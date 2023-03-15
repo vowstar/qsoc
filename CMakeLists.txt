@@ -28,17 +28,17 @@ if(SQLite3_FOUND)
 endif()
 
 ## Slang(svlang)
-pkg_check_modules(slang REQUIRED IMPORTED_TARGET slang)
-if (slang_FOUND)
-    set(slang_INCLUDE_DIRS ${slang_INCLUDE_DIR})
-    set(slang_LIBRARIES ${slang_LIBRARY})
+pkg_check_modules(svlang IMPORTED_TARGET svlang)
+if (svlang_FOUND)
+    set(svlang_INCLUDE_DIRS ${svlang_INCLUDE_DIR})
+    set(svlang_LIBRARIES ${svlang_LIBRARY})
 else()
     add_subdirectory(external/slang)
-    set(slang_INCLUDE_DIRS
+    set(svlang_INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/external/slang/include
         ${CMAKE_CURRENT_SOURCE_DIR}/external/slang/external
     )
-    set(slang_LIBRARIES svlang::svlang)
+    set(svlang_LIBRARIES slang::slang)
 endif()
 
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "src/*.cpp")
@@ -93,7 +93,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${SQLite3_INCLUDE_DIRS}
-    ${slang_INCLUDE_DIRS}
+    ${svlang_INCLUDE_DIRS}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -104,7 +104,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt${QT_VERSION_MAJOR}::Svg
     ${Core5Compat_LIBRARIES}
     ${SQLite3_LIBRARIES}
-    ${slang_LIBRARIES}
+    ${svlang_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

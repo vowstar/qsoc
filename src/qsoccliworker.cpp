@@ -5,9 +5,17 @@
 #include <QtGlobal>
 #include <QString>
 
+#include <slang/driver/Driver.h>
+#include <slang/util/Version.h>
+
+using namespace slang;
+using namespace slang::driver;
+
 QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)
 {
+    Driver driver;
+    driver.addStandardArgs();
 
 }
 
