@@ -11,8 +11,35 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets LinguistTools)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets LinguistTools)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Sql Widgets Svg LinguistTools)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Sql Widgets Svg LinguistTools)
+
+if (Qt6_FOUND)
+    find_package(Qt6 COMPONENTS Core5Compat REQUIRED)
+    set(Core5Compat_LIBRARIES Qt6::Core5Compat)
+endif()
+
+## SQLite3
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(sqlite3 REQUIRED IMPORTED_TARGET sqlite3)
+if(SQLite3_FOUND)
+    set(SQLite3_INCLUDE_DIRS ${SQLite3_INCLUDE_DIR})
+    set(SQLite3_LIBRARIES ${SQLite3_LIBRARY})
+endif()
+
+## Slang(svlang)
+pkg_check_modules(slang REQUIRED IMPORTED_TARGET slang)
+if (slang_FOUND)
+    set(slang_INCLUDE_DIRS ${slang_INCLUDE_DIR})
+    set(slang_LIBRARIES ${slang_LIBRARY})
+else()
+    add_subdirectory(external/slang)
+    set(slang_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/slang/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/slang/external
+    )
+    set(slang_LIBRARIES svlang::svlang)
+endif()
 
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE ${CMAKE_CURRENT_LIST_DIR} "include/*.h")
@@ -29,7 +56,7 @@ set(PROJECT_SOURCES
     ${PROJECT_QRC_FILES}
 )
 
-set(CMAKE_AUTOUIC_SEARCH_PATHS 
+set(CMAKE_AUTOUIC_SEARCH_PATHS
     ${CMAKE_CURRENT_LIST_DIR}/ui
     ${CMAKE_CURRENT_LIST_DIR}/i18n
     ${CMAKE_CURRENT_LIST_DIR}/resource
@@ -65,12 +92,19 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SQLite3_INCLUDE_DIRS}
+    ${slang_INCLUDE_DIRS}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Sql
     Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Svg
+    ${Core5Compat_LIBRARIES}
+    ${SQLite3_LIBRARIES}
+    ${slang_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
