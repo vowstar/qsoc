@@ -69,7 +69,7 @@ int main(int argc, char *argv[])
     if (isGui(argc, argv))
     {
         QApplication app(argc, argv);
-        initTranslator(app, translator, ":/i18n/");
+        initTranslator(app, translator, ":/i18n/app_");
         initTranslator(app, translatorBase, ":/i18n/qtbase_");
         initParser(app, parser);
 
@@ -80,7 +80,7 @@ int main(int argc, char *argv[])
     else
     {
         QCoreApplication app(argc, argv);
-        initTranslator(app, translator, ":/i18n/");
+        initTranslator(app, translator, ":/i18n/app_");
         initTranslator(app, translatorBase, ":/i18n/qtbase_");
         initParser(app, parser);
 
