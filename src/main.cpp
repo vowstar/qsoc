@@ -59,7 +59,6 @@ void initParser(const QCoreApplication &app, QCommandLineParser &parser)
 int main(int argc, char *argv[])
 {
     QStaticLog::setLevel(QStaticLog::levelS);
-    QStaticLog::setTextBrowser(nullptr);
 
     QCommandLineParser parser;
     QTranslator translator;
