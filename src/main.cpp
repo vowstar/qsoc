@@ -51,6 +51,9 @@ void initParser(const QCoreApplication &app, QCommandLineParser &parser)
         {{"l", "level"},
          QCoreApplication::translate("main", "Set log level. 0 is silent, 1 is error, 2 is warning, 3 is info, 4 is debug, 5 is verbose."),
          "level"},
+        {{"f", "filelist"},
+         QCoreApplication::translate("main", "The path where the file list is located, including a list of verilog files in order."),
+         "filelist"},
     });
 
     parser.process(app);

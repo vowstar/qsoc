@@ -1,21 +1,13 @@
 #include "qsoccliworker.h"
 
-#include <QTextStream>
-
 #include <QtGlobal>
 #include <QString>
 
-#include <slang/driver/Driver.h>
-#include <slang/util/Version.h>
-
-using namespace slang;
-using namespace slang::driver;
+#include "qslangdriver.h"
 
 QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)
 {
-    Driver driver;
-    driver.addStandardArgs();
 
 }
 
@@ -35,6 +27,16 @@ void QSocCliWorker::setParser(QCommandLineParser *parser)
     this->parser = parser;
 }
 
+void QSocCliWorker::processFileList(const QString &fileListName)
+{
+    QSlangDriver driver(this);
+    if (driver.parseFileList(fileListName)) {
+        /* Parse success */
+    } else {
+        /* Parse fail */
+    }
+}
+
 void QSocCliWorker::run()
 {
     mutex.lock();
@@ -42,7 +44,14 @@ void QSocCliWorker::run()
     if (parser)
     {
         QString selfName = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
+
+        if (parser->isSet("filelist"))
+        {
+            QString fileListName = parser->value("filelist");
+            processFileList(fileListName);
+        }
     }
+
     QCoreApplication::exit(0);
     QCoreApplication::processEvents();
     mutex.unlock();

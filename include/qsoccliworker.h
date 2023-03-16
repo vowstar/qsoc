@@ -18,15 +18,17 @@ public:
     void setup(QThread &thread);
     void setParser(QCommandLineParser *parser);
 
+public slots:
+    void run();
+
 private:
     QCommandLineParser *parser;
     QMutex mutex;
 
+    void processFileList(const QString &fileListName);
+
 signals:
     void finished();
-
-public slots:
-    void run();
 };
 
 #endif // QSOCCLIWORKER_H
