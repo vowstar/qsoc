@@ -67,15 +67,23 @@ bool QSlangDriver::parseArgs(const QString &args)
         driver.reportMacros();
         result = driver.reportParseDiags();
 
-        QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
-        QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+        if (result) {
+            QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+        } else {
+            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+        }
 
         auto compilation = driver.createCompilation();
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
         result = driver.reportCompilation(*compilation, false);
-        QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
-        QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+
+        if (result) {
+            QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+        } else {
+            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+        }
+
         slang::JsonWriter writer;
         writer.setPrettyPrint(true);
 
