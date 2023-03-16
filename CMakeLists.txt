@@ -16,29 +16,27 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Sql Widgets Svg 
 
 if (Qt6_FOUND)
     find_package(Qt6 COMPONENTS Core5Compat REQUIRED)
-    set(Core5Compat_LIBRARIES Qt6::Core5Compat)
+    set(QT_LIBRARIES Qt6::Core5Compat)
 endif()
 
 ## SQLite3
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(sqlite3 REQUIRED IMPORTED_TARGET sqlite3)
-if(SQLite3_FOUND)
-    set(SQLite3_INCLUDE_DIRS ${SQLite3_INCLUDE_DIR})
-    set(SQLite3_LIBRARIES ${SQLite3_LIBRARY})
+pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
+if(SQLITE3_FOUND)
+    message(STATUS "Use system SQLite3 library: ${SQLITE3_LIBRARIES} ${SQLITE3_VERSION}")
 endif()
 
-## Slang(svlang)
-pkg_check_modules(svlang IMPORTED_TARGET svlang)
-if (svlang_FOUND)
-    set(svlang_INCLUDE_DIRS ${svlang_INCLUDE_DIR})
-    set(svlang_LIBRARIES ${svlang_LIBRARY})
+## Slang(sv-lang)
+pkg_check_modules(SVLANG IMPORTED_TARGET sv-lang)
+if (SVLANG_FOUND)
+    message(STATUS "Use system sv-lang library: ${SVLANG_LIBRARIES} ${SVLANG_VERSION}")
 else()
     add_subdirectory(external/slang)
-    set(svlang_INCLUDE_DIRS
+    set(SVLANG_INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/external/slang/include
         ${CMAKE_CURRENT_SOURCE_DIR}/external/slang/external
     )
-    set(svlang_LIBRARIES slang::slang)
+    set(SVLANG_LIBRARIES slang::slang)
 endif()
 
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "src/*.cpp")
@@ -92,8 +90,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${SQLite3_INCLUDE_DIRS}
-    ${svlang_INCLUDE_DIRS}
+    ${SQLITE3_INCLUDE_DIRS}
+    ${SVLANG_INCLUDE_DIRS}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -102,9 +100,9 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt${QT_VERSION_MAJOR}::Sql
     Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::Svg
-    ${Core5Compat_LIBRARIES}
-    ${SQLite3_LIBRARIES}
-    ${svlang_LIBRARIES}
+    ${QT_LIBRARIES}
+    ${SQLITE3_LIBRARIES}
+    ${SVLANG_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
