@@ -19,16 +19,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+      with:
+        submodules: recursive
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        version: 6.2.4
+        version: 6.4.3
+        install-deps: 'true'
+        modules: 'qt5compat'
     - name: Install depends
-      run: sudo apt-get install -y catch libfmt-dev libsqlite3-dev
+      run: sudo apt-get install -y catch clang-tidy libfmt-dev libsqlite3-dev ninja-build 
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      run: cmake -B ${{github.workspace}}/build -G Ninja -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Build
       # Build your program with the given configuration
