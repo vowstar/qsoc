@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.5)
 project(socstudio VERSION 0.1 LANGUAGES CXX)
 
 option(ENABLE_CLANG_TIDY "Enable static analysis with clang-tidy" ON)
+option(ENABLE_UNIT_TEST  "Enable unit test"                       ON)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
@@ -14,8 +15,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ## QT
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Sql Widgets Svg LinguistTools)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Sql Widgets Svg LinguistTools)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui LinguistTools Sql Svg Widgets Test)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core LinguistTools Gui Sql Svg Widgets Test)
 
 if (Qt6_FOUND)
     find_package(Qt6 COMPONENTS Core5Compat REQUIRED)
@@ -125,8 +126,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Gui
     Qt${QT_VERSION_MAJOR}::Sql
-    Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::Svg
+    Qt${QT_VERSION_MAJOR}::Widgets
     ${QT_LIBRARIES}
     ${SQLITE3_LIBRARIES}
     ${SVLANG_LIBRARIES}
@@ -146,4 +147,11 @@ install(TARGETS ${PROJECT_NAME}
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(${PROJECT_NAME})
+endif()
+
+## Testing
+if (ENABLE_UNIT_TEST)
+    enable_testing()
+    add_test(NAME test_cmd_version COMMAND ${PROJECT_NAME} -c -v)
+    add_subdirectory(test)
 endif()
