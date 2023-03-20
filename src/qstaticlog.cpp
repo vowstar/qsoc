@@ -2,6 +2,13 @@
 
 #include <QDebug>
 
+const int QStaticLog::levelS = 0;
+const int QStaticLog::levelE = 1;
+const int QStaticLog::levelW = 2;
+const int QStaticLog::levelI = 3;
+const int QStaticLog::levelD = 4;
+const int QStaticLog::levelV = 5;
+
 const QString QStaticLog::styleReset = "\033[0m";
 const QString QStaticLog::styleBold = "\033[1m";
 const QString QStaticLog::styleBlack = "\033[30m";

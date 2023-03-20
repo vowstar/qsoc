@@ -9,12 +9,12 @@ class QStaticLog : public QObject
 {
     Q_OBJECT
 public:
-    static const int levelS = 0;
-    static const int levelE = 1;
-    static const int levelW = 2;
-    static const int levelI = 3;
-    static const int levelD = 4;
-    static const int levelV = 5;
+    static const int levelS;
+    static const int levelE;
+    static const int levelW;
+    static const int levelI;
+    static const int levelD;
+    static const int levelV;
 
     static QStaticLog &instance()
     {

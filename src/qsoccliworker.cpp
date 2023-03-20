@@ -4,6 +4,7 @@
 #include <QtGlobal>
 
 #include "qslangdriver.h"
+#include "qstaticlog.h"
 
 QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)
@@ -27,8 +28,6 @@ void QSocCliWorker::processFileList(const QString &fileListName)
     QSlangDriver driver(this);
     if (driver.parseFileList(fileListName)) {
         /* Parse success */
-    } else {
-        /* Parse fail */
     }
 }
 
@@ -37,10 +36,10 @@ void QSocCliWorker::run()
     mutex.lock();
 
     if (parser) {
-        QString selfName = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
-
+        const QString selfName = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
+        QStaticLog::logD(Q_FUNC_INFO, "Start " + selfName + " in CLI mode.");
         if (parser->isSet("filelist")) {
-            QString fileListName = parser->value("filelist");
+            const QString fileListName = parser->value("filelist");
             processFileList(fileListName);
         }
     }

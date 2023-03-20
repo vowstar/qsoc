@@ -15,6 +15,7 @@
 #include <slang/text/Json.h>
 #include <slang/util/TimeTrace.h>
 #include <slang/util/Version.h>
+#include <stdexcept>
 
 #include "qstaticlog.h"
 
@@ -22,10 +23,10 @@ QSlangDriver::QSlangDriver(QObject *parent)
     : QObject(parent)
 {
     /* Get system environments */
-    QStringList envList = QProcess::systemEnvironment();
+    const QStringList envList = QProcess::systemEnvironment();
 
     /* Save system environments into QMap */
-    foreach (QString str, envList) {
+    foreach (const QString str, envList) {
         QStringList keyAndValue = str.split('=');
         if (keyAndValue.size() == 2) {
             env[keyAndValue[0]] = keyAndValue[1];
@@ -58,41 +59,55 @@ bool QSlangDriver::parseArgs(const QString &args)
     bool result = false;
     try {
         QStaticLog::logV(Q_FUNC_INFO, "Arguments:" + args);
-
-        result = driver.parseCommandLine(slang::string_view(args.toStdString()));
-        result = driver.processOptions();
-        result = driver.parseAllSources();
-        driver.reportMacros();
-        result = driver.reportParseDiags();
-
-        if (result) {
-            QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
-        } else {
-            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
-        }
-
-        auto compilation = driver.createCompilation();
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
-        result = driver.reportCompilation(*compilation, false);
-
-        if (result) {
-            QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
-        } else {
+        if (!driver.parseCommandLine(slang::string_view(args.toStdString()))) {
             QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            throw std::runtime_error("Failed to parse command line");
         }
+        slang::OS::capturedStdout.clear();
+        slang::OS::capturedStderr.clear();
+        if (!driver.processOptions()) {
+            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            throw std::runtime_error("Failed to process options");
+        }
+        slang::OS::capturedStdout.clear();
+        slang::OS::capturedStderr.clear();
+        if (!driver.parseAllSources()) {
+            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            throw std::runtime_error("Failed to parse sources");
+        }
+        slang::OS::capturedStdout.clear();
+        slang::OS::capturedStderr.clear();
+        driver.reportMacros();
+        QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+        slang::OS::capturedStdout.clear();
+        slang::OS::capturedStderr.clear();
+        if (!driver.reportParseDiags()) {
+            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            throw std::runtime_error("Failed to report parse diagnostics");
+        }
+        slang::OS::capturedStdout.clear();
+        slang::OS::capturedStderr.clear();
+        auto compilation = driver.createCompilation();
+        if (!driver.reportCompilation(*compilation, false)) {
+            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            throw std::runtime_error("Failed to report compilation");
+        }
+        result = true;
+        QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
 
         slang::JsonWriter writer;
         writer.setPrettyPrint(true);
 
-        std::vector<std::string> astJsonScopes;
+        const std::vector<std::string> astJsonScopes;
 
         slang::ast::ASTSerializer serializer(*compilation, writer);
         if (astJsonScopes.empty()) {
             serializer.serialize(compilation->getRoot());
         } else {
-            for (auto &scopeName : astJsonScopes) {
-                auto sym = compilation->getRoot().lookupName(scopeName);
+            for (const auto &scopeName : astJsonScopes) {
+                const auto *sym = compilation->getRoot().lookupName(scopeName);
                 if (sym)
                     serializer.serialize(*sym);
             }
@@ -109,6 +124,7 @@ bool QSlangDriver::parseArgs(const QString &args)
 bool QSlangDriver::parseFileList(const QString &fileListName)
 {
     bool result = false;
+    QStaticLog::logD(Q_FUNC_INFO, "Use file list:" + fileListName);
     /* Read text from filelist */
     QFile inputFile(fileListName);
     if (inputFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -116,18 +132,18 @@ bool QSlangDriver::parseFileList(const QString &fileListName)
         QString content = inputStream.readAll();
 
         /* Remove single line comment */
-        content.remove(QRegularExpression("\\s*//[^\\n]*\\s*"));
+        content.remove(QRegularExpression(R"(\s*//[^\n]*\s*)"));
         /* Remove multiline comments */
-        content.remove(QRegularExpression("\\s*/\\*.*?\\*/\\s*"));
+        content.remove(QRegularExpression(R"(\s*/\*.*?\*/\s*)"));
         /* Remove empty lines */
-        content.remove(QRegularExpression("\\n\\s*\\n"));
+        content.remove(QRegularExpression(R"(\n\s*\n)"));
 
         /* Replace environment variables */
-        QMapIterator<QString, QString> it(env);
-        while (it.hasNext()) {
-            it.next();
-            QString pattern = QString("${%1}").arg(it.key());
-            content.replace(pattern, it.value());
+        QMapIterator<QString, QString> iterator(env);
+        while (iterator.hasNext()) {
+            iterator.next();
+            const QString pattern = QString("${%1}").arg(iterator.key());
+            content.replace(pattern, iterator.value());
         }
 
         /* Create a temporary file */
@@ -141,7 +157,7 @@ bool QSlangDriver::parseFileList(const QString &fileListName)
             tempFile.flush();
             tempFile.close();
 
-            QString args
+            const QString args
                 = "slang -f \"" + tempFile.fileName()
                   + "\" --ignore-unknown-modules --single-unit --compat vcs --error-limit=0";
 
@@ -153,6 +169,8 @@ bool QSlangDriver::parseFileList(const QString &fileListName)
             /* Delete temporary file */
             tempFile.remove();
         }
+    } else {
+        QStaticLog::logE(Q_FUNC_INFO, "Failed to open file list:" + fileListName);
     }
 
     return result;

@@ -75,16 +75,16 @@ int main(int argc, char *argv[])
     int result = 0;
 
     if (isGui(argc, argv)) {
-        QApplication app(argc, argv);
+        const QApplication app(argc, argv);
         initTranslator(app, translator, ":/i18n/app_");
         initTranslator(app, translatorBase, ":/i18n/qtbase_");
         initParser(app, parser);
 
-        MainWindow w;
-        w.show();
+        MainWindow mainWindow;
+        mainWindow.show();
         result = app.exec();
     } else {
-        QCoreApplication app(argc, argv);
+        const QCoreApplication app(argc, argv);
         initTranslator(app, translator, ":/i18n/app_");
         initTranslator(app, translatorBase, ":/i18n/qtbase_");
         initParser(app, parser);
