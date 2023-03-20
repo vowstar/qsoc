@@ -3,8 +3,8 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDebug>
-#include <QThread>
 #include <QLocale>
+#include <QThread>
 #include <QTranslator>
 
 #include "qsoccliworker.h"
@@ -12,24 +12,23 @@
 
 bool isGui(int &argc, char *argv[])
 {
-    for (int i = 1; i < argc; ++i)
-    {
-        if (!qstrcmp(argv[i], "--cli" ) || !qstrcmp(argv[i], "-c" ))
+    for (int i = 1; i < argc; ++i) {
+        if (!qstrcmp(argv[i], "--cli") || !qstrcmp(argv[i], "-c"))
             return false;
     }
     return true;
 }
 
-void initTranslator(const QCoreApplication &app, QTranslator &translator, const QString &prefix = ":/i18n/")
+void initTranslator(const QCoreApplication &app,
+                    QTranslator &translator,
+                    const QString &prefix = ":/i18n/")
 {
     const QStringList uiLanguages = QLocale::system().uiLanguages();
 
-    for (const QString &locale : uiLanguages)
-    {
+    for (const QString &locale : uiLanguages) {
         const QString baseName = QLocale(locale).name();
 
-        if (translator.load(prefix+ baseName + ".qm"))
-        {
+        if (translator.load(prefix + baseName + ".qm")) {
             break;
         }
     }
@@ -41,18 +40,24 @@ void initParser(const QCoreApplication &app, QCommandLineParser &parser)
     QCoreApplication::setApplicationName(QCoreApplication::translate("main", "SoC Studio"));
     QCoreApplication::setApplicationVersion("1.0.0");
 
-    parser.setApplicationDescription(QCoreApplication::translate("main", "Generate SoC components via the command line."));
+    parser.setApplicationDescription(
+        QCoreApplication::translate("main", "Generate SoC components via the command line."));
     parser.addHelpOption();
     parser.addVersionOption();
 
     parser.addOptions({
         {{"c", "cli"},
-         QCoreApplication::translate("main", "Start the software in CLI mode, otherwise it will start in GUI mode.")},
+         QCoreApplication::translate(
+             "main", "Start the software in CLI mode, otherwise it will start in GUI mode.")},
         {{"l", "level"},
-         QCoreApplication::translate("main", "Set log level. 0 is silent, 1 is error, 2 is warning, 3 is info, 4 is debug, 5 is verbose."),
+         QCoreApplication::translate("main",
+                                     "Set log level. 0 is silent, 1 is error, 2 is warning, 3 is "
+                                     "info, 4 is debug, 5 is verbose."),
          "level"},
         {{"f", "filelist"},
-         QCoreApplication::translate("main", "The path where the file list is located, including a list of verilog files in order."),
+         QCoreApplication::translate("main",
+                                     "The path where the file list is located, including a list of "
+                                     "verilog files in order."),
          "filelist"},
     });
 
@@ -69,8 +74,7 @@ int main(int argc, char *argv[])
 
     int result = 0;
 
-    if (isGui(argc, argv))
-    {
+    if (isGui(argc, argv)) {
         QApplication app(argc, argv);
         initTranslator(app, translator, ":/i18n/app_");
         initTranslator(app, translatorBase, ":/i18n/qtbase_");
@@ -79,16 +83,13 @@ int main(int argc, char *argv[])
         MainWindow w;
         w.show();
         result = app.exec();
-    }
-    else
-    {
+    } else {
         QCoreApplication app(argc, argv);
         initTranslator(app, translator, ":/i18n/app_");
         initTranslator(app, translatorBase, ":/i18n/qtbase_");
         initParser(app, parser);
 
-        if (parser.isSet("level"))
-        {
+        if (parser.isSet("level")) {
             QStaticLog::setLevel(parser.value("level").toInt());
         }
 

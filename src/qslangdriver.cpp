@@ -2,9 +2,9 @@
 
 #include <QFile>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QTemporaryFile>
 #include <QTextStream>
-#include <QRegularExpression>
 
 #include <fmt/core.h>
 #include <slang/ast/ASTSerializer.h>
@@ -33,16 +33,14 @@ QSlangDriver::QSlangDriver(QObject *parent)
     }
 }
 
-QSlangDriver::~QSlangDriver()
-{
-}
+QSlangDriver::~QSlangDriver() {}
 
 void QSlangDriver::setEnv(const QString &key, const QString &value)
 {
     env[key] = value;
 }
 
-void QSlangDriver::setEnv(const QMap<QString, QString>& env)
+void QSlangDriver::setEnv(const QMap<QString, QString> &env)
 {
     this->env = env;
 }
@@ -92,9 +90,8 @@ bool QSlangDriver::parseArgs(const QString &args)
         slang::ast::ASTSerializer serializer(*compilation, writer);
         if (astJsonScopes.empty()) {
             serializer.serialize(compilation->getRoot());
-        }
-        else {
-            for (auto& scopeName : astJsonScopes) {
+        } else {
+            for (auto &scopeName : astJsonScopes) {
                 auto sym = compilation->getRoot().lookupName(scopeName);
                 if (sym)
                     serializer.serialize(*sym);
@@ -102,8 +99,7 @@ bool QSlangDriver::parseArgs(const QString &args)
         }
 
         QStaticLog::logI(Q_FUNC_INFO, std::string(writer.view()).c_str());
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         /* Handle error */
         QStaticLog::logE(Q_FUNC_INFO, e.what());
     }
@@ -113,10 +109,9 @@ bool QSlangDriver::parseArgs(const QString &args)
 bool QSlangDriver::parseFileList(const QString &fileListName)
 {
     bool result = false;
-    /* Read text from filelist */ 
+    /* Read text from filelist */
     QFile inputFile(fileListName);
-    if (inputFile.open(QIODevice::ReadOnly | QIODevice::Text))
-    {
+    if (inputFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream inputStream(&inputFile);
         QString content = inputStream.readAll();
 
@@ -146,7 +141,9 @@ bool QSlangDriver::parseFileList(const QString &fileListName)
             tempFile.flush();
             tempFile.close();
 
-            QString args = "slang -f \"" + tempFile.fileName() + "\" --ignore-unknown-modules --single-unit --compat vcs --error-limit=0";
+            QString args
+                = "slang -f \"" + tempFile.fileName()
+                  + "\" --ignore-unknown-modules --single-unit --compat vcs --error-limit=0";
 
             QStaticLog::logV(Q_FUNC_INFO, "TemporaryFile name:" + tempFile.fileName());
             QStaticLog::logV(Q_FUNC_INFO, "Content list begin");

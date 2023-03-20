@@ -31,8 +31,7 @@ bool QStaticLog::colorRichtext = true;
 
 void QStaticLog::logE(const QString &func, const QString &message)
 {
-    if (QStaticLog::level >= QStaticLog::levelE)
-    {
+    if (QStaticLog::level >= QStaticLog::levelE) {
         qCritical() << QString(strEConsole + func + ":" + message).toStdString().c_str();
         emit instance().log(strERichtext + func + ":" + message);
     }
@@ -40,8 +39,7 @@ void QStaticLog::logE(const QString &func, const QString &message)
 
 void QStaticLog::logW(const QString &func, const QString &message)
 {
-    if (QStaticLog::level >= QStaticLog::levelW)
-    {
+    if (QStaticLog::level >= QStaticLog::levelW) {
         qWarning() << QString(strWConsole + func + ":" + message).toStdString().c_str();
         emit instance().log(strWRichtext + func + ":" + message);
     }
@@ -49,8 +47,7 @@ void QStaticLog::logW(const QString &func, const QString &message)
 
 void QStaticLog::logI(const QString &func, const QString &message)
 {
-    if (QStaticLog::level >= QStaticLog::levelI)
-    {
+    if (QStaticLog::level >= QStaticLog::levelI) {
         qInfo() << QString(strIConsole + func + ":" + message).toStdString().c_str();
         emit instance().log(strIRichtext + func + ":" + message);
     }
@@ -58,8 +55,7 @@ void QStaticLog::logI(const QString &func, const QString &message)
 
 void QStaticLog::logD(const QString &func, const QString &message)
 {
-    if (QStaticLog::level >= QStaticLog::levelD)
-    {
+    if (QStaticLog::level >= QStaticLog::levelD) {
         qDebug() << QString(strDConsole + func + ":" + message).toStdString().c_str();
         emit instance().log(strDRichtext + func + ":" + message);
     }
@@ -67,8 +63,7 @@ void QStaticLog::logD(const QString &func, const QString &message)
 
 void QStaticLog::logV(const QString &func, const QString &message)
 {
-    if (QStaticLog::level >= QStaticLog::levelV)
-    {
+    if (QStaticLog::level >= QStaticLog::levelV) {
         qDebug() << QString(strVConsole + func + ":" + message).toStdString().c_str();
         emit instance().log(strVRichtext + func + ":" + message);
     }
@@ -82,8 +77,7 @@ void QStaticLog::setLevel(int level)
 void QStaticLog::setColorConsole(bool color)
 {
     QStaticLog::colorConsole = color;
-    if (color)
-    {
+    if (color) {
         QStaticLog::strEConsole = styleBold + styleRed + "[E]:" + styleReset;
         QStaticLog::strWConsole = styleBold + styleYellow + "[W]:" + styleReset;
         QStaticLog::strIConsole = styleBold + styleBlue + "[I]:" + styleReset;
@@ -101,8 +95,7 @@ void QStaticLog::setColorConsole(bool color)
 void QStaticLog::setColorRichtext(bool color)
 {
     QStaticLog::colorRichtext = color;
-    if (color)
-    {
+    if (color) {
         QStaticLog::strERichtext = "<b style='color: red'>[E]:</b>";
         QStaticLog::strWRichtext = "<b style='color: orange'>[W]:</b>";
         QStaticLog::strIRichtext = "<b style='color: blue'>[I]:</b>";

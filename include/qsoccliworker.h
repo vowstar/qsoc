@@ -1,12 +1,12 @@
 #ifndef QSOCCLIWORKER_H
 #define QSOCCLIWORKER_H
 
-#include <QObject>
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDebug>
 #include <QFileInfo>
 #include <QMutex>
+#include <QObject>
 #include <QThread>
 
 class QSocCliWorker : public QObject

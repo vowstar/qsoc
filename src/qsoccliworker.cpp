@@ -1,20 +1,15 @@
 #include "qsoccliworker.h"
 
-#include <QtGlobal>
 #include <QString>
+#include <QtGlobal>
 
 #include "qslangdriver.h"
 
 QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)
-{
+{}
 
-}
-
-QSocCliWorker::~QSocCliWorker()
-{
-
-}
+QSocCliWorker::~QSocCliWorker() {}
 
 void QSocCliWorker::setup(QThread &thread)
 {
@@ -41,12 +36,10 @@ void QSocCliWorker::run()
 {
     mutex.lock();
 
-    if (parser)
-    {
+    if (parser) {
         QString selfName = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
 
-        if (parser->isSet("filelist"))
-        {
+        if (parser->isSet("filelist")) {
             QString fileListName = parser->value("filelist");
             processFileList(fileListName);
         }

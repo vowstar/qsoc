@@ -16,7 +16,7 @@ public:
     static const int levelD = 4;
     static const int levelV = 5;
 
-    static QStaticLog& instance()
+    static QStaticLog &instance()
     {
         static QStaticLog instance;
         return instance;
