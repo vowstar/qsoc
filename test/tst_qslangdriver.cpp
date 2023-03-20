@@ -6,7 +6,7 @@ class test : public QObject
 
 public:
     test();
-    ~test();
+    ~test() override;
 
 private slots:
     void testParseArgs();
