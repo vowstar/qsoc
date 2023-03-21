@@ -4,6 +4,10 @@
 #include <QMap>
 #include <QObject>
 
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
+
 class QSlangDriver : public QObject
 {
     Q_OBJECT
@@ -16,9 +20,11 @@ public slots:
     void setEnv(const QMap<QString, QString> &env);
     bool parseArgs(const QString &args);
     bool parseFileList(const QString &fileListName);
+    const json &getAst();
 
 private:
     QMap<QString, QString> env;
+    json ast;
 };
 
 #endif // QSLANGDRIVER_H

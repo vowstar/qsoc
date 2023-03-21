@@ -103,6 +103,7 @@ bool QSlangDriver::parseArgs(const QString &args)
         const std::vector<std::string> astJsonScopes;
 
         slang::ast::ASTSerializer serializer(*compilation, writer);
+
         if (astJsonScopes.empty()) {
             serializer.serialize(compilation->getRoot());
         } else {
@@ -113,7 +114,8 @@ bool QSlangDriver::parseArgs(const QString &args)
             }
         }
 
-        QStaticLog::logI(Q_FUNC_INFO, std::string(writer.view()).c_str());
+        ast = json::parse(std::string(writer.view()).c_str());
+        QStaticLog::logV(Q_FUNC_INFO, ast.dump(4).c_str());
     } catch (const std::exception &e) {
         /* Handle error */
         QStaticLog::logE(Q_FUNC_INFO, e.what());
@@ -147,7 +149,7 @@ bool QSlangDriver::parseFileList(const QString &fileListName)
         }
 
         /* Create a temporary file */
-        QTemporaryFile tempFile("socstudio");
+        QTemporaryFile tempFile("socstudio.fl");
         /* Do not remove file after close */
         tempFile.setAutoRemove(false);
         if (tempFile.open()) {
@@ -174,4 +176,9 @@ bool QSlangDriver::parseFileList(const QString &fileListName)
     }
 
     return result;
+}
+
+const json &QSlangDriver::getAst()
+{
+    return ast;
 }
