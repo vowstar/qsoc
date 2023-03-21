@@ -67,6 +67,18 @@ else()
     set(SVLANG_LIBRARIES slang::slang)
 endif()
 
+## JSON
+pkg_check_modules(JSON IMPORTED_TARGET nlohmann_json)
+if (JSON_FOUND)
+    message(STATUS "Use system nlohmann_json library: ${JSON_LIBRARIES} ${JSON_VERSION}")
+else()
+    add_subdirectory(external/json)
+    set(JSON_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/json/include
+    )
+    set(JSON_LIBRARIES nlohmann_json::nlohmann_json)
+endif()
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE ${CMAKE_CURRENT_LIST_DIR} "include/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "resource/*.qrc")

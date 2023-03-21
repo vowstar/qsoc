@@ -1,3 +1,6 @@
 [submodule "external/slang"]
 	path = external/slang
 	url = git@github.com:MikePopoloski/slang.git
+[submodule "external/json"]
+	path = external/json
+	url = git@github.com:nlohmann/json.git
