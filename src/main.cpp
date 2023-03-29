@@ -3,11 +3,10 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDebug>
-#include <QLocale>
-#include <QTranslator>
 
 #include "qsoccliworker.h"
 #include "qstaticlog.h"
+#include "qstatictranslator.h"
 
 bool isGui(int &argc, char *argv[])
 {
@@ -16,21 +15,6 @@ bool isGui(int &argc, char *argv[])
             return true;
     }
     return false;
-}
-
-void initTranslator(
-    const QCoreApplication &app, QTranslator &translator, const QString &prefix = ":/i18n/")
-{
-    const QStringList uiLanguages = QLocale::system().uiLanguages();
-
-    for (const QString &locale : uiLanguages) {
-        const QString baseName = QLocale(locale).name();
-
-        if (translator.load(prefix + baseName + ".qm")) {
-            break;
-        }
-    }
-    app.installTranslator(&translator);
 }
 
 void initParser(const QCoreApplication &app, QCommandLineParser &parser)
@@ -147,15 +131,12 @@ int main(int argc, char *argv[])
     QStaticLog::setLevel(QStaticLog::levelS);
 
     QCommandLineParser parser;
-    QTranslator        translator;
-    QTranslator        translatorBase;
 
     int result = 0;
 
     if (isGui(argc, argv)) {
         const QApplication app(argc, argv);
-        initTranslator(app, translator, ":/i18n/app_");
-        initTranslator(app, translatorBase, ":/i18n/qtbase_");
+        QStaticTranslator::setup();
         initParser(app, parser);
 
         MainWindow mainWindow;
@@ -163,8 +144,7 @@ int main(int argc, char *argv[])
         result = app.exec();
     } else {
         const QCoreApplication app(argc, argv);
-        initTranslator(app, translator, ":/i18n/app_");
-        initTranslator(app, translatorBase, ":/i18n/qtbase_");
+        QStaticTranslator::setup();
         initParser(app, parser);
 
         QSocCliWorker socCliWorker;
