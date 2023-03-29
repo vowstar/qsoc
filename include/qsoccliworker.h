@@ -13,14 +13,14 @@ class QSocCliWorker : public QObject
 public:
     explicit QSocCliWorker(QObject *parent = nullptr);
     ~QSocCliWorker();
-    void setup(const QCoreApplication &application);
-    void setParser(QCommandLineParser *parser);
+    void setup(bool isGui = false);
+    void process();
 
 public slots:
     void run();
 
 private:
-    QCommandLineParser *parser;
+    QCommandLineParser parser;
 
     void processFileList(const QString &fileListName);
 
