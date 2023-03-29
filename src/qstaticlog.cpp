@@ -9,16 +9,16 @@ const int QStaticLog::levelI = 3;
 const int QStaticLog::levelD = 4;
 const int QStaticLog::levelV = 5;
 
-const QString QStaticLog::styleReset = "\033[0m";
-const QString QStaticLog::styleBold = "\033[1m";
-const QString QStaticLog::styleBlack = "\033[30m";
-const QString QStaticLog::styleRed = "\033[31m";
-const QString QStaticLog::styleGreen = "\033[32m";
-const QString QStaticLog::styleYellow = "\033[33m";
-const QString QStaticLog::styleBlue = "\033[34m";
+const QString QStaticLog::styleReset   = "\033[0m";
+const QString QStaticLog::styleBold    = "\033[1m";
+const QString QStaticLog::styleBlack   = "\033[30m";
+const QString QStaticLog::styleRed     = "\033[31m";
+const QString QStaticLog::styleGreen   = "\033[32m";
+const QString QStaticLog::styleYellow  = "\033[33m";
+const QString QStaticLog::styleBlue    = "\033[34m";
 const QString QStaticLog::styleMagenta = "\033[35m";
-const QString QStaticLog::styleCyan = "\033[36m";
-const QString QStaticLog::styleWhite = "\033[37m";
+const QString QStaticLog::styleCyan    = "\033[36m";
+const QString QStaticLog::styleWhite   = "\033[37m";
 
 QString QStaticLog::strEConsole = styleBold + styleRed + "[E]:" + styleReset;
 QString QStaticLog::strWConsole = styleBold + styleYellow + "[W]:" + styleReset;
@@ -32,8 +32,8 @@ QString QStaticLog::strIRichtext = "<b style='color: blue'>[I]:</b>";
 QString QStaticLog::strDRichtext = "<b style='color: green'>[D]:</b>";
 QString QStaticLog::strVRichtext = "<b style='color: silver'>[V]:</b>";
 
-int QStaticLog::level = QStaticLog::levelS;
-bool QStaticLog::colorConsole = true;
+int  QStaticLog::level         = QStaticLog::levelS;
+bool QStaticLog::colorConsole  = true;
 bool QStaticLog::colorRichtext = true;
 
 void QStaticLog::logE(const QString &func, const QString &message)

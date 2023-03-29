@@ -131,7 +131,7 @@ bool QSlangDriver::parseFileList(const QString &fileListName)
     QFile inputFile(fileListName);
     if (inputFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream inputStream(&inputFile);
-        QString content = inputStream.readAll();
+        QString     content = inputStream.readAll();
 
         /* Remove single line comment */
         content.remove(QRegularExpression(R"(\s*//[^\n]*\s*)"));

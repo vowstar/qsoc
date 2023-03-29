@@ -16,15 +16,15 @@ public:
     ~QSlangDriver();
 
 public slots:
-    void setEnv(const QString &key, const QString &value);
-    void setEnv(const QMap<QString, QString> &env);
-    bool parseArgs(const QString &args);
-    bool parseFileList(const QString &fileListName);
+    void        setEnv(const QString &key, const QString &value);
+    void        setEnv(const QMap<QString, QString> &env);
+    bool        parseArgs(const QString &args);
+    bool        parseFileList(const QString &fileListName);
     const json &getAst();
 
 private:
     QMap<QString, QString> env;
-    json ast;
+    json                   ast;
 };
 
 #endif // QSLANGDRIVER_H

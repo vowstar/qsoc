@@ -19,9 +19,8 @@ bool isGui(int &argc, char *argv[])
     return true;
 }
 
-void initTranslator(const QCoreApplication &app,
-                    QTranslator &translator,
-                    const QString &prefix = ":/i18n/")
+void initTranslator(
+    const QCoreApplication &app, QTranslator &translator, const QString &prefix = ":/i18n/")
 {
     const QStringList uiLanguages = QLocale::system().uiLanguages();
 
@@ -42,24 +41,33 @@ void initParser(const QCoreApplication &app, QCommandLineParser &parser)
 
     parser.setApplicationDescription(
         QCoreApplication::translate("main", "Generate SoC components via the command line."));
+    parser.setOptionsAfterPositionalArgumentsMode(QCommandLineParser::ParseAsOptions);
     parser.addHelpOption();
     parser.addVersionOption();
-
     parser.addOptions({
         {{"c", "cli"},
          QCoreApplication::translate(
              "main", "Start the software in CLI mode, otherwise it will start in GUI mode.")},
         {{"l", "level"},
-         QCoreApplication::translate("main",
-                                     "Set log level. 0 is silent, 1 is error, 2 is warning, 3 is "
-                                     "info, 4 is debug, 5 is verbose."),
+         QCoreApplication::translate(
+             "main",
+             "Set log level. 0 is silent, 1 is error, 2 is warning, 3 is "
+             "info, 4 is debug, 5 is verbose."),
          "level"},
         {{"f", "filelist"},
-         QCoreApplication::translate("main",
-                                     "The path where the file list is located, including a list of "
-                                     "verilog files in order."),
+         QCoreApplication::translate(
+             "main",
+             "The path where the file list is located, including a list of "
+             "verilog files in order."),
          "filelist"},
     });
+    parser.addPositionalArgument(
+        "command",
+        QCoreApplication::translate(
+            "main",
+            "The subcommand to run.\n"
+            "symbol"),
+        "<command> [options]");
 
     parser.process(app);
 }
@@ -69,8 +77,8 @@ int main(int argc, char *argv[])
     QStaticLog::setLevel(QStaticLog::levelS);
 
     QCommandLineParser parser;
-    QTranslator translator;
-    QTranslator translatorBase;
+    QTranslator        translator;
+    QTranslator        translatorBase;
 
     int result = 0;
 
@@ -93,7 +101,7 @@ int main(int argc, char *argv[])
             QStaticLog::setLevel(parser.value("level").toInt());
         }
 
-        QThread thread;
+        QThread       thread;
         QSocCliWorker socCliWorker;
         socCliWorker.setup(thread);
         socCliWorker.setParser(&parser);

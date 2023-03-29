@@ -23,7 +23,7 @@ public slots:
 
 private:
     QCommandLineParser *parser;
-    QMutex mutex;
+    QMutex              mutex;
 
     void processFileList(const QString &fileListName);
 

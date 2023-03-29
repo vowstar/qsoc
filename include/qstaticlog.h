@@ -64,7 +64,7 @@ private:
     static QString strDRichtext;
     static QString strVRichtext;
 
-    static int level;
+    static int  level;
     static bool colorConsole;
     static bool colorRichtext;
 };
