@@ -161,6 +161,17 @@ if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(${PROJECT_NAME})
 endif()
 
+## Clang-format
+find_program(CLANG_FORMAT NAMES clang-format)
+if(CLANG_FORMAT)
+    message(STATUS "Found clang-format: ${CLANG_FORMAT}")
+    add_custom_target(
+        clang-format
+        COMMAND ${CLANG_FORMAT} -i -style=file ${PROJECT_CPP_FILES} ${PROJECT_H_FILES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+    )
+endif()
+
 ## Testing
 if (ENABLE_UNIT_TEST)
     enable_testing()
