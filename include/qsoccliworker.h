@@ -5,9 +5,7 @@
 #include <QCommandLineParser>
 #include <QDebug>
 #include <QFileInfo>
-#include <QMutex>
 #include <QObject>
-#include <QThread>
 
 class QSocCliWorker : public QObject
 {
@@ -15,7 +13,7 @@ class QSocCliWorker : public QObject
 public:
     explicit QSocCliWorker(QObject *parent = nullptr);
     ~QSocCliWorker();
-    void setup(QThread &thread);
+    void setup(const QCoreApplication &application);
     void setParser(QCommandLineParser *parser);
 
 public slots:
@@ -23,7 +21,6 @@ public slots:
 
 private:
     QCommandLineParser *parser;
-    QMutex              mutex;
 
     void processFileList(const QString &fileListName);
 

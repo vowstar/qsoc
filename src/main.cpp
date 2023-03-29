@@ -3,9 +3,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDebug>
-#include <QHash>
 #include <QLocale>
-#include <QThread>
 #include <QTranslator>
 
 #include "qsoccliworker.h"
@@ -169,13 +167,10 @@ int main(int argc, char *argv[])
         initTranslator(app, translatorBase, ":/i18n/qtbase_");
         initParser(app, parser);
 
-        QThread       thread;
         QSocCliWorker socCliWorker;
-        socCliWorker.setup(thread);
+        socCliWorker.setup(app);
         socCliWorker.setParser(&parser);
-        thread.start();
         result = app.exec();
-        thread.wait();
     }
     return result;
 }
