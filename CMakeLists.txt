@@ -65,6 +65,7 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/external/slang/external
     )
     set(SVLANG_LIBRARIES slang::slang)
+    message(STATUS "Use local sv-lang library: ${SVLANG_LIBRARIES}")
 endif()
 
 ## JSON
@@ -77,6 +78,7 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/external/json/include
     )
     set(JSON_LIBRARIES nlohmann_json::nlohmann_json)
+    message(STATUS "Use local nlohmann_json library: ${JSON_LIBRARIES} ${JSON_INCLUDE_DIRS}")
 endif()
 
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "src/*.cpp")
@@ -132,6 +134,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${SQLITE3_INCLUDE_DIRS}
     ${SVLANG_INCLUDE_DIRS}
+    ${JSON_INCLUDE_DIRS}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -143,6 +146,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${QT_LIBRARIES}
     ${SQLITE3_LIBRARIES}
     ${SVLANG_LIBRARIES}
+    ${JSON_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

@@ -60,6 +60,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${SQLITE3_INCLUDE_DIRS}
         ${SVLANG_INCLUDE_DIRS}
+        ${JSON_INCLUDE_DIRS}
     )
 
     target_link_libraries(${TARGET_NAME} PRIVATE
@@ -72,6 +73,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${QT_LIBRARIES}
         ${SQLITE3_LIBRARIES}
         ${SVLANG_LIBRARIES}
+        ${JSON_LIBRARIES}
     )
 endfunction()
 
