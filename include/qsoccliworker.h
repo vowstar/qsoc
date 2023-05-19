@@ -21,7 +21,9 @@ public slots:
 
 private:
     QCommandLineParser parser;
-    void parseSymbol();
+
+    void parseRoot(const QStringList &appArguments);
+    void parseSymbol(const QStringList &appArguments);
     void processFileList(const QString &fileListName);
 
 signals:

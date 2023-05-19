@@ -13,6 +13,11 @@ QSocCliWorker::QSocCliWorker(QObject *parent)
     /* Set up application name and version */
     QCoreApplication::setApplicationName("socstuido");
     QCoreApplication::setApplicationVersion("1.0.0");
+    /* Set up command line parser */
+    parser.setApplicationDescription(
+        QCoreApplication::translate("main", "Generate SoC components via the command line."));
+    parser.setOptionsAfterPositionalArgumentsMode(QCommandLineParser::ParseAsOptions);
+    parser.addVersionOption();
 }
 
 QSocCliWorker::~QSocCliWorker() {}
@@ -41,15 +46,15 @@ void QSocCliWorker::processFileList(const QString &fileListName)
 
 void QSocCliWorker::run()
 {
-    /* Set up command line parser */
-    parser.setApplicationDescription(
-        QCoreApplication::translate("main", "Generate SoC components via the command line."));
-    parser.setOptionsAfterPositionalArgumentsMode(QCommandLineParser::ParseAsOptions);
-    parser.addVersionOption();
+    parseRoot(QCoreApplication::arguments());
+    emit quit();
+}
+
+void QSocCliWorker::parseRoot(const QStringList &appArguments)
+{
     parser.addOptions({
         {{"h", "help"},
-         QCoreApplication::translate(
-             "main", "Displays help on commandline options.")},
+         QCoreApplication::translate("main", "Displays help on commandline options.")},
         {{"c", "cli"},
          QCoreApplication::translate(
              "main", "Start the software in CLI mode, otherwise it will start in GUI mode.")},
@@ -69,15 +74,15 @@ void QSocCliWorker::run()
             "schematic   Processing of Schematic.\n"
             "generate    Generate rtl, such as verilog, etc.\n"),
         "<command> [command options]");
-    parser.parse(QCoreApplication::arguments());
+    parser.parse(appArguments);
     /* Set debug level as early as possible */
     if (parser.isSet("level")) {
         QStaticLog::setLevel(parser.value("level").toInt());
     }
     /* version options have higher priority */
     if (!parser.isSet("version")) {
-        const QStringList args = parser.positionalArguments();
-        if (args.isEmpty()) {
+        const QStringList cmdArguments = parser.positionalArguments();
+        if (cmdArguments.isEmpty()) {
             if (!parser.isSet("help")) {
                 qCritical() << QCoreApplication::translate("main", "Error: missing subcommand.");
                 parser.showHelp(1);
@@ -85,11 +90,14 @@ void QSocCliWorker::run()
                 parser.showHelp(0);
             }
         } else {
-            const QString &command = args.first();
+            /* Perform different operations according to different subcommands */
+            const QString &command       = cmdArguments.first();
+            QStringList    nextArguments = appArguments;
             if (command == "gui") {
                 QStaticLog::logV(Q_FUNC_INFO, "Starting GUI ...");
             } else if (command == "symbol") {
-                parseSymbol();
+                nextArguments.removeOne(command);
+                parseSymbol(nextArguments);
             } else if (command == "schematic") {
                 qCritical() << "Error: not implemented schematic yet.";
                 parser.showHelp(1);
@@ -107,13 +115,11 @@ void QSocCliWorker::run()
         }
     }
     parser.process(*QCoreApplication::instance());
-
-    emit quit();
 }
 
-void QSocCliWorker::parseSymbol()
+void QSocCliWorker::parseSymbol(const QStringList &appArguments)
 {
-    /* Setup subcommand */
+    /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
     parser.addOptions({
         {{"f", "filelist"},
@@ -141,11 +147,9 @@ void QSocCliWorker::parseSymbol()
         QCoreApplication::translate("main", "The verilog files to be processed."),
         "[<verilog files>]");
 
-    QStringList subArguments = QCoreApplication::arguments();
-    subArguments.removeOne("symbol");
-    parser.parse(subArguments);
-    const QStringList subArgs = parser.positionalArguments();
-    if (subArgs.isEmpty()) {
+    parser.parse(appArguments);
+    const QStringList cmdArguments = parser.positionalArguments();
+    if (cmdArguments.isEmpty()) {
         if (!parser.isSet("help")) {
             qCritical() << "Error: missing subcommand.";
             parser.showHelp(1);
@@ -153,17 +157,16 @@ void QSocCliWorker::parseSymbol()
             parser.showHelp(0);
         }
     } else {
-        const QString &subCommand = subArgs.first();
-        if (subCommand == "import" || subCommand == "update") {
-        } else if (subCommand == "remove") {
+        const QString &command = cmdArguments.first();
+        if (command == "import" || command == "update") {
+        } else if (command == "remove") {
             parser.addPositionalArgument(
                 "name",
                 QCoreApplication::translate("main", "The name of the symbol to be removed."),
                 "[<name>]");
-
         } else {
             if (!parser.isSet("help")) {
-                qCritical() << "Error: unknown subcommand." << subCommand;
+                qCritical() << "Error: unknown subcommand." << command;
                 parser.showHelp(1);
             } else {
                 parser.showHelp(0);
