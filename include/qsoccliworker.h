@@ -21,11 +21,12 @@ public slots:
 
 private:
     QCommandLineParser parser;
-
+    void parseSymbol();
     void processFileList(const QString &fileListName);
 
 signals:
-    void finished();
+    void exit(int returnCode = 0);
+    void quit();
 };
 
 #endif // QSOCCLIWORKER_H

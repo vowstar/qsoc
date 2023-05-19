@@ -21,7 +21,10 @@ void QSocCliWorker::setup(bool isGui)
     /* Determine if we are in gui or cli mode */
     if (!isGui) {
         /* In cli, cause application to exit when finished */
-        QObject::connect(this, SIGNAL(finished()), QCoreApplication::instance(), SLOT(quit()));
+        QObject::connect(
+            this, SIGNAL(exit()), QCoreApplication::instance(), SLOT(exit()), Qt::QueuedConnection);
+        QObject::connect(
+            this, SIGNAL(quit()), QCoreApplication::instance(), SLOT(quit()), Qt::QueuedConnection);
     }
     /* This will run the task from the application event loop */
     QTimer::singleShot(0, this, SLOT(run()));
@@ -68,66 +71,18 @@ void QSocCliWorker::run()
     if (parser.isSet("level")) {
         QStaticLog::setLevel(parser.value("level").toInt());
     }
-    /* help and version options have higher priority */
-    if ((!parser.isSet("help")) && (!parser.isSet("version"))) {
+    /* version options have higher priority */
+    if (!parser.isSet("version")) {
         const QStringList args = parser.positionalArguments();
-        if (args.isEmpty()) {
-            qCritical() << "Error: missing subcommand";
+        if (args.isEmpty() && !parser.isSet("help")) {
+            qCritical() << QCoreApplication::translate("main", "Error: missing subcommand");
             parser.showHelp(1);
         }
         const QString &command = args.first();
         if (command == "gui") {
             QStaticLog::logV(Q_FUNC_INFO, "Starting GUI ...");
         } else if (command == "symbol") {
-            /* Setup subcommand */
-            parser.clearPositionalArguments();
-            parser.addPositionalArgument(
-                "subcommand",
-                QCoreApplication::translate(
-                    "main",
-                    "import   Import symbol from verilog\n"
-                    "update   Update symbol from verilog\n"
-                    "remove   Remove symbol by name"),
-                "symbol <subcommand> [subcommand options]");
-            parser.addPositionalArgument(
-                "files",
-                QCoreApplication::translate("main", "The verilog files to be processed"),
-                "[<verilog files>]");
-            parser.addOptions({
-                {{"f", "filelist"},
-                 QCoreApplication::translate(
-                     "main",
-                     "The path where the file list is located, including a list of "
-                     "verilog files in order"),
-                 "filelist"},
-            });
-            parser.addOptions({
-                {{"s", "symbol"},
-                 QCoreApplication::translate(
-                     "main", "The symbol name to be imported, updated or removed"),
-                 "symbol"},
-            });
-
-            QStringList subArguments = QCoreApplication::arguments();
-            subArguments.removeOne("symbol");
-            parser.parse(subArguments);
-            const QStringList subArgs = parser.positionalArguments();
-            if (subArgs.isEmpty()) {
-                qCritical() << "Error: missing subcommand";
-                parser.showHelp(1);
-            }
-            const QString &subCommand = subArgs.first();
-            if (subCommand == "import" || subCommand == "update") {
-            } else if (subCommand == "remove") {
-                parser.addPositionalArgument(
-                    "name",
-                    QCoreApplication::translate("main", "The name of the symbol to be removed"),
-                    "[<name>]");
-
-            } else {
-                qCritical() << "Error: unknown subcommand" << subCommand;
-                parser.showHelp(1);
-            }
+            parseSymbol();
         } else if (command == "schematic") {
             qCritical() << "Error: not implemented schematic yet";
             parser.showHelp(1);
@@ -135,11 +90,68 @@ void QSocCliWorker::run()
             qCritical() << "Error: not implemented generate yet";
             parser.showHelp(1);
         } else {
-            qCritical() << "Error: unknown subcommand" << command;
-            parser.showHelp(1);
+            if (!parser.isSet("help")) {
+                qCritical() << "Error: unknown subcommand" << command;
+                parser.showHelp(1);
+            }
         }
     }
     parser.process(*QCoreApplication::instance());
 
-    emit finished();
+    emit quit();
+}
+
+void QSocCliWorker::parseSymbol()
+{
+    /* Setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addPositionalArgument(
+        "subcommand",
+        QCoreApplication::translate(
+            "main",
+            "import   Import symbol from verilog\n"
+            "update   Update symbol from verilog\n"
+            "remove   Remove symbol by name"),
+        "symbol <subcommand> [subcommand options]");
+    parser.addPositionalArgument(
+        "files",
+        QCoreApplication::translate("main", "The verilog files to be processed"),
+        "[<verilog files>]");
+    parser.addOptions({
+        {{"f", "filelist"},
+            QCoreApplication::translate(
+                "main",
+                "The path where the file list is located, including a list of "
+                "verilog files in order"),
+            "filelist"},
+    });
+    parser.addOptions({
+        {{"s", "symbol"},
+            QCoreApplication::translate(
+                "main", "The symbol name to be imported, updated or removed"),
+            "symbol"},
+    });
+
+    QStringList subArguments = QCoreApplication::arguments();
+    subArguments.removeOne("symbol");
+    parser.parse(subArguments);
+    const QStringList subArgs = parser.positionalArguments();
+    if (subArgs.isEmpty() && !parser.isSet("help")) {
+        qCritical() << "Error: missing subcommand";
+        parser.showHelp(1);
+    }
+    const QString &subCommand = subArgs.first();
+    if (subCommand == "import" || subCommand == "update") {
+    } else if (subCommand == "remove") {
+        parser.addPositionalArgument(
+            "name",
+            QCoreApplication::translate("main", "The name of the symbol to be removed"),
+            "[<name>]");
+
+    } else {
+        if (!parser.isSet("help")) {
+            qCritical() << "Error: unknown subcommand" << subCommand;
+            parser.showHelp(1);
+        }
+    }
 }
