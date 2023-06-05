@@ -1,6 +1,7 @@
 #include "qslangdriver.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QTemporaryFile>
@@ -123,16 +124,33 @@ bool QSlangDriver::parseArgs(const QString &args)
     return result;
 }
 
-bool QSlangDriver::parseFileList(const QString &fileListName)
+bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList &filePathList)
 {
-    bool result = false;
-    QStaticLog::logD(Q_FUNC_INFO, "Use file list:" + fileListName);
-    /* Read text from filelist */
-    QFile inputFile(fileListName);
-    if (inputFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream inputStream(&inputFile);
-        QString     content = inputStream.readAll();
-
+    bool    result  = false;
+    QString content = "";
+    if (!QFileInfo::exists(fileListPath) && filePathList.isEmpty()) {
+        QStaticLog::logE(
+            Q_FUNC_INFO,
+            "File path parameter is empty, also the file list path not exist:" + fileListPath);
+    } else {
+        /* Process read file list path */
+        if (QFileInfo::exists(fileListPath)) {
+            QStaticLog::logD(Q_FUNC_INFO, "Use file list path:" + fileListPath);
+            /* Read text from filelist */
+            QFile inputFile(fileListPath);
+            if (inputFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream inputStream(&inputFile);
+                content = inputStream.readAll();
+            } else {
+                QStaticLog::logE(Q_FUNC_INFO, "Failed to open file list:" + fileListPath);
+            }
+        }
+        /* Process append of file path list */
+        if (!filePathList.isEmpty()) {
+            QStaticLog::logD(Q_FUNC_INFO, "Use file path list:" + filePathList.join(","));
+            /* Append file path list to the end of content */
+            content.append("\n" + filePathList.join("\n"));
+        }
         /* Remove single line comment */
         content.remove(QRegularExpression(R"(\s*//[^\n]*\s*)"));
         /* Remove multiline comments */
@@ -171,8 +189,6 @@ bool QSlangDriver::parseFileList(const QString &fileListName)
             /* Delete temporary file */
             tempFile.remove();
         }
-    } else {
-        QStaticLog::logE(Q_FUNC_INFO, "Failed to open file list:" + fileListName);
     }
 
     return result;

@@ -27,7 +27,7 @@ private:
     void parseSymbolImport(const QStringList &appArguments);
     void parseSymbolUpdate(const QStringList &appArguments);
     void parseSymbolRemove(const QStringList &appArguments);
-    void processFileList(const QString &fileListName);
+    void processFileList(const QString &fileListPath, const QStringList &filePathList);
 
 signals:
     void exit(int returnCode = 0);

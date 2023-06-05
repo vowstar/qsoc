@@ -36,12 +36,13 @@ void QSocCliWorker::setup(bool isGui)
     QTimer::singleShot(0, this, SLOT(run()));
 }
 
-void QSocCliWorker::processFileList(const QString &fileListName)
+void QSocCliWorker::processFileList(const QString &fileListPath, const QStringList &filePathList)
 {
     QSlangDriver driver(this);
-    if (driver.parseFileList(fileListName)) {
+    if (driver.parseFileList(fileListPath, filePathList)) {
         /* Parse success */
     }
+    qCritical() << driver.getAst().dump(4).c_str();
 }
 
 void QSocCliWorker::run()
@@ -211,12 +212,6 @@ void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
     }
 }
 
-void QSocCliWorker::parseSymbolUpdate(const QStringList &appArguments)
-{
+void QSocCliWorker::parseSymbolUpdate(const QStringList &appArguments) {}
 
-}
-
-void QSocCliWorker::parseSymbolRemove(const QStringList &appArguments)
-{
-
-}
+void QSocCliWorker::parseSymbolRemove(const QStringList &appArguments) {}
