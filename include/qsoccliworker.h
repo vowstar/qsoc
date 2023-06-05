@@ -24,6 +24,9 @@ private:
 
     void parseRoot(const QStringList &appArguments);
     void parseSymbol(const QStringList &appArguments);
+    void parseSymbolImport(const QStringList &appArguments);
+    void parseSymbolUpdate(const QStringList &appArguments);
+    void parseSymbolRemove(const QStringList &appArguments);
     void processFileList(const QString &fileListName);
 
 signals:
