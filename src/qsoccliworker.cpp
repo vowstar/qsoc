@@ -194,21 +194,23 @@ void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
             parser.showHelp(0);
         }
     } else {
-        const QString &symbolName = cmdArguments.first();
-        QStringList    fileList   = cmdArguments;
-        fileList.removeFirst();
-        // if (!parser.isSet("filelist")) {
-        //     cmdArguments.count()
-        // } else if (command == "remove") {
-
-        // } else {
-        //     if (!parser.isSet("help")) {
-        //         qCritical() << "Error: unknown subcommand." << command;
-        //         parser.showHelp(1);
-        //     } else {
-        //         parser.showHelp(0);
-        //     }
-        // }
+        const QString &symbolName   = cmdArguments.first();
+        QStringList    filePathList = cmdArguments;
+        filePathList.removeFirst();
+        if (filePathList.isEmpty() && !parser.isSet("filelist")) {
+            if (!parser.isSet("help")) {
+                qCritical() << "Error: missing verilog files.";
+                parser.showHelp(1);
+            } else {
+                parser.showHelp(0);
+            }
+        } else {
+            if (!parser.isSet("filelist")) {
+                processFileList("", filePathList);
+            } else {
+                processFileList(parser.value("filelist"), filePathList);
+            }
+        }
     }
 }
 
