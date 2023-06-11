@@ -41,8 +41,14 @@ void QSocCliWorker::processFileList(const QString &fileListPath, const QStringLi
     QSlangDriver driver(this);
     if (driver.parseFileList(fileListPath, filePathList)) {
         /* Parse success */
+        QStringList moduleList = driver.getModuleList();
+        if (moduleList.isEmpty()) {
+            qCritical() << "Error: no module found.";
+        } else {
+            qDebug() << "Found modules:" << moduleList;
+            qDebug() << driver.getModuleAst(moduleList.first()).dump(4).c_str();
+        }
     }
-    qCritical() << driver.getAst().dump(4).c_str();
 }
 
 void QSocCliWorker::run()

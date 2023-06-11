@@ -198,3 +198,31 @@ const json &QSlangDriver::getAst()
 {
     return ast;
 }
+
+const json &QSlangDriver::getModuleAst(const QString &moduleName)
+{
+    if (ast.contains("members")) {
+        for (const json &member : ast["members"]) {
+            if (member.contains("kind") && member["kind"] == "Instance") {
+                if (member.contains("name") && member["name"] == moduleName.toStdString()) {
+                    return member;
+                }
+            }
+        }
+    }
+    return ast;
+}
+
+const QStringList &QSlangDriver::getModuleList()
+{
+    if (ast.contains("members")) {
+        for (const json &member : ast["members"]) {
+            if (member.contains("kind") && member["kind"] == "Instance") {
+                if (member.contains("name")) {
+                    moduleList.append(QString::fromStdString(member["name"]));
+                }
+            }
+        }
+    }
+    return moduleList;
+}
