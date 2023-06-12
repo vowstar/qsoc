@@ -77,6 +77,7 @@ void QSocCliWorker::parseRoot(const QStringList &appArguments)
         QCoreApplication::translate(
             "main",
             "gui         Start the software in GUI mode.\n"
+            "project     Create, update of project.\n"
             "symbol      Import, update of symbol.\n"
             "schematic   Processing of Schematic.\n"
             "generate    Generate rtl, such as verilog, etc.\n"),
@@ -102,6 +103,9 @@ void QSocCliWorker::parseRoot(const QStringList &appArguments)
             QStringList    nextArguments = appArguments;
             if (command == "gui") {
                 QStaticLog::logV(Q_FUNC_INFO, "Starting GUI ...");
+            } else if (command == "project") {
+                nextArguments.removeOne(command);
+                parseProject(nextArguments);
             } else if (command == "symbol") {
                 nextArguments.removeOne(command);
                 parseSymbol(nextArguments);
@@ -123,6 +127,89 @@ void QSocCliWorker::parseRoot(const QStringList &appArguments)
     }
     parser.process(*QCoreApplication::instance());
 }
+
+void QSocCliWorker::parseProject(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addPositionalArgument(
+        "subcommand",
+        QCoreApplication::translate(
+            "main",
+            "create   Create project.\n"
+            "update   Update project.\n"
+            "remove   Remove project."),
+        "project <subcommand> [subcommand options]");
+
+    parser.parse(appArguments);
+    const QStringList cmdArguments = parser.positionalArguments();
+    if (cmdArguments.isEmpty()) {
+        if (!parser.isSet("help")) {
+            qCritical() << "Error: missing subcommand.";
+            parser.showHelp(1);
+        } else {
+            parser.showHelp(0);
+        }
+    } else {
+        const QString &command       = cmdArguments.first();
+        QStringList    nextArguments = appArguments;
+        if (command == "create") {
+            nextArguments.removeOne(command);
+            parseProjectCreate(nextArguments);
+        } else if (command == "config") {
+            nextArguments.removeOne(command);
+            parseProjectUpdate(nextArguments);
+        } else if (command == "remove") {
+            nextArguments.removeOne(command);
+            parseProjectRemove(nextArguments);
+        } else {
+            if (!parser.isSet("help")) {
+                qCritical() << "Error: unknown subcommand." << command;
+                parser.showHelp(1);
+            } else {
+                parser.showHelp(0);
+            }
+        }
+    }
+}
+
+void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"m", "sym"},
+         QCoreApplication::translate("main", "The path to the symbol directory."),
+         "symbol directory"},
+        {{"b", "bus"},
+         QCoreApplication::translate("main", "The path to the bus directory."),
+         "bus directory"},
+        {{"s", "sch"},
+         QCoreApplication::translate("main", "The path to the schematic directory."),
+         "schematic directory"},
+    });
+    parser.addPositionalArgument(
+        "name",
+        QCoreApplication::translate("main", "The name of the project to be create."),
+        "[<name>]");
+
+    parser.parse(appArguments);
+    const QStringList cmdArguments = parser.positionalArguments();
+    if (cmdArguments.isEmpty()) {
+        if (!parser.isSet("help")) {
+            qCritical() << "Error: missing project name.";
+            parser.showHelp(1);
+        } else {
+            parser.showHelp(0);
+        }
+    } else {
+        const QString &projectName = cmdArguments.first();
+    }
+}
+
+void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments) {}
+
+void QSocCliWorker::parseProjectRemove(const QStringList &appArguments) {}
 
 void QSocCliWorker::parseSymbol(const QStringList &appArguments)
 {
