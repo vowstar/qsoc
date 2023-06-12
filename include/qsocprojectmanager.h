@@ -16,19 +16,21 @@ public slots:
     bool save(const QString &projectName);
     bool load(const QString &projectName);
     bool load();
-    // bool           isValid();
+    bool isValid();
+
     const QString &getProjectName();
     const QString &getProjectPath();
     const QString &getBusPath();
     const QString &getSymbolPath();
     const QString &getSchematicPath();
     const QString &getOutputPath();
-    void           setProjectName(const QString &projectName);
-    void           setProjectPath(const QString &projectPath);
-    void           setBusPath(const QString &busPath);
-    void           setSymbolPath(const QString &symbolPath);
-    void           setSchematicPath(const QString &schematicPath);
-    void           setOutputPath(const QString &outputPath);
+
+    void setProjectName(const QString &projectName);
+    void setProjectPath(const QString &projectPath);
+    void setBusPath(const QString &busPath);
+    void setSymbolPath(const QString &symbolPath);
+    void setSchematicPath(const QString &schematicPath);
+    void setOutputPath(const QString &outputPath);
 
 private:
     /* Project environment variables map */

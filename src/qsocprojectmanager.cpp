@@ -195,6 +195,55 @@ bool QSocProjectManager::load()
     return true;
 }
 
+bool QSocProjectManager::isValid()
+{
+    if (projectName.isEmpty()) {
+        qCritical() << "Error: project name is empty.";
+        return false;
+    }
+    if (projectPath.isEmpty()) {
+        qCritical() << "Error: project path is empty.";
+        return false;
+    }
+    if (busPath.isEmpty()) {
+        qCritical() << "Error: bus path is empty.";
+        return false;
+    }
+    if (symbolPath.isEmpty()) {
+        qCritical() << "Error: symbol path is empty.";
+        return false;
+    }
+    if (schematicPath.isEmpty()) {
+        qCritical() << "Error: schematic path is empty.";
+        return false;
+    }
+    if (outputPath.isEmpty()) {
+        qCritical() << "Error: output path is empty.";
+        return false;
+    }
+    if (!QDir(projectPath).exists()) {
+        qCritical() << "Error: project path is not a directory.";
+        return false;
+    }
+    if (!QDir(busPath).exists()) {
+        qCritical() << "Error: bus path is not a directory.";
+        return false;
+    }
+    if (!QDir(symbolPath).exists()) {
+        qCritical() << "Error: symbol path is not a directory.";
+        return false;
+    }
+    if (!QDir(schematicPath).exists()) {
+        qCritical() << "Error: schematic path is not a directory.";
+        return false;
+    }
+    if (!QDir(outputPath).exists()) {
+        qCritical() << "Error: output path is not a directory.";
+        return false;
+    }
+    return true;
+}
+
 const QString &QSocProjectManager::getProjectName()
 {
     return projectName;
