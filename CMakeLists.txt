@@ -81,6 +81,22 @@ else()
     message(STATUS "Use local nlohmann_json library: ${JSON_LIBRARIES} ${JSON_INCLUDE_DIRS}")
 endif()
 
+# YAML
+pkg_check_modules(YAML IMPORTED_TARGET yaml-cpp)
+if (YAML_FOUND)
+    message(STATUS "Use system yaml-cpp library: ${YAML_LIBRARIES} ${YAML_VERSION}")
+else()
+    set(YAML_CPP_BUILD_TESTS   OFF CACHE BOOL "disable yaml tests")
+    set(YAML_CPP_BUILD_TOOLS   OFF CACHE BOOL "disable yaml tools")
+    set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "disable yaml contrib")
+    add_subdirectory(external/yaml)
+    set(YAML_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/yaml/include
+    )
+    set(YAML_LIBRARIES yaml-cpp)
+    message(STATUS "Use local yaml-cpp library: ${YAML_LIBRARIES} ${YAML_INCLUDE_DIRS}")
+endif()
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE ${CMAKE_CURRENT_LIST_DIR} "include/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "resource/*.qrc")
@@ -135,6 +151,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${SQLITE3_INCLUDE_DIRS}
     ${SVLANG_INCLUDE_DIRS}
     ${JSON_INCLUDE_DIRS}
+    ${YAML_INCLUDE_DIRS}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -147,6 +164,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${SQLITE3_LIBRARIES}
     ${SVLANG_LIBRARIES}
     ${JSON_LIBRARIES}
+    ${YAML_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
