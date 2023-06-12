@@ -52,6 +52,9 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
     parser.addOptions({
+        {{"p", "path"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project path"},
         {{"b", "bus"},
          QCoreApplication::translate("main", "The path to the bus directory."),
          "bus directory"},
