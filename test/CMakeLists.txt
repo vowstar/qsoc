@@ -61,6 +61,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${SQLITE3_INCLUDE_DIRS}
         ${SVLANG_INCLUDE_DIRS}
         ${JSON_INCLUDE_DIRS}
+        ${YAML_INCLUDE_DIRS}
     )
 
     target_link_libraries(${TARGET_NAME} PRIVATE
@@ -74,6 +75,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${SQLITE3_LIBRARIES}
         ${SVLANG_LIBRARIES}
         ${JSON_LIBRARIES}
+        ${YAML_LIBRARIES}
     )
 endfunction()
 
