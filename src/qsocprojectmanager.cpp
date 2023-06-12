@@ -16,7 +16,7 @@ QSocProjectManager::QSocProjectManager(QObject *parent)
 bool QSocProjectManager::create(const QString &projectName)
 {
     /* Create project directory */
-    QDir dir = QDir(projectPath);
+    const QDir &dir = QDir::currentPath();
     if (!dir.mkpath(projectPath)) {
         qCritical() << "Error: failed to create bus directory.";
         return false;
@@ -37,6 +37,8 @@ bool QSocProjectManager::create(const QString &projectName)
         qCritical() << "Error: failed to create output directory.";
         return false;
     }
+
+    qDebug() << "Project created at" << projectPath << "with name" << projectName << ".";
 
     return true;
 }
