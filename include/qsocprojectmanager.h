@@ -26,12 +26,15 @@ public slots:
     void           setOutputPath(const QString &outputPath);
 
 private:
+    /* Project environment variables map */
     QMap<QString, QString> env;
-    QString                projectPath;
-    QString                busPath;
-    QString                symbolPath;
-    QString                schematicPath;
-    QString                outputPath;
+    /* Project private variables */
+    QString projectName;
+    QString projectPath;
+    QString busPath;
+    QString symbolPath;
+    QString schematicPath;
+    QString outputPath;
 
     QString getSimplifyPath(const QString &path);
     QString getExpandPath(const QString &path);

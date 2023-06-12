@@ -20,6 +20,8 @@ QSocProjectManager::QSocProjectManager(QObject *parent)
             env[keyAndValue[0]] = keyAndValue[1];
         }
     }
+    /* Set project default name */
+    projectName = "";
     /* Set project default paths */
     projectPath   = QDir::currentPath();
     busPath       = QDir::currentPath() + "/bus";
@@ -50,7 +52,6 @@ QString QSocProjectManager::getSimplifyPath(const QString &path)
         if (iterator.key().contains("SOCSTUDIO_")) {
             const QString pattern = QString("${%1}").arg(iterator.key());
             result                = result.replace(iterator.value(), pattern);
-            qDebug() << "Catched! " << iterator.key() << iterator.value() << pattern;
         }
     }
     return result;
@@ -104,7 +105,7 @@ bool QSocProjectManager::create(const QString &projectName)
     std::ofstream  outputFileStream(projectFilePath.toStdString());
     outputFileStream << projectNode;
 
-    qDebug() << "Project created at" << projectPath << "with name" << projectName << ".";
+    this->projectName = projectName;
 
     return true;
 }
