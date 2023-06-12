@@ -25,7 +25,6 @@ QSlangDriver::QSlangDriver(QObject *parent)
 {
     /* Get system environments */
     const QStringList envList = QProcess::systemEnvironment();
-
     /* Save system environments into QMap */
     foreach (const QString str, envList) {
         QStringList keyAndValue = str.split('=');
@@ -158,12 +157,12 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
         /* Remove empty lines */
         content.remove(QRegularExpression(R"(\n\s*\n)"));
 
-        /* Replace environment variables */
+        /* Substitute environment variables */
         QMapIterator<QString, QString> iterator(env);
         while (iterator.hasNext()) {
             iterator.next();
             const QString pattern = QString("${%1}").arg(iterator.key());
-            content.replace(pattern, iterator.value());
+            content               = content.replace(pattern, iterator.value());
         }
 
         /* Create a temporary file */
