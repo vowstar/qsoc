@@ -1,6 +1,7 @@
 #ifndef QSOCPROJECTMANAGER_H
 #define QSOCPROJECTMANAGER_H
 
+#include <QMap>
 #include <QObject>
 
 class QSocProjectManager : public QObject
@@ -10,6 +11,8 @@ public:
     explicit QSocProjectManager(QObject *parent = nullptr);
 
 public slots:
+    void           setEnv(const QString &key, const QString &value);
+    void           setEnv(const QMap<QString, QString> &env);
     bool           create(const QString &projectName);
     const QString &getProjectPath();
     const QString &getBusPath();
@@ -23,11 +26,15 @@ public slots:
     void           setOutputPath(const QString &outputPath);
 
 private:
-    QString projectPath;
-    QString busPath;
-    QString symbolPath;
-    QString schematicPath;
-    QString outputPath;
+    QMap<QString, QString> env;
+    QString                projectPath;
+    QString                busPath;
+    QString                symbolPath;
+    QString                schematicPath;
+    QString                outputPath;
+
+    QString getSimplifyPath(const QString &path);
+    QString getExpandPath(const QString &path);
 
 signals:
 };
