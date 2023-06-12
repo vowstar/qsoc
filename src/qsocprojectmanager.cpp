@@ -24,15 +24,13 @@ QSocProjectManager::QSocProjectManager(QObject *parent)
         }
     }
     /* Set project default name */
-    projectName = "";
+    setProjectName("");
     /* Set project default paths */
-    projectPath   = QDir::currentPath();
-    busPath       = QDir::currentPath() + "/bus";
-    symbolPath    = QDir::currentPath() + "/symbol";
-    schematicPath = QDir::currentPath() + "/schematic";
-    outputPath    = QDir::currentPath() + "/output";
-    /* Add socstudio system environments */
-    env["SOCSTUDIO_PROJECT_DIR"] = projectPath;
+    setProjectPath(QDir::currentPath());
+    setBusPath(QDir::currentPath() + "/bus");
+    setSymbolPath(QDir::currentPath() + "/symbol");
+    setSchematicPath(QDir::currentPath() + "/schematic");
+    setOutputPath(QDir::currentPath() + "/output");
 }
 
 void QSocProjectManager::setEnv(const QString &key, const QString &value)
@@ -73,9 +71,15 @@ QString QSocProjectManager::getExpandPath(const QString &path)
     return result;
 }
 
-bool QSocProjectManager::create(const QString &projectName)
+bool QSocProjectManager::save(const QString &projectName)
 {
-    /* Create project directory */
+    /* Check project name */
+    if (projectName.isEmpty()) {
+        qCritical() << "Error: project name is empty.";
+        return false;
+    }
+    setProjectName(projectName);
+    /* Create project directories */
     if (!QDir().mkpath(projectPath)) {
         qCritical() << "Error: failed to create bus directory.";
         return false;
@@ -96,29 +100,65 @@ bool QSocProjectManager::create(const QString &projectName)
         qCritical() << "Error: failed to create output directory.";
         return false;
     }
-
+    /* Create YAML data */
     YAML::Node projectNode;
     projectNode["version"]   = QCoreApplication::applicationVersion().toStdString();
     projectNode["bus"]       = getSimplifyPath(busPath).toStdString();
     projectNode["symbol"]    = getSimplifyPath(symbolPath).toStdString();
     projectNode["schematic"] = getSimplifyPath(schematicPath).toStdString();
     projectNode["output"]    = getSimplifyPath(outputPath).toStdString();
-
+    /* Save project file */
     const QString &projectFilePath = QString(projectPath + "/" + projectName + ".soc_pro");
     std::ofstream  outputFileStream(projectFilePath.toStdString());
     outputFileStream << projectNode;
 
-    this->projectName = projectName;
+    return true;
+}
+
+bool QSocProjectManager::load(const QString &projectName)
+{
+    /* Check project name */
+    if (projectName.isEmpty()) {
+        qCritical() << "Error: project name is empty.";
+        return false;
+    }
+    setProjectName(projectName);
+    /* Load project file */
+    const QString &filePath = QString(projectPath + "/" + projectName + ".soc_pro");
+    /* Check the existence of project files */
+    if (!QFile::exists(filePath)) {
+        qCritical() << "Error: project file not found.";
+        return false;
+    }
+    /* Load project file */
+    YAML::Node projectNode = YAML::LoadFile(filePath.toStdString());
+    /* Check project file version */
+    const QVersionNumber projectVersion = QVersionNumber::fromString(
+        QString::fromStdString(projectNode["version"].as<std::string>()));
+    const QVersionNumber appVersion = QVersionNumber::fromString(
+        QCoreApplication::applicationVersion());
+    if (projectVersion > appVersion) {
+        qCritical() << "Error: project file version is newer than application version.";
+        return false;
+    }
+    /* Set project name */
+    setProjectName(filePath.split('/').last().split('.').first());
+    /* Set project paths */
+    setProjectPath(QFileInfo(filePath).absoluteDir().absolutePath());
+    setBusPath(QString::fromStdString(projectNode["bus"].as<std::string>()));
+    setSymbolPath(QString::fromStdString(projectNode["symbol"].as<std::string>()));
+    setSchematicPath(QString::fromStdString(projectNode["schematic"].as<std::string>()));
+    setOutputPath(QString::fromStdString(projectNode["output"].as<std::string>()));
 
     return true;
 }
 
-bool QSocProjectManager::load(const QString &projectFilePath)
+bool QSocProjectManager::load()
 {
-    QString filePath = projectFilePath;
+    QString filePath;
     /* If path is a directory, search and pick a *.soc_pro file */
-    if (QFileInfo(projectFilePath).isDir()) {
-        QDir dir(projectFilePath);
+    if (QFileInfo(projectPath).isDir()) {
+        QDir dir(projectPath);
         dir.setNameFilters(QStringList() << "*.soc_pro");
         dir.setFilter(QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks);
         if (dir.count() == 0) {
@@ -144,18 +184,20 @@ bool QSocProjectManager::load(const QString &projectFilePath)
         return false;
     }
     /* Set project name */
-    projectName = filePath.split('/').last().split('.').first();
+    setProjectName(filePath.split('/').last().split('.').first());
     /* Set project paths */
-    projectPath   = QFileInfo(filePath).absoluteDir().absolutePath();
-    busPath       = getExpandPath(QString::fromStdString(projectNode["bus"].as<std::string>()));
-    symbolPath    = getExpandPath(QString::fromStdString(projectNode["symbol"].as<std::string>()));
-    schematicPath = getExpandPath(
-        QString::fromStdString(projectNode["schematic"].as<std::string>()));
-    outputPath = getExpandPath(QString::fromStdString(projectNode["output"].as<std::string>()));
-    /* Add socstudio system environments */
-    env["SOCSTUDIO_PROJECT_DIR"] = projectPath;
+    setProjectPath(QFileInfo(filePath).absoluteDir().absolutePath());
+    setBusPath(QString::fromStdString(projectNode["bus"].as<std::string>()));
+    setSymbolPath(QString::fromStdString(projectNode["symbol"].as<std::string>()));
+    setSchematicPath(QString::fromStdString(projectNode["schematic"].as<std::string>()));
+    setOutputPath(QString::fromStdString(projectNode["output"].as<std::string>()));
 
     return true;
+}
+
+const QString &QSocProjectManager::getProjectName()
+{
+    return projectName;
 }
 
 const QString &QSocProjectManager::getProjectPath()
@@ -183,28 +225,33 @@ const QString &QSocProjectManager::getOutputPath()
     return outputPath;
 }
 
+void QSocProjectManager::setProjectName(const QString &projectName)
+{
+    this->projectName = projectName;
+}
+
 void QSocProjectManager::setProjectPath(const QString &projectPath)
 {
-    this->projectPath            = projectPath;
-    env["SOCSTUDIO_PROJECT_DIR"] = projectPath;
+    this->projectPath            = getExpandPath(projectPath);
+    env["SOCSTUDIO_PROJECT_DIR"] = this->projectPath;
 }
 
 void QSocProjectManager::setBusPath(const QString &busPath)
 {
-    this->busPath = busPath;
+    this->busPath = getExpandPath(busPath);
 }
 
 void QSocProjectManager::setSymbolPath(const QString &symbolPath)
 {
-    this->symbolPath = symbolPath;
+    this->symbolPath = getExpandPath(symbolPath);
 }
 
 void QSocProjectManager::setSchematicPath(const QString &schematicPath)
 {
-    this->schematicPath = schematicPath;
+    this->schematicPath = getExpandPath(schematicPath);
 }
 
 void QSocProjectManager::setOutputPath(const QString &outputPath)
 {
-    this->outputPath = outputPath;
+    this->outputPath = getExpandPath(outputPath);
 }

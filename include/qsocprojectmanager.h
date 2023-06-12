@@ -11,15 +11,19 @@ public:
     explicit QSocProjectManager(QObject *parent = nullptr);
 
 public slots:
-    void           setEnv(const QString &key, const QString &value);
-    void           setEnv(const QMap<QString, QString> &env);
-    bool           create(const QString &projectName);
-    bool           load(const QString &projectFilePath);
+    void setEnv(const QString &key, const QString &value);
+    void setEnv(const QMap<QString, QString> &env);
+    bool save(const QString &projectName);
+    bool load(const QString &projectName);
+    bool load();
+    // bool           isValid();
+    const QString &getProjectName();
     const QString &getProjectPath();
     const QString &getBusPath();
     const QString &getSymbolPath();
     const QString &getSchematicPath();
     const QString &getOutputPath();
+    void           setProjectName(const QString &projectName);
     void           setProjectPath(const QString &projectPath);
     void           setBusPath(const QString &busPath);
     void           setSymbolPath(const QString &symbolPath);

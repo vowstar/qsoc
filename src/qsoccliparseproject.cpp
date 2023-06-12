@@ -101,7 +101,7 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
         if (parser.isSet("output")) {
             projectManager.setOutputPath(parser.value("output"));
         }
-        if (projectManager.create(projectName)) {
+        if (projectManager.save(projectName)) {
             qInfo() << "Project" << projectName << "created.";
         } else {
             qCritical() << "Error: failed to create project" << projectName;
