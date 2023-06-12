@@ -61,6 +61,9 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
         {{"s", "sch"},
          QCoreApplication::translate("main", "The path to the schematic directory."),
          "schematic directory"},
+        {{"o", "output"},
+         QCoreApplication::translate("main", "The path to the output file."),
+         "output directory"},
     });
     parser.addPositionalArgument(
         "name",
