@@ -1,5 +1,6 @@
 #include "qsoccliworker.h"
 
+#include "qsocprojectmanager.h"
 #include "qstaticlog.h"
 
 void QSocCliWorker::parseProject(const QStringList &appArguments)
@@ -83,7 +84,28 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
             parser.showHelp(0);
         }
     } else {
-        const QString &projectName = cmdArguments.first();
+        const QString     &projectName = cmdArguments.first();
+        QSocProjectManager projectManager;
+        if (parser.isSet("path")) {
+            projectManager.setProjectPath(parser.value("path"));
+        }
+        if (parser.isSet("bus")) {
+            projectManager.setBusPath(parser.value("bus"));
+        }
+        if (parser.isSet("sym")) {
+            projectManager.setSymbolPath(parser.value("sym"));
+        }
+        if (parser.isSet("sch")) {
+            projectManager.setSchematicPath(parser.value("sch"));
+        }
+        if (parser.isSet("output")) {
+            projectManager.setOutputPath(parser.value("output"));
+        }
+        if (projectManager.create(projectName)) {
+            qInfo() << "Project" << projectName << "created.";
+        } else {
+            qCritical() << "Error: failed to create project" << projectName;
+        }
     }
 }
 
