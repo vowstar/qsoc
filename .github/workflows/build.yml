@@ -24,7 +24,7 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        version: 6.4.3
+        version: 6.5.0
         install-deps: 'true'
         modules: 'qt5compat'
     - name: Install depends
