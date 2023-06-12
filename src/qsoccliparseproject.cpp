@@ -76,13 +76,14 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
+    /* Check help flag */
+    if (parser.isSet("help")) {
+        parser.showHelp(0);
+        return;
+    }
     if (cmdArguments.isEmpty()) {
-        if (!parser.isSet("help")) {
-            qCritical() << "Error: missing project name.";
-            parser.showHelp(1);
-        } else {
-            parser.showHelp(0);
-        }
+        qCritical() << "Error: missing project name.";
+        parser.showHelp(1);
         return;
     }
     /* Pass projectName to projectManager */
@@ -138,13 +139,14 @@ void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
+    /* Check help flag */
+    if (parser.isSet("help")) {
+        parser.showHelp(0);
+        return;
+    }
     if (cmdArguments.isEmpty()) {
-        if (!parser.isSet("help")) {
-            qCritical() << "Error: missing project name.";
-            parser.showHelp(1);
-        } else {
-            parser.showHelp(0);
-        }
+        qCritical() << "Error: missing project name.";
+        parser.showHelp(1);
         return;
     }
     /* Pass projectName to projectManager */
