@@ -14,6 +14,7 @@ public slots:
     void           setEnv(const QString &key, const QString &value);
     void           setEnv(const QMap<QString, QString> &env);
     bool           create(const QString &projectName);
+    bool           load(const QString &projectFilePath);
     const QString &getProjectPath();
     const QString &getBusPath();
     const QString &getSymbolPath();

@@ -3,8 +3,11 @@
 #include <fstream>
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QProcess>
 #include <QStringList>
+#include <QVersionNumber>
 
 #include "yaml-cpp/yaml.h"
 
@@ -106,6 +109,51 @@ bool QSocProjectManager::create(const QString &projectName)
     outputFileStream << projectNode;
 
     this->projectName = projectName;
+
+    return true;
+}
+
+bool QSocProjectManager::load(const QString &projectFilePath)
+{
+    QString filePath = projectFilePath;
+    /* If path is a directory, search and pick a *.soc_pro file */
+    if (QFileInfo(projectFilePath).isDir()) {
+        QDir dir(projectFilePath);
+        dir.setNameFilters(QStringList() << "*.soc_pro");
+        dir.setFilter(QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+        if (dir.count() == 0) {
+            qCritical() << "Error: project file not found.";
+            return false;
+        }
+        filePath = dir.absoluteFilePath(dir[0]);
+    }
+    /* Check the existence of project files */
+    if (!QFile::exists(filePath)) {
+        qCritical() << "Error: project file not found.";
+        return false;
+    }
+    /* Load project file */
+    YAML::Node projectNode = YAML::LoadFile(filePath.toStdString());
+    /* Check project file version */
+    const QVersionNumber projectVersion = QVersionNumber::fromString(
+        QString::fromStdString(projectNode["version"].as<std::string>()));
+    const QVersionNumber appVersion = QVersionNumber::fromString(
+        QCoreApplication::applicationVersion());
+    if (projectVersion > appVersion) {
+        qCritical() << "Error: project file version is newer than application version.";
+        return false;
+    }
+    /* Set project name */
+    projectName = filePath.split('/').last().split('.').first();
+    /* Set project paths */
+    projectPath   = QFileInfo(filePath).absoluteDir().absolutePath();
+    busPath       = getExpandPath(QString::fromStdString(projectNode["bus"].as<std::string>()));
+    symbolPath    = getExpandPath(QString::fromStdString(projectNode["symbol"].as<std::string>()));
+    schematicPath = getExpandPath(
+        QString::fromStdString(projectNode["schematic"].as<std::string>()));
+    outputPath = getExpandPath(QString::fromStdString(projectNode["output"].as<std::string>()));
+    /* Add socstudio system environments */
+    env["SOCSTUDIO_PROJECT_DIR"] = projectPath;
 
     return true;
 }
