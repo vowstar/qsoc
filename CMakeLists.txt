@@ -49,13 +49,13 @@ Checks: '-*,llvm-twine-local'
 
 ## SQLite3
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
+pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3>=3.30.0)
 if(SQLITE3_FOUND)
     message(STATUS "Use system SQLite3 library: ${SQLITE3_LIBRARIES} ${SQLITE3_VERSION}")
 endif()
 
 ## Slang(sv-lang)
-pkg_check_modules(SVLANG IMPORTED_TARGET sv-lang)
+pkg_check_modules(SVLANG IMPORTED_TARGET sv-lang>=3.0.0)
 if (SVLANG_FOUND)
     message(STATUS "Use system sv-lang library: ${SVLANG_LIBRARIES} ${SVLANG_VERSION}")
 else()
@@ -69,7 +69,7 @@ else()
 endif()
 
 ## JSON
-pkg_check_modules(JSON IMPORTED_TARGET nlohmann_json)
+pkg_check_modules(JSON IMPORTED_TARGET nlohmann_json>=3.11.0)
 if (JSON_FOUND)
     message(STATUS "Use system nlohmann_json library: ${JSON_LIBRARIES} ${JSON_VERSION}")
 else()
@@ -82,7 +82,7 @@ else()
 endif()
 
 # YAML
-pkg_check_modules(YAML IMPORTED_TARGET yaml-cpp)
+pkg_check_modules(YAML IMPORTED_TARGET yaml-cpp>=0.7.0)
 if (YAML_FOUND)
     message(STATUS "Use system yaml-cpp library: ${YAML_LIBRARIES} ${YAML_VERSION}")
 else()
