@@ -15,126 +15,126 @@ class QSocProjectManager : public QObject
     Q_OBJECT
 public:
     /**
-     * @brief QSocProjectManager
-     * @param parent
+     * @brief Constructor for QSocProjectManager
+     * @param parent parent object
      * @details This constructor will initialize project environment
      */
     explicit QSocProjectManager(QObject *parent = nullptr);
 
 public slots:
     /**
-     * @brief setEnv
-     * @param key
-     * @param value
+     * @brief Set project environment variable
+     * @param key environment variable key
+     * @param value environment variable value
      * @details This function will set project environment variable
      */
     void setEnv(const QString &key, const QString &value);
     /**
-     * @brief setEnv
-     * @param env
+     * @brief Set project environment variables
+     * @param env environment variables
      * @details This function will set project environment variables
      */
     void setEnv(const QMap<QString, QString> &env);
     /**
-     * @brief save
-     * @param projectName
-     * @return
+     * @brief Save project environment variables and settings
+     * @param projectName project name
+     * @return true if save successfully, otherwise false
      * @details This function will save project environment variables
      *          and settings into project file
      */
     bool save(const QString &projectName);
     /**
-     * @brief load
-     * @param projectName
-     * @return
+     * @brief Load project environment variables and settings
+     * @param projectName project name
+     * @return true if load successfully, otherwise false
      * @details This function will load project environment variables
      *          and settings from project file
      */
     bool load(const QString &projectName);
     /**
-     * @brief autoLoad
-     * @return
+     * @brief Auto load project environment variables and settings
+     * @return true if load successfully, otherwise false
      * @details This function will load project environment variables
-     *         and settings from project file automatically
+     *          and settings from project file automatically
      */
     bool autoLoad();
     /**
-     * @brief isValid
-     * @return
+     * @brief Validate project environment variables and settings
+     * @return true if valid, otherwise false
      * @details This function will check if project environment variables
      *          and settings are valid
      */
     bool isValid();
     /**
-     * @brief getProjectName
-     * @return
+     * @brief Get project name
+     * @return project name
      * @details This function will return project name
      */
     const QString &getProjectName();
     /**
-     * @brief getProjectPath
-     * @return
+     * @brief Get project path
+     * @return project path
      * @details This function will return project path
      */
     const QString &getProjectPath();
     /**
-     * @brief getBusPath
-     * @return
-     * @details This function will return bus path
+     * @brief Get project bus path
+     * @return project bus path
+     * @details This function will return project bus path
      */
     const QString &getBusPath();
     /**
-     * @brief getSymbolPath
-     * @return
-     * @details This function will return symbol path
+     * @brief Get project symbol path
+     * @return project symbol path
+     * @details This function will return project symbol path
      */
     const QString &getSymbolPath();
     /**
-     * @brief getSchematicPath
-     * @return
-     * @details This function will return schematic path
+     * @brief Get project schematic path
+     * @return project schematic path
+     * @details This function will return project schematic path
      */
     const QString &getSchematicPath();
     /**
-     * @brief getOutputPath
-     * @return
-     * @details This function will return output path
+     * @brief Get project output path
+     * @return project output path
+     * @details This function will return project output path
      */
     const QString &getOutputPath();
     /**
-     * @brief setProjectName
-     * @param projectName
+     * @brief Set project name
+     * @param projectName project name
      * @details This function will set project name
      */
     void setProjectName(const QString &projectName);
     /**
-     * @brief setProjectPath
-     * @param projectPath
+     * @brief Set project path
+     * @param projectPath project path
      * @details This function will set project path
      */
     void setProjectPath(const QString &projectPath);
     /**
-     * @brief setBusPath
-     * @param busPath
-     * @details This function will set bus path
+     * @brief Set project bus path
+     * @param busPath bus path
+     * @details This function will set project bus path
      */
     void setBusPath(const QString &busPath);
     /**
-     * @brief setSymbolPath
-     * @param symbolPath
-     * @details This function will set symbol path
+     * @brief Set project symbol path
+     * @param symbolPath symbol path
+     * @details This function will set project symbol path
      */
     void setSymbolPath(const QString &symbolPath);
     /**
-     * @brief setSchematicPath
-     * @param schematicPath
-     * @details This function will set schematic path
+     * @brief Set project schematic path
+     * @param schematicPath schematic path
+     * @details This function will set project schematic path
      */
     void setSchematicPath(const QString &schematicPath);
     /**
-     * @brief setOutputPath
-     * @param outputPath
-     * @details This function will set output path
+     * @brief Set project output path
+     * @param outputPath output path
+     * @details This function will set project output path
      */
     void setOutputPath(const QString &outputPath);
 
@@ -155,16 +155,16 @@ private:
     QString outputPath;
 
     /**
-     * @brief getSimplifyPath
-     * @param path
-     * @return
+     * @brief Get simplify path
+     * @param path path
+     * @return simplify path
      * @details This function will simplify path
      */
     QString getSimplifyPath(const QString &path);
     /**
-     * @brief getExpandPath
-     * @param path
-     * @return
+     * @brief Get expand path
+     * @param path path
+     * @return expand path
      * @details This function will expand path
      */
     QString getExpandPath(const QString &path);
