@@ -148,7 +148,7 @@ private:
     /* String for richtext verbose */
     static QString strVRichtext;
     /* Log level */
-    static int  level;
+    static int level;
     /* Color mode for console */
     static bool colorConsole;
     /* Color mode for richtext */
