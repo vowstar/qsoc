@@ -15,7 +15,7 @@ public slots:
     void setEnv(const QMap<QString, QString> &env);
     bool save(const QString &projectName);
     bool load(const QString &projectName);
-    bool load();
+    bool autoLoad();
     bool isValid();
 
     const QString &getProjectName();

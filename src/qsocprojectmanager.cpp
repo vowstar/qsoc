@@ -153,7 +153,7 @@ bool QSocProjectManager::load(const QString &projectName)
     return true;
 }
 
-bool QSocProjectManager::load()
+bool QSocProjectManager::autoLoad()
 {
     QString filePath;
     /* If path is a directory, search and pick a *.soc_pro file */
