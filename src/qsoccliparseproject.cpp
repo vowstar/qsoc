@@ -34,9 +34,6 @@ void QSocCliWorker::parseProject(const QStringList &appArguments)
         } else if (command == "update") {
             nextArguments.removeOne(command);
             parseProjectUpdate(nextArguments);
-        } else if (command == "remove") {
-            nextArguments.removeOne(command);
-            parseProjectRemove(nextArguments);
         } else {
             if (!parser.isSet("help")) {
                 qCritical() << "Error: unknown subcommand." << command;
@@ -181,5 +178,3 @@ void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
         qCritical() << "Error: failed to load project" << projectName;
     }
 }
-
-void QSocCliWorker::parseProjectRemove(const QStringList &appArguments) {}

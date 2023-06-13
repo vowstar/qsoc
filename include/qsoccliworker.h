@@ -26,7 +26,6 @@ private:
     void parseProject(const QStringList &appArguments);
     void parseProjectCreate(const QStringList &appArguments);
     void parseProjectUpdate(const QStringList &appArguments);
-    void parseProjectRemove(const QStringList &appArguments);
     void parseSymbol(const QStringList &appArguments);
     void parseSymbolImport(const QStringList &appArguments);
     void parseSymbolUpdate(const QStringList &appArguments);
