@@ -18,86 +18,85 @@ class QSocCliWorker : public QObject
     Q_OBJECT
 public:
     /**
-     * @brief QSocCliWorker
-     * @param parent
+     * @brief Constructor for QSocCliWorker
+     * @param parent parent object
      * @details This constructor will initialize the command line parser
      */
     explicit QSocCliWorker(QObject *parent = nullptr);
     /**
-     * @brief ~QSocCliWorker
+     * @brief Destructor for QSocCliWorker
      * @details This destructor will free the command line parser
      */
     ~QSocCliWorker();
     /**
-     * @brief setup
-     * @param isGui
+     * @brief Setup the command line parser
+     * @param isGui indicates whether the application is running
+     *              in GUI mode or not, default is false
      * @details This function will setup the command line parser
      */
     void setup(bool isGui = false);
     /**
-     * @brief process
+     * @brief Process the command line arguments
      * @details This function will process the command line arguments
      */
     void process();
 
 public slots:
     /**
-     * @brief run
+     * @brief Run the command line parser
      * @details This function will run the command line parser
      */
     void run();
 
 private:
-    /**
-     * @brief parser
-     * @details This variable is the command line parser
-     */
+    /* Command line parser */
     QCommandLineParser parser;
+
     /**
-     * @brief isGui
-     * @details This variable indicates whether the application is running
-     *          in GUI mode or not
+     * @brief Parse the application command line arguments
+     * @param appArguments command line arguments
+     * @details This function will parse the application command line arguments
      */
     void parseRoot(const QStringList &appArguments);
     /**
-     * @brief parseProject
-     * @param appArguments
+     * @brief Parse the project command line arguments
+     * @param appArguments command line arguments
      * @details This function will parse the project command line arguments
      */
     void parseProject(const QStringList &appArguments);
     /**
-     * @brief parseProjectCreate
-     * @param appArguments
+     * @brief Parse the project create command line arguments
+     * @param appArguments command line arguments
      * @details This function will parse the project create command line arguments
      */
     void parseProjectCreate(const QStringList &appArguments);
     /**
-     * @brief parseProjectUpdate
-     * @param appArguments
+     * @brief Parse the project update command line arguments
+     * @param appArguments command line arguments
      * @details This function will parse the project update command line arguments
      */
     void parseProjectUpdate(const QStringList &appArguments);
     /**
-     * @brief parseSymbol
-     * @param appArguments
+     * @brief Parse the symbol command line arguments
+     * @param appArguments command line arguments
      * @details This function will parse the symbol command line arguments
      */
     void parseSymbol(const QStringList &appArguments);
     /**
-     * @brief parseSymbolImport
-     * @param appArguments
+     * @brief Parse the symbol import command line arguments
+     * @param appArguments command line arguments
      * @details This function will parse the symbol import command line arguments
      */
     void parseSymbolImport(const QStringList &appArguments);
     /**
-     * @brief parseSymbolUpdate
-     * @param appArguments
+     * @brief Parse the symbol update command line arguments
+     * @param appArguments command line arguments
      * @details This function will parse the symbol update command line arguments
      */
     void parseSymbolUpdate(const QStringList &appArguments);
     /**
-     * @brief parseSymbolRemove
-     * @param appArguments
+     * @brief Parse the symbol remove command line arguments
+     * @param appArguments command line arguments
      * @details This function will parse the symbol remove command line arguments
      */
     void parseSymbolRemove(const QStringList &appArguments);
@@ -105,13 +104,13 @@ private:
 
 signals:
     /**
-     * @brief exit
-     * @details This signal will be emitted when the application is exiting
+     * @brief Exit the application
+     * @details This signal will be emitted when exit the application
      */
     void exit(int returnCode = 0);
     /**
-     * @brief quit
-     * @details This signal will be emitted when the application is quitting
+     * @brief Quit the application
+     * @details This signal will be emitted when quit the application
      */
     void quit();
 };
