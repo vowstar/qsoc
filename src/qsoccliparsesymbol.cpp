@@ -113,11 +113,6 @@ void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
             }
             symbolManager
                 .importFromFileList(QRegularExpression(symbolName), filelistPath, filePathList);
-            // if (!parser.isSet("filelist")) {
-            //     processFileList("", filePathList);
-            // } else {
-            //     processFileList(parser.value("filelist"), filePathList);
-            // }
         }
     }
 }
