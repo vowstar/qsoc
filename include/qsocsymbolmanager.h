@@ -36,7 +36,7 @@ public slots:
         const QStringList        &filePathList);
 
 private:
-    QSocProjectManager *projectManager;
+    QSocProjectManager *projectManager = nullptr;
 
 signals:
 };

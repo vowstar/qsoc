@@ -5,7 +5,10 @@
 QSocSymbolManager::QSocSymbolManager(QObject *parent, QSocProjectManager *projectManager)
     : QObject{parent}
 {
-    this->projectManager = projectManager;
+    /* Set project manager */
+    if (projectManager) {
+        this->projectManager = projectManager;
+    }
 }
 
 bool QSocSymbolManager::importFromFileList(
@@ -18,8 +21,6 @@ bool QSocSymbolManager::importFromFileList(
         return false;
     }
     Q_UNUSED(symbolNameRegex)
-    Q_UNUSED(fileListPath)
-    Q_UNUSED(filePathList)
 
     QSlangDriver driver(this, projectManager);
     if (driver.parseFileList(fileListPath, filePathList)) {

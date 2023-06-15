@@ -1,6 +1,8 @@
 #include "qsoccliworker.h"
 
 #include "qslangdriver.h"
+#include "qsocprojectmanager.h"
+#include "qsocsymbolmanager.h"
 #include "qstaticlog.h"
 
 void QSocCliWorker::parseSymbol(const QStringList &appArguments)
@@ -53,6 +55,9 @@ void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
     parser.addOptions({
+        {{"p", "path"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project path"},
         {{"f", "filelist"},
          QCoreApplication::translate(
              "main",
@@ -90,6 +95,24 @@ void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
                 parser.showHelp(0);
             }
         } else {
+            /* Setup project manager and project path  */
+            QSocProjectManager projectManager(this);
+            if (parser.isSet("path")) {
+                projectManager.setProjectPath(parser.value("path"));
+            }
+            if (!projectManager.isValid()) {
+                qCritical() << "Error: invalid project path.";
+                parser.showHelp(1);
+                return;
+            }
+            /* Setup symbol manager */
+            QSocSymbolManager symbolManager(this, &projectManager);
+            QString           filelistPath = "";
+            if (parser.isSet("filelist")) {
+                filelistPath = parser.value("filelist");
+            }
+            symbolManager
+                .importFromFileList(QRegularExpression(symbolName), filelistPath, filePathList);
             // if (!parser.isSet("filelist")) {
             //     processFileList("", filePathList);
             // } else {

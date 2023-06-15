@@ -20,6 +20,7 @@ public:
     /**
      * @brief Constructor for QSlangDriver
      * @param parent parent object
+     * @param projectManager project manager
      * @details This constructor will initialize the resources
      */
     explicit QSlangDriver(QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
@@ -70,8 +71,8 @@ public slots:
     const QStringList &getModuleList();
 
 private:
-    /* Environment variable pair */
-    QMap<QString, QString> env;
+    /* Pointer of project manager */
+    QSocProjectManager *projectManager = nullptr;
     /* Abstract Syntax Tree JSON data */
     json ast;
     /* Module list */

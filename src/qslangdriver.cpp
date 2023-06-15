@@ -23,9 +23,9 @@
 QSlangDriver::QSlangDriver(QObject *parent, QSocProjectManager *projectManager)
     : QObject(parent)
 {
-    /* Get project environments */
+    /* Set project manager */
     if (projectManager) {
-        this->env = projectManager->getEnv();
+        this->projectManager = projectManager;
     }
 }
 
@@ -143,13 +143,15 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
         content.remove(QRegularExpression(R"(\n\s*\n)"));
 
         /* Substitute environment variables */
-        QMapIterator<QString, QString> iterator(env);
-        while (iterator.hasNext()) {
-            iterator.next();
-            const QString pattern = QString("${%1}").arg(iterator.key());
-            content               = content.replace(pattern, iterator.value());
+        if (projectManager) {
+            const QMap<QString, QString>   env = projectManager->getEnv();
+            QMapIterator<QString, QString> iterator(env);
+            while (iterator.hasNext()) {
+                iterator.next();
+                const QString pattern = QString("${%1}").arg(iterator.key());
+                content               = content.replace(pattern, iterator.value());
+            }
         }
-
         /* Create a temporary file */
         QTemporaryFile tempFile("socstudio.fl");
         /* Do not remove file after close */
