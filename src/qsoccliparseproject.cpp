@@ -12,8 +12,7 @@ void QSocCliWorker::parseProject(const QStringList &appArguments)
         QCoreApplication::translate(
             "main",
             "create   Create project.\n"
-            "update   Update project.\n"
-            "remove   Remove project."),
+            "update   Update project."),
         "project <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
@@ -50,16 +49,16 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
     parser.addOptions({
-        {{"p", "path"},
+        {{"d", "directory"},
          QCoreApplication::translate("main", "The path to the project directory."),
-         "project path"},
+         "project directory"},
         {{"b", "bus"},
          QCoreApplication::translate("main", "The path to the bus directory."),
          "bus directory"},
-        {{"m", "sym"},
+        {{"m", "symbol"},
          QCoreApplication::translate("main", "The path to the symbol directory."),
          "symbol directory"},
-        {{"s", "sch"},
+        {{"s", "schematic"},
          QCoreApplication::translate("main", "The path to the schematic directory."),
          "schematic directory"},
         {{"o", "output"},
@@ -86,17 +85,17 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
     /* Pass projectName to projectManager */
     const QString     &projectName = cmdArguments.first();
     QSocProjectManager projectManager(this);
-    if (parser.isSet("path")) {
-        projectManager.setProjectPath(parser.value("path"));
+    if (parser.isSet("directory")) {
+        projectManager.setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("bus")) {
         projectManager.setBusPath(parser.value("bus"));
     }
-    if (parser.isSet("sym")) {
-        projectManager.setSymbolPath(parser.value("sym"));
+    if (parser.isSet("symbol")) {
+        projectManager.setSymbolPath(parser.value("symbol"));
     }
-    if (parser.isSet("sch")) {
-        projectManager.setSchematicPath(parser.value("sch"));
+    if (parser.isSet("schematic")) {
+        projectManager.setSchematicPath(parser.value("schematic"));
     }
     if (parser.isSet("output")) {
         projectManager.setOutputPath(parser.value("output"));
@@ -113,16 +112,16 @@ void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
     parser.addOptions({
-        {{"p", "path"},
+        {{"d", "directory"},
          QCoreApplication::translate("main", "The path to the project directory."),
-         "project path"},
+         "project directory"},
         {{"b", "bus"},
          QCoreApplication::translate("main", "The path to the bus directory."),
          "bus directory"},
-        {{"m", "sym"},
+        {{"m", "symbol"},
          QCoreApplication::translate("main", "The path to the symbol directory."),
          "symbol directory"},
-        {{"s", "sch"},
+        {{"s", "schematic"},
          QCoreApplication::translate("main", "The path to the schematic directory."),
          "schematic directory"},
         {{"o", "output"},
@@ -149,8 +148,8 @@ void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
     /* Pass projectName to projectManager */
     const QString     &projectName = cmdArguments.first();
     QSocProjectManager projectManager(this);
-    if (parser.isSet("path")) {
-        projectManager.setProjectPath(parser.value("path"));
+    if (parser.isSet("directory")) {
+        projectManager.setProjectPath(parser.value("directory"));
     }
     /* Load project by name from project path */
     if (projectManager.load(projectName)) {
@@ -159,11 +158,11 @@ void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
         if (parser.isSet("bus")) {
             projectManager.setBusPath(parser.value("bus"));
         }
-        if (parser.isSet("sym")) {
-            projectManager.setSymbolPath(parser.value("sym"));
+        if (parser.isSet("symbol")) {
+            projectManager.setSymbolPath(parser.value("symbol"));
         }
-        if (parser.isSet("sch")) {
-            projectManager.setSchematicPath(parser.value("sch"));
+        if (parser.isSet("schematic")) {
+            projectManager.setSchematicPath(parser.value("schematic"));
         }
         if (parser.isSet("output")) {
             projectManager.setOutputPath(parser.value("output"));
