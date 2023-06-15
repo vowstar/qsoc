@@ -76,6 +76,22 @@ QString QSocProjectManager::getExpandPath(const QString &path)
     return result;
 }
 
+bool QSocProjectManager::isExist(const QString &projectName)
+{
+    bool result = false;
+    /* Check project name */
+    if (projectName.isEmpty()) {
+        qCritical() << "Error: project name is empty.";
+        return false;
+    }
+    /* Check project file */
+    const QString &projectFilePath = QString(projectPath + "/" + projectName + ".soc_pro");
+    if (QFile::exists(projectFilePath)) {
+        result = true;
+    }
+    return result;
+}
+
 bool QSocProjectManager::save(const QString &projectName)
 {
     /* Check project name */

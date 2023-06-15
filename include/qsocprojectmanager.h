@@ -42,6 +42,14 @@ public slots:
      */
     const QMap<QString, QString> &getEnv();
     /**
+     * @brief Is the project exist on filesystem
+     * @param projectName 
+     * @return true 
+     * @return false 
+     * @details This function will check if the project exist on filesystem
+     */
+    bool isExist(const QString &projectName);
+    /**
      * @brief Save project environment variables and settings
      * @param projectName project name
      * @return true if save successfully, otherwise false
