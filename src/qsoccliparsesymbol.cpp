@@ -90,11 +90,11 @@ void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
                 parser.showHelp(0);
             }
         } else {
-            if (!parser.isSet("filelist")) {
-                processFileList("", filePathList);
-            } else {
-                processFileList(parser.value("filelist"), filePathList);
-            }
+            // if (!parser.isSet("filelist")) {
+            //     processFileList("", filePathList);
+            // } else {
+            //     processFileList(parser.value("filelist"), filePathList);
+            // }
         }
     }
 }

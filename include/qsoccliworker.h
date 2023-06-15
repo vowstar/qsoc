@@ -100,7 +100,6 @@ private:
      * @details This function will parse the symbol remove command line arguments
      */
     void parseSymbolRemove(const QStringList &appArguments);
-    void processFileList(const QString &fileListPath, const QStringList &filePathList);
 
 signals:
     /**
