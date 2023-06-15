@@ -43,6 +43,11 @@ void QSocProjectManager::setEnv(const QMap<QString, QString> &env)
     this->env = env;
 }
 
+const QMap<QString, QString> &QSocProjectManager::getEnv()
+{
+    return env;
+}
+
 QString QSocProjectManager::getSimplifyPath(const QString &path)
 {
     QString result = path;

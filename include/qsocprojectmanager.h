@@ -36,6 +36,12 @@ public slots:
      */
     void setEnv(const QMap<QString, QString> &env);
     /**
+     * @brief Get project environment variables
+     * @return environment variable values map
+     * @details This function will return project environment variables
+     */
+    const QMap<QString, QString> &getEnv();
+    /**
      * @brief Save project environment variables and settings
      * @param projectName project name
      * @return true if save successfully, otherwise false
