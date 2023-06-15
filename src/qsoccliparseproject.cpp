@@ -85,7 +85,7 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
     }
     /* Pass projectName to projectManager */
     const QString     &projectName = cmdArguments.first();
-    QSocProjectManager projectManager;
+    QSocProjectManager projectManager(this);
     if (parser.isSet("path")) {
         projectManager.setProjectPath(parser.value("path"));
     }
@@ -148,7 +148,7 @@ void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
     }
     /* Pass projectName to projectManager */
     const QString     &projectName = cmdArguments.first();
-    QSocProjectManager projectManager;
+    QSocProjectManager projectManager(this);
     if (parser.isSet("path")) {
         projectManager.setProjectPath(parser.value("path"));
     }
