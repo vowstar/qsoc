@@ -55,9 +55,10 @@ void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
     parser.addOptions({
-        {{"p", "path"},
+        {{"d", "directory"},
          QCoreApplication::translate("main", "The path to the project directory."),
-         "project path"},
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
         {{"f", "filelist"},
          QCoreApplication::translate(
              "main",
@@ -76,44 +77,49 @@ void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
+    /* Check help flag */
+    if (parser.isSet("help")) {
+        parser.showHelp(0);
+        return;
+    }
     if (cmdArguments.isEmpty()) {
+        qCritical() << "Error: missing symbol name.";
+        parser.showHelp(1);
+        return;
+    }
+    const QString &symbolName   = cmdArguments.first();
+    QStringList    filePathList = cmdArguments;
+    filePathList.removeFirst();
+    if (filePathList.isEmpty() && !parser.isSet("filelist")) {
         if (!parser.isSet("help")) {
-            qCritical() << "Error: missing symbol name.";
+            qCritical() << "Error: missing verilog files.";
             parser.showHelp(1);
         } else {
             parser.showHelp(0);
         }
     } else {
-        const QString &symbolName   = cmdArguments.first();
-        QStringList    filePathList = cmdArguments;
-        filePathList.removeFirst();
-        if (filePathList.isEmpty() && !parser.isSet("filelist")) {
-            if (!parser.isSet("help")) {
-                qCritical() << "Error: missing verilog files.";
-                parser.showHelp(1);
-            } else {
-                parser.showHelp(0);
-            }
-        } else {
-            /* Setup project manager and project path  */
-            QSocProjectManager projectManager(this);
-            if (parser.isSet("path")) {
-                projectManager.setProjectPath(parser.value("path"));
-            }
-            if (!projectManager.isValid()) {
-                qCritical() << "Error: invalid project path.";
-                parser.showHelp(1);
-                return;
-            }
-            /* Setup symbol manager */
-            QSocSymbolManager symbolManager(this, &projectManager);
-            QString           filelistPath = "";
-            if (parser.isSet("filelist")) {
-                filelistPath = parser.value("filelist");
-            }
-            symbolManager
-                .importFromFileList(QRegularExpression(symbolName), filelistPath, filePathList);
+        /* Setup project manager and project path  */
+        QSocProjectManager projectManager(this);
+        if (parser.isSet("directory")) {
+            projectManager.setProjectPath(parser.value("directory"));
         }
+        if (parser.isSet("project")) {
+            projectManager.load(parser.value("project"));
+        } else {
+            projectManager.autoLoad();
+        }
+        if (!projectManager.isValid()) {
+            qCritical() << "Error: invalid project directory.";
+            parser.showHelp(1);
+            return;
+        }
+        /* Setup symbol manager */
+        QSocSymbolManager symbolManager(this, &projectManager);
+        QString           filelistPath = "";
+        if (parser.isSet("filelist")) {
+            filelistPath = parser.value("filelist");
+        }
+        symbolManager.importFromFileList(QRegularExpression(symbolName), filelistPath, filePathList);
     }
 }
 
