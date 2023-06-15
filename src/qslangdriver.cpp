@@ -20,31 +20,16 @@
 
 #include "qstaticlog.h"
 
-QSlangDriver::QSlangDriver(QObject *parent)
+QSlangDriver::QSlangDriver(QObject *parent, QSocProjectManager *projectManager)
     : QObject(parent)
 {
-    /* Get system environments */
-    const QStringList envList = QProcess::systemEnvironment();
-    /* Save system environments into QMap */
-    foreach (const QString str, envList) {
-        QStringList keyAndValue = str.split('=');
-        if (keyAndValue.size() == 2) {
-            env[keyAndValue[0]] = keyAndValue[1];
-        }
+    /* Get project environments */
+    if (projectManager) {
+        this->env = projectManager->getEnv();
     }
 }
 
 QSlangDriver::~QSlangDriver() {}
-
-void QSlangDriver::setEnv(const QString &key, const QString &value)
-{
-    env[key] = value;
-}
-
-void QSlangDriver::setEnv(const QMap<QString, QString> &env)
-{
-    this->env = env;
-}
 
 bool QSlangDriver::parseArgs(const QString &args)
 {

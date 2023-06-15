@@ -1,10 +1,11 @@
 #ifndef QSLANGDRIVER_H
 #define QSLANGDRIVER_H
 
+#include <nlohmann/json.hpp>
 #include <QMap>
 #include <QObject>
 
-#include <nlohmann/json.hpp>
+#include "qsocprojectmanager.h"
 
 using json = nlohmann::json;
 
@@ -21,7 +22,7 @@ public:
      * @param parent parent object
      * @details This constructor will initialize the resources
      */
-    explicit QSlangDriver(QObject *parent = nullptr);
+    explicit QSlangDriver(QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
     /**
      * @brief Destructor for QSlangDriver
      * @details This destructor will free all the allocated resources
@@ -29,19 +30,6 @@ public:
     ~QSlangDriver();
 
 public slots:
-    /**
-     * @brief Set environment variable
-     * @param key environment variable key
-     * @param value environment variable value
-     * @details This function will set environment variable
-     */
-    void setEnv(const QString &key, const QString &value);
-    /**
-     * @brief Set environment variables
-     * @param env environment variables
-     * @details This function will set environment variables
-     */
-    void setEnv(const QMap<QString, QString> &env);
     /**
      * @brief Parse command line arguments
      * @param args command line arguments
