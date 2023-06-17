@@ -28,10 +28,28 @@ bool QSocSymbolManager::importFromFileList(
         QStringList moduleList = driver.getModuleList();
         if (moduleList.isEmpty()) {
             qCritical() << "Error: no module found.";
-        } else {
-            qDebug() << "Found modules:" << moduleList;
+            return false;
+        }
+        /* Pick first module if pattern is empty */
+        if (symbolNameRegex.pattern().isEmpty()) {
+            qDebug() << "Pick first module:" << moduleList.first();
             qDebug() << driver.getModuleAst(moduleList.first()).dump(4).c_str();
+            return true;
+        }
+        /* Find module by pattern */
+        bool hasMatch = false;
+        for (const QString &moduleName : moduleList) {
+            const QRegularExpressionMatch &match = symbolNameRegex.match(moduleName);
+            if (match.hasMatch()) {
+                qDebug() << "Found module:" << moduleName;
+                qDebug() << driver.getModuleAst(moduleName).dump(4).c_str();
+                hasMatch = true;
+            }
+        }
+        if (hasMatch) {
+            return true;
         }
     }
+    qCritical() << "Error: no module found.";
     return false;
 }
