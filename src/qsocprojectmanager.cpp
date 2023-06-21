@@ -1,6 +1,5 @@
 #include "qsocprojectmanager.h"
 
-#include <fstream>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -9,7 +8,8 @@
 #include <QStringList>
 #include <QVersionNumber>
 
-#include "yaml-cpp/yaml.h"
+#include <fstream>
+#include <yaml-cpp/yaml.h>
 
 QSocProjectManager::QSocProjectManager(QObject *parent)
     : QObject{parent}
