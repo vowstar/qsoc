@@ -1,9 +1,10 @@
 #ifndef QSLANGDRIVER_H
 #define QSLANGDRIVER_H
 
-#include <nlohmann/json.hpp>
 #include <QMap>
 #include <QObject>
+
+#include <nlohmann/json.hpp>
 
 #include "qsocprojectmanager.h"
 
