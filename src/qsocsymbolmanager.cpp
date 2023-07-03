@@ -39,7 +39,7 @@ bool QSocSymbolManager::importFromFileList(
         if (symbolNameRegex.pattern().isEmpty()) {
             const QString &moduleName = moduleList.first();
             qDebug() << "Pick first module:" << moduleName;
-            qDebug() << driver.getModuleAst(moduleName).dump(4).c_str();
+            // qDebug() << driver.getModuleAst(moduleName).dump(4).c_str();
             const json       &moduleAst  = driver.getModuleAst(moduleName);
             const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
             saveModuleYaml(moduleYaml, moduleName);
@@ -51,7 +51,7 @@ bool QSocSymbolManager::importFromFileList(
             const QRegularExpressionMatch &match = symbolNameRegex.match(moduleName);
             if (match.hasMatch()) {
                 qDebug() << "Found module:" << moduleName;
-                qDebug() << driver.getModuleAst(moduleName).dump(4).c_str();
+                // qDebug() << driver.getModuleAst(moduleName).dump(4).c_str();
                 const json       &moduleAst  = driver.getModuleAst(moduleName);
                 const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
                 saveModuleYaml(moduleYaml, moduleName);
@@ -71,18 +71,24 @@ YAML::Node QSocSymbolManager::getModuleYaml(const json &moduleAst)
     YAML::Node moduleYaml;
     if (moduleAst.contains("kind") && moduleAst.contains("name") && moduleAst.contains("body")
         && moduleAst["kind"] == "Instance" && moduleAst["body"].contains("members")) {
-        const QString kind = QString::fromStdString(moduleAst["kind"]);
-        const QString name = QString::fromStdString(moduleAst["name"]);
-        const json   &body = moduleAst["body"];
+        const QString &kind = QString::fromStdString(moduleAst["kind"]);
+        const QString &name = QString::fromStdString(moduleAst["name"]);
+        const json    &body = moduleAst["body"];
         for (const json &member : moduleAst["body"]["members"]) {
             if (member.contains("kind") && member.contains("name") && member.contains("type")) {
-                const QString memberKind = QString::fromStdString(member["kind"]);
-                const QString memberName = QString::fromStdString(member["name"]);
-                const QString memberType = QString::fromStdString(member["type"]);
+                const QString &memberKind = QString::fromStdString(member["kind"]);
+                const QString &memberName = QString::fromStdString(member["name"]);
+                const QString &memberType = QString::fromStdString(member["type"]);
                 if (memberKind == "Port") {
-                    moduleYaml["port"][memberName.toStdString()] = memberType.toStdString();
+                    moduleYaml["port"][memberName.toStdString()]["type"] = memberType.toStdString();
                 } else if (memberKind == "Parameter") {
-                    moduleYaml["parameter"][memberName.toStdString()] = memberType.toStdString();
+                    moduleYaml["parameter"][memberName.toStdString()]["type"]
+                        = memberType.toStdString();
+                    if (member.contains("value")) {
+                        const QString &memberValue = QString::fromStdString(member["value"]);
+                        moduleYaml["parameter"][memberName.toStdString()]["value"]
+                            = memberValue.toStdString();
+                    }
                 }
             }
         }
