@@ -2,6 +2,11 @@
 
 #include "qslangdriver.h"
 
+#include <QDebug>
+#include <QFile>
+
+#include <fstream>
+
 QSocSymbolManager::QSocSymbolManager(QObject *parent, QSocProjectManager *projectManager)
     : QObject{parent}
 {
@@ -32,8 +37,12 @@ bool QSocSymbolManager::importFromFileList(
         }
         /* Pick first module if pattern is empty */
         if (symbolNameRegex.pattern().isEmpty()) {
-            qDebug() << "Pick first module:" << moduleList.first();
-            qDebug() << driver.getModuleAst(moduleList.first()).dump(4).c_str();
+            const QString &moduleName = moduleList.first();
+            qDebug() << "Pick first module:" << moduleName;
+            qDebug() << driver.getModuleAst(moduleName).dump(4).c_str();
+            const json       &moduleAst  = driver.getModuleAst(moduleName);
+            const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
+            saveModuleYaml(moduleYaml, moduleName);
             return true;
         }
         /* Find module by pattern */
@@ -43,6 +52,9 @@ bool QSocSymbolManager::importFromFileList(
             if (match.hasMatch()) {
                 qDebug() << "Found module:" << moduleName;
                 qDebug() << driver.getModuleAst(moduleName).dump(4).c_str();
+                const json       &moduleAst  = driver.getModuleAst(moduleName);
+                const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
+                saveModuleYaml(moduleYaml, moduleName);
                 hasMatch = true;
             }
         }
@@ -52,4 +64,49 @@ bool QSocSymbolManager::importFromFileList(
     }
     qCritical() << "Error: no module found.";
     return false;
+}
+
+YAML::Node QSocSymbolManager::getModuleYaml(const json &moduleAst)
+{
+    YAML::Node moduleYaml;
+    if (moduleAst.contains("kind") && moduleAst.contains("name") && moduleAst.contains("body")
+        && moduleAst["kind"] == "Instance" && moduleAst["body"].contains("members")) {
+        const QString kind = QString::fromStdString(moduleAst["kind"]);
+        const QString name = QString::fromStdString(moduleAst["name"]);
+        const json   &body = moduleAst["body"];
+        for (const json &member : moduleAst["body"]["members"]) {
+            if (member.contains("kind") && member.contains("name") && member.contains("type")) {
+                const QString memberKind = QString::fromStdString(member["kind"]);
+                const QString memberName = QString::fromStdString(member["name"]);
+                const QString memberType = QString::fromStdString(member["type"]);
+                if (memberKind == "Port") {
+                    moduleYaml["port"][memberName.toStdString()] = memberType.toStdString();
+                } else if (memberKind == "Parameter") {
+                    moduleYaml["parameter"][memberName.toStdString()] = memberType.toStdString();
+                }
+            }
+        }
+    }
+    return moduleYaml;
+}
+
+bool QSocSymbolManager::saveModuleYaml(const YAML::Node &moduleYaml, const QString &moduleName)
+{
+    /* Check project manager */
+    if (!projectManager) {
+        qCritical() << "Error: project manager is null.";
+        return false;
+    }
+    /* Check project path */
+    if (!projectManager->isValid()) {
+        qCritical() << "Error: project manager is invalid.";
+        return false;
+    }
+    /* Check file path */
+    const QString &symbolPath         = projectManager->getSymbolPath();
+    const QString &moduleYamlFilePath = symbolPath + "/" + moduleName + ".soc_sym";
+    /* Save YAML file */
+    std::ofstream outputFileStream(moduleYamlFilePath.toStdString());
+    outputFileStream << moduleYaml;
+    return true;
 }
