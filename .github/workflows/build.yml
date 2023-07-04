@@ -21,14 +21,40 @@ jobs:
     - uses: actions/checkout@v3
       with:
         submodules: recursive
+    - name: Install depends
+      run: >-
+        sudo apt-get install -y
+        catch
+        clang-tidy
+        libfmt-dev
+        libgl-dev
+        libgl1-mesa-dev
+        libicu-dev
+        libsqlite3-dev
+        libxcb-{icccm4,image0,keysyms1,randr0,render-util0,shape0,sync1,xfixes0,xinerama0,xkb1}
+        libxcb-xkb-dev
+        libxkbcommon-x11-0
+        linguist-qt6
+        ninja-build
+        p7zip-full
+        python3-py7zr
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        version: 6.5.0
+        version: '6.5.1'
+        host: 'linux'
+        target: 'desktop'
+        arch: 'gcc_64'
         install-deps: 'true'
         modules: 'qt5compat'
-    - name: Install depends
-      run: sudo apt-get install -y catch clang-tidy libfmt-dev libsqlite3-dev ninja-build 
+        cache: 'true'
+        cache-key-prefix: 'install-qt-action'
+        setup-python: 'true'
+        tools: 'tools_ifw'
+        set-env: 'true'
+        aqtversion: '==3.1.*'
+        py7zrversion: '==0.20.*'
+        extra: '--external 7z'
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
