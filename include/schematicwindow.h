@@ -30,6 +30,9 @@ public:
      */
     ~SchematicWindow();
 
+private slots:
+    void on_actionQuit_triggered();
+
 private:
     /* Main window UI */
     Ui::SchematicWindow *ui;
