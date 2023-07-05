@@ -62,6 +62,7 @@
     <property name="title">
      <string>Preferences</string>
     </property>
+    <addaction name="actionSchematicEditor"/>
    </widget>
    <addaction name="menuFile"/>
    <addaction name="menuView"/>
@@ -119,6 +120,17 @@
    </property>
    <property name="shortcut">
     <string>F5</string>
+   </property>
+  </action>
+  <action name="actionSchematicEditor">
+   <property name="text">
+    <string>Schematic Editor</string>
+   </property>
+   <property name="statusTip">
+    <string>Edit schematic (Ctrl+E)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+E</string>
    </property>
   </action>
  </widget>
