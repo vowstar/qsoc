@@ -3,6 +3,8 @@
 
 #include <QMainWindow>
 
+#include "schematicwindow.h"
+
 QT_BEGIN_NAMESPACE
 namespace Ui {
 class MainWindow;
@@ -33,8 +35,11 @@ public:
 private slots:
     void on_actionQuit_triggered();
 
+    void on_actionSchematicEditor_triggered();
+
 private:
     /* Main window UI */
     Ui::MainWindow *ui;
+    SchematicWindow schematicWindow;
 };
 #endif // MAINWINDOW_H
