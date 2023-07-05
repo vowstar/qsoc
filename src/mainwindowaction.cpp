@@ -12,6 +12,6 @@ void MainWindow::on_actionQuit_triggered()
 void MainWindow::on_actionSchematicEditor_triggered()
 {
     schematicWindow.setParent(this);
-    schematicWindow.setWindowFlag(Qt::Tool, true);
+    schematicWindow.setWindowFlag(Qt::Window, true);
     schematicWindow.show();
 }
