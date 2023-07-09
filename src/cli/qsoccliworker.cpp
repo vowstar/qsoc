@@ -4,8 +4,8 @@
 #include "common/qstaticlog.h"
 
 #include <QString>
-#include <QtGlobal>
 #include <QTimer>
+#include <QtGlobal>
 
 QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)
