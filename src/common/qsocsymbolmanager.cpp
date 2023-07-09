@@ -1,6 +1,6 @@
-#include "qsocsymbolmanager.h"
+#include "common/qsocsymbolmanager.h"
 
-#include "qslangdriver.h"
+#include "common/qslangdriver.h"
 
 #include <QDebug>
 #include <QFile>

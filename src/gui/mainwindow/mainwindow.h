@@ -1,9 +1,9 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include <QMainWindow>
+#include "gui/schematicwindow/schematicwindow.h"
 
-#include "schematicwindow.h"
+#include <QMainWindow>
 
 QT_BEGIN_NAMESPACE
 namespace Ui {

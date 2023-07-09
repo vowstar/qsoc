@@ -1,4 +1,4 @@
-#include "schematicwindow.h"
+#include "gui/schematicwindow/schematicwindow.h"
 
 #include "./ui_schematicwindow.h"
 

@@ -1,11 +1,11 @@
-#include "qsoccliworker.h"
+#include "cli/qsoccliworker.h"
+
+#include "common/qslangdriver.h"
+#include "common/qstaticlog.h"
 
 #include <QString>
-#include <QTimer>
 #include <QtGlobal>
-
-#include "qslangdriver.h"
-#include "qstaticlog.h"
+#include <QTimer>
 
 QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)

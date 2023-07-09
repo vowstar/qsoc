@@ -1,4 +1,4 @@
-#include "qsocprojectmanager.h"
+#include "common/qsocprojectmanager.h"
 
 #include <QCoreApplication>
 #include <QDir>

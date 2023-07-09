@@ -1,7 +1,7 @@
-#include "qsoccliworker.h"
+#include "cli/qsoccliworker.h"
 
-#include "qsocprojectmanager.h"
-#include "qstaticlog.h"
+#include "common/qsocprojectmanager.h"
+#include "common/qstaticlog.h"
 
 void QSocCliWorker::parseProject(const QStringList &appArguments)
 {

@@ -147,11 +147,6 @@ endif()
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/src
-    ${CMAKE_CURRENT_LIST_DIR}/src/common
-    ${CMAKE_CURRENT_LIST_DIR}/src/cli
-    ${CMAKE_CURRENT_LIST_DIR}/src/gui
-    ${CMAKE_CURRENT_LIST_DIR}/src/gui/mainwindow
-    ${CMAKE_CURRENT_LIST_DIR}/src/gui/schematicwindow
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${SQLITE3_INCLUDE_DIRS}
     ${SVLANG_INCLUDE_DIRS}

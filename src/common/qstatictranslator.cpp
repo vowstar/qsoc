@@ -1,4 +1,4 @@
-#include "qstatictranslator.h"
+#include "common/qstatictranslator.h"
 
 #include <QCoreApplication>
 #include <QLocale>

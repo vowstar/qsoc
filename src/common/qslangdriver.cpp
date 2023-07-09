@@ -1,4 +1,6 @@
-#include "qslangdriver.h"
+#include "common/qslangdriver.h"
+
+#include "common/qstaticlog.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -17,8 +19,6 @@
 #include <slang/util/TimeTrace.h>
 #include <slang/util/Version.h>
 #include <stdexcept>
-
-#include "qstaticlog.h"
 
 QSlangDriver::QSlangDriver(QObject *parent, QSocProjectManager *projectManager)
     : QObject(parent)

@@ -1,13 +1,13 @@
 #ifndef QSOCSYMBOLMANAGER_H
 #define QSOCSYMBOLMANAGER_H
 
+#include "common/qsocprojectmanager.h"
+
 #include <QObject>
 #include <QRegularExpression>
 
 #include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
-
-#include "qsocprojectmanager.h"
 
 using json = nlohmann::json;
 

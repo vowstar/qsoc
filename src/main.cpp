@@ -1,10 +1,9 @@
-#include "mainwindow.h"
+#include "cli/qsoccliworker.h"
+#include "common/qstaticlog.h"
+#include "common/qstatictranslator.h"
+#include "gui/mainwindow/mainwindow.h"
 
 #include <QApplication>
-
-#include "qsoccliworker.h"
-#include "qstaticlog.h"
-#include "qstatictranslator.h"
 
 bool isGui(int &argc, char *argv[])
 {

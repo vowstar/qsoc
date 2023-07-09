@@ -1,4 +1,4 @@
-#include "qstaticlog.h"
+#include "common/qstaticlog.h"
 
 #include <QDebug>
 

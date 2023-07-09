@@ -1,4 +1,4 @@
-#include "mainwindow.h"
+#include "gui/mainwindow/mainwindow.h"
 
 #include "./ui_mainwindow.h"
 

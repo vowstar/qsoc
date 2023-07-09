@@ -1,12 +1,12 @@
 #ifndef QSLANGDRIVER_H
 #define QSLANGDRIVER_H
 
+#include "common/qsocprojectmanager.h"
+
 #include <QMap>
 #include <QObject>
 
 #include <nlohmann/json.hpp>
-
-#include "qsocprojectmanager.h"
 
 using json = nlohmann::json;
 
