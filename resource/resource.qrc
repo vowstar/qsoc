@@ -1,2 +1,6 @@
-<!DOCTYPE RCC>
-<RCC version="1.0"/>
+<RCC>
+    <qresource prefix="/">
+        <file>icon/light/index.theme</file>
+        <file>icon/light/scalable/application-exit.svg</file>
+    </qresource>
+</RCC>

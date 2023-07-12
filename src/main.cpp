@@ -25,6 +25,8 @@ int main(int argc, char *argv[])
         QStaticTranslator::setup();
         QSocCliWorker socCliWorker;
         socCliWorker.setup(true);
+        QIcon::setThemeSearchPaths({":icon"});
+        QIcon::setThemeName("light");
         MainWindow mainWindow;
         mainWindow.show();
         result = app.exec();

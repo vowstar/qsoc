@@ -3,6 +3,10 @@
 
 #include <QMainWindow>
 
+#include <qschematic/scene.h>
+#include <qschematic/settings.h>
+#include <qschematic/view.h>
+
 QT_BEGIN_NAMESPACE
 namespace Ui {
 class SchematicWindow;
@@ -36,5 +40,8 @@ private slots:
 private:
     /* Main window UI */
     Ui::SchematicWindow *ui;
+
+    QSchematic::Scene scene;
+    QSchematic::Settings settings;
 };
 #endif // SCHEMATICWINDOW_H
