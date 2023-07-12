@@ -41,7 +41,7 @@ private:
     /* Main window UI */
     Ui::SchematicWindow *ui;
 
-    QSchematic::Scene scene;
+    QSchematic::Scene    scene;
     QSchematic::Settings settings;
 };
 #endif // SCHEMATICWINDOW_H

@@ -10,8 +10,8 @@ SchematicWindow::SchematicWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
-    settings.debug = false;
-    settings.showGrid = true;
+    settings.debug               = false;
+    settings.showGrid            = true;
     settings.routeStraightAngles = true;
 
     // scene.setParent(ui->schematicView);
