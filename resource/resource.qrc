@@ -2,5 +2,7 @@
     <qresource prefix="/">
         <file>icon/light/index.theme</file>
         <file>icon/light/scalable/application-exit.svg</file>
+        <file>icon/dark/index.theme</file>
+        <file>icon/dark/scalable/application-exit.svg</file>
     </qresource>
 </RCC>
