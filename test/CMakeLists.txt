@@ -61,6 +61,8 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${SVLANG_INCLUDE_DIRS}
         ${JSON_INCLUDE_DIRS}
         ${YAML_INCLUDE_DIRS}
+        ${GPDS_INCLUDE_DIRS}
+        ${QSCHEMATIC_INCLUDE_DIRS}
     )
 
     target_link_libraries(${TARGET_NAME} PRIVATE
@@ -75,6 +77,8 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${SVLANG_LIBRARIES}
         ${JSON_LIBRARIES}
         ${YAML_LIBRARIES}
+        ${GPDS_LIBRARIES}
+        ${QSCHEMATIC_LIBRARIES}
     )
 endfunction()
 

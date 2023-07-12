@@ -15,8 +15,26 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ## QT
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui LinguistTools Sql Svg Widgets Test)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core LinguistTools Gui Sql Svg Widgets Test)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS
+    Core
+    Gui
+    LinguistTools
+    PrintSupport
+    Sql
+    Svg
+    Test
+    Widgets
+)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
+    Core
+    Gui
+    LinguistTools
+    PrintSupport
+    Sql
+    Svg
+    Test
+    Widgets
+)
 
 if (Qt6_FOUND)
     find_package(Qt6 COMPONENTS Core5Compat REQUIRED)
@@ -97,6 +115,40 @@ else()
     message(STATUS "Use local yaml-cpp library: ${YAML_LIBRARIES} ${YAML_INCLUDE_DIRS}")
 endif()
 
+# GPDS
+pkg_check_modules(GPDS IMPORTED_TARGET gpds>=1.5.1)
+if (GPDS_FOUND)
+    message(STATUS "Use system gpds library: ${GPDS_LIBRARIES} ${GPDS_VERSION}")
+else()
+    set(GPDS_BUILD_TESTS OFF CACHE BOOL "disable gpds tests")
+    set(GPDS_BUILD_EXAMPLES OFF CACHE BOOL "disable gpds examples build")
+    set(GPDS_FEATURE_SPDLOG OFF CACHE BOOL "disable gpds spdlog build")
+    set(QSCHEMATIC_DEPENDENCY_GPDS_TARGET   gpds-static CACHE STRING "qschematic gpds local target name")
+    add_subdirectory(external/gpds)
+    add_library(gpds::gpds-static ALIAS gpds-static)
+    set(GPDS_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/gpds/lib/include
+    )
+    set(GPDS_LIBRARIES gpds::gpds-static)
+    message(STATUS "Use local gpds library: ${GPDS_LIBRARIES} ${GPDS_INCLUDE_DIRS}")
+endif()
+
+# QSCHEMATIC
+pkg_check_modules(QSCHEMATIC IMPORTED_TARGET qschematic>=1.4.0)
+if (QSCHEMATIC_FOUND)
+    message(STATUS "Use system qschematic library: ${QSCHEMATIC_LIBRARIES} ${QSCHEMATIC_VERSION}")
+else()
+    set(QSCHEMATIC_BUILD_DEMO               OFF CACHE BOOL "disable qschematic demo build")
+    set(QSCHEMATIC_DEPENDENCY_GPDS_DOWNLOAD OFF CACHE BOOL "disable qschematic gpds sources download")
+    set(QSCHEMATIC_DEPENDENCY_GPDS_LOCAL    ON  CACHE BOOL "enable qschematic gpds local sources")
+    add_subdirectory(external/qschematic)
+    set(QSCHEMATIC_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/qschematic/qschematic
+    )
+    set(QSCHEMATIC_LIBRARIES qschematic-static)
+    message(STATUS "Use local qschematic library: ${QSCHEMATIC_LIBRARIES} ${QSCHEMATIC_INCLUDE_DIRS}")
+endif()
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE ${CMAKE_CURRENT_LIST_DIR} "src/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE ${CMAKE_CURRENT_LIST_DIR} "resource/*.qrc")
@@ -152,6 +204,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${SVLANG_INCLUDE_DIRS}
     ${JSON_INCLUDE_DIRS}
     ${YAML_INCLUDE_DIRS}
+    ${GPDS_INCLUDE_DIRS}
+    ${QSCHEMATIC_INCLUDE_DIRS}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -165,6 +219,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${SVLANG_LIBRARIES}
     ${JSON_LIBRARIES}
     ${YAML_LIBRARIES}
+    ${GPDS_LIBRARIES}
+    ${QSCHEMATIC_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
