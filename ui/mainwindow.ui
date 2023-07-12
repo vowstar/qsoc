@@ -15,15 +15,8 @@
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QGridLayout" name="gridLayout_2">
-    <item row="1" column="0">
-     <widget class="QTreeView" name="treeViewProjectFile"/>
-    </item>
     <item row="0" column="0">
-     <widget class="QLabel" name="labelProjectFile">
-      <property name="text">
-       <string>Project Files</string>
-      </property>
-     </widget>
+     <layout class="QVBoxLayout" name="verticalLayout"/>
     </item>
    </layout>
   </widget>
@@ -33,7 +26,7 @@
      <x>0</x>
      <y>0</y>
      <width>800</width>
-     <height>25</height>
+     <height>23</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">
@@ -70,7 +63,56 @@
    <addaction name="menuPreferences"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QDockWidget" name="dockWidgetProjectFile">
+   <property name="minimumSize">
+    <size>
+     <width>300</width>
+     <height>108</height>
+    </size>
+   </property>
+   <property name="features">
+    <set>QDockWidget::NoDockWidgetFeatures</set>
+   </property>
+   <property name="windowTitle">
+    <string extracomment="List of project files">Project Files</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>1</number>
+   </attribute>
+   <widget class="QWidget" name="dockWidgetContents">
+    <layout class="QGridLayout" name="gridLayout">
+     <item row="0" column="0">
+      <widget class="QTreeView" name="treeViewProjectFile"/>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+  <widget class="QToolBar" name="toolBar">
+   <property name="windowTitle">
+    <string>toolBar</string>
+   </property>
+   <property name="movable">
+    <bool>false</bool>
+   </property>
+   <property name="floatable">
+    <bool>false</bool>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>LeftToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionNewProject"/>
+   <addaction name="actionOpenProject"/>
+   <addaction name="actionCloseProject"/>
+   <addaction name="separator"/>
+   <addaction name="actionRefresh"/>
+  </widget>
   <action name="actionNewProject">
+   <property name="icon">
+    <iconset theme="document-new"/>
+   </property>
    <property name="text">
     <string>&amp;New Project</string>
    </property>
@@ -82,6 +124,9 @@
    </property>
   </action>
   <action name="actionOpenProject">
+   <property name="icon">
+    <iconset theme="document-open"/>
+   </property>
    <property name="text">
     <string>&amp;Open Project</string>
    </property>
@@ -93,6 +138,9 @@
    </property>
   </action>
   <action name="actionCloseProject">
+   <property name="icon">
+    <iconset theme="document-close"/>
+   </property>
    <property name="text">
     <string>Close Project</string>
    </property>
@@ -101,6 +149,9 @@
    </property>
   </action>
   <action name="actionQuit">
+   <property name="icon">
+    <iconset theme="window-close"/>
+   </property>
    <property name="text">
     <string>&amp;Quit</string>
    </property>
@@ -112,6 +163,9 @@
    </property>
   </action>
   <action name="actionRefresh">
+   <property name="icon">
+    <iconset theme="view-refresh"/>
+   </property>
    <property name="text">
     <string>Refresh</string>
    </property>
