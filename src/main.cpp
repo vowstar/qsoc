@@ -1,4 +1,5 @@
 #include "cli/qsoccliworker.h"
+#include "common/qstaticicontheme.h"
 #include "common/qstaticlog.h"
 #include "common/qstatictranslator.h"
 #include "gui/mainwindow/mainwindow.h"
@@ -25,8 +26,7 @@ int main(int argc, char *argv[])
         QStaticTranslator::setup();
         QSocCliWorker socCliWorker;
         socCliWorker.setup(true);
-        QIcon::setThemeSearchPaths({":icon"});
-        QIcon::setThemeName("light");
+        QStaticIconTheme::setup();
         MainWindow mainWindow;
         mainWindow.show();
         result = app.exec();
