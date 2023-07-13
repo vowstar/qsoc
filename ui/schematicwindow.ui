@@ -33,6 +33,8 @@
     <property name="title">
      <string>File</string>
     </property>
+    <addaction name="actionSave"/>
+    <addaction name="separator"/>
     <addaction name="actionQuit"/>
    </widget>
    <widget class="QMenu" name="menuEdit">
@@ -112,7 +114,7 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="actionQuit"/>
+   <addaction name="actionSave"/>
   </widget>
   <widget class="QToolBar" name="toolBarLeft">
    <property name="windowTitle">
@@ -153,10 +155,14 @@
   </widget>
   <action name="actionQuit">
    <property name="icon">
-    <iconset theme="window-close"/>
+    <iconset theme="window-close">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>&amp;Quit</string>
+   </property>
+   <property name="toolTip">
+    <string>Quit (CTRL+Q)</string>
    </property>
    <property name="statusTip">
     <string>Quit schematic editor (CTRL+Q)</string>
@@ -173,7 +179,8 @@
     <bool>true</bool>
    </property>
    <property name="icon">
-    <iconset theme="view-grid-on"/>
+    <iconset theme="view-grid-on">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>Show Grid</string>
@@ -190,13 +197,20 @@
     <bool>true</bool>
    </property>
    <property name="icon">
-    <iconset theme="view-select-item"/>
+    <iconset theme="view-select-item">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>Select Item(s)</string>
    </property>
+   <property name="iconText">
+    <string>Select Item(s)</string>
+   </property>
+   <property name="toolTip">
+    <string>Select Item(s)  (ESC)</string>
+   </property>
    <property name="statusTip">
-    <string>Select item(s) on the schematic</string>
+    <string>Select item(s) on the schematic (ESC)</string>
    </property>
    <property name="shortcut">
     <string>Esc</string>
@@ -213,7 +227,8 @@
     <bool>false</bool>
    </property>
    <property name="icon">
-    <iconset theme="view-add-wire"/>
+    <iconset theme="view-add-wire">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>Add a wire</string>
@@ -222,13 +237,31 @@
     <string>Add a wire (W)</string>
    </property>
    <property name="statusTip">
-    <string>Add a wire on the schematic</string>
+    <string>Add a wire on the schematic (W)</string>
    </property>
    <property name="shortcut">
     <string>W</string>
    </property>
    <property name="menuRole">
     <enum>QAction::TextHeuristicRole</enum>
+   </property>
+  </action>
+  <action name="actionSave">
+   <property name="icon">
+    <iconset theme="document-save">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Save</string>
+   </property>
+   <property name="toolTip">
+    <string>Save (CTRL+S)</string>
+   </property>
+   <property name="statusTip">
+    <string>Save Changes (CTRL+S)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+S</string>
    </property>
   </action>
  </widget>
