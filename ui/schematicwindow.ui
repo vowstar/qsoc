@@ -103,6 +103,9 @@
    <property name="movable">
     <bool>false</bool>
    </property>
+   <property name="floatable">
+    <bool>false</bool>
+   </property>
    <attribute name="toolBarArea">
     <enum>TopToolBarArea</enum>
    </attribute>
@@ -118,6 +121,9 @@
    <property name="movable">
     <bool>false</bool>
    </property>
+   <property name="floatable">
+    <bool>false</bool>
+   </property>
    <attribute name="toolBarArea">
     <enum>LeftToolBarArea</enum>
    </attribute>
@@ -125,6 +131,25 @@
     <bool>false</bool>
    </attribute>
    <addaction name="actionShowGrid"/>
+  </widget>
+  <widget class="QToolBar" name="toolBarRight">
+   <property name="windowTitle">
+    <string>toolBar</string>
+   </property>
+   <property name="movable">
+    <bool>false</bool>
+   </property>
+   <property name="floatable">
+    <bool>false</bool>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>RightToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionSelectItem"/>
+   <addaction name="actionAddWire"/>
   </widget>
   <action name="actionQuit">
    <property name="icon">
@@ -155,6 +180,55 @@
    </property>
    <property name="statusTip">
     <string>Display background grid in the edit window</string>
+   </property>
+  </action>
+  <action name="actionSelectItem">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset theme="view-select-item"/>
+   </property>
+   <property name="text">
+    <string>Select Item(s)</string>
+   </property>
+   <property name="statusTip">
+    <string>Select item(s) on the schematic</string>
+   </property>
+   <property name="shortcut">
+    <string>Esc</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::TextHeuristicRole</enum>
+   </property>
+  </action>
+  <action name="actionAddWire">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset theme="view-add-wire"/>
+   </property>
+   <property name="text">
+    <string>Add a wire</string>
+   </property>
+   <property name="toolTip">
+    <string>Add a wire (W)</string>
+   </property>
+   <property name="statusTip">
+    <string>Add a wire on the schematic</string>
+   </property>
+   <property name="shortcut">
+    <string>W</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::TextHeuristicRole</enum>
    </property>
   </action>
  </widget>
