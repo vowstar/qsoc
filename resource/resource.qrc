@@ -7,9 +7,11 @@
         <file>icon/dark/scalable/document-new.svg</file>
         <file>icon/dark/scalable/document-open-in-explorer.svg</file>
         <file>icon/dark/scalable/document-open.svg</file>
+        <file>icon/dark/scalable/view-add-wire.svg</file>
         <file>icon/dark/scalable/view-grid-off.svg</file>
         <file>icon/dark/scalable/view-grid-on.svg</file>
         <file>icon/dark/scalable/view-refresh.svg</file>
+        <file>icon/dark/scalable/view-select-item.svg</file>
         <file>icon/dark/scalable/window-close.svg</file>
         <file>icon/light/index.theme</file>
         <file>icon/light/scalable/applications-schematic.svg</file>
@@ -18,9 +20,11 @@
         <file>icon/light/scalable/document-new.svg</file>
         <file>icon/light/scalable/document-open-in-explorer.svg</file>
         <file>icon/light/scalable/document-open.svg</file>
+        <file>icon/light/scalable/view-add-wire.svg</file>
         <file>icon/light/scalable/view-grid-off.svg</file>
         <file>icon/light/scalable/view-grid-on.svg</file>
         <file>icon/light/scalable/view-refresh.svg</file>
+        <file>icon/light/scalable/view-select-item.svg</file>
         <file>icon/light/scalable/window-close.svg</file>
     </qresource>
 </RCC>
