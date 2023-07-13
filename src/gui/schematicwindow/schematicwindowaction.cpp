@@ -18,3 +18,15 @@ void SchematicWindow::on_actionShowGrid_triggered(bool checked)
     scene.setSettings(settings);
     ui->schematicView->setSettings(settings);
 }
+
+void SchematicWindow::on_actionSelectItem_triggered()
+{
+    ui->actionSelectItem->setChecked(true);
+    ui->actionAddWire->setChecked(false);
+}
+
+void SchematicWindow::on_actionAddWire_triggered()
+{
+    ui->actionAddWire->setChecked(true);
+    ui->actionSelectItem->setChecked(false);
+}

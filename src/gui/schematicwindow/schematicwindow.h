@@ -35,6 +35,12 @@ public:
     ~SchematicWindow();
 
 private slots:
+    void on_actionAddWire_triggered();
+
+private slots:
+    void on_actionSelectItem_triggered();
+
+private slots:
     void on_actionShowGrid_triggered(bool checked);
 
 private slots:
