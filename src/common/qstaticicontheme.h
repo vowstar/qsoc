@@ -20,6 +20,13 @@ public:
         return instance;
     }
 
+    /**
+     * @brief Check if the theme is dark
+     * @return true if the theme is dark, false otherwise
+     * @details This function will check if the theme is dark.
+     */
+    static bool isDarkTheme();
+
 public slots:
     /**
      * @brief Setup the theme

@@ -5,11 +5,18 @@
 #include <QIcon>
 #include <QPalette>
 
-void QStaticIconTheme::setup()
+bool QStaticIconTheme::isDarkTheme()
 {
     const QColor color = QApplication::palette().color(QPalette::Active, QPalette::Base);
+    return color.lightness() < 127;
+}
+
+void QStaticIconTheme::setup()
+{
+    /* Set theme search path */
     QIcon::setThemeSearchPaths({":icon"});
-    if (color.lightness() < 127) {
+    /* Select theme by system theme */
+    if (isDarkTheme()) {
         QIcon::setThemeName("dark");
     } else {
         QIcon::setThemeName("light");
