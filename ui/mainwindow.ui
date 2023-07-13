@@ -108,6 +108,8 @@
    <addaction name="actionCloseProject"/>
    <addaction name="separator"/>
    <addaction name="actionRefresh"/>
+   <addaction name="separator"/>
+   <addaction name="actionOpenProjectInFileExplorer"/>
   </widget>
   <action name="actionNewProject">
    <property name="icon">
@@ -185,6 +187,23 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+E</string>
+   </property>
+  </action>
+  <action name="actionOpenProjectInFileExplorer">
+   <property name="icon">
+    <iconset theme="document-open-in-explorer"/>
+   </property>
+   <property name="text">
+    <string>Open In File Explorer</string>
+   </property>
+   <property name="toolTip">
+    <string>Open In File Explorer</string>
+   </property>
+   <property name="statusTip">
+    <string>Open project directory in file browser</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::TextHeuristicRole</enum>
    </property>
   </action>
  </widget>
