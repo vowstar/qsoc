@@ -35,6 +35,9 @@ public:
     ~SchematicWindow();
 
 private slots:
+    void on_actionShowGrid_triggered(bool checked);
+
+private slots:
     void on_actionQuit_triggered();
 
 private:
