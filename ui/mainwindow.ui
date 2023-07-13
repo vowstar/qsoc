@@ -60,6 +60,48 @@
        </layout>
       </item>
       <item>
+       <layout class="QHBoxLayout" name="horizontalLayoutSymbolEditor">
+        <item>
+         <widget class="QToolButton" name="toolButtonSymbolEditor">
+          <property name="iconSize">
+           <size>
+            <width>50</width>
+            <height>50</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QVBoxLayout" name="verticalLayoutSymbolEditor">
+          <item>
+           <widget class="QLabel" name="labelSymbolEditor">
+            <property name="font">
+             <font>
+              <bold>true</bold>
+             </font>
+            </property>
+            <property name="text">
+             <string>Symbol Editor</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="labelSymbolEditorDetail">
+            <property name="font">
+             <font>
+              <italic>true</italic>
+             </font>
+            </property>
+            <property name="text">
+             <string>Edit golbal and/or project schematic symbols</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </item>
+      <item>
        <spacer name="verticalSpacerToolList">
         <property name="orientation">
          <enum>Qt::Vertical</enum>
@@ -107,6 +149,7 @@
      <string>Tools</string>
     </property>
     <addaction name="actionSchematicEditor"/>
+    <addaction name="actionSymbolEditor"/>
    </widget>
    <widget class="QMenu" name="menuPreferences">
     <property name="title">
@@ -166,7 +209,6 @@
    <addaction name="actionRefresh"/>
    <addaction name="separator"/>
    <addaction name="actionOpenProjectInFileExplorer"/>
-   <addaction name="actionSchematicEditor"/>
   </widget>
   <action name="actionNewProject">
    <property name="icon">
@@ -271,6 +313,20 @@
    </property>
    <property name="menuRole">
     <enum>QAction::TextHeuristicRole</enum>
+   </property>
+  </action>
+  <action name="actionSymbolEditor">
+   <property name="icon">
+    <iconset theme="applications-symbol"/>
+   </property>
+   <property name="text">
+    <string>Symbo&amp;l Editor</string>
+   </property>
+   <property name="statusTip">
+    <string>Edit schematic symbols (CTRL+L)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+L</string>
    </property>
   </action>
  </widget>
