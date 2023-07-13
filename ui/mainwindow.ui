@@ -14,9 +14,65 @@
    <string>SoC Studio</string>
   </property>
   <widget class="QWidget" name="centralwidget">
-   <layout class="QGridLayout" name="gridLayout_2">
+   <layout class="QGridLayout" name="gridLayoutCentralWidget">
     <item row="0" column="0">
-     <layout class="QVBoxLayout" name="verticalLayout"/>
+     <layout class="QVBoxLayout" name="verticalLayoutToolList">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayoutSchematicEditor">
+        <item>
+         <widget class="QToolButton" name="toolButtonSchematicEditor">
+          <property name="iconSize">
+           <size>
+            <width>50</width>
+            <height>50</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QVBoxLayout" name="verticalLayoutSchematicEditor">
+          <item>
+           <widget class="QLabel" name="labelSchematicEditor">
+            <property name="font">
+             <font>
+              <bold>true</bold>
+             </font>
+            </property>
+            <property name="text">
+             <string>Schematic Editor</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="labelSchematicEditorDetail">
+            <property name="font">
+             <font>
+              <italic>true</italic>
+             </font>
+            </property>
+            <property name="text">
+             <string>Edit the project schematic</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <spacer name="verticalSpacerToolList">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>20</width>
+          <height>40</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
     </item>
    </layout>
   </widget>
@@ -50,12 +106,12 @@
     <property name="title">
      <string>Tools</string>
     </property>
+    <addaction name="actionSchematicEditor"/>
    </widget>
    <widget class="QMenu" name="menuPreferences">
     <property name="title">
      <string>Preferences</string>
     </property>
-    <addaction name="actionSchematicEditor"/>
    </widget>
    <addaction name="menuFile"/>
    <addaction name="menuView"/>
@@ -110,10 +166,12 @@
    <addaction name="actionRefresh"/>
    <addaction name="separator"/>
    <addaction name="actionOpenProjectInFileExplorer"/>
+   <addaction name="actionSchematicEditor"/>
   </widget>
   <action name="actionNewProject">
    <property name="icon">
-    <iconset theme="document-new"/>
+    <iconset theme="document-new">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>&amp;New Project</string>
@@ -127,7 +185,8 @@
   </action>
   <action name="actionOpenProject">
    <property name="icon">
-    <iconset theme="document-open"/>
+    <iconset theme="document-open">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>&amp;Open Project</string>
@@ -141,7 +200,8 @@
   </action>
   <action name="actionCloseProject">
    <property name="icon">
-    <iconset theme="document-close"/>
+    <iconset theme="document-close">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>Close Project</string>
@@ -152,7 +212,8 @@
   </action>
   <action name="actionQuit">
    <property name="icon">
-    <iconset theme="window-close"/>
+    <iconset theme="window-close">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>&amp;Quit</string>
@@ -166,7 +227,8 @@
   </action>
   <action name="actionRefresh">
    <property name="icon">
-    <iconset theme="view-refresh"/>
+    <iconset theme="view-refresh">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>Refresh</string>
@@ -179,6 +241,10 @@
    </property>
   </action>
   <action name="actionSchematicEditor">
+   <property name="icon">
+    <iconset theme="applications-schematic">
+     <normaloff>.</normaloff>.</iconset>
+   </property>
    <property name="text">
     <string>Schematic &amp;Editor</string>
    </property>
@@ -191,7 +257,8 @@
   </action>
   <action name="actionOpenProjectInFileExplorer">
    <property name="icon">
-    <iconset theme="document-open-in-explorer"/>
+    <iconset theme="document-open-in-explorer">
+     <normaloff>.</normaloff>.</iconset>
    </property>
    <property name="text">
     <string>Open In File Explorer</string>
