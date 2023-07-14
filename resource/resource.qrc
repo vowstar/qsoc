@@ -7,7 +7,15 @@
         <file>icon/dark/scalable/document-new.svg</file>
         <file>icon/dark/scalable/document-open-in-explorer.svg</file>
         <file>icon/dark/scalable/document-open.svg</file>
+        <file>icon/dark/scalable/document-print.svg</file>
         <file>icon/dark/scalable/document-save.svg</file>
+        <file>icon/dark/scalable/edit-copy.svg</file>
+        <file>icon/dark/scalable/edit-cut.svg</file>
+        <file>icon/dark/scalable/edit-delete.svg</file>
+        <file>icon/dark/scalable/edit-paste.svg</file>
+        <file>icon/dark/scalable/edit-redo.svg</file>
+        <file>icon/dark/scalable/edit-select-all.svg</file>
+        <file>icon/dark/scalable/edit-undo.svg</file>
         <file>icon/dark/scalable/view-add-wire.svg</file>
         <file>icon/dark/scalable/view-grid-off.svg</file>
         <file>icon/dark/scalable/view-grid-on.svg</file>
@@ -21,7 +29,15 @@
         <file>icon/light/scalable/document-new.svg</file>
         <file>icon/light/scalable/document-open-in-explorer.svg</file>
         <file>icon/light/scalable/document-open.svg</file>
+        <file>icon/light/scalable/document-print.svg</file>
         <file>icon/light/scalable/document-save.svg</file>
+        <file>icon/light/scalable/edit-copy.svg</file>
+        <file>icon/light/scalable/edit-cut.svg</file>
+        <file>icon/light/scalable/edit-delete.svg</file>
+        <file>icon/light/scalable/edit-paste.svg</file>
+        <file>icon/light/scalable/edit-redo.svg</file>
+        <file>icon/light/scalable/edit-select-all.svg</file>
+        <file>icon/light/scalable/edit-undo.svg</file>
         <file>icon/light/scalable/view-add-wire.svg</file>
         <file>icon/light/scalable/view-grid-off.svg</file>
         <file>icon/light/scalable/view-grid-on.svg</file>
