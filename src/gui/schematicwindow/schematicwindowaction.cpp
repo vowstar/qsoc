@@ -30,3 +30,17 @@ void SchematicWindow::on_actionAddWire_triggered()
     ui->actionAddWire->setChecked(true);
     ui->actionSelectItem->setChecked(false);
 }
+
+void SchematicWindow::on_actionUndo_triggered()
+{
+    if (scene.undoStack()->canUndo()) {
+        scene.undoStack()->undo();
+    }
+}
+
+void SchematicWindow::on_actionRedo_triggered()
+{
+    if (scene.undoStack()->canRedo()) {
+        scene.undoStack()->redo();
+    }
+}

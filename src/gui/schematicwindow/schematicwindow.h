@@ -35,6 +35,12 @@ public:
     ~SchematicWindow();
 
 private slots:
+    void on_actionRedo_triggered();
+
+private slots:
+    void on_actionUndo_triggered();
+
+private slots:
     void on_actionAddWire_triggered();
 
 private slots:

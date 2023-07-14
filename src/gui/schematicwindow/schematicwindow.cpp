@@ -29,10 +29,22 @@ SchematicWindow::SchematicWindow(QWidget *parent)
         }
     });
 
-    // scene.setParent(ui->schematicView);
+    ui->actionUndo->setEnabled(scene.undoStack()->canUndo());
+    ui->actionRedo->setEnabled(scene.undoStack()->canRedo());
+
+    connect(scene.undoStack(), &QUndoStack::canUndoChanged, [this](bool canUndo) {
+        ui->actionUndo->setEnabled(canUndo);
+    });
+    connect(scene.undoStack(), &QUndoStack::canRedoChanged, [this](bool canRedo) {
+        ui->actionRedo->setEnabled(canRedo);
+    });
+
+    scene.setParent(ui->schematicView);
     scene.setSettings(settings);
     ui->schematicView->setSettings(settings);
     ui->schematicView->setScene(&scene);
+
+    ui->undoViewCommandHistory->setStack(scene.undoStack());
 
     scene.clear();
     scene.setSceneRect(-500, -500, 3000, 3000);
