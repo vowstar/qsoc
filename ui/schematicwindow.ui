@@ -35,8 +35,9 @@
     </property>
     <addaction name="actionSave"/>
     <addaction name="separator"/>
-    <addaction name="actionQuit"/>
     <addaction name="actionPrint"/>
+    <addaction name="separator"/>
+    <addaction name="actionQuit"/>
    </widget>
    <widget class="QMenu" name="menuEdit">
     <property name="title">
