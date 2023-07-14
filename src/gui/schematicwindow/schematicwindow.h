@@ -35,6 +35,9 @@ public:
     ~SchematicWindow();
 
 private slots:
+    void on_actionPrint_triggered();
+
+private slots:
     void on_actionRedo_triggered();
 
 private slots:

@@ -3,6 +3,8 @@
 #include "./ui_schematicwindow.h"
 
 #include <QIcon>
+#include <QPrintDialog>
+#include <QPrinter>
 
 void SchematicWindow::on_actionQuit_triggered()
 {
@@ -42,5 +44,15 @@ void SchematicWindow::on_actionRedo_triggered()
 {
     if (scene.undoStack()->canRedo()) {
         scene.undoStack()->redo();
+    }
+}
+
+void SchematicWindow::on_actionPrint_triggered()
+{
+    QPrinter printer(QPrinter::HighResolution);
+    if (QPrintDialog(&printer).exec() == QDialog::Accepted) {
+        QPainter painter(&printer);
+        painter.setRenderHint(QPainter::Antialiasing);
+        scene.render(&painter);
     }
 }
