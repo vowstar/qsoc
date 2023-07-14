@@ -18,6 +18,9 @@ SchematicWindow::SchematicWindow(QWidget *parent)
     scene.setSettings(settings);
     ui->schematicView->setSettings(settings);
     ui->schematicView->setScene(&scene);
+
+    scene.clear();
+    scene.setSceneRect(-500, -500, 3000, 3000);
 }
 
 SchematicWindow::~SchematicWindow()
