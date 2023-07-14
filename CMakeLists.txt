@@ -214,6 +214,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt${QT_VERSION_MAJOR}::Sql
     Qt${QT_VERSION_MAJOR}::Svg
     Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::PrintSupport
     ${QT_LIBRARIES}
     ${SQLITE3_LIBRARIES}
     ${SVLANG_LIBRARIES}
