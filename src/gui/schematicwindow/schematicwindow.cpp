@@ -14,6 +14,21 @@ SchematicWindow::SchematicWindow(QWidget *parent)
     settings.showGrid            = true;
     settings.routeStraightAngles = true;
 
+    connect(&scene, &QSchematic::Scene::modeChanged, [this](int mode) {
+        switch (mode) {
+        case QSchematic::Scene::NormalMode:
+            on_actionSelectItem_triggered();
+            break;
+
+        case QSchematic::Scene::WireMode:
+            on_actionAddWire_triggered();
+            break;
+
+        default:
+            break;
+        }
+    });
+
     // scene.setParent(ui->schematicView);
     scene.setSettings(settings);
     ui->schematicView->setSettings(settings);
