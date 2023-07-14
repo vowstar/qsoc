@@ -77,10 +77,10 @@
    <addaction name="menuPreferences"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
-  <widget class="QDockWidget" name="dockWidget">
+  <widget class="QDockWidget" name="dockWidgetSymbolList">
    <property name="minimumSize">
     <size>
-     <width>300</width>
+     <width>200</width>
      <height>36</height>
     </size>
    </property>
@@ -96,7 +96,7 @@
    <attribute name="dockWidgetArea">
     <number>1</number>
    </attribute>
-   <widget class="QWidget" name="dockWidgetContents"/>
+   <widget class="QWidget" name="dockWidgetContentsSymbolList"/>
   </widget>
   <widget class="QToolBar" name="toolBarTop">
    <property name="windowTitle">
@@ -152,6 +152,27 @@
    </attribute>
    <addaction name="actionSelectItem"/>
    <addaction name="actionAddWire"/>
+  </widget>
+  <widget class="QDockWidget" name="dockWidgetCommandHistory">
+   <property name="minimumSize">
+    <size>
+     <width>200</width>
+     <height>36</height>
+    </size>
+   </property>
+   <property name="features">
+    <set>QDockWidget::DockWidgetClosable|QDockWidget::DockWidgetMovable</set>
+   </property>
+   <property name="allowedAreas">
+    <set>Qt::LeftDockWidgetArea|Qt::RightDockWidgetArea</set>
+   </property>
+   <property name="windowTitle">
+    <string extracomment="Command history list for the current schematic">Command History</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>1</number>
+   </attribute>
+   <widget class="QWidget" name="dockWidgetContentsCommandHistory"/>
   </widget>
   <action name="actionQuit">
    <property name="icon">
