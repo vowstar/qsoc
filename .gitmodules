@@ -12,4 +12,4 @@
 	url = git@github.com:vowstar/QSchematic.git
 [submodule "external/gpds"]
 	path = external/gpds
-	url = git@github.com:vowstar/gpds.git
+	url = git@github.com:simulton/gpds.git
