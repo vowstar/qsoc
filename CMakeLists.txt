@@ -254,6 +254,6 @@ endif()
 ## Testing
 if (ENABLE_UNIT_TEST)
     enable_testing()
-    add_test(NAME test_cmd_version COMMAND ${PROJECT_NAME} -c -v)
+    add_test(NAME test_cmd_version COMMAND ${PROJECT_NAME} -v)
     add_subdirectory(test)
 endif()
