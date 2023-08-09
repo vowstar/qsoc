@@ -30,4 +30,4 @@ void test::testParseArgs()
 
 QTEST_APPLESS_MAIN(test)
 
-#include "tst_qslangdriver.moc"
+#include "test_qslangdriver.moc"

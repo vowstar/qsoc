@@ -83,4 +83,4 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
     )
 endfunction()
 
-qt_add_test_target("tst_qslangdriver")
+qt_add_test_target("test_qslangdriver")
