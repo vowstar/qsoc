@@ -47,9 +47,6 @@ void QSocCliWorker::parseRoot(const QStringList &appArguments)
     parser.addOptions({
         {{"h", "help"},
          QCoreApplication::translate("main", "Displays help on commandline options.")},
-        {{"c", "cli"},
-         QCoreApplication::translate(
-             "main", "Start the software in CLI mode, otherwise it will start in GUI mode.")},
         {{"l", "level"},
          QCoreApplication::translate(
              "main",
