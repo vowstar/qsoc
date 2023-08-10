@@ -3,9 +3,9 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
-#include <QDebug>
 #include <QFileInfo>
 #include <QObject>
+#include <QStringList>
 
 /**
  * @brief   The QSocCliWorker class
@@ -30,11 +30,12 @@ public:
     ~QSocCliWorker();
     /**
      * @brief Setup the command line parser
+     * @param appArguments command line arguments for the application
      * @param isGui indicates whether the application is running
      *              in GUI mode or not, default is false
      * @details This function will setup the command line parser
      */
-    void setup(bool isGui = false);
+    void setup(const QStringList &appArguments, bool isGui = false);
     /**
      * @brief Process the command line arguments
      * @details This function will process the command line arguments
@@ -51,6 +52,8 @@ public slots:
 private:
     /* Command line parser */
     QCommandLineParser parser;
+    /* Command line arguments */
+    QStringList cmdArguments;
 
     /**
      * @brief Parse the application command line arguments

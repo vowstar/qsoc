@@ -25,7 +25,7 @@ int main(int argc, char *argv[])
         const QApplication app(argc, argv);
         QStaticTranslator::setup();
         QSocCliWorker socCliWorker;
-        socCliWorker.setup(true);
+        socCliWorker.setup(app.arguments(), true);
         QStaticIconTheme::setup();
         MainWindow mainWindow;
         mainWindow.show();
@@ -34,7 +34,7 @@ int main(int argc, char *argv[])
         const QCoreApplication app(argc, argv);
         QStaticTranslator::setup();
         QSocCliWorker socCliWorker;
-        socCliWorker.setup(false);
+        socCliWorker.setup(app.arguments(), false);
         result = app.exec();
     }
     return result;

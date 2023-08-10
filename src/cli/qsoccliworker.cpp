@@ -22,8 +22,10 @@ QSocCliWorker::QSocCliWorker(QObject *parent)
 
 QSocCliWorker::~QSocCliWorker() {}
 
-void QSocCliWorker::setup(bool isGui)
+void QSocCliWorker::setup(const QStringList &appArguments, bool isGui)
 {
+    /* Set up command line arguments */
+    this->cmdArguments = appArguments;
     /* Determine if we are in gui or cli mode */
     if (!isGui) {
         /* In cli, cause application to exit when finished */
@@ -38,7 +40,7 @@ void QSocCliWorker::setup(bool isGui)
 
 void QSocCliWorker::run()
 {
-    parseRoot(QCoreApplication::arguments());
+    parseRoot(cmdArguments);
     emit quit();
 }
 
