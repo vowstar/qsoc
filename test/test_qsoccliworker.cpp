@@ -14,7 +14,8 @@ struct TestApp
         static auto                  argc      = 1;
         static char                  appName[] = "socstudio";
         static std::array<char *, 1> argv      = {{appName}};
-        static const QApplication    app       = QApplication(argc, argv.data());
+        /* Use QCoreApplication for cli test */
+        static const QCoreApplication app = QCoreApplication(argc, argv.data());
         return app;
     }
 };
