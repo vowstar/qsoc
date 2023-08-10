@@ -81,6 +81,11 @@ void QStaticLog::setLevel(int level)
     QStaticLog::level = level;
 }
 
+int QStaticLog::getLevel()
+{
+    return QStaticLog::level;
+}
+
 void QStaticLog::setColorConsole(bool color)
 {
     QStaticLog::colorConsole = color;
@@ -99,6 +104,11 @@ void QStaticLog::setColorConsole(bool color)
     }
 }
 
+bool QStaticLog::isColorConsole()
+{
+    return QStaticLog::colorConsole;
+}
+
 void QStaticLog::setColorRichtext(bool color)
 {
     QStaticLog::colorRichtext = color;
@@ -115,6 +125,11 @@ void QStaticLog::setColorRichtext(bool color)
         QStaticLog::strDRichtext = "[D]:";
         QStaticLog::strVRichtext = "[V]:";
     }
+}
+
+bool QStaticLog::isColorRichtext()
+{
+    return QStaticLog::colorRichtext;
 }
 
 void QStaticLog::setColor(bool color)

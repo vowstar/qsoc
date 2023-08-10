@@ -34,6 +34,27 @@ public:
         return instance;
     }
 
+    /**
+     * @brief Get the log level
+     * @return int 
+     * @details This function will return the log level
+     */
+    static int getLevel();
+
+    /**
+     * @brief Get the color mode for console
+     * @return bool 
+     * @details This function will return the color mode for console
+     */
+    static bool isColorConsole();
+
+    /**
+     * @brief Get the color mode for richtext
+     * @return bool 
+     * @details This function will return the color mode for richtext
+     */
+    static bool isColorRichtext();
+
 public slots:
     /**
      * @brief Log error message to console
