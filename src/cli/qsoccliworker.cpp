@@ -1,5 +1,6 @@
 #include "cli/qsoccliworker.h"
 
+#include "common/config.h"
 #include "common/qslangdriver.h"
 #include "common/qstaticlog.h"
 
@@ -11,8 +12,8 @@ QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)
 {
     /* Set up application name and version */
-    QCoreApplication::setApplicationName("socstuido");
-    QCoreApplication::setApplicationVersion("1.0.0");
+    QCoreApplication::setApplicationName("socstudio");
+    QCoreApplication::setApplicationVersion(SOCSTUDIO_VERSION);
     /* Set up command line parser */
     parser.setApplicationDescription(
         QCoreApplication::translate("main", "Generate SoC components via the command line."));
