@@ -1,33 +1,13 @@
 #include <QtTest>
 
-class test : public QObject
+class Test : public QObject
 {
     Q_OBJECT
 
-public:
-    test();
-    ~test() override;
-
 private slots:
-    void testParseArgs();
-
+    void parseArgs(){};
 };
 
-test::test()
-{
-
-}
-
-test::~test()
-{
-
-}
-
-void test::testParseArgs()
-{
-
-}
-
-QTEST_APPLESS_MAIN(test)
+QTEST_APPLESS_MAIN(Test)
 
 #include "test_qslangdriver.moc"
