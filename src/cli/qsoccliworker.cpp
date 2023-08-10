@@ -27,7 +27,7 @@ void QSocCliWorker::setup(const QStringList &appArguments, bool isGui)
     /* Set up command line arguments */
     this->cmdArguments = appArguments;
     /* Determine if we are in gui or cli mode */
-    if (!isGui) {
+    if (!isGui && QCoreApplication::instance()) {
         /* In cli, cause application to exit when finished */
         QObject::connect(
             this, SIGNAL(exit()), QCoreApplication::instance(), SLOT(exit()), Qt::QueuedConnection);
