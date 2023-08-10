@@ -24,16 +24,22 @@ jobs:
     - name: Install depends
       run: >-
         sudo apt-get install -y
+        '^libxcb.*-dev'
         catch
         clang-tidy
         libfmt-dev
         libgl-dev
         libgl1-mesa-dev
+        libglu1-mesa-dev
         libicu-dev
         libsqlite3-dev
+        libx11-xcb-dev
         libxcb-{icccm4,image0,keysyms1,randr0,render-util0,shape0,sync1,xfixes0,xinerama0,xkb1}
-        libxcb-xkb-dev
+        libxi-dev
+        libxkbcommon-dev
         libxkbcommon-x11-0
+        libxkbcommon-x11-dev
+        libxrender-dev
         linguist-qt6
         ninja-build
         p7zip-full
