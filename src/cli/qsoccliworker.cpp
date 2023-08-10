@@ -123,7 +123,16 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
     parser.parse(appArguments);
     /* Set debug level as early as possible */
     if (parser.isSet("level")) {
-        QStaticLog::setLevel(parser.value("level").toInt());
+        const int level = parser.value("level").toInt();
+        /* Check if the level is valid */
+        if (level < QStaticLog::Level::Silent || level > QStaticLog::Level::Verbose) {
+            return showError(
+                1,
+                QCoreApplication::translate("main", "Error: invalid log level: %1.")
+                    .arg(parser.value("level")));
+        }
+        /* Set log level */
+        QStaticLog::setLevel(static_cast<QStaticLog::Level>(level));
     }
     /* version options have higher priority */
     if (parser.isSet("version")) {

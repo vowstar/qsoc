@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QString>
 #include <QTextBrowser>
+#include <QtCore>
 
 /**
  * @brief   The QStaticLog class
@@ -14,18 +15,16 @@ class QStaticLog : public QObject
 {
     Q_OBJECT
 public:
-    /* Log level silent */
-    static const int levelS;
-    /* Log level error */
-    static const int levelE;
-    /* Log level warning */
-    static const int levelW;
-    /* Log level info */
-    static const int levelI;
-    /* Log level debug */
-    static const int levelD;
-    /* Log level verbose */
-    static const int levelV;
+    enum Level {
+        Silent  = 0, /*!< Log level silent */
+        Error   = 1, /*!< Log level error */
+        Warning = 2, /*!< Log level warning */
+        Info    = 3, /*!< Log level info */
+        Debug   = 4, /*!< Log level debug */
+        Verbose = 5, /*!< Log level verbose */
+    };
+
+    Q_DECLARE_FLAGS(Levels, Level)
 
     /* Static instance of this object */
     static QStaticLog &instance()
@@ -36,21 +35,21 @@ public:
 
     /**
      * @brief Get the log level
-     * @return int 
+     * @return The log level
      * @details This function will return the log level
      */
-    static int getLevel();
+    static QStaticLog::Level getLevel();
 
     /**
      * @brief Get the color mode for console
-     * @return bool 
+     * @return true if color, false if colorless
      * @details This function will return the color mode for console
      */
     static bool isColorConsole();
 
     /**
      * @brief Get the color mode for richtext
-     * @return bool 
+     * @return true if color, false if colorless 
      * @details This function will return the color mode for richtext
      */
     static bool isColorRichtext();
@@ -58,60 +57,60 @@ public:
 public slots:
     /**
      * @brief Log error message to console
-     * @param func
-     * @param message
+     * @param func The function name
+     * @param message The log message
      * @details This function will log the message to the console
      */
     static void logE(const QString &func, const QString &message);
     /**
      * @brief Log warning message to console
-     * @param func
-     * @param message
+     * @param func The function name
+     * @param message The log message
      * @details This function will log the message to the console
      */
     static void logW(const QString &func, const QString &message);
     /**
      * @brief Log info message to console
-     * @param func
-     * @param message
+     * @param func The function name
+     * @param message The log message
      * @details This function will log the message to the console
      */
     static void logI(const QString &func, const QString &message);
     /**
      * @brief Log debug message to console
-     * @param func
-     * @param message
+     * @param func The function name
+     * @param message The log message
      * @details This function will log the message to the console
      */
     static void logD(const QString &func, const QString &message);
     /**
      * @brief Log verbose message to console
-     * @param func
-     * @param message
+     * @param func The function name
+     * @param message The log message
      * @details This function will log the message to the console
      */
     static void logV(const QString &func, const QString &message);
     /**
      * @brief Set log level for both console and richtext
-     * @param level
+     * @param level The log level to set
      * @details This function will set the log level for both console and richtext
      */
-    static void setLevel(int level);
+    static void setLevel(QStaticLog::Level level);
     /**
      * @brief Set color mode for console
-     * @param color
+     * @param color The color mode to set, true is color, false is colorless
      * @details This function will set the color mode for console
      */
     static void setColorConsole(bool color);
     /**
      * @brief Set color mode for richtext
-     * @param color
+     * @param color The color mode to set, true is color, false is colorless
      * @details This function will set the color mode for richtext
      */
     static void setColorRichtext(bool color);
     /**
      * @brief Set color mode for both console and richtext
-     * @param color
+     * @param color The color mode to set, true is color, false is colorless
      * @details This function will set the color mode for both console and richtext
      */
     static void setColor(bool color);
@@ -119,8 +118,8 @@ public slots:
 signals:
     /**
      * @brief Log error message to richtext
-     * @param func
-     * @param message
+     * @param func The function name
+     * @param message The log message
      * @details This function will log the message to the richtext
      */
     void log(const QString &message);
@@ -169,7 +168,7 @@ private:
     /* String for richtext verbose */
     static QString strVRichtext;
     /* Log level */
-    static int level;
+    static QStaticLog::Level level;
     /* Color mode for console */
     static bool colorConsole;
     /* Color mode for richtext */

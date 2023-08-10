@@ -17,7 +17,7 @@ bool isGui(int &argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
-    QStaticLog::setLevel(QStaticLog::levelS);
+    QStaticLog::setLevel(QStaticLog::Level::Silent);
 
     int result = 0;
 
