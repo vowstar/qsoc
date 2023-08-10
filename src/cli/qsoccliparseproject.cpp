@@ -3,7 +3,7 @@
 #include "common/qsocprojectmanager.h"
 #include "common/qstaticlog.h"
 
-void QSocCliWorker::parseProject(const QStringList &appArguments)
+bool QSocCliWorker::parseProject(const QStringList &appArguments)
 {
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
@@ -18,33 +18,29 @@ void QSocCliWorker::parseProject(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     if (cmdArguments.isEmpty()) {
-        if (!parser.isSet("help")) {
-            qCritical() << "Error: missing subcommand.";
-            parser.showHelp(1);
-        } else {
-            parser.showHelp(0);
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
+    }
+    const QString &command       = cmdArguments.first();
+    QStringList    nextArguments = appArguments;
+    if (command == "create") {
+        nextArguments.removeOne(command);
+        if (!parseProjectCreate(nextArguments)) {
+            return false;
+        }
+    } else if (command == "update") {
+        nextArguments.removeOne(command);
+        if (!parseProjectUpdate(nextArguments)) {
+            return false;
         }
     } else {
-        const QString &command       = cmdArguments.first();
-        QStringList    nextArguments = appArguments;
-        if (command == "create") {
-            nextArguments.removeOne(command);
-            parseProjectCreate(nextArguments);
-        } else if (command == "update") {
-            nextArguments.removeOne(command);
-            parseProjectUpdate(nextArguments);
-        } else {
-            if (!parser.isSet("help")) {
-                qCritical() << "Error: unknown subcommand." << command;
-                parser.showHelp(1);
-            } else {
-                parser.showHelp(0);
-            }
-        }
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: unknown subcommand: %1.").arg(command));
     }
+
+    return true;
 }
 
-void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
+bool QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
 {
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
@@ -72,16 +68,11 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
-    /* Check help flag */
-    if (parser.isSet("help")) {
-        parser.showHelp(0);
-        return;
-    }
+
     if (cmdArguments.isEmpty()) {
-        qCritical() << "Error: missing project name.";
-        parser.showHelp(1);
-        return;
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
     }
+
     /* Pass projectName to projectManager */
     const QString     &projectName = cmdArguments.first();
     QSocProjectManager projectManager(this);
@@ -100,14 +91,17 @@ void QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
     if (parser.isSet("output")) {
         projectManager.setOutputPath(parser.value("output"));
     }
-    if (projectManager.save(projectName)) {
-        qInfo() << "Project" << projectName << "created.";
-    } else {
-        qCritical() << "Error: failed to create project" << projectName;
+    if (!projectManager.save(projectName)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: failed to create project %1.")
+                .arg(projectName));
     }
+
+    return showInfo(0, QCoreApplication::translate("main", "Project %1 created.").arg(projectName));
 }
 
-void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
+bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
 {
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
@@ -135,15 +129,9 @@ void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
-    /* Check help flag */
-    if (parser.isSet("help")) {
-        parser.showHelp(0);
-        return;
-    }
+
     if (cmdArguments.isEmpty()) {
-        qCritical() << "Error: missing project name.";
-        parser.showHelp(1);
-        return;
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
     }
     /* Pass projectName to projectManager */
     const QString     &projectName = cmdArguments.first();
@@ -152,28 +140,31 @@ void QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
         projectManager.setProjectPath(parser.value("directory"));
     }
     /* Load project by name from project path */
-    if (projectManager.load(projectName)) {
-        qInfo() << "Project" << projectName << "loaded.";
-        /* Update project config with new paths */
-        if (parser.isSet("bus")) {
-            projectManager.setBusPath(parser.value("bus"));
-        }
-        if (parser.isSet("symbol")) {
-            projectManager.setSymbolPath(parser.value("symbol"));
-        }
-        if (parser.isSet("schematic")) {
-            projectManager.setSchematicPath(parser.value("schematic"));
-        }
-        if (parser.isSet("output")) {
-            projectManager.setOutputPath(parser.value("output"));
-        }
-        /* Save project config */
-        if (projectManager.save(projectName)) {
-            qInfo() << "Project" << projectName << "saved.";
-        } else {
-            qCritical() << "Error: failed to save project" << projectName;
-        }
-    } else {
-        qCritical() << "Error: failed to load project" << projectName;
+    if (!projectManager.load(projectName)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: failed to load project %1.")
+                .arg(projectName));
     }
+    /* Update project config with new paths */
+    if (parser.isSet("bus")) {
+        projectManager.setBusPath(parser.value("bus"));
+    }
+    if (parser.isSet("symbol")) {
+        projectManager.setSymbolPath(parser.value("symbol"));
+    }
+    if (parser.isSet("schematic")) {
+        projectManager.setSchematicPath(parser.value("schematic"));
+    }
+    if (parser.isSet("output")) {
+        projectManager.setOutputPath(parser.value("output"));
+    }
+    /* Save project config */
+    if (!projectManager.save(projectName)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: failed to update project %1.")
+                .arg(projectName));
+    }
+    return showInfo(0, QCoreApplication::translate("main", "Project %1 updated.").arg(projectName));
 }

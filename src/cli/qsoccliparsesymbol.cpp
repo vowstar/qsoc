@@ -5,7 +5,7 @@
 #include "common/qsocsymbolmanager.h"
 #include "common/qstaticlog.h"
 
-void QSocCliWorker::parseSymbol(const QStringList &appArguments)
+bool QSocCliWorker::parseSymbol(const QStringList &appArguments)
 {
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
@@ -21,36 +21,34 @@ void QSocCliWorker::parseSymbol(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     if (cmdArguments.isEmpty()) {
-        if (!parser.isSet("help")) {
-            qCritical() << "Error: missing subcommand.";
-            parser.showHelp(1);
-        } else {
-            parser.showHelp(0);
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
+    }
+    const QString &command       = cmdArguments.first();
+    QStringList    nextArguments = appArguments;
+    if (command == "import") {
+        nextArguments.removeOne(command);
+        if (!parseSymbolImport(nextArguments)) {
+            return false;
+        }
+    } else if (command == "update") {
+        nextArguments.removeOne(command);
+        if (!parseSymbolUpdate(nextArguments)) {
+            return false;
+        }
+    } else if (command == "remove") {
+        nextArguments.removeOne(command);
+        if (!parseSymbolRemove(nextArguments)) {
+            return false;
         }
     } else {
-        const QString &command       = cmdArguments.first();
-        QStringList    nextArguments = appArguments;
-        if (command == "import") {
-            nextArguments.removeOne(command);
-            parseSymbolImport(nextArguments);
-        } else if (command == "update") {
-            nextArguments.removeOne(command);
-            parseSymbolUpdate(nextArguments);
-        } else if (command == "remove") {
-            nextArguments.removeOne(command);
-            parseSymbolRemove(nextArguments);
-        } else {
-            if (!parser.isSet("help")) {
-                qCritical() << "Error: unknown subcommand." << command;
-                parser.showHelp(1);
-            } else {
-                parser.showHelp(0);
-            }
-        }
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: unknown subcommand: %1.").arg(command));
     }
+
+    return true;
 }
 
-void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
+bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
 {
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
@@ -77,52 +75,50 @@ void QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
-    /* Check help flag */
-    if (parser.isSet("help")) {
-        parser.showHelp(0);
-        return;
-    }
+
     if (cmdArguments.isEmpty()) {
-        qCritical() << "Error: missing symbol name.";
-        parser.showHelp(1);
-        return;
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing symbol name."));
     }
+
     const QString &symbolName   = cmdArguments.first();
     QStringList    filePathList = cmdArguments;
     filePathList.removeFirst();
     if (filePathList.isEmpty() && !parser.isSet("filelist")) {
-        if (!parser.isSet("help")) {
-            qCritical() << "Error: missing verilog files.";
-            parser.showHelp(1);
-        } else {
-            parser.showHelp(0);
-        }
-    } else {
-        /* Setup project manager and project path  */
-        QSocProjectManager projectManager(this);
-        if (parser.isSet("directory")) {
-            projectManager.setProjectPath(parser.value("directory"));
-        }
-        if (parser.isSet("project")) {
-            projectManager.load(parser.value("project"));
-        } else {
-            projectManager.autoLoad();
-        }
-        if (!projectManager.isValid()) {
-            qCritical() << "Error: invalid project directory.";
-            parser.showHelp(1);
-            return;
-        }
-        /* Setup symbol manager */
-        QSocSymbolManager symbolManager(this, &projectManager);
-        QString           filelistPath = "";
-        if (parser.isSet("filelist")) {
-            filelistPath = parser.value("filelist");
-        }
-        symbolManager.importFromFileList(QRegularExpression(symbolName), filelistPath, filePathList);
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: missing verilog files."));
     }
+    /* Setup project manager and project path  */
+    QSocProjectManager projectManager(this);
+    if (parser.isSet("directory")) {
+        projectManager.setProjectPath(parser.value("directory"));
+    }
+    if (parser.isSet("project")) {
+        projectManager.load(parser.value("project"));
+    } else {
+        projectManager.autoLoad();
+    }
+    if (!projectManager.isValid()) {
+        return showError(1, QCoreApplication::translate("main", "Error: invalid project directory."));
+    }
+    /* Setup symbol manager */
+    QSocSymbolManager symbolManager(this, &projectManager);
+    QString           filelistPath = "";
+    if (parser.isSet("filelist")) {
+        filelistPath = parser.value("filelist");
+    }
+    symbolManager.importFromFileList(QRegularExpression(symbolName), filelistPath, filePathList);
+
+    return true;
 }
 
-void QSocCliWorker::parseSymbolUpdate(const QStringList &appArguments) {}
+bool QSocCliWorker::parseSymbolUpdate(const QStringList &appArguments)
+{
+    Q_UNUSED(appArguments);
+    return true;
+}
 
-void QSocCliWorker::parseSymbolRemove(const QStringList &appArguments) {}
+bool QSocCliWorker::parseSymbolRemove(const QStringList &appArguments)
+{
+    Q_UNUSED(appArguments);
+    return true;
+}
