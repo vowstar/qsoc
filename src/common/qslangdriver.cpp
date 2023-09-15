@@ -9,16 +9,20 @@
 #include <QTemporaryFile>
 #include <QTextStream>
 
+#include <stdexcept>
+#include <string>
+
 #include <fmt/core.h>
 #include <slang/ast/ASTSerializer.h>
+#include <slang/ast/Compilation.h>
 #include <slang/ast/symbols/CompilationUnitSymbols.h>
 #include <slang/diagnostics/TextDiagnosticClient.h>
 #include <slang/driver/Driver.h>
 #include <slang/syntax/SyntaxTree.h>
 #include <slang/text/Json.h>
+#include <slang/util/String.h>
 #include <slang/util/TimeTrace.h>
 #include <slang/util/Version.h>
-#include <stdexcept>
 
 QSlangDriver::QSlangDriver(QObject *parent, QSocProjectManager *projectManager)
     : QObject(parent)
@@ -46,7 +50,7 @@ bool QSlangDriver::parseArgs(const QString &args)
         QStaticLog::logV(Q_FUNC_INFO, "Arguments:" + args);
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
-        if (!driver.parseCommandLine(slang::string_view(args.toStdString()))) {
+        if (!driver.parseCommandLine(std::string_view(args.toStdString()))) {
             QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
             throw std::runtime_error("Failed to parse command line");
         }
