@@ -118,9 +118,12 @@ else()
     set(QSCHEMATIC_BUILD_DEMO               OFF CACHE BOOL "disable qschematic demo build")
     set(QSCHEMATIC_DEPENDENCY_GPDS_DOWNLOAD OFF CACHE BOOL "disable qschematic gpds sources download")
     set(QSCHEMATIC_DEPENDENCY_GPDS_LOCAL    ON  CACHE BOOL "enable qschematic gpds local sources")
+    # Generate dummy gpds gpds-targets.cmake to avoid error
+    set(gpds_DIR "${CMAKE_CURRENT_BINARY_DIR}/external/gpds/lib/gpds")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/external/gpds/lib/gpds/gpds-targets.cmake" "\n")
     add_subdirectory(external/qschematic)
     set(QSCHEMATIC_INCLUDE_DIRS
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/qschematic/qschematic
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/qschematic/qschematic"
     )
     set(QSCHEMATIC_LIBRARIES qschematic-static)
     message(STATUS "Use local qschematic library: ${QSCHEMATIC_LIBRARIES} ${QSCHEMATIC_INCLUDE_DIRS}")

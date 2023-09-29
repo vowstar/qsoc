@@ -458,7 +458,7 @@
   <customwidget>
    <class>QSchematic::View</class>
    <extends>QGraphicsView</extends>
-   <header>qschematic/view.h</header>
+   <header>qschematic/view.hpp</header>
   </customwidget>
  </customwidgets>
  <resources/>

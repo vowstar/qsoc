@@ -2,8 +2,6 @@
 
 #include "./ui_schematicwindow.h"
 
-#include <qschematic/view.h>
-
 SchematicWindow::SchematicWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::SchematicWindow)

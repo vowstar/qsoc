@@ -9,7 +9,7 @@
 	url = git@github.com:jbeder/yaml-cpp.git
 [submodule "external/qschematic"]
 	path = external/qschematic
-	url = git@github.com:vowstar/QSchematic.git
+	url = git@github.com:simulton/QSchematic.git
 [submodule "external/gpds"]
 	path = external/gpds
 	url = git@github.com:simulton/gpds.git

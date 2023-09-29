@@ -3,9 +3,9 @@
 
 #include <QMainWindow>
 
-#include <qschematic/scene.h>
-#include <qschematic/settings.h>
-#include <qschematic/view.h>
+#include <qschematic/scene.hpp>
+#include <qschematic/settings.hpp>
+#include <qschematic/view.hpp>
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
