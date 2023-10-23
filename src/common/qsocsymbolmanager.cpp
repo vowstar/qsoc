@@ -16,8 +16,45 @@ QSocSymbolManager::QSocSymbolManager(QObject *parent, QSocProjectManager *projec
     }
 }
 
+YAML::Node QSocSymbolManager::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
+{
+    if (!fromYaml.IsMap()) {
+        /* If fromYaml is not a map, merge result is fromYaml, unless fromYaml is null */
+        return fromYaml.IsNull() ? toYaml : fromYaml;
+    }
+    if (!toYaml.IsMap()) {
+        /* If toYaml is not a map, merge result is fromYaml */
+        return fromYaml;
+    }
+    if (!fromYaml.size()) {
+        /* If toYaml is a map, and fromYaml is an empty map, return toYaml */
+        return toYaml;
+    }
+    /* Create a new map 'resultYaml' with the same mappings as toYaml, merged with fromYaml */
+    YAML::Node resultYaml = YAML::Node(YAML::NodeType::Map);
+    for (auto iter : toYaml) {
+        if (iter.first.IsScalar()) {
+            const std::string &key      = iter.first.Scalar();
+            auto               tempYaml = YAML::Node(fromYaml[key]);
+            if (tempYaml) {
+                resultYaml[iter.first] = mergeNodes(iter.second, tempYaml);
+                continue;
+            }
+        }
+        resultYaml[iter.first] = iter.second;
+    }
+    /* Add the mappings from 'fromYaml' not already in 'resultYaml' */
+    for (auto iter : fromYaml) {
+        if (!iter.first.IsScalar() || !resultYaml[iter.first.Scalar()]) {
+            resultYaml[iter.first] = iter.second;
+        }
+    }
+    return resultYaml;
+}
+
 bool QSocSymbolManager::importFromFileList(
-    const QRegularExpression &symbolNameRegex,
+    const QString            &symbolFilename,
+    const QRegularExpression &moduleNameRegex,
     const QString            &fileListPath,
     const QStringList        &filePathList)
 {
@@ -25,40 +62,54 @@ bool QSocSymbolManager::importFromFileList(
         qCritical() << "Error: project manager is null.";
         return false;
     }
-    Q_UNUSED(symbolNameRegex)
 
     QSlangDriver driver(this, projectManager);
     if (driver.parseFileList(fileListPath, filePathList)) {
         /* Parse success */
         QStringList moduleList = driver.getModuleList();
         if (moduleList.isEmpty()) {
+            /* No module found */
             qCritical() << "Error: no module found.";
             return false;
         }
-        /* Pick first module if pattern is empty */
-        if (symbolNameRegex.pattern().isEmpty()) {
+        YAML::Node symbolYaml;
+        QString    localSymbolFilename = symbolFilename;
+
+        if (moduleNameRegex.pattern().isEmpty()) {
+            /* Pick first module if pattern is empty */
             const QString &moduleName = moduleList.first();
             qDebug() << "Pick first module:" << moduleName;
-            // qDebug() << driver.getModuleAst(moduleName).dump(4).c_str();
+            if (localSymbolFilename.isEmpty()) {
+                /* Use first module name as symbol filename */
+                localSymbolFilename = moduleName.toLower();
+                qDebug() << "Pick symbol filename:" << localSymbolFilename;
+            }
             const json       &moduleAst  = driver.getModuleAst(moduleName);
             const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
-            saveModuleYaml(moduleYaml, moduleName);
+            /* Add module to symbol yaml */
+            symbolYaml[moduleName.toStdString()] = moduleYaml;
+            saveSymbolYaml(symbolYaml, localSymbolFilename);
             return true;
         }
         /* Find module by pattern */
         bool hasMatch = false;
         for (const QString &moduleName : moduleList) {
-            const QRegularExpressionMatch &match = symbolNameRegex.match(moduleName);
+            const QRegularExpressionMatch &match = moduleNameRegex.match(moduleName);
             if (match.hasMatch()) {
                 qDebug() << "Found module:" << moduleName;
-                // qDebug() << driver.getModuleAst(moduleName).dump(4).c_str();
+                if (localSymbolFilename.isEmpty()) {
+                    /* Use first module name as symbol filename */
+                    localSymbolFilename = moduleName.toLower();
+                    qDebug() << "Pick symbol filename:" << localSymbolFilename;
+                }
                 const json       &moduleAst  = driver.getModuleAst(moduleName);
                 const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
-                saveModuleYaml(moduleYaml, moduleName);
+                symbolYaml[moduleName.toStdString()] = moduleYaml;
                 hasMatch = true;
             }
         }
         if (hasMatch) {
+            saveSymbolYaml(symbolYaml, localSymbolFilename);
             return true;
         }
     }
@@ -96,8 +147,9 @@ YAML::Node QSocSymbolManager::getModuleYaml(const json &moduleAst)
     return moduleYaml;
 }
 
-bool QSocSymbolManager::saveModuleYaml(const YAML::Node &moduleYaml, const QString &moduleName)
+bool QSocSymbolManager::saveSymbolYaml(const YAML::Node &symbolYaml, const QString &symbolFilename)
 {
+    YAML::Node localSymbolYaml;
     /* Check project manager */
     if (!projectManager) {
         qCritical() << "Error: project manager is null.";
@@ -110,9 +162,18 @@ bool QSocSymbolManager::saveModuleYaml(const YAML::Node &moduleYaml, const QStri
     }
     /* Check file path */
     const QString &symbolPath         = projectManager->getSymbolPath();
-    const QString &moduleYamlFilePath = symbolPath + "/" + moduleName + ".soc_sym";
+    const QString &moduleYamlFilePath = symbolPath + "/" + symbolFilename + ".soc_sym";
+    if (QFile::exists(moduleYamlFilePath)) {
+        /* Load symbol YAML file */
+        std::ifstream inputFileStream(moduleYamlFilePath.toStdString());
+        localSymbolYaml = mergeNodes(YAML::Load(inputFileStream), symbolYaml);
+        qDebug() << "Load and merge";
+    } else {
+        localSymbolYaml = symbolYaml;
+    }
+
     /* Save YAML file */
     std::ofstream outputFileStream(moduleYamlFilePath.toStdString());
-    outputFileStream << moduleYaml;
+    outputFileStream << localSymbolYaml;
     return true;
 }

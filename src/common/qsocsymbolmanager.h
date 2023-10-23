@@ -30,14 +30,23 @@ public:
 
 public slots:
     /**
-     * @brief   Import symbol files from file list
-     * @param   symbolNameRegex regular expression to match the symbol name
-     * @param   directoryPath directory path
-     * @details This function will import symbol files from file list.
+     * @brief   Import verilog files from file list
+     * @param   symbolFilename the name of the symbol library file
+     * @param   moduleNameRegex regular expression to match the module name
+     * @param   fileListPath the path of the verilog file list
+     * @param   filePathList the list of verilog files
      * @return  bool true if import successfully, otherwise false
+     * @details This function will import verilog files from file list, and
+     *          generate the symbol library file. 
+     *          If symbolFilename is empty, the first matching verilog module
+     *          name is automatically selected and converted into lowercase as
+     *          the symbol library name.
+     *          If moduleNameRegex is empty, the first matching verilog module
+     *          is automatically selected for import.
      */
     bool importFromFileList(
-        const QRegularExpression &symbolNameRegex,
+        const QString            &symbolFilename,
+        const QRegularExpression &moduleNameRegex,
         const QString            &fileListPath,
         const QStringList        &filePathList);
     /**
@@ -45,21 +54,38 @@ public slots:
      *
      * @param moduleAst The module AST json object
      * @return YAML::Node The module YAML object
-     * @details This function will convert the module AST json object to YAML object
+     * @details This function will convert the module AST json object to YAML 
+     *          object.
      */
     YAML::Node getModuleYaml(const json &moduleAst);
     /**
-     * @brief Save the module YAML object to file
+     * @brief Save the symbol YAML object to symbol file
      *
-     * @param moduleYaml The module YAML object
-     * @param moduleName The module name
+     * @param symbolYaml The symbol YAML object
+     * @param symbolFilename The symbolFilename
      * @return true if save successfully, otherwise false
-     * @details This function will save the module YAML object to file
+     * @details This function will save the symbol YAML object to symbol library
+     *          file.
      */
-    bool saveModuleYaml(const YAML::Node &moduleYaml, const QString &moduleName);
+    bool saveSymbolYaml(const YAML::Node &symbolYaml, const QString &symbolFilename);
 
 private:
+    /* Internal used project manager */
     QSocProjectManager *projectManager = nullptr;
+    /**
+     * @brief Merge two YAML nodes
+     *
+     * @param toYaml The destination YAML node
+     * @param fromYaml The source YAML node
+     * @return YAML::Node The merged YAML node which is a merge of fromYaml into
+     *                    toYaml.
+     * @details This function will merge two YAML nodes. It returns a new map
+     *          resultYaml which is a merge of fromYaml into toYaml.
+     *          Values from fromYaml will replace identically keyed non-map
+     *          values from toYaml in the resultYaml map.
+     *          The values ​​in toYaml and fromYaml will not be modified.
+     */
+    YAML::Node mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml);
 
 signals:
 };
