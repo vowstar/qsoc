@@ -65,9 +65,9 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
          "filelist"},
     });
     parser.addPositionalArgument(
-        "name",
-        QCoreApplication::translate("main", "The name of the symbol to be import."),
-        "[<name>]");
+        "regex",
+        QCoreApplication::translate("main", "The name (regex) of the verilog module to import."),
+        "[<regex>]");
     parser.addPositionalArgument(
         "files",
         QCoreApplication::translate("main", "The verilog files to be processed."),
@@ -77,10 +77,11 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
     const QStringList cmdArguments = parser.positionalArguments();
 
     if (cmdArguments.isEmpty()) {
-        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing symbol name."));
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: missing module name (regex)."));
     }
 
-    const QString &symbolName   = cmdArguments.first();
+    const QString &moduleNameRegex = cmdArguments.first();
     QStringList    filePathList = cmdArguments;
     filePathList.removeFirst();
     if (filePathList.isEmpty() && !parser.isSet("filelist")) {
@@ -106,7 +107,7 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
     if (parser.isSet("filelist")) {
         filelistPath = parser.value("filelist");
     }
-    symbolManager.importFromFileList(QRegularExpression(symbolName), filelistPath, filePathList);
+    symbolManager.importFromFileList(QRegularExpression(moduleNameRegex), filelistPath, filePathList);
 
     return true;
 }
