@@ -255,6 +255,24 @@ if (ENABLE_CLANG_TIDY)
         "...\n")
 endif()
 
+# check if Doxygen is installed
+find_package(Doxygen
+    REQUIRED dot
+    OPTIONAL_COMPONENTS mscgen dia)
+if (DOXYGEN_FOUND)
+    # doxygen_add_docs required cmake version minimum 3.9.
+    cmake_minimum_required(VERSION 3.9)
+    set(DOXYGEN_RECURSIVE YES)
+    set(DOXYGEN_GENERATE_LATEX YES)
+    set(DOXYGEN_USE_MDFILE_AS_MAINPAGE README.md)
+    doxygen_add_docs(doc_doxygen
+        ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/README.md
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        COMMENT "Generating API documentation with Doxygen")
+else (DOXYGEN_FOUND)
+    message("Doxygen need to be installed to generate the doxygen documentation")
+endif (DOXYGEN_FOUND)
+
 # Testing
 if (ENABLE_UNIT_TEST)
     enable_testing()
