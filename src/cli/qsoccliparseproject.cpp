@@ -45,6 +45,11 @@ bool QSocCliWorker::parseProject(const QStringList &appArguments)
         if (!parseProjectList(nextArguments)) {
             return false;
         }
+    } else if (command == "show") {
+        nextArguments.removeOne(command);
+        if (!parseProjectShow(nextArguments)) {
+            return false;
+        }
     } else {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: unknown subcommand: %1.").arg(command));
@@ -261,4 +266,52 @@ bool QSocCliWorker::parseProjectList(const QStringList &appArguments)
         return true;
     }
     return showInfo(0, projectNameList.join("\n"));
+}
+
+bool QSocCliWorker::parseProjectShow(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+    });
+    parser.addPositionalArgument(
+        "name",
+        QCoreApplication::translate("main", "The name of the project to be show."),
+        "[<name>]");
+
+    parser.parse(appArguments);
+    const QStringList cmdArguments = parser.positionalArguments();
+
+    if (cmdArguments.isEmpty()) {
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
+    }
+    /* Pass projectName to projectManager */
+    const QString     &projectName = cmdArguments.first();
+    QSocProjectManager projectManager(this);
+    if (parser.isSet("directory")) {
+        projectManager.setProjectPath(parser.value("directory"));
+    }
+    /* Load project by name from project path */
+    if (!projectManager.load(projectName)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: failed to load project %1.")
+                .arg(projectName));
+    }
+    if (!projectManager.isValid()) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: project %1 is invalid.").arg(projectName));
+    }
+    /* Show details about the project */
+    showInfo(0, QString("directory=\"%1\"").arg(projectManager.getProjectPath()));
+    showInfo(0, QString("bus=\"%1\"").arg(projectManager.getBusPath()));
+    showInfo(0, QString("symbol=\"%1\"").arg(projectManager.getSymbolPath()));
+    showInfo(0, QString("schematic=\"%1\"").arg(projectManager.getSchematicPath()));
+    showInfo(0, QString("output=\"%1\"").arg(projectManager.getOutputPath()));
+
+    return true;
 }

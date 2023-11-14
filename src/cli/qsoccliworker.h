@@ -100,6 +100,13 @@ private:
      */
     bool parseProjectList(const QStringList &appArguments);
     /**
+     * @brief Parse the project show command line arguments
+     * @param appArguments command line arguments
+     * @return true if parse successfully, otherwise false
+     * @details This function will parse the project show command line arguments.
+     */
+    bool parseProjectShow(const QStringList &appArguments);
+    /**
      * @brief Parse the symbol command line arguments
      * @param appArguments command line arguments
      * @return true if parse successfully, otherwise false
