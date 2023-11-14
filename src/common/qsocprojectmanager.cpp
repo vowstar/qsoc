@@ -238,6 +238,27 @@ bool QSocProjectManager::remove(const QString &projectName)
     return true;
 }
 
+QStringList QSocProjectManager::list(const QRegularExpression &projectNameRegex)
+{
+    QStringList result;
+    /* Check project path */
+    if (!QDir(projectPath).exists()) {
+        qCritical() << "Error: project path is not a directory.";
+        return result;
+    }
+    /* List project files */
+    QDir dir(projectPath);
+    dir.setNameFilters(QStringList() << "*.soc_pro");
+    dir.setFilter(QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+    /* Filter project files */
+    foreach (const QString &filename, dir.entryList()) {
+        if (projectNameRegex.match(filename).hasMatch()) {
+            result.append(filename.split('.').first());
+        }
+    }
+    return result;
+}
+
 bool QSocProjectManager::isValid()
 {
     if (projectName.isEmpty()) {

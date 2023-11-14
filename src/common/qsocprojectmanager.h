@@ -3,6 +3,8 @@
 
 #include <QMap>
 #include <QObject>
+#include <QRegularExpression>
+#include <QStringList>
 
 /**
  * @brief   The QSocProjectManager class
@@ -79,6 +81,13 @@ public slots:
      * @details This function will remove project file
      */
     bool remove(const QString &projectName);
+    /**
+     * @brief List matched projects
+     * @param projectNameRegex regular expression to match the project name
+     * @return QStringList The list of project in the project directory
+     * @details This function will list matched projects
+     */
+    QStringList list(const QRegularExpression &projectNameRegex);
     /**
      * @brief Validate project environment variables and settings
      * @return true if valid, otherwise false
