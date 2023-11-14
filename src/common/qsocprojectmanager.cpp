@@ -181,7 +181,7 @@ bool QSocProjectManager::autoLoad()
     if (QFileInfo(projectPath).isDir()) {
         QDir dir(projectPath);
         dir.setNameFilters(QStringList() << "*.soc_pro");
-        dir.setFilter(QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+        dir.setFilter(QDir::Files | QDir::NoDotAndDotDot);
         if (dir.count() == 0) {
             qCritical() << "Error: project file not found.";
             return false;
@@ -249,7 +249,7 @@ QStringList QSocProjectManager::list(const QRegularExpression &projectNameRegex)
     /* List project files */
     QDir dir(projectPath);
     dir.setNameFilters(QStringList() << "*.soc_pro");
-    dir.setFilter(QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+    dir.setFilter(QDir::Files | QDir::NoDotAndDotDot);
     /* Filter project files */
     foreach (const QString &filename, dir.entryList()) {
         if (projectNameRegex.match(filename).hasMatch()) {
