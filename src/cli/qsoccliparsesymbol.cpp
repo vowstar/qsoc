@@ -99,6 +99,16 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
     if (parser.isSet("project")) {
         projectManager.load(parser.value("project"));
     } else {
+        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        if (projectNameList.length() > 1) {
+            return showError(
+                1,
+                QCoreApplication::translate(
+                    "main",
+                    "Error: multiple projects found, please specify the project name.\n"
+                    "Available projects are:\n%1\n")
+                    .arg(projectNameList.join("\n")));
+        }
         projectManager.autoLoad();
     }
     if (!projectManager.isValid()) {
