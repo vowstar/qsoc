@@ -73,6 +73,13 @@ public slots:
      */
     bool autoLoad();
     /**
+     * @brief Remove project file
+     * @param projectName project name
+     * @return true if remove successfully, otherwise false
+     * @details This function will remove project file
+     */
+    bool remove(const QString &projectName);
+    /**
      * @brief Validate project environment variables and settings
      * @return true if valid, otherwise false
      * @details This function will check if project environment variables

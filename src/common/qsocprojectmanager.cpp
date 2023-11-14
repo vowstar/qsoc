@@ -216,6 +216,28 @@ bool QSocProjectManager::autoLoad()
     return true;
 }
 
+bool QSocProjectManager::remove(const QString &projectName)
+{
+    /* Check project name */
+    if (projectName.isEmpty()) {
+        qCritical() << "Error: project name is empty.";
+        return false;
+    }
+    setProjectName(projectName);
+    /* Check the existence of project files */
+    if (!isExist(projectName)) {
+        qCritical() << "Error: project file not found.";
+        return false;
+    }
+    /* Remove project file */
+    const QString &filePath = QString(projectPath + "/" + projectName + ".soc_pro");
+    if (!QFile::remove(filePath)) {
+        qCritical() << "Error: failed to remove project file.";
+        return false;
+    }
+    return true;
+}
+
 bool QSocProjectManager::isValid()
 {
     if (projectName.isEmpty()) {
