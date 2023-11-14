@@ -240,6 +240,10 @@ bool QSocCliWorker::parseProjectList(const QStringList &appArguments)
         "[<regex>]");
 
     parser.parse(appArguments);
+
+    if (parser.isSet("help")) {
+        return showHelp(0);
+    }
     const QStringList cmdArguments = parser.positionalArguments();
     /* Select all files when regular expression is empty */
     const QString projectNameRegexStr = cmdArguments.isEmpty() ? ".*" : cmdArguments.first();
