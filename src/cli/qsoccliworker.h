@@ -86,6 +86,13 @@ private:
      */
     bool parseProjectUpdate(const QStringList &appArguments);
     /**
+     * @brief Parse the project remove command line arguments
+     * @param appArguments command line arguments
+     * @return true if parse successfully, otherwise false
+     * @details This function will parse the project remove command line arguments.
+     */
+    bool parseProjectRemove(const QStringList &appArguments);
+    /**
      * @brief Parse the symbol command line arguments
      * @param appArguments command line arguments
      * @return true if parse successfully, otherwise false

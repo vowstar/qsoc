@@ -12,7 +12,10 @@ bool QSocCliWorker::parseProject(const QStringList &appArguments)
         QCoreApplication::translate(
             "main",
             "create   Create project.\n"
-            "update   Update project."),
+            "update   Update project.\n"
+            "remove   Remove project.\n"
+            "list     List projects.\n"
+            "show     Show project details."),
         "project <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
@@ -30,6 +33,11 @@ bool QSocCliWorker::parseProject(const QStringList &appArguments)
     } else if (command == "update") {
         nextArguments.removeOne(command);
         if (!parseProjectUpdate(nextArguments)) {
+            return false;
+        }
+    } else if (command == "remove") {
+        nextArguments.removeOne(command);
+        if (!parseProjectRemove(nextArguments)) {
             return false;
         }
     } else {
@@ -167,4 +175,47 @@ bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
                 .arg(projectName));
     }
     return showInfo(0, QCoreApplication::translate("main", "Project %1 updated.").arg(projectName));
+}
+
+bool QSocCliWorker::parseProjectRemove(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+    });
+    parser.addPositionalArgument(
+        "name",
+        QCoreApplication::translate("main", "The name of the project to be remove."),
+        "[<name>]");
+
+    parser.parse(appArguments);
+    const QStringList cmdArguments = parser.positionalArguments();
+
+    if (cmdArguments.isEmpty()) {
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
+    }
+    /* Pass projectName to projectManager */
+    const QString     &projectName = cmdArguments.first();
+    QSocProjectManager projectManager(this);
+    if (parser.isSet("directory")) {
+        projectManager.setProjectPath(parser.value("directory"));
+    }
+    /* Check if project exists */
+    if (!projectManager.isExist(projectName)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: failed to find project %1.")
+                .arg(projectName));
+    }
+    /* Remove project file */
+    if (!projectManager.remove(projectName)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: failed to remove project %1.")
+                .arg(projectName));
+    }
+    return showInfo(0, QCoreApplication::translate("main", "Project %1 removed.").arg(projectName));
 }
