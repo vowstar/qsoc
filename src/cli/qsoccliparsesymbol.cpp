@@ -13,9 +13,10 @@ bool QSocCliWorker::parseSymbol(const QStringList &appArguments)
         "subcommand",
         QCoreApplication::translate(
             "main",
-            "import   Import symbol from verilog, clear properties.\n"
-            "update   Update symbol from verilog, reserved properties.\n"
-            "remove   Remove module from the symbol library."),
+            "import   Import symbol from verilog.\n"
+            "remove   Remove module from the symbol library.\n"
+            "list     List symbols in all symbol libraries.\n"
+            "show     Show the specified symbol details."),
         "symbol <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
@@ -30,14 +31,19 @@ bool QSocCliWorker::parseSymbol(const QStringList &appArguments)
         if (!parseSymbolImport(nextArguments)) {
             return false;
         }
-    } else if (command == "update") {
-        nextArguments.removeOne(command);
-        if (!parseSymbolUpdate(nextArguments)) {
-            return false;
-        }
     } else if (command == "remove") {
         nextArguments.removeOne(command);
         if (!parseSymbolRemove(nextArguments)) {
+            return false;
+        }
+    } else if (command == "list") {
+        nextArguments.removeOne(command);
+        if (!parseSymbolList(nextArguments)) {
+            return false;
+        }
+    } else if (command == "show") {
+        nextArguments.removeOne(command);
+        if (!parseSymbolShow(nextArguments)) {
             return false;
         }
     } else {
@@ -118,13 +124,19 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
     return true;
 }
 
-bool QSocCliWorker::parseSymbolUpdate(const QStringList &appArguments)
+bool QSocCliWorker::parseSymbolRemove(const QStringList &appArguments)
 {
     Q_UNUSED(appArguments);
     return true;
 }
 
-bool QSocCliWorker::parseSymbolRemove(const QStringList &appArguments)
+bool QSocCliWorker::parseSymbolList(const QStringList &appArguments)
+{
+    Q_UNUSED(appArguments);
+    return true;
+}
+
+bool QSocCliWorker::parseSymbolShow(const QStringList &appArguments)
 {
     Q_UNUSED(appArguments);
     return true;

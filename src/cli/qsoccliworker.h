@@ -100,19 +100,26 @@ private:
      */
     bool parseSymbolImport(const QStringList &appArguments);
     /**
-     * @brief Parse the symbol update command line arguments
-     * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse the symbol update command line arguments.
-     */
-    bool parseSymbolUpdate(const QStringList &appArguments);
-    /**
      * @brief Parse the symbol remove command line arguments
      * @param appArguments command line arguments
      * @return true if parse successfully, otherwise false
      * @details This function will parse the symbol remove command line arguments.
      */
     bool parseSymbolRemove(const QStringList &appArguments);
+    /**
+     * @brief Parse the symbol list command line arguments
+     * @param appArguments command line arguments
+     * @return true if parse successfully, otherwise false
+     * @details This function will parse the symbol list command line arguments.
+     */
+    bool parseSymbolList(const QStringList &appArguments);
+    /**
+     * @brief Parse the symbol show command line arguments
+     * @param appArguments command line arguments
+     * @return true if parse successfully, otherwise false
+     * @details This function will parse the symbol show command line arguments.
+     */
+    bool parseSymbolShow(const QStringList &appArguments);
     /**
      * @brief Show application name and version and emit exit with exitCode
      * @param exitCode exit code to emit
