@@ -40,6 +40,11 @@ bool QSocCliWorker::parseProject(const QStringList &appArguments)
         if (!parseProjectRemove(nextArguments)) {
             return false;
         }
+    } else if (command == "list") {
+        nextArguments.removeOne(command);
+        if (!parseProjectList(nextArguments)) {
+            return false;
+        }
     } else {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: unknown subcommand: %1.").arg(command));
@@ -218,4 +223,38 @@ bool QSocCliWorker::parseProjectRemove(const QStringList &appArguments)
                 .arg(projectName));
     }
     return showInfo(0, QCoreApplication::translate("main", "Project %1 removed.").arg(projectName));
+}
+
+bool QSocCliWorker::parseProjectList(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+    });
+    parser.addPositionalArgument(
+        "regex",
+        QCoreApplication::translate("main", "The regular expression to filter project list."),
+        "[<regex>]");
+
+    parser.parse(appArguments);
+    const QStringList cmdArguments = parser.positionalArguments();
+    /* Select all files when regular expression is empty */
+    const QString projectNameRegexStr = cmdArguments.isEmpty() ? ".*" : cmdArguments.first();
+    const QRegularExpression projectNameRegex(projectNameRegexStr);
+    /* Pass ProjectPath to projectManager */
+    QSocProjectManager projectManager(this);
+    if (parser.isSet("directory")) {
+        projectManager.setProjectPath(parser.value("directory"));
+    }
+    /* List projects */
+    const QStringList projectNameList = projectManager.list(projectNameRegex);
+    /* Show project list */
+    if (projectNameList.isEmpty()) {
+        /* Output nothing */
+        return true;
+    }
+    return showInfo(0, projectNameList.join("\n"));
 }
