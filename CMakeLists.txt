@@ -1,10 +1,9 @@
 cmake_minimum_required(VERSION 3.5)
 
-project(socstudio VERSION 0.1 LANGUAGES CXX)
-
+# Options
 option(ENABLE_CLANG_TIDY "Enable static analysis with clang-tidy" ON)
 option(ENABLE_UNIT_TEST  "Enable unit test"                       ON)
-
+# CMake Settings
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 set(CMAKE_AUTOUIC ON)
@@ -14,6 +13,14 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Project settings
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/common/config.h" CONFIG_H_CONTENT)
+string(REGEX MATCH "#define SOCSTUDIO_VERSION \"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _ ${CONFIG_H_CONTENT})
+set(SOCSTUDIO_VERSION ${CMAKE_MATCH_1})
+message(STATUS "Project version: socstudio ${SOCSTUDIO_VERSION}")
+
+project(socstudio VERSION ${SOCSTUDIO_VERSION} LANGUAGES CXX)
 
 # QT
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS
