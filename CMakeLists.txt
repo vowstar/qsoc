@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.5)
 # Options
 option(ENABLE_CLANG_TIDY "Enable static analysis with clang-tidy" ON)
 option(ENABLE_UNIT_TEST  "Enable unit test"                       ON)
+option(ENABLE_DOXYGEN    "Enable static analysis with clang-tidy" OFF)
 # CMake Settings
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
@@ -262,24 +263,29 @@ if (ENABLE_CLANG_TIDY)
         "...\n")
 endif()
 
-# check if Doxygen is installed
-find_package(Doxygen
-    REQUIRED dot
-    OPTIONAL_COMPONENTS mscgen dia)
-if (DOXYGEN_FOUND)
-    # doxygen_add_docs required cmake version minimum 3.9.
-    cmake_minimum_required(VERSION 3.9)
-    set(DOXYGEN_RECURSIVE YES)
-    set(DOXYGEN_GENERATE_LATEX YES)
-    set(DOXYGEN_USE_MDFILE_AS_MAINPAGE README.md)
-    set(DOXYGEN_FULL_PATH_NAMES NO)
-    doxygen_add_docs(doc_doxygen
-        ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/README.md
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        COMMENT "Generating API documentation with Doxygen")
-else (DOXYGEN_FOUND)
-    message("Doxygen need to be installed to generate the doxygen documentation")
-endif (DOXYGEN_FOUND)
+# Doxygen
+if (ENABLE_DOXYGEN)
+    # check if Doxygen is installed
+    find_package(Doxygen)
+    if (DOXYGEN_FOUND)
+        # doxygen_add_docs required cmake version minimum 3.9.
+        cmake_minimum_required(VERSION 3.9)
+        set(DOXYGEN_RECURSIVE YES)
+        set(DOXYGEN_GENERATE_LATEX YES)
+        set(DOXYGEN_USE_MDFILE_AS_MAINPAGE README.md)
+        set(DOXYGEN_FULL_PATH_NAMES NO)
+        doxygen_add_docs(doc_doxygen
+            ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/README.md
+            ALL
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+            COMMENT "Generating API documentation with Doxygen")
+    else()
+        message("Doxygen need to be installed to generate the doxygen documentation")
+    endif()
+    if (NOT DOXYGEN_DOT_FOUND)
+        message(FATAL_ERROR "Command `dot` not found.  Please install graphviz.")
+    endif()
+endif()
 
 # Testing
 if (ENABLE_UNIT_TEST)
