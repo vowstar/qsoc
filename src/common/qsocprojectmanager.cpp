@@ -136,7 +136,6 @@ bool QSocProjectManager::load(const QString &projectName)
         qCritical() << "Error: project name is empty.";
         return false;
     }
-    setProjectName(projectName);
     /* Load project file */
     const QString &filePath = QString(projectPath + "/" + projectName + ".soc_pro");
     /* Check the existence of project files */
@@ -197,7 +196,6 @@ bool QSocProjectManager::remove(const QString &projectName)
         qCritical() << "Error: project name is empty.";
         return false;
     }
-    setProjectName(projectName);
     /* Check the existence of project files */
     if (!isExist(projectName)) {
         qCritical() << "Error: project file not found.";
