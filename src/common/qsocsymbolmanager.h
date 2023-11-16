@@ -61,13 +61,13 @@ public slots:
     /**
      * @brief Save the symbol YAML object to symbol file
      *
-     * @param symbolYaml The symbol YAML object
      * @param symbolFilename The symbolFilename
+     * @param symbolYaml The symbol YAML object
      * @return true if save successfully, otherwise false
      * @details This function will save the symbol YAML object to symbol library
      *          file.
      */
-    bool saveSymbolYaml(const YAML::Node &symbolYaml, const QString &symbolFilename);
+    bool saveSymbolYaml(const QString &symbolFilename, const YAML::Node &symbolYaml);
 
 private:
     /* Internal used project manager */

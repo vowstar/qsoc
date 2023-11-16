@@ -88,7 +88,7 @@ bool QSocSymbolManager::importFromFileList(
             const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
             /* Add module to symbol yaml */
             symbolYaml[moduleName.toStdString()] = moduleYaml;
-            saveSymbolYaml(symbolYaml, localSymbolFilename);
+            saveSymbolYaml(localSymbolFilename, symbolYaml);
             return true;
         }
         /* Find module by pattern */
@@ -109,7 +109,7 @@ bool QSocSymbolManager::importFromFileList(
             }
         }
         if (hasMatch) {
-            saveSymbolYaml(symbolYaml, localSymbolFilename);
+            saveSymbolYaml(localSymbolFilename, symbolYaml);
             return true;
         }
     }
@@ -147,7 +147,7 @@ YAML::Node QSocSymbolManager::getModuleYaml(const json &moduleAst)
     return moduleYaml;
 }
 
-bool QSocSymbolManager::saveSymbolYaml(const YAML::Node &symbolYaml, const QString &symbolFilename)
+bool QSocSymbolManager::saveSymbolYaml(const QString &symbolFilename, const YAML::Node &symbolYaml)
 {
     YAML::Node localSymbolYaml;
     /* Check project manager */
