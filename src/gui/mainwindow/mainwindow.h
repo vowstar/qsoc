@@ -33,13 +33,21 @@ public:
     ~MainWindow();
 
 private slots:
+    /**
+     * @brief Quit action
+     * @details This function will quit the application.
+     */
     void on_actionQuit_triggered();
-
+    /**
+     * @brief Open schematic editor
+     * @details This function will open the schematic editor.
+     */
     void on_actionSchematicEditor_triggered();
 
 private:
     /* Main window UI */
     Ui::MainWindow *ui;
+    /* Schematic window object */
     SchematicWindow schematicWindow;
 };
 #endif // MAINWINDOW_H

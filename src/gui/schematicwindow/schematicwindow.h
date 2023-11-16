@@ -35,24 +35,42 @@ public:
     ~SchematicWindow();
 
 private slots:
+    /**
+     * @brief Print schematic file
+     * @details This function will print the schematic file.
+     */
     void on_actionPrint_triggered();
-
-private slots:
+    /**
+     * @brief Redo Action
+     * @details This function is triggered to redo the last undone action.
+     */
     void on_actionRedo_triggered();
-
-private slots:
+    /**
+     * @brief Undo Action
+     * @details This function is triggered to undo the last action performed.
+     */
     void on_actionUndo_triggered();
-
-private slots:
+    /**
+     * @brief Add Wire
+     * @details This function is triggered to add a wire to the schematic.
+     */
     void on_actionAddWire_triggered();
-
-private slots:
+    /**
+     * @brief Select Item
+     * @details This function is triggered to select an item within the
+     *          schematic, based on the 'checked' state.
+     */
     void on_actionSelectItem_triggered();
-
-private slots:
+    /**
+     * @brief Show Grid
+     * @details This function toggles the grid display on the schematic, based
+     *          on the 'checked' state.
+     */
     void on_actionShowGrid_triggered(bool checked);
-
-private slots:
+    /**
+     * @brief Quit schematic editor
+     * @details This function is triggered to quit the schematic editor.
+     */
     void on_actionQuit_triggered();
 
 private:
