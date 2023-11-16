@@ -53,7 +53,7 @@ YAML::Node QSocSymbolManager::mergeNodes(const YAML::Node &toYaml, const YAML::N
 }
 
 bool QSocSymbolManager::importFromFileList(
-    const QString            &symbolFilename,
+    const QString            &symbolBasename,
     const QRegularExpression &moduleNameRegex,
     const QString            &fileListPath,
     const QStringList        &filePathList)
@@ -73,22 +73,22 @@ bool QSocSymbolManager::importFromFileList(
             return false;
         }
         YAML::Node symbolYaml;
-        QString    localSymbolFilename = symbolFilename;
+        QString    localSymbolBasename = symbolBasename;
 
         if (moduleNameRegex.pattern().isEmpty()) {
             /* Pick first module if pattern is empty */
             const QString &moduleName = moduleList.first();
             qDebug() << "Pick first module:" << moduleName;
-            if (localSymbolFilename.isEmpty()) {
+            if (localSymbolBasename.isEmpty()) {
                 /* Use first module name as symbol filename */
-                localSymbolFilename = moduleName.toLower();
-                qDebug() << "Pick symbol filename:" << localSymbolFilename;
+                localSymbolBasename = moduleName.toLower();
+                qDebug() << "Pick symbol filename:" << localSymbolBasename;
             }
             const json       &moduleAst  = driver.getModuleAst(moduleName);
             const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
             /* Add module to symbol yaml */
             symbolYaml[moduleName.toStdString()] = moduleYaml;
-            saveSymbolYaml(localSymbolFilename, symbolYaml);
+            saveSymbolYaml(localSymbolBasename, symbolYaml);
             return true;
         }
         /* Find module by pattern */
@@ -97,10 +97,10 @@ bool QSocSymbolManager::importFromFileList(
             const QRegularExpressionMatch &match = moduleNameRegex.match(moduleName);
             if (match.hasMatch()) {
                 qDebug() << "Found module:" << moduleName;
-                if (localSymbolFilename.isEmpty()) {
+                if (localSymbolBasename.isEmpty()) {
                     /* Use first module name as symbol filename */
-                    localSymbolFilename = moduleName.toLower();
-                    qDebug() << "Pick symbol filename:" << localSymbolFilename;
+                    localSymbolBasename = moduleName.toLower();
+                    qDebug() << "Pick symbol filename:" << localSymbolBasename;
                 }
                 const json       &moduleAst  = driver.getModuleAst(moduleName);
                 const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
@@ -109,7 +109,7 @@ bool QSocSymbolManager::importFromFileList(
             }
         }
         if (hasMatch) {
-            saveSymbolYaml(localSymbolFilename, symbolYaml);
+            saveSymbolYaml(localSymbolBasename, symbolYaml);
             return true;
         }
     }
@@ -147,7 +147,7 @@ YAML::Node QSocSymbolManager::getModuleYaml(const json &moduleAst)
     return moduleYaml;
 }
 
-bool QSocSymbolManager::saveSymbolYaml(const QString &symbolFilename, const YAML::Node &symbolYaml)
+bool QSocSymbolManager::saveSymbolYaml(const QString &symbolBasename, const YAML::Node &symbolYaml)
 {
     YAML::Node localSymbolYaml;
     /* Check project manager */
@@ -162,7 +162,7 @@ bool QSocSymbolManager::saveSymbolYaml(const QString &symbolFilename, const YAML
     }
     /* Check file path */
     const QString &symbolPath         = projectManager->getSymbolPath();
-    const QString &moduleYamlFilePath = symbolPath + "/" + symbolFilename + ".soc_sym";
+    const QString &moduleYamlFilePath = symbolPath + "/" + symbolBasename + ".soc_sym";
     if (QFile::exists(moduleYamlFilePath)) {
         /* Load symbol YAML file */
         std::ifstream inputFileStream(moduleYamlFilePath.toStdString());

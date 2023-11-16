@@ -20,9 +20,9 @@ class QSocSymbolManager : public QObject
     Q_OBJECT
 public:
     /**
-     * @brief   Constructor
-     * @param   parent parent object
-     * @param   projectManager project manager
+     * @brief Constructor
+     * @param parent parent object
+     * @param projectManager project manager
      * @details This constructor will create an instance of this object.
      */
     explicit QSocSymbolManager(
@@ -30,22 +30,22 @@ public:
 
 public slots:
     /**
-     * @brief   Import verilog files from file list
-     * @param   symbolFilename the name of the symbol library file
-     * @param   moduleNameRegex regular expression to match the module name
-     * @param   fileListPath the path of the verilog file list
-     * @param   filePathList the list of verilog files
-     * @return  bool true if import successfully, otherwise false
+     * @brief Import verilog files from file list
+     * @param symbolBasename The basename of the symbol library file without ext
+     * @param moduleNameRegex Regular expression to match the module name
+     * @param fileListPath The path of the verilog file list
+     * @param filePathList The list of verilog files
+     * @return bool true if import successfully, otherwise false
      * @details This function will import verilog files from file list, and
      *          generate the symbol library file. 
-     *          If symbolFilename is empty, the first matching verilog module
+     *          If symbolBasename is empty, the first matching verilog module
      *          name is automatically selected and converted into lowercase as
      *          the symbol library name.
      *          If moduleNameRegex is empty, the first matching verilog module
      *          is automatically selected for import.
      */
     bool importFromFileList(
-        const QString            &symbolFilename,
+        const QString            &symbolBasename,
         const QRegularExpression &moduleNameRegex,
         const QString            &fileListPath,
         const QStringList        &filePathList);
@@ -61,13 +61,13 @@ public slots:
     /**
      * @brief Save the symbol YAML object to symbol file
      *
-     * @param symbolFilename The symbolFilename
+     * @param symbolBasename The basename of the symbol library file without ext
      * @param symbolYaml The symbol YAML object
-     * @return true if save successfully, otherwise false
+     * @return bool true if save successfully, otherwise false
      * @details This function will save the symbol YAML object to symbol library
      *          file.
      */
-    bool saveSymbolYaml(const QString &symbolFilename, const YAML::Node &symbolYaml);
+    bool saveSymbolYaml(const QString &symbolBasename, const YAML::Node &symbolYaml);
 
 private:
     /* Internal used project manager */
