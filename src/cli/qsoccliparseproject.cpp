@@ -1,6 +1,7 @@
 #include "cli/qsoccliworker.h"
 
 #include "common/qsocprojectmanager.h"
+#include "common/qstaticdatasedes.h"
 #include "common/qstaticlog.h"
 
 bool QSocCliWorker::parseProject(const QStringList &appArguments)
@@ -307,11 +308,7 @@ bool QSocCliWorker::parseProjectShow(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: project %1 is invalid.").arg(projectName));
     }
     /* Show details about the project */
-    showInfo(0, QString("directory=\"%1\"").arg(projectManager.getProjectPath()));
-    showInfo(0, QString("bus=\"%1\"").arg(projectManager.getBusPath()));
-    showInfo(0, QString("symbol=\"%1\"").arg(projectManager.getSymbolPath()));
-    showInfo(0, QString("schematic=\"%1\"").arg(projectManager.getSchematicPath()));
-    showInfo(0, QString("output=\"%1\"").arg(projectManager.getOutputPath()));
+    showInfo(0, QStaticDataSedes::serializeYaml(projectManager.getProjectNode()));
 
     return true;
 }
