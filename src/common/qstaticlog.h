@@ -15,6 +15,10 @@ class QStaticLog : public QObject
 {
     Q_OBJECT
 public:
+    /**
+     * @brief The Level enum
+     * @details This enum represents the different log levels.
+     */
     enum Level {
         Silent  = 0, /*!< Log level silent */
         Error   = 1, /*!< Log level error */
@@ -26,7 +30,11 @@ public:
 
     Q_DECLARE_FLAGS(Levels, Level)
 
-    /* Static instance of this object */
+    /**
+     * @brief Get the static instance of this object
+     * @details This function will return the static instance of this object.
+     * @return The static instance of this object
+     */
     static QStaticLog &instance()
     {
         static QStaticLog instance;
@@ -140,14 +148,11 @@ signals:
     /**
      * @brief Log error message to richtext
      * @details This function will log the message to the richtext.
-     * @param func The function name
      * @param message The log message
      */
     void log(const QString &message);
 
 private:
-    /* Disallow creating an instance of this object from external */
-    QStaticLog() {}
     /* Style for console reset */
     static const QString styleReset;
     /* Style for console bold */
@@ -194,6 +199,14 @@ private:
     static bool colorConsole;
     /* Color mode for richtext */
     static bool colorRichtext;
+    /**
+     * @brief Constructor
+     * @details This is a private constructor for this class to prevent
+     *          instantiation. Making the constructor private ensures that no
+     *          objects of this class can be created from outside the class,
+     *          enforcing a static-only usage pattern.
+     */
+    QStaticLog() {}
 };
 
 #endif // QSTATICLOG_H

@@ -13,7 +13,11 @@ class QStaticTranslator : public QObject
 {
     Q_OBJECT
 public:
-    /* Static instance of this object */
+    /**
+     * @brief Get the static instance of this object
+     * @details This function will return the static instance of this object.
+     * @return The static instance of this object
+     */
     static QStaticTranslator &instance()
     {
         static QStaticTranslator instance;
@@ -29,12 +33,18 @@ public slots:
     static void setup();
 
 private:
-    /* Disallow creating an instance of this object from external */
-    QStaticTranslator(){};
     /* App translator */
     static QTranslator translator;
     /* QT Base translator */
     static QTranslator translatorBase;
+    /**
+     * @brief Constructor
+     * @details This is a private constructor for this class to prevent
+     *          instantiation. Making the constructor private ensures that no
+     *          objects of this class can be created from outside the class,
+     *          enforcing a static-only usage pattern.
+     */
+    QStaticTranslator(){};
     /**
      * @brief Initialize the translator
      * @details This function will initialize the translator for the application.
