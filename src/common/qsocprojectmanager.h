@@ -6,6 +6,8 @@
 #include <QRegularExpression>
 #include <QStringList>
 
+#include <yaml-cpp/yaml.h>
+
 /**
  * @brief   The QSocProjectManager class
  * @details This class is used to manage project environment variables.
@@ -103,6 +105,12 @@ public slots:
      */
     bool isValid();
     /**
+     * @brief Get project node
+     * @details This function will return project YAML node.
+     * @return YAML::Node & The project node
+     */
+    const YAML::Node &getProjectNode();
+    /**
      * @brief Get project name
      * @details This function will return project name.
      * @return QString & The project name
@@ -138,6 +146,12 @@ public slots:
      * @return QString & The project output path
      */
     const QString &getOutputPath();
+    /**
+     * @brief Set project node
+     * @details This function will set project YAML node.
+     * @param projectNode The project node
+     */
+    void setProjectNode(const YAML::Node &projectNode);
     /**
      * @brief Set project name
      * @details This function will set project name.
@@ -178,6 +192,8 @@ public slots:
 private:
     /* Project environment variables map */
     QMap<QString, QString> env;
+    /* Project YAML node */
+    YAML::Node projectNode;
     /* Project name */
     QString projectName;
     /* Project path */

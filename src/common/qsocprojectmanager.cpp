@@ -9,7 +9,6 @@
 #include <QVersionNumber>
 
 #include <fstream>
-#include <yaml-cpp/yaml.h>
 
 QSocProjectManager::QSocProjectManager(QObject *parent)
     : QObject{parent}
@@ -121,17 +120,11 @@ bool QSocProjectManager::save(const QString &projectName)
         qCritical() << "Error: failed to create output directory.";
         return false;
     }
-    /* Create YAML data */
-    YAML::Node projectNode;
-    projectNode["version"]   = QCoreApplication::applicationVersion().toStdString();
-    projectNode["bus"]       = getSimplifyPath(busPath).toStdString();
-    projectNode["symbol"]    = getSimplifyPath(symbolPath).toStdString();
-    projectNode["schematic"] = getSimplifyPath(schematicPath).toStdString();
-    projectNode["output"]    = getSimplifyPath(outputPath).toStdString();
     /* Save project file */
     const QString &projectFilePath = QString(projectPath + "/" + projectName + ".soc_pro");
     std::ofstream  outputFileStream(projectFilePath.toStdString());
-    outputFileStream << projectNode;
+    /* Serialize project yaml data */
+    outputFileStream << getProjectNode();
 
     return true;
 }
@@ -152,10 +145,10 @@ bool QSocProjectManager::load(const QString &projectName)
         return false;
     }
     /* Load project file */
-    YAML::Node projectNode = YAML::LoadFile(filePath.toStdString());
+    YAML::Node localProjectNode = YAML::LoadFile(filePath.toStdString());
     /* Check project file version */
     const QVersionNumber projectVersion = QVersionNumber::fromString(
-        QString::fromStdString(projectNode["version"].as<std::string>()));
+        QString::fromStdString(localProjectNode["version"].as<std::string>()));
     const QVersionNumber appVersion = QVersionNumber::fromString(
         QCoreApplication::applicationVersion());
     if (projectVersion > appVersion) {
@@ -166,10 +159,7 @@ bool QSocProjectManager::load(const QString &projectName)
     setProjectName(filePath.split('/').last().split('.').first());
     /* Set project paths */
     setProjectPath(QFileInfo(filePath).absoluteDir().absolutePath());
-    setBusPath(QString::fromStdString(projectNode["bus"].as<std::string>()));
-    setSymbolPath(QString::fromStdString(projectNode["symbol"].as<std::string>()));
-    setSchematicPath(QString::fromStdString(projectNode["schematic"].as<std::string>()));
-    setOutputPath(QString::fromStdString(projectNode["output"].as<std::string>()));
+    setProjectNode(localProjectNode);
 
     return true;
 }
@@ -193,25 +183,9 @@ bool QSocProjectManager::autoLoad()
         qCritical() << "Error: project file not found.";
         return false;
     }
-    /* Load project file */
-    YAML::Node projectNode = YAML::LoadFile(filePath.toStdString());
-    /* Check project file version */
-    const QVersionNumber projectVersion = QVersionNumber::fromString(
-        QString::fromStdString(projectNode["version"].as<std::string>()));
-    const QVersionNumber appVersion = QVersionNumber::fromString(
-        QCoreApplication::applicationVersion());
-    if (projectVersion > appVersion) {
-        qCritical() << "Error: project file version is newer than application version.";
-        return false;
-    }
-    /* Set project name */
-    setProjectName(filePath.split('/').last().split('.').first());
-    /* Set project paths */
-    setProjectPath(QFileInfo(filePath).absoluteDir().absolutePath());
-    setBusPath(QString::fromStdString(projectNode["bus"].as<std::string>()));
-    setSymbolPath(QString::fromStdString(projectNode["symbol"].as<std::string>()));
-    setSchematicPath(QString::fromStdString(projectNode["schematic"].as<std::string>()));
-    setOutputPath(QString::fromStdString(projectNode["output"].as<std::string>()));
+    const QString localProjectName = filePath.split('/').last().split('.').first();
+    /* Load the project */
+    load(localProjectName);
 
     return true;
 }
@@ -308,6 +282,16 @@ bool QSocProjectManager::isValid()
     return true;
 }
 
+const YAML::Node &QSocProjectManager::getProjectNode()
+{
+    projectNode["version"]   = QCoreApplication::applicationVersion().toStdString();
+    projectNode["bus"]       = getSimplifyPath(busPath).toStdString();
+    projectNode["symbol"]    = getSimplifyPath(symbolPath).toStdString();
+    projectNode["schematic"] = getSimplifyPath(schematicPath).toStdString();
+    projectNode["output"]    = getSimplifyPath(outputPath).toStdString();
+    return projectNode;
+}
+
 const QString &QSocProjectManager::getProjectName()
 {
     return projectName;
@@ -336,6 +320,15 @@ const QString &QSocProjectManager::getSchematicPath()
 const QString &QSocProjectManager::getOutputPath()
 {
     return outputPath;
+}
+
+void QSocProjectManager::setProjectNode(const YAML::Node &projectNode)
+{
+    this->projectNode = projectNode;
+    setBusPath(QString::fromStdString(projectNode["bus"].as<std::string>()));
+    setSymbolPath(QString::fromStdString(projectNode["symbol"].as<std::string>()));
+    setSchematicPath(QString::fromStdString(projectNode["schematic"].as<std::string>()));
+    setOutputPath(QString::fromStdString(projectNode["output"].as<std::string>()));
 }
 
 void QSocProjectManager::setProjectName(const QString &projectName)
