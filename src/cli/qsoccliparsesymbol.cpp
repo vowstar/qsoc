@@ -64,8 +64,8 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
         {{"s", "symbol"},
-         QCoreApplication::translate("main", "The symbol filename."),
-         "symbol filename"},
+         QCoreApplication::translate("main", "The symbol file basename."),
+         "symbol file basename"},
         {{"r", "regex"},
          QCoreApplication::translate("main", "The verilog module name (regex)."),
          "module name (regex)"},
@@ -83,7 +83,7 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList  cmdArguments   = parser.positionalArguments();
-    const QString     &symbolFilename = parser.isSet("symbol") ? parser.value("symbol") : "";
+    const QString     &symbolFileBase = parser.isSet("symbol") ? parser.value("symbol") : "";
     const QString     &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
     const QStringList &filePathList   = cmdArguments;
 
@@ -127,7 +127,7 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: invalid regular expression of module name."));
     }
     if (!symbolManager
-             .importFromFileList(symbolFilename, moduleNameRegex, filelistPath, filePathList)) {
+             .importFromFileList(symbolFileBase, moduleNameRegex, filelistPath, filePathList)) {
         return showError(1, QCoreApplication::translate("main", "Error: import failed."));
     }
 
