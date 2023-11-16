@@ -5,7 +5,7 @@
 #include <QTranslator>
 
 /**
- * @brief   The QStaticTranslator class
+ * @brief The QStaticTranslator class
  * @details This class is used to setup the translator for the application.
  *          It will load the translation files from the resource file.
  */
@@ -37,10 +37,10 @@ private:
     static QTranslator translatorBase;
     /**
      * @brief Initialize the translator
-     * @param translator translator object
-     * @param prefix prefix of the translation files
      * @details This function will initialize the translator for the application.
      *          It will load the translation files from the resource file.
+     * @param translator translator object
+     * @param prefix prefix of the translation files
      */
     static void initTranslator(QTranslator &translator, const QString &prefix = ":/i18n/");
 };

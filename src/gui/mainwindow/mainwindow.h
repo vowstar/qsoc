@@ -22,13 +22,13 @@ class MainWindow : public QMainWindow
 public:
     /**
      * @brief Constructor for MainWindow
-     * @param parent parent object
-     * @details This constructor will initialize the main window
+     * @details This constructor will initialize the main window.
+     * @param[in] parent parent object
      */
     MainWindow(QWidget *parent = nullptr);
     /**
      * @brief Destructor for MainWindow
-     * @details This destructor will free the main window
+     * @details This destructor will free the main window.
      */
     ~MainWindow();
 

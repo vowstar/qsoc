@@ -19,8 +19,8 @@ class QSocCliWorker : public QObject
 public:
     /**
      * @brief Constructor for QSocCliWorker
-     * @param parent parent object
      * @details This constructor will initialize the command line parser.
+     * @param[in] parent parent object
      */
     explicit QSocCliWorker(QObject *parent = nullptr);
     /**
@@ -30,10 +30,12 @@ public:
     ~QSocCliWorker();
     /**
      * @brief Setup the command line parser
+     * @details This function will setup the command line parser.
      * @param appArguments command line arguments for the application
      * @param isGui indicates whether the application is running
      *              in GUI mode or not, default is false.
-     * @details This function will setup the command line parser
+     *              - true indicates GUI mode
+     *              - false indicates CLI mode
      */
     void setup(const QStringList &appArguments, bool isGui = false);
     /**
@@ -59,129 +61,153 @@ private:
 
     /**
      * @brief Parse the application command line arguments
-     * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
      * @details This function will parse the application command line arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseRoot(const QStringList &appArguments);
     /**
      * @brief Parse the project command line arguments
-     * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
      * @details This function will parse the project command line arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseProject(const QStringList &appArguments);
     /**
      * @brief Parse the project create command line arguments
+     * @details This function will parse the project create command line
+     *          arguments.
      * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse the project create command line arguments.
+     * @retval true Parse successfully
+     * @retval false Parse failed
+
      */
     bool parseProjectCreate(const QStringList &appArguments);
     /**
      * @brief Parse the project update command line arguments
+     * @details This function will parse the project update command line
+     *          arguments.
      * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse the project update command line arguments.
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseProjectUpdate(const QStringList &appArguments);
     /**
      * @brief Parse the project remove command line arguments
+     * @details This function will parse the project remove command line
+     *          arguments.
      * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse the project remove command line arguments.
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseProjectRemove(const QStringList &appArguments);
     /**
      * @brief Parse the project list command line arguments
+     * @details This function will parse the project list command line
+     *          arguments.
      * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse the project list command line arguments.
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseProjectList(const QStringList &appArguments);
     /**
      * @brief Parse the project show command line arguments
+     * @details This function will parse the project show command line
+     *          arguments.
      * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse the project show command line arguments.
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseProjectShow(const QStringList &appArguments);
     /**
      * @brief Parse the symbol command line arguments
-     * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
      * @details This function will parse the symbol command line arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseSymbol(const QStringList &appArguments);
     /**
      * @brief Parse the symbol import command line arguments
+     * @details This function will parse the symbol import command line
+     *          arguments.
      * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse the symbol import command line arguments.
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseSymbolImport(const QStringList &appArguments);
     /**
      * @brief Parse the symbol remove command line arguments
+     * @details This function will parse the symbol remove command line
+     *          arguments.
      * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse the symbol remove command line arguments.
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseSymbolRemove(const QStringList &appArguments);
     /**
      * @brief Parse the symbol list command line arguments
-     * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
      * @details This function will parse the symbol list command line arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseSymbolList(const QStringList &appArguments);
     /**
      * @brief Parse the symbol show command line arguments
-     * @param appArguments command line arguments
-     * @return true if parse successfully, otherwise false
      * @details This function will parse the symbol show command line arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseSymbolShow(const QStringList &appArguments);
     /**
      * @brief Show application name and version and emit exit with exitCode
-     * @param exitCode exit code to emit
-     * @return true if parse successfully, otherwise false
-     * @return always true
      * @details This function will show application name and version and emit
      *          exit with exitCode.
+     * @param exitCode exit code to emit
+     * @return bool always true
+
      */
     bool showVersion(int exitCode);
     /**
      * @brief Show help message and emit exit with exitCode
-     * @param exitCode exit code to emit
-     * @return always true
-     * @details This function will show help message and emit exit with exitCode.
+     * @details This function will show help message and emit exit with
+     *          exitCode.
+     * @param exitCode The exit code to emit
+     * @return bool always true
      */
     bool showHelp(int exitCode);
     /**
      * @brief Show error message and emit exit with exitCode
-     * @param exitCode exit code to emit
-     * @param message error message to show
-     * @return always false
      * @details This function will show error message and emit exit with
      *          exitCode.
+     * @param exitCode The exit code to emit
+     * @param message The error message to show
+     * @return bool always false
+
      */
     bool showError(int exitCode, const QString &message);
     /**
      * @brief Show info message and emit exit with exitCode
-     * @param exitCode exit code to emit
-     * @param message info message to show
-     * @return always true
-     * @details This function will show info message and emit exit with exitCode.
+     * @details This function will show info message and emit exit with
+     *          exitCode.
+     * @param exitCode The exit code to emit
+     * @param message The info message to show
+     * @return bool always true
      */
     bool showInfo(int exitCode, const QString &message);
     /**
      * @brief Show help message or error message and emit exit
-     * @param exitCode exit code to emit
-     * @param message error message to show if no help flag is se
-     * @return true if it is a help message, false if it is an error message
      * @details This function will show error message if no help flag is set,
      *          or show help message if help flag is set. It exit with exitCode
      *          when it is error, otherwise it exit with 0.
+     * @param exitCode The exit code to emit
+     * @param message The error message to show if no help flag is set
+     * @retval true It is a help message
+     * @retval false It is an error message
      */
     bool showHelpOrError(int exitCode, const QString &message);
 
@@ -189,6 +215,7 @@ signals:
     /**
      * @brief Exit the application
      * @details This signal will be emitted when exit the application.
+     * @param returnCode The return code of the application
      */
     void exit(int returnCode = 0);
     /**

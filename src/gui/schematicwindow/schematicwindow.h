@@ -13,7 +13,7 @@ class SchematicWindow;
 }
 QT_END_NAMESPACE
 /**
- * @brief   The SchematicWindow class
+ * @brief The SchematicWindow class
  * @details This class is the schematic window class for the socstudio application.
  *          It is responsible for displaying the schematic window.
  */
@@ -24,13 +24,13 @@ class SchematicWindow : public QMainWindow
 public:
     /**
      * @brief Constructor for SchematicWindow
-     * @param parent parent object
-     * @details This constructor will initialize the schematic window
+     * @details This constructor will initialize the schematic window.
+     * @param[in] parent parent object
      */
     SchematicWindow(QWidget *parent = nullptr);
     /**
      * @brief Destructor for SchematicWindow
-     * @details This destructor will free the schematic window
+     * @details This destructor will free the schematic window.
      */
     ~SchematicWindow();
 
@@ -58,8 +58,9 @@ private slots:
 private:
     /* Main window UI */
     Ui::SchematicWindow *ui;
-
-    QSchematic::Scene    scene;
+    /* Schematic scene */
+    QSchematic::Scene scene;
+    /* Schematic settings */
     QSchematic::Settings settings;
 };
 #endif // SCHEMATICWINDOW_H

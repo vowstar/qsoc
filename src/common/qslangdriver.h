@@ -20,54 +20,56 @@ class QSlangDriver : public QObject
 public:
     /**
      * @brief Constructor for QSlangDriver
-     * @param parent parent object
-     * @param projectManager project manager
-     * @details This constructor will initialize the resources
+     * @details This constructor will initialize the resources.
+     * @param[in] parent parent object
+     * @param[in] projectManager project manager
      */
     explicit QSlangDriver(QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
     /**
      * @brief Destructor for QSlangDriver
-     * @details This destructor will free all the allocated resources
+     * @details This destructor will free all the allocated resources.
      */
     ~QSlangDriver();
 
 public slots:
     /**
      * @brief Parse command line arguments
+     * @details This function will parse command line arguments.
      * @param args command line arguments
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseArgs(const QString &args);
     /**
      * @brief Parse file list
+     * @details This function will parse file list.
      * @param fileListPath file list path
      * @param filePathList file path list
-     * @return true if parse successfully, otherwise false
-     * @details This function will parse file list
+     * @retval true Parse successfully
+     * @retval false Parse failed
      */
     bool parseFileList(const QString &fileListPath, const QStringList &filePathList);
     /**
      * @brief Get Abstract Syntax Tree
-     * @return Abstract Syntax Tree
      * @details This function will return the Abstract Syntax Tree
-     *          of the parsed files
-     * @note   The AST is in JSON format
+     *          of the parsed files.
+     * @note The AST is in JSON format
+     * @return json & Abstract Syntax Tree
      */
     const json &getAst();
     /**
      * @brief Get module Abstract Syntax Tree
-     * @param moduleName module name
-     * @return module Abstract Syntax Tree
      * @details This function will return the Abstract Syntax Tree
-     *          of the specified module
-     * @note   The AST is in JSON format
+     *          of the specified module.
+     * @note The AST is in JSON format
+     * @param moduleName module name
+     * @return json & module Abstract Syntax Tree
      */
     const json &getModuleAst(const QString &moduleName);
     /**
      * @brief Get module list
-     * @return module list
-     * @details This function will return the module list
+     * @details This function will return the module list.
+     * @return QStringList & The module list
      */
     const QStringList &getModuleList();
 

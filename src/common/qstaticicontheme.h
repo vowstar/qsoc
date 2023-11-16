@@ -4,7 +4,7 @@
 #include <QObject>
 
 /**
- * @brief   The QStaticIconTheme class
+ * @brief The QStaticIconTheme class
  * @details This class is used to setup the theme for the application.
  *          It will set the theme of light mode or dark mode according to the
  *          theme of the system.
@@ -22,8 +22,9 @@ public:
 
     /**
      * @brief Check if the theme is dark
-     * @return true if the theme is dark, false otherwise
      * @details This function will check if the theme is dark.
+     * @retval true Theme is dark
+     * @retval false Theme is not dark
      */
     static bool isDarkTheme();
 
@@ -31,8 +32,8 @@ public slots:
     /**
      * @brief Setup the theme
      * @details This function will setup the theme for the application.
-     *          It will set the theme of light mode or dark mode according to the
-     *          theme of the system.
+     *          It will set the theme of light mode or dark mode according to
+     *          the theme of the system.
      */
     static void setup();
 };

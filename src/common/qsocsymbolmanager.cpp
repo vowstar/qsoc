@@ -102,10 +102,10 @@ bool QSocSymbolManager::importFromFileList(
                     localSymbolBasename = moduleName.toLower();
                     qDebug() << "Pick symbol filename:" << localSymbolBasename;
                 }
-                const json       &moduleAst  = driver.getModuleAst(moduleName);
-                const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
+                const json       &moduleAst          = driver.getModuleAst(moduleName);
+                const YAML::Node &moduleYaml         = getModuleYaml(moduleAst);
                 symbolYaml[moduleName.toStdString()] = moduleYaml;
-                hasMatch = true;
+                hasMatch                             = true;
             }
         }
         if (hasMatch) {
