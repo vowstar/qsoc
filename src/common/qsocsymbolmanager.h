@@ -53,7 +53,7 @@ public slots:
     /**
      * @brief Get the Module Yaml object
      * @details This function will convert the module AST json object to YAML 
-     *          object.
+     *          object. This function relies on projectManager to be valid.
      * @param moduleAst The module AST json object
      * @return YAML::Node The module YAML object
      */
@@ -73,7 +73,8 @@ public slots:
      * @details Retrieves basenames of ".soc_sym" files in directory defined by
      *          `symbolPath`, excluding the ".soc_sym" extension. Scans the symbol
      *          directory and compiles a list of relevant basenames. Useful for
-     *          processing or iterating over project symbol files.
+     *          processing or iterating over project symbol files. This function
+     *          relies on projectManager to be valid.
      * @param symbolBasenameRegex Regular expression to match file basenames,
      *        default is ".*".
      * @return QStringList of basenames for all ".soc_sym" files in the symbol

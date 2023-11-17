@@ -11,7 +11,7 @@
 QSocSymbolManager::QSocSymbolManager(QObject *parent, QSocProjectManager *projectManager)
     : QObject{parent}
 {
-    /* Set project manager */
+    /* Set projectManager */
     if (projectManager) {
         this->projectManager = projectManager;
     }
@@ -59,8 +59,9 @@ bool QSocSymbolManager::importFromFileList(
     const QString            &fileListPath,
     const QStringList        &filePathList)
 {
-    if (!projectManager) {
-        qCritical() << "Error: project manager is null.";
+    /* Validate projectManager and its path */
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: projectManager is null or invalid.";
         return false;
     }
 
@@ -151,14 +152,9 @@ YAML::Node QSocSymbolManager::getModuleYaml(const json &moduleAst)
 bool QSocSymbolManager::saveSymbolYaml(const QString &symbolBasename, const YAML::Node &symbolYaml)
 {
     YAML::Node localSymbolYaml;
-    /* Check project manager */
-    if (!projectManager) {
-        qCritical() << "Error: project manager is null.";
-        return false;
-    }
-    /* Check project path */
-    if (!projectManager->isValid()) {
-        qCritical() << "Error: project manager is invalid.";
+    /* Validate projectManager and its path */
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: projectManager is null or invalid.";
         return false;
     }
     /* Check file path */
@@ -182,6 +178,11 @@ bool QSocSymbolManager::saveSymbolYaml(const QString &symbolBasename, const YAML
 QStringList QSocSymbolManager::listSymbol(const QRegularExpression &symbolBasenameRegex)
 {
     QStringList result;
+    /* Validate projectManager and its path */
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: projectManager is null or invalid.";
+        return result;
+    }
     /* QDir for '.soc_sym' files in symbol path, sorted by name. */
     const QDir symbolPathDir(
         projectManager->getSymbolPath(),
