@@ -68,6 +68,18 @@ public slots:
      * @retval false Save failed
      */
     bool saveSymbolYaml(const QString &symbolBasename, const YAML::Node &symbolYaml);
+    /**
+     * @brief Get list of symbol basenames
+     * @details Retrieves basenames of ".soc_sym" files in directory defined by
+     *          `symbolPath`, excluding the ".soc_sym" extension. Scans the symbol
+     *          directory and compiles a list of relevant basenames. Useful for
+     *          processing or iterating over project symbol files.
+     * @param symbolBasenameRegex Regular expression to match file basenames,
+     *        default is ".*".
+     * @return QStringList of basenames for all ".soc_sym" files in the symbol
+     *         directory, excluding the ".soc_sym" extension
+     */
+    QStringList listSymbol(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
 
 private:
     /* Internal used project manager */

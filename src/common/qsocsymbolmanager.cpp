@@ -3,6 +3,7 @@
 #include "common/qslangdriver.h"
 
 #include <QDebug>
+#include <QDir>
 #include <QFile>
 
 #include <fstream>
@@ -176,4 +177,23 @@ bool QSocSymbolManager::saveSymbolYaml(const QString &symbolBasename, const YAML
     std::ofstream outputFileStream(moduleYamlFilePath.toStdString());
     outputFileStream << localSymbolYaml;
     return true;
+}
+
+QStringList QSocSymbolManager::listSymbol(const QRegularExpression &symbolBasenameRegex)
+{
+    QStringList result;
+    /* QDir for '.soc_sym' files in symbol path, sorted by name. */
+    const QDir symbolPathDir(
+        projectManager->getSymbolPath(),
+        "*.soc_sym",
+        QDir::SortFlag::Name | QDir::SortFlag::IgnoreCase,
+        QDir::Files | QDir::NoDotAndDotDot);
+    /* Add matching file basenames from projectDir to result list. */
+    foreach (const QString &filename, symbolPathDir.entryList()) {
+        if (symbolBasenameRegex.match(filename).hasMatch()) {
+            result.append(filename.split('.').first());
+        }
+    }
+
+    return result;
 }
