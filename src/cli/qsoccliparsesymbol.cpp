@@ -111,8 +111,11 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
         }
         projectManager.loadFirst();
     }
-    if (!projectManager.isValid()) {
-        return showError(1, QCoreApplication::translate("main", "Error: invalid project directory."));
+    if (!projectManager.isValidSymbolPath()) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: invalid symbol directory: %1")
+                .arg(projectManager.getSymbolPath()));
     }
     /* Setup symbol manager */
     QSocSymbolManager symbolManager(this, &projectManager);
