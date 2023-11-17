@@ -109,7 +109,7 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.autoLoad();
+        projectManager.loadFirst();
     }
     if (!projectManager.isValid()) {
         return showError(1, QCoreApplication::translate("main", "Error: invalid project directory."));

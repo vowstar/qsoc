@@ -72,13 +72,14 @@ public slots:
      */
     bool load(const QString &projectName);
     /**
-     * @brief Auto load project environment variables and settings
-     * @details This function will load project environment variables
-     *          and settings from project file automatically.
+     * @brief Auto load the first found project
+     * @details Automatically loads the first project file found in the specified
+     *          directory. It initializes project environment variables and
+     *          settings based on this file.
      * @retval true Load successfully
      * @retval false Load failed
      */
-    bool autoLoad();
+    bool loadFirst();
     /**
      * @brief Remove project file
      * @details This function will remove project file which in the project
