@@ -302,11 +302,6 @@ bool QSocCliWorker::parseProjectShow(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: failed to load project %1.")
                 .arg(projectName));
     }
-    if (!projectManager.isValid()) {
-        return showError(
-            1,
-            QCoreApplication::translate("main", "Error: project %1 is invalid.").arg(projectName));
-    }
     /* Show details about the project */
     showInfo(0, QStaticDataSedes::serializeYaml(projectManager.getProjectNode()));
 
