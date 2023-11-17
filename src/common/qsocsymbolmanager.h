@@ -30,6 +30,28 @@ public:
 
 public slots:
     /**
+     * @brief Set the project manager
+     * @details Assigns a new project manager to this object. The project manager
+     *          is used for managing various project-related functionalities.
+     * @param projectManager Pointer to the new project manager
+     */
+    void setProjectManager(QSocProjectManager *projectManager);
+    /**
+     * @brief Get the project manager
+     * @details Retrieves the currently assigned project manager. This manager
+     *          is responsible for handling various aspects of the project.
+     * @return QSocProjectManager * Pointer to the current project manager
+     */
+    QSocProjectManager *getProjectManager();
+    /**
+     * @brief Check if symbol path is valid
+     * @details Verifies the validity of the symbol path set in the project
+     *          manager. Checks if the path exists and is a directory.
+     * @retval true Symbol path is valid
+     * @retval false Symbol path is invalid, or projectManager is nullptr
+     */
+    bool isSymbolPathValid();
+    /**
      * @brief Import verilog files from file list
      * @details This function will import verilog files from file list, and
      *          generate the symbol library file. 

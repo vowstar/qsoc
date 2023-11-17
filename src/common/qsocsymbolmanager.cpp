@@ -12,9 +12,35 @@ QSocSymbolManager::QSocSymbolManager(QObject *parent, QSocProjectManager *projec
     : QObject{parent}
 {
     /* Set projectManager */
+    setProjectManager(projectManager);
+}
+
+void QSocSymbolManager::setProjectManager(QSocProjectManager *projectManager)
+{
+    /* Set projectManager */
     if (projectManager) {
         this->projectManager = projectManager;
     }
+}
+
+QSocProjectManager *QSocSymbolManager::getProjectManager()
+{
+    return projectManager;
+}
+
+bool QSocSymbolManager::isSymbolPathValid()
+{
+    /* Validate projectManager */
+    if (!projectManager) {
+        qCritical() << "Error: projectManager is nullptr.";
+        return false;
+    }
+    /* Validate symbol path. */
+    if (!projectManager->isValidSymbolPath()) {
+        qCritical() << "Error: Invalid symbol path:" << projectManager->getSymbolPath();
+        return false;
+    }
+    return true;
 }
 
 YAML::Node QSocSymbolManager::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
@@ -60,7 +86,7 @@ bool QSocSymbolManager::importFromFileList(
     const QStringList        &filePathList)
 {
     /* Validate projectManager and its path */
-    if (!projectManager || !projectManager->isValidSymbolPath()) {
+    if (!isSymbolPathValid()) {
         qCritical() << "Error: projectManager is null or invalid symbol path.";
         return false;
     }
@@ -153,7 +179,7 @@ bool QSocSymbolManager::saveSymbolYaml(const QString &symbolBasename, const YAML
 {
     YAML::Node localSymbolYaml;
     /* Validate projectManager and its path */
-    if (!projectManager || !projectManager->isValidSymbolPath()) {
+    if (!isSymbolPathValid()) {
         qCritical() << "Error: projectManager is null or invalid symbol path.";
         return false;
     }
@@ -179,7 +205,7 @@ QStringList QSocSymbolManager::listSymbol(const QRegularExpression &symbolBasena
 {
     QStringList result;
     /* Validate projectManager and its path */
-    if (!projectManager || !projectManager->isValidSymbolPath()) {
+    if (!isSymbolPathValid()) {
         qCritical() << "Error: projectManager is null or invalid symbol path.";
         return result;
     }
