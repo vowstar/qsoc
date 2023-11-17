@@ -99,13 +99,74 @@ public slots:
      */
     QStringList list(const QRegularExpression &projectNameRegex = QRegularExpression(".*"));
     /**
-     * @brief Validate project environment variables and settings
-     * @details This function will check if project environment variables
-     *          and settings are valid.
-     * @retval true Project environment variables and settings are valid
-     * @retval false Project environment variables and settings are invalid
+     * @brief Validate project environment settings
+     * @details Checks the validity of project environment settings.
+     * @param writable Controls if all path writability should be checked
+     * @retval true Project environment settings are valid
+     * @retval false Project environment settings are invalid
      */
-    bool isValid();
+    bool isValid(bool writable = false);
+    /**
+     * @brief Validate the project node
+     * @details Checks if the provided project YAML node is valid.
+     * @param projectNode The YAML::Node representing the project.
+     * @retval true The project node is valid.
+     * @retval false The project node is invalid.
+     */
+    bool isValidProjectNode(const YAML::Node &projectNode);
+    /**
+     * @brief Validate the project name
+     * @details Checks if the provided project name is valid.
+     * @param projectName The name of the project to validate.
+     * @retval true The project name is valid.
+     * @retval false The project name is invalid.
+     */
+    bool isValidProjectName(const QString &projectName);
+    /**
+     * @brief Validate the project path
+     * @details Checks if the provided project path is valid.
+     * @param projectPath The path of the project to validate.
+     * @param writable Controls if path writability should be checked.
+     * @retval true The project path is valid.
+     * @retval false The project path is invalid.
+     */
+    bool isValidProjectPath(const QString &projectPath, bool writable = false);
+    /**
+     * @brief Validate the bus path
+     * @details Checks if the provided bus path is valid.
+     * @param busPath The bus path to validate.
+     * @param writable Controls if path writability should be checked.
+     * @retval true The bus path is valid.
+     * @retval false The bus path is invalid.
+     */
+    bool isValidBusPath(const QString &busPath, bool writable = false);
+    /**
+     * @brief Validate the symbol path
+     * @details Checks if the provided symbol path is valid.
+     * @param symbolPath The symbol path to validate.
+     * @param writable Controls if path writability should be checked.
+     * @retval true The symbol path is valid.
+     * @retval false The symbol path is invalid.
+     */
+    bool isValidSymbolPath(const QString &symbolPath, bool writable = false);
+    /**
+     * @brief Validate the schematic path
+     * @details Checks if the provided schematic path is valid.
+     * @param schematicPath The schematic path to validate.
+     * @param writable Controls if path writability should be checked.
+     * @retval true The schematic path is valid.
+     * @retval false The schematic path is invalid.
+     */
+    bool isValidSchematicPath(const QString &schematicPath, bool writable = false);
+    /**
+     * @brief Validate the output path
+     * @details Checks if the provided output path is valid.
+     * @param outputPath The output path to validate.
+     * @param writable Controls if path writability should be checked.
+     * @retval true The output path is valid.
+     * @retval false The output path is invalid.
+     */
+    bool isValidOutputPath(const QString &outputPath, bool writable = false);
     /**
      * @brief Get project node
      * @details This function will return project YAML node.

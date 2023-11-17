@@ -237,50 +237,165 @@ QStringList QSocProjectManager::list(const QRegularExpression &projectNameRegex)
     return result;
 }
 
-bool QSocProjectManager::isValid()
+bool QSocProjectManager::isValid(bool writable)
 {
+    /* Validate project node */
+    if (!isValidProjectNode(projectNode)) {
+        qCritical() << "Error: Invalid project node.";
+        return false;
+    }
+
+    /* Validate project name */
+    if (!isValidProjectName(projectName)) {
+        qCritical() << "Error: Invalid project name.";
+        return false;
+    }
+
+    /* Validate project path */
+    if (!isValidProjectPath(projectPath, writable)) {
+        qCritical() << "Error: Invalid project path.";
+        return false;
+    }
+
+    /* Validate bus path */
+    if (!isValidBusPath(busPath, writable)) {
+        qCritical() << "Error: Invalid bus path.";
+        return false;
+    }
+
+    /* Validate symbol path */
+    if (!isValidSymbolPath(symbolPath, writable)) {
+        qCritical() << "Error: Invalid symbol path.";
+        return false;
+    }
+
+    /* Validate schematic path */
+    if (!isValidSchematicPath(schematicPath, writable)) {
+        qCritical() << "Error: Invalid schematic path.";
+        return false;
+    }
+
+    /* Validate output path */
+    if (!isValidOutputPath(outputPath, writable)) {
+        qCritical() << "Error: Invalid output path.";
+        return false;
+    }
+
+    return true;
+}
+
+bool QSocProjectManager::isValidProjectNode(const YAML::Node &projectNode)
+{
+    return projectNode.IsDefined() && !projectNode.IsNull();
+}
+
+bool QSocProjectManager::isValidProjectName(const QString &projectName)
+{
+    /* Check if project name is empty */
     if (projectName.isEmpty()) {
-        qCritical() << "Error: project name is empty.";
+        qCritical() << "Error: Project name is empty.";
         return false;
     }
+
+    /* Define a list of invalid characters for file names */
+    const QString invalidChars = "\\/:*?\"<>|";
+
+    /* Check if project name contains any invalid characters */
+    for (const QChar invalidChar : invalidChars) {
+        if (projectName.contains(invalidChar)) {
+            qCritical() << "Error: Project name contains invalid characters.";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool QSocProjectManager::isValidProjectPath(const QString &projectPath, bool writable)
+{
     if (projectPath.isEmpty()) {
-        qCritical() << "Error: project path is empty.";
+        qCritical() << "Error: Project path is empty.";
         return false;
     }
+    const QFileInfo pathInfo(projectPath);
+    if (!pathInfo.exists() || !pathInfo.isDir()) {
+        qCritical() << "Error: Project path does not exist or is not a directory.";
+        return false;
+    }
+    if (writable && !pathInfo.isWritable()) {
+        qCritical() << "Error: Project path is not writable.";
+        return false;
+    }
+    return true;
+}
+
+bool QSocProjectManager::isValidBusPath(const QString &busPath, bool writable)
+{
     if (busPath.isEmpty()) {
-        qCritical() << "Error: bus path is empty.";
+        qCritical() << "Error: Bus path is empty.";
         return false;
     }
+    const QFileInfo pathInfo(busPath);
+    if (!pathInfo.exists() || !pathInfo.isDir()) {
+        qCritical() << "Error: Bus path does not exist or is not a directory.";
+        return false;
+    }
+    if (writable && !pathInfo.isWritable()) {
+        qCritical() << "Error: Bus path is not writable.";
+        return false;
+    }
+    return true;
+}
+
+bool QSocProjectManager::isValidSymbolPath(const QString &symbolPath, bool writable)
+{
     if (symbolPath.isEmpty()) {
-        qCritical() << "Error: symbol path is empty.";
+        qCritical() << "Error: Symbol path is empty.";
         return false;
     }
+    const QFileInfo pathInfo(symbolPath);
+    if (!pathInfo.exists() || !pathInfo.isDir()) {
+        qCritical() << "Error: Symbol path does not exist or is not a directory.";
+        return false;
+    }
+    if (writable && !pathInfo.isWritable()) {
+        qCritical() << "Error: Symbol path is not writable.";
+        return false;
+    }
+    return true;
+}
+
+bool QSocProjectManager::isValidSchematicPath(const QString &schematicPath, bool writable)
+{
     if (schematicPath.isEmpty()) {
-        qCritical() << "Error: schematic path is empty.";
+        qCritical() << "Error: Schematic path is empty.";
         return false;
     }
+    const QFileInfo pathInfo(schematicPath);
+    if (!pathInfo.exists() || !pathInfo.isDir()) {
+        qCritical() << "Error: Schematic path does not exist or is not a directory.";
+        return false;
+    }
+    if (writable && !pathInfo.isWritable()) {
+        qCritical() << "Error: Schematic path is not writable.";
+        return false;
+    }
+    return true;
+}
+
+bool QSocProjectManager::isValidOutputPath(const QString &outputPath, bool writable)
+{
     if (outputPath.isEmpty()) {
         qCritical() << "Error: output path is empty.";
         return false;
     }
-    if (!QDir(projectPath).exists()) {
-        qCritical() << "Error: project path is not a directory.";
+    const QFileInfo outputPathInfo(outputPath);
+    if (!outputPathInfo.exists() || !outputPathInfo.isDir()) {
+        qCritical() << "Error: output path does not exist or is not a directory.";
         return false;
     }
-    if (!QDir(busPath).exists()) {
-        qCritical() << "Error: bus path is not a directory.";
-        return false;
-    }
-    if (!QDir(symbolPath).exists()) {
-        qCritical() << "Error: symbol path is not a directory.";
-        return false;
-    }
-    if (!QDir(schematicPath).exists()) {
-        qCritical() << "Error: schematic path is not a directory.";
-        return false;
-    }
-    if (!QDir(outputPath).exists()) {
-        qCritical() << "Error: output path is not a directory.";
+    if (writable && !outputPathInfo.isWritable()) {
+        qCritical() << "Error: output path is not writable.";
         return false;
     }
     return true;
