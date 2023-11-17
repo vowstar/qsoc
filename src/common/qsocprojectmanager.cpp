@@ -91,6 +91,36 @@ bool QSocProjectManager::isExist(const QString &projectName)
     return result;
 }
 
+bool QSocProjectManager::mkpath()
+{
+    /* Check and create project directory */
+    if (!QDir().mkpath(projectPath)) {
+        qCritical() << "Error: Failed to create project directory.";
+        return false;
+    }
+    /* Check and create bus directory */
+    if (!QDir().mkpath(busPath)) {
+        qCritical() << "Error: Failed to create bus directory.";
+        return false;
+    }
+    /* Check and create symbol directory */
+    if (!QDir().mkpath(symbolPath)) {
+        qCritical() << "Error: Failed to create symbol directory.";
+        return false;
+    }
+    /* Check and create schematic directory */
+    if (!QDir().mkpath(schematicPath)) {
+        qCritical() << "Error: Failed to create schematic directory.";
+        return false;
+    }
+    /* Check and create output directory */
+    if (!QDir().mkpath(outputPath)) {
+        qCritical() << "Error: Failed to create output directory.";
+        return false;
+    }
+    return true;
+}
+
 bool QSocProjectManager::save(const QString &projectName)
 {
     /* Check project name */
@@ -100,24 +130,8 @@ bool QSocProjectManager::save(const QString &projectName)
     }
     setProjectName(projectName);
     /* Create project directories */
-    if (!QDir().mkpath(projectPath)) {
-        qCritical() << "Error: failed to create bus directory.";
-        return false;
-    }
-    if (!QDir().mkpath(busPath)) {
-        qCritical() << "Error: failed to create bus directory.";
-        return false;
-    }
-    if (!QDir().mkpath(symbolPath)) {
-        qCritical() << "Error: failed to create symbol directory.";
-        return false;
-    }
-    if (!QDir().mkpath(schematicPath)) {
-        qCritical() << "Error: failed to create schematic directory.";
-        return false;
-    }
-    if (!QDir().mkpath(outputPath)) {
-        qCritical() << "Error: failed to create output directory.";
+    if (!mkpath()) {
+        qCritical() << "Error: failed to create project directories.";
         return false;
     }
     /* Save project file */

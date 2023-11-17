@@ -54,6 +54,14 @@ public slots:
      */
     bool isExist(const QString &projectName);
     /**
+     * @brief Create project directories
+     * @details Creates all necessary directories for the project, including
+     *          bus, symbol, schematic, and output directories.
+     * @retval true if all directories were successfully created
+     * @retval false if any directory creation failed
+     */
+    bool mkpath();
+    /**
      * @brief Save project environment variables and settings
      * @details This function will save project environment variables
      *          and settings into project file.
