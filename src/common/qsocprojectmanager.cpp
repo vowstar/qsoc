@@ -168,14 +168,18 @@ bool QSocProjectManager::autoLoad()
     QString filePath;
     /* If path is a directory, search and pick a *.soc_pro file */
     if (QFileInfo(projectPath).isDir()) {
-        QDir dir(projectPath);
-        dir.setNameFilters(QStringList() << "*.soc_pro");
-        dir.setFilter(QDir::Files | QDir::NoDotAndDotDot);
-        if (dir.count() == 0) {
+        /* QDir object for '.soc_pro' files in 'projectPath', sorted by name. */
+        const QDir projectDir(
+            projectPath,
+            "*.soc_pro",
+            QDir::SortFlag::Name | QDir::SortFlag::IgnoreCase,
+            QDir::Files | QDir::NoDotAndDotDot);
+        if (projectDir.count() == 0) {
             qCritical() << "Error: project file not found.";
             return false;
         }
-        filePath = dir.absoluteFilePath(dir[0]);
+        /* Get the first path as filePath */
+        filePath = projectDir.absoluteFilePath(projectDir[0]);
     }
     /* Check the existence of project files */
     if (!QFile::exists(filePath)) {
@@ -218,12 +222,14 @@ QStringList QSocProjectManager::list(const QRegularExpression &projectNameRegex)
         qCritical() << "Error: project path is not a directory.";
         return result;
     }
-    /* List project files */
-    QDir dir(projectPath);
-    dir.setNameFilters(QStringList() << "*.soc_pro");
-    dir.setFilter(QDir::Files | QDir::NoDotAndDotDot);
-    /* Filter project files */
-    foreach (const QString &filename, dir.entryList()) {
+    /* QDir object for '.soc_pro' files in 'projectPath', sorted by name. */
+    const QDir projectDir(
+        projectPath,
+        "*.soc_pro",
+        QDir::SortFlag::Name | QDir::SortFlag::IgnoreCase,
+        QDir::Files | QDir::NoDotAndDotDot);
+    /* Add matching file basenames from projectDir to result list. */
+    foreach (const QString &filename, projectDir.entryList()) {
         if (projectNameRegex.match(filename).hasMatch()) {
             result.append(filename.split('.').first());
         }

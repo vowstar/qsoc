@@ -92,10 +92,11 @@ public slots:
      * @brief List matched projects
      * @details This function will list matched projects which in the project
      *          directory.
-     * @param projectNameRegex regular expression to match the project name
+     * @param projectNameRegex regular expression to match the project name,
+     *        default is ".*"
      * @return QStringList The list of project in the project directory
      */
-    QStringList list(const QRegularExpression &projectNameRegex);
+    QStringList list(const QRegularExpression &projectNameRegex = QRegularExpression(".*"));
     /**
      * @brief Validate project environment variables and settings
      * @details This function will check if project environment variables
