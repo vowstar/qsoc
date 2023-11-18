@@ -534,19 +534,27 @@ bool QSocSymbolManager::removeModule(const QRegularExpression &moduleNameRegex)
         }
     }
 
+    /* Remove modules from symbolLib */
     for (const QString &moduleName : modulesToRemove) {
         symbolLib.remove(moduleName.toStdString());
+    }
+
+    /* Ensure symbolsToSave does not include symbols marked for removal */
+    for (const QString &symbolToRemove : symbolsToRemove) {
+        symbolsToSave.remove(symbolToRemove);
     }
 
     const QStringList symbolsToSaveList = QList<QString>(symbolsToSave.begin(), symbolsToSave.end());
     const QStringList symbolsToRemoveList
         = QList<QString>(symbolsToRemove.begin(), symbolsToRemove.end());
 
+    /* Save symbols that still have associations in symbolMap */
     if (!save(symbolsToSaveList)) {
         qCritical() << "Error: Failed to save symbols.";
         return false;
     }
 
+    /* Remove symbols with no remaining associations in symbolMap */
     if (!remove(symbolsToRemoveList)) {
         qCritical() << "Error: Failed to remove symbols.";
         return false;
