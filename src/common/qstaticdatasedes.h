@@ -37,6 +37,7 @@ public:
         return instance;
     }
 
+public slots:
     /**
      * @brief Serialize YAML Node to QString
      * @details This function serializes a YAML::Node to a QString.
