@@ -54,7 +54,7 @@ public slots:
     /**
      * @brief Import verilog files from file list
      * @details This function will import verilog files from file list, and
-     *          generate the symbol library file. 
+     *          generate the symbol library file.
      *          If symbolBasename is empty, the first matching verilog module
      *          name is automatically selected and converted into lowercase as
      *          the symbol library name.
@@ -74,7 +74,7 @@ public slots:
         const QStringList        &filePathList);
     /**
      * @brief Get the Module Yaml object
-     * @details This function will convert the module AST json object to YAML 
+     * @details This function will convert the module AST json object to YAML
      *          object. This function relies on projectManager to be valid.
      * @param moduleAst The module AST json object
      * @return YAML::Node The module YAML object
