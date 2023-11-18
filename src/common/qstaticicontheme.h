@@ -13,7 +13,14 @@ class QStaticIconTheme : public QObject
 {
     Q_OBJECT
 public:
-    /* Static instance of this object */
+    /**
+     * @brief Get the static instance of this object
+     * @details This function returns the static instance of this object. It is
+     *          used to provide a singleton instance of the class, ensuring that
+     *          only one instance of the class exists throughout the
+     *          application.
+     * @return The static instance of QStaticIconTheme.
+     */
     static QStaticIconTheme &instance()
     {
         static QStaticIconTheme instance;
@@ -36,6 +43,16 @@ public slots:
      *          the theme of the system.
      */
     static void setup();
+
+private:
+    /**
+     * @brief Constructor
+     * @details This is a private constructor for QStaticIconTheme to prevent
+     *          instantiation. Making the constructor private ensures that no
+     *          objects of this class can be created from outside the class,
+     *          enforcing a static-only usage pattern.
+     */
+    QStaticIconTheme() {}
 };
 
 #endif // QSTATICICONTHEME_H
