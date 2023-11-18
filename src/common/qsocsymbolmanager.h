@@ -106,7 +106,7 @@ public slots:
     /**
      * @brief Check if the symbol file exists in the filesystem
      * @details This function checks if a symbol file with the given basename
-     *          exists in the symbol directory. It is used to verify the 
+     *          exists in the symbol directory. It is used to verify the
      *          existence of symbol files before processing them.
      * @param symbolBasename The basename of the symbol file, without the
      *        ".soc_sym" extension.
@@ -137,6 +137,30 @@ public slots:
      * @retval false if loading any matching symbols fails
      */
     bool load(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
+    /**
+     * @brief Remove a specific symbol by basename
+     * @details Removes the symbol file identified by `symbolBasename` from
+     *          the symbol directory. This method is useful for deleting
+     *          individual symbol files. It requires a valid projectManager
+     *          and checks if the symbol file exists.
+     * @param symbolBasename Basename of the symbol file to remove, without
+     *        the ".soc_sym" extension.
+     * @retval true if the symbol file is successfully removed
+     * @retval false if removal fails or the file does not exist
+     */
+    bool remove(const QString &symbolBasename);
+    /**
+     * @brief Remove symbols matching a regex pattern
+     * @details Removes all symbol files from the symbol directory that
+     *          match `symbolBasenameRegex`. This method is ideal for batch
+     *          removal of symbols based on naming patterns. It relies on
+     *          a valid projectManager to execute.
+     * @param symbolBasenameRegex Regex to match file basenames. Defaults
+     *        to ".*", which matches all symbol files.
+     * @retval true if all matching symbols are successfully removed
+     * @retval false if removal of any matching symbols fails
+     */
+    bool remove(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
 
 private:
     /* Internal used project manager */

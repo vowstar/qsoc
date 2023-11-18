@@ -240,7 +240,8 @@ bool QSocSymbolManager::isExist(const QString &symbolBasename)
     }
 
     /* Get the full file path by joining symbol path and basename with extension */
-    const QString filePath = QDir(projectManager->getSymbolPath()).filePath(symbolBasename + ".soc_sym");
+    const QString filePath
+        = QDir(projectManager->getSymbolPath()).filePath(symbolBasename + ".soc_sym");
 
     /* Check if symbol file exists */
     return QFile::exists(filePath);
@@ -261,7 +262,8 @@ bool QSocSymbolManager::load(const QString &symbolBasename)
     }
 
     /* Get the full file path by joining symbol path and basename with extension */
-    const QString filePath = QDir(projectManager->getSymbolPath()).filePath(symbolBasename + ".soc_sym");
+    const QString filePath
+        = QDir(projectManager->getSymbolPath()).filePath(symbolBasename + ".soc_sym");
 
     /* Open the YAML file */
     std::ifstream fileStream(filePath.toStdString());
@@ -307,6 +309,65 @@ bool QSocSymbolManager::load(const QRegularExpression &symbolBasenameRegex)
     for (const QString &basename : matchingBasenames) {
         if (!load(basename)) {
             qCritical() << "Error: Failed to load symbol:" << basename;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool QSocSymbolManager::remove(const QString &symbolBasename)
+{
+    /* Validate projectManager and its symbol path */
+    if (!isSymbolPathValid()) {
+        qCritical() << "Error: projectManager is null or invalid symbol path.";
+        return false;
+    }
+
+    /* Check symbol basename */
+    if (symbolBasename.isEmpty()) {
+        qCritical() << "Error: Symbol basename is empty.";
+        return false;
+    }
+
+    /* Get the full file path */
+    const QString filePath
+        = QDir(projectManager->getSymbolPath()).filePath(symbolBasename + ".soc_sym");
+
+    /* Check if symbol file exists */
+    if (!QFile::exists(filePath)) {
+        qCritical() << "Error: Symbol file does not exist for basename:" << symbolBasename;
+        return false;
+    }
+
+    /* Remove the file */
+    if (!QFile::remove(filePath)) {
+        qCritical() << "Error: Failed to remove symbol file:" << filePath;
+        return false;
+    }
+
+    /* Remove from symbolLib and symbolMap */
+    symbolLib.remove(symbolBasename.toStdString());
+    symbolMap.remove(symbolBasename);
+
+    return true;
+}
+
+bool QSocSymbolManager::remove(const QRegularExpression &symbolBasenameRegex)
+{
+    /* Validate projectManager */
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: Invalid or null projectManager.";
+        return false;
+    }
+
+    /* Get the list of symbol basenames matching the regex */
+    const QStringList matchingBasenames = listSymbol(symbolBasenameRegex);
+
+    /* Iterate through the list and remove each symbol */
+    for (const QString &basename : matchingBasenames) {
+        if (!remove(basename)) {
+            qCritical() << "Error: Failed to remove symbol:" << basename;
             return false;
         }
     }
