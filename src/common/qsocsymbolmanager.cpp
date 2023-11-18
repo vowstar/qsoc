@@ -375,6 +375,51 @@ bool QSocSymbolManager::remove(const QRegularExpression &symbolBasenameRegex)
     return true;
 }
 
+bool QSocSymbolManager::save(const QString &symbolBasename)
+{
+    /* Check if the symbolBasename exists in symbolMap */
+    if (!symbolMap.contains(symbolBasename)) {
+        qCritical() << "Error: Symbol basename not found in symbolMap.";
+        return false;
+    }
+
+    /* Extract modules from symbolLib */
+    YAML::Node dataToSave;
+    auto       range = symbolMap.equal_range(symbolBasename);
+    for (auto it = range.first; it != range.second; ++it) {
+        dataToSave[it.value().toStdString()] = symbolLib[it.value().toStdString()];
+    }
+
+    /* Serialize and save to file */
+    const QString filePath
+        = QDir(projectManager->getSymbolPath()).filePath(symbolBasename + ".soc_sym");
+    std::ofstream outFile(filePath.toStdString());
+    if (!outFile.is_open()) {
+        qCritical() << "Error: Unable to open file for writing:" << filePath;
+        return false;
+    }
+
+    outFile << dataToSave;
+    return true;
+}
+
+bool QSocSymbolManager::save(const QRegularExpression &symbolBasenameRegex)
+{
+    bool allSaved = true;
+
+    /* Iterate over symbolMap and save matching symbols */
+    for (const QString &symbolBasename : symbolMap.keys()) {
+        if (symbolBasenameRegex.match(symbolBasename).hasMatch()) {
+            if (!save(symbolBasename)) {
+                qCritical() << "Error: Failed to save symbol:" << symbolBasename;
+                allSaved = false;
+            }
+        }
+    }
+
+    return allSaved;
+}
+
 QStringList QSocSymbolManager::listModule(const QRegularExpression &moduleNameRegex)
 {
     QStringList result;

@@ -162,6 +162,31 @@ public slots:
      */
     bool remove(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
     /**
+     * @brief Save symbol data associated with a specific basename
+     * @details Serializes and saves the symbol data related to the given
+     *          `symbolBasename`. It locates the corresponding modules in
+     *          `symbolLib` using `symbolMap`, then serializes them into YAML
+     *          format. The result is saved to a file with the same basename,
+     *          appending the ".soc_sym" extension. Existing files are
+     *          overwritten.
+     * @param symbolBasename The basename of the symbol, excluding extension
+     * @retval true on successful serialization and saving
+     * @retval false on failure to serialize or save
+     */
+    bool save(const QString &symbolBasename);
+    /**
+     * @brief Save multiple symbols matching a regex pattern
+     * @details Iterates through `symbolMap` to find symbols matching the
+     *          provided regex pattern. Each matching symbol is serialized and
+     *          saved individually in YAML format. Files are named after the
+     *          symbol basenames with the ".soc_sym" extension. Existing files
+     *          are overwritten.
+     * @param symbolBasenameRegex Regular expression to filter symbol basenames
+     * @retval true if all matching symbols are successfully saved
+     * @retval false if saving any matching symbol fails
+     */
+    bool save(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
+    /**
      * @brief Get list of module names matching a regex pattern
      * @details Retrieves module names from the `symbolLib` YAML node that
      *          match the provided `moduleNameRegex`. This function scans
