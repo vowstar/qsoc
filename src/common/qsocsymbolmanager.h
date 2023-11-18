@@ -138,6 +138,18 @@ public slots:
      */
     bool load(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
     /**
+     * @brief Load multiple symbols by a list of basenames
+     * @details Loads multiple symbols specified in `symbolBasenameList` from the
+     *          symbol directory. Useful for loading a specific set of symbol files.
+     *          Requires a valid projectManager and checks the existence of each
+     *          symbol file.
+     * @param symbolBasenameList List of symbol file basenames to load, without
+     *        ".soc_sym" extensions.
+     * @retval true All specified symbols are successfully loaded
+     * @retval false Loading fails for any of the specified symbols
+     */
+    bool load(const QStringList &symbolBasenameList);
+    /**
      * @brief Remove a specific symbol by basename
      * @details Removes the symbol file identified by `symbolBasename` from
      *          the symbol directory. This method is useful for deleting
@@ -162,13 +174,25 @@ public slots:
      */
     bool remove(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
     /**
+     * @brief Remove multiple symbols by a list of basenames
+     * @details Removes multiple symbol files specified in `symbolBasenameList`
+     *          from the symbol directory. Useful for deleting a specific set of
+     *          symbol files. Requires a valid projectManager and checks each
+     *          symbol file's existence.
+     * @param symbolBasenameList List of symbol file basenames to remove, without
+     *        ".soc_sym" extensions.
+     * @retval true All specified symbols are successfully removed
+     * @retval false Removal fails for any of the specified symbols
+     */
+    bool remove(const QStringList &symbolBasenameList);
+    /**
      * @brief Save symbol data associated with a specific basename
      * @details Serializes and saves the symbol data related to the given
      *          `symbolBasename`. It locates the corresponding modules in
      *          `symbolLib` using `symbolMap`, then serializes them into YAML
      *          format. The result is saved to a file with the same basename,
      *          appending the ".soc_sym" extension. Existing files are
-     *          overwritten.
+     *          overwritten. This function requires a valid projectManager.
      * @param symbolBasename The basename of the symbol, excluding extension
      * @retval true on successful serialization and saving
      * @retval false on failure to serialize or save
@@ -180,19 +204,34 @@ public slots:
      *          provided regex pattern. Each matching symbol is serialized and
      *          saved individually in YAML format. Files are named after the
      *          symbol basenames with the ".soc_sym" extension. Existing files
-     *          are overwritten.
+     *          are overwritten. This function requires a valid projectManager.
      * @param symbolBasenameRegex Regular expression to filter symbol basenames
      * @retval true if all matching symbols are successfully saved
      * @retval false if saving any matching symbol fails
      */
     bool save(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
     /**
+     * @brief Save multiple symbols by a list of basenames
+     * @details Serializes and saves symbol data related to each `symbolBasename`
+     *          in `symbolBasenameList`. It locates corresponding modules in
+     *          `symbolLib` using `symbolMap`, then serializes them into YAML
+     *          format. Results are saved to files named after each basename,
+     *          appending ".soc_sym". Existing files are overwritten. Requires
+     *          a valid projectManager.
+     * @param symbolBasenameList List of symbol basenames to save, excluding
+     *        extensions.
+     * @retval true All specified symbols are successfully saved
+     * @retval false Saving fails for any of the specified symbols
+     */
+    bool save(const QStringList &symbolBasenameList);
+    /**
      * @brief Get list of module names matching a regex pattern
      * @details Retrieves module names from the `symbolLib` YAML node that
      *          match the provided `moduleNameRegex`. This function scans
      *          the symbol library and compiles a list of module names. Useful
      *          for processing or iterating over project modules. It relies on
-     *          the validity of the `symbolLib` YAML node.
+     *          the validity of the `symbolLib` YAML node. This function
+     *          requires a valid projectManager.
      * @param moduleNameRegex Regular expression to match module names,
      *        default is ".*".
      * @return QStringList of module names matching the regex in the symbol
@@ -201,17 +240,14 @@ public slots:
     QStringList listModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
     /**
-     * @brief Remove modules matching a regex pattern
-     * @details Removes modules from the symbol library that match the
-     *          provided `moduleNameRegex`. This method is suitable for batch
-     *          removal of modules based on naming patterns. It updates the
-     *          symbol library and symbol map, and removes symbol files if their
-     *          last mapping in the symbol map is deleted. Requires a valid
-     *          projectManager for execution.
-     * @param moduleNameRegex Regex to match module names. Defaults to
-     *        ".*", matching all modules.
-     * @retval true All matching modules are successfully removed
-     * @retval false Removal of any matching modules fails
+     * @brief Remove modules matching regex from symbol library
+     * @details Removes modules that match `moduleNameRegex` from symbolLib,
+     *          updating symbolMap accordingly. It saves symbols with remaining
+     *          module associations and removes files with no associations.
+     *          Requires a valid projectManager for execution.
+     * @param moduleNameRegex Regex to filter module names for removal.
+     * @retval true All matching modules are successfully processed
+     * @retval false Errors occur during module removal or symbol saving
      */
     bool removeModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 

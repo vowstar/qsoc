@@ -296,9 +296,9 @@ bool QSocSymbolManager::load(const QString &symbolBasename)
 
 bool QSocSymbolManager::load(const QRegularExpression &symbolBasenameRegex)
 {
-    /* Validate projectManager */
-    if (!projectManager || !projectManager->isValid()) {
-        qCritical() << "Error: Invalid or null projectManager.";
+    /* Validate projectManager and its path */
+    if (!isSymbolPathValid()) {
+        qCritical() << "Error: projectManager is null or invalid symbol path.";
         return false;
     }
 
@@ -307,6 +307,25 @@ bool QSocSymbolManager::load(const QRegularExpression &symbolBasenameRegex)
 
     /* Iterate through the list and load each symbol */
     for (const QString &basename : matchingBasenames) {
+        if (!load(basename)) {
+            qCritical() << "Error: Failed to load symbol:" << basename;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool QSocSymbolManager::load(const QStringList &symbolBasenameList)
+{
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: Invalid or null projectManager.";
+        return false;
+    }
+
+    const QSet<QString> uniqueBasenames(symbolBasenameList.begin(), symbolBasenameList.end());
+
+    for (const QString &basename : uniqueBasenames) {
         if (!load(basename)) {
             qCritical() << "Error: Failed to load symbol:" << basename;
             return false;
@@ -355,9 +374,9 @@ bool QSocSymbolManager::remove(const QString &symbolBasename)
 
 bool QSocSymbolManager::remove(const QRegularExpression &symbolBasenameRegex)
 {
-    /* Validate projectManager */
-    if (!projectManager || !projectManager->isValid()) {
-        qCritical() << "Error: Invalid or null projectManager.";
+    /* Validate projectManager and its path */
+    if (!isSymbolPathValid()) {
+        qCritical() << "Error: projectManager is null or invalid symbol path.";
         return false;
     }
 
@@ -375,8 +394,33 @@ bool QSocSymbolManager::remove(const QRegularExpression &symbolBasenameRegex)
     return true;
 }
 
+bool QSocSymbolManager::remove(const QStringList &symbolBasenameList)
+{
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: Invalid or null projectManager.";
+        return false;
+    }
+
+    const QSet<QString> uniqueBasenames(symbolBasenameList.begin(), symbolBasenameList.end());
+
+    for (const QString &basename : uniqueBasenames) {
+        if (!remove(basename)) {
+            qCritical() << "Error: Failed to remove symbol:" << basename;
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool QSocSymbolManager::save(const QString &symbolBasename)
 {
+    /* Validate projectManager and its path */
+    if (!isSymbolPathValid()) {
+        qCritical() << "Error: projectManager is null or invalid symbol path.";
+        return false;
+    }
+
     /* Check if the symbolBasename exists in symbolMap */
     if (!symbolMap.contains(symbolBasename)) {
         qCritical() << "Error: Symbol basename not found in symbolMap.";
@@ -407,6 +451,12 @@ bool QSocSymbolManager::save(const QRegularExpression &symbolBasenameRegex)
 {
     bool allSaved = true;
 
+    /* Validate projectManager and its path */
+    if (!isSymbolPathValid()) {
+        qCritical() << "Error: projectManager is null or invalid symbol path.";
+        return false;
+    }
+
     /* Iterate over symbolMap and save matching symbols */
     for (const QString &symbolBasename : symbolMap.keys()) {
         if (symbolBasenameRegex.match(symbolBasename).hasMatch()) {
@@ -418,6 +468,25 @@ bool QSocSymbolManager::save(const QRegularExpression &symbolBasenameRegex)
     }
 
     return allSaved;
+}
+
+bool QSocSymbolManager::save(const QStringList &symbolBasenameList)
+{
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: Invalid or null projectManager.";
+        return false;
+    }
+
+    const QSet<QString> uniqueBasenames(symbolBasenameList.begin(), symbolBasenameList.end());
+
+    for (const QString &basename : uniqueBasenames) {
+        if (!save(basename)) {
+            qCritical() << "Error: Failed to save symbol:" << basename;
+            return false;
+        }
+    }
+
+    return true;
 }
 
 QStringList QSocSymbolManager::listModule(const QRegularExpression &moduleNameRegex)
@@ -439,30 +508,25 @@ QStringList QSocSymbolManager::listModule(const QRegularExpression &moduleNameRe
 
 bool QSocSymbolManager::removeModule(const QRegularExpression &moduleNameRegex)
 {
-    /* Validate projectManager */
-    if (!projectManager || !projectManager->isValid()) {
-        qCritical() << "Error: Invalid or null projectManager.";
+    if (!isSymbolPathValid()) {
+        qCritical() << "Error: projectManager is null or invalid symbol path.";
         return false;
     }
 
-    /* List to keep track of symbol basenames and module names for removal */
-    QSet<QString>    symbolsToRemove;
-    QVector<QString> modulesToRemove;
+    QSet<QString> symbolsToSave;
+    QSet<QString> symbolsToRemove;
+    QSet<QString> modulesToRemove;
 
-    /* Iterate through symbolLib to find matching modules */
     for (YAML::const_iterator it = symbolLib.begin(); it != symbolLib.end(); ++it) {
         const QString moduleName = QString::fromStdString(it->first.as<std::string>());
-
-        /* Check if module name matches the regex */
         if (moduleNameRegex.match(moduleName).hasMatch()) {
-            /* Mark module for removal */
-            modulesToRemove.append(moduleName);
-
-            /* Find and mark symbol basename for removal */
+            modulesToRemove.insert(moduleName);
             for (auto symbolIt = symbolMap.begin(); symbolIt != symbolMap.end();) {
                 if (symbolIt.value() == moduleName) {
-                    symbolsToRemove.insert(symbolIt.key());
+                    const QString symbolBasename = symbolIt.key();
+                    symbolsToRemove.insert(symbolBasename);
                     symbolIt = symbolMap.erase(symbolIt);
+                    symbolsToSave.insert(symbolBasename);
                 } else {
                     ++symbolIt;
                 }
@@ -470,20 +534,22 @@ bool QSocSymbolManager::removeModule(const QRegularExpression &moduleNameRegex)
         }
     }
 
-    /* Remove marked modules from symbolLib */
     for (const QString &moduleName : modulesToRemove) {
         symbolLib.remove(moduleName.toStdString());
     }
 
-    /* Remove symbols if they have no remaining mappings in symbolMap */
-    for (const QString &symbolBasename : symbolsToRemove) {
-        if (!symbolMap.contains(symbolBasename)) {
-            /* Remove symbol file */
-            if (!remove(symbolBasename)) {
-                qCritical() << "Error: Failed to remove symbol:" << symbolBasename;
-                return false;
-            }
-        }
+    const QStringList symbolsToSaveList = QList<QString>(symbolsToSave.begin(), symbolsToSave.end());
+    const QStringList symbolsToRemoveList
+        = QList<QString>(symbolsToRemove.begin(), symbolsToRemove.end());
+
+    if (!save(symbolsToSaveList)) {
+        qCritical() << "Error: Failed to save symbols.";
+        return false;
+    }
+
+    if (!remove(symbolsToRemoveList)) {
+        qCritical() << "Error: Failed to remove symbols.";
+        return false;
     }
 
     return true;
