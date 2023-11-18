@@ -122,8 +122,8 @@ public slots:
      *          file.
      * @param symbolBasename Basename of symbol file to load, without
      *        ".soc_sym" extension
-     * @retval true if symbol is successfully loaded
-     * @retval false if loading fails or file does not exist
+     * @retval true Symbol is successfully loaded
+     * @retval false Loading fails or file does not exist
      */
     bool load(const QString &symbolBasename);
     /**
@@ -133,8 +133,8 @@ public slots:
      *          based on naming patterns. Requires projectManager to be valid.
      * @param symbolBasenameRegex Regex to match file basenames, defaults to
      *        ".*", matching all symbols
-     * @retval true if all matching symbols are loaded
-     * @retval false if loading any matching symbols fails
+     * @retval true All matching symbols are loaded
+     * @retval false Loading any matching symbols fails
      */
     bool load(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
     /**
@@ -145,8 +145,8 @@ public slots:
      *          and checks if the symbol file exists.
      * @param symbolBasename Basename of the symbol file to remove, without
      *        the ".soc_sym" extension.
-     * @retval true if the symbol file is successfully removed
-     * @retval false if removal fails or the file does not exist
+     * @retval true The symbol file is successfully removed
+     * @retval false Removal fails or the file does not exist
      */
     bool remove(const QString &symbolBasename);
     /**
@@ -174,6 +174,21 @@ public slots:
      *         library
      */
     QStringList listModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
+
+    /**
+     * @brief Remove modules matching a regex pattern
+     * @details Removes modules from the symbol library that match the
+     *          provided `moduleNameRegex`. This method is suitable for batch
+     *          removal of modules based on naming patterns. It updates the
+     *          symbol library and symbol map, and removes symbol files if their
+     *          last mapping in the symbol map is deleted. Requires a valid
+     *          projectManager for execution.
+     * @param moduleNameRegex Regex to match module names. Defaults to
+     *        ".*", matching all modules.
+     * @retval true All matching modules are successfully removed
+     * @retval false Removal of any matching modules fails
+     */
+    bool removeModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
 private:
     /* Internal used project manager */

@@ -391,3 +391,55 @@ QStringList QSocSymbolManager::listModule(const QRegularExpression &moduleNameRe
 
     return result;
 }
+
+bool QSocSymbolManager::removeModule(const QRegularExpression &moduleNameRegex)
+{
+    /* Validate projectManager */
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: Invalid or null projectManager.";
+        return false;
+    }
+
+    /* List to keep track of symbol basenames and module names for removal */
+    QSet<QString>    symbolsToRemove;
+    QVector<QString> modulesToRemove;
+
+    /* Iterate through symbolLib to find matching modules */
+    for (YAML::const_iterator it = symbolLib.begin(); it != symbolLib.end(); ++it) {
+        const QString moduleName = QString::fromStdString(it->first.as<std::string>());
+
+        /* Check if module name matches the regex */
+        if (moduleNameRegex.match(moduleName).hasMatch()) {
+            /* Mark module for removal */
+            modulesToRemove.append(moduleName);
+
+            /* Find and mark symbol basename for removal */
+            for (auto symbolIt = symbolMap.begin(); symbolIt != symbolMap.end();) {
+                if (symbolIt.value() == moduleName) {
+                    symbolsToRemove.insert(symbolIt.key());
+                    symbolIt = symbolMap.erase(symbolIt);
+                } else {
+                    ++symbolIt;
+                }
+            }
+        }
+    }
+
+    /* Remove marked modules from symbolLib */
+    for (const QString &moduleName : modulesToRemove) {
+        symbolLib.remove(moduleName.toStdString());
+    }
+
+    /* Remove symbols if they have no remaining mappings in symbolMap */
+    for (const QString &symbolBasename : symbolsToRemove) {
+        if (!symbolMap.contains(symbolBasename)) {
+            /* Remove symbol file */
+            if (!remove(symbolBasename)) {
+                qCritical() << "Error: Failed to remove symbol:" << symbolBasename;
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
