@@ -161,6 +161,19 @@ public slots:
      * @retval false if removal of any matching symbols fails
      */
     bool remove(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
+    /**
+     * @brief Get list of module names matching a regex pattern
+     * @details Retrieves module names from the `symbolLib` YAML node that
+     *          match the provided `moduleNameRegex`. This function scans
+     *          the symbol library and compiles a list of module names. Useful
+     *          for processing or iterating over project modules. It relies on
+     *          the validity of the `symbolLib` YAML node.
+     * @param moduleNameRegex Regular expression to match module names,
+     *        default is ".*".
+     * @return QStringList of module names matching the regex in the symbol
+     *         library
+     */
+    QStringList listModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
 private:
     /* Internal used project manager */

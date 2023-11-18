@@ -374,3 +374,20 @@ bool QSocSymbolManager::remove(const QRegularExpression &symbolBasenameRegex)
 
     return true;
 }
+
+QStringList QSocSymbolManager::listModule(const QRegularExpression &moduleNameRegex)
+{
+    QStringList result;
+
+    /* Iterate through each node in symbolLib */
+    for (YAML::const_iterator it = symbolLib.begin(); it != symbolLib.end(); ++it) {
+        const QString moduleName = QString::fromStdString(it->first.as<std::string>());
+
+        /* Check if the module name matches the regex */
+        if (moduleNameRegex.match(moduleName).hasMatch()) {
+            result.append(moduleName);
+        }
+    }
+
+    return result;
+}
