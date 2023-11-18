@@ -103,10 +103,48 @@ public slots:
      *         directory, excluding the ".soc_sym" extension
      */
     QStringList listSymbol(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
+    /**
+     * @brief Check if the symbol file exists in the filesystem
+     * @details This function checks if a symbol file with the given basename
+     *          exists in the symbol directory. It is used to verify the 
+     *          existence of symbol files before processing them.
+     * @param symbolBasename The basename of the symbol file, without the
+     *        ".soc_sym" extension.
+     * @retval true Symbol file exists in the symbol directory
+     * @retval false Symbol file does not exist in the symbol directory
+     */
+    bool isExist(const QString &symbolBasename);
+    /**
+     * @brief Load a specific symbol by basename
+     * @details Loads symbol specified by `symbolBasename` from the symbol
+     *          directory. Useful for retrieving individual symbol files.
+     *          Relies on a valid projectManager and existence of the symbol
+     *          file.
+     * @param symbolBasename Basename of symbol file to load, without
+     *        ".soc_sym" extension
+     * @retval true if symbol is successfully loaded
+     * @retval false if loading fails or file does not exist
+     */
+    bool load(const QString &symbolBasename);
+    /**
+     * @brief Load symbols matching a regex pattern
+     * @details Loads symbol files matching `symbolBasenameRegex` in the symbol
+     *          directory. Ideal for batch processing or retrieving symbols
+     *          based on naming patterns. Requires projectManager to be valid.
+     * @param symbolBasenameRegex Regex to match file basenames, defaults to
+     *        ".*", matching all symbols
+     * @retval true if all matching symbols are loaded
+     * @retval false if loading any matching symbols fails
+     */
+    bool load(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
 
 private:
     /* Internal used project manager */
     QSocProjectManager *projectManager = nullptr;
+    /* Symbol and module name map */
+    QMap<QString, QString> symbolMap;
+    /* Symbol library YAML node */
+    YAML::Node symbolLib;
     /**
      * @brief Merge two YAML nodes
      * @details This function will merge two YAML nodes. It returns a new map

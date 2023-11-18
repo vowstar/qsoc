@@ -224,3 +224,92 @@ QStringList QSocSymbolManager::listSymbol(const QRegularExpression &symbolBasena
 
     return result;
 }
+
+bool QSocSymbolManager::isExist(const QString &symbolBasename)
+{
+    /* Validate projectManager and its symbol path */
+    if (!isSymbolPathValid()) {
+        qCritical() << "Error: projectManager is null or invalid symbol path.";
+        return false;
+    }
+
+    /* Check symbol basename */
+    if (symbolBasename.isEmpty()) {
+        qCritical() << "Error: Symbol basename is empty.";
+        return false;
+    }
+
+    /* Get the full file path by joining symbol path and basename with extension */
+    const QString filePath = QDir(projectManager->getSymbolPath()).filePath(symbolBasename + ".soc_sym");
+
+    /* Check if symbol file exists */
+    return QFile::exists(filePath);
+}
+
+bool QSocSymbolManager::load(const QString &symbolBasename)
+{
+    /* Validate projectManager and its path */
+    if (!isSymbolPathValid()) {
+        qCritical() << "Error: projectManager is null or invalid symbol path.";
+        return false;
+    }
+
+    /* Check if symbol file exists */
+    if (!isExist(symbolBasename)) {
+        qCritical() << "Error: Symbol file does not exist for basename:" << symbolBasename;
+        return false;
+    }
+
+    /* Get the full file path by joining symbol path and basename with extension */
+    const QString filePath = QDir(projectManager->getSymbolPath()).filePath(symbolBasename + ".soc_sym");
+
+    /* Open the YAML file */
+    std::ifstream fileStream(filePath.toStdString());
+    if (!fileStream.is_open()) {
+        qCritical() << "Error: Unable to open file:" << filePath;
+        return false;
+    }
+
+    try {
+        /* Load YAML content into a temporary node */
+        YAML::Node tempNode = YAML::Load(fileStream);
+
+        /* Iterate through the temporary node and add to symbolLib */
+        for (YAML::const_iterator it = tempNode.begin(); it != tempNode.end(); ++it) {
+            const auto key = it->first.as<std::string>();
+
+            /* Add to symbolLib */
+            symbolLib[key] = it->second;
+
+            /* Update symbolMap with symbolBasename to key mapping */
+            symbolMap[symbolBasename] = QString::fromStdString(key);
+        }
+    } catch (const YAML::Exception &e) {
+        qCritical() << "Error parsing YAML file:" << filePath << ":" << e.what();
+        return false;
+    }
+
+    return true;
+}
+
+bool QSocSymbolManager::load(const QRegularExpression &symbolBasenameRegex)
+{
+    /* Validate projectManager */
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: Invalid or null projectManager.";
+        return false;
+    }
+
+    /* Get the list of symbol basenames matching the regex */
+    const QStringList matchingBasenames = listSymbol(symbolBasenameRegex);
+
+    /* Iterate through the list and load each symbol */
+    for (const QString &basename : matchingBasenames) {
+        if (!load(basename)) {
+            qCritical() << "Error: Failed to load symbol:" << basename;
+            return false;
+        }
+    }
+
+    return true;
+}
