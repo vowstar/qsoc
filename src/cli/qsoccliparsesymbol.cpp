@@ -13,10 +13,10 @@ bool QSocCliWorker::parseSymbol(const QStringList &appArguments)
         "subcommand",
         QCoreApplication::translate(
             "main",
-            "import   Import symbol from verilog.\n"
-            "remove   Remove module from the symbol library.\n"
-            "list     List symbols in all symbol libraries.\n"
-            "show     Show the specified symbol details."),
+            "import   Import Verilog modules into symbol libraries.\n"
+            "remove   Remove selected symbols from specified libraries.\n"
+            "list     List all symbols within designated libraries.\n"
+            "show     Show detailed information on a chosen symbol."),
         "symbol <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
