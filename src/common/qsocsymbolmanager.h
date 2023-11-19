@@ -55,12 +55,12 @@ public slots:
      * @brief Import verilog files from file list
      * @details This function will import verilog files from file list, and
      *          generate the symbol library file.
-     *          If symbolBasename is empty, the first matching verilog module
+     *          If libraryName is empty, the first matching verilog module
      *          name is automatically selected and converted into lowercase as
      *          the symbol library name.
      *          If moduleNameRegex is empty, the first matching verilog module
      *          is automatically selected for import.
-     * @param symbolBasename The basename of the symbol library file without ext
+     * @param libraryName The basename of the symbol library file without ext
      * @param moduleNameRegex Regular expression to match the module name
      * @param fileListPath The path of the verilog file list
      * @param filePathList The list of verilog files
@@ -68,7 +68,7 @@ public slots:
      * @retval false Import failed
      */
     bool importFromFileList(
-        const QString            &symbolBasename,
+        const QString            &libraryName,
         const QRegularExpression &moduleNameRegex,
         const QString            &fileListPath,
         const QStringList        &filePathList);
@@ -84,12 +84,12 @@ public slots:
      * @brief Save the symbol YAML object to symbol file
      * @details This function will save the symbol YAML object to symbol library
      *          file.
-     * @param symbolBasename The basename of the symbol library file without ext
+     * @param libraryName The basename of the symbol library file without ext
      * @param symbolYaml The symbol YAML object
      * @retval true Save successfully
      * @retval false Save failed
      */
-    bool saveSymbolYaml(const QString &symbolBasename, const YAML::Node &symbolYaml);
+    bool saveSymbolYaml(const QString &libraryName, const YAML::Node &symbolYaml);
     /**
      * @brief Get list of symbol basenames
      * @details Retrieves basenames of ".soc_sym" files in directory defined by
@@ -97,107 +97,107 @@ public slots:
      *          directory and compiles a list of relevant basenames. Useful for
      *          processing or iterating over project symbol files. This function
      *          relies on projectManager to be valid.
-     * @param symbolBasenameRegex Regular expression to match file basenames,
+     * @param libraryNameRegex Regular expression to match file basenames,
      *        default is ".*".
      * @return QStringList of basenames for all ".soc_sym" files in the symbol
      *         directory, excluding the ".soc_sym" extension
      */
-    QStringList listSymbol(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
+    QStringList listSymbol(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
      * @brief Check if the symbol file exists in the filesystem
      * @details This function checks if a symbol file with the given basename
      *          exists in the symbol directory. It is used to verify the
      *          existence of symbol files before processing them.
-     * @param symbolBasename The basename of the symbol file, without the
+     * @param libraryName The basename of the symbol file, without the
      *        ".soc_sym" extension.
      * @retval true Symbol file exists in the symbol directory
      * @retval false Symbol file does not exist in the symbol directory
      */
-    bool isExist(const QString &symbolBasename);
+    bool isExist(const QString &libraryName);
     /**
      * @brief Load a specific symbol by basename
-     * @details Loads symbol specified by `symbolBasename` from the symbol
+     * @details Loads symbol specified by `libraryName` from the symbol
      *          directory. Useful for retrieving individual symbol files.
      *          Relies on a valid projectManager and existence of the symbol
      *          file.
-     * @param symbolBasename Basename of symbol file to load, without
+     * @param libraryName Basename of symbol file to load, without
      *        ".soc_sym" extension
      * @retval true Symbol is successfully loaded
      * @retval false Loading fails or file does not exist
      */
-    bool load(const QString &symbolBasename);
+    bool load(const QString &libraryName);
     /**
      * @brief Load symbols matching a regex pattern
-     * @details Loads symbol files matching `symbolBasenameRegex` in the symbol
+     * @details Loads symbol files matching `libraryNameRegex` in the symbol
      *          directory. Ideal for batch processing or retrieving symbols
      *          based on naming patterns. Requires projectManager to be valid.
-     * @param symbolBasenameRegex Regex to match file basenames, defaults to
+     * @param libraryNameRegex Regex to match file basenames, defaults to
      *        ".*", matching all symbols
      * @retval true All matching symbols are loaded
      * @retval false Loading any matching symbols fails
      */
-    bool load(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
+    bool load(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
      * @brief Load multiple symbols by a list of basenames
-     * @details Loads multiple symbols specified in `symbolBasenameList` from the
+     * @details Loads multiple symbols specified in `libraryNameList` from the
      *          symbol directory. Useful for loading a specific set of symbol files.
      *          Requires a valid projectManager and checks the existence of each
      *          symbol file.
-     * @param symbolBasenameList List of symbol file basenames to load, without
+     * @param libraryNameList List of symbol file basenames to load, without
      *        ".soc_sym" extensions.
      * @retval true All specified symbols are successfully loaded
      * @retval false Loading fails for any of the specified symbols
      */
-    bool load(const QStringList &symbolBasenameList);
+    bool load(const QStringList &libraryNameList);
     /**
      * @brief Remove a specific symbol by basename
-     * @details Removes the symbol file identified by `symbolBasename` from
+     * @details Removes the symbol file identified by `libraryName` from
      *          the symbol directory. This method is useful for deleting
      *          individual symbol files. It requires a valid projectManager
      *          and checks if the symbol file exists.
-     * @param symbolBasename Basename of the symbol file to remove, without
+     * @param libraryName Basename of the symbol file to remove, without
      *        the ".soc_sym" extension.
      * @retval true The symbol file is successfully removed
      * @retval false Removal fails or the file does not exist
      */
-    bool remove(const QString &symbolBasename);
+    bool remove(const QString &libraryName);
     /**
      * @brief Remove symbols matching a regex pattern
      * @details Removes all symbol files from the symbol directory that
-     *          match `symbolBasenameRegex`. This method is ideal for batch
+     *          match `libraryNameRegex`. This method is ideal for batch
      *          removal of symbols based on naming patterns. It relies on
      *          a valid projectManager to execute.
-     * @param symbolBasenameRegex Regex to match file basenames. Defaults
+     * @param libraryNameRegex Regex to match file basenames. Defaults
      *        to ".*", which matches all symbol files.
      * @retval true if all matching symbols are successfully removed
      * @retval false if removal of any matching symbols fails
      */
-    bool remove(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
+    bool remove(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
      * @brief Remove multiple symbols by a list of basenames
-     * @details Removes multiple symbol files specified in `symbolBasenameList`
+     * @details Removes multiple symbol files specified in `libraryNameList`
      *          from the symbol directory. Useful for deleting a specific set of
      *          symbol files. Requires a valid projectManager and checks each
      *          symbol file's existence.
-     * @param symbolBasenameList List of symbol file basenames to remove, without
+     * @param libraryNameList List of symbol file basenames to remove, without
      *        ".soc_sym" extensions.
      * @retval true All specified symbols are successfully removed
      * @retval false Removal fails for any of the specified symbols
      */
-    bool remove(const QStringList &symbolBasenameList);
+    bool remove(const QStringList &libraryNameList);
     /**
      * @brief Save symbol data associated with a specific basename
      * @details Serializes and saves the symbol data related to the given
-     *          `symbolBasename`. It locates the corresponding modules in
+     *          `libraryName`. It locates the corresponding modules in
      *          `symbolLib` using `symbolMap`, then serializes them into YAML
      *          format. The result is saved to a file with the same basename,
      *          appending the ".soc_sym" extension. Existing files are
      *          overwritten. This function requires a valid projectManager.
-     * @param symbolBasename The basename of the symbol, excluding extension
+     * @param libraryName The basename of the symbol, excluding extension
      * @retval true on successful serialization and saving
      * @retval false on failure to serialize or save
      */
-    bool save(const QString &symbolBasename);
+    bool save(const QString &libraryName);
     /**
      * @brief Save multiple symbols matching a regex pattern
      * @details Iterates through `symbolMap` to find symbols matching the
@@ -205,25 +205,25 @@ public slots:
      *          saved individually in YAML format. Files are named after the
      *          symbol basenames with the ".soc_sym" extension. Existing files
      *          are overwritten. This function requires a valid projectManager.
-     * @param symbolBasenameRegex Regular expression to filter symbol basenames
+     * @param libraryNameRegex Regular expression to filter symbol basenames
      * @retval true if all matching symbols are successfully saved
      * @retval false if saving any matching symbol fails
      */
-    bool save(const QRegularExpression &symbolBasenameRegex = QRegularExpression(".*"));
+    bool save(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
      * @brief Save multiple symbols by a list of basenames
-     * @details Serializes and saves symbol data related to each `symbolBasename`
-     *          in `symbolBasenameList`. It locates corresponding modules in
+     * @details Serializes and saves symbol data related to each `libraryName`
+     *          in `libraryNameList`. It locates corresponding modules in
      *          `symbolLib` using `symbolMap`, then serializes them into YAML
      *          format. Results are saved to files named after each basename,
      *          appending ".soc_sym". Existing files are overwritten. Requires
      *          a valid projectManager.
-     * @param symbolBasenameList List of symbol basenames to save, excluding
+     * @param libraryNameList List of symbol basenames to save, excluding
      *        extensions.
      * @retval true All specified symbols are successfully saved
      * @retval false Saving fails for any of the specified symbols
      */
-    bool save(const QStringList &symbolBasenameList);
+    bool save(const QStringList &libraryNameList);
     /**
      * @brief Get list of module names matching a regex pattern
      * @details Retrieves module names from the `symbolLib` YAML node that
