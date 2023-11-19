@@ -201,7 +201,7 @@ bool QSocSymbolManager::saveSymbolYaml(const QString &libraryName, const YAML::N
     return true;
 }
 
-QStringList QSocSymbolManager::listSymbol(const QRegularExpression &libraryNameRegex)
+QStringList QSocSymbolManager::listLibrary(const QRegularExpression &libraryNameRegex)
 {
     QStringList result;
     /* Validate projectManager and its path */
@@ -303,7 +303,7 @@ bool QSocSymbolManager::load(const QRegularExpression &libraryNameRegex)
     }
 
     /* Get the list of symbol basenames matching the regex */
-    const QStringList matchingBasenames = listSymbol(libraryNameRegex);
+    const QStringList matchingBasenames = listLibrary(libraryNameRegex);
 
     /* Iterate through the list and load each symbol */
     for (const QString &basename : matchingBasenames) {
@@ -381,7 +381,7 @@ bool QSocSymbolManager::remove(const QRegularExpression &libraryNameRegex)
     }
 
     /* Get the list of symbol basenames matching the regex */
-    const QStringList matchingBasenames = listSymbol(libraryNameRegex);
+    const QStringList matchingBasenames = listLibrary(libraryNameRegex);
 
     /* Iterate through the list and remove each symbol */
     for (const QString &basename : matchingBasenames) {

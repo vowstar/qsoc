@@ -102,7 +102,7 @@ public slots:
      * @return QStringList of basenames for all ".soc_sym" files in the symbol
      *         directory, excluding the ".soc_sym" extension
      */
-    QStringList listSymbol(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
+    QStringList listLibrary(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
      * @brief Check if the symbol file exists in the filesystem
      * @details This function checks if a symbol file with the given basename
