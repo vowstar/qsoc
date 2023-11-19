@@ -60,9 +60,9 @@
        </layout>
       </item>
       <item>
-       <layout class="QHBoxLayout" name="horizontalLayoutSymbolEditor">
+       <layout class="QHBoxLayout" name="horizontalLayoutModuleEditor">
         <item>
-         <widget class="QToolButton" name="toolButtonSymbolEditor">
+         <widget class="QToolButton" name="toolButtonModuleEditor">
           <property name="iconSize">
            <size>
             <width>50</width>
@@ -72,28 +72,28 @@
          </widget>
         </item>
         <item>
-         <layout class="QVBoxLayout" name="verticalLayoutSymbolEditor">
+         <layout class="QVBoxLayout" name="verticalLayoutModuleEditor">
           <item>
-           <widget class="QLabel" name="labelSymbolEditor">
+           <widget class="QLabel" name="labelModuleEditor">
             <property name="font">
              <font>
               <bold>true</bold>
              </font>
             </property>
             <property name="text">
-             <string>Symbol Editor</string>
+             <string>Module Editor</string>
             </property>
            </widget>
           </item>
           <item>
-           <widget class="QLabel" name="labelSymbolEditorDetail">
+           <widget class="QLabel" name="labelModuleEditorDetail">
             <property name="font">
              <font>
               <italic>true</italic>
              </font>
             </property>
             <property name="text">
-             <string>Edit golbal and/or project schematic symbols</string>
+             <string>Edit golbal and/or project schematic modules</string>
             </property>
            </widget>
           </item>
@@ -149,7 +149,7 @@
      <string>Tools</string>
     </property>
     <addaction name="actionSchematicEditor"/>
-    <addaction name="actionSymbolEditor"/>
+    <addaction name="actionModuleEditor"/>
    </widget>
    <widget class="QMenu" name="menuPreferences">
     <property name="title">
@@ -315,15 +315,15 @@
     <enum>QAction::TextHeuristicRole</enum>
    </property>
   </action>
-  <action name="actionSymbolEditor">
+  <action name="actionModuleEditor">
    <property name="icon">
-    <iconset theme="applications-symbol"/>
+    <iconset theme="applications-module"/>
    </property>
    <property name="text">
     <string>Symbo&amp;l Editor</string>
    </property>
    <property name="statusTip">
-    <string>Edit schematic symbols (CTRL+L)</string>
+    <string>Edit schematic modules (CTRL+L)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+L</string>

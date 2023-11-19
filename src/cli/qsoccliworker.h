@@ -122,47 +122,47 @@ private:
      */
     bool parseProjectShow(const QStringList &appArguments);
     /**
-     * @brief Parse the symbol command line arguments
-     * @details This function will parse the symbol command line arguments.
+     * @brief Parse the module command line arguments
+     * @details This function will parse the module command line arguments.
      * @param appArguments command line arguments
      * @retval true Parse successfully
      * @retval false Parse failed
      */
-    bool parseSymbol(const QStringList &appArguments);
+    bool parseModule(const QStringList &appArguments);
     /**
-     * @brief Parse the symbol import command line arguments
-     * @details This function will parse the symbol import command line
+     * @brief Parse the module import command line arguments
+     * @details This function will parse the module import command line
      *          arguments.
      * @param appArguments command line arguments
      * @retval true Parse successfully
      * @retval false Parse failed
      */
-    bool parseSymbolImport(const QStringList &appArguments);
+    bool parseModuleImport(const QStringList &appArguments);
     /**
-     * @brief Parse the symbol remove command line arguments
-     * @details This function will parse the symbol remove command line
+     * @brief Parse the module remove command line arguments
+     * @details This function will parse the module remove command line
      *          arguments.
      * @param appArguments command line arguments
      * @retval true Parse successfully
      * @retval false Parse failed
      */
-    bool parseSymbolRemove(const QStringList &appArguments);
+    bool parseModuleRemove(const QStringList &appArguments);
     /**
-     * @brief Parse the symbol list command line arguments
-     * @details This function will parse the symbol list command line arguments.
+     * @brief Parse the module list command line arguments
+     * @details This function will parse the module list command line arguments.
      * @param appArguments command line arguments
      * @retval true Parse successfully
      * @retval false Parse failed
      */
-    bool parseSymbolList(const QStringList &appArguments);
+    bool parseModuleList(const QStringList &appArguments);
     /**
-     * @brief Parse the symbol show command line arguments
-     * @details This function will parse the symbol show command line arguments.
+     * @brief Parse the module show command line arguments
+     * @details This function will parse the module show command line arguments.
      * @param appArguments command line arguments
      * @retval true Parse successfully
      * @retval false Parse failed
      */
-    bool parseSymbolShow(const QStringList &appArguments);
+    bool parseModuleShow(const QStringList &appArguments);
     /**
      * @brief Show application name and version and emit exit with exitCode
      * @details This function will show application name and version and emit

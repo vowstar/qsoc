@@ -27,7 +27,7 @@ QSocProjectManager::QSocProjectManager(QObject *parent)
     /* Set project default paths */
     setProjectPath(QDir::currentPath());
     setBusPath(QDir::currentPath() + "/bus");
-    setSymbolPath(QDir::currentPath() + "/symbol");
+    setModulePath(QDir::currentPath() + "/module");
     setSchematicPath(QDir::currentPath() + "/schematic");
     setOutputPath(QDir::currentPath() + "/output");
 }
@@ -103,9 +103,9 @@ bool QSocProjectManager::mkpath()
         qCritical() << "Error: Failed to create bus directory.";
         return false;
     }
-    /* Check and create symbol directory */
-    if (!QDir().mkpath(symbolPath)) {
-        qCritical() << "Error: Failed to create symbol directory.";
+    /* Check and create module directory */
+    if (!QDir().mkpath(modulePath)) {
+        qCritical() << "Error: Failed to create module directory.";
         return false;
     }
     /* Check and create schematic directory */
@@ -277,9 +277,9 @@ bool QSocProjectManager::isValid(bool writable)
         return false;
     }
 
-    /* Validate symbol path */
-    if (!isValidSymbolPath(writable)) {
-        qCritical() << "Error: Invalid symbol path.";
+    /* Validate module path */
+    if (!isValidModulePath(writable)) {
+        qCritical() << "Error: Invalid module path.";
         return false;
     }
 
@@ -354,9 +354,9 @@ bool QSocProjectManager::isValidBusPath(bool writable)
     return isValidPath(getBusPath(), writable);
 }
 
-bool QSocProjectManager::isValidSymbolPath(bool writable)
+bool QSocProjectManager::isValidModulePath(bool writable)
 {
-    return isValidPath(getSymbolPath(), writable);
+    return isValidPath(getModulePath(), writable);
 }
 
 bool QSocProjectManager::isValidSchematicPath(bool writable)
@@ -373,7 +373,7 @@ const YAML::Node &QSocProjectManager::getProjectNode()
 {
     projectNode["version"]   = QCoreApplication::applicationVersion().toStdString();
     projectNode["bus"]       = getSimplifyPath(busPath).toStdString();
-    projectNode["symbol"]    = getSimplifyPath(symbolPath).toStdString();
+    projectNode["module"]    = getSimplifyPath(modulePath).toStdString();
     projectNode["schematic"] = getSimplifyPath(schematicPath).toStdString();
     projectNode["output"]    = getSimplifyPath(outputPath).toStdString();
     return projectNode;
@@ -394,9 +394,9 @@ const QString &QSocProjectManager::getBusPath()
     return busPath;
 }
 
-const QString &QSocProjectManager::getSymbolPath()
+const QString &QSocProjectManager::getModulePath()
 {
-    return symbolPath;
+    return modulePath;
 }
 
 const QString &QSocProjectManager::getSchematicPath()
@@ -413,7 +413,7 @@ void QSocProjectManager::setProjectNode(const YAML::Node &projectNode)
 {
     this->projectNode = projectNode;
     setBusPath(QString::fromStdString(projectNode["bus"].as<std::string>()));
-    setSymbolPath(QString::fromStdString(projectNode["symbol"].as<std::string>()));
+    setModulePath(QString::fromStdString(projectNode["module"].as<std::string>()));
     setSchematicPath(QString::fromStdString(projectNode["schematic"].as<std::string>()));
     setOutputPath(QString::fromStdString(projectNode["output"].as<std::string>()));
 }
@@ -434,9 +434,9 @@ void QSocProjectManager::setBusPath(const QString &busPath)
     this->busPath = getExpandPath(busPath);
 }
 
-void QSocProjectManager::setSymbolPath(const QString &symbolPath)
+void QSocProjectManager::setModulePath(const QString &modulePath)
 {
-    this->symbolPath = getExpandPath(symbolPath);
+    this->modulePath = getExpandPath(modulePath);
 }
 
 void QSocProjectManager::setSchematicPath(const QString &schematicPath)

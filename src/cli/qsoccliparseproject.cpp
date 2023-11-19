@@ -70,9 +70,9 @@ bool QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
         {{"b", "bus"},
          QCoreApplication::translate("main", "The path to the bus directory."),
          "bus directory"},
-        {{"m", "symbol"},
-         QCoreApplication::translate("main", "The path to the symbol directory."),
-         "symbol directory"},
+        {{"m", "module"},
+         QCoreApplication::translate("main", "The path to the module directory."),
+         "module directory"},
         {{"s", "schematic"},
          QCoreApplication::translate("main", "The path to the schematic directory."),
          "schematic directory"},
@@ -101,8 +101,8 @@ bool QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
     if (parser.isSet("bus")) {
         projectManager.setBusPath(parser.value("bus"));
     }
-    if (parser.isSet("symbol")) {
-        projectManager.setSymbolPath(parser.value("symbol"));
+    if (parser.isSet("module")) {
+        projectManager.setModulePath(parser.value("module"));
     }
     if (parser.isSet("schematic")) {
         projectManager.setSchematicPath(parser.value("schematic"));
@@ -131,9 +131,9 @@ bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
         {{"b", "bus"},
          QCoreApplication::translate("main", "The path to the bus directory."),
          "bus directory"},
-        {{"m", "symbol"},
-         QCoreApplication::translate("main", "The path to the symbol directory."),
-         "symbol directory"},
+        {{"m", "module"},
+         QCoreApplication::translate("main", "The path to the module directory."),
+         "module directory"},
         {{"s", "schematic"},
          QCoreApplication::translate("main", "The path to the schematic directory."),
          "schematic directory"},
@@ -169,8 +169,8 @@ bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
     if (parser.isSet("bus")) {
         projectManager.setBusPath(parser.value("bus"));
     }
-    if (parser.isSet("symbol")) {
-        projectManager.setSymbolPath(parser.value("symbol"));
+    if (parser.isSet("module")) {
+        projectManager.setModulePath(parser.value("module"));
     }
     if (parser.isSet("schematic")) {
         projectManager.setSchematicPath(parser.value("schematic"));

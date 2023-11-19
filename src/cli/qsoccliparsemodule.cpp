@@ -5,7 +5,7 @@
 #include "common/qsocprojectmanager.h"
 #include "common/qstaticlog.h"
 
-bool QSocCliWorker::parseSymbol(const QStringList &appArguments)
+bool QSocCliWorker::parseModule(const QStringList &appArguments)
 {
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
@@ -13,11 +13,11 @@ bool QSocCliWorker::parseSymbol(const QStringList &appArguments)
         "subcommand",
         QCoreApplication::translate(
             "main",
-            "import   Import Verilog modules into symbol libraries.\n"
-            "remove   Remove selected symbols from specified libraries.\n"
-            "list     List all symbols within designated libraries.\n"
-            "show     Show detailed information on a chosen symbol."),
-        "symbol <subcommand> [subcommand options]");
+            "import   Import Verilog modules into module libraries.\n"
+            "remove   Remove selected modules from specified libraries.\n"
+            "list     List all modules within designated libraries.\n"
+            "show     Show detailed information on a chosen module."),
+        "module <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
@@ -28,22 +28,22 @@ bool QSocCliWorker::parseSymbol(const QStringList &appArguments)
     QStringList    nextArguments = appArguments;
     if (command == "import") {
         nextArguments.removeOne(command);
-        if (!parseSymbolImport(nextArguments)) {
+        if (!parseModuleImport(nextArguments)) {
             return false;
         }
     } else if (command == "remove") {
         nextArguments.removeOne(command);
-        if (!parseSymbolRemove(nextArguments)) {
+        if (!parseModuleRemove(nextArguments)) {
             return false;
         }
     } else if (command == "list") {
         nextArguments.removeOne(command);
-        if (!parseSymbolList(nextArguments)) {
+        if (!parseModuleList(nextArguments)) {
             return false;
         }
     } else if (command == "show") {
         nextArguments.removeOne(command);
-        if (!parseSymbolShow(nextArguments)) {
+        if (!parseModuleShow(nextArguments)) {
             return false;
         }
     } else {
@@ -54,7 +54,7 @@ bool QSocCliWorker::parseSymbol(const QStringList &appArguments)
     return true;
 }
 
-bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
+bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
 {
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
@@ -64,11 +64,11 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
         {{"l", "library"},
-         QCoreApplication::translate("main", "The symbol library name."),
-         "symbol library name"},
+         QCoreApplication::translate("main", "The module library name."),
+         "module library name"},
         {{"r", "regex"},
-         QCoreApplication::translate("main", "The Verilog symbol/module name (regex)."),
-         "symbol/module name (regex)"},
+         QCoreApplication::translate("main", "The Verilog module name or regex."),
+         "module name or regex"},
         {{"f", "filelist"},
          QCoreApplication::translate(
              "main",
@@ -111,14 +111,14 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
         }
         projectManager.loadFirst();
     }
-    if (!projectManager.isValidSymbolPath()) {
+    if (!projectManager.isValidModulePath()) {
         return showError(
             1,
-            QCoreApplication::translate("main", "Error: invalid symbol directory: %1")
-                .arg(projectManager.getSymbolPath()));
+            QCoreApplication::translate("main", "Error: invalid module directory: %1")
+                .arg(projectManager.getModulePath()));
     }
-    /* Setup symbol manager */
-    QSocSymbolManager symbolManager(this, &projectManager);
+    /* Setup module manager */
+    QSocModuleManager moduleManager(this, &projectManager);
     QString           filelistPath = "";
     if (parser.isSet("filelist")) {
         filelistPath = parser.value("filelist");
@@ -129,26 +129,26 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of module name."));
     }
-    if (!symbolManager.importFromFileList(libraryName, moduleNameRegex, filelistPath, filePathList)) {
+    if (!moduleManager.importFromFileList(libraryName, moduleNameRegex, filelistPath, filePathList)) {
         return showError(1, QCoreApplication::translate("main", "Error: import failed."));
     }
 
     return true;
 }
 
-bool QSocCliWorker::parseSymbolRemove(const QStringList &appArguments)
+bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
 {
     Q_UNUSED(appArguments);
     return true;
 }
 
-bool QSocCliWorker::parseSymbolList(const QStringList &appArguments)
+bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
 {
     Q_UNUSED(appArguments);
     return true;
 }
 
-bool QSocCliWorker::parseSymbolShow(const QStringList &appArguments)
+bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
 {
     Q_UNUSED(appArguments);
     return true;

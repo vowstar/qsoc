@@ -1,5 +1,5 @@
-#ifndef QSOCSYMBOLMANAGER_H
-#define QSOCSYMBOLMANAGER_H
+#ifndef QSOCMODULEMANAGER_H
+#define QSOCMODULEMANAGER_H
 
 #include "common/qsocprojectmanager.h"
 
@@ -12,10 +12,10 @@
 using json = nlohmann::json;
 
 /**
- * @brief   The QSocSymbolManager class
- * @details This class is used to manage the symbol library files.
+ * @brief   The QSocModuleManager class
+ * @details This class is used to manage the module library files.
  */
-class QSocSymbolManager : public QObject
+class QSocModuleManager : public QObject
 {
     Q_OBJECT
 public:
@@ -25,7 +25,7 @@ public:
      * @param[in] parent parent object
      * @param[in] projectManager project manager
      */
-    explicit QSocSymbolManager(
+    explicit QSocModuleManager(
         QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
 
 public slots:
@@ -44,23 +44,23 @@ public slots:
      */
     QSocProjectManager *getProjectManager();
     /**
-     * @brief Check if symbol path is valid
-     * @details Verifies the validity of the symbol path set in the project
+     * @brief Check if module path is valid
+     * @details Verifies the validity of the module path set in the project
      *          manager. Checks if the path exists and is a directory.
-     * @retval true Symbol path is valid
-     * @retval false Symbol path is invalid, or projectManager is nullptr
+     * @retval true Module path is valid
+     * @retval false Module path is invalid, or projectManager is nullptr
      */
-    bool isSymbolPathValid();
+    bool isModulePathValid();
     /**
      * @brief Import verilog files from file list
      * @details This function will import verilog files from file list, and
-     *          generate the symbol library file.
+     *          generate the module library file.
      *          If libraryName is empty, the first matching verilog module
      *          name is automatically selected and converted into lowercase as
-     *          the symbol library name.
+     *          the module library name.
      *          If moduleNameRegex is empty, the first matching verilog module
      *          is automatically selected for import.
-     * @param libraryName The basename of the symbol library file without ext
+     * @param libraryName The basename of the module library file without ext
      * @param moduleNameRegex Regular expression to match the module name
      * @param fileListPath The path of the verilog file list
      * @param filePathList The list of verilog files
@@ -90,44 +90,44 @@ public slots:
      */
     bool saveLibraryYaml(const QString &libraryName, const YAML::Node &libraryYaml);
     /**
-     * @brief Get list of symbol basenames
+     * @brief Get list of library basenames
      * @details Retrieves basenames of ".soc_sym" files in directory defined by
-     *          `symbolPath`, excluding the ".soc_sym" extension. Scans the symbol
-     *          directory and compiles a list of relevant basenames. Useful for
-     *          processing or iterating over project symbol files. This function
-     *          relies on projectManager to be valid.
+     *          `modulePath`, excluding the ".soc_sym" extension. Scans the
+     *          module directory and compiles a list of relevant basenames.
+     *          Useful for processing or iterating over library files. This
+     *          function relies on projectManager to be valid.
      * @param libraryNameRegex Regular expression to match file basenames,
      *        default is ".*".
-     * @return QStringList of basenames for all ".soc_sym" files in the symbol
+     * @return QStringList of basenames for all ".soc_sym" files in the module
      *         directory, excluding the ".soc_sym" extension
      */
     QStringList listLibrary(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
-     * @brief Check if the symbol file exists in the filesystem
-     * @details This function checks if a symbol file with the given basename
-     *          exists in the symbol directory. It is used to verify the
-     *          existence of symbol files before processing them.
-     * @param libraryName The basename of the symbol file, without the
+     * @brief Check if the library file exists in the filesystem
+     * @details This function checks if a library file with the given basename
+     *          exists in the module directory. It is used to verify the
+     *          existence of library files before processing them.
+     * @param libraryName The basename of the library file, without the
      *        ".soc_sym" extension.
-     * @retval true Symbol file exists in the symbol directory
-     * @retval false Symbol file does not exist in the symbol directory
+     * @retval true Library file exists in the module directory
+     * @retval false Library file does not exist in the module directory
      */
     bool isExist(const QString &libraryName);
     /**
-     * @brief Load a specific symbol by basename
-     * @details Loads symbol specified by `libraryName` from the symbol
-     *          directory. Useful for retrieving individual symbol files.
-     *          Relies on a valid projectManager and existence of the symbol
+     * @brief Load a specific library by basename
+     * @details Loads library specified by `libraryName` from the module
+     *          directory. Useful for retrieving individual library files.
+     *          Relies on a valid projectManager and existence of the library
      *          file.
-     * @param libraryName Basename of symbol file to load, without
+     * @param libraryName Basename of module file to load, without
      *        ".soc_sym" extension
-     * @retval true Symbol is successfully loaded
+     * @retval true Library is successfully loaded
      * @retval false Loading fails or file does not exist
      */
     bool load(const QString &libraryName);
     /**
      * @brief Load libraries matching a regex pattern
-     * @details Loads symbol files matching `libraryNameRegex` in the symbol
+     * @details Loads library files matching `libraryNameRegex` in the module
      *          directory. Ideal for batch processing or retrieving libraries
      *          based on naming patterns. Requires projectManager to be valid.
      * @param libraryNameRegex Regex to match file basenames, defaults to
@@ -139,60 +139,60 @@ public slots:
     /**
      * @brief Load multiple libraries by a list of basenames
      * @details Loads multiple libraries specified in `libraryNameList` from the
-     *          symbol directory. Useful for loading a specific set of symbol files.
-     *          Requires a valid projectManager and checks the existence of each
-     *          symbol file.
-     * @param libraryNameList List of symbol file basenames to load, without
+     *          module directory. Useful for loading a specific set of
+     *          library files. Requires a valid projectManager and checks the
+     *          existence of each library file.
+     * @param libraryNameList List of library file basenames to load, without
      *        ".soc_sym" extensions.
      * @retval true All specified libraries are successfully loaded
      * @retval false Loading fails for any of the specified libraries
      */
     bool load(const QStringList &libraryNameList);
     /**
-     * @brief Remove a specific symbol by basename
-     * @details Removes the symbol file identified by `libraryName` from
-     *          the symbol directory. This method is useful for deleting
-     *          individual symbol files. It requires a valid projectManager
-     *          and checks if the symbol file exists.
-     * @param libraryName Basename of the symbol file to remove, without
+     * @brief Remove a specific library by basename
+     * @details Removes the library file identified by `libraryName` from
+     *          the library directory. This method is useful for deleting
+     *          individual library files. It requires a valid projectManager
+     *          and checks if the library file exists.
+     * @param libraryName Basename of the library file to remove, without
      *        the ".soc_sym" extension.
-     * @retval true The symbol file is successfully removed
+     * @retval true The library file is successfully removed
      * @retval false Removal fails or the file does not exist
      */
     bool remove(const QString &libraryName);
     /**
      * @brief Remove libraries matching a regex pattern
-     * @details Removes all symbol files from the symbol directory that
+     * @details Removes all module files from the module directory that
      *          match `libraryNameRegex`. This method is ideal for batch
      *          removal of libraries based on naming patterns. It relies on
      *          a valid projectManager to execute.
      * @param libraryNameRegex Regex to match file basenames. Defaults
-     *        to ".*", which matches all symbol files.
+     *        to ".*", which matches all module files.
      * @retval true if all matching libraries are successfully removed
      * @retval false if removal of any matching libraries fails
      */
     bool remove(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
      * @brief Remove multiple libraries by a list of basenames
-     * @details Removes multiple symbol files specified in `libraryNameList`
-     *          from the symbol directory. Useful for deleting a specific set of
-     *          symbol files. Requires a valid projectManager and checks each
-     *          symbol file's existence.
-     * @param libraryNameList List of symbol file basenames to remove, without
+     * @details Removes multiple module files specified in `libraryNameList`
+     *          from the module directory. Useful for deleting a specific set of
+     *          module files. Requires a valid projectManager and checks each
+     *          module file's existence.
+     * @param libraryNameList List of module file basenames to remove, without
      *        ".soc_sym" extensions.
      * @retval true All specified libraries are successfully removed
      * @retval false Removal fails for any of the specified libraries
      */
     bool remove(const QStringList &libraryNameList);
     /**
-     * @brief Save symbol data associated with a specific basename
-     * @details Serializes and saves the symbol data related to the given
+     * @brief Save library data associated with a specific basename
+     * @details Serializes and saves the module data related to the given
      *          `libraryName`. It locates the corresponding modules in
      *          `moduleData` using `libraryMap`, then serializes them into YAML
      *          format. The result is saved to a file with the same basename,
      *          appending the ".soc_sym" extension. Existing files are
      *          overwritten. This function requires a valid projectManager.
-     * @param libraryName The basename of the symbol, excluding extension
+     * @param libraryName The basename of the module, excluding extension
      * @retval true on successful serialization and saving
      * @retval false on failure to serialize or save
      */
@@ -200,24 +200,24 @@ public slots:
     /**
      * @brief Save multiple libraries matching a regex pattern
      * @details Iterates through `libraryMap` to find libraries matching the
-     *          provided regex pattern. Each matching symbol is serialized and
+     *          provided regex pattern. Each matching library is serialized and
      *          saved individually in YAML format. Files are named after the
-     *          symbol basenames with the ".soc_sym" extension. Existing files
+     *          library basenames with the ".soc_sym" extension. Existing files
      *          are overwritten. This function requires a valid projectManager.
-     * @param libraryNameRegex Regular expression to filter symbol basenames
+     * @param libraryNameRegex Regular expression to filter library basenames
      * @retval true if all matching libraries are successfully saved
-     * @retval false if saving any matching symbol fails
+     * @retval false if saving any matching module fails
      */
     bool save(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
      * @brief Save multiple libraries by a list of basenames
-     * @details Serializes and saves symbol data related to each `libraryName`
+     * @details Serializes and saves module data related to each `libraryName`
      *          in `libraryNameList`. It locates corresponding modules in
      *          `moduleData` using `libraryMap`, then serializes them into YAML
      *          format. Results are saved to files named after each basename,
      *          appending ".soc_sym". Existing files are overwritten. Requires
      *          a valid projectManager.
-     * @param libraryNameList List of symbol basenames to save, excluding
+     * @param libraryNameList List of library basenames to save, excluding
      *        extensions.
      * @retval true All specified libraries are successfully saved
      * @retval false Saving fails for any of the specified libraries
@@ -227,35 +227,35 @@ public slots:
      * @brief Get list of module names matching a regex pattern
      * @details Retrieves module names from the `moduleData` YAML node that
      *          match the provided `moduleNameRegex`. This function scans
-     *          the symbol library and compiles a list of module names. Useful
-     *          for processing or iterating over project modules. It relies on
+     *          the module library and compiles a list of module names. Useful
+     *          for processing or iterating over project libraries. It relies on
      *          the validity of the `moduleData` YAML node. This function
      *          requires a valid projectManager.
      * @param moduleNameRegex Regular expression to match module names,
      *        default is ".*".
-     * @return QStringList of module names matching the regex in the symbol
+     * @return QStringList of module names matching the regex in the module
      *         library
      */
     QStringList listModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
     /**
-     * @brief Remove modules matching regex from symbol library
+     * @brief Remove modules matching regex from module library
      * @details Removes modules that match `moduleNameRegex` from moduleData,
-     *          updating libraryMap accordingly. It saves libraries with remaining
-     *          module associations and removes files with no associations.
-     *          Requires a valid projectManager for execution.
+     *          updating libraryMap accordingly. It saves libraries with
+     *          remaining module associations and removes files with no
+     *          associations. Requires a valid projectManager for execution.
      * @param moduleNameRegex Regex to filter module names for removal.
      * @retval true All matching modules are successfully processed
-     * @retval false Errors occur during module removal or symbol saving
+     * @retval false Errors occur during module removal or module saving
      */
     bool removeModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
 private:
     /* Internal used project manager */
     QSocProjectManager *projectManager = nullptr;
-    /* Symbol and module name map */
+    /* Module and module name map */
     QMap<QString, QString> libraryMap;
-    /* Symbol library YAML node */
+    /* Module library YAML node */
     YAML::Node moduleData;
     /**
      * @brief Merge two YAML nodes
@@ -274,4 +274,4 @@ private:
 signals:
 };
 
-#endif // QSOCSYMBOLMANAGER_H
+#endif // QSOCMODULEMANAGER_H

@@ -56,7 +56,7 @@ public slots:
     /**
      * @brief Create project directories
      * @details Creates all necessary directories for the project, including
-     *          bus, symbol, schematic, and output directories.
+     *          bus, module, schematic, and output directories.
      * @retval true if all directories were successfully created
      * @retval false if any directory creation failed
      */
@@ -154,13 +154,13 @@ public slots:
      */
     bool isValidBusPath(bool writable = false);
     /**
-     * @brief Validate the symbol path
-     * @details Checks if the provided symbol path is valid.
+     * @brief Validate the module path
+     * @details Checks if the provided module path is valid.
      * @param writable Controls if path writability should be checked
-     * @retval true The symbol path is valid
-     * @retval false The symbol path is invalid
+     * @retval true The module path is valid
+     * @retval false The module path is invalid
      */
-    bool isValidSymbolPath(bool writable = false);
+    bool isValidModulePath(bool writable = false);
     /**
      * @brief Validate the schematic path
      * @details Checks if the provided schematic path is valid.
@@ -202,11 +202,11 @@ public slots:
      */
     const QString &getBusPath();
     /**
-     * @brief Get project symbol path
-     * @details This function will return project symbol path.
-     * @return QString & The project symbol path
+     * @brief Get project module path
+     * @details This function will return project module path.
+     * @return QString & The project module path
      */
-    const QString &getSymbolPath();
+    const QString &getModulePath();
     /**
      * @brief Get project schematic path
      * @details This function will return project schematic path.
@@ -244,11 +244,11 @@ public slots:
      */
     void setBusPath(const QString &busPath);
     /**
-     * @brief Set project symbol path
-     * @details This function will set project symbol path.
-     * @param symbolPath The symbol path
+     * @brief Set project module path
+     * @details This function will set project module path.
+     * @param modulePath The module path
      */
-    void setSymbolPath(const QString &symbolPath);
+    void setModulePath(const QString &modulePath);
     /**
      * @brief Set project schematic path
      * @details This function will set project schematic path.
@@ -273,8 +273,8 @@ private:
     QString projectPath;
     /* Project bus path */
     QString busPath;
-    /* Project symbol path */
-    QString symbolPath;
+    /* Project module path */
+    QString modulePath;
     /* Project schematic path */
     QString schematicPath;
     /* Project output path */

@@ -88,7 +88,7 @@
    <addaction name="menuPreferences"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
-  <widget class="QDockWidget" name="dockWidgetSymbolList">
+  <widget class="QDockWidget" name="dockWidgetModuleList">
    <property name="minimumSize">
     <size>
      <width>200</width>
@@ -102,12 +102,12 @@
     <set>Qt::LeftDockWidgetArea|Qt::RightDockWidgetArea</set>
    </property>
    <property name="windowTitle">
-    <string extracomment="List of symbols for the current project">Symbol List</string>
+    <string extracomment="List of modules for the current project">Module List</string>
    </property>
    <attribute name="dockWidgetArea">
     <number>1</number>
    </attribute>
-   <widget class="QWidget" name="dockWidgetContentsSymbolList"/>
+   <widget class="QWidget" name="dockWidgetContentsModuleList"/>
   </widget>
   <widget class="QToolBar" name="toolBarTop">
    <property name="windowTitle">

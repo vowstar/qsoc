@@ -8,7 +8,7 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
     ui->toolButtonSchematicEditor->setDefaultAction(ui->actionSchematicEditor);
-    ui->toolButtonSymbolEditor->setDefaultAction(ui->actionSymbolEditor);
+    ui->toolButtonModuleEditor->setDefaultAction(ui->actionModuleEditor);
 }
 
 MainWindow::~MainWindow()

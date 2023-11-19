@@ -2,7 +2,7 @@
     <qresource prefix="/">
         <file>icon/dark/index.theme</file>
         <file>icon/dark/scalable/applications-schematic.svg</file>
-        <file>icon/dark/scalable/applications-symbol.svg</file>
+        <file>icon/dark/scalable/applications-module.svg</file>
         <file>icon/dark/scalable/document-close.svg</file>
         <file>icon/dark/scalable/document-new.svg</file>
         <file>icon/dark/scalable/document-open-in-explorer.svg</file>
@@ -24,7 +24,7 @@
         <file>icon/dark/scalable/window-close.svg</file>
         <file>icon/light/index.theme</file>
         <file>icon/light/scalable/applications-schematic.svg</file>
-        <file>icon/light/scalable/applications-symbol.svg</file>
+        <file>icon/light/scalable/applications-module.svg</file>
         <file>icon/light/scalable/document-close.svg</file>
         <file>icon/light/scalable/document-new.svg</file>
         <file>icon/light/scalable/document-open-in-explorer.svg</file>

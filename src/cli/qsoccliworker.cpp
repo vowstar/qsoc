@@ -117,7 +117,7 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
             "main",
             "gui         Start the software in GUI mode.\n"
             "project     Create, update of project.\n"
-            "symbol      Import, update of symbol.\n"
+            "module      Import, update of module.\n"
             "schematic   Processing of Schematic.\n"
             "generate    Generate rtl, such as verilog, etc.\n"),
         "<command> [command options]");
@@ -153,9 +153,9 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
         if (!parseProject(nextArguments)) {
             return false;
         }
-    } else if (command == "symbol") {
+    } else if (command == "module") {
         nextArguments.removeOne(command);
-        if (!parseSymbol(nextArguments)) {
+        if (!parseModule(nextArguments)) {
             return false;
         }
     } else if (command == "schematic") {
