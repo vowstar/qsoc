@@ -63,9 +63,9 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"s", "symbol"},
-         QCoreApplication::translate("main", "The symbol file basename."),
-         "symbol file basename"},
+        {{"l", "library"},
+         QCoreApplication::translate("main", "The symbol library name."),
+         "symbol library name"},
         {{"r", "regex"},
          QCoreApplication::translate("main", "The verilog module name (regex)."),
          "module name (regex)"},
@@ -82,10 +82,10 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
         "[<verilog files>]");
 
     parser.parse(appArguments);
-    const QStringList  cmdArguments   = parser.positionalArguments();
-    const QString     &symbolFileBase = parser.isSet("symbol") ? parser.value("symbol") : "";
-    const QString     &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
-    const QStringList &filePathList   = cmdArguments;
+    const QStringList  cmdArguments = parser.positionalArguments();
+    const QString     &libraryName  = parser.isSet("library") ? parser.value("library") : "";
+    const QString     &moduleName   = parser.isSet("regex") ? parser.value("regex") : "";
+    const QStringList &filePathList = cmdArguments;
 
     if (filePathList.isEmpty() && !parser.isSet("filelist")) {
         return showHelpOrError(
@@ -129,8 +129,7 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of module name."));
     }
-    if (!symbolManager
-             .importFromFileList(symbolFileBase, moduleNameRegex, filelistPath, filePathList)) {
+    if (!symbolManager.importFromFileList(libraryName, moduleNameRegex, filelistPath, filePathList)) {
         return showError(1, QCoreApplication::translate("main", "Error: import failed."));
     }
 
