@@ -14,7 +14,7 @@ bool QSocCliWorker::parseModule(const QStringList &appArguments)
         QCoreApplication::translate(
             "main",
             "import   Import Verilog modules into module libraries.\n"
-            "remove   Remove selected modules from specified libraries.\n"
+            "remove   Remove modules from specified libraries.\n"
             "list     List all modules within designated libraries.\n"
             "show     Show detailed information on a chosen module."),
         "module <subcommand> [subcommand options]");
