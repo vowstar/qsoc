@@ -67,8 +67,8 @@ bool QSocCliWorker::parseSymbolImport(const QStringList &appArguments)
          QCoreApplication::translate("main", "The symbol library name."),
          "symbol library name"},
         {{"r", "regex"},
-         QCoreApplication::translate("main", "The verilog module name (regex)."),
-         "module name (regex)"},
+         QCoreApplication::translate("main", "The Verilog symbol/module name (regex)."),
+         "symbol/module name (regex)"},
         {{"f", "filelist"},
          QCoreApplication::translate(
              "main",
