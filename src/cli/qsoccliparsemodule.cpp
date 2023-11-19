@@ -159,13 +159,20 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments   = parser.positionalArguments();
-    const QString    &libraryName    = parser.isSet("base") ? parser.value("base") : "";
+    const QString    &libraryName    = parser.isSet("base") ? parser.value("base") : ".*";
     const QString    &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList       moduleNameList = cmdArguments;
     /* Append module name from positional arguments */
     moduleNameList.append(moduleName);
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
+    /* Removing empty strings and strings containing only whitespace */
+    moduleNameList.erase(
+        std::remove_if(
+            moduleNameList.begin(),
+            moduleNameList.end(),
+            [](const QString &str) { return str.trimmed().isEmpty(); }),
+        moduleNameList.end());
     /* Setup project manager and project path  */
     QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
@@ -232,7 +239,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     /* Remove modules */
     for (const QString &moduleName : moduleNameList) {
         const QRegularExpression moduleNameRegex(moduleName);
-        if (!moduleManager.remove(moduleNameRegex)) {
+        if (!moduleManager.removeModule(moduleNameRegex)) {
             return showError(
                 1,
                 QCoreApplication::translate("main", "Error: could not remove module: %1")
@@ -266,14 +273,20 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments   = parser.positionalArguments();
-    const QString    &libraryName    = parser.isSet("base") ? parser.value("base") : "";
-    const QString    &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString    &libraryName    = parser.isSet("base") ? parser.value("base") : ".*";
+    const QString    &moduleName     = parser.isSet("regex") ? parser.value("regex") : ".*";
     QStringList       moduleNameList = cmdArguments;
     /* Append module name from positional arguments */
     moduleNameList.append(moduleName);
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
-
+    /* Removing empty strings and strings containing only whitespace */
+    moduleNameList.erase(
+        std::remove_if(
+            moduleNameList.begin(),
+            moduleNameList.end(),
+            [](const QString &str) { return str.trimmed().isEmpty(); }),
+        moduleNameList.end());
     /* Setup project manager and project path  */
     QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
@@ -308,14 +321,6 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of library name: %1")
                 .arg(libraryName));
-    }
-    /* Check if module name is valid */
-    const QRegularExpression moduleNameRegex(moduleName);
-    if (!moduleNameRegex.isValid()) {
-        return showError(
-            1,
-            QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
-                .arg(moduleName));
     }
     /* Check if all module names in list is valid */
     bool    invalidModuleNameFound = false;

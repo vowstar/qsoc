@@ -52,6 +52,43 @@ public slots:
      */
     bool isModulePathValid();
     /**
+     * @brief Check if a regular expression is valid and non-empty
+     * @details Validates the provided regular expression object. It checks
+     *          whether the regex is a valid pattern and not an empty string.
+     *          This function is useful for ensuring that regex patterns used
+     *          for filtering or matching are correctly formatted and not blank.
+     * @param regex The QRegularExpression object to validate
+     * @retval true If the regex is valid and non-empty
+     * @retval false If the regex is invalid or an empty string
+     */
+    bool isNameRegexValid(const QRegularExpression &regex);
+    /**
+     * @brief Determines if a string contains a regular expression
+     * @details Checks if the provided string contains characters or patterns
+     *          commonly used in regular expressions. This function is helpful
+     *          for distinguishing between plain text and regex patterns,
+     *          especially when both could be user inputs. It uses a heuristic
+     *          approach to identify regex-specific characters or sequences.
+     * @param str The string to be checked for regular expression content
+     * @retval true If the string appears to contain a regular expression
+     * @retval false If the string does not contain common regex characters or
+     *         patterns
+     */
+    bool isNameRegularExpression(const QString &str);
+    /**
+     * @brief Checks if a string exactly matches a regular expression
+     * @details This function determines if the given string strictly matches
+     *          the provided regular expression. If the regex pattern is a plain
+     *          string (not a typical regular expression), it converts it to a regex
+     *          that matches the exact string. Useful for validating inputs against
+     *          specific patterns or keywords.
+     * @param str The string to compare against the regex
+     * @param regex The QRegularExpression to match against the string
+     * @retval true If the string exactly matches the regex
+     * @retval false If the string does not match, or the pattern is empty
+     */
+    bool isNameExactMatch(const QString &str, const QRegularExpression &regex);
+    /**
      * @brief Import verilog files from file list
      * @details This function will import verilog files from file list, and
      *          generate the module library file.
@@ -253,8 +290,16 @@ public slots:
 private:
     /* Internal used project manager */
     QSocProjectManager *projectManager = nullptr;
-    /* Module and module name map */
-    QMap<QString, QString> libraryMap;
+    /* This QMap, libraryMap, maps library names to sets of module names.
+       Each key in the map is a library name (QString).
+       The corresponding value is a QSet<QString> containing the names
+       of all modules that are part of that library.
+       - key: QString libraryName
+       - value: QSet<QString> moduleNameSet
+       This structure ensures that each library name is associated with
+       a unique set of module names, allowing efficient retrieval and
+       management of modules within each library. */
+    QMap<QString, QSet<QString>> libraryMap;
     /* Module library YAML node */
     YAML::Node moduleData;
     /**
@@ -270,6 +315,29 @@ private:
      *                    toYaml.
      */
     YAML::Node mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml);
+    /**
+     * @brief Adds a module name to the library map.
+     * @details This function adds a given module name to the set of modules
+     *          associated with a specified library in the libraryMap.
+     *          If the library does not already exist in the map, it creates
+     *          a new entry with an empty set of modules and then adds the
+     *          module name. If the library exists, it simply adds the module
+     *          name to the existing set.
+     * @param libraryName The name of the library.
+     * @param moduleName The name of the module to add to the library.
+     */
+    void libraryMapAdd(const QString &libraryName, const QString &moduleName);
+    /**
+     * @brief Removes a module from a library in the library map.
+     * @details This function removes the specified module from the set
+     *          associated with the given library name in the library map. If
+     *          the module is the only one in the set, it also removes the
+     *          entire library entry from the map. Does nothing if the library
+     *          or module does not exist.
+     * @param libraryName The name of the library to be modified.
+     * @param moduleName The name of the module to be removed.
+     */
+    void libraryMapRemove(const QString &libraryName, const QString &moduleName);
 
 signals:
 };
