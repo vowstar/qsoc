@@ -63,11 +63,11 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"l", "library"},
-         QCoreApplication::translate("main", "The module library name."),
-         "module library name"},
+        {{"b", "base"},
+         QCoreApplication::translate("main", "The base name of the module library."),
+         "library base name"},
         {{"r", "regex"},
-         QCoreApplication::translate("main", "The Verilog module name or regex."),
+         QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
         {{"f", "filelist"},
          QCoreApplication::translate(
@@ -83,7 +83,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList  cmdArguments = parser.positionalArguments();
-    const QString     &libraryName  = parser.isSet("library") ? parser.value("library") : "";
+    const QString     &libraryName  = parser.isSet("base") ? parser.value("base") : "";
     const QString     &moduleName   = parser.isSet("regex") ? parser.value("regex") : "";
     const QStringList &filePathList = cmdArguments;
 
