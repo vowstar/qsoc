@@ -13,7 +13,7 @@ using json = nlohmann::json;
 
 /**
  * @brief   The QSocSymbolManager class
- * @details This class is used to manage the symbol files.
+ * @details This class is used to manage the symbol library files.
  */
 class QSocSymbolManager : public QObject
 {
@@ -126,26 +126,26 @@ public slots:
      */
     bool load(const QString &libraryName);
     /**
-     * @brief Load symbols matching a regex pattern
+     * @brief Load libraries matching a regex pattern
      * @details Loads symbol files matching `libraryNameRegex` in the symbol
-     *          directory. Ideal for batch processing or retrieving symbols
+     *          directory. Ideal for batch processing or retrieving libraries
      *          based on naming patterns. Requires projectManager to be valid.
      * @param libraryNameRegex Regex to match file basenames, defaults to
-     *        ".*", matching all symbols
-     * @retval true All matching symbols are loaded
-     * @retval false Loading any matching symbols fails
+     *        ".*", matching all libraries
+     * @retval true All matching libraries are loaded
+     * @retval false Loading any matching libraries fails
      */
     bool load(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
-     * @brief Load multiple symbols by a list of basenames
-     * @details Loads multiple symbols specified in `libraryNameList` from the
+     * @brief Load multiple libraries by a list of basenames
+     * @details Loads multiple libraries specified in `libraryNameList` from the
      *          symbol directory. Useful for loading a specific set of symbol files.
      *          Requires a valid projectManager and checks the existence of each
      *          symbol file.
      * @param libraryNameList List of symbol file basenames to load, without
      *        ".soc_sym" extensions.
-     * @retval true All specified symbols are successfully loaded
-     * @retval false Loading fails for any of the specified symbols
+     * @retval true All specified libraries are successfully loaded
+     * @retval false Loading fails for any of the specified libraries
      */
     bool load(const QStringList &libraryNameList);
     /**
@@ -161,27 +161,27 @@ public slots:
      */
     bool remove(const QString &libraryName);
     /**
-     * @brief Remove symbols matching a regex pattern
+     * @brief Remove libraries matching a regex pattern
      * @details Removes all symbol files from the symbol directory that
      *          match `libraryNameRegex`. This method is ideal for batch
-     *          removal of symbols based on naming patterns. It relies on
+     *          removal of libraries based on naming patterns. It relies on
      *          a valid projectManager to execute.
      * @param libraryNameRegex Regex to match file basenames. Defaults
      *        to ".*", which matches all symbol files.
-     * @retval true if all matching symbols are successfully removed
-     * @retval false if removal of any matching symbols fails
+     * @retval true if all matching libraries are successfully removed
+     * @retval false if removal of any matching libraries fails
      */
     bool remove(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
-     * @brief Remove multiple symbols by a list of basenames
+     * @brief Remove multiple libraries by a list of basenames
      * @details Removes multiple symbol files specified in `libraryNameList`
      *          from the symbol directory. Useful for deleting a specific set of
      *          symbol files. Requires a valid projectManager and checks each
      *          symbol file's existence.
      * @param libraryNameList List of symbol file basenames to remove, without
      *        ".soc_sym" extensions.
-     * @retval true All specified symbols are successfully removed
-     * @retval false Removal fails for any of the specified symbols
+     * @retval true All specified libraries are successfully removed
+     * @retval false Removal fails for any of the specified libraries
      */
     bool remove(const QStringList &libraryNameList);
     /**
@@ -198,19 +198,19 @@ public slots:
      */
     bool save(const QString &libraryName);
     /**
-     * @brief Save multiple symbols matching a regex pattern
-     * @details Iterates through `libraryMap` to find symbols matching the
+     * @brief Save multiple libraries matching a regex pattern
+     * @details Iterates through `libraryMap` to find libraries matching the
      *          provided regex pattern. Each matching symbol is serialized and
      *          saved individually in YAML format. Files are named after the
      *          symbol basenames with the ".soc_sym" extension. Existing files
      *          are overwritten. This function requires a valid projectManager.
      * @param libraryNameRegex Regular expression to filter symbol basenames
-     * @retval true if all matching symbols are successfully saved
+     * @retval true if all matching libraries are successfully saved
      * @retval false if saving any matching symbol fails
      */
     bool save(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
-     * @brief Save multiple symbols by a list of basenames
+     * @brief Save multiple libraries by a list of basenames
      * @details Serializes and saves symbol data related to each `libraryName`
      *          in `libraryNameList`. It locates corresponding modules in
      *          `moduleData` using `libraryMap`, then serializes them into YAML
@@ -219,8 +219,8 @@ public slots:
      *          a valid projectManager.
      * @param libraryNameList List of symbol basenames to save, excluding
      *        extensions.
-     * @retval true All specified symbols are successfully saved
-     * @retval false Saving fails for any of the specified symbols
+     * @retval true All specified libraries are successfully saved
+     * @retval false Saving fails for any of the specified libraries
      */
     bool save(const QStringList &libraryNameList);
     /**
@@ -241,7 +241,7 @@ public slots:
     /**
      * @brief Remove modules matching regex from symbol library
      * @details Removes modules that match `moduleNameRegex` from moduleData,
-     *          updating libraryMap accordingly. It saves symbols with remaining
+     *          updating libraryMap accordingly. It saves libraries with remaining
      *          module associations and removes files with no associations.
      *          Requires a valid projectManager for execution.
      * @param moduleNameRegex Regex to filter module names for removal.

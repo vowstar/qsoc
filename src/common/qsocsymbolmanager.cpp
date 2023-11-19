@@ -548,9 +548,9 @@ bool QSocSymbolManager::removeModule(const QRegularExpression &moduleNameRegex)
     const QStringList libraryToRemoveList
         = QList<QString>(libraryToRemove.begin(), libraryToRemove.end());
 
-    /* Save symbols that still have associations in libraryMap */
+    /* Save libraries that still have associations in libraryMap */
     if (!save(libraryToSaveList)) {
-        qCritical() << "Error: Failed to save symbols.";
+        qCritical() << "Error: Failed to save libraries.";
         return false;
     }
 
