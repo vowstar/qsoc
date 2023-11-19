@@ -100,7 +100,7 @@ bool QSocSymbolManager::importFromFileList(
             qCritical() << "Error: no module found.";
             return false;
         }
-        YAML::Node symbolYaml;
+        YAML::Node libraryYaml;
         QString    locallibraryName = libraryName;
 
         if (moduleNameRegex.pattern().isEmpty()) {
@@ -108,15 +108,15 @@ bool QSocSymbolManager::importFromFileList(
             const QString &moduleName = moduleList.first();
             qDebug() << "Pick first module:" << moduleName;
             if (locallibraryName.isEmpty()) {
-                /* Use first module name as symbol filename */
+                /* Use first module name as library filename */
                 locallibraryName = moduleName.toLower();
-                qDebug() << "Pick symbol filename:" << locallibraryName;
+                qDebug() << "Pick library filename:" << locallibraryName;
             }
             const json       &moduleAst  = driver.getModuleAst(moduleName);
             const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
-            /* Add module to symbol yaml */
-            symbolYaml[moduleName.toStdString()] = moduleYaml;
-            saveSymbolYaml(locallibraryName, symbolYaml);
+            /* Add module to library yaml */
+            libraryYaml[moduleName.toStdString()] = moduleYaml;
+            saveLibraryYaml(locallibraryName, libraryYaml);
             return true;
         }
         /* Find module by pattern */
@@ -126,18 +126,18 @@ bool QSocSymbolManager::importFromFileList(
             if (match.hasMatch()) {
                 qDebug() << "Found module:" << moduleName;
                 if (locallibraryName.isEmpty()) {
-                    /* Use first module name as symbol filename */
+                    /* Use first module name as library filename */
                     locallibraryName = moduleName.toLower();
-                    qDebug() << "Pick symbol filename:" << locallibraryName;
+                    qDebug() << "Pick library filename:" << locallibraryName;
                 }
-                const json       &moduleAst          = driver.getModuleAst(moduleName);
-                const YAML::Node &moduleYaml         = getModuleYaml(moduleAst);
-                symbolYaml[moduleName.toStdString()] = moduleYaml;
-                hasMatch                             = true;
+                const json       &moduleAst           = driver.getModuleAst(moduleName);
+                const YAML::Node &moduleYaml          = getModuleYaml(moduleAst);
+                libraryYaml[moduleName.toStdString()] = moduleYaml;
+                hasMatch                              = true;
             }
         }
         if (hasMatch) {
-            saveSymbolYaml(locallibraryName, symbolYaml);
+            saveLibraryYaml(locallibraryName, libraryYaml);
             return true;
         }
     }
@@ -175,29 +175,29 @@ YAML::Node QSocSymbolManager::getModuleYaml(const json &moduleAst)
     return moduleYaml;
 }
 
-bool QSocSymbolManager::saveSymbolYaml(const QString &libraryName, const YAML::Node &symbolYaml)
+bool QSocSymbolManager::saveLibraryYaml(const QString &libraryName, const YAML::Node &libraryYaml)
 {
-    YAML::Node localSymbolYaml;
+    YAML::Node localLibraryYaml;
     /* Validate projectManager and its path */
     if (!isSymbolPathValid()) {
         qCritical() << "Error: projectManager is null or invalid symbol path.";
         return false;
     }
     /* Check file path */
-    const QString &symbolPath         = projectManager->getSymbolPath();
-    const QString &moduleYamlFilePath = symbolPath + "/" + libraryName + ".soc_sym";
-    if (QFile::exists(moduleYamlFilePath)) {
-        /* Load symbol YAML file */
-        std::ifstream inputFileStream(moduleYamlFilePath.toStdString());
-        localSymbolYaml = mergeNodes(YAML::Load(inputFileStream), symbolYaml);
+    const QString &symbolPath = projectManager->getSymbolPath();
+    const QString &filePath   = symbolPath + "/" + libraryName + ".soc_sym";
+    if (QFile::exists(filePath)) {
+        /* Load library YAML file */
+        std::ifstream inputFileStream(filePath.toStdString());
+        localLibraryYaml = mergeNodes(YAML::Load(inputFileStream), libraryYaml);
         qDebug() << "Load and merge";
     } else {
-        localSymbolYaml = symbolYaml;
+        localLibraryYaml = libraryYaml;
     }
 
     /* Save YAML file */
-    std::ofstream outputFileStream(moduleYamlFilePath.toStdString());
-    outputFileStream << localSymbolYaml;
+    std::ofstream outputFileStream(filePath.toStdString());
+    outputFileStream << localLibraryYaml;
     return true;
 }
 
@@ -233,9 +233,9 @@ bool QSocSymbolManager::isExist(const QString &libraryName)
         return false;
     }
 
-    /* Check symbol basename */
+    /* Check library basename */
     if (libraryName.isEmpty()) {
-        qCritical() << "Error: Symbol basename is empty.";
+        qCritical() << "Error: library basename is empty.";
         return false;
     }
 
@@ -243,7 +243,7 @@ bool QSocSymbolManager::isExist(const QString &libraryName)
     const QString filePath
         = QDir(projectManager->getSymbolPath()).filePath(libraryName + ".soc_sym");
 
-    /* Check if symbol file exists */
+    /* Check if library file exists */
     return QFile::exists(filePath);
 }
 
@@ -255,9 +255,9 @@ bool QSocSymbolManager::load(const QString &libraryName)
         return false;
     }
 
-    /* Check if symbol file exists */
+    /* Check if library file exists */
     if (!isExist(libraryName)) {
-        qCritical() << "Error: Symbol file does not exist for basename:" << libraryName;
+        qCritical() << "Error: Library file does not exist for basename:" << libraryName;
         return false;
     }
 
@@ -276,15 +276,15 @@ bool QSocSymbolManager::load(const QString &libraryName)
         /* Load YAML content into a temporary node */
         YAML::Node tempNode = YAML::Load(fileStream);
 
-        /* Iterate through the temporary node and add to symbolLib */
+        /* Iterate through the temporary node and add to moduleData */
         for (YAML::const_iterator it = tempNode.begin(); it != tempNode.end(); ++it) {
             const auto key = it->first.as<std::string>();
 
-            /* Add to symbolLib */
-            symbolLib[key] = it->second;
+            /* Add to moduleData */
+            moduleData[key] = it->second;
 
-            /* Update symbolMap with libraryName to key mapping */
-            symbolMap[libraryName] = QString::fromStdString(key);
+            /* Update libraryMap with libraryName to key mapping */
+            libraryMap[libraryName] = QString::fromStdString(key);
         }
     } catch (const YAML::Exception &e) {
         qCritical() << "Error parsing YAML file:" << filePath << ":" << e.what();
@@ -302,13 +302,13 @@ bool QSocSymbolManager::load(const QRegularExpression &libraryNameRegex)
         return false;
     }
 
-    /* Get the list of symbol basenames matching the regex */
+    /* Get the list of library basenames matching the regex */
     const QStringList matchingBasenames = listLibrary(libraryNameRegex);
 
-    /* Iterate through the list and load each symbol */
+    /* Iterate through the list and load each library */
     for (const QString &basename : matchingBasenames) {
         if (!load(basename)) {
-            qCritical() << "Error: Failed to load symbol:" << basename;
+            qCritical() << "Error: Failed to load library:" << basename;
             return false;
         }
     }
@@ -327,7 +327,7 @@ bool QSocSymbolManager::load(const QStringList &libraryNameList)
 
     for (const QString &basename : uniqueBasenames) {
         if (!load(basename)) {
-            qCritical() << "Error: Failed to load symbol:" << basename;
+            qCritical() << "Error: Failed to load library:" << basename;
             return false;
         }
     }
@@ -343,9 +343,9 @@ bool QSocSymbolManager::remove(const QString &libraryName)
         return false;
     }
 
-    /* Check symbol basename */
+    /* Check library basename */
     if (libraryName.isEmpty()) {
-        qCritical() << "Error: Symbol basename is empty.";
+        qCritical() << "Error: library basename is empty.";
         return false;
     }
 
@@ -353,9 +353,9 @@ bool QSocSymbolManager::remove(const QString &libraryName)
     const QString filePath
         = QDir(projectManager->getSymbolPath()).filePath(libraryName + ".soc_sym");
 
-    /* Check if symbol file exists */
+    /* Check if library file exists */
     if (!QFile::exists(filePath)) {
-        qCritical() << "Error: Symbol file does not exist for basename:" << libraryName;
+        qCritical() << "Error: library file does not exist for basename:" << libraryName;
         return false;
     }
 
@@ -365,9 +365,9 @@ bool QSocSymbolManager::remove(const QString &libraryName)
         return false;
     }
 
-    /* Remove from symbolLib and symbolMap */
-    symbolLib.remove(libraryName.toStdString());
-    symbolMap.remove(libraryName);
+    /* Remove from moduleData and libraryMap */
+    moduleData.remove(libraryName.toStdString());
+    libraryMap.remove(libraryName);
 
     return true;
 }
@@ -380,13 +380,13 @@ bool QSocSymbolManager::remove(const QRegularExpression &libraryNameRegex)
         return false;
     }
 
-    /* Get the list of symbol basenames matching the regex */
+    /* Get the list of library basenames matching the regex */
     const QStringList matchingBasenames = listLibrary(libraryNameRegex);
 
-    /* Iterate through the list and remove each symbol */
+    /* Iterate through the list and remove each library */
     for (const QString &basename : matchingBasenames) {
         if (!remove(basename)) {
-            qCritical() << "Error: Failed to remove symbol:" << basename;
+            qCritical() << "Error: Failed to remove library:" << basename;
             return false;
         }
     }
@@ -405,7 +405,7 @@ bool QSocSymbolManager::remove(const QStringList &libraryNameList)
 
     for (const QString &basename : uniqueBasenames) {
         if (!remove(basename)) {
-            qCritical() << "Error: Failed to remove symbol:" << basename;
+            qCritical() << "Error: Failed to remove library:" << basename;
             return false;
         }
     }
@@ -417,21 +417,21 @@ bool QSocSymbolManager::save(const QString &libraryName)
 {
     /* Validate projectManager and its path */
     if (!isSymbolPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid symbol path.";
+        qCritical() << "Error: projectManager is null or invalid library path.";
         return false;
     }
 
-    /* Check if the libraryName exists in symbolMap */
-    if (!symbolMap.contains(libraryName)) {
-        qCritical() << "Error: Symbol basename not found in symbolMap.";
+    /* Check if the libraryName exists in libraryMap */
+    if (!libraryMap.contains(libraryName)) {
+        qCritical() << "Error: Library basename not found in libraryMap.";
         return false;
     }
 
-    /* Extract modules from symbolLib */
+    /* Extract modules from moduleData */
     YAML::Node dataToSave;
-    auto       range = symbolMap.equal_range(libraryName);
+    auto       range = libraryMap.equal_range(libraryName);
     for (auto it = range.first; it != range.second; ++it) {
-        dataToSave[it.value().toStdString()] = symbolLib[it.value().toStdString()];
+        dataToSave[it.value().toStdString()] = moduleData[it.value().toStdString()];
     }
 
     /* Serialize and save to file */
@@ -457,11 +457,11 @@ bool QSocSymbolManager::save(const QRegularExpression &libraryNameRegex)
         return false;
     }
 
-    /* Iterate over symbolMap and save matching symbols */
-    for (const QString &libraryName : symbolMap.keys()) {
+    /* Iterate over libraryMap and save matching libraries */
+    for (const QString &libraryName : libraryMap.keys()) {
         if (libraryNameRegex.match(libraryName).hasMatch()) {
             if (!save(libraryName)) {
-                qCritical() << "Error: Failed to save symbol:" << libraryName;
+                qCritical() << "Error: Failed to save library:" << libraryName;
                 allSaved = false;
             }
         }
@@ -481,7 +481,7 @@ bool QSocSymbolManager::save(const QStringList &libraryNameList)
 
     for (const QString &basename : uniqueBasenames) {
         if (!save(basename)) {
-            qCritical() << "Error: Failed to save symbol:" << basename;
+            qCritical() << "Error: Failed to save library:" << basename;
             return false;
         }
     }
@@ -493,8 +493,8 @@ QStringList QSocSymbolManager::listModule(const QRegularExpression &moduleNameRe
 {
     QStringList result;
 
-    /* Iterate through each node in symbolLib */
-    for (YAML::const_iterator it = symbolLib.begin(); it != symbolLib.end(); ++it) {
+    /* Iterate through each node in moduleData */
+    for (YAML::const_iterator it = moduleData.begin(); it != moduleData.end(); ++it) {
         const QString moduleName = QString::fromStdString(it->first.as<std::string>());
 
         /* Check if the module name matches the regex */
@@ -513,20 +513,20 @@ bool QSocSymbolManager::removeModule(const QRegularExpression &moduleNameRegex)
         return false;
     }
 
-    QSet<QString> symbolsToSave;
-    QSet<QString> symbolsToRemove;
-    QSet<QString> modulesToRemove;
+    QSet<QString> libraryToSave;
+    QSet<QString> libraryToRemove;
+    QSet<QString> moduleToRemove;
 
-    for (YAML::const_iterator it = symbolLib.begin(); it != symbolLib.end(); ++it) {
+    for (YAML::const_iterator it = moduleData.begin(); it != moduleData.end(); ++it) {
         const QString moduleName = QString::fromStdString(it->first.as<std::string>());
         if (moduleNameRegex.match(moduleName).hasMatch()) {
-            modulesToRemove.insert(moduleName);
-            for (auto symbolIt = symbolMap.begin(); symbolIt != symbolMap.end();) {
+            moduleToRemove.insert(moduleName);
+            for (auto symbolIt = libraryMap.begin(); symbolIt != libraryMap.end();) {
                 if (symbolIt.value() == moduleName) {
                     const QString libraryName = symbolIt.key();
-                    symbolsToRemove.insert(libraryName);
-                    symbolIt = symbolMap.erase(symbolIt);
-                    symbolsToSave.insert(libraryName);
+                    libraryToRemove.insert(libraryName);
+                    symbolIt = libraryMap.erase(symbolIt);
+                    libraryToSave.insert(libraryName);
                 } else {
                     ++symbolIt;
                 }
@@ -534,28 +534,28 @@ bool QSocSymbolManager::removeModule(const QRegularExpression &moduleNameRegex)
         }
     }
 
-    /* Remove modules from symbolLib */
-    for (const QString &moduleName : modulesToRemove) {
-        symbolLib.remove(moduleName.toStdString());
+    /* Remove modules from moduleData */
+    for (const QString &moduleName : moduleToRemove) {
+        moduleData.remove(moduleName.toStdString());
     }
 
-    /* Ensure symbolsToSave does not include symbols marked for removal */
-    for (const QString &symbolToRemove : symbolsToRemove) {
-        symbolsToSave.remove(symbolToRemove);
+    /* Ensure libraryToSave does not include symbols marked for removal */
+    for (const QString &symbolToRemove : libraryToRemove) {
+        libraryToSave.remove(symbolToRemove);
     }
 
-    const QStringList symbolsToSaveList = QList<QString>(symbolsToSave.begin(), symbolsToSave.end());
-    const QStringList symbolsToRemoveList
-        = QList<QString>(symbolsToRemove.begin(), symbolsToRemove.end());
+    const QStringList libraryToSaveList = QList<QString>(libraryToSave.begin(), libraryToSave.end());
+    const QStringList libraryToRemoveList
+        = QList<QString>(libraryToRemove.begin(), libraryToRemove.end());
 
-    /* Save symbols that still have associations in symbolMap */
-    if (!save(symbolsToSaveList)) {
+    /* Save symbols that still have associations in libraryMap */
+    if (!save(libraryToSaveList)) {
         qCritical() << "Error: Failed to save symbols.";
         return false;
     }
 
-    /* Remove symbols with no remaining associations in symbolMap */
-    if (!remove(symbolsToRemoveList)) {
+    /* Remove symbols with no remaining associations in libraryMap */
+    if (!remove(libraryToRemoveList)) {
         qCritical() << "Error: Failed to remove symbols.";
         return false;
     }

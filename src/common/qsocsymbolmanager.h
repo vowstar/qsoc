@@ -81,15 +81,14 @@ public slots:
      */
     YAML::Node getModuleYaml(const json &moduleAst);
     /**
-     * @brief Save the symbol YAML object to symbol file
-     * @details This function will save the symbol YAML object to symbol library
-     *          file.
-     * @param libraryName The basename of the symbol library file without ext
-     * @param symbolYaml The symbol YAML object
+     * @brief Save the library YAML object to library file
+     * @details This function will save the library YAML object to library file.
+     * @param libraryName The basename of the library file without ext
+     * @param libraryYaml The library YAML object
      * @retval true Save successfully
      * @retval false Save failed
      */
-    bool saveSymbolYaml(const QString &libraryName, const YAML::Node &symbolYaml);
+    bool saveLibraryYaml(const QString &libraryName, const YAML::Node &libraryYaml);
     /**
      * @brief Get list of symbol basenames
      * @details Retrieves basenames of ".soc_sym" files in directory defined by
@@ -189,7 +188,7 @@ public slots:
      * @brief Save symbol data associated with a specific basename
      * @details Serializes and saves the symbol data related to the given
      *          `libraryName`. It locates the corresponding modules in
-     *          `symbolLib` using `symbolMap`, then serializes them into YAML
+     *          `moduleData` using `libraryMap`, then serializes them into YAML
      *          format. The result is saved to a file with the same basename,
      *          appending the ".soc_sym" extension. Existing files are
      *          overwritten. This function requires a valid projectManager.
@@ -200,7 +199,7 @@ public slots:
     bool save(const QString &libraryName);
     /**
      * @brief Save multiple symbols matching a regex pattern
-     * @details Iterates through `symbolMap` to find symbols matching the
+     * @details Iterates through `libraryMap` to find symbols matching the
      *          provided regex pattern. Each matching symbol is serialized and
      *          saved individually in YAML format. Files are named after the
      *          symbol basenames with the ".soc_sym" extension. Existing files
@@ -214,7 +213,7 @@ public slots:
      * @brief Save multiple symbols by a list of basenames
      * @details Serializes and saves symbol data related to each `libraryName`
      *          in `libraryNameList`. It locates corresponding modules in
-     *          `symbolLib` using `symbolMap`, then serializes them into YAML
+     *          `moduleData` using `libraryMap`, then serializes them into YAML
      *          format. Results are saved to files named after each basename,
      *          appending ".soc_sym". Existing files are overwritten. Requires
      *          a valid projectManager.
@@ -226,11 +225,11 @@ public slots:
     bool save(const QStringList &libraryNameList);
     /**
      * @brief Get list of module names matching a regex pattern
-     * @details Retrieves module names from the `symbolLib` YAML node that
+     * @details Retrieves module names from the `moduleData` YAML node that
      *          match the provided `moduleNameRegex`. This function scans
      *          the symbol library and compiles a list of module names. Useful
      *          for processing or iterating over project modules. It relies on
-     *          the validity of the `symbolLib` YAML node. This function
+     *          the validity of the `moduleData` YAML node. This function
      *          requires a valid projectManager.
      * @param moduleNameRegex Regular expression to match module names,
      *        default is ".*".
@@ -241,8 +240,8 @@ public slots:
 
     /**
      * @brief Remove modules matching regex from symbol library
-     * @details Removes modules that match `moduleNameRegex` from symbolLib,
-     *          updating symbolMap accordingly. It saves symbols with remaining
+     * @details Removes modules that match `moduleNameRegex` from moduleData,
+     *          updating libraryMap accordingly. It saves symbols with remaining
      *          module associations and removes files with no associations.
      *          Requires a valid projectManager for execution.
      * @param moduleNameRegex Regex to filter module names for removal.
@@ -255,9 +254,9 @@ private:
     /* Internal used project manager */
     QSocProjectManager *projectManager = nullptr;
     /* Symbol and module name map */
-    QMap<QString, QString> symbolMap;
+    QMap<QString, QString> libraryMap;
     /* Symbol library YAML node */
-    YAML::Node symbolLib;
+    YAML::Node moduleData;
     /**
      * @brief Merge two YAML nodes
      * @details This function will merge two YAML nodes. It returns a new map
