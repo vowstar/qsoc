@@ -139,22 +139,23 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
             /* Append file path list to the end of content */
             content.append("\n" + filePathList.join("\n"));
         }
-        /* Remove single line comment */
-        content.remove(QRegularExpression(R"(\s*//[^\n]*\s*)"));
-        /* Remove multiline comments */
-        content.remove(QRegularExpression(R"(\s*/\*.*?\*/\s*)"));
-        /* Remove empty lines */
-        content.remove(QRegularExpression(R"(\n\s*\n)"));
-
+        /* Removes comments from the content */
+        content = contentCleanComment(content);
         /* Substitute environment variables */
         if (projectManager) {
             const QMap<QString, QString>   env = projectManager->getEnv();
             QMapIterator<QString, QString> iterator(env);
             while (iterator.hasNext()) {
                 iterator.next();
+                /* Create pattern */
                 const QString pattern = QString("${%1}").arg(iterator.key());
-                content               = content.replace(pattern, iterator.value());
+                /* Replace environment variable */
+                content = content.replace(pattern, iterator.value());
             }
+        }
+        /* Convert relative path to absolute path */
+        if (QFileInfo::exists(fileListPath)) {
+            content = contentRelativeToAbsolute(content, QFileInfo(fileListPath).absoluteDir());
         }
         /* Create a temporary file */
         QTemporaryFile tempFile("socstudio.fl");
@@ -215,4 +216,37 @@ const QStringList &QSlangDriver::getModuleList()
         }
     }
     return moduleList;
+}
+
+QString QSlangDriver::contentCleanComment(const QString &content)
+{
+    QString result = content;
+    /* Normalize line endings to Unix-style */
+    result.replace(QRegularExpression(R"(\r\n|\r)"), "\n");
+    /* Remove single line comment */
+    result.remove(QRegularExpression(R"(\s*//[^\n]*\s*)"));
+    /* Remove multiline comments */
+    result.remove(QRegularExpression(R"(\s*/\*.*?\*/\s*)"));
+    /* Remove empty lines */
+    result.remove(QRegularExpression(R"(\n\s*\n)"));
+    return result;
+}
+
+QString QSlangDriver::contentRelativeToAbsolute(const QString &content, const QDir &baseDir)
+{
+    QStringList result;
+    /* Splitting content into lines, considering different newline characters */
+    const QStringList lines = content.split(QRegularExpression(R"(\r\n|\n|\r)"), Qt::KeepEmptyParts);
+
+    for (const QString &line : lines) {
+        /* Check for relative path and convert it to absolute */
+        if (QDir::isRelativePath(line)) {
+            /* Convert relative path to absolute path */
+            result.append(baseDir.filePath(line));
+        } else {
+            /* Preserve absolute paths and non-path content as is */
+            result.append(line);
+        }
+    }
+    return result.join("\n");
 }
