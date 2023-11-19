@@ -1,4 +1,4 @@
-#include "common/qsocsymbolmanager.h"
+#include "common/qsocmodulemanager.h"
 
 #include "common/qslangdriver.h"
 

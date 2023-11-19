@@ -1,8 +1,8 @@
 #include "cli/qsoccliworker.h"
 
 #include "common/qslangdriver.h"
+#include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
-#include "common/qsocsymbolmanager.h"
 #include "common/qstaticlog.h"
 
 bool QSocCliWorker::parseSymbol(const QStringList &appArguments)
