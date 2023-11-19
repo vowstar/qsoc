@@ -158,10 +158,121 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
         "[<module name or regex list>]");
 
     parser.parse(appArguments);
-    const QStringList  cmdArguments   = parser.positionalArguments();
-    const QString     &libraryName    = parser.isSet("base") ? parser.value("base") : "";
-    const QString     &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
-    const QStringList &moduleNameList = cmdArguments;
+    const QStringList cmdArguments   = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("base") ? parser.value("base") : "";
+    const QString    &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
+    QStringList       moduleNameList = cmdArguments;
+    /* Append module name from positional arguments */
+    moduleNameList.append(moduleName);
+    /* Removing duplicates */
+    moduleNameList.removeDuplicates();
+    /* Setup project manager and project path  */
+    QSocProjectManager projectManager(this);
+    if (parser.isSet("directory")) {
+        projectManager.setProjectPath(parser.value("directory"));
+    }
+    if (parser.isSet("project")) {
+        projectManager.load(parser.value("project"));
+    } else {
+        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        if (projectNameList.length() > 1) {
+            return showError(
+                1,
+                QCoreApplication::translate(
+                    "main",
+                    "Error: multiple projects found, please specify the project name.\n"
+                    "Available projects are:\n%1\n")
+                    .arg(projectNameList.join("\n")));
+        }
+        projectManager.loadFirst();
+    }
+    /* Check if module path is valid */
+    if (!projectManager.isValidModulePath()) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: invalid module directory: %1")
+                .arg(projectManager.getModulePath()));
+    }
+    /* Check if library name is valid */
+    const QRegularExpression libraryNameRegex(libraryName);
+    if (!libraryNameRegex.isValid()) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: invalid regular expression of library name: %1")
+                .arg(libraryName));
+    }
+    /* Check if all module names in list is valid */
+    bool    invalidModuleNameFound = false;
+    QString invalidModuleName;
+    /* Iterate through all module names */
+    for (const QString &moduleName : moduleNameList) {
+        const QRegularExpression moduleNameRegex(moduleName);
+        if (!moduleNameRegex.isValid()) {
+            invalidModuleNameFound = true;
+            invalidModuleName      = moduleName;
+            break;
+        }
+    }
+    /* Show error if invalid module name is found */
+    if (invalidModuleNameFound) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
+                .arg(invalidModuleName));
+    }
+    /* Setup module manager */
+    QSocModuleManager moduleManager(this, &projectManager);
+    /* Load modules */
+    if (!moduleManager.load(libraryNameRegex)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: could not load library: %1")
+                .arg(libraryName));
+    }
+    /* Remove modules */
+    for (const QString &moduleName : moduleNameList) {
+        const QRegularExpression moduleNameRegex(moduleName);
+        if (!moduleManager.remove(moduleNameRegex)) {
+            return showError(
+                1,
+                QCoreApplication::translate("main", "Error: could not remove module: %1")
+                    .arg(moduleName));
+        }
+    }
+
+    return true;
+}
+
+bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"b", "base"},
+         QCoreApplication::translate("main", "The library base name or regex."),
+         "library base name or regex"},
+        {{"r", "regex"},
+         QCoreApplication::translate("main", "The module name or regex."),
+         "module name or regex"},
+    });
+    parser.addPositionalArgument(
+        "name",
+        QCoreApplication::translate("main", "The module name or regex list."),
+        "[<module name or regex list>]");
+
+    parser.parse(appArguments);
+    const QStringList cmdArguments   = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("base") ? parser.value("base") : "";
+    const QString    &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
+    QStringList       moduleNameList = cmdArguments;
+    /* Append module name from positional arguments */
+    moduleNameList.append(moduleName);
+    /* Removing duplicates */
+    moduleNameList.removeDuplicates();
 
     /* Setup project manager and project path  */
     QSocProjectManager projectManager(this);
@@ -227,19 +338,20 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     }
     /* Setup module manager */
     QSocModuleManager moduleManager(this, &projectManager);
-    /* Remove modules */
-    moduleManager.load(libraryNameRegex);
-    moduleManager.remove(moduleNameRegex);
+    /* Load modules */
+    if (!moduleManager.load(libraryNameRegex)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: could not load library: %1")
+                .arg(libraryName));
+    }
+    /* list modules */
     for (const QString &moduleName : moduleNameList) {
-        moduleManager.remove(moduleName);
+        const QRegularExpression moduleNameRegex(moduleName);
+        const QStringList        result = moduleManager.listModule(moduleNameRegex);
+        showInfo(0, result.join("\n"));
     }
 
-    return true;
-}
-
-bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
-{
-    Q_UNUSED(appArguments);
     return true;
 }
 
