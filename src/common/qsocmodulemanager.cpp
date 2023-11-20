@@ -1,6 +1,7 @@
 #include "common/qsocmodulemanager.h"
 
 #include "common/qslangdriver.h"
+#include "common/qstaticregex.h"
 
 #include <QDebug>
 #include <QDir>
@@ -41,53 +42,6 @@ bool QSocModuleManager::isModulePathValid()
         return false;
     }
     return true;
-}
-
-bool QSocModuleManager::isNameRegexValid(const QRegularExpression &regex)
-{
-    /* Retrieve the pattern of the regular expression */
-    const QString pattern = regex.pattern();
-    /* Check if the regular expression is valid, return false if the pattern is
-       invalid or empty or contains only white spaces */
-    return regex.isValid() && !(pattern.isEmpty() || pattern.trimmed().isEmpty());
-}
-
-bool QSocModuleManager::isNameRegularExpression(const QString &str)
-{
-    /* List of special characters commonly used in regular expressions */
-    const QStringList specialCharacters
-        = {"*", "+", "?", "|", "[", "]", "(", ")", "{", "}", "^", "$", "\\", "."};
-
-    /* Check for special characters */
-    for (const auto &character : specialCharacters) {
-        if (str.contains(character)) {
-            return true;
-        }
-    }
-
-    /* Check for common regex patterns */
-    const QStringList regexPatterns = {"\\d", "\\w", "\\s", "\\b"};
-    for (const auto &pattern : regexPatterns) {
-        if (str.contains(pattern)) {
-            return true;
-        }
-    }
-
-    /* If none of the special characters or patterns are found, assume it's not a regex */
-    return false;
-}
-
-bool QSocModuleManager::isNameExactMatch(const QString &str, const QRegularExpression &regex)
-{
-    const QString pattern = regex.pattern();
-    if (pattern.isEmpty()) {
-        return false;
-    }
-    const QRegularExpression strictRegex = isNameRegularExpression(pattern)
-                                               ? regex
-                                               : QRegularExpression(
-                                                   "^" + QRegularExpression::escape(pattern) + "$");
-    return strictRegex.match(str).hasMatch();
 }
 
 YAML::Node QSocModuleManager::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
@@ -168,7 +122,7 @@ bool QSocModuleManager::importFromFileList(
         return false;
     }
     /* Validate moduleNameRegex */
-    if (!isNameRegexValid(moduleNameRegex)) {
+    if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
         qCritical() << "Error: Invalid or empty regex:" << moduleNameRegex.pattern();
         return false;
     }
@@ -204,7 +158,7 @@ bool QSocModuleManager::importFromFileList(
         /* Find module by pattern */
         bool hasMatch = false;
         for (const QString &moduleName : moduleList) {
-            if (isNameExactMatch(moduleName, moduleNameRegex)) {
+            if (QStaticRegex::isNameExactMatch(moduleName, moduleNameRegex)) {
                 qDebug() << "Found module:" << moduleName;
                 if (locallibraryName.isEmpty()) {
                     /* Use first module name as library filename */
@@ -295,7 +249,7 @@ QStringList QSocModuleManager::listLibrary(const QRegularExpression &libraryName
         return result;
     }
     /* Validate libraryNameRegex */
-    if (!isNameRegexValid(libraryNameRegex)) {
+    if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
         qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
         return result;
     }
@@ -307,7 +261,7 @@ QStringList QSocModuleManager::listLibrary(const QRegularExpression &libraryName
         QDir::Files | QDir::NoDotAndDotDot);
     /* Add matching file basenames from projectDir to result list. */
     foreach (const QString &filename, modulePathDir.entryList()) {
-        if (isNameExactMatch(filename, libraryNameRegex)) {
+        if (QStaticRegex::isNameExactMatch(filename, libraryNameRegex)) {
             result.append(filename.split('.').first());
         }
     }
@@ -393,7 +347,7 @@ bool QSocModuleManager::load(const QRegularExpression &libraryNameRegex)
         return false;
     }
     /* Validate libraryNameRegex */
-    if (!isNameRegexValid(libraryNameRegex)) {
+    if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
         qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
         return false;
     }
@@ -476,7 +430,7 @@ bool QSocModuleManager::remove(const QRegularExpression &libraryNameRegex)
         return false;
     }
     /* Validate libraryNameRegex */
-    if (!isNameRegexValid(libraryNameRegex)) {
+    if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
         qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
         return false;
     }
@@ -563,14 +517,14 @@ bool QSocModuleManager::save(const QRegularExpression &libraryNameRegex)
         return false;
     }
     /* Validate libraryNameRegex */
-    if (!isNameRegexValid(libraryNameRegex)) {
+    if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
         qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
         return false;
     }
 
     /* Iterate over libraryMap and save matching libraries */
     for (const QString &libraryName : libraryMap.keys()) {
-        if (isNameExactMatch(libraryName, libraryNameRegex)) {
+        if (QStaticRegex::isNameExactMatch(libraryName, libraryNameRegex)) {
             if (!save(libraryName)) {
                 qCritical() << "Error: Failed to save library:" << libraryName;
                 allSaved = false;
@@ -605,7 +559,7 @@ QStringList QSocModuleManager::listModule(const QRegularExpression &moduleNameRe
 {
     QStringList result;
     /* Validate moduleNameRegex */
-    if (!isNameRegexValid(moduleNameRegex)) {
+    if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
         qCritical() << "Error: Invalid or empty regex:" << moduleNameRegex.pattern();
         return result;
     }
@@ -615,7 +569,7 @@ QStringList QSocModuleManager::listModule(const QRegularExpression &moduleNameRe
         const QString moduleName = QString::fromStdString(it->first.as<std::string>());
 
         /* Check if the module name matches the regex */
-        if (isNameExactMatch(moduleName, moduleNameRegex)) {
+        if (QStaticRegex::isNameExactMatch(moduleName, moduleNameRegex)) {
             result.append(moduleName);
         }
     }
@@ -631,7 +585,7 @@ bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
         return false;
     }
     /* Validate moduleNameRegex */
-    if (!isNameRegexValid(moduleNameRegex)) {
+    if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
         qCritical() << "Error: Invalid or empty regex:" << moduleNameRegex.pattern();
         return false;
     }
@@ -643,7 +597,7 @@ bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
     for (auto moduleDataIter = moduleData.begin(); moduleDataIter != moduleData.end();
          ++moduleDataIter) {
         const QString moduleName = QString::fromStdString(moduleDataIter->first.as<std::string>());
-        if (isNameExactMatch(moduleName, moduleNameRegex)) {
+        if (QStaticRegex::isNameExactMatch(moduleName, moduleNameRegex)) {
             moduleToRemove.insert(moduleName);
             const QString libraryName = QString::fromStdString(
                 moduleDataIter->second["library"].as<std::string>());
