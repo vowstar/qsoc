@@ -163,7 +163,9 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     const QString    &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList       moduleNameList = cmdArguments;
     /* Append module name from positional arguments */
-    moduleNameList.append(moduleName);
+    if (!moduleName.trimmed().isEmpty()) {
+        moduleNameList.append(moduleName.trimmed());
+    }
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
@@ -272,12 +274,14 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
         "[<module name or regex list>]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments   = parser.positionalArguments();
-    const QString    &libraryName    = parser.isSet("base") ? parser.value("base") : ".*";
-    const QString    &moduleName     = parser.isSet("regex") ? parser.value("regex") : ".*";
-    QStringList       moduleNameList = cmdArguments;
+    const QStringList cmdArguments = parser.positionalArguments();
+    const QString    &libraryName  = parser.isSet("base") ? parser.value("base") : ".*";
+    const QString    &moduleName   = parser.isSet("regex") ? parser.value("regex") : "";
+    QStringList moduleNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append module name from positional arguments */
-    moduleNameList.append(moduleName);
+    if (!moduleName.trimmed().isEmpty()) {
+        moduleNameList.append(moduleName.trimmed());
+    }
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
