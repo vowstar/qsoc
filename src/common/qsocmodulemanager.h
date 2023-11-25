@@ -250,6 +250,20 @@ public slots:
      */
     bool removeModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
+    /**
+     * @brief Retrieve YAML node for modules matching the regex
+     * @details Fetches and returns the YAML node for modules whose names
+     *          match the provided regular expression. This allows for
+     *          specific querying and manipulation of module data within
+     *          the module library. Defaults to fetching all module nodes
+     *          if no regex is specified.
+     * @param moduleNameRegex Regex used to filter the module names.
+     *                        Default is ".*", which matches all modules.
+     * @return YAML::Node The YAML node(s) corresponding to the matched
+     *                    module(s). Returns an empty node if no match is found.
+     */
+    YAML::Node getModuleNode(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
+
 private:
     /* Internal used project manager */
     QSocProjectManager *projectManager = nullptr;

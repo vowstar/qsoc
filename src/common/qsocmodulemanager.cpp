@@ -639,3 +639,27 @@ bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
 
     return true;
 }
+
+YAML::Node QSocModuleManager::getModuleNode(const QRegularExpression &moduleNameRegex)
+{
+    YAML::Node result;
+
+    /* Check if the regex is valid, if not, return an empty node */
+    if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
+        qWarning() << "Invalid regular expression provided.";
+        return result;
+    }
+
+    /* Iterate over the moduleData to find matches */
+    for (YAML::const_iterator it = moduleData.begin(); it != moduleData.end(); ++it) {
+        const QString moduleName = QString::fromStdString(it->first.as<std::string>());
+
+        /* Check if the module name matches the regex */
+        if (QStaticRegex::isNameExactMatch(moduleName, moduleNameRegex)) {
+            /* Add the module node to the result */
+            result[moduleName.toStdString()] = it->second;
+        }
+    }
+
+    return result;
+}
