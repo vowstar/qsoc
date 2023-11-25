@@ -91,15 +91,15 @@ public slots:
     bool saveLibraryYaml(const QString &libraryName, const YAML::Node &libraryYaml);
     /**
      * @brief Get list of library basenames
-     * @details Retrieves basenames of ".soc_sym" files in directory defined by
-     *          `modulePath`, excluding the ".soc_sym" extension. Scans the
+     * @details Retrieves basenames of ".soc_mod" files in directory defined by
+     *          `modulePath`, excluding the ".soc_mod" extension. Scans the
      *          module directory and compiles a list of relevant basenames.
      *          Useful for processing or iterating over library files. This
      *          function relies on projectManager to be valid.
      * @param libraryNameRegex Regular expression to match file basenames,
      *        default is ".*".
-     * @return QStringList of basenames for all ".soc_sym" files in the module
-     *         directory, excluding the ".soc_sym" extension
+     * @return QStringList of basenames for all ".soc_mod" files in the module
+     *         directory, excluding the ".soc_mod" extension
      */
     QStringList listLibrary(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
@@ -108,7 +108,7 @@ public slots:
      *          exists in the module directory. It is used to verify the
      *          existence of library files before processing them.
      * @param libraryName The basename of the library file, without the
-     *        ".soc_sym" extension.
+     *        ".soc_mod" extension.
      * @retval true Library file exists in the module directory
      * @retval false Library file does not exist in the module directory
      */
@@ -120,7 +120,7 @@ public slots:
      *          Relies on a valid projectManager and existence of the library
      *          file.
      * @param libraryName Basename of module file to load, without
-     *        ".soc_sym" extension
+     *        ".soc_mod" extension
      * @retval true Library is successfully loaded
      * @retval false Loading fails or file does not exist
      */
@@ -143,7 +143,7 @@ public slots:
      *          library files. Requires a valid projectManager and checks the
      *          existence of each library file.
      * @param libraryNameList List of library file basenames to load, without
-     *        ".soc_sym" extensions.
+     *        ".soc_mod" extensions.
      * @retval true All specified libraries are successfully loaded
      * @retval false Loading fails for any of the specified libraries
      */
@@ -155,7 +155,7 @@ public slots:
      *          individual library files. It requires a valid projectManager
      *          and checks if the library file exists.
      * @param libraryName Basename of the library file to remove, without
-     *        the ".soc_sym" extension.
+     *        the ".soc_mod" extension.
      * @retval true The library file is successfully removed
      * @retval false Removal fails or the file does not exist
      */
@@ -179,7 +179,7 @@ public slots:
      *          module files. Requires a valid projectManager and checks each
      *          module file's existence.
      * @param libraryNameList List of module file basenames to remove, without
-     *        ".soc_sym" extensions.
+     *        ".soc_mod" extensions.
      * @retval true All specified libraries are successfully removed
      * @retval false Removal fails for any of the specified libraries
      */
@@ -190,7 +190,7 @@ public slots:
      *          `libraryName`. It locates the corresponding modules in
      *          `moduleData` using `libraryMap`, then serializes them into YAML
      *          format. The result is saved to a file with the same basename,
-     *          appending the ".soc_sym" extension. Existing files are
+     *          appending the ".soc_mod" extension. Existing files are
      *          overwritten. This function requires a valid projectManager.
      * @param libraryName The basename of the module, excluding extension
      * @retval true on successful serialization and saving
@@ -202,7 +202,7 @@ public slots:
      * @details Iterates through `libraryMap` to find libraries matching the
      *          provided regex pattern. Each matching library is serialized and
      *          saved individually in YAML format. Files are named after the
-     *          library basenames with the ".soc_sym" extension. Existing files
+     *          library basenames with the ".soc_mod" extension. Existing files
      *          are overwritten. This function requires a valid projectManager.
      * @param libraryNameRegex Regular expression to filter library basenames
      * @retval true if all matching libraries are successfully saved
@@ -215,7 +215,7 @@ public slots:
      *          in `libraryNameList`. It locates corresponding modules in
      *          `moduleData` using `libraryMap`, then serializes them into YAML
      *          format. Results are saved to files named after each basename,
-     *          appending ".soc_sym". Existing files are overwritten. Requires
+     *          appending ".soc_mod". Existing files are overwritten. Requires
      *          a valid projectManager.
      * @param libraryNameList List of library basenames to save, excluding
      *        extensions.

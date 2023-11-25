@@ -220,7 +220,7 @@ bool QSocModuleManager::saveLibraryYaml(const QString &libraryName, const YAML::
     }
     /* Check file path */
     const QString &modulePath = projectManager->getModulePath();
-    const QString &filePath   = modulePath + "/" + libraryName + ".soc_sym";
+    const QString &filePath   = modulePath + "/" + libraryName + ".soc_mod";
     if (QFile::exists(filePath)) {
         /* Load library YAML file */
         std::ifstream inputFileStream(filePath.toStdString());
@@ -253,10 +253,10 @@ QStringList QSocModuleManager::listLibrary(const QRegularExpression &libraryName
         qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
         return result;
     }
-    /* QDir for '.soc_sym' files in module path, sorted by name. */
+    /* QDir for '.soc_mod' files in module path, sorted by name. */
     const QDir modulePathDir(
         projectManager->getModulePath(),
-        "*.soc_sym",
+        "*.soc_mod",
         QDir::SortFlag::Name | QDir::SortFlag::IgnoreCase,
         QDir::Files | QDir::NoDotAndDotDot);
     /* Add matching file basenames from projectDir to result list. */
@@ -285,7 +285,7 @@ bool QSocModuleManager::isExist(const QString &libraryName)
 
     /* Get the full file path by joining module path and basename with extension */
     const QString filePath
-        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_sym");
+        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
 
     /* Check if library file exists */
     return QFile::exists(filePath);
@@ -307,7 +307,7 @@ bool QSocModuleManager::load(const QString &libraryName)
 
     /* Get the full file path by joining module path and basename with extension */
     const QString filePath
-        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_sym");
+        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
 
     /* Open the YAML file */
     std::ifstream fileStream(filePath.toStdString());
@@ -401,7 +401,7 @@ bool QSocModuleManager::remove(const QString &libraryName)
 
     /* Get the full file path */
     const QString filePath
-        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_sym");
+        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
 
     /* Check if library file exists */
     if (!QFile::exists(filePath)) {
@@ -497,7 +497,7 @@ bool QSocModuleManager::save(const QString &libraryName)
 
     /* Serialize and save to file */
     const QString filePath
-        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_sym");
+        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
     std::ofstream outputFileStream(filePath.toStdString());
     if (!outputFileStream.is_open()) {
         qCritical() << "Error: Unable to open file for writing:" << filePath;
