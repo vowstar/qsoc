@@ -183,32 +183,46 @@ bool QSocModuleManager::importFromFileList(
 YAML::Node QSocModuleManager::getModuleYaml(const json &moduleAst)
 {
     YAML::Node moduleYaml;
+    /* Check if the module AST contains the required fields */
     if (moduleAst.contains("kind") && moduleAst.contains("name") && moduleAst.contains("body")
         && moduleAst["kind"] == "Instance" && moduleAst["body"].contains("members")) {
+        /* Extract the module's kind and name */
         const QString &kind = QString::fromStdString(moduleAst["kind"]);
         const QString &name = QString::fromStdString(moduleAst["name"]);
         const json    &body = moduleAst["body"];
+        /* Set of valid member kinds */
+        const QSet<QString> validKind = {"port", "parameter"};
+        /* Iterate through each member in the AST */
         for (const json &member : moduleAst["body"]["members"]) {
+            /* Check if the member contains the necessary fields */
             if (member.contains("kind") && member.contains("name") && member.contains("type")) {
-                const QString &memberKind = QString::fromStdString(member["kind"]);
-                const QString &memberName = QString::fromStdString(member["name"]);
-                const QString &memberType = QString::fromStdString(member["type"]);
-                if (memberKind == "Port") {
-                    moduleYaml["port"][memberName.toStdString()]["type"] = memberType.toStdString();
-                    if (member.contains("direction")) {
-                        const QString &memberDirection = QString::fromStdString(
-                            member["direction"]);
-                        moduleYaml["port"][memberName.toStdString()]["direction"]
-                            = memberDirection.toStdString();
-                    }
-                } else if (memberKind == "Parameter") {
-                    moduleYaml["parameter"][memberName.toStdString()]["type"]
-                        = memberType.toStdString();
-                    if (member.contains("value")) {
-                        const QString &memberValue = QString::fromStdString(member["value"]);
-                        moduleYaml["parameter"][memberName.toStdString()]["value"]
-                            = memberValue.toStdString();
-                    }
+                const QString     &memberKind    = QString::fromStdString(member["kind"]).toLower();
+                const QString     &memberName    = QString::fromStdString(member["name"]);
+                const QString     &memberType    = QString::fromStdString(member["type"]).toLower();
+                const std::string &memberKindStd = memberKind.toStdString();
+                const std::string &memberNameStd = memberName.toStdString();
+                const std::string &memberTypeStd = memberType.toStdString();
+                /* Check if memberKind is within the valid kinds */
+                if (!validKind.contains(memberKind)) {
+                    /* If memberKind is not in the set, exit the loop. */
+                    break;
+                }
+                /* Add member information to the YAML node */
+                moduleYaml[memberKindStd][memberNameStd]["type"] = memberTypeStd;
+                /* Check for and add the direction of the member if present */
+                if (member.contains("direction")) {
+                    const QString &memberDirection
+                        = QString::fromStdString(member["direction"]).toLower();
+                    const std::string &memberDirectionStd = memberDirection.toStdString();
+
+                    moduleYaml[memberKindStd][memberNameStd]["direction"] = memberDirectionStd;
+                }
+                /* Check for and add the value of the member if present */
+                if (member.contains("value")) {
+                    const QString     &memberValue    = QString::fromStdString(member["value"]);
+                    const std::string &memberValueStd = memberValue.toStdString();
+
+                    moduleYaml[memberKindStd][memberNameStd]["value"] = memberValueStd;
                 }
             }
         }
