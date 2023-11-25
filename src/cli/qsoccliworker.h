@@ -164,6 +164,48 @@ private:
      */
     bool parseModuleShow(const QStringList &appArguments);
     /**
+     * @brief Parse the bus command line arguments
+     * @details This function will parse the bus command line arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
+     */
+    bool parseBus(const QStringList &appArguments);
+    /**
+     * @brief Parse the bus import command line arguments
+     * @details This function will parse the bus import command line
+     *          arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
+     */
+    bool parseBusImport(const QStringList &appArguments);
+    /**
+     * @brief Parse the bus remove command line arguments
+     * @details This function will parse the bus remove command line
+     *          arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
+     */
+    bool parseBusRemove(const QStringList &appArguments);
+    /**
+     * @brief Parse the bus list command line arguments
+     * @details This function will parse the bus list command line arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
+     */
+    bool parseBusList(const QStringList &appArguments);
+    /**
+     * @brief Parse the bus show command line arguments
+     * @details This function will parse the bus show command line arguments.
+     * @param appArguments command line arguments
+     * @retval true Parse successfully
+     * @retval false Parse failed
+     */
+    bool parseBusShow(const QStringList &appArguments);
+    /**
      * @brief Show application name and version and emit exit with exitCode
      * @details This function will show application name and version and emit
      *          exit with exitCode.
