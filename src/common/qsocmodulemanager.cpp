@@ -195,6 +195,12 @@ YAML::Node QSocModuleManager::getModuleYaml(const json &moduleAst)
                 const QString &memberType = QString::fromStdString(member["type"]);
                 if (memberKind == "Port") {
                     moduleYaml["port"][memberName.toStdString()]["type"] = memberType.toStdString();
+                    if (member.contains("direction")) {
+                        const QString &memberDirection = QString::fromStdString(
+                            member["direction"]);
+                        moduleYaml["port"][memberName.toStdString()]["direction"]
+                            = memberDirection.toStdString();
+                    }
                 } else if (memberKind == "Parameter") {
                     moduleYaml["parameter"][memberName.toStdString()]["type"]
                         = memberType.toStdString();
