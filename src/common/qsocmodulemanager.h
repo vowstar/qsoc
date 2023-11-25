@@ -162,7 +162,7 @@ public slots:
     bool remove(const QString &libraryName);
     /**
      * @brief Remove libraries matching a regex pattern
-     * @details Removes all module files from the module directory that
+     * @details Removes all library files from the module directory that
      *          match `libraryNameRegex`. This method is ideal for batch
      *          removal of libraries based on naming patterns. It relies on
      *          a valid projectManager to execute.
@@ -174,7 +174,7 @@ public slots:
     bool remove(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
     /**
      * @brief Remove multiple libraries by a list of basenames
-     * @details Removes multiple module files specified in `libraryNameList`
+     * @details Removes multiple library files specified in `libraryNameList`
      *          from the module directory. Useful for deleting a specific set of
      *          module files. Requires a valid projectManager and checks each
      *          module file's existence.
