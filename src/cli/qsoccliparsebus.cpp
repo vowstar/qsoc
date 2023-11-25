@@ -83,10 +83,10 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
         "[<bus name or regex list>]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments   = parser.positionalArguments();
-    const QString    &libraryName    = parser.isSet("base") ? parser.value("base") : ".*";
-    const QString    &busName     = parser.isSet("regex") ? parser.value("regex") : "";
-    QStringList       busNameList = cmdArguments;
+    const QStringList cmdArguments = parser.positionalArguments();
+    const QString    &libraryName  = parser.isSet("base") ? parser.value("base") : ".*";
+    const QString    &busName      = parser.isSet("regex") ? parser.value("regex") : "";
+    QStringList       busNameList  = cmdArguments;
     /* Append bus name from positional arguments */
     if (!busName.trimmed().isEmpty()) {
         busNameList.append(busName.trimmed());
@@ -169,8 +169,7 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
         if (!busManager.removeBus(busNameRegex)) {
             return showError(
                 1,
-                QCoreApplication::translate("main", "Error: could not remove bus: %1")
-                    .arg(busName));
+                QCoreApplication::translate("main", "Error: could not remove bus: %1").arg(busName));
         }
     }
 
@@ -201,7 +200,7 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("base") ? parser.value("base") : ".*";
-    const QString    &busName   = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString    &busName      = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append bus name from positional arguments */
     if (!busName.trimmed().isEmpty()) {
@@ -313,7 +312,7 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("base") ? parser.value("base") : ".*";
-    const QString    &busName   = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString    &busName      = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append bus name from positional arguments */
     if (!busName.trimmed().isEmpty()) {
