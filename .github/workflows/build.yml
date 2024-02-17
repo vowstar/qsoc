@@ -23,6 +23,7 @@ jobs:
         submodules: recursive
     - name: Install depends
       run: >-
+        sudo apt update &&
         sudo apt-get install -y
         '^libxcb.*-dev'
         catch
@@ -47,7 +48,7 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        version: '6.6.0'
+        version: '6.6.2'
         host: 'linux'
         target: 'desktop'
         arch: 'gcc_64'
