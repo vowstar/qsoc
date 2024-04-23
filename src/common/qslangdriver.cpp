@@ -170,7 +170,13 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
 
             const QString args
                 = "slang -f \"" + tempFile.fileName()
-                  + "\" --ignore-unknown-modules --single-unit --compat vcs --error-limit=0";
+                  + "\" --ignore-unknown-modules --single-unit --compat vcs --error-limit=0"
+                  + " --ignore-directive delay_mode_path" + " --ignore-directive suppress_faults"
+                  + " --ignore-directive enable_portfaults"
+                  + " --ignore-directive disable_portfaults"
+                  + " --ignore-directive nosuppress_faults"
+                  + " --ignore-directive delay_mode_distributed"
+                  + " --ignore-directive delay_mode_unit";
 
             QStaticLog::logV(Q_FUNC_INFO, "TemporaryFile name:" + tempFile.fileName());
             QStaticLog::logV(Q_FUNC_INFO, "Content list begin");
