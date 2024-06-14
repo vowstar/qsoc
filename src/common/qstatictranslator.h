@@ -46,7 +46,7 @@ private:
      *          objects of this class can be created from outside the class,
      *          enforcing a static-only usage pattern.
      */
-    QStaticTranslator(){};
+    QStaticTranslator() {};
 
     /**
      * @brief Initialize the translator.

@@ -40,9 +40,9 @@ bool QStaticRegex::isNameExactMatch(const QString &str, const QRegularExpression
     if (pattern.isEmpty()) {
         return false;
     }
-    const QRegularExpression strictRegex = QStaticRegex::isNameRegularExpression(pattern)
-                                               ? regex
-                                               : QRegularExpression(
-                                                   "^" + QRegularExpression::escape(pattern) + "$");
+    const QRegularExpression strictRegex
+        = QStaticRegex::isNameRegularExpression(pattern)
+              ? regex
+              : QRegularExpression("^" + QRegularExpression::escape(pattern) + "$");
     return strictRegex.match(str).hasMatch();
 }
