@@ -234,7 +234,7 @@ if(CLANG_FORMAT)
     message(STATUS "Found clang-format: ${CLANG_FORMAT}")
     add_custom_target(
         clang-format
-        COMMAND ${CLANG_FORMAT} -i -style=file "${PROJECT_CPP_FILES}" "${PROJECT_H_FILES}"
+        COMMAND ${CLANG_FORMAT} -i -style=file ${PROJECT_CPP_FILES} ${PROJECT_H_FILES}
         WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}"
     )
 endif()
