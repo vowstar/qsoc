@@ -5,7 +5,7 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
-    void parseArgs(){};
+    void parseArgs() {};
 };
 
 QTEST_APPLESS_MAIN(Test)
