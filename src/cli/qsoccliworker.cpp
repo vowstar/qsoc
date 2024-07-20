@@ -79,6 +79,13 @@ bool QSocCliWorker::showErrorWithHelp(int exitCode, const QString &message)
     return false;
 }
 
+bool QSocCliWorker::showError(int exitCode, const QString &message)
+{
+    qCritical().noquote() << message;
+    this->exitCode = exitCode;
+    return false;
+}
+
 bool QSocCliWorker::showInfo(int exitCode, const QString &message)
 {
     qInfo().noquote() << message;

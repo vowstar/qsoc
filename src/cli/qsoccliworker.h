@@ -257,6 +257,16 @@ private:
     bool showErrorWithHelp(int exitCode, const QString &message);
 
     /**
+     * @brief Show error message and emit exit with exitCode.
+     * @details This function will show error message and emit exit with
+     *          exitCode.
+     * @param exitCode The exit code to emit.
+     * @param message The error message to show.
+     * @return bool always false.
+     */
+    bool showError(int exitCode, const QString &message);
+
+    /**
      * @brief Show info message and emit exit with exitCode.
      * @details This function will show info message and emit exit with
      *          exitCode.
