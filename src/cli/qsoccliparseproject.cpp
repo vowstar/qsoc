@@ -111,7 +111,7 @@ bool QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
         projectManager.setOutputPath(parser.value("output"));
     }
     if (!projectManager.save(projectName)) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to create project %1.")
                 .arg(projectName));
@@ -160,7 +160,7 @@ bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
     }
     /* Load project by name from project path */
     if (!projectManager.load(projectName)) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to load project %1.")
                 .arg(projectName));
@@ -180,7 +180,7 @@ bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
     }
     /* Save project config */
     if (!projectManager.save(projectName)) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to update project %1.")
                 .arg(projectName));
@@ -216,14 +216,14 @@ bool QSocCliWorker::parseProjectRemove(const QStringList &appArguments)
     }
     /* Check if project exists */
     if (!projectManager.isExist(projectName)) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to find project %1.")
                 .arg(projectName));
     }
     /* Remove project file */
     if (!projectManager.remove(projectName)) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to remove project %1.")
                 .arg(projectName));
@@ -297,7 +297,7 @@ bool QSocCliWorker::parseProjectShow(const QStringList &appArguments)
     }
     /* Load project by name from project path */
     if (!projectManager.load(projectName)) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to load project %1.")
                 .arg(projectName));

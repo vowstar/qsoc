@@ -102,7 +102,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
     } else {
         const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
-            return showError(
+            return showErrorWithHelp(
                 1,
                 QCoreApplication::translate(
                     "main",
@@ -113,7 +113,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
         projectManager.loadFirst();
     }
     if (!projectManager.isValidModulePath()) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
                 .arg(projectManager.getModulePath()));
@@ -126,12 +126,12 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
     }
     const QRegularExpression moduleNameRegex(moduleName);
     if (!moduleNameRegex.isValid()) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of module name."));
     }
     if (!moduleManager.importFromFileList(libraryName, moduleNameRegex, filelistPath, filePathList)) {
-        return showError(1, QCoreApplication::translate("main", "Error: import failed."));
+        return showErrorWithHelp(1, QCoreApplication::translate("main", "Error: import failed."));
     }
 
     return true;
@@ -186,7 +186,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     } else {
         const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
-            return showError(
+            return showErrorWithHelp(
                 1,
                 QCoreApplication::translate(
                     "main",
@@ -198,7 +198,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     }
     /* Check if module path is valid */
     if (!projectManager.isValidModulePath()) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
                 .arg(projectManager.getModulePath()));
@@ -206,7 +206,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
     if (!libraryNameRegex.isValid()) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of library name: %1")
                 .arg(libraryName));
@@ -225,7 +225,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     }
     /* Show error if invalid module name is found */
     if (invalidModuleNameFound) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
                 .arg(invalidModuleName));
@@ -234,7 +234,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     QSocModuleManager moduleManager(this, &projectManager);
     /* Load modules */
     if (!moduleManager.load(libraryNameRegex)) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
                 .arg(libraryName));
@@ -243,7 +243,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     for (const QString &moduleName : moduleNameList) {
         const QRegularExpression moduleNameRegex(moduleName);
         if (!moduleManager.removeModule(moduleNameRegex)) {
-            return showError(
+            return showErrorWithHelp(
                 1,
                 QCoreApplication::translate("main", "Error: could not remove module: %1")
                     .arg(moduleName));
@@ -302,7 +302,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
     } else {
         const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
-            return showError(
+            return showErrorWithHelp(
                 1,
                 QCoreApplication::translate(
                     "main",
@@ -314,7 +314,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
     }
     /* Check if module path is valid */
     if (!projectManager.isValidModulePath()) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
                 .arg(projectManager.getModulePath()));
@@ -322,7 +322,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
     if (!libraryNameRegex.isValid()) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of library name: %1")
                 .arg(libraryName));
@@ -341,7 +341,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
     }
     /* Show error if invalid module name is found */
     if (invalidModuleNameFound) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
                 .arg(invalidModuleName));
@@ -350,7 +350,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
     QSocModuleManager moduleManager(this, &projectManager);
     /* Load modules */
     if (!moduleManager.load(libraryNameRegex)) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
                 .arg(libraryName));
@@ -414,7 +414,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
     } else {
         const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
-            return showError(
+            return showErrorWithHelp(
                 1,
                 QCoreApplication::translate(
                     "main",
@@ -426,7 +426,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
     }
     /* Check if module path is valid */
     if (!projectManager.isValidModulePath()) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
                 .arg(projectManager.getModulePath()));
@@ -434,7 +434,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
     if (!libraryNameRegex.isValid()) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of library name: %1")
                 .arg(libraryName));
@@ -453,7 +453,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
     }
     /* Show error if invalid module name is found */
     if (invalidModuleNameFound) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
                 .arg(invalidModuleName));
@@ -462,7 +462,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
     QSocModuleManager moduleManager(this, &projectManager);
     /* Load modules */
     if (!moduleManager.load(libraryNameRegex)) {
-        return showError(
+        return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
                 .arg(libraryName));

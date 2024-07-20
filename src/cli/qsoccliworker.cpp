@@ -69,7 +69,7 @@ bool QSocCliWorker::showHelp(int exitCode)
     return true;
 }
 
-bool QSocCliWorker::showError(int exitCode, const QString &message)
+bool QSocCliWorker::showErrorWithHelp(int exitCode, const QString &message)
 {
     qCritical().noquote() << message;
     qCritical().noquote() << QCoreApplication::applicationName()
@@ -92,7 +92,7 @@ bool QSocCliWorker::showHelpOrError(int exitCode, const QString &message)
     if (parser.isSet("help")) {
         result = showHelp(0);
     } else {
-        result = showError(exitCode, message);
+        result = showErrorWithHelp(exitCode, message);
     }
     return result;
 }
@@ -128,7 +128,7 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
         const int level = parser.value("level").toInt();
         /* Check if the level is valid */
         if (level < QStaticLog::Level::Silent || level > QStaticLog::Level::Verbose) {
-            return showError(
+            return showErrorWithHelp(
                 1,
                 QCoreApplication::translate("main", "Error: invalid log level: %1.")
                     .arg(parser.value("level")));
@@ -165,10 +165,10 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
             return false;
         }
     } else if (command == "schematic") {
-        return showError(
+        return showErrorWithHelp(
             1, QCoreApplication::translate("main", "Error: not implemented schematic yet."));
     } else if (command == "generate") {
-        return showError(
+        return showErrorWithHelp(
             1, QCoreApplication::translate("main", "Error: not implemented generate yet."));
     } else {
         return showHelpOrError(
