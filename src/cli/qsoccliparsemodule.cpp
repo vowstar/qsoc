@@ -85,7 +85,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList  cmdArguments = parser.positionalArguments();
     const QString     &libraryName  = parser.isSet("base") ? parser.value("base") : "";
-    const QString     &moduleName   = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString     &moduleName   = parser.isSet("regex") ? parser.value("regex") : ".*";
     const QStringList &filePathList = cmdArguments;
 
     if (filePathList.isEmpty() && !parser.isSet("filelist")) {
