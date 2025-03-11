@@ -92,16 +92,18 @@ public slots:
     QString contentCleanComment(const QString &content);
 
     /**
-     * @brief Converts relative paths in content to absolute paths.
-     * @details This function processes the given string and converts
-     *          any relative file paths to absolute paths, using the
-     *          specified base directory. Assumes path formats are
-     *          appropriate for the operating system in use.
-     * @param content String containing content with relative paths.
-     * @param baseDir Base directory for resolving relative paths.
-     * @return QString with modified content, featuring absolute paths.
+     * @brief Filters and validates file paths in content.
+     * @details This function processes each line of the input content as a file
+     *          path, verifies if it exists as a regular file or valid symbolic
+     *          link (not a directory), and returns absolute paths of valid
+     *          files. Paths are resolved relative to the specified base
+     *          directory.
+     * @param content String containing potential file paths (one per line)
+     * @param baseDir Base directory used for resolving relative paths
+     * @return QString containing newline-separated absolute paths of valid
+     *         files. Returns empty string if no valid files found.
      */
-    QString contentRelativeToAbsolute(const QString &content, const QDir &baseDir);
+    QString contentValidFile(const QString &content, const QDir &baseDir);
 
 private:
     /* Pointer of project manager. */

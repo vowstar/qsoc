@@ -155,7 +155,7 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
         }
         /* Convert relative path to absolute path */
         if (QFileInfo::exists(fileListPath)) {
-            content = contentRelativeToAbsolute(content, QFileInfo(fileListPath).absoluteDir());
+            content = contentValidFile(content, QFileInfo(fileListPath).absoluteDir());
         }
         /* Create a temporary file */
         QTemporaryFile tempFile("socstudio.fl");
@@ -171,8 +171,8 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
             const QString args
                 = "slang -f \"" + tempFile.fileName()
                   + "\" --ignore-unknown-modules --single-unit --compat vcs --error-limit=0"
-                  + " --ignore-directive delay_mode_path" + " --ignore-directive suppress_faults"
-                  + " --ignore-directive enable_portfaults"
+                  + " -Wunknown-sys-name" + " --ignore-directive delay_mode_path"
+                  + " --ignore-directive suppress_faults" + " --ignore-directive enable_portfaults"
                   + " --ignore-directive disable_portfaults"
                   + " --ignore-directive nosuppress_faults"
                   + " --ignore-directive delay_mode_distributed"
@@ -238,20 +238,26 @@ QString QSlangDriver::contentCleanComment(const QString &content)
     return result;
 }
 
-QString QSlangDriver::contentRelativeToAbsolute(const QString &content, const QDir &baseDir)
+QString QSlangDriver::contentValidFile(const QString &content, const QDir &baseDir)
 {
     QStringList result;
     /* Splitting content into lines, considering different newline characters */
     const QStringList lines = content.split(QRegularExpression(R"(\r\n|\n|\r)"), Qt::KeepEmptyParts);
 
     for (const QString &line : lines) {
+        QString absolutePath = line;
         /* Check for relative path and convert it to absolute */
         if (QDir::isRelativePath(line)) {
             /* Convert relative path to absolute path */
-            result.append(baseDir.filePath(line));
+            absolutePath = baseDir.filePath(line);
         } else {
             /* Preserve absolute paths and non-path content as is */
-            result.append(line);
+            absolutePath = line;
+        }
+        QFileInfo fileInfo(absolutePath);
+        /* Check if path exists and is a regular file (including valid symlinks to files) */
+        if (fileInfo.exists() && fileInfo.isFile()) {
+            result.append(absolutePath);
         }
     }
     return result.join("\n");
