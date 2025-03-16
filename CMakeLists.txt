@@ -100,6 +100,19 @@ else()
     message(STATUS "Use local yaml-cpp library: ${YAML_LIBRARIES} ${YAML_INCLUDE_DIRS}")
 endif()
 
+# CSV
+pkg_check_modules(CSV IMPORTED_TARGET rapidcsv>=8.80)
+if (CSV_FOUND)
+    message(STATUS "Use system rapidcsv library: ${CSV_LIBRARIES} ${CSV_VERSION}")
+else()
+    add_subdirectory(external/csv)
+    set(CSV_INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/csv/src"
+    )
+    set(CSV_LIBRARIES rapidcsv)
+    message(STATUS "Use local rapidcsv library: ${CSV_LIBRARIES} ${CSV_INCLUDE_DIRS}")
+endif()
+
 # GPDS
 pkg_check_modules(GPDS IMPORTED_TARGET gpds>=1.5.1)
 if (GPDS_FOUND)
@@ -192,6 +205,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${SVLANG_INCLUDE_DIRS}"
     "${JSON_INCLUDE_DIRS}"
     "${YAML_INCLUDE_DIRS}"
+    "${CSV_INCLUDE_DIRS}"
     "${GPDS_INCLUDE_DIRS}"
     "${QSCHEMATIC_INCLUDE_DIRS}"
 )
@@ -208,6 +222,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${SVLANG_LIBRARIES}
     ${JSON_LIBRARIES}
     ${YAML_LIBRARIES}
+    ${CSV_LIBRARIES}
     ${GPDS_LIBRARIES}
     ${QSCHEMATIC_LIBRARIES}
 )

@@ -62,6 +62,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         "${SVLANG_INCLUDE_DIRS}"
         "${JSON_INCLUDE_DIRS}"
         "${YAML_INCLUDE_DIRS}"
+        "${CSV_INCLUDE_DIRS}"
         "${GPDS_INCLUDE_DIRS}"
         "${QSCHEMATIC_INCLUDE_DIRS}"
     )
@@ -79,6 +80,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${SVLANG_LIBRARIES}
         ${JSON_LIBRARIES}
         ${YAML_LIBRARIES}
+        ${CSV_LIBRARIES}
         ${GPDS_LIBRARIES}
         ${QSCHEMATIC_LIBRARIES}
     )
