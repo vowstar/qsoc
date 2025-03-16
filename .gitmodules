@@ -13,3 +13,6 @@
 [submodule "external/gpds"]
 	path = external/gpds
 	url = git@github.com:simulton/gpds.git
+[submodule "external/csv"]
+	path = external/csv
+	url = git@github.com:d99kris/rapidcsv.git
