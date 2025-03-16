@@ -204,8 +204,8 @@ YAML::Node QSocModuleManager::getModuleYaml(const json &moduleAst)
                 const std::string &memberTypeStd = memberType.toStdString();
                 /* Check if memberKind is within the valid kinds */
                 if (!validKind.contains(memberKind)) {
-                    /* If memberKind is not in the set, exit the loop. */
-                    break;
+                    /* If memberKind is not in the set, skip to next iteration */
+                    continue;
                 }
                 /* Add member information to the YAML node */
                 moduleYaml[memberKindStd][memberNameStd]["type"] = memberTypeStd;
