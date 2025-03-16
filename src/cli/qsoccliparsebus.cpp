@@ -57,7 +57,74 @@ bool QSocCliWorker::parseBus(const QStringList &appArguments)
 
 bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
 {
-    Q_UNUSED(appArguments);
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"b", "base"},
+         QCoreApplication::translate("main", "The library base name."),
+         "library base name"},
+        {{"n", "name"}, QCoreApplication::translate("main", "The bus name."), "bus name"},
+    });
+    parser.addPositionalArgument(
+        "files",
+        QCoreApplication::translate("main", "The bus definition CSV files to be processed."),
+        "[<CSV files>]");
+
+    parser.parse(appArguments);
+    const QStringList  cmdArguments = parser.positionalArguments();
+    const QString     &libraryName  = parser.isSet("base") ? parser.value("base") : "";
+    const QString     &busName      = parser.isSet("name") ? parser.value("name") : "";
+    const QStringList &filePathList = cmdArguments;
+
+    if (filePathList.isEmpty()) {
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: missing bus definition CSV files."));
+    }
+    /* Setup project manager and project path  */
+    QSocProjectManager projectManager(this);
+    if (parser.isSet("directory")) {
+        projectManager.setProjectPath(parser.value("directory"));
+    }
+    if (parser.isSet("project")) {
+        projectManager.load(parser.value("project"));
+    } else {
+        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        if (projectNameList.length() > 1) {
+            return showErrorWithHelp(
+                1,
+                QCoreApplication::translate(
+                    "main", "Error: multiple projects found, please specify one using -p option."));
+        } else if (projectNameList.isEmpty()) {
+            return showErrorWithHelp(
+                1, QCoreApplication::translate("main", "Error: no project found."));
+        }
+        projectManager.load(projectNameList.first());
+    }
+    /* Check if both busName and libraryName are empty */
+    if (busName.isEmpty() && libraryName.isEmpty()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: both bus name and library name are empty."));
+    }
+    /* Check if busName is empty */
+    if (busName.isEmpty()) {
+        return showErrorWithHelp(1, QCoreApplication::translate("main", "Error: bus name is empty."));
+    }
+    /* Check if libraryName is empty */
+    if (libraryName.isEmpty()) {
+        return showErrorWithHelp(
+            1, QCoreApplication::translate("main", "Error: library name is empty."));
+    }
+
+    QSocBusManager busManager(this, &projectManager);
+    if (!busManager.importFromFileList(libraryName, busName, filePathList)) {
+        return showErrorWithHelp(1, QCoreApplication::translate("main", "Error: import failed."));
+    }
+
     return true;
 }
 
