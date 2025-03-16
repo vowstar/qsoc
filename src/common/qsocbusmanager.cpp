@@ -7,6 +7,10 @@
 #include <QFile>
 
 #include <fstream>
+#include <string>
+#include <vector>
+
+#include <rapidcsv.h>
 
 QSocBusManager::QSocBusManager(QObject *parent, QSocProjectManager *projectManager)
     : QObject{parent}
@@ -40,6 +44,153 @@ bool QSocBusManager::isBusPathValid()
         qCritical() << "Error: Invalid bus path:" << projectManager->getBusPath();
         return false;
     }
+    return true;
+}
+
+bool QSocBusManager::importFromFileList(
+    const QString &libraryName, const QString &busName, const QStringList &filePathList)
+{
+    /* Check if libraryName is empty */
+    if (libraryName.isEmpty()) {
+        qCritical() << "Error: library name is empty.";
+        return false;
+    }
+    /* Check if busName is empty */
+    if (busName.isEmpty()) {
+        qCritical() << "Error: bus name is empty.";
+        return false;
+    }
+    /* Define standard column names */
+    const QStringList standardColumns
+        = {"name", "mode", "direction", "width", "qualifier", "description"};
+
+    /* Initialize result CSV data */
+    QStringList        resultHeaders = standardColumns;
+    QList<QStringList> resultData;
+
+    /* Process each CSV file */
+    for (const QString &filePath : filePathList) {
+        QFile file(filePath);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            continue;
+        }
+
+        QTextStream in(&file);
+        QString     firstLine = in.readLine();
+        file.close();
+
+        /* Auto-detect delimiter */
+        QChar delimiter = firstLine.count(',') >= firstLine.count(';') ? ',' : ';';
+
+        /* Configure rapidcsv */
+        rapidcsv::SeparatorParams params(static_cast<char>(delimiter.unicode()));
+
+        /* Parse CSV file using rapidcsv */
+        rapidcsv::Document doc(filePath.toStdString(), rapidcsv::LabelParams(0, -1), params);
+
+        /* Get column names from first row */
+        std::vector<std::string> fileColumnsStd = doc.GetColumnNames();
+        QStringList              fileColumns;
+        for (const auto &col : fileColumnsStd) {
+            fileColumns.append(QString::fromStdString(col));
+        }
+
+        /* Map file columns to standard columns */
+        QMap<int, int> columnMapping; /* maps file column index to standard column index */
+
+        /* For each standard column, track matching columns and their lengths */
+        QMap<QString, QMap<int, int>> columnLengths; /* standard column -> {file index -> length} */
+
+        /* First pass - find all potential matches and their lengths */
+        for (int i = 0; i < fileColumns.size(); i++) {
+            QString fileCol = fileColumns[i].trimmed().toLower();
+
+            /* Check against each standard column */
+            for (const QString &stdCol : standardColumns) {
+                if (fileCol.contains(stdCol, Qt::CaseInsensitive)) {
+                    if (!columnLengths.contains(stdCol)) {
+                        columnLengths[stdCol] = QMap<int, int>();
+                    }
+                    columnLengths[stdCol][i] = fileColumns[i].trimmed().length();
+                }
+            }
+        }
+
+        /* Second pass - map shortest column for each standard column */
+        for (const QString &stdCol : standardColumns) {
+            if (columnLengths.contains(stdCol)) {
+                /* Find column with shortest name */
+                int shortestLength = INT_MAX;
+                int shortestIndex  = -1;
+
+                const auto &lengthMap = columnLengths[stdCol];
+                for (auto it = lengthMap.begin(); it != lengthMap.end(); ++it) {
+                    if (it.value() < shortestLength) {
+                        shortestLength = it.value();
+                        shortestIndex  = it.key();
+                    }
+                }
+
+                /* Map the shortest column */
+                columnMapping[shortestIndex] = standardColumns.indexOf(stdCol);
+            }
+        }
+
+        /* Read and map data rows */
+        for (size_t rowIdx = 0; rowIdx < doc.GetRowCount(); rowIdx++) {
+            QStringList mappedRow(standardColumns.size());
+
+            for (auto it = columnMapping.begin(); it != columnMapping.end(); ++it) {
+                int fileColIdx = it.key();
+                int stdColIdx  = it.value();
+
+                std::string cellValue = doc.GetCell<std::string>(fileColIdx, rowIdx);
+                mappedRow[stdColIdx]  = QString::fromStdString(cellValue);
+            }
+
+            resultData.append(mappedRow);
+        }
+    }
+
+    /* Convert CSV data to YAML format */
+    YAML::Node busYaml;
+
+    for (const QStringList &row : resultData) {
+        /* Ensure we have all required fields */
+        if (row.size() >= 6) {
+            QString signalName = row[0].trimmed();
+            QString mode       = row[1].trimmed();
+            QString direction  = row[2].trimmed();
+            QString width      = row[3].trimmed();
+            QString qualifier  = row[4].trimmed();
+
+            if (!signalName.isEmpty() && !mode.isEmpty()) {
+                /* Create nested structure: busName -> signalName -> mode -> properties */
+                if (!direction.isEmpty()) {
+                    busYaml[busName.toStdString()][signalName.toStdString()][mode.toStdString()]
+                           ["direction"]
+                        = direction.toStdString();
+                }
+                if (!width.isEmpty()) {
+                    busYaml[busName.toStdString()][signalName.toStdString()][mode.toStdString()]
+                           ["width"]
+                        = width.toStdString();
+                }
+                if (!qualifier.isEmpty()) {
+                    busYaml[busName.toStdString()][signalName.toStdString()][mode.toStdString()]
+                           ["qualifier"]
+                        = qualifier.toStdString();
+                }
+            }
+        }
+    }
+
+    /* Save YAML file */
+    if (!saveLibraryYaml(libraryName, busYaml)) {
+        qCritical() << "Error: Failed to save bus library YAML file";
+        return false;
+    }
+
     return true;
 }
 

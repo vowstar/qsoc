@@ -51,6 +51,22 @@ public slots:
     bool isBusPathValid();
 
     /**
+     * @brief Import CSV files into bus library.
+     * @details Imports CSV files, specified in filePathList, into the
+     *          bus library. This function creates or updates bus data
+     *          in YAML::Node busData. The libraryName parameter specifies
+     *          the bus library's basename, while busName is the name of
+     *          the specific bus being processed.
+     * @param libraryName Base name of the bus library file, sans extension.
+     * @param busName Name of the specific bus being imported.
+     * @param filePathList List of paths to CSV files for import.
+     * @retval true Import successful.
+     * @retval false Import failed.
+     */
+    bool importFromFileList(
+        const QString &libraryName, const QString &busName, const QStringList &filePathList);
+
+    /**
      * @brief Save the library YAML object to library file.
      * @details This function will save the library YAML object to library file.
      * @param libraryName The basename of the library file without ext.
