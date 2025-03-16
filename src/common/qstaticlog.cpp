@@ -25,7 +25,7 @@ QString QStaticLog::strIRichtext = "<b style='color: blue'>[I]:</b>";
 QString QStaticLog::strDRichtext = "<b style='color: green'>[D]:</b>";
 QString QStaticLog::strVRichtext = "<b style='color: silver'>[V]:</b>";
 
-QStaticLog::Level QStaticLog::level         = QStaticLog::Level::Silent;
+QStaticLog::Level QStaticLog::level         = QStaticLog::Level::Error;
 bool              QStaticLog::colorConsole  = true;
 bool              QStaticLog::colorRichtext = true;
 
