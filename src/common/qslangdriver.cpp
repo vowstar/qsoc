@@ -51,19 +51,34 @@ bool QSlangDriver::parseArgs(const QString &args)
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
         if (!driver.parseCommandLine(std::string_view(args.toStdString()))) {
-            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            if (!slang::OS::capturedStdout.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            }
+            if (!slang::OS::capturedStderr.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+            }
             throw std::runtime_error("Failed to parse command line");
         }
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
         if (!driver.processOptions()) {
-            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            if (!slang::OS::capturedStdout.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            }
+            if (!slang::OS::capturedStderr.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+            }
             throw std::runtime_error("Failed to process options");
         }
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
         if (!driver.parseAllSources()) {
-            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            if (!slang::OS::capturedStdout.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            }
+            if (!slang::OS::capturedStderr.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+            }
             throw std::runtime_error("Failed to parse sources");
         }
         slang::OS::capturedStdout.clear();
@@ -73,25 +88,32 @@ bool QSlangDriver::parseArgs(const QString &args)
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
         if (!driver.reportParseDiags()) {
-            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            if (!slang::OS::capturedStdout.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            }
+            if (!slang::OS::capturedStderr.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+            }
             throw std::runtime_error("Failed to report parse diagnostics");
         }
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
         auto compilation = driver.createCompilation();
         if (!driver.reportCompilation(*compilation, false)) {
-            QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            if (!slang::OS::capturedStdout.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            }
+            if (!slang::OS::capturedStderr.empty()) {
+                QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+            }
             throw std::runtime_error("Failed to report compilation");
         }
         result = true;
         QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
 
-        slang::JsonWriter writer;
-        writer.setPrettyPrint(true);
-
+        slang::JsonWriter              writer;
         const std::vector<std::string> astJsonScopes;
-
-        slang::ast::ASTSerializer serializer(*compilation, writer);
+        slang::ast::ASTSerializer      serializer(*compilation, writer);
 
         if (astJsonScopes.empty()) {
             serializer.serialize(compilation->getRoot());
