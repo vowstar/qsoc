@@ -17,7 +17,8 @@ bool QSocCliWorker::parseModule(const QStringList &appArguments)
             "import   Import Verilog modules into module libraries.\n"
             "remove   Remove modules from specified libraries.\n"
             "list     List all modules within designated libraries.\n"
-            "show     Show detailed information on a chosen module."),
+            "show     Show detailed information on a chosen module.\n"
+            "bus      Manage bus interfaces of modules."),
         "module <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
@@ -45,6 +46,11 @@ bool QSocCliWorker::parseModule(const QStringList &appArguments)
     } else if (command == "show") {
         nextArguments.removeOne(command);
         if (!parseModuleShow(nextArguments)) {
+            return false;
+        }
+    } else if (command == "bus") {
+        nextArguments.removeOne(command);
+        if (!parseModuleBus(nextArguments)) {
             return false;
         }
     } else {
@@ -474,5 +480,134 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
         showInfo(0, QStaticDataSedes::serializeYaml(moduleManager.getModuleNode(moduleNameRegex)));
     }
 
+    return true;
+}
+
+bool QSocCliWorker::parseModuleBus(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addPositionalArgument(
+        "subcommand",
+        QCoreApplication::translate(
+            "main",
+            "add      Add bus definitions to modules.\n"
+            "remove   Remove bus definitions from modules.\n"
+            "list     List bus definitions of modules.\n"
+            "show     Show bus definitions of modules."),
+        "module bus <subcommand> [subcommand options]");
+
+    parser.parse(appArguments);
+    const QStringList cmdArguments = parser.positionalArguments();
+    if (cmdArguments.isEmpty()) {
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
+    }
+    const QString &command       = cmdArguments.first();
+    QStringList    nextArguments = appArguments;
+    if (command == "add") {
+        nextArguments.removeOne(command);
+        if (!parseModuleBusAdd(nextArguments)) {
+            return false;
+        }
+    } else if (command == "remove") {
+        nextArguments.removeOne(command);
+        if (!parseModuleBusRemove(nextArguments)) {
+            return false;
+        }
+    } else if (command == "list") {
+        nextArguments.removeOne(command);
+        if (!parseModuleBusList(nextArguments)) {
+            return false;
+        }
+    } else if (command == "show") {
+        nextArguments.removeOne(command);
+        if (!parseModuleBusShow(nextArguments)) {
+            return false;
+        }
+    } else {
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: unknown subcommand: %1.").arg(command));
+    }
+
+    return true;
+}
+
+bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"b", "base"},
+         QCoreApplication::translate("main", "The library base name or regex."),
+         "library base name or regex"},
+        {{"r", "regex"},
+         QCoreApplication::translate("main", "The module name or regex."),
+         "module name or regex"},
+    });
+    // Implementation needed
+    return true;
+}
+
+bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"b", "base"},
+         QCoreApplication::translate("main", "The library base name or regex."),
+         "library base name or regex"},
+        {{"r", "regex"},
+         QCoreApplication::translate("main", "The module name or regex."),
+         "module name or regex"},
+    });
+    // Implementation needed
+    return true;
+}
+
+bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"b", "base"},
+         QCoreApplication::translate("main", "The library base name or regex."),
+         "library base name or regex"},
+        {{"r", "regex"},
+         QCoreApplication::translate("main", "The module name or regex."),
+         "module name or regex"},
+    });
+    // Implementation needed
+    return true;
+}
+
+bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"b", "base"},
+         QCoreApplication::translate("main", "The library base name or regex."),
+         "library base name or regex"},
+        {{"r", "regex"},
+         QCoreApplication::translate("main", "The module name or regex."),
+         "module name or regex"},
+    });
+    // Implementation needed
     return true;
 }

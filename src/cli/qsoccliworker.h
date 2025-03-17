@@ -181,6 +181,55 @@ private:
     bool parseModuleShow(const QStringList &appArguments);
 
     /**
+     * @brief Parse the module bus command line arguments.
+     * @details This function will parse the module bus command line arguments.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseModuleBus(const QStringList &appArguments);
+
+    /**
+     * @brief Parse the module bus add command line arguments.
+     * @details This function will parse the module bus add command line arguments
+     *          to add bus interfaces to specified module.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseModuleBusAdd(const QStringList &appArguments);
+
+    /**
+     * @brief Parse the module bus remove command line arguments.
+     * @details This function will parse the module bus remove command line arguments
+     *          to remove bus interfaces from specified module.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseModuleBusRemove(const QStringList &appArguments);
+
+    /**
+     * @brief Parse the module bus list command line arguments.
+     * @details This function will parse the module bus list command line arguments
+     *          to list all bus interfaces of specified module.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseModuleBusList(const QStringList &appArguments);
+
+    /**
+     * @brief Parse the module bus show command line arguments.
+     * @details This function will parse the module bus show command line arguments
+     *          to show detailed information of specified module's bus interfaces.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseModuleBusShow(const QStringList &appArguments);
+
+    /**
      * @brief Parse the bus command line arguments.
      * @details This function will parse the bus command line arguments.
      * @param appArguments command line arguments.
