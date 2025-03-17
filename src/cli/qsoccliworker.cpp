@@ -110,11 +110,12 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
     parser.addOptions({
         {{"h", "help"},
          QCoreApplication::translate("main", "Displays help on commandline options.")},
-        {{"l", "level"},
+        {"verbose",
          QCoreApplication::translate(
              "main",
-             "Set log level. 0 is silent, 1 is error, 2 is warning, 3 is "
-             "info, 4 is debug, 5 is verbose."),
+             "Verbosity level (0-5).\n"
+             "Higher values increase output detail.\n"
+             "0=silent, 1=error, 2=warning, 3=info, 4=debug, 5=verbose"),
          "level"},
         {{"v", "version"}, QCoreApplication::translate("main", "Displays version information.")},
     });
@@ -130,15 +131,15 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
             "generate    Generate rtl, such as verilog, etc.\n"),
         "<command> [command options]");
     parser.parse(appArguments);
-    /* Set debug level as early as possible */
-    if (parser.isSet("level")) {
-        const int level = parser.value("level").toInt();
+    /* Set verbosity level as early as possible */
+    if (parser.isSet("verbose")) {
+        const int level = parser.value("verbose").toInt();
         /* Check if the level is valid */
         if (level < QStaticLog::Level::Silent || level > QStaticLog::Level::Verbose) {
             return showErrorWithHelp(
                 1,
                 QCoreApplication::translate("main", "Error: invalid log level: %1.")
-                    .arg(parser.value("level")));
+                    .arg(parser.value("verbose")));
         }
         /* Set log level */
         QStaticLog::setLevel(static_cast<QStaticLog::Level>(level));
