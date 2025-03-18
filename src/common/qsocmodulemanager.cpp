@@ -564,7 +564,7 @@ QStringList QSocModuleManager::listModule(const QRegularExpression &moduleNameRe
     return result;
 }
 
-YAML::Node QSocModuleManager::getModuleNode(const QRegularExpression &moduleNameRegex)
+YAML::Node QSocModuleManager::getModuleYamls(const QRegularExpression &moduleNameRegex)
 {
     YAML::Node result;
 

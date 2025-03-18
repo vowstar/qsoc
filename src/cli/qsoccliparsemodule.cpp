@@ -477,7 +477,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
     for (const QString &moduleName : moduleNameList) {
         const QRegularExpression moduleNameRegex(moduleName);
         /* Show details about the module */
-        showInfo(0, QStaticDataSedes::serializeYaml(moduleManager.getModuleNode(moduleNameRegex)));
+        showInfo(0, QStaticDataSedes::serializeYaml(moduleManager.getModuleYamls(moduleNameRegex)));
     }
 
     return true;

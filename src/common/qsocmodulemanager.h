@@ -303,18 +303,21 @@ public slots:
     QStringList listModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
     /**
-     * @brief Retrieve YAML node for modules matching the regex.
-     * @details Fetches and returns the YAML node for modules whose names
+     * @brief Retrieve YAML nodes for modules matching the regex.
+     * @details Fetches and returns YAML nodes for all modules whose names
      *          match the provided regular expression. This allows for
-     *          specific querying and manipulation of module data within
-     *          the module library. Defaults to fetching all module nodes
-     *          if no regex is specified.
+     *          querying multiple modules at once based on name patterns.
+     *          The returned YAML node contains a map where each key is a
+     *          matching module name and its value is the corresponding
+     *          module's YAML data. Returns an empty node if no matches
+     *          are found.
      * @param moduleNameRegex Regex used to filter the module names.
      *        Default is ".*", which matches all modules.
-     * @return YAML::Node The YAML node(s) corresponding to the matched
-     *                    module(s). Returns an empty node if no match is found.
+     * @return YAML::Node A map of YAML nodes, where each key is a module
+     *                    name and its value is the module's YAML data.
+     *                    Returns an empty node if no matches are found.
      */
-    YAML::Node getModuleNode(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
+    YAML::Node getModuleYamls(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
     /**
      * @brief Update existing module's YAML data and save to its library file
