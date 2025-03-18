@@ -137,22 +137,21 @@ bool QSocModuleManager::importFromFileList(
             return false;
         }
         YAML::Node libraryYaml;
-        QString    locallibraryName = libraryName;
+        QString    effectiveName = libraryName;
 
         if (moduleNameRegex.pattern().isEmpty()) {
             /* Pick first module if pattern is empty */
             const QString &moduleName = moduleList.first();
             qDebug() << "Pick first module:" << moduleName;
-            if (locallibraryName.isEmpty()) {
-                /* Use first module name as library filename */
-                locallibraryName = moduleName.toLower();
-                qDebug() << "Pick library filename:" << locallibraryName;
+            if (effectiveName.isEmpty()) {
+                effectiveName = moduleName.toLower();
+                qDebug() << "Pick library filename:" << effectiveName;
             }
             const json       &moduleAst  = driver.getModuleAst(moduleName);
             const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
             /* Add module to library yaml */
             libraryYaml[moduleName.toStdString()] = moduleYaml;
-            saveLibraryYaml(locallibraryName, libraryYaml);
+            saveLibraryYaml(effectiveName, libraryYaml);
             return true;
         }
         /* Find module by pattern */
@@ -160,10 +159,10 @@ bool QSocModuleManager::importFromFileList(
         for (const QString &moduleName : moduleList) {
             if (QStaticRegex::isNameExactMatch(moduleName, moduleNameRegex)) {
                 qDebug() << "Found module:" << moduleName;
-                if (locallibraryName.isEmpty()) {
+                if (effectiveName.isEmpty()) {
                     /* Use first module name as library filename */
-                    locallibraryName = moduleName.toLower();
-                    qDebug() << "Pick library filename:" << locallibraryName;
+                    effectiveName = moduleName.toLower();
+                    qDebug() << "Pick library filename:" << effectiveName;
                 }
                 const json       &moduleAst           = driver.getModuleAst(moduleName);
                 const YAML::Node &moduleYaml          = getModuleYaml(moduleAst);
@@ -172,7 +171,7 @@ bool QSocModuleManager::importFromFileList(
             }
         }
         if (hasMatch) {
-            saveLibraryYaml(locallibraryName, libraryYaml);
+            saveLibraryYaml(effectiveName, libraryYaml);
             return true;
         }
     }
