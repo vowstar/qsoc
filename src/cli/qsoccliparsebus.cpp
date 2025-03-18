@@ -67,7 +67,7 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name."),
          "library base name"},
-        {{"b", "bus"}, QCoreApplication::translate("main", "The bus name."), "bus name"},
+        {{"b", "bus"}, QCoreApplication::translate("main", "The specified bus name."), "bus name"},
     });
     parser.addPositionalArgument(
         "files",
