@@ -73,7 +73,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name."),
          "library base name"},
-        {{"r", "regex"},
+        {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
         {{"f", "filelist"},
@@ -91,7 +91,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList  cmdArguments = parser.positionalArguments();
     const QString     &libraryName  = parser.isSet("library") ? parser.value("library") : "";
-    const QString     &moduleName   = parser.isSet("regex") ? parser.value("regex") : ".*";
+    const QString     &moduleName   = parser.isSet("module") ? parser.value("module") : ".*";
     const QStringList &filePathList = cmdArguments;
 
     if (filePathList.isEmpty() && !parser.isSet("filelist")) {
@@ -155,7 +155,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
     });
@@ -167,7 +167,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments   = parser.positionalArguments();
     const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : "";
     QStringList       moduleNameList = cmdArguments;
     /* Append module name from positional arguments */
     if (!moduleName.trimmed().isEmpty()) {
@@ -271,7 +271,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
     });
@@ -283,7 +283,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName   = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : "";
     QStringList moduleNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append module name from positional arguments */
     if (!moduleName.trimmed().isEmpty()) {
@@ -383,7 +383,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
     });
@@ -395,7 +395,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName   = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : "";
     QStringList moduleNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append module name from positional arguments */
     if (!moduleName.trimmed().isEmpty()) {
@@ -544,7 +544,7 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
     });
@@ -564,7 +564,7 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
     });
@@ -584,7 +584,7 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
     });
@@ -604,7 +604,7 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
     });
