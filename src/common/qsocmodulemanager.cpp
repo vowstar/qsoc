@@ -44,72 +44,6 @@ bool QSocModuleManager::isModulePathValid()
     return true;
 }
 
-YAML::Node QSocModuleManager::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
-{
-    if (!fromYaml.IsMap()) {
-        /* If fromYaml is not a map, merge result is fromYaml, unless fromYaml is null */
-        return fromYaml.IsNull() ? toYaml : fromYaml;
-    }
-    if (!toYaml.IsMap()) {
-        /* If toYaml is not a map, merge result is fromYaml */
-        return fromYaml;
-    }
-    if (!fromYaml.size()) {
-        /* If toYaml is a map, and fromYaml is an empty map, return toYaml */
-        return toYaml;
-    }
-    /* Create a new map 'resultYaml' with the same mappings as toYaml, merged with fromYaml */
-    YAML::Node resultYaml = YAML::Node(YAML::NodeType::Map);
-    for (auto iter : toYaml) {
-        if (iter.first.IsScalar()) {
-            const std::string &key      = iter.first.Scalar();
-            auto               tempYaml = YAML::Node(fromYaml[key]);
-            if (tempYaml) {
-                resultYaml[iter.first] = mergeNodes(iter.second, tempYaml);
-                continue;
-            }
-        }
-        resultYaml[iter.first] = iter.second;
-    }
-    /* Add the mappings from 'fromYaml' not already in 'resultYaml' */
-    for (auto iter : fromYaml) {
-        if (!iter.first.IsScalar() || !resultYaml[iter.first.Scalar()]) {
-            resultYaml[iter.first] = iter.second;
-        }
-    }
-    return resultYaml;
-}
-
-void QSocModuleManager::libraryMapAdd(const QString &libraryName, const QString &moduleName)
-{
-    /* Check if the library exists in the map */
-    if (!libraryMap.contains(libraryName)) {
-        /* If the key doesn't exist, create a new QSet and insert the moduleName */
-        QSet<QString> moduleSet;
-        moduleSet.insert(moduleName);
-        libraryMap.insert(libraryName, moduleSet);
-    } else {
-        /* If the key exists, just add the moduleName to the existing QSet */
-        libraryMap[libraryName].insert(moduleName);
-    }
-}
-
-void QSocModuleManager::libraryMapRemove(const QString &libraryName, const QString &moduleName)
-{
-    /* Check if the library exists in the map */
-    if (libraryMap.contains(libraryName)) {
-        QSet<QString> &modules = libraryMap[libraryName];
-
-        /* Remove the module if it exists in the set */
-        modules.remove(moduleName);
-
-        /* If the set becomes empty after removal, delete the library entry */
-        if (modules.isEmpty()) {
-            libraryMap.remove(libraryName);
-        }
-    }
-}
-
 bool QSocModuleManager::importFromFileList(
     const QString            &libraryName,
     const QRegularExpression &moduleNameRegex,
@@ -259,6 +193,33 @@ bool QSocModuleManager::saveLibraryYaml(const QString &libraryName, const YAML::
     return true;
 }
 
+bool QSocModuleManager::isLibraryFileExist(const QString &libraryName)
+{
+    /* Validate projectManager and its module path */
+    if (!isModulePathValid()) {
+        qCritical() << "Error: projectManager is null or invalid module path.";
+        return false;
+    }
+
+    /* Check library basename */
+    if (libraryName.isEmpty()) {
+        qCritical() << "Error: library basename is empty.";
+        return false;
+    }
+
+    /* Get the full file path by joining module path and basename with extension */
+    const QString filePath
+        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
+
+    /* Check if library file exists */
+    return QFile::exists(filePath);
+}
+
+bool QSocModuleManager::isLibraryExist(const QString &libraryName)
+{
+    return libraryMap.contains(libraryName);
+}
+
 QStringList QSocModuleManager::listLibrary(const QRegularExpression &libraryNameRegex)
 {
     QStringList result;
@@ -286,33 +247,6 @@ QStringList QSocModuleManager::listLibrary(const QRegularExpression &libraryName
     }
 
     return result;
-}
-
-bool QSocModuleManager::isLibraryFileExist(const QString &libraryName)
-{
-    /* Validate projectManager and its module path */
-    if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
-        return false;
-    }
-
-    /* Check library basename */
-    if (libraryName.isEmpty()) {
-        qCritical() << "Error: library basename is empty.";
-        return false;
-    }
-
-    /* Get the full file path by joining module path and basename with extension */
-    const QString filePath
-        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
-
-    /* Check if library file exists */
-    return QFile::exists(filePath);
-}
-
-bool QSocModuleManager::isLibraryExist(const QString &libraryName)
-{
-    return libraryMap.contains(libraryName);
 }
 
 bool QSocModuleManager::load(const QString &libraryName)
@@ -409,89 +343,6 @@ bool QSocModuleManager::load(const QStringList &libraryNameList)
     return true;
 }
 
-bool QSocModuleManager::remove(const QString &libraryName)
-{
-    /* Validate projectManager and its module path */
-    if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
-        return false;
-    }
-
-    /* Check library basename */
-    if (libraryName.isEmpty()) {
-        qCritical() << "Error: library basename is empty.";
-        return false;
-    }
-
-    /* Get the full file path */
-    const QString filePath
-        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
-
-    /* Check if library file exists */
-    if (!QFile::exists(filePath)) {
-        qCritical() << "Error: library file does not exist for basename:" << libraryName;
-        return false;
-    }
-
-    /* Remove the file */
-    if (!QFile::remove(filePath)) {
-        qCritical() << "Error: Failed to remove module file:" << filePath;
-        return false;
-    }
-
-    /* Remove from moduleData and libraryMap */
-    moduleData.remove(libraryName.toStdString());
-    libraryMap.remove(libraryName);
-
-    return true;
-}
-
-bool QSocModuleManager::remove(const QRegularExpression &libraryNameRegex)
-{
-    /* Validate projectManager and its path */
-    if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
-        return false;
-    }
-    /* Validate libraryNameRegex */
-    if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
-        return false;
-    }
-
-    /* Get the list of library basenames matching the regex */
-    const QStringList matchingBasenames = listLibrary(libraryNameRegex);
-
-    /* Iterate through the list and remove each library */
-    for (const QString &basename : matchingBasenames) {
-        if (!remove(basename)) {
-            qCritical() << "Error: Failed to remove library:" << basename;
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool QSocModuleManager::remove(const QStringList &libraryNameList)
-{
-    if (!projectManager || !projectManager->isValid()) {
-        qCritical() << "Error: Invalid or null projectManager.";
-        return false;
-    }
-
-    const QSet<QString> uniqueBasenames(libraryNameList.begin(), libraryNameList.end());
-
-    for (const QString &basename : uniqueBasenames) {
-        if (!remove(basename)) {
-            qCritical() << "Error: Failed to remove library:" << basename;
-            return false;
-        }
-    }
-
-    return true;
-}
-
 bool QSocModuleManager::save(const QString &libraryName)
 {
     /* Validate projectManager and its path */
@@ -579,6 +430,102 @@ bool QSocModuleManager::save(const QStringList &libraryNameList)
     return true;
 }
 
+bool QSocModuleManager::remove(const QString &libraryName)
+{
+    /* Validate projectManager and its module path */
+    if (!isModulePathValid()) {
+        qCritical() << "Error: projectManager is null or invalid module path.";
+        return false;
+    }
+
+    /* Check library basename */
+    if (libraryName.isEmpty()) {
+        qCritical() << "Error: library basename is empty.";
+        return false;
+    }
+
+    /* Get the full file path */
+    const QString filePath
+        = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
+
+    /* Check if library file exists */
+    if (!QFile::exists(filePath)) {
+        qCritical() << "Error: library file does not exist for basename:" << libraryName;
+        return false;
+    }
+
+    /* Remove the file */
+    if (!QFile::remove(filePath)) {
+        qCritical() << "Error: Failed to remove module file:" << filePath;
+        return false;
+    }
+
+    /* Remove from moduleData and libraryMap */
+    moduleData.remove(libraryName.toStdString());
+    libraryMap.remove(libraryName);
+
+    return true;
+}
+
+bool QSocModuleManager::remove(const QRegularExpression &libraryNameRegex)
+{
+    /* Validate projectManager and its path */
+    if (!isModulePathValid()) {
+        qCritical() << "Error: projectManager is null or invalid module path.";
+        return false;
+    }
+    /* Validate libraryNameRegex */
+    if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
+        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
+        return false;
+    }
+
+    /* Get the list of library basenames matching the regex */
+    const QStringList matchingBasenames = listLibrary(libraryNameRegex);
+
+    /* Iterate through the list and remove each library */
+    for (const QString &basename : matchingBasenames) {
+        if (!remove(basename)) {
+            qCritical() << "Error: Failed to remove library:" << basename;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool QSocModuleManager::remove(const QStringList &libraryNameList)
+{
+    if (!projectManager || !projectManager->isValid()) {
+        qCritical() << "Error: Invalid or null projectManager.";
+        return false;
+    }
+
+    const QSet<QString> uniqueBasenames(libraryNameList.begin(), libraryNameList.end());
+
+    for (const QString &basename : uniqueBasenames) {
+        if (!remove(basename)) {
+            qCritical() << "Error: Failed to remove library:" << basename;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool QSocModuleManager::isModuleExist(const QString &moduleName)
+{
+    return moduleData[moduleName.toStdString()].IsDefined();
+}
+
+QString QSocModuleManager::getModuleLibrary(const QString &moduleName)
+{
+    if (!isModuleExist(moduleName)) {
+        return QString();
+    }
+    return QString::fromStdString(moduleData[moduleName.toStdString()]["library"].as<std::string>());
+}
+
 QStringList QSocModuleManager::listModule(const QRegularExpression &moduleNameRegex)
 {
     QStringList result;
@@ -599,6 +546,53 @@ QStringList QSocModuleManager::listModule(const QRegularExpression &moduleNameRe
     }
 
     return result;
+}
+
+YAML::Node QSocModuleManager::getModuleNode(const QRegularExpression &moduleNameRegex)
+{
+    YAML::Node result;
+
+    /* Check if the regex is valid, if not, return an empty node */
+    if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
+        qWarning() << "Invalid regular expression provided.";
+        return result;
+    }
+
+    /* Iterate over the moduleData to find matches */
+    for (YAML::const_iterator it = moduleData.begin(); it != moduleData.end(); ++it) {
+        const QString moduleName = QString::fromStdString(it->first.as<std::string>());
+
+        /* Check if the module name matches the regex */
+        if (QStaticRegex::isNameExactMatch(moduleName, moduleNameRegex)) {
+            /* Add the module node to the result */
+            result[moduleName.toStdString()] = it->second;
+        }
+    }
+
+    return result;
+}
+
+bool QSocModuleManager::updateModuleYaml(const QString &moduleName, const YAML::Node &moduleYaml)
+{
+    /* Check if module exists in a library */
+    if (!isModuleExist(moduleName)) {
+        qCritical() << "Error: Module does not exist:" << moduleName;
+        return false;
+    }
+
+    /* Get the library name for this module */
+    const QString libraryName = getModuleLibrary(moduleName);
+    if (libraryName.isEmpty()) {
+        qCritical() << "Error: Could not find library for module:" << moduleName;
+        return false;
+    }
+
+    /* Update module data */
+    moduleData[moduleName.toStdString()]            = moduleYaml;
+    moduleData[moduleName.toStdString()]["library"] = libraryName.toStdString();
+
+    /* Save the updated library */
+    return save(libraryName);
 }
 
 bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
@@ -664,62 +658,68 @@ bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
     return true;
 }
 
-YAML::Node QSocModuleManager::getModuleNode(const QRegularExpression &moduleNameRegex)
+YAML::Node QSocModuleManager::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
 {
-    YAML::Node result;
-
-    /* Check if the regex is valid, if not, return an empty node */
-    if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
-        qWarning() << "Invalid regular expression provided.";
-        return result;
+    if (!fromYaml.IsMap()) {
+        /* If fromYaml is not a map, merge result is fromYaml, unless fromYaml is null */
+        return fromYaml.IsNull() ? toYaml : fromYaml;
     }
-
-    /* Iterate over the moduleData to find matches */
-    for (YAML::const_iterator it = moduleData.begin(); it != moduleData.end(); ++it) {
-        const QString moduleName = QString::fromStdString(it->first.as<std::string>());
-
-        /* Check if the module name matches the regex */
-        if (QStaticRegex::isNameExactMatch(moduleName, moduleNameRegex)) {
-            /* Add the module node to the result */
-            result[moduleName.toStdString()] = it->second;
+    if (!toYaml.IsMap()) {
+        /* If toYaml is not a map, merge result is fromYaml */
+        return fromYaml;
+    }
+    if (!fromYaml.size()) {
+        /* If toYaml is a map, and fromYaml is an empty map, return toYaml */
+        return toYaml;
+    }
+    /* Create a new map 'resultYaml' with the same mappings as toYaml, merged with fromYaml */
+    YAML::Node resultYaml = YAML::Node(YAML::NodeType::Map);
+    for (auto iter : toYaml) {
+        if (iter.first.IsScalar()) {
+            const std::string &key      = iter.first.Scalar();
+            auto               tempYaml = YAML::Node(fromYaml[key]);
+            if (tempYaml) {
+                resultYaml[iter.first] = mergeNodes(iter.second, tempYaml);
+                continue;
+            }
+        }
+        resultYaml[iter.first] = iter.second;
+    }
+    /* Add the mappings from 'fromYaml' not already in 'resultYaml' */
+    for (auto iter : fromYaml) {
+        if (!iter.first.IsScalar() || !resultYaml[iter.first.Scalar()]) {
+            resultYaml[iter.first] = iter.second;
         }
     }
-
-    return result;
+    return resultYaml;
 }
 
-bool QSocModuleManager::isModuleExist(const QString &moduleName)
+void QSocModuleManager::libraryMapAdd(const QString &libraryName, const QString &moduleName)
 {
-    return moduleData[moduleName.toStdString()].IsDefined();
+    /* Check if the library exists in the map */
+    if (!libraryMap.contains(libraryName)) {
+        /* If the key doesn't exist, create a new QSet and insert the moduleName */
+        QSet<QString> moduleSet;
+        moduleSet.insert(moduleName);
+        libraryMap.insert(libraryName, moduleSet);
+    } else {
+        /* If the key exists, just add the moduleName to the existing QSet */
+        libraryMap[libraryName].insert(moduleName);
+    }
 }
 
-QString QSocModuleManager::getModuleLibrary(const QString &moduleName)
+void QSocModuleManager::libraryMapRemove(const QString &libraryName, const QString &moduleName)
 {
-    if (!isModuleExist(moduleName)) {
-        return QString();
+    /* Check if the library exists in the map */
+    if (libraryMap.contains(libraryName)) {
+        QSet<QString> &modules = libraryMap[libraryName];
+
+        /* Remove the module if it exists in the set */
+        modules.remove(moduleName);
+
+        /* If the set becomes empty after removal, delete the library entry */
+        if (modules.isEmpty()) {
+            libraryMap.remove(libraryName);
+        }
     }
-    return QString::fromStdString(moduleData[moduleName.toStdString()]["library"].as<std::string>());
-}
-
-bool QSocModuleManager::updateModuleYaml(const QString &moduleName, const YAML::Node &moduleYaml)
-{
-    /* Check if module exists in a library */
-    if (!isModuleExist(moduleName)) {
-        qCritical() << "Error: Module does not exist:" << moduleName;
-        return false;
-    }
-
-    /* Get the library name for this module */
-    const QString libraryName = getModuleLibrary(moduleName);
-    if (libraryName.isEmpty()) {
-        qCritical() << "Error: Could not find library for module:" << moduleName;
-        return false;
-    }
-
-    /* Update module data */
-    moduleData[moduleName.toStdString()]            = moduleYaml;
-    moduleData[moduleName.toStdString()]["library"] = libraryName.toStdString();
-
-    /* Save the updated library */
-    return save(libraryName);
 }

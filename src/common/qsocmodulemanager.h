@@ -97,20 +97,6 @@ public slots:
     bool saveLibraryYaml(const QString &libraryName, const YAML::Node &libraryYaml);
 
     /**
-     * @brief Get list of library basenames.
-     * @details Retrieves basenames of ".soc_mod" files in directory defined by
-     *          `modulePath`, excluding the ".soc_mod" extension. Scans the
-     *          module directory and compiles a list of relevant basenames.
-     *          Useful for processing or iterating over library files. This
-     *          function relies on projectManager to be valid.
-     * @param libraryNameRegex Regular expression to match file basenames,
-     *        default is ".*".
-     * @return QStringList of basenames for all ".soc_mod" files in the module.
-     *         directory, excluding the ".soc_mod" extension.
-     */
-    QStringList listLibrary(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
-
-    /**
      * @brief Check if the library file exists in the filesystem.
      * @details This function checks if a library file with the given basename
      *          exists in the module directory. It is used to verify the
@@ -133,6 +119,20 @@ public slots:
      * @retval false Library does not exist in libraryMap
      */
     bool isLibraryExist(const QString &libraryName);
+
+    /**
+     * @brief Get list of library basenames.
+     * @details Retrieves basenames of ".soc_mod" files in directory defined by
+     *          `modulePath`, excluding the ".soc_mod" extension. Scans the
+     *          module directory and compiles a list of relevant basenames.
+     *          Useful for processing or iterating over library files. This
+     *          function relies on projectManager to be valid.
+     * @param libraryNameRegex Regular expression to match file basenames,
+     *        default is ".*".
+     * @return QStringList of basenames for all ".soc_mod" files in the module.
+     *         directory, excluding the ".soc_mod" extension.
+     */
+    QStringList listLibrary(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
 
     /**
      * @brief Load a specific library by basename.
@@ -171,45 +171,6 @@ public slots:
      * @retval false Loading fails for any of the specified libraries.
      */
     bool load(const QStringList &libraryNameList);
-
-    /**
-     * @brief Remove a specific library by basename.
-     * @details Removes the library file identified by `libraryName` from
-     *          the library directory. This method is useful for deleting
-     *          individual library files. It requires a valid projectManager
-     *          and checks if the library file exists.
-     * @param libraryName Basename of the library file to remove, without
-     *        the ".soc_mod" extension.
-     * @retval true The library file is successfully removed.
-     * @retval false Removal fails or the file does not exist.
-     */
-    bool remove(const QString &libraryName);
-
-    /**
-     * @brief Remove libraries matching a regex pattern.
-     * @details Removes all library files from the module directory that
-     *          match `libraryNameRegex`. This method is ideal for batch
-     *          removal of libraries based on naming patterns. It relies on
-     *          a valid projectManager to execute.
-     * @param libraryNameRegex Regex to match file basenames. Defaults
-     *        to ".*", which matches all module files.
-     * @retval true if all matching libraries are successfully removed.
-     * @retval false if removal of any matching libraries fails.
-     */
-    bool remove(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
-
-    /**
-     * @brief Remove multiple libraries by a list of basenames.
-     * @details Removes multiple library files specified in `libraryNameList`
-     *          from the module directory. Useful for deleting a specific set of
-     *          module files. Requires a valid projectManager and checks each
-     *          module file's existence.
-     * @param libraryNameList List of module file basenames to remove, without
-     *        ".soc_mod" extensions.
-     * @retval true All specified libraries are successfully removed.
-     * @retval false Removal fails for any of the specified libraries.
-     */
-    bool remove(const QStringList &libraryNameList);
 
     /**
      * @brief Save library data associated with a specific basename.
@@ -254,45 +215,43 @@ public slots:
     bool save(const QStringList &libraryNameList);
 
     /**
-     * @brief Get list of module names matching a regex pattern.
-     * @details Retrieves module names from the `moduleData` YAML node that
-     *          match the provided `moduleNameRegex`. This function scans
-     *          the module library and compiles a list of module names. Useful
-     *          for processing or iterating over project libraries. It relies on
-     *          the validity of the `moduleData` YAML node. This function
-     *          requires a valid projectManager.
-     * @param moduleNameRegex Regular expression to match module names,
-     *        default is ".*".
-     * @return QStringList of module names matching the regex in the module
-     *         library.
+     * @brief Remove a specific library by basename.
+     * @details Removes the library file identified by `libraryName` from
+     *          the library directory. This method is useful for deleting
+     *          individual library files. It requires a valid projectManager
+     *          and checks if the library file exists.
+     * @param libraryName Basename of the library file to remove, without
+     *        the ".soc_mod" extension.
+     * @retval true The library file is successfully removed.
+     * @retval false Removal fails or the file does not exist.
      */
-    QStringList listModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
+    bool remove(const QString &libraryName);
 
     /**
-     * @brief Remove modules matching regex from module library.
-     * @details Removes modules that match `moduleNameRegex` from moduleData,
-     *          updating libraryMap accordingly. It saves libraries with
-     *          remaining module associations and removes files with no
-     *          associations. Requires a valid projectManager for execution.
-     * @param moduleNameRegex Regex to filter module names for removal.
-     * @retval true All matching modules are successfully processed.
-     * @retval false Errors occur during module removal or module saving.
+     * @brief Remove libraries matching a regex pattern.
+     * @details Removes all library files from the module directory that
+     *          match `libraryNameRegex`. This method is ideal for batch
+     *          removal of libraries based on naming patterns. It relies on
+     *          a valid projectManager to execute.
+     * @param libraryNameRegex Regex to match file basenames. Defaults
+     *        to ".*", which matches all module files.
+     * @retval true if all matching libraries are successfully removed.
+     * @retval false if removal of any matching libraries fails.
      */
-    bool removeModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
+    bool remove(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
 
     /**
-     * @brief Retrieve YAML node for modules matching the regex.
-     * @details Fetches and returns the YAML node for modules whose names
-     *          match the provided regular expression. This allows for
-     *          specific querying and manipulation of module data within
-     *          the module library. Defaults to fetching all module nodes
-     *          if no regex is specified.
-     * @param moduleNameRegex Regex used to filter the module names.
-     *        Default is ".*", which matches all modules.
-     * @return YAML::Node The YAML node(s) corresponding to the matched
-     *                    module(s). Returns an empty node if no match is found.
+     * @brief Remove multiple libraries by a list of basenames.
+     * @details Removes multiple library files specified in `libraryNameList`
+     *          from the module directory. Useful for deleting a specific set of
+     *          module files. Requires a valid projectManager and checks each
+     *          module file's existence.
+     * @param libraryNameList List of module file basenames to remove, without
+     *        ".soc_mod" extensions.
+     * @retval true All specified libraries are successfully removed.
+     * @retval false Removal fails for any of the specified libraries.
      */
-    YAML::Node getModuleNode(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
+    bool remove(const QStringList &libraryNameList);
 
     /**
      * @brief Check if a module exists in moduleData
@@ -318,6 +277,35 @@ public slots:
     QString getModuleLibrary(const QString &moduleName);
 
     /**
+     * @brief Get list of module names matching a regex pattern.
+     * @details Retrieves module names from the `moduleData` YAML node that
+     *          match the provided `moduleNameRegex`. This function scans
+     *          the module library and compiles a list of module names. Useful
+     *          for processing or iterating over project libraries. It relies on
+     *          the validity of the `moduleData` YAML node. This function
+     *          requires a valid projectManager.
+     * @param moduleNameRegex Regular expression to match module names,
+     *        default is ".*".
+     * @return QStringList of module names matching the regex in the module
+     *         library.
+     */
+    QStringList listModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
+
+    /**
+     * @brief Retrieve YAML node for modules matching the regex.
+     * @details Fetches and returns the YAML node for modules whose names
+     *          match the provided regular expression. This allows for
+     *          specific querying and manipulation of module data within
+     *          the module library. Defaults to fetching all module nodes
+     *          if no regex is specified.
+     * @param moduleNameRegex Regex used to filter the module names.
+     *        Default is ".*", which matches all modules.
+     * @return YAML::Node The YAML node(s) corresponding to the matched
+     *                    module(s). Returns an empty node if no match is found.
+     */
+    YAML::Node getModuleNode(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
+
+    /**
      * @brief Update existing module's YAML data and save to its library file
      * @details Updates the YAML data for an existing module in moduleData and
      *          saves the changes to the associated library file. The module
@@ -330,6 +318,18 @@ public slots:
      * @retval false Update failed or module/library not loaded
      */
     bool updateModuleYaml(const QString &moduleName, const YAML::Node &moduleYaml);
+
+    /**
+     * @brief Remove modules matching regex from module library.
+     * @details Removes modules that match `moduleNameRegex` from moduleData,
+     *          updating libraryMap accordingly. It saves libraries with
+     *          remaining module associations and removes files with no
+     *          associations. Requires a valid projectManager for execution.
+     * @param moduleNameRegex Regex to filter module names for removal.
+     * @retval true All matching modules are successfully processed.
+     * @retval false Errors occur during module removal or module saving.
+     */
+    bool removeModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
 private:
     /* Internal used project manager. */
