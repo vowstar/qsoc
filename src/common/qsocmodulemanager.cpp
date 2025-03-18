@@ -682,3 +682,39 @@ YAML::Node QSocModuleManager::getModuleNode(const QRegularExpression &moduleName
 
     return result;
 }
+
+bool QSocModuleManager::isModuleExist(const QString &moduleName)
+{
+    return moduleData[moduleName.toStdString()].IsDefined();
+}
+
+QString QSocModuleManager::getModuleLibrary(const QString &moduleName)
+{
+    if (!isModuleExist(moduleName)) {
+        return QString();
+    }
+    return QString::fromStdString(moduleData[moduleName.toStdString()]["library"].as<std::string>());
+}
+
+bool QSocModuleManager::updateModuleYaml(const QString &moduleName, const YAML::Node &moduleYaml)
+{
+    /* Check if module exists in a library */
+    if (!isModuleExist(moduleName)) {
+        qCritical() << "Error: Module does not exist:" << moduleName;
+        return false;
+    }
+
+    /* Get the library name for this module */
+    const QString libraryName = getModuleLibrary(moduleName);
+    if (libraryName.isEmpty()) {
+        qCritical() << "Error: Could not find library for module:" << moduleName;
+        return false;
+    }
+
+    /* Update module data */
+    moduleData[moduleName.toStdString()]            = moduleYaml;
+    moduleData[moduleName.toStdString()]["library"] = libraryName.toStdString();
+
+    /* Save the updated library */
+    return save(libraryName);
+}

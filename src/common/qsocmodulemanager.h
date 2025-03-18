@@ -282,6 +282,43 @@ public slots:
      */
     YAML::Node getModuleNode(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
+    /**
+     * @brief Check if a module exists in moduleData
+     * @details Checks whether the specified module name exists in the
+     *          moduleData YAML node. This function requires that the module
+     *          library has been loaded using one of the load() functions
+     *          before checking.
+     * @param moduleName Name of the module to check
+     * @retval true Module exists in moduleData
+     * @retval false Module does not exist or library not loaded
+     */
+    bool isModuleExist(const QString &moduleName);
+
+    /**
+     * @brief Get the library name for a given module
+     * @details Retrieves the library name associated with the specified module
+     *          from moduleData. The module library must be loaded using one of
+     *          the load() functions before calling this function. Returns an
+     *          empty string if the module is not found or library not loaded.
+     * @param moduleName Name of the module
+     * @return Library name if module exists, empty string otherwise
+     */
+    QString getModuleLibrary(const QString &moduleName);
+
+    /**
+     * @brief Update existing module's YAML data and save to its library file
+     * @details Updates the YAML data for an existing module in moduleData and
+     *          saves the changes to the associated library file. The module
+     *          must exist in a loaded library (using load()) before updating.
+     *          This function will merge the new YAML data with existing data
+     *          and save the updated library file.
+     * @param moduleName Name of the existing module
+     * @param moduleYaml New YAML node containing module data
+     * @retval true Module successfully updated and saved
+     * @retval false Update failed or module/library not loaded
+     */
+    bool updateModuleYaml(const QString &moduleName, const YAML::Node &moduleYaml);
+
 private:
     /* Internal used project manager. */
     QSocProjectManager *projectManager = nullptr;
