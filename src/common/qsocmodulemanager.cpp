@@ -288,7 +288,7 @@ QStringList QSocModuleManager::listLibrary(const QRegularExpression &libraryName
     return result;
 }
 
-bool QSocModuleManager::isExist(const QString &libraryName)
+bool QSocModuleManager::isLibraryFileExist(const QString &libraryName)
 {
     /* Validate projectManager and its module path */
     if (!isModulePathValid()) {
@@ -310,6 +310,11 @@ bool QSocModuleManager::isExist(const QString &libraryName)
     return QFile::exists(filePath);
 }
 
+bool QSocModuleManager::isLibraryExist(const QString &libraryName)
+{
+    return libraryMap.contains(libraryName);
+}
+
 bool QSocModuleManager::load(const QString &libraryName)
 {
     /* Validate projectManager and its path */
@@ -319,7 +324,7 @@ bool QSocModuleManager::load(const QString &libraryName)
     }
 
     /* Check if library file exists */
-    if (!isExist(libraryName)) {
+    if (!isLibraryFileExist(libraryName)) {
         qCritical() << "Error: Library file does not exist for basename:" << libraryName;
         return false;
     }

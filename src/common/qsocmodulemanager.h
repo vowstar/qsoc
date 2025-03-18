@@ -120,7 +120,19 @@ public slots:
      * @retval true Library file exists in the module directory.
      * @retval false Library file does not exist in the module directory.
      */
-    bool isExist(const QString &libraryName);
+    bool isLibraryFileExist(const QString &libraryName);
+
+    /**
+     * @brief Check if a library is loaded in memory.
+     * @details Checks whether the specified library name exists in the
+     *          libraryMap. This function verifies if a library has been
+     *          loaded into memory using one of the load() functions,
+     *          rather than checking for the file's existence on disk.
+     * @param libraryName Name of the library to check
+     * @retval true Library exists in libraryMap
+     * @retval false Library does not exist in libraryMap
+     */
+    bool isLibraryExist(const QString &libraryName);
 
     /**
      * @brief Load a specific library by basename.
