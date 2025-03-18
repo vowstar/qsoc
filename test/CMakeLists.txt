@@ -88,3 +88,4 @@ endfunction()
 
 qt_add_test_target("test_qslangdriver")
 qt_add_test_target("test_qsoccliworker")
+qt_add_test_target("test_qsoccliparseproject")
