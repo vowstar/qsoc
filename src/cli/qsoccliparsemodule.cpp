@@ -547,8 +547,9 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
         {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
+        {{"b", "bus"}, QCoreApplication::translate("main", "The specified bus name."), "bus name"},
     });
-    // Implementation needed
+    /* TODO: Implement module bus add functionality */
     return true;
 }
 
@@ -567,8 +568,11 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
         {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
+        {{"b", "bus"},
+         QCoreApplication::translate("main", "The bus name or regex."),
+         "bus name or regex"},
     });
-    // Implementation needed
+    /* TODO: Implement module bus remove functionality */
     return true;
 }
 
@@ -587,8 +591,11 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
         {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
+        {{"b", "bus"},
+         QCoreApplication::translate("main", "The bus name or regex."),
+         "bus name or regex"},
     });
-    // Implementation needed
+    /* TODO: Implement module bus list functionality */
     return true;
 }
 
@@ -607,7 +614,10 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
         {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
+        {{"b", "bus"},
+         QCoreApplication::translate("main", "The bus name or regex."),
+         "bus name or regex"},
     });
-    // Implementation needed
+    /* TODO: Implement module bus show functionality */
     return true;
 }
