@@ -70,28 +70,13 @@ private slots:
         QVERIFY(messageList.first().contains("Usage: socstudio [options]"));
     }
 
-    void optionL()
+    void optionVerbose()
     {
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
             "socstudio",
-            "-l10",
-        };
-        socCliWorker.setup(appArguments, false);
-        socCliWorker.run();
-        /* Check that the message list contains the expected message */
-        QCOMPARE(messageList.count(), 3);
-        QVERIFY(messageList.first().contains("Error: invalid log level: 10"));
-    }
-
-    void optionLevel()
-    {
-        messageList.clear();
-        QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {
-            "socstudio",
-            "--level=10",
+            "--verbose=10",
         };
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
