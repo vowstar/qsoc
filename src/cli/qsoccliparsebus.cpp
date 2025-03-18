@@ -67,7 +67,7 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name."),
          "library base name"},
-        {{"n", "name"}, QCoreApplication::translate("main", "The bus name."), "bus name"},
+        {{"b", "bus"}, QCoreApplication::translate("main", "The bus name."), "bus name"},
     });
     parser.addPositionalArgument(
         "files",
@@ -77,7 +77,7 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList  cmdArguments = parser.positionalArguments();
     const QString     &libraryName  = parser.isSet("library") ? parser.value("library") : "";
-    const QString     &busName      = parser.isSet("name") ? parser.value("name") : "";
+    const QString     &busName      = parser.isSet("bus") ? parser.value("bus") : "";
     const QStringList &filePathList = cmdArguments;
 
     if (filePathList.isEmpty()) {
@@ -140,7 +140,7 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"b", "bus"},
          QCoreApplication::translate("main", "The bus name or regex."),
          "bus name or regex"},
     });
@@ -152,7 +152,7 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &busName      = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString    &busName      = parser.isSet("bus") ? parser.value("bus") : "";
     QStringList       busNameList  = cmdArguments;
     /* Append bus name from positional arguments */
     if (!busName.trimmed().isEmpty()) {
@@ -255,7 +255,7 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"b", "bus"},
          QCoreApplication::translate("main", "The bus name or regex."),
          "bus name or regex"},
     });
@@ -267,7 +267,7 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &busName      = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString    &busName      = parser.isSet("bus") ? parser.value("bus") : "";
     QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append bus name from positional arguments */
     if (!busName.trimmed().isEmpty()) {
@@ -367,7 +367,7 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"r", "regex"},
+        {{"b", "bus"},
          QCoreApplication::translate("main", "The bus name or regex."),
          "bus name or regex"},
     });
@@ -379,7 +379,7 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &busName      = parser.isSet("regex") ? parser.value("regex") : "";
+    const QString    &busName      = parser.isSet("bus") ? parser.value("bus") : "";
     QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append bus name from positional arguments */
     if (!busName.trimmed().isEmpty()) {
