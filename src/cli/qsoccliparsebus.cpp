@@ -64,7 +64,7 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name."),
          "library base name"},
         {{"n", "name"}, QCoreApplication::translate("main", "The bus name."), "bus name"},
@@ -76,7 +76,7 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList  cmdArguments = parser.positionalArguments();
-    const QString     &libraryName  = parser.isSet("base") ? parser.value("base") : "";
+    const QString     &libraryName  = parser.isSet("library") ? parser.value("library") : "";
     const QString     &busName      = parser.isSet("name") ? parser.value("name") : "";
     const QStringList &filePathList = cmdArguments;
 
@@ -137,7 +137,7 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
@@ -151,7 +151,7 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("base") ? parser.value("base") : ".*";
+    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
     const QString    &busName      = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList       busNameList  = cmdArguments;
     /* Append bus name from positional arguments */
@@ -252,7 +252,7 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
@@ -266,7 +266,7 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("base") ? parser.value("base") : ".*";
+    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
     const QString    &busName      = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append bus name from positional arguments */
@@ -364,7 +364,7 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
@@ -378,7 +378,7 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("base") ? parser.value("base") : ".*";
+    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
     const QString    &busName      = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append bus name from positional arguments */

@@ -70,7 +70,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name."),
          "library base name"},
         {{"r", "regex"},
@@ -90,7 +90,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList  cmdArguments = parser.positionalArguments();
-    const QString     &libraryName  = parser.isSet("base") ? parser.value("base") : "";
+    const QString     &libraryName  = parser.isSet("library") ? parser.value("library") : "";
     const QString     &moduleName   = parser.isSet("regex") ? parser.value("regex") : ".*";
     const QStringList &filePathList = cmdArguments;
 
@@ -152,7 +152,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
@@ -166,7 +166,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments   = parser.positionalArguments();
-    const QString    &libraryName    = parser.isSet("base") ? parser.value("base") : ".*";
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
     const QString    &moduleName     = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList       moduleNameList = cmdArguments;
     /* Append module name from positional arguments */
@@ -268,7 +268,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
@@ -282,7 +282,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("base") ? parser.value("base") : ".*";
+    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
     const QString    &moduleName   = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList moduleNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append module name from positional arguments */
@@ -380,7 +380,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
@@ -394,7 +394,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("base") ? parser.value("base") : ".*";
+    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
     const QString    &moduleName   = parser.isSet("regex") ? parser.value("regex") : "";
     QStringList moduleNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Append module name from positional arguments */
@@ -541,7 +541,7 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
@@ -561,7 +561,7 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
@@ -581,7 +581,7 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
@@ -601,7 +601,7 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"b", "base"},
+        {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
         {{"r", "regex"},
