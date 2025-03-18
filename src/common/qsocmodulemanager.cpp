@@ -163,6 +163,22 @@ YAML::Node QSocModuleManager::getModuleYaml(const json &moduleAst)
     return moduleYaml;
 }
 
+YAML::Node QSocModuleManager::getModuleYaml(const QString &moduleName)
+{
+    YAML::Node result;
+
+    /* Check if module exists in moduleData */
+    if (!isModuleExist(moduleName)) {
+        qWarning() << "Module does not exist:" << moduleName;
+        return result;
+    }
+
+    /* Get module YAML node from moduleData */
+    result = moduleData[moduleName.toStdString()];
+
+    return result;
+}
+
 bool QSocModuleManager::saveLibraryYaml(const QString &libraryName, const YAML::Node &libraryYaml)
 {
     YAML::Node localLibraryYaml;

@@ -87,6 +87,17 @@ public slots:
     YAML::Node getModuleYaml(const json &moduleAst);
 
     /**
+     * @brief Get the Module Yaml object.
+     * @details This function will get the YAML node for a specific module from
+     *          moduleData. The module must exist in moduleData (loaded using
+     *          one of the load() functions).
+     * @param moduleName The name of the module.
+     * @return YAML::Node The module YAML object. Returns an empty node if
+     *         module does not exist.
+     */
+    YAML::Node getModuleYaml(const QString &moduleName);
+
+    /**
      * @brief Save the library YAML object to library file.
      * @details This function will save the library YAML object to library file.
      * @param libraryName The basename of the library file without ext.
