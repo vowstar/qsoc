@@ -345,6 +345,25 @@ public slots:
      */
     bool removeModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
 
+    /**
+     * @brief Add a bus interface to a module.
+     * @details This function adds a bus interface to a specified module by
+     *          updating the module's YAML data. It first loads the bus data
+     *          from the bus library, then adds the bus interface to the
+     *          module's YAML with the specified port name and mode.
+     * @param moduleName Name of the module to add the bus interface to.
+     * @param busName Name of the bus to add.
+     * @param portName Name of the port to connect the bus to.
+     * @param portMode Mode of the port (e.g., "master", "slave").
+     * @retval true Bus interface successfully added.
+     * @retval false Failed to add bus interface.
+     */
+    bool addModuleBus(
+        const QString &moduleName,
+        const QString &busName,
+        const QString &portName,
+        const QString &portMode);
+
 private:
     /* Internal used project manager. */
     QSocProjectManager *projectManager = nullptr;

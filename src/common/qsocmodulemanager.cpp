@@ -1,6 +1,7 @@
 #include "common/qsocmodulemanager.h"
 
 #include "common/qslangdriver.h"
+#include "common/qsocbusmanager.h"
 #include "common/qstaticregex.h"
 
 #include <QDebug>
@@ -672,6 +673,51 @@ bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
     }
 
     return true;
+}
+
+bool QSocModuleManager::addModuleBus(
+    const QString &moduleName,
+    const QString &busName,
+    const QString &portName,
+    const QString &portMode)
+{
+    /* Validate projectManager and its path */
+    if (!isModulePathValid()) {
+        qCritical() << "Error: projectManager is null or invalid module path.";
+        return false;
+    }
+
+    /* Check if module exists */
+    if (!isModuleExist(moduleName)) {
+        qCritical() << "Error: Module does not exist:" << moduleName;
+        return false;
+    }
+
+    /* Get module YAML */
+    YAML::Node moduleYaml = getModuleYaml(moduleName);
+
+    /* Create QSocBusManager instance */
+    QSocBusManager busManager(this, projectManager);
+
+    /* Load bus library */
+    if (!busManager.load(".*")) {
+        qCritical() << "Error: Failed to load bus library.";
+        return false;
+    }
+
+    /* Get bus YAML */
+    YAML::Node busYaml = busManager.getBusYaml(busName);
+    if (!busYaml) {
+        qCritical() << "Error: Bus does not exist:" << busName;
+        return false;
+    }
+
+    /* Add bus interface to module YAML */
+    moduleYaml["bus"][portName.toStdString()]["bus"]  = busName.toStdString();
+    moduleYaml["bus"][portName.toStdString()]["mode"] = portMode.toStdString();
+
+    /* Update module YAML */
+    return updateModuleYaml(moduleName, moduleYaml);
 }
 
 YAML::Node QSocModuleManager::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
