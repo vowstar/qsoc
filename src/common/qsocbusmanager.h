@@ -248,6 +248,39 @@ public slots:
     bool removeBus(const QRegularExpression &busNameRegex = QRegularExpression(".*"));
 
     /**
+     * @brief Get the Bus YAML object.
+     * @details This function will get the YAML node for a specific bus from
+     *          busData. The bus must exist in busData (loaded using
+     *          one of the load() functions).
+     * @param busName The name of the bus.
+     * @return YAML::Node The bus YAML object. Returns an empty node if
+     *         bus does not exist.
+     */
+    YAML::Node getBusYaml(const QString &busName);
+
+    /**
+     * @brief Check if a bus exists in busData.
+     * @details This function checks if a bus with the given name exists in
+     *          the busData YAML node. It is used to verify the existence
+     *          of buses before processing them.
+     * @param busName The name of the bus to check.
+     * @retval true Bus exists in busData.
+     * @retval false Bus does not exist in busData.
+     */
+    bool isBusExist(const QString &busName);
+
+    /**
+     * @brief Get the library name for a specific bus.
+     * @details This function retrieves the library name associated with a
+     *          specific bus from busData. The bus must exist in busData
+     *          (loaded using one of the load() functions).
+     * @param busName The name of the bus.
+     * @return QString The library name. Returns an empty string if the
+     *         bus does not exist.
+     */
+    QString getBusLibrary(const QString &busName);
+
+    /**
      * @brief Retrieve combined YAML nodes for buses matching the regex.
      * @details Fetches and returns a combined YAML node containing all buses
      *          whose names match the provided regular expression. Each matching

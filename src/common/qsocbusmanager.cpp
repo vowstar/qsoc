@@ -685,6 +685,35 @@ bool QSocBusManager::removeBus(const QRegularExpression &busNameRegex)
     return true;
 }
 
+YAML::Node QSocBusManager::getBusYaml(const QString &busName)
+{
+    YAML::Node result;
+
+    /* Check if bus exists in busData */
+    if (!isBusExist(busName)) {
+        qWarning() << "Bus does not exist:" << busName;
+        return result;
+    }
+
+    /* Get bus YAML node from busData */
+    result = busData[busName.toStdString()];
+
+    return result;
+}
+
+bool QSocBusManager::isBusExist(const QString &busName)
+{
+    return busData[busName.toStdString()].IsDefined();
+}
+
+QString QSocBusManager::getBusLibrary(const QString &busName)
+{
+    if (!isBusExist(busName)) {
+        return QString();
+    }
+    return QString::fromStdString(busData[busName.toStdString()]["library"].as<std::string>());
+}
+
 YAML::Node QSocBusManager::getBusYamls(const QRegularExpression &busNameRegex)
 {
     YAML::Node result;
