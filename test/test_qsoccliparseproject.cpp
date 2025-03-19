@@ -125,6 +125,34 @@ private slots:
         QVERIFY(hasOutput);
     }
 
+    void testProjectUpdate()
+    {
+        messageList.clear();
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments = {
+            "socstudio",
+            "project",
+            "update",
+            "-s",
+            "./",
+            "test_project",
+        };
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Check if schematic path was updated */
+        QFile projectFile("test_project.soc_pro");
+        QVERIFY(projectFile.exists());
+
+        /* Read the file content */
+        projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
+        QString content = projectFile.readAll();
+        projectFile.close();
+
+        /* Check for updated schematic path */
+        QVERIFY(content.contains("schematic: ./"));
+    }
+
     void testProjectRemove()
     {
         messageList.clear();
