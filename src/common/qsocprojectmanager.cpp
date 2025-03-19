@@ -138,7 +138,7 @@ bool QSocProjectManager::save(const QString &projectName)
     const QString &projectFilePath = QString(projectPath + "/" + projectName + ".soc_pro");
     std::ofstream  outputFileStream(projectFilePath.toStdString());
     /* Serialize project yaml data */
-    outputFileStream << getProjectNode();
+    outputFileStream << getProjectYaml();
 
     return true;
 }
@@ -369,7 +369,7 @@ bool QSocProjectManager::isValidOutputPath(bool writable)
     return isValidPath(getOutputPath(), writable);
 }
 
-const YAML::Node &QSocProjectManager::getProjectNode()
+const YAML::Node &QSocProjectManager::getProjectYaml()
 {
     projectNode["version"]   = QCoreApplication::applicationVersion().toStdString();
     projectNode["bus"]       = getSimplifyPath(busPath).toStdString();

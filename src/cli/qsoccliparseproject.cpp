@@ -303,7 +303,7 @@ bool QSocCliWorker::parseProjectShow(const QStringList &appArguments)
                 .arg(projectName));
     }
     /* Show details about the project */
-    showInfo(0, QStaticDataSedes::serializeYaml(projectManager.getProjectNode()));
+    showInfo(0, QStaticDataSedes::serializeYaml(projectManager.getProjectYaml()));
 
     return true;
 }

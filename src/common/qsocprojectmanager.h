@@ -197,11 +197,11 @@ public slots:
     bool isValidOutputPath(bool writable = false);
 
     /**
-     * @brief Get project node.
-     * @details This function will return project YAML node.
-     * @return YAML::Node & The project node.
+     * @brief Get project YAML configuration.
+     * @details This function will return the project configuration in YAML.
+     * @return YAML::Node & The project YAML configuration.
      */
-    const YAML::Node &getProjectNode();
+    const YAML::Node &getProjectYaml();
 
     /**
      * @brief Get project name.
