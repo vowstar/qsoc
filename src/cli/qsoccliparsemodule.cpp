@@ -125,7 +125,8 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
                 .arg(projectManager.getModulePath()));
     }
     /* Setup module manager */
-    QSocModuleManager moduleManager(this, &projectManager);
+    QSocBusManager    busManager(this, &projectManager);
+    QSocModuleManager moduleManager(this, &projectManager, &busManager);
     QString           filelistPath = "";
     if (parser.isSet("filelist")) {
         filelistPath = parser.value("filelist");
@@ -237,7 +238,8 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
                 .arg(invalidModuleName));
     }
     /* Setup module manager */
-    QSocModuleManager moduleManager(this, &projectManager);
+    QSocBusManager    busManager(this, &projectManager);
+    QSocModuleManager moduleManager(this, &projectManager, &busManager);
     /* Load modules */
     if (!moduleManager.load(libraryNameRegex)) {
         return showErrorWithHelp(
@@ -353,7 +355,8 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
                 .arg(invalidModuleName));
     }
     /* Setup module manager */
-    QSocModuleManager moduleManager(this, &projectManager);
+    QSocBusManager    busManager(this, &projectManager);
+    QSocModuleManager moduleManager(this, &projectManager, &busManager);
     /* Load modules */
     if (!moduleManager.load(libraryNameRegex)) {
         return showErrorWithHelp(
@@ -465,7 +468,8 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
                 .arg(invalidModuleName));
     }
     /* Setup module manager */
-    QSocModuleManager moduleManager(this, &projectManager);
+    QSocBusManager    busManager(this, &projectManager);
+    QSocModuleManager moduleManager(this, &projectManager, &busManager);
     /* Load modules */
     if (!moduleManager.load(libraryNameRegex)) {
         return showErrorWithHelp(

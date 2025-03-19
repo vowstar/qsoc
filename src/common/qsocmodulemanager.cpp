@@ -10,11 +10,14 @@
 
 #include <fstream>
 
-QSocModuleManager::QSocModuleManager(QObject *parent, QSocProjectManager *projectManager)
+QSocModuleManager::QSocModuleManager(
+    QObject *parent, QSocProjectManager *projectManager, QSocBusManager *busManager)
     : QObject{parent}
 {
     /* Set projectManager */
     setProjectManager(projectManager);
+    /* Set busManager */
+    setBusManager(busManager);
 }
 
 void QSocModuleManager::setProjectManager(QSocProjectManager *projectManager)
@@ -22,6 +25,14 @@ void QSocModuleManager::setProjectManager(QSocProjectManager *projectManager)
     /* Set projectManager */
     if (projectManager) {
         this->projectManager = projectManager;
+    }
+}
+
+void QSocModuleManager::setBusManager(QSocBusManager *busManager)
+{
+    /* Set busManager */
+    if (busManager) {
+        this->busManager = busManager;
     }
 }
 
@@ -696,17 +707,20 @@ bool QSocModuleManager::addModuleBus(
     /* Get module YAML */
     YAML::Node moduleYaml = getModuleYaml(moduleName);
 
-    /* Create QSocBusManager instance */
-    QSocBusManager busManager(this, projectManager);
+    /* Validate busManager */
+    if (!busManager) {
+        qCritical() << "Error: busManager is null.";
+        return false;
+    }
 
     /* Load bus library */
-    if (!busManager.load(".*")) {
+    if (!busManager->load(".*")) {
         qCritical() << "Error: Failed to load bus library.";
         return false;
     }
 
     /* Get bus YAML */
-    YAML::Node busYaml = busManager.getBusYaml(busName);
+    YAML::Node busYaml = busManager->getBusYaml(busName);
     if (!busYaml) {
         qCritical() << "Error: Bus does not exist:" << busName;
         return false;

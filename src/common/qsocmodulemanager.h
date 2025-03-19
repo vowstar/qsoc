@@ -1,6 +1,7 @@
 #ifndef QSOCMODULEMANAGER_H
 #define QSOCMODULEMANAGER_H
 
+#include "common/qsocbusmanager.h"
 #include "common/qsocprojectmanager.h"
 
 #include <QObject>
@@ -24,9 +25,12 @@ public:
      * @details This constructor will create an instance of this object.
      * @param[in] parent parent object.
      * @param[in] projectManager project manager.
+     * @param[in] busManager bus manager.
      */
     explicit QSocModuleManager(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+        QObject            *parent         = nullptr,
+        QSocProjectManager *projectManager = nullptr,
+        QSocBusManager     *busManager     = nullptr);
 
 public slots:
     /**
@@ -37,6 +41,14 @@ public slots:
      * @param projectManager Pointer to the new project manager.
      */
     void setProjectManager(QSocProjectManager *projectManager);
+
+    /**
+     * @brief Set the bus manager.
+     * @details Assigns a new bus manager to this object. The bus manager
+     *          is used for managing bus-related functionalities.
+     * @param busManager Pointer to the new bus manager.
+     */
+    void setBusManager(QSocBusManager *busManager);
 
     /**
      * @brief Get the project manager.
@@ -367,6 +379,9 @@ public slots:
 private:
     /* Internal used project manager. */
     QSocProjectManager *projectManager = nullptr;
+
+    /* Internal used bus manager. */
+    QSocBusManager *busManager = nullptr;
 
     /* This QMap, libraryMap, maps library names to sets of module names.
        Each key in the map is a library name (QString).
