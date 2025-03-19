@@ -685,7 +685,7 @@ bool QSocBusManager::removeBus(const QRegularExpression &busNameRegex)
     return true;
 }
 
-YAML::Node QSocBusManager::getBusNode(const QRegularExpression &busNameRegex)
+YAML::Node QSocBusManager::getBusYamls(const QRegularExpression &busNameRegex)
 {
     YAML::Node result;
 

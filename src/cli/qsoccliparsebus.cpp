@@ -461,7 +461,7 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
     for (const QString &busName : busNameList) {
         const QRegularExpression busNameRegex(busName);
         /* Show details about the bus */
-        showInfo(0, QStaticDataSedes::serializeYaml(busManager.getBusNode(busNameRegex)));
+        showInfo(0, QStaticDataSedes::serializeYaml(busManager.getBusYamls(busNameRegex)));
     }
 
     return true;

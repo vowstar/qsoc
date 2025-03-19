@@ -248,18 +248,20 @@ public slots:
     bool removeBus(const QRegularExpression &busNameRegex = QRegularExpression(".*"));
 
     /**
-     * @brief Retrieve YAML node for buses matching the regex.
-     * @details Fetches and returns the YAML node for buses whose names
-     *          match the provided regular expression. This allows for
-     *          specific querying and manipulation of bus data within
-     *          the bus library. Defaults to fetching all bus nodes
-     *          if no regex is specified.
+     * @brief Retrieve combined YAML nodes for buses matching the regex.
+     * @details Fetches and returns a combined YAML node containing all buses
+     *          whose names match the provided regular expression. Each matching
+     *          bus's data is added as a separate key-value pair in the result
+     *          node, where the key is the bus name and the value is the
+     *          corresponding bus YAML data. This allows for batch querying and
+     *          manipulation of multiple bus data within the bus library.
+     *          Defaults to fetching all bus nodes if no regex is specified.
      * @param busNameRegex Regex used to filter the bus names.
-     *                        Default is ".*", which matches all buses.
-     * @return YAML::Node The YAML node(s) corresponding to the matched
-     *                    bus(es). Returns an empty node if no match is found.
+     *                      Default is ".*", which matches all buses.
+     * @return YAML::Node A combined YAML node containing all matched bus YAMLs.
+     *                    Returns an empty node if no matches are found.
      */
-    YAML::Node getBusNode(const QRegularExpression &busNameRegex = QRegularExpression(".*"));
+    YAML::Node getBusYamls(const QRegularExpression &busNameRegex = QRegularExpression(".*"));
 
 private:
     /* Internal used project manager. */
