@@ -155,9 +155,6 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"m", "module"},
-         QCoreApplication::translate("main", "The module name or regex."),
-         "module name or regex"},
     });
     parser.addPositionalArgument(
         "name",
@@ -167,16 +164,10 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments   = parser.positionalArguments();
     const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : "";
-    QStringList       moduleNameList = parser.isSet("module") ? (QStringList() << moduleName)
-                                                              : cmdArguments;
-    if (moduleNameList.isEmpty() && !parser.isSet("module")) {
+    QStringList       moduleNameList = cmdArguments;
+    if (moduleNameList.isEmpty()) {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: missing module name or regex."));
-    }
-    /* Append module name from positional arguments */
-    if (!moduleName.trimmed().isEmpty()) {
-        moduleNameList.append(moduleName.trimmed());
     }
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
@@ -277,9 +268,6 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"m", "module"},
-         QCoreApplication::translate("main", "The module name or regex."),
-         "module name or regex"},
     });
     parser.addPositionalArgument(
         "name",
@@ -292,13 +280,9 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments   = parser.positionalArguments();
-    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : "";
-    QStringList       moduleNameList = parser.isSet("module")
-                                           ? (QStringList() << moduleName)
-                                           : (cmdArguments.length() > 0 ? cmdArguments
-                                                                        : QStringList() << ".*");
+    const QStringList cmdArguments = parser.positionalArguments();
+    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
+    QStringList moduleNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
@@ -394,9 +378,6 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"m", "module"},
-         QCoreApplication::translate("main", "The module name or regex."),
-         "module name or regex"},
     });
     parser.addPositionalArgument(
         "name",
@@ -408,14 +389,10 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
     if (parser.isSet("help")) {
         return showHelp(0);
     }
+
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : "";
     QStringList moduleNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
-    /* Append module name from positional arguments */
-    if (!moduleName.trimmed().isEmpty()) {
-        moduleNameList.append(moduleName.trimmed());
-    }
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
@@ -564,9 +541,6 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
         {{"b", "bus"}, QCoreApplication::translate("main", "The specified bus name."), "bus name"},
-        {{"n", "port"},
-         QCoreApplication::translate("main", "The port name to connect the bus to."),
-         "port name"},
         {{"o", "mode"},
          QCoreApplication::translate("main", "The port mode (e.g., master, slave)."),
          "port mode"},
@@ -602,9 +576,7 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
 
     /* Get port name from positional arguments or port option */
     QString portName;
-    if (parser.isSet("port")) {
-        portName = parser.value("port");
-    } else if (!cmdArguments.isEmpty()) {
+    if (!cmdArguments.isEmpty()) {
         portName = cmdArguments.first();
     } else {
         return showHelpOrError(
