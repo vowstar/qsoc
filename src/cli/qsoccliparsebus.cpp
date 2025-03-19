@@ -140,9 +140,6 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"b", "bus"},
-         QCoreApplication::translate("main", "The bus name or regex."),
-         "bus name or regex"},
     });
     parser.addPositionalArgument(
         "name",
@@ -152,11 +149,10 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &busName      = parser.isSet("bus") ? parser.value("bus") : "";
     QStringList       busNameList  = cmdArguments;
-    /* Append bus name from positional arguments */
-    if (!busName.trimmed().isEmpty()) {
-        busNameList.append(busName.trimmed());
+    if (busNameList.isEmpty()) {
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: missing bus name or regex."));
     }
     /* Removing duplicates */
     busNameList.removeDuplicates();
@@ -255,9 +251,6 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"b", "bus"},
-         QCoreApplication::translate("main", "The bus name or regex."),
-         "bus name or regex"},
     });
     parser.addPositionalArgument(
         "name",
@@ -265,14 +258,14 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
         "[<bus name or regex list>]");
 
     parser.parse(appArguments);
+
+    if (parser.isSet("help")) {
+        return showHelp(0);
+    }
+
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &busName      = parser.isSet("bus") ? parser.value("bus") : "";
     QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
-    /* Append bus name from positional arguments */
-    if (!busName.trimmed().isEmpty()) {
-        busNameList.append(busName.trimmed());
-    }
     /* Removing duplicates */
     busNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
@@ -367,9 +360,6 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
         {{"l", "library"},
          QCoreApplication::translate("main", "The library base name or regex."),
          "library base name or regex"},
-        {{"b", "bus"},
-         QCoreApplication::translate("main", "The bus name or regex."),
-         "bus name or regex"},
     });
     parser.addPositionalArgument(
         "name",
@@ -377,14 +367,14 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
         "[<bus name or regex list>]");
 
     parser.parse(appArguments);
+
+    if (parser.isSet("help")) {
+        return showHelp(0);
+    }
+
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &busName      = parser.isSet("bus") ? parser.value("bus") : "";
     QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
-    /* Append bus name from positional arguments */
-    if (!busName.trimmed().isEmpty()) {
-        busNameList.append(busName.trimmed());
-    }
     /* Removing duplicates */
     busNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
