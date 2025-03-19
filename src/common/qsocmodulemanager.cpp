@@ -713,12 +713,6 @@ bool QSocModuleManager::addModuleBus(
         return false;
     }
 
-    /* Load bus library */
-    if (!busManager->load(".*")) {
-        qCritical() << "Error: Failed to load bus library.";
-        return false;
-    }
-
     /* Get bus YAML */
     YAML::Node busYaml = busManager->getBusYaml(busName);
     if (!busYaml) {
