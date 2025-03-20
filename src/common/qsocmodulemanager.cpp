@@ -900,26 +900,26 @@ bool QSocModuleManager::addModuleBusWithLLM(
     /* Use LLM API to match bus signals to module ports */
     static QLLMService llmService;
 
-    /* 构建提示 */
+    /* Build prompt */
     QString prompt
         = QString(
               "I need to match bus signals to module ports based on naming conventions and "
               "semantics.\n\n"
               "Module name: %1\n"
               "Bus name: %2\n"
-              "Port interface name: %3\n\n"
               "Module ports:\n%4\n\n"
               "Bus signals:\n%5\n\n"
               "Please provide the best mapping between bus signals and module ports. "
-              "Return a JSON object where keys are bus signals and values are module ports. "
-              "Only include mappings you're reasonably confident about.")
+              "Consider matches related to: %3.\n"
+              "For unmatched bus signals, use empty string."
+              "Return a JSON object where keys are bus signals and values are module ports. ")
               .arg(moduleName)
               .arg(busName)
               .arg(portName)
               .arg(groupModule.join(", "))
               .arg(groupBus.join(", "));
 
-    /* 发送请求到LLM服务 */
+    /* Send request to LLM service */
     LLMResponse response = llmService.sendRequest(
         provider,
         prompt,
@@ -928,13 +928,13 @@ bool QSocModuleManager::addModuleBusWithLLM(
         0.2,
         true);
 
-    /* 如果请求失败，返回错误 */
+    /* Return error if request failed */
     if (!response.success) {
         qCritical() << "Error: LLM API request failed:" << response.errorMessage;
         return false;
     }
 
-    /* 从响应中提取映射 */
+    /* Extract mappings from response */
     QMap<QString, QString> matching = QLLMService::extractMappingsFromResponse(response);
 
     if (matching.isEmpty()) {
