@@ -769,36 +769,34 @@ bool QSocModuleManager::addModuleBus(
         return a.size() > b.size();
     });
 
-    /* Find best matching group for the portName hint */
-    QString bestHintGroupMarker;
-    double  bestHintSimilarity = 0.0;
-    int     bestHintLength     = 0;
+    /* Find best matching group markers for the port name hint */
+    QVector<QString> bestHintGroupMarkers;
 
-    for (const QString &marker : candidateMarkers) {
-        double currentSimilarity
-            = QStaticStringWeaver::similarity(marker.toLower(), portName.toLower());
-        int currentLength = marker.length();
-        if (currentSimilarity > bestHintSimilarity
-            || (currentSimilarity == bestHintSimilarity && currentLength > bestHintLength)) {
-            bestHintSimilarity  = currentSimilarity;
-            bestHintLength      = currentLength;
-            bestHintGroupMarker = marker;
-        }
+    /* Try to find markers using the original port name without hardcoding prefixes */
+    QString bestMarker = QStaticStringWeaver::findBestGroupMarkerForHint(portName, candidateMarkers);
+    if (!bestMarker.isEmpty()) {
+        bestHintGroupMarkers.append(bestMarker);
+        qDebug() << "Best matching marker:" << bestMarker << "for hint:" << portName;
+    } else {
+        /* If no marker found, use empty string */
+        bestHintGroupMarkers.append("");
+        qDebug() << "No suitable group marker found, using empty string";
     }
 
-    /* If no markers found, use empty string */
-    if (bestHintGroupMarker.isEmpty()) {
-        bestHintGroupMarker = "";
-    }
-
-    qDebug() << "Best matching group marker:" << bestHintGroupMarker
-             << "similarity:" << bestHintSimilarity;
-
-    /* Collect all module ports from groups whose keys start with bestHintGroupMarker */
+    /* Collect all module ports from groups whose keys match any of the best hint group markers */
     QVector<QString> filteredModulePorts;
     for (auto it = groups.begin(); it != groups.end(); ++it) {
         QString groupKey = it.key();
-        if (groupKey.contains(bestHintGroupMarker, Qt::CaseInsensitive)) {
+        bool    matches  = false;
+
+        for (const QString &marker : bestHintGroupMarkers) {
+            if (groupKey.contains(marker, Qt::CaseInsensitive)) {
+                matches = true;
+                break;
+            }
+        }
+
+        if (matches) {
             qDebug() << "Including ports from group:" << groupKey;
             for (const QString &portStr : it.value()) {
                 filteredModulePorts.append(portStr);
@@ -814,12 +812,11 @@ bool QSocModuleManager::addModuleBus(
         qDebug() << "Using filtered ports for matching:" << filteredModulePorts;
     }
 
-    /* Step 4: Find optimal matching between bus signals and filtered module ports */
-    QMap<QString, QString> matching = QStaticStringWeaver::findOptimalMatching(
-        filteredModulePorts, groupBus, bestHintGroupMarker);
+    /* Find optimal matching between bus signals and filtered module ports */
+    QMap<QString, QString> matching
+        = QStaticStringWeaver::findOptimalMatching(filteredModulePorts, groupBus, bestMarker);
 
-    /* Print matching results */
-    qDebug() << "Signal mapping results:";
+    /* Debug output */
     for (auto it = matching.begin(); it != matching.end(); ++it) {
         qDebug() << "Bus signal:" << it.key() << "matched with module port:" << it.value();
     }
@@ -827,6 +824,12 @@ bool QSocModuleManager::addModuleBus(
     /* Add bus interface to module YAML */
     moduleYaml["bus"][portName.toStdString()]["bus"]  = busName.toStdString();
     moduleYaml["bus"][portName.toStdString()]["mode"] = portMode.toStdString();
+
+    /* Add signal mappings to the bus interface */
+    for (auto it = matching.begin(); it != matching.end(); ++it) {
+        moduleYaml["bus"][portName.toStdString()]["mapping"][it.key().toStdString()]
+            = it.value().toStdString();
+    }
 
     /* Update module YAML */
     return updateModuleYaml(moduleName, moduleYaml);
