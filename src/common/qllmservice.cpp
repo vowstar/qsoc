@@ -1,12 +1,18 @@
 #include "common/qllmservice.h"
 
+#include <fstream>
 #include <QDebug>
+#include <QDir>
 #include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
 #include <QNetworkRequest>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QUrlQuery>
+
+#include <yaml-cpp/yaml.h>
 
 QLLMService::QLLMService(QObject *parent)
     : QObject(parent)
@@ -33,30 +39,61 @@ void QLLMService::loadApiKeys()
     apiKeys[OLLAMA]   = env.value("OLLAMA_API_KEY", "");
 
     /* If not found in environment variables, try to load from config file */
-    QSettings settings("config.ini", QSettings::IniFormat);
-    settings.beginGroup(QString("API"));
+    QString configPath = QDir::home().absoluteFilePath(".config/socstudio/config.yaml");
+    QDir    configDir  = QFileInfo(configPath).dir();
 
-    if (apiKeys[DEEPSEEK].isEmpty()) {
-        apiKeys[DEEPSEEK] = settings.value(QString("DeepseekApiKey"), QString("")).toString();
+    /* Create config directory if it doesn't exist */
+    if (!configDir.exists()) {
+        configDir.mkpath(".");
     }
 
-    if (apiKeys[OPENAI].isEmpty()) {
-        apiKeys[OPENAI] = settings.value(QString("OpenAIApiKey"), QString("")).toString();
-    }
+    YAML::Node config;
+    try {
+        if (QFile::exists(configPath)) {
+            config = YAML::LoadFile(configPath.toStdString());
+        } else {
+            /* Create default config with commented API keys */
+            std::ofstream fout(configPath.toStdString());
+            fout << "# SoC Studio API Configuration\n";
+            fout << "api:\n";
+            fout << "  # Deepseek API key - Get from https://platform.deepseek.com\n";
+            fout << "  #deepseek: your_deepseek_api_key\n";
+            fout << "  # OpenAI API key - Get from https://platform.openai.com\n";
+            fout << "  #openai: your_openai_api_key\n";
+            fout << "  # Groq API key - Get from https://console.groq.com\n";
+            fout << "  #groq: your_groq_api_key\n";
+            fout << "  # Anthropic Claude API key - Get from https://console.anthropic.com\n";
+            fout << "  #claude: your_claude_api_key\n";
+            fout << "  # Ollama API key - Local deployment\n";
+            fout << "  #ollama: your_ollama_api_key\n";
+            fout.close();
 
-    if (apiKeys[GROQ].isEmpty()) {
-        apiKeys[GROQ] = settings.value(QString("GroqApiKey"), QString("")).toString();
-    }
+            config = YAML::LoadFile(configPath.toStdString());
+        }
 
-    if (apiKeys[CLAUDE].isEmpty()) {
-        apiKeys[CLAUDE] = settings.value(QString("ClaudeApiKey"), QString("")).toString();
-    }
+        /* Try to load API keys from YAML if they're not already set */
+        if (config["api"]) {
+            if (apiKeys[DEEPSEEK].isEmpty() && config["api"]["deepseek"]) {
+                apiKeys[DEEPSEEK] = QString::fromStdString(
+                    config["api"]["deepseek"].as<std::string>());
+            }
+            if (apiKeys[OPENAI].isEmpty() && config["api"]["openai"]) {
+                apiKeys[OPENAI] = QString::fromStdString(config["api"]["openai"].as<std::string>());
+            }
+            if (apiKeys[GROQ].isEmpty() && config["api"]["groq"]) {
+                apiKeys[GROQ] = QString::fromStdString(config["api"]["groq"].as<std::string>());
+            }
+            if (apiKeys[CLAUDE].isEmpty() && config["api"]["claude"]) {
+                apiKeys[CLAUDE] = QString::fromStdString(config["api"]["claude"].as<std::string>());
+            }
+            if (apiKeys[OLLAMA].isEmpty() && config["api"]["ollama"]) {
+                apiKeys[OLLAMA] = QString::fromStdString(config["api"]["ollama"].as<std::string>());
+            }
+        }
 
-    if (apiKeys[OLLAMA].isEmpty()) {
-        apiKeys[OLLAMA] = settings.value(QString("OllamaApiKey"), QString("")).toString();
+    } catch (const YAML::Exception &e) {
+        qWarning() << "Failed to load/save config:" << e.what();
     }
-
-    settings.endGroup();
 }
 
 bool QLLMService::isApiKeyConfigured(Provider provider) const
@@ -67,6 +104,48 @@ bool QLLMService::isApiKeyConfigured(Provider provider) const
 void QLLMService::setApiKey(Provider provider, const QString &apiKey)
 {
     apiKeys[provider] = apiKey;
+
+    /* Save API key to config file */
+    QString configPath = QDir::home().absoluteFilePath(".config/socstudio/config.yaml");
+
+    YAML::Node config;
+    try {
+        if (QFile::exists(configPath)) {
+            config = YAML::LoadFile(configPath.toStdString());
+        }
+
+        /* Create api section if it doesn't exist */
+        if (!config["api"]) {
+            config["api"] = YAML::Node(YAML::NodeType::Map);
+        }
+
+        /* Update the API key */
+        switch (provider) {
+        case DEEPSEEK:
+            config["api"]["deepseek"] = apiKey.toStdString();
+            break;
+        case OPENAI:
+            config["api"]["openai"] = apiKey.toStdString();
+            break;
+        case GROQ:
+            config["api"]["groq"] = apiKey.toStdString();
+            break;
+        case CLAUDE:
+            config["api"]["claude"] = apiKey.toStdString();
+            break;
+        case OLLAMA:
+            config["api"]["ollama"] = apiKey.toStdString();
+            break;
+        }
+
+        /* Save the updated config */
+        std::ofstream fout(configPath.toStdString());
+        fout << config;
+        fout.close();
+
+    } catch (const YAML::Exception &e) {
+        qWarning() << "Failed to save API key to config:" << e.what();
+    }
 }
 
 QUrl QLLMService::getApiEndpoint(Provider provider) const
