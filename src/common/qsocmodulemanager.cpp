@@ -835,6 +835,132 @@ bool QSocModuleManager::addModuleBus(
     return updateModuleYaml(moduleName, moduleYaml);
 }
 
+bool QSocModuleManager::addModuleBusWithLLM(
+    const QString        &moduleName,
+    const QString        &busName,
+    const QString        &portName,
+    const QString        &portMode,
+    QLLMService::Provider provider)
+{
+    /* Validate projectManager and its path */
+    if (!isModulePathValid()) {
+        qCritical() << "Error: projectManager is null or invalid module path.";
+        return false;
+    }
+
+    /* Check if module exists */
+    if (!isModuleExist(moduleName)) {
+        qCritical() << "Error: Module does not exist:" << moduleName;
+        return false;
+    }
+
+    /* Get module YAML */
+    YAML::Node moduleYaml = getModuleYaml(moduleName);
+
+    /* Validate busManager */
+    if (!busManager) {
+        qCritical() << "Error: busManager is null.";
+        return false;
+    }
+
+    /* Get bus YAML */
+    YAML::Node busYaml = busManager->getBusYaml(busName);
+    if (!busYaml) {
+        qCritical() << "Error: Bus does not exist:" << busName;
+        return false;
+    }
+
+    /* Extract module ports from moduleYaml */
+    QVector<QString> groupModule;
+    if (moduleYaml["port"]) {
+        for (YAML::const_iterator it = moduleYaml["port"].begin(); it != moduleYaml["port"].end();
+             ++it) {
+            const std::string portNameStd = it->first.as<std::string>();
+            groupModule.append(QString::fromStdString(portNameStd));
+        }
+    }
+
+    /* Extract bus signals from busYaml */
+    QVector<QString> groupBus;
+    if (busYaml["port"]) {
+        /* Signals are under the "port" node */
+        for (YAML::const_iterator it = busYaml["port"].begin(); it != busYaml["port"].end(); ++it) {
+            const std::string busSignalStd = it->first.as<std::string>();
+            groupBus.append(QString::fromStdString(busSignalStd));
+        }
+    } else {
+        /* No port node found */
+        qCritical() << "Error: Bus has invalid structure (missing 'port' node):" << busName;
+        return false;
+    }
+
+    qDebug() << "Module ports:" << groupModule;
+    qDebug() << "Bus signals:" << groupBus;
+
+    /* Use LLM API to match bus signals to module ports */
+    static QLLMService llmService;
+
+    /* 构建提示 */
+    QString prompt
+        = QString(
+              "I need to match bus signals to module ports based on naming conventions and "
+              "semantics.\n\n"
+              "Module name: %1\n"
+              "Bus name: %2\n"
+              "Port interface name: %3\n\n"
+              "Module ports:\n%4\n\n"
+              "Bus signals:\n%5\n\n"
+              "Please provide the best mapping between bus signals and module ports. "
+              "Return a JSON object where keys are bus signals and values are module ports. "
+              "Only include mappings you're reasonably confident about.")
+              .arg(moduleName)
+              .arg(busName)
+              .arg(portName)
+              .arg(groupModule.join(", "))
+              .arg(groupBus.join(", "));
+
+    /* 发送请求到LLM服务 */
+    LLMResponse response = llmService.sendRequest(
+        provider,
+        prompt,
+        "You are a helpful assistant that specializes in hardware "
+        "design and bus interfaces.", // Default system prompt
+        0.2,
+        true);
+
+    /* 如果请求失败，返回错误 */
+    if (!response.success) {
+        qCritical() << "Error: LLM API request failed:" << response.errorMessage;
+        return false;
+    }
+
+    /* 从响应中提取映射 */
+    QMap<QString, QString> matching = QLLMService::extractMappingsFromResponse(response);
+
+    if (matching.isEmpty()) {
+        qCritical() << "Error: Failed to obtain mapping from LLM provider";
+        return false;
+    }
+
+    /* Debug output */
+    for (auto it = matching.begin(); it != matching.end(); ++it) {
+        qDebug() << "Bus signal:" << it.key() << "matched with module port:" << it.value();
+    }
+
+    /* Add bus interface to module YAML */
+    moduleYaml["bus"][portName.toStdString()]["bus"]  = busName.toStdString();
+    moduleYaml["bus"][portName.toStdString()]["mode"] = portMode.toStdString();
+
+    /* Add signal mappings to the bus interface */
+    for (auto it = matching.begin(); it != matching.end(); ++it) {
+        moduleYaml["bus"][portName.toStdString()]["mapping"][it.key().toStdString()]
+            = it.value().toStdString();
+    }
+
+    /* Update module YAML */
+    return updateModuleYaml(moduleName, moduleYaml);
+}
+
 YAML::Node QSocModuleManager::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
 {
     if (!fromYaml.IsMap()) {

@@ -1,6 +1,7 @@
 #ifndef QSOCMODULEMANAGER_H
 #define QSOCMODULEMANAGER_H
 
+#include "common/qllmservice.h"
 #include "common/qsocbusmanager.h"
 #include "common/qsocprojectmanager.h"
 
@@ -375,6 +376,28 @@ public slots:
         const QString &busName,
         const QString &portName,
         const QString &portMode);
+
+    /**
+     * @brief Add a bus interface to a module using LLM matching.
+     * @details This function adds a bus interface to a module by using a
+     *          Large Language Model to match the module ports to bus signals.
+     *          It sends the module and bus information to the selected LLM
+     *          provider and uses the returned mappings to configure the bus
+     *          interface.
+     * @param moduleName Name of the module to add the bus interface to.
+     * @param busName Name of the bus to add.
+     * @param portName Name of the port to connect the bus to.
+     * @param portMode Mode of the port (e.g., "master", "slave").
+     * @param provider The LLM provider to use for matching.
+     * @retval true Bus interface successfully added.
+     * @retval false Failed to add bus interface.
+     */
+    bool addModuleBusWithLLM(
+        const QString        &moduleName,
+        const QString        &busName,
+        const QString        &portName,
+        const QString        &portMode,
+        QLLMService::Provider provider = QLLMService::DEEPSEEK);
 
 private:
     /* Internal used project manager. */

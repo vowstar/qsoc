@@ -529,25 +529,26 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
 {
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
-    parser.addOptions({
-        {{"d", "directory"},
-         QCoreApplication::translate("main", "The path to the project directory."),
-         "project directory"},
-        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
-        {{"l", "library"},
-         QCoreApplication::translate("main", "The library base name or regex."),
-         "library base name or regex"},
-        {{"m", "module"},
-         QCoreApplication::translate("main", "The module name or regex."),
-         "module name or regex"},
-        {{"b", "bus"}, QCoreApplication::translate("main", "The specified bus name."), "bus name"},
-        {{"o", "mode"},
-         QCoreApplication::translate("main", "The port mode (e.g., master, slave)."),
-         "port mode"},
-        {{"bl", "bus-library"},
-         QCoreApplication::translate("main", "The bus library name or regex."),
-         "bus library name or regex"},
-    });
+    parser.addOptions(
+        {{{"d", "directory"},
+          QCoreApplication::translate("main", "The path to the project directory."),
+          "project directory"},
+         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+         {{"l", "library"},
+          QCoreApplication::translate("main", "The library base name or regex."),
+          "library base name or regex"},
+         {{"m", "module"},
+          QCoreApplication::translate("main", "The module name or regex."),
+          "module name or regex"},
+         {{"b", "bus"}, QCoreApplication::translate("main", "The specified bus name."), "bus name"},
+         {{"o", "mode"},
+          QCoreApplication::translate("main", "The port mode (e.g., master, slave)."),
+          "port mode"},
+         {{"bl", "bus-library"},
+          QCoreApplication::translate("main", "The bus library name or regex."),
+          "bus library name or regex"},
+         {"ai", QCoreApplication::translate("main", "Use AI to generate bus interfaces."), ""}});
+
     parser.addPositionalArgument(
         "port",
         QCoreApplication::translate("main", "The port name to connect the bus to."),
@@ -560,6 +561,7 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
     const QString    &busName      = parser.isSet("bus") ? parser.value("bus") : "";
     const QString    &busLibrary = parser.isSet("bus-library") ? parser.value("bus-library") : ".*";
     const QString    &portMode   = parser.isSet("mode") ? parser.value("mode") : "";
+    const bool        useAI      = parser.isSet("ai");
 
     /* Validate required parameters */
     if (busName.isEmpty()) {
@@ -659,8 +661,18 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: could not load bus library: %1")
                 .arg(busLibrary));
     }
-    /* Add bus interface to module */
-    if (!moduleManager.addModuleBus(moduleName, busName, portName, portMode)) {
+
+    /* Add bus interface to module using AI or standard method */
+    bool success = false;
+    if (useAI) {
+        /* Call the LLM-based method if AI option is set */
+        success = moduleManager.addModuleBusWithLLM(moduleName, busName, portName, portMode);
+    } else {
+        /* Call the standard method if AI option is not set */
+        success = moduleManager.addModuleBus(moduleName, busName, portName, portMode);
+    }
+
+    if (!success) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not add bus interface to module: %1")
