@@ -539,7 +539,9 @@ bool QSocBusManager::save(const QString &libraryName)
             return false;
         }
         dataToSave[busNameStd] = busData[busNameStd];
-        dataToSave[busNameStd].remove("library");
+        if (dataToSave[busNameStd]["library"]) {
+            dataToSave[busNameStd].remove("library");
+        }
     }
 
     /* Serialize and save to file */

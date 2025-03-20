@@ -395,7 +395,9 @@ bool QSocModuleManager::save(const QString &libraryName)
             return false;
         }
         dataToSave[moduleNameStd] = moduleData[moduleNameStd];
-        // dataToSave[moduleNameStd].remove("library");
+        if (dataToSave[moduleNameStd]["library"]) {
+            dataToSave[moduleNameStd].remove("library");
+        }
     }
 
     /* Serialize and save to file */
