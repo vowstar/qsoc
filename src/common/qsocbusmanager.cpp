@@ -165,20 +165,20 @@ bool QSocBusManager::importFromFileList(
             QString qualifier  = row[4].trimmed();
 
             if (!signalName.isEmpty() && !mode.isEmpty()) {
-                /* Create nested structure: busName -> signalName -> mode -> properties */
+                /* Create nested structure: busName -> port -> signalName -> mode -> properties */
                 if (!direction.isEmpty()) {
-                    busYaml[busName.toStdString()][signalName.toStdString()][mode.toStdString()]
-                           ["direction"]
+                    busYaml[busName.toStdString()]["port"][signalName.toStdString()]
+                           [mode.toStdString()]["direction"]
                         = direction.toStdString();
                 }
                 if (!width.isEmpty()) {
-                    busYaml[busName.toStdString()][signalName.toStdString()][mode.toStdString()]
-                           ["width"]
+                    busYaml[busName.toStdString()]["port"][signalName.toStdString()]
+                           [mode.toStdString()]["width"]
                         = width.toStdString();
                 }
                 if (!qualifier.isEmpty()) {
-                    busYaml[busName.toStdString()][signalName.toStdString()][mode.toStdString()]
-                           ["qualifier"]
+                    busYaml[busName.toStdString()]["port"][signalName.toStdString()]
+                           [mode.toStdString()]["qualifier"]
                         = qualifier.toStdString();
                 }
             }
@@ -373,7 +373,17 @@ bool QSocBusManager::load(const QString &libraryName)
             const auto key = it->first.as<std::string>();
 
             /* Add to busData */
-            busData[key]            = it->second;
+            busData[key] = it->second;
+
+            /* Check if this is old format (no "port" node) and reject it */
+            if (!busData[key]["port"]) {
+                qCritical() << "Error: Bus" << QString::fromStdString(key)
+                            << "has invalid structure (missing 'port' node)";
+                /* Remove invalid bus data */
+                busData.remove(key);
+                return false;
+            }
+
             busData[key]["library"] = libraryName.toStdString();
 
             /* Update libraryMap with libraryName to key mapping */
@@ -699,6 +709,11 @@ YAML::Node QSocBusManager::getBusYaml(const QString &busName)
 
     /* Get bus YAML node from busData */
     result = busData[busName.toStdString()];
+
+    /* Check for required port structure */
+    if (!result["port"]) {
+        qWarning() << "Bus" << busName << "has invalid structure (missing 'port' node)";
+    }
 
     return result;
 }
