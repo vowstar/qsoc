@@ -3,6 +3,7 @@
 #include "common/qslangdriver.h"
 #include "common/qsocbusmanager.h"
 #include "common/qstaticregex.h"
+#include "common/qstaticstringweaver.h"
 
 #include <QDebug>
 #include <QDir>
@@ -720,6 +721,107 @@ bool QSocModuleManager::addModuleBus(
     if (!busYaml) {
         qCritical() << "Error: Bus does not exist:" << busName;
         return false;
+    }
+
+    /* Extract module ports from moduleYaml */
+    QVector<QString> groupModule;
+    if (moduleYaml["port"]) {
+        for (YAML::const_iterator it = moduleYaml["port"].begin(); it != moduleYaml["port"].end();
+             ++it) {
+            const std::string portNameStd = it->first.as<std::string>();
+            groupModule.append(QString::fromStdString(portNameStd));
+        }
+    }
+
+    /* Extract bus signals from busYaml - with the new structure where signals are under "port" */
+    QVector<QString> groupBus;
+    if (busYaml["port"]) {
+        /* Signals are under the "port" node */
+        for (YAML::const_iterator it = busYaml["port"].begin(); it != busYaml["port"].end(); ++it) {
+            const std::string busSignalStd = it->first.as<std::string>();
+            groupBus.append(QString::fromStdString(busSignalStd));
+        }
+    } else {
+        /* No port node found */
+        qCritical() << "Error: Bus has invalid structure (missing 'port' node):" << busName;
+        return false;
+    }
+
+    /* Print extracted lists for debugging */
+    qDebug() << "Module ports:" << groupModule;
+    qDebug() << "Bus signals:" << groupBus;
+
+    /* Use QStaticStringWeaver to match bus signals to module ports */
+    /* Step 1: Extract candidate substrings for clustering */
+    int minSubstringLength = 3; /* Min length for common substrings */
+    int freqThreshold      = 2; /* Must appear in at least 2 strings */
+
+    QMap<QString, int> candidateSubstrings = QStaticStringWeaver::extractCandidateSubstrings(
+        groupModule, minSubstringLength, freqThreshold);
+
+    /* Step 2: Cluster module ports based on common substrings */
+    QMap<QString, QVector<QString>> groups
+        = QStaticStringWeaver::clusterStrings(groupModule, candidateSubstrings);
+
+    /* Step 3: Find best matching group for the port name hint */
+    QList<QString> candidateMarkers = candidateSubstrings.keys();
+    std::sort(candidateMarkers.begin(), candidateMarkers.end(), [](const QString &a, const QString &b) {
+        return a.size() > b.size();
+    });
+
+    /* Find best matching group for the portName hint */
+    QString bestHintGroupMarker;
+    double  bestHintSimilarity = 0.0;
+    int     bestHintLength     = 0;
+
+    for (const QString &marker : candidateMarkers) {
+        double currentSimilarity
+            = QStaticStringWeaver::similarity(marker.toLower(), portName.toLower());
+        int currentLength = marker.length();
+        if (currentSimilarity > bestHintSimilarity
+            || (currentSimilarity == bestHintSimilarity && currentLength > bestHintLength)) {
+            bestHintSimilarity  = currentSimilarity;
+            bestHintLength      = currentLength;
+            bestHintGroupMarker = marker;
+        }
+    }
+
+    /* If no markers found, use empty string */
+    if (bestHintGroupMarker.isEmpty()) {
+        bestHintGroupMarker = "";
+    }
+
+    qDebug() << "Best matching group marker:" << bestHintGroupMarker
+             << "similarity:" << bestHintSimilarity;
+
+    /* Collect all module ports from groups whose keys start with bestHintGroupMarker */
+    QVector<QString> filteredModulePorts;
+    for (auto it = groups.begin(); it != groups.end(); ++it) {
+        QString groupKey = it.key();
+        if (groupKey.contains(bestHintGroupMarker, Qt::CaseInsensitive)) {
+            qDebug() << "Including ports from group:" << groupKey;
+            for (const QString &portStr : it.value()) {
+                filteredModulePorts.append(portStr);
+            }
+        }
+    }
+
+    /* If no filtered ports found, fall back to all ports */
+    if (filteredModulePorts.isEmpty()) {
+        qDebug() << "No ports found in matching groups, using all ports";
+        filteredModulePorts = groupModule;
+    } else {
+        qDebug() << "Using filtered ports for matching:" << filteredModulePorts;
+    }
+
+    /* Step 4: Find optimal matching between bus signals and filtered module ports */
+    QMap<QString, QString> matching = QStaticStringWeaver::findOptimalMatching(
+        filteredModulePorts, groupBus, bestHintGroupMarker);
+
+    /* Print matching results */
+    qDebug() << "Signal mapping results:";
+    for (auto it = matching.begin(); it != matching.end(); ++it) {
+        qDebug() << "Bus signal:" << it.key() << "matched with module port:" << it.value();
     }
 
     /* Add bus interface to module YAML */
