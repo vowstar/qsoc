@@ -12,7 +12,7 @@ struct TestApp
     static auto &instance()
     {
         static auto                  argc      = 1;
-        static char                  appName[] = "socstudio";
+        static char                  appName[] = "qsoc";
         static std::array<char *, 1> argv      = {{appName}};
         /* Use QCoreApplication for cli test */
         static const QCoreApplication app = QCoreApplication(argc, argv.data());
@@ -45,14 +45,14 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "-h",
         };
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
         /* Check that the message list contains the expected message */
         QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("Usage: socstudio [options]"));
+        QVERIFY(messageList.first().contains("Usage: qsoc [options]"));
     }
 
     void optionHelp()
@@ -60,14 +60,14 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "--help",
         };
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
         /* Check that the message list contains the expected message */
         QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("Usage: socstudio [options]"));
+        QVERIFY(messageList.first().contains("Usage: qsoc [options]"));
     }
 
     void optionVerbose()
@@ -75,7 +75,7 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "--verbose=10",
         };
         socCliWorker.setup(appArguments, false);
@@ -90,14 +90,14 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "-v",
         };
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
         /* Check that the message list contains the expected message */
         QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("socstudio " SOCSTUDIO_VERSION));
+        QVERIFY(messageList.first().contains("qsoc " QSOC_VERSION));
     }
 
     void optionVersion()
@@ -105,14 +105,14 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "--version",
         };
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
         /* Check that the message list contains the expected message */
         QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("socstudio " SOCSTUDIO_VERSION));
+        QVERIFY(messageList.first().contains("qsoc " QSOC_VERSION));
     }
 };
 

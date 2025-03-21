@@ -261,7 +261,7 @@
     <string>&amp;Quit</string>
    </property>
    <property name="statusTip">
-    <string>Quit socstudio (CTRL+Q)</string>
+    <string>Quit qsoc (CTRL+Q)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+Q</string>

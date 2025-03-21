@@ -54,7 +54,7 @@ QString QSocProjectManager::getSimplifyPath(const QString &path)
     QMapIterator<QString, QString> iterator(env);
     while (iterator.hasNext()) {
         iterator.next();
-        if (iterator.key().contains("SOCSTUDIO_")) {
+        if (iterator.key().contains("QSOC_")) {
             const QString pattern = QString("${%1}").arg(iterator.key());
             result                = result.replace(iterator.value(), pattern);
         }
@@ -425,8 +425,8 @@ void QSocProjectManager::setProjectName(const QString &projectName)
 
 void QSocProjectManager::setProjectPath(const QString &projectPath)
 {
-    this->projectPath            = getExpandPath(projectPath);
-    env["SOCSTUDIO_PROJECT_DIR"] = this->projectPath;
+    this->projectPath       = getExpandPath(projectPath);
+    env["QSOC_PROJECT_DIR"] = this->projectPath;
 }
 
 void QSocProjectManager::setBusPath(const QString &busPath)

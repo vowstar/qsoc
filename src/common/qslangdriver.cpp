@@ -180,7 +180,7 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
             content = contentValidFile(content, QFileInfo(fileListPath).absoluteDir());
         }
         /* Create a temporary file */
-        QTemporaryFile tempFile("socstudio.fl");
+        QTemporaryFile tempFile("qsoc.fl");
         /* Do not remove file after close */
         tempFile.setAutoRemove(false);
         if (tempFile.open()) {

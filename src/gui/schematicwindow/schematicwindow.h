@@ -14,7 +14,7 @@ class SchematicWindow;
 QT_END_NAMESPACE
 /**
  * @brief The SchematicWindow class.
- * @details This class is the schematic window class for the socstudio
+ * @details This class is the schematic window class for the qsoc
  *          application. It is responsible for displaying the schematic window.
  */
 class SchematicWindow : public QMainWindow

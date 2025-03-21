@@ -14,7 +14,7 @@ struct TestApp
     static auto &instance()
     {
         static auto                  argc      = 1;
-        static char                  appName[] = "socstudio";
+        static char                  appName[] = "qsoc";
         static std::array<char *, 1> argv      = {{appName}};
         /* Use QCoreApplication for cli test */
         static const QCoreApplication app = QCoreApplication(argc, argv.data());
@@ -47,7 +47,7 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "project",
             "create",
             "test_project",
@@ -76,7 +76,7 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "project",
             "list",
         };
@@ -99,7 +99,7 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "project",
             "show",
             "test_project",
@@ -130,7 +130,7 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "project",
             "update",
             "-s",
@@ -158,7 +158,7 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "socstudio",
+            "qsoc",
             "project",
             "remove",
             "test_project",

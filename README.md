@@ -1,3 +1,3 @@
-# SoC Studio
+# QSoC
 
 IDE for building SoC.

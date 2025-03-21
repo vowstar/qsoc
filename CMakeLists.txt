@@ -17,11 +17,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Project settings
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/common/config.h" CONFIG_H_CONTENT)
-string(REGEX MATCH "#define SOCSTUDIO_VERSION \"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _ ${CONFIG_H_CONTENT})
-set(SOCSTUDIO_VERSION ${CMAKE_MATCH_1})
-message(STATUS "Project version: socstudio ${SOCSTUDIO_VERSION}")
+string(REGEX MATCH "#define QSOC_VERSION \"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _ ${CONFIG_H_CONTENT})
+set(QSOC_VERSION ${CMAKE_MATCH_1})
+message(STATUS "Project version: qsoc ${QSOC_VERSION}")
 
-project(socstudio VERSION ${SOCSTUDIO_VERSION} LANGUAGES CXX)
+project(qsoc VERSION ${QSOC_VERSION} LANGUAGES CXX)
 
 # QT
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS

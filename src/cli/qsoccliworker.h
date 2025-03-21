@@ -9,7 +9,7 @@
 
 /**
  * @brief The QSocCliWorker class.
- * @details This class is the main worker class for the socstudio application.
+ * @details This class is the main worker class for the qsoc application.
  *          It is responsible for parsing the command line arguments and
  *          executing the appropriate actions.
  */

@@ -12,7 +12,7 @@ class MainWindow;
 QT_END_NAMESPACE
 /**
  * @brief The MainWindow class.
- * @details This class is the main window class for the socstudio application.
+ * @details This class is the main window class for the qsoc application.
  *          It is responsible for displaying the main window.
  */
 class MainWindow : public QMainWindow

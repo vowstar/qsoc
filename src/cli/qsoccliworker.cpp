@@ -12,8 +12,8 @@ QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)
 {
     /* Set up application name and version */
-    QCoreApplication::setApplicationName("socstudio");
-    QCoreApplication::setApplicationVersion(SOCSTUDIO_VERSION);
+    QCoreApplication::setApplicationName("qsoc");
+    QCoreApplication::setApplicationVersion(QSOC_VERSION);
     /* Set up command line parser */
     parser.setApplicationDescription(
         QCoreApplication::translate("main", "Generate SoC components via the command line."));

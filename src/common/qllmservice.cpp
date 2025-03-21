@@ -39,7 +39,7 @@ void QLLMService::loadApiKeys()
     apiKeys[OLLAMA]   = env.value("OLLAMA_API_KEY", "");
 
     /* If not found in environment variables, try to load from config file */
-    QString configPath = QDir::home().absoluteFilePath(".config/socstudio/config.yaml");
+    QString configPath = QDir::home().absoluteFilePath(".config/qsoc/config.yaml");
     QDir    configDir  = QFileInfo(configPath).dir();
 
     /* Create config directory if it doesn't exist */
@@ -106,7 +106,7 @@ void QLLMService::setApiKey(Provider provider, const QString &apiKey)
     apiKeys[provider] = apiKey;
 
     /* Save API key to config file */
-    QString configPath = QDir::home().absoluteFilePath(".config/socstudio/config.yaml");
+    QString configPath = QDir::home().absoluteFilePath(".config/qsoc/config.yaml");
 
     YAML::Node config;
     try {
