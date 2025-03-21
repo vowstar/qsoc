@@ -1,6 +1,10 @@
-# QSoC
+# QSoC - Quick System on Chip Studio
 
-IDE for building SoC.
+QSoC is a Quick, Quality, Quintessential development environment for modern
+SoC (System on Chip) development based on the Qt framework.
+
+QSoC empowers hardware engineers with streamlined features for designing complex
+SoC systems.
 
 ## Development
 
