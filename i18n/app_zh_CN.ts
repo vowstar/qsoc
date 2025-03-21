@@ -5,7 +5,7 @@
     <name>MainWindow</name>
     <message>
         <location filename="../ui/mainwindow.ui" line="14"/>
-        <source>SoC Studio</source>
+        <source>QSoC</source>
         <translation>芯片工作室</translation>
     </message>
 </context>
