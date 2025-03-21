@@ -1,6 +1,8 @@
 #ifndef QLLMSERVICE_H
 #define QLLMSERVICE_H
 
+#include "common/qsocconfig.h"
+
 #include <functional>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -41,8 +43,27 @@ public:
         /* More providers can be added */
     };
 
-    explicit QLLMService(QObject *parent = nullptr);
+    /**
+     * @brief Constructor for QLLMService
+     * @param parent Parent object
+     * @param config Configuration manager, can be nullptr
+     */
+    explicit QLLMService(QObject *parent = nullptr, QSocConfig *config = nullptr);
     ~QLLMService();
+
+    /**
+     * @brief Set the configuration manager
+     * @details Sets the configuration manager and reloads API keys.
+     * @param config Configuration manager, can be nullptr
+     */
+    void setConfig(QSocConfig *config);
+
+    /**
+     * @brief Get the configuration manager
+     * @details Retrieves the currently assigned configuration manager.
+     * @return QSocConfig* Pointer to the current configuration manager.
+     */
+    QSocConfig *getConfig();
 
     /**
      * @brief Send a synchronous request to an LLM
@@ -80,7 +101,7 @@ public:
         bool   jsonMode    = false);
 
     /**
-     * @brief Check if an API key is configured
+     * @brief Check if an API key is configured for the given provider
      * @param provider LLM provider
      * @return Whether the API key is configured
      */
@@ -101,13 +122,22 @@ public:
     static QMap<QString, QString> extractMappingsFromResponse(const LLMResponse &response);
 
 private:
-    QNetworkAccessManager  *networkManager;
-    QMap<Provider, QString> apiKeys;
+    QNetworkAccessManager *networkManager;
+    QSocConfig            *config;
 
     /**
-     * @brief Load API keys from environment variables or config file
+     * @brief Get the API key for the given provider
+     * @param provider LLM provider
+     * @return API key for the provider
      */
-    void loadApiKeys();
+    QString getApiKey(Provider provider) const;
+
+    /**
+     * @brief Get provider name as string
+     * @param provider LLM provider
+     * @return Provider name as string
+     */
+    QString getProviderName(Provider provider) const;
 
     /**
      * @brief Get the API endpoint URL for a provider
@@ -115,6 +145,13 @@ private:
      * @return API endpoint URL
      */
     QUrl getApiEndpoint(Provider provider) const;
+
+    /**
+     * @brief Get the default API endpoint URL for a provider
+     * @param provider LLM provider
+     * @return Default API endpoint URL
+     */
+    QUrl getDefaultApiEndpoint(Provider provider) const;
 
     /**
      * @brief Build the request payload
@@ -139,6 +176,20 @@ private:
      * @return Parsed LLM response struct
      */
     LLMResponse parseResponse(Provider provider, QNetworkReply *reply) const;
+
+    /**
+     * @brief Get current provider from configuration
+     * @param defaultProvider Default provider to use if not specified in config
+     * @return Provider to use
+     */
+    Provider getCurrentProvider(Provider defaultProvider) const;
+
+    /**
+     * @brief Prepare network request for given provider
+     * @param provider LLM provider
+     * @return Configured network request
+     */
+    QNetworkRequest prepareRequest(Provider provider) const;
 };
 
 #endif // QLLMSERVICE_H

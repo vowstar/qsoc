@@ -27,11 +27,13 @@ public:
      * @param[in] parent parent object.
      * @param[in] projectManager project manager.
      * @param[in] busManager bus manager.
+     * @param[in] llmService LLM service.
      */
     explicit QSocModuleManager(
         QObject            *parent         = nullptr,
         QSocProjectManager *projectManager = nullptr,
-        QSocBusManager     *busManager     = nullptr);
+        QSocBusManager     *busManager     = nullptr,
+        QLLMService        *llmService     = nullptr);
 
 public slots:
     /**
@@ -52,12 +54,33 @@ public slots:
     void setBusManager(QSocBusManager *busManager);
 
     /**
+     * @brief Set the LLM service.
+     * @details Assigns a new LLM service to this object.
+     * @param llmService Pointer to the new LLM service.
+     */
+    void setLLMService(QLLMService *llmService);
+
+    /**
      * @brief Get the project manager.
      * @details Retrieves the currently assigned project manager. This manager
      *          is responsible for handling various aspects of the project.
      * @return QSocProjectManager * Pointer to the current project manager.
      */
     QSocProjectManager *getProjectManager();
+
+    /**
+     * @brief Get the LLM service.
+     * @details Retrieves the currently assigned LLM service.
+     * @return QLLMService * Pointer to the current LLM service.
+     */
+    QLLMService *getLLMService();
+
+    /**
+     * @brief Get the bus manager.
+     * @details Retrieves the currently assigned bus manager.
+     * @return QSocBusManager * Pointer to the current bus manager.
+     */
+    QSocBusManager *getBusManager();
 
     /**
      * @brief Check if module path is valid.
@@ -378,26 +401,20 @@ public slots:
         const QString &portMode);
 
     /**
-     * @brief Add a bus interface to a module using LLM matching.
-     * @details This function adds a bus interface to a module by using a
-     *          Large Language Model to match the module ports to bus signals.
-     *          It sends the module and bus information to the selected LLM
-     *          provider and uses the returned mappings to configure the bus
-     *          interface.
-     * @param moduleName Name of the module to add the bus interface to.
-     * @param busName Name of the bus to add.
-     * @param portName Name of the port to connect the bus to.
+     * @brief Add a bus interface to a module using LLM API for signal matching.
+     * @details This method uses a large language model to match bus signals to module ports.
+     * @param moduleName Name of the module.
+     * @param busName Name of the bus.
+     * @param portName Name of the port (interface name).
      * @param portMode Mode of the port (e.g., "master", "slave").
-     * @param provider The LLM provider to use for matching.
      * @retval true Bus interface successfully added.
      * @retval false Failed to add bus interface.
      */
     bool addModuleBusWithLLM(
-        const QString        &moduleName,
-        const QString        &busName,
-        const QString        &portName,
-        const QString        &portMode,
-        QLLMService::Provider provider = QLLMService::DEEPSEEK);
+        const QString &moduleName,
+        const QString &busName,
+        const QString &portName,
+        const QString &portMode);
 
 private:
     /* Internal used project manager. */
@@ -405,6 +422,9 @@ private:
 
     /* Internal used bus manager. */
     QSocBusManager *busManager = nullptr;
+
+    /* Internal used LLM service. */
+    QLLMService *llmService = nullptr;
 
     /* This QMap, libraryMap, maps library names to sets of module names.
        Each key in the map is a library name (QString).

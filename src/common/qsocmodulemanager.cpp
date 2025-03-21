@@ -2,6 +2,7 @@
 
 #include "common/qslangdriver.h"
 #include "common/qsocbusmanager.h"
+#include "common/qsocconfig.h"
 #include "common/qstaticregex.h"
 #include "common/qstaticstringweaver.h"
 
@@ -12,8 +13,14 @@
 #include <fstream>
 
 QSocModuleManager::QSocModuleManager(
-    QObject *parent, QSocProjectManager *projectManager, QSocBusManager *busManager)
-    : QObject{parent}
+    QObject            *parent,
+    QSocProjectManager *projectManager,
+    QSocBusManager     *busManager,
+    QLLMService        *llmService)
+    : QObject(parent)
+    , projectManager(projectManager)
+    , busManager(busManager)
+    , llmService(llmService)
 {
     /* Set projectManager */
     setProjectManager(projectManager);
@@ -836,12 +843,17 @@ bool QSocModuleManager::addModuleBus(
 }
 
 bool QSocModuleManager::addModuleBusWithLLM(
-    const QString        &moduleName,
-    const QString        &busName,
-    const QString        &portName,
-    const QString        &portMode,
-    QLLMService::Provider provider)
+    const QString &moduleName,
+    const QString &busName,
+    const QString &portName,
+    const QString &portMode)
 {
+    /* Validate llmService */
+    if (!llmService) {
+        qCritical() << "Error: llmService is null.";
+        return false;
+    }
+
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
         qCritical() << "Error: projectManager is null or invalid module path.";
@@ -897,9 +909,6 @@ bool QSocModuleManager::addModuleBusWithLLM(
     qDebug() << "Module ports:" << groupModule;
     qDebug() << "Bus signals:" << groupBus;
 
-    /* Use LLM API to match bus signals to module ports */
-    static QLLMService llmService;
-
     /* Build prompt */
     QString prompt
         = QString(
@@ -920,8 +929,8 @@ bool QSocModuleManager::addModuleBusWithLLM(
               .arg(groupBus.join(", "));
 
     /* Send request to LLM service */
-    LLMResponse response = llmService.sendRequest(
-        provider,
+    LLMResponse response = llmService->sendRequest(
+        QLLMService::Provider::OPENAI, // Default provider
         prompt,
         "You are a helpful assistant that specializes in hardware "
         "design and bus interfaces.", // Default system prompt
@@ -1025,4 +1034,19 @@ void QSocModuleManager::libraryMapRemove(const QString &libraryName, const QStri
             libraryMap.remove(libraryName);
         }
     }
+}
+
+void QSocModuleManager::setLLMService(QLLMService *llmService)
+{
+    this->llmService = llmService;
+}
+
+QLLMService *QSocModuleManager::getLLMService()
+{
+    return llmService;
+}
+
+QSocBusManager *QSocModuleManager::getBusManager()
+{
+    return busManager;
 }

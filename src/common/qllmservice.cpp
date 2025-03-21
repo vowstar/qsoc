@@ -7,18 +7,17 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QNetworkRequest>
-#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QUrlQuery>
 
 #include <yaml-cpp/yaml.h>
 
-QLLMService::QLLMService(QObject *parent)
+QLLMService::QLLMService(QObject *parent, QSocConfig *config)
     : QObject(parent)
+    , config(config)
 {
     networkManager = new QNetworkAccessManager(this);
-    loadApiKeys();
 }
 
 QLLMService::~QLLMService()
@@ -26,130 +25,115 @@ QLLMService::~QLLMService()
     /* QNetworkAccessManager is a QObject child class and will be cleaned up automatically */
 }
 
-void QLLMService::loadApiKeys()
+void QLLMService::setConfig(QSocConfig *config)
 {
-    /* Load API keys from environment variables */
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    this->config = config;
+}
 
-    /* Try to load from environment variables */
-    apiKeys[DEEPSEEK] = env.value("DEEPSEEK_API_KEY", "");
-    apiKeys[OPENAI]   = env.value("OPENAI_API_KEY", "");
-    apiKeys[GROQ]     = env.value("GROQ_API_KEY", "");
-    apiKeys[CLAUDE]   = env.value("CLAUDE_API_KEY", "");
-    apiKeys[OLLAMA]   = env.value("OLLAMA_API_KEY", "");
+QSocConfig *QLLMService::getConfig()
+{
+    return config;
+}
 
-    /* If not found in environment variables, try to load from config file */
-    QString configPath = QDir::home().absoluteFilePath(".config/qsoc/config.yaml");
-    QDir    configDir  = QFileInfo(configPath).dir();
+QString QLLMService::getProviderName(Provider provider) const
+{
+    switch (provider) {
+    case DEEPSEEK:
+        return "deepseek";
+    case OPENAI:
+        return "openai";
+    case GROQ:
+        return "groq";
+    case CLAUDE:
+        return "claude";
+    case OLLAMA:
+        return "ollama";
+    default:
+        return QString();
+    }
+}
 
-    /* Create config directory if it doesn't exist */
-    if (!configDir.exists()) {
-        configDir.mkpath(".");
+QString QLLMService::getApiKey(Provider provider) const
+{
+    /* Check config */
+    if (!config) {
+        return QString();
     }
 
-    YAML::Node config;
-    try {
-        if (QFile::exists(configPath)) {
-            config = YAML::LoadFile(configPath.toStdString());
-        } else {
-            /* Create default config with commented API keys */
-            std::ofstream fout(configPath.toStdString());
-            fout << "# SoC Studio API Configuration\n";
-            fout << "api:\n";
-            fout << "  # Deepseek API key - Get from https://platform.deepseek.com\n";
-            fout << "  #deepseek: your_deepseek_api_key\n";
-            fout << "  # OpenAI API key - Get from https://platform.openai.com\n";
-            fout << "  #openai: your_openai_api_key\n";
-            fout << "  # Groq API key - Get from https://console.groq.com\n";
-            fout << "  #groq: your_groq_api_key\n";
-            fout << "  # Anthropic Claude API key - Get from https://console.anthropic.com\n";
-            fout << "  #claude: your_claude_api_key\n";
-            fout << "  # Ollama API key - Local deployment\n";
-            fout << "  #ollama: your_ollama_api_key\n";
-            fout.close();
+    QString providerName = getProviderName(provider);
 
-            config = YAML::LoadFile(configPath.toStdString());
+    /* Priority 1: Global key when ai_provider matches current provider */
+    if (config->hasKey("api_key") && config->hasKey("ai_provider")) {
+        QString configProvider = config->getValue("ai_provider").toLower();
+        if (configProvider == providerName) {
+            return config->getValue("api_key");
         }
-
-        /* Try to load API keys from YAML if they're not already set */
-        if (config["api"]) {
-            if (apiKeys[DEEPSEEK].isEmpty() && config["api"]["deepseek"]) {
-                apiKeys[DEEPSEEK] = QString::fromStdString(
-                    config["api"]["deepseek"].as<std::string>());
-            }
-            if (apiKeys[OPENAI].isEmpty() && config["api"]["openai"]) {
-                apiKeys[OPENAI] = QString::fromStdString(config["api"]["openai"].as<std::string>());
-            }
-            if (apiKeys[GROQ].isEmpty() && config["api"]["groq"]) {
-                apiKeys[GROQ] = QString::fromStdString(config["api"]["groq"].as<std::string>());
-            }
-            if (apiKeys[CLAUDE].isEmpty() && config["api"]["claude"]) {
-                apiKeys[CLAUDE] = QString::fromStdString(config["api"]["claude"].as<std::string>());
-            }
-            if (apiKeys[OLLAMA].isEmpty() && config["api"]["ollama"]) {
-                apiKeys[OLLAMA] = QString::fromStdString(config["api"]["ollama"].as<std::string>());
-            }
-        }
-
-    } catch (const YAML::Exception &e) {
-        qWarning() << "Failed to load/save config:" << e.what();
     }
+
+    /* Priority 2: Global api_key regardless of provider */
+    if (config->hasKey("api_key")) {
+        return config->getValue("api_key");
+    }
+
+    /* Priority 3: Provider-specific key in nested configuration */
+    QString providerSpecificKey = providerName + ".api_key";
+    if (config->hasKey(providerSpecificKey)) {
+        return config->getValue(providerSpecificKey);
+    }
+
+    return QString();
 }
 
 bool QLLMService::isApiKeyConfigured(Provider provider) const
 {
-    return apiKeys.contains(provider) && !apiKeys[provider].isEmpty();
+    return !getApiKey(provider).isEmpty();
 }
 
 void QLLMService::setApiKey(Provider provider, const QString &apiKey)
 {
-    apiKeys[provider] = apiKey;
-
-    /* Save API key to config file */
-    QString configPath = QDir::home().absoluteFilePath(".config/qsoc/config.yaml");
-
-    YAML::Node config;
-    try {
-        if (QFile::exists(configPath)) {
-            config = YAML::LoadFile(configPath.toStdString());
-        }
-
-        /* Create api section if it doesn't exist */
-        if (!config["api"]) {
-            config["api"] = YAML::Node(YAML::NodeType::Map);
-        }
-
-        /* Update the API key */
-        switch (provider) {
-        case DEEPSEEK:
-            config["api"]["deepseek"] = apiKey.toStdString();
-            break;
-        case OPENAI:
-            config["api"]["openai"] = apiKey.toStdString();
-            break;
-        case GROQ:
-            config["api"]["groq"] = apiKey.toStdString();
-            break;
-        case CLAUDE:
-            config["api"]["claude"] = apiKey.toStdString();
-            break;
-        case OLLAMA:
-            config["api"]["ollama"] = apiKey.toStdString();
-            break;
-        }
-
-        /* Save the updated config */
-        std::ofstream fout(configPath.toStdString());
-        fout << config;
-        fout.close();
-
-    } catch (const YAML::Exception &e) {
-        qWarning() << "Failed to save API key to config:" << e.what();
+    /* If config is available, save to it */
+    if (config) {
+        /* Use modern nested format */
+        QString providerName        = getProviderName(provider);
+        QString providerSpecificKey = providerName + ".api_key";
+        config->setValue(providerSpecificKey, apiKey);
     }
 }
 
 QUrl QLLMService::getApiEndpoint(Provider provider) const
 {
+    if (!config) {
+        /* Use default endpoints if config not available */
+        return getDefaultApiEndpoint(provider);
+    }
+
+    QString providerName = getProviderName(provider);
+
+    /* Priority 1: Global URL when ai_provider matches current provider */
+    if (config->hasKey("api_url") && !config->getValue("api_url").isEmpty()
+        && config->hasKey("ai_provider")
+        && config->getValue("ai_provider").toLower() == providerName) {
+        return QUrl(config->getValue("api_url"));
+    }
+
+    /* Priority 2: Global URL regardless of provider */
+    if (config->hasKey("api_url") && !config->getValue("api_url").isEmpty()) {
+        return QUrl(config->getValue("api_url"));
+    }
+
+    /* Priority 3: Provider-specific URL in nested configuration */
+    QString providerSpecificUrl = providerName + ".api_url";
+    if (config->hasKey(providerSpecificUrl) && !config->getValue(providerSpecificUrl).isEmpty()) {
+        return QUrl(config->getValue(providerSpecificUrl));
+    }
+
+    /* Fall back to default endpoints */
+    return getDefaultApiEndpoint(provider);
+}
+
+QUrl QLLMService::getDefaultApiEndpoint(Provider provider) const
+{
+    /* Default endpoints for each provider */
     switch (provider) {
     case DEEPSEEK:
         return QUrl("https://api.deepseek.com/v1/chat/completions");
@@ -174,10 +158,33 @@ QJsonDocument QLLMService::buildRequestPayload(
     bool           jsonMode) const
 {
     QJsonObject payload;
+    QString     model;
+    QString     providerName = getProviderName(provider);
+
+    /* Get model from config with proper priority */
+    if (config) {
+        /* Priority 1: Global model when ai_provider matches current provider */
+        if (config->hasKey("ai_model") && config->hasKey("ai_provider")
+            && config->getValue("ai_provider").toLower() == providerName) {
+            model = config->getValue("ai_model");
+        }
+        /* Priority 2: Global model regardless of provider */
+        else if (config->hasKey("ai_model")) {
+            model = config->getValue("ai_model");
+        }
+        /* Priority 3 (lowest): Provider-specific model in nested configuration */
+        else {
+            QString providerSpecificModel = providerName + ".ai_model";
+            if (config->hasKey(providerSpecificModel)) {
+                model = config->getValue(providerSpecificModel);
+            }
+        }
+    }
 
     switch (provider) {
     case DEEPSEEK: {
-        payload["model"] = "deepseek-chat"; /* default model */
+        /* Set model from config or use default */
+        payload["model"] = model.isEmpty() ? "deepseek-chat" : model;
 
         /* Create messages array with system and user messages */
         QJsonArray messages;
@@ -195,7 +202,7 @@ QJsonDocument QLLMService::buildRequestPayload(
         messages.append(userMessage);
 
         payload["messages"]    = messages;
-        payload["temperature"] = 0.7; /* Match the temperature from the Rust code */
+        payload["temperature"] = temperature;
 
         if (jsonMode) {
             payload["response_format"] = QJsonObject{{"type", "json_object"}};
@@ -203,7 +210,9 @@ QJsonDocument QLLMService::buildRequestPayload(
         break;
     }
     case OPENAI: {
-        payload["model"] = "gpt-4o-mini";
+        /* Set model from config or use default */
+        payload["model"] = model.isEmpty() ? "gpt-4o-mini" : model;
+
         QJsonArray messages;
 
         /* Add system message */
@@ -226,7 +235,9 @@ QJsonDocument QLLMService::buildRequestPayload(
         break;
     }
     case GROQ: {
-        payload["model"] = "mixtral-8x7b-32768"; /* Updated to match Rust code's default model */
+        /* Set model from config or use default */
+        payload["model"] = model.isEmpty() ? "mixtral-8x7b-32768" : model;
+
         QJsonArray messages;
 
         /* Add system message */
@@ -241,12 +252,8 @@ QJsonDocument QLLMService::buildRequestPayload(
         userMessage["content"] = prompt;
         messages.append(userMessage);
 
-        payload["messages"] = messages;
-
-        /* Temperature is not set in the Rust code, so we'll only set it if needed */
-        if (temperature != 0.2) { /* Only set if not default */
-            payload["temperature"] = temperature;
-        }
+        payload["messages"]    = messages;
+        payload["temperature"] = temperature;
 
         if (jsonMode) {
             payload["response_format"] = QJsonObject{{"type", "json_object"}};
@@ -254,9 +261,11 @@ QJsonDocument QLLMService::buildRequestPayload(
         break;
     }
     case CLAUDE: {
-        payload["model"] = "claude-3-5-sonnet-20241022"; /* Updated to newer model from Rust code */
-        payload["max_tokens"] = 4096;                    /* Updated to match Rust code */
-        payload["system"]     = systemPrompt;            /* Set system prompt */
+        /* Set model from config or use default */
+        payload["model"] = model.isEmpty() ? "claude-3-5-sonnet-20241022" : model;
+
+        payload["max_tokens"] = 4096;
+        payload["system"]     = systemPrompt;
 
         QJsonArray messages;
 
@@ -278,7 +287,8 @@ QJsonDocument QLLMService::buildRequestPayload(
         break;
     }
     case OLLAMA: {
-        payload["model"] = "llama3"; /* Default model */
+        /* Set model from config or use default */
+        payload["model"] = model.isEmpty() ? "llama3" : model;
 
         /* Format prompt by combining system prompt and user prompt */
         QString combinedPrompt;
@@ -303,22 +313,30 @@ QJsonDocument QLLMService::buildRequestPayload(
     return QJsonDocument(payload);
 }
 
-LLMResponse QLLMService::sendRequest(
-    Provider       provider,
-    const QString &prompt,
-    const QString &systemPrompt,
-    double         temperature,
-    bool           jsonMode)
+QLLMService::Provider QLLMService::getCurrentProvider(QLLMService::Provider defaultProvider) const
 {
-    /* Check if API key is configured */
-    if (!isApiKeyConfigured(provider)) {
-        LLMResponse response;
-        response.success      = false;
-        response.errorMessage = QString("API key for provider %1 is not configured").arg(provider);
-        return response;
+    /* Use provider from config if available */
+    if (config && config->hasKey("ai_provider")) {
+        QString configProvider = config->getValue("ai_provider").toLower();
+
+        if (configProvider == "deepseek") {
+            return DEEPSEEK;
+        } else if (configProvider == "openai") {
+            return OPENAI;
+        } else if (configProvider == "groq") {
+            return GROQ;
+        } else if (configProvider == "claude") {
+            return CLAUDE;
+        } else if (configProvider == "ollama") {
+            return OLLAMA;
+        }
     }
 
-    /* Prepare request */
+    return defaultProvider;
+}
+
+QNetworkRequest QLLMService::prepareRequest(QLLMService::Provider provider) const
+{
     QNetworkRequest request(getApiEndpoint(provider));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
@@ -327,10 +345,10 @@ LLMResponse QLLMService::sendRequest(
     case DEEPSEEK:
     case OPENAI:
     case GROQ:
-        request.setRawHeader("Authorization", QString("Bearer %1").arg(apiKeys[provider]).toUtf8());
+        request.setRawHeader("Authorization", QString("Bearer %1").arg(getApiKey(provider)).toUtf8());
         break;
     case CLAUDE:
-        request.setRawHeader("x-api-key", apiKeys[provider].toUtf8());
+        request.setRawHeader("x-api-key", getApiKey(provider).toUtf8());
         request.setRawHeader("anthropic-version", "2023-06-01");
         request.setRawHeader("Content-Type", "application/json");
         break;
@@ -338,6 +356,31 @@ LLMResponse QLLMService::sendRequest(
         /* Ollama typically doesn't need authentication when running locally */
         break;
     }
+
+    return request;
+}
+
+LLMResponse QLLMService::sendRequest(
+    Provider       provider,
+    const QString &prompt,
+    const QString &systemPrompt,
+    double         temperature,
+    bool           jsonMode)
+{
+    /* Get provider based on config if available */
+    provider = getCurrentProvider(provider);
+
+    /* Check if API key is configured */
+    if (!isApiKeyConfigured(provider)) {
+        LLMResponse response;
+        response.success = false;
+        response.errorMessage
+            = QString("API key for provider %1 is not configured").arg(getProviderName(provider));
+        return response;
+    }
+
+    /* Prepare request */
+    QNetworkRequest request = prepareRequest(provider);
 
     /* Build request payload */
     QJsonDocument payload
@@ -365,35 +408,21 @@ void QLLMService::sendRequestAsync(
     double                                   temperature,
     bool                                     jsonMode)
 {
+    /* Get provider based on config if available */
+    provider = getCurrentProvider(provider);
+
     /* Check if API key is configured */
     if (!isApiKeyConfigured(provider)) {
         LLMResponse response;
-        response.success      = false;
-        response.errorMessage = QString("API key for provider %1 is not configured").arg(provider);
+        response.success = false;
+        response.errorMessage
+            = QString("API key for provider %1 is not configured").arg(getProviderName(provider));
         callback(response);
         return;
     }
 
     /* Prepare request */
-    QNetworkRequest request(getApiEndpoint(provider));
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-
-    /* Set authentication headers based on different providers */
-    switch (provider) {
-    case DEEPSEEK:
-    case OPENAI:
-    case GROQ:
-        request.setRawHeader("Authorization", QString("Bearer %1").arg(apiKeys[provider]).toUtf8());
-        break;
-    case CLAUDE:
-        request.setRawHeader("x-api-key", apiKeys[provider].toUtf8());
-        request.setRawHeader("anthropic-version", "2023-06-01");
-        request.setRawHeader("Content-Type", "application/json");
-        break;
-    case OLLAMA:
-        /* Ollama typically doesn't need authentication when running locally */
-        break;
-    }
+    QNetworkRequest request = prepareRequest(provider);
 
     /* Build request payload */
     QJsonDocument payload

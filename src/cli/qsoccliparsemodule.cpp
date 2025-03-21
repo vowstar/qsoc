@@ -457,8 +457,10 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
                 .arg(invalidModuleName));
     }
     /* Setup module manager */
+    QSocConfig        socConfig(this, &projectManager);
+    QLLMService       llmService(this, &socConfig);
     QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager);
+    QSocModuleManager moduleManager(this, &projectManager, &busManager, &llmService);
     /* Load modules */
     if (!moduleManager.load(libraryNameRegex)) {
         return showErrorWithHelp(
@@ -645,8 +647,10 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
     }
 
     /* Setup module manager */
+    QSocConfig        socConfig(this, &projectManager);
+    QLLMService       llmService(this, &socConfig);
     QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager);
+    QSocModuleManager moduleManager(this, &projectManager, &busManager, &llmService);
     /* Load modules */
     if (!moduleManager.load(libraryNameRegex)) {
         return showErrorWithHelp(
