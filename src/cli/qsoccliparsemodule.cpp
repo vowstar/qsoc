@@ -700,10 +700,11 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
         {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
-        {{"b", "bus"},
-         QCoreApplication::translate("main", "The bus interface name or regex."),
-         "bus interface name or regex"},
     });
+    parser.addPositionalArgument(
+        "interface",
+        QCoreApplication::translate("main", "The bus interface name or regex."),
+        "<bus interface name or regex>");
 
     parser.parse(appArguments);
 
@@ -711,9 +712,10 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QString &libraryName = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString &moduleName  = parser.isSet("module") ? parser.value("module") : "";
-    const QString &busName     = parser.isSet("bus") ? parser.value("bus") : "";
+    const QStringList cmdArguments = parser.positionalArguments();
+    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
+    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : "";
+    const QString    &busName      = cmdArguments.isEmpty() ? "" : cmdArguments.first();
 
     /* Validate required parameters */
     if (moduleName.isEmpty()) {
@@ -840,10 +842,11 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
         {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
-        {{"b", "bus"},
-         QCoreApplication::translate("main", "The bus interface name or regex."),
-         "bus interface name or regex"},
     });
+    parser.addPositionalArgument(
+        "interface",
+        QCoreApplication::translate("main", "The bus interface name or regex."),
+        "[<bus interface name or regex>]");
 
     parser.parse(appArguments);
 
@@ -851,9 +854,10 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QString &libraryName = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString &moduleName  = parser.isSet("module") ? parser.value("module") : ".*";
-    const QString &busName     = parser.isSet("bus") ? parser.value("bus") : ".*";
+    const QStringList cmdArguments = parser.positionalArguments();
+    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
+    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : ".*";
+    const QString    &busName      = cmdArguments.isEmpty() ? ".*" : cmdArguments.first();
 
     /* Setup project manager and project path  */
     QSocProjectManager projectManager(this);
@@ -970,10 +974,11 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
         {{"m", "module"},
          QCoreApplication::translate("main", "The module name or regex."),
          "module name or regex"},
-        {{"b", "bus"},
-         QCoreApplication::translate("main", "The bus interface name or regex."),
-         "bus interface name or regex"},
     });
+    parser.addPositionalArgument(
+        "interface",
+        QCoreApplication::translate("main", "The bus interface name or regex."),
+        "[<bus interface name or regex>]");
 
     parser.parse(appArguments);
 
@@ -981,9 +986,10 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QString &libraryName = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString &moduleName  = parser.isSet("module") ? parser.value("module") : ".*";
-    const QString &busName     = parser.isSet("bus") ? parser.value("bus") : ".*";
+    const QStringList cmdArguments = parser.positionalArguments();
+    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
+    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : ".*";
+    const QString    &busName      = cmdArguments.isEmpty() ? ".*" : cmdArguments.first();
 
     /* Validate required parameters */
     if (moduleName.isEmpty()) {
