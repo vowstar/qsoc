@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QTextStream>
 
 #include <fstream>
@@ -177,7 +178,8 @@ bool QSoCGenerateManager::processNetlist()
                 };
 
                 std::vector<Connection> validConnections;
-                std::string busType; // Will be determined from the first valid connection
+                /* Will be determined from the first valid connection */
+                std::string busType;
 
                 /* Step 1: Validate all connections first */
                 for (const auto &connectionPair : busConnections) {
@@ -417,7 +419,8 @@ bool QSoCGenerateManager::processNetlist()
                             }
 
                             if (!mappingFound || mappedPortName.empty()) {
-                                continue; // Skip this signal for this connection
+                                /* Skip this signal for this connection */
+                                continue;
                             }
 
                             /* Create a connection entry in the sequence format */
@@ -656,22 +659,28 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                 }
 
                 const YAML::Node &portData = moduleData["port"][portName.toStdString()];
-                QString           wireType = "logic"; // Default type
-
-                if (portData["type"] && portData["type"].IsScalar()) {
-                    wireType = QString::fromStdString(portData["type"].as<std::string>());
-                }
 
                 QString wireWidth = "";
-                if (portData["width"] && portData["width"].IsScalar()) {
-                    int width = portData["width"].as<int>();
-                    if (width > 1) {
-                        wireWidth = QString("[%1:0]").arg(width - 1);
+
+                /* Parse width information from type field */
+                if (portData["type"] && portData["type"].IsScalar()) {
+                    QString typeString = QString::fromStdString(portData["type"].as<std::string>());
+
+                    /* Extract width information from type string (e.g. "logic[39:0]") */
+                    QRegularExpression widthRegex("\\[(\\d+):(\\d+)\\]");
+                    if (widthRegex.match(typeString).hasMatch()) {
+                        int msb   = widthRegex.match(typeString).captured(1).toInt();
+                        int lsb   = widthRegex.match(typeString).captured(2).toInt();
+                        wireWidth = QString("[%1:%2]").arg(msb).arg(lsb);
                     }
                 }
 
                 /* Generate wire declaration */
-                out << "    wire " << wireType << wireWidth << " " << netName << ";\n";
+                if (wireWidth.isEmpty()) {
+                    out << "    wire " << netName << ";\n";
+                } else {
+                    out << "    wire " << wireWidth << " " << netName << ";\n";
+                }
 
                 /* Build port connection mapping for each instance */
                 for (size_t i = 0; i < connections.size(); i++) {
@@ -702,6 +711,7 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
     for (auto instanceIter = netlistData["instance"].begin();
          instanceIter != netlistData["instance"].end();
          ++instanceIter) {
+        /* Check if the instance name is a scalar */
         if (!instanceIter->first.IsScalar()) {
             qWarning() << "Warning: Invalid instance name, skipping";
             continue;
@@ -709,6 +719,7 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 
         const QString instanceName = QString::fromStdString(instanceIter->first.as<std::string>());
 
+        /* Check if the instance data is valid */
         if (!instanceIter->second || !instanceIter->second.IsMap()) {
             qWarning() << "Warning: Invalid instance data for" << instanceName
                        << "(not a map), skipping";
@@ -782,7 +793,8 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
         }
 
         if (portConnections.isEmpty()) {
-            out << "        // No port connections found for this instance\n";
+            /* No port connections found for this instance */
+            out << "        /* No port connections found for this instance */\n";
         } else {
             out << portConnections.join(",\n") << "\n";
         }
