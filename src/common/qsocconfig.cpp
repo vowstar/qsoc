@@ -4,6 +4,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QNetworkAccessManager>
+#include <QNetworkProxy>
+#include <QNetworkProxyFactory>
 #include <QProcessEnvironment>
 
 #include <fstream>
@@ -270,7 +273,20 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "# Ollama configuration\n";
     out << "# ollama:\n";
     out << "#   api_url: http://localhost:11434/api/generate\n";
-    out << "#   ai_model: llama3\n";
+    out << "#   ai_model: llama3\n\n";
+
+    /* Add network proxy configuration section */
+    out << "# Network Proxy Configuration\n";
+    out << "# -------------------------\n";
+    out << "# proxy_type: system     # Use system proxy settings (default)\n";
+    out << "# proxy_type: none       # No proxy\n";
+    out << "# proxy_type: default    # Use application proxy\n";
+    out << "# proxy_type: socks5     # Use SOCKS5 proxy\n";
+    out << "# proxy_type: http       # Use HTTP proxy\n";
+    out << "# proxy_host: 127.0.0.1  # Proxy server hostname or IP\n";
+    out << "# proxy_port: 1080       # Proxy server port\n";
+    out << "# proxy_user: username   # Username for proxy authentication (if required)\n";
+    out << "# proxy_password: pass   # Password for proxy authentication (if required)\n";
 
     file.close();
 

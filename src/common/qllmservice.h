@@ -164,9 +164,9 @@ public slots:
     static QMap<QString, QString> extractMappingsFromResponse(const LLMResponse &response);
 
 private:
-    QNetworkAccessManager *networkManager;
-    QSocConfig            *config;
-    Provider               provider;
+    QNetworkAccessManager *networkManager = nullptr;
+    QSocConfig            *config         = nullptr;
+    Provider               provider       = DEEPSEEK;
     QString                apiKey;
     QUrl                   apiUrl;
     QString                aiModel;
@@ -176,6 +176,13 @@ private:
      * @details Loads provider, apiKey, apiUrl, aiModel according to priority rules
      */
     void loadConfigSettings();
+
+    /**
+     * @brief Set up network proxy based on configuration settings
+     * @details Configures the network proxy for the networkManager based on
+     *          settings from the configuration (proxy_type, proxy_host, etc.)
+     */
+    void setupNetworkProxy();
 
     /**
      * @brief Get the default API endpoint URL for a provider

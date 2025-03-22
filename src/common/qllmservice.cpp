@@ -6,6 +6,8 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QNetworkProxy>
+#include <QNetworkProxyFactory>
 #include <QNetworkRequest>
 #include <QRegularExpression>
 #include <QSettings>
@@ -17,13 +19,15 @@
 
 QLLMService::QLLMService(QObject *parent, QSocConfig *config)
     : QObject(parent)
-    , config(config)
-    , provider(DEEPSEEK) /* Default provider */
 {
+    /* Initialize network manager */
     networkManager = new QNetworkAccessManager(this);
 
-    /* Load settings from config */
-    loadConfigSettings();
+    /* Set config and load settings */
+    setConfig(config);
+
+    /* Configure network proxy */
+    setupNetworkProxy();
 }
 
 QLLMService::~QLLMService()
@@ -39,6 +43,9 @@ void QLLMService::setConfig(QSocConfig *config)
 
     /* Reload settings from new config */
     loadConfigSettings();
+
+    /* Update network proxy */
+    setupNetworkProxy();
 }
 
 QSocConfig *QLLMService::getConfig()
@@ -610,4 +617,59 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
     }
 
     return response;
+}
+
+void QLLMService::setupNetworkProxy()
+{
+    /* Skip if no config or network manager */
+    if (!config || !networkManager) {
+        return;
+    }
+
+    /* Get proxy type, default is "system" */
+    QString proxyType = config->getValue("proxy_type", "system").toLower();
+
+    QNetworkProxy proxy;
+
+    if (proxyType == "none") {
+        /* No proxy */
+        proxy.setType(QNetworkProxy::NoProxy);
+    } else if (proxyType == "default") {
+        /* Use application-defined proxy */
+        proxy.setType(QNetworkProxy::DefaultProxy);
+    } else if (proxyType == "socks5") {
+        /* Use SOCKS5 proxy */
+        proxy.setType(QNetworkProxy::Socks5Proxy);
+        proxy.setHostName(config->getValue("proxy_host", "127.0.0.1"));
+        proxy.setPort(config->getValue("proxy_port", "1080").toUInt());
+
+        /* Set authentication if provided */
+        if (config->hasKey("proxy_user")) {
+            proxy.setUser(config->getValue("proxy_user"));
+            if (config->hasKey("proxy_password")) {
+                proxy.setPassword(config->getValue("proxy_password"));
+            }
+        }
+    } else if (proxyType == "http") {
+        /* Use HTTP proxy */
+        proxy.setType(QNetworkProxy::HttpProxy);
+        proxy.setHostName(config->getValue("proxy_host", "127.0.0.1"));
+        proxy.setPort(config->getValue("proxy_port", "8080").toUInt());
+
+        /* Set authentication if provided */
+        if (config->hasKey("proxy_user")) {
+            proxy.setUser(config->getValue("proxy_user"));
+            if (config->hasKey("proxy_password")) {
+                proxy.setPassword(config->getValue("proxy_password"));
+            }
+        }
+    } else {
+        /* Default to system proxy settings */
+        QNetworkProxyFactory::setUseSystemConfiguration(true);
+        networkManager->setProxy(QNetworkProxy::DefaultProxy);
+        return;
+    }
+
+    /* Apply proxy settings to network manager */
+    networkManager->setProxy(proxy);
 }

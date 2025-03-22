@@ -95,7 +95,7 @@ public slots:
 
 private:
     /* Project manager pointer, can be nullptr */
-    QSocProjectManager *projectManager;
+    QSocProjectManager *projectManager = nullptr;
 
     /* Configuration values map */
     QMap<QString, QString> configValues;
