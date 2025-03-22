@@ -34,6 +34,7 @@ public:
      */
     explicit QSocConfig(QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
 
+public slots:
     /**
      * @brief Set the project manager.
      * @details Sets the project manager and reloads configuration if a valid 

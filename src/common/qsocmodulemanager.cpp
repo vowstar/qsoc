@@ -930,10 +930,10 @@ bool QSocModuleManager::addModuleBusWithLLM(
 
     /* Send request to LLM service */
     LLMResponse response = llmService->sendRequest(
-        QLLMService::Provider::OPENAI, // Default provider
         prompt,
+        /* Default system prompt */
         "You are a helpful assistant that specializes in hardware "
-        "design and bus interfaces.", // Default system prompt
+        "design and bus interfaces.",
         0.2,
         true);
 

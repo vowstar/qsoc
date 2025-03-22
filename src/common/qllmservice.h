@@ -49,7 +49,14 @@ public:
      * @param config Configuration manager, can be nullptr
      */
     explicit QLLMService(QObject *parent = nullptr, QSocConfig *config = nullptr);
+
+    /**
+     * @brief Destructor for QLLMService
+     */
     ~QLLMService();
+
+public slots:
+    /* Configuration related methods */
 
     /**
      * @brief Set the configuration manager
@@ -65,9 +72,59 @@ public:
      */
     QSocConfig *getConfig();
 
+    /* Provider related methods */
+
+    /**
+     * @brief Set the provider to use for API requests
+     * @param provider Provider to use
+     */
+    void setProvider(Provider provider);
+
+    /**
+     * @brief Get the current provider used for API requests
+     * @return Current provider
+     */
+    Provider getProvider() const;
+
+    /**
+     * @brief Get provider name as string
+     * @param provider LLM provider
+     * @return Provider name as string
+     */
+    QString getProviderName(Provider provider) const;
+
+    /* API key related methods */
+
+    /**
+     * @brief Check if an API key is configured
+     * @return Whether the API key is configured
+     */
+    bool isApiKeyConfigured() const;
+
+    /**
+     * @brief Get the API key
+     * @return API key for the current provider
+     */
+    QString getApiKey() const;
+
+    /**
+     * @brief Manually set an API key
+     * @param apiKey API key to set
+     */
+    void setApiKey(const QString &apiKey);
+
+    /* API endpoint related methods */
+
+    /**
+     * @brief Get the API endpoint URL
+     * @return API endpoint URL for the current provider
+     */
+    QUrl getApiEndpoint() const;
+
+    /* LLM request methods */
+
     /**
      * @brief Send a synchronous request to an LLM
-     * @param provider LLM provider
      * @param prompt User prompt content
      * @param systemPrompt System prompt to guide AI role and behavior
      * @param temperature Temperature parameter (0.0-1.0)
@@ -75,7 +132,6 @@ public:
      * @return LLM response result
      */
     LLMResponse sendRequest(
-        Provider       provider,
         const QString &prompt,
         const QString &systemPrompt
         = "You are a helpful assistant that provides accurate and informative responses.",
@@ -84,7 +140,6 @@ public:
 
     /**
      * @brief Send an asynchronous request to an LLM
-     * @param provider LLM provider
      * @param prompt User prompt content
      * @param callback Callback function to handle the response
      * @param systemPrompt System prompt to guide AI role and behavior
@@ -92,27 +147,14 @@ public:
      * @param jsonMode Whether to request JSON format output from the LLM
      */
     void sendRequestAsync(
-        Provider                                 provider,
-        const QString                           &prompt,
-        std::function<void(const LLMResponse &)> callback,
-        const QString                           &systemPrompt
+        const QString                     &prompt,
+        std::function<void(LLMResponse &)> callback,
+        const QString                     &systemPrompt
         = "You are a helpful assistant that provides accurate and informative responses.",
         double temperature = 0.2,
         bool   jsonMode    = false);
 
-    /**
-     * @brief Check if an API key is configured for the given provider
-     * @param provider LLM provider
-     * @return Whether the API key is configured
-     */
-    bool isApiKeyConfigured(Provider provider) const;
-
-    /**
-     * @brief Manually set an API key
-     * @param provider LLM provider
-     * @param apiKey API key
-     */
-    void setApiKey(Provider provider, const QString &apiKey);
+    /* Utility methods */
 
     /**
      * @brief Extract key-value pairs from a JSON response
@@ -124,27 +166,16 @@ public:
 private:
     QNetworkAccessManager *networkManager;
     QSocConfig            *config;
+    Provider               provider;
+    QString                apiKey;
+    QUrl                   apiUrl;
+    QString                aiModel;
 
     /**
-     * @brief Get the API key for the given provider
-     * @param provider LLM provider
-     * @return API key for the provider
+     * @brief Load configuration settings from config
+     * @details Loads provider, apiKey, apiUrl, aiModel according to priority rules
      */
-    QString getApiKey(Provider provider) const;
-
-    /**
-     * @brief Get provider name as string
-     * @param provider LLM provider
-     * @return Provider name as string
-     */
-    QString getProviderName(Provider provider) const;
-
-    /**
-     * @brief Get the API endpoint URL for a provider
-     * @param provider LLM provider
-     * @return API endpoint URL
-     */
-    QUrl getApiEndpoint(Provider provider) const;
+    void loadConfigSettings();
 
     /**
      * @brief Get the default API endpoint URL for a provider
@@ -154,8 +185,19 @@ private:
     QUrl getDefaultApiEndpoint(Provider provider) const;
 
     /**
+     * @brief Get current provider from configuration
+     * @return Provider to use
+     */
+    Provider getCurrentProvider() const;
+
+    /**
+     * @brief Prepare network request for the current provider
+     * @return Configured network request
+     */
+    QNetworkRequest prepareRequest() const;
+
+    /**
      * @brief Build the request payload
-     * @param provider LLM provider
      * @param prompt User prompt content
      * @param systemPrompt System prompt content
      * @param temperature Temperature parameter
@@ -163,33 +205,14 @@ private:
      * @return JSON document for the request payload
      */
     QJsonDocument buildRequestPayload(
-        Provider       provider,
-        const QString &prompt,
-        const QString &systemPrompt,
-        double         temperature,
-        bool           jsonMode) const;
+        const QString &prompt, const QString &systemPrompt, double temperature, bool jsonMode) const;
 
     /**
      * @brief Parse the API response
-     * @param provider LLM provider
      * @param reply Network response
      * @return Parsed LLM response struct
      */
-    LLMResponse parseResponse(Provider provider, QNetworkReply *reply) const;
-
-    /**
-     * @brief Get current provider from configuration
-     * @param defaultProvider Default provider to use if not specified in config
-     * @return Provider to use
-     */
-    Provider getCurrentProvider(Provider defaultProvider) const;
-
-    /**
-     * @brief Prepare network request for given provider
-     * @param provider LLM provider
-     * @return Configured network request
-     */
-    QNetworkRequest prepareRequest(Provider provider) const;
+    LLMResponse parseResponse(QNetworkReply *reply) const;
 };
 
 #endif // QLLMSERVICE_H
