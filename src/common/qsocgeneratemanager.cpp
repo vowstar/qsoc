@@ -99,12 +99,18 @@ bool QSoCGenerateManager::loadNetlist(const QString &netlistFilePath)
         netlistData = YAML::Load(fileStream);
 
         /* Validate basic netlist structure */
-        if (!netlistData["instance"] || !netlistData["instance"].IsMap()) {
-            qCritical() << "Error: Invalid netlist format, missing or invalid 'instance' section";
+        if (!netlistData["instance"]) {
+            qCritical() << "Error: Invalid netlist format, missing 'instance' section";
             return false;
         }
 
-        /* Validate net and bus sections */
+        if (!netlistData["instance"].IsMap() || netlistData["instance"].size() == 0) {
+            qCritical()
+                << "Error: Invalid netlist format, 'instance' section is empty or not a map";
+            return false;
+        }
+
+        /* Validate net and bus sections if they exist */
         if ((netlistData["net"] && !netlistData["net"].IsMap())
             || (netlistData["bus"] && !netlistData["bus"].IsMap())) {
             qCritical() << "Error: Invalid netlist format, invalid 'net' or 'bus' section";
@@ -122,125 +128,201 @@ bool QSoCGenerateManager::loadNetlist(const QString &netlistFilePath)
 bool QSoCGenerateManager::processNetlist()
 {
     /* Check if netlistData is valid */
-    if (!netlistData["instance"] || !netlistData["instance"].IsMap()) {
-        qCritical() << "Error: Invalid netlist data, call loadNetlist() first";
+    if (!netlistData["instance"]) {
+        qCritical()
+            << "Error: Invalid netlist data, missing 'instance' section, call loadNetlist() first";
         return false;
     }
 
-    /* Process each bus connection */
-    if (netlistData["bus"] && netlistData["bus"].IsMap()) {
-        /* Create a new net section if it doesn't exist */
-        if (!netlistData["net"]) {
-            netlistData["net"] = YAML::Node(YAML::NodeType::Map);
-        }
+    if (!netlistData["instance"].IsMap() || netlistData["instance"].size() == 0) {
+        qCritical() << "Error: Invalid netlist data, 'instance' section is empty or not a map";
+        return false;
+    }
 
-        /* Iterate through each bus connection */
-        for (auto busEntry = netlistData["bus"].begin(); busEntry != netlistData["bus"].end();
-             ++busEntry) {
-            const QString busConnectionName = QString::fromStdString(
-                busEntry->first.as<std::string>());
-            const YAML::Node &busConnections = busEntry->second;
-
-            if (!busConnections.IsSequence()) {
-                qWarning() << "Warning: Invalid bus connection format for" << busConnectionName;
-                continue;
+    /* Process each bus connection if bus section exists */
+    if (netlistData["bus"]) {
+        if (!netlistData["bus"].IsMap()) {
+            qWarning() << "Warning: 'bus' section is not a map, skipping bus processing";
+        } else if (netlistData["bus"].size() == 0) {
+            qWarning() << "Warning: 'bus' section is empty, skipping bus processing";
+        } else {
+            /* Create a new net section if it doesn't exist */
+            if (!netlistData["net"]) {
+                netlistData["net"] = YAML::Node(YAML::NodeType::Map);
+            } else if (!netlistData["net"].IsMap()) {
+                netlistData["net"] = YAML::Node(YAML::NodeType::Map);
+                qWarning() << "Warning: 'net' section was not a map, resetting it";
             }
 
-            /* Process each bus port in the connection */
-            for (size_t i = 0; i < busConnections.size(); ++i) {
-                const YAML::Node &connection = busConnections[i];
-
-                if (!connection.IsMap() || !connection["instance"] || !connection["port"]) {
-                    qWarning() << "Warning: Invalid connection data in bus" << busConnectionName;
+            /* Iterate through each bus connection */
+            for (auto busEntry = netlistData["bus"].begin(); busEntry != netlistData["bus"].end();
+                 ++busEntry) {
+                if (!busEntry->first.IsScalar() || !busEntry->second) {
+                    qWarning() << "Warning: Invalid bus entry, skipping";
                     continue;
                 }
 
-                const QString instanceName = QString::fromStdString(
-                    connection["instance"].as<std::string>());
-                const QString portName = QString::fromStdString(
-                    connection["port"].as<std::string>());
+                const QString busConnectionName = QString::fromStdString(
+                    busEntry->first.as<std::string>());
+                const YAML::Node &busConnections = busEntry->second;
 
-                /* Check if instance exists in netlist */
-                if (!netlistData["instance"][instanceName.toStdString()]) {
-                    qWarning() << "Warning: Instance" << instanceName << "not found in netlist";
+                if (!busConnections.IsSequence() || busConnections.size() == 0) {
+                    qWarning() << "Warning: Invalid or empty bus connection format for"
+                               << busConnectionName;
                     continue;
                 }
 
-                /* Check if module exists in module library */
-                const QString moduleName = QString::fromStdString(
-                    netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
+                /* Process each bus port in the connection */
+                for (size_t i = 0; i < busConnections.size(); ++i) {
+                    const YAML::Node &connection = busConnections[i];
 
-                if (!moduleManager->isModuleExist(moduleName)) {
-                    qWarning() << "Warning: Module" << moduleName << "not found in module library";
-                    continue;
-                }
-
-                /* Get module data */
-                YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
-
-                /* Check if bus exists in module */
-                if (!moduleData["bus"] || !moduleData["bus"].IsMap()
-                    || !moduleData["bus"][portName.toStdString()]) {
-                    qWarning() << "Warning: Bus" << portName << "not found in module" << moduleName;
-                    continue;
-                }
-
-                /* Get bus name from module's bus definition */
-                const QString busType = QString::fromStdString(
-                    moduleData["bus"][portName.toStdString()]["bus"].as<std::string>());
-
-                /* Check if bus exists in bus library */
-                if (!busManager->isBusExist(busType)) {
-                    qWarning() << "Warning: Bus type" << busType << "not found in bus library";
-                    continue;
-                }
-
-                /* Get bus data */
-                YAML::Node busData = busManager->getBusYaml(busType);
-
-                /* Get bus port mappings from module */
-                const YAML::Node &busMapping = moduleData["bus"][portName.toStdString()]["mapping"];
-
-                /* Expand bus signals and add them to the net section */
-                for (auto portIter = busData["port"].begin(); portIter != busData["port"].end();
-                     ++portIter) {
-                    const QString signalName = QString::fromStdString(
-                        portIter->first.as<std::string>());
-
-                    /* Check if this signal is mapped in the module */
-                    if (!busMapping[signalName.toStdString()]) {
-                        continue; // Skip unmapped signals
-                    }
-
-                    /* Get the module port name mapped to this bus signal */
-                    const QString modulePortName = QString::fromStdString(
-                        busMapping[signalName.toStdString()].as<std::string>());
-
-                    /* Skip empty mappings */
-                    if (modulePortName.isEmpty()) {
+                    if (!connection || !connection.IsMap()) {
+                        qWarning() << "Warning: Invalid connection data (not a map) in bus"
+                                   << busConnectionName;
                         continue;
                     }
 
-                    /* Create a unique net name for this bus signal */
-                    const QString netName = busConnectionName + "_" + signalName;
-
-                    /* Create a new net entry if it doesn't exist */
-                    if (!netlistData["net"][netName.toStdString()]) {
-                        netlistData["net"][netName.toStdString()] = YAML::Node(
-                            YAML::NodeType::Sequence);
+                    if (!connection["instance"] || !connection["instance"].IsScalar()
+                        || !connection["port"] || !connection["port"].IsScalar()) {
+                        qWarning()
+                            << "Warning: Invalid connection data (missing instance or port) in bus"
+                            << busConnectionName;
+                        continue;
                     }
 
-                    /* Add the instance.port to the net */
-                    YAML::Node connectionNode;
-                    connectionNode["instance"] = instanceName.toStdString();
-                    connectionNode["port"]     = modulePortName.toStdString();
-                    netlistData["net"][netName.toStdString()].push_back(connectionNode);
+                    const QString instanceName = QString::fromStdString(
+                        connection["instance"].as<std::string>());
+                    const QString portName = QString::fromStdString(
+                        connection["port"].as<std::string>());
+
+                    /* Check if instance exists in netlist */
+                    if (!netlistData["instance"][instanceName.toStdString()]) {
+                        qWarning() << "Warning: Instance" << instanceName << "not found in netlist";
+                        continue;
+                    }
+
+                    if (!netlistData["instance"][instanceName.toStdString()].IsMap()
+                        || !netlistData["instance"][instanceName.toStdString()]["module"]
+                        || !netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
+                        qWarning() << "Warning: Invalid instance data for" << instanceName;
+                        continue;
+                    }
+
+                    /* Check if module exists in module library */
+                    const QString moduleName = QString::fromStdString(
+                        netlistData["instance"][instanceName.toStdString()]["module"]
+                            .as<std::string>());
+
+                    if (!moduleManager || !moduleManager->isModuleExist(moduleName)) {
+                        qWarning()
+                            << "Warning: Module" << moduleName << "not found in module library";
+                        continue;
+                    }
+
+                    /* Get module data */
+                    YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+                    if (!moduleData) {
+                        qWarning() << "Warning: Failed to get module data for" << moduleName;
+                        continue;
+                    }
+
+                    /* Check if bus exists in module */
+                    if (!moduleData["bus"] || !moduleData["bus"].IsMap()
+                        || !moduleData["bus"][portName.toStdString()]
+                        || !moduleData["bus"][portName.toStdString()].IsMap()) {
+                        qWarning()
+                            << "Warning: Bus" << portName << "not found in module" << moduleName;
+                        continue;
+                    }
+
+                    /* Get bus name from module's bus definition */
+                    if (!moduleData["bus"][portName.toStdString()]["bus"]
+                        || !moduleData["bus"][portName.toStdString()]["bus"].IsScalar()) {
+                        qWarning() << "Warning: Invalid bus definition for" << portName
+                                   << "in module" << moduleName;
+                        continue;
+                    }
+
+                    const QString busType = QString::fromStdString(
+                        moduleData["bus"][portName.toStdString()]["bus"].as<std::string>());
+
+                    /* Check if bus exists in bus library */
+                    if (!busManager || !busManager->isBusExist(busType)) {
+                        qWarning() << "Warning: Bus type" << busType << "not found in bus library";
+                        continue;
+                    }
+
+                    /* Get bus data */
+                    YAML::Node busData = busManager->getBusYaml(busType);
+                    if (!busData || !busData["port"] || !busData["port"].IsMap()
+                        || busData["port"].size() == 0) {
+                        qWarning() << "Warning: Invalid bus data for" << busType;
+                        continue;
+                    }
+
+                    /* Get bus port mappings from module */
+                    if (!moduleData["bus"][portName.toStdString()]["mapping"]
+                        || !moduleData["bus"][portName.toStdString()]["mapping"].IsMap()) {
+                        qWarning() << "Warning: Missing or invalid mapping for bus" << portName
+                                   << "in module" << moduleName;
+                        continue;
+                    }
+
+                    const YAML::Node &busMapping
+                        = moduleData["bus"][portName.toStdString()]["mapping"];
+
+                    /* Expand bus signals and add them to the net section */
+                    for (auto portIter = busData["port"].begin(); portIter != busData["port"].end();
+                         ++portIter) {
+                        if (!portIter->first.IsScalar()) {
+                            qWarning() << "Warning: Invalid port name in bus" << busType;
+                            continue;
+                        }
+
+                        const QString signalName = QString::fromStdString(
+                            portIter->first.as<std::string>());
+
+                        /* Check if this signal is mapped in the module */
+                        if (!busMapping[signalName.toStdString()]
+                            || !busMapping[signalName.toStdString()].IsScalar()) {
+                            continue; // Skip unmapped signals
+                        }
+
+                        /* Get the module port name mapped to this bus signal */
+                        const QString modulePortName = QString::fromStdString(
+                            busMapping[signalName.toStdString()].as<std::string>());
+
+                        /* Skip empty mappings */
+                        if (modulePortName.isEmpty()) {
+                            continue;
+                        }
+
+                        /* Create a unique net name for this bus signal */
+                        const QString netName = busConnectionName + "_" + signalName;
+
+                        /* Create a new net entry if it doesn't exist */
+                        if (!netlistData["net"][netName.toStdString()]) {
+                            netlistData["net"][netName.toStdString()] = YAML::Node(
+                                YAML::NodeType::Sequence);
+                        } else if (!netlistData["net"][netName.toStdString()].IsSequence()) {
+                            qWarning() << "Warning: Net" << netName
+                                       << "exists but is not a sequence, overwriting";
+                            netlistData["net"][netName.toStdString()] = YAML::Node(
+                                YAML::NodeType::Sequence);
+                        }
+
+                        /* Add the instance.port to the net */
+                        YAML::Node connectionNode;
+                        connectionNode["instance"] = instanceName.toStdString();
+                        connectionNode["port"]     = modulePortName.toStdString();
+                        netlistData["net"][netName.toStdString()].push_back(connectionNode);
+                    }
                 }
             }
-        }
 
-        /* Remove the processed bus section (as it has been expanded to nets) */
-        netlistData.remove("bus");
+            /* Remove the processed bus section (as it has been expanded to nets) */
+            netlistData.remove("bus");
+        }
     }
 
     /* Print the processed netlist for debugging */
@@ -252,16 +334,31 @@ bool QSoCGenerateManager::processNetlist()
 bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 {
     /* Check if netlistData is valid */
-    if (!netlistData["instance"] || !netlistData["instance"].IsMap() || !netlistData["net"]
-        || !netlistData["net"].IsMap()) {
-        qCritical() << "Error: Invalid netlist data, make sure loadNetlist() and processNetlist() "
-                       "have been called";
+    if (!netlistData["instance"]) {
+        qCritical() << "Error: Invalid netlist data, missing 'instance' section, make sure "
+                       "loadNetlist() and processNetlist() have been called";
+        return false;
+    }
+
+    if (!netlistData["instance"].IsMap() || netlistData["instance"].size() == 0) {
+        qCritical() << "Error: Invalid netlist data, 'instance' section is empty or not a map";
+        return false;
+    }
+
+    /* Check if net section exists and has valid format if present */
+    if (netlistData["net"] && !netlistData["net"].IsMap()) {
+        qCritical() << "Error: Invalid netlist data, 'net' section is not a map";
         return false;
     }
 
     /* Check if project manager is valid */
-    if (!projectManager || !projectManager->isValidOutputPath(true)) {
-        qCritical() << "Error: Invalid project manager or output path";
+    if (!projectManager) {
+        qCritical() << "Error: Project manager is null";
+        return false;
+    }
+
+    if (!projectManager->isValidOutputPath(true)) {
+        qCritical() << "Error: Invalid output path: " << projectManager->getOutputPath();
         return false;
     }
 
@@ -301,11 +398,23 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
     for (auto instanceIter = netlistData["instance"].begin();
          instanceIter != netlistData["instance"].end();
          ++instanceIter) {
+        if (!instanceIter->first.IsScalar()) {
+            qWarning() << "Warning: Invalid instance name, skipping";
+            continue;
+        }
+
         const QString instanceName = QString::fromStdString(instanceIter->first.as<std::string>());
+
+        if (!instanceIter->second || !instanceIter->second.IsMap()) {
+            qWarning() << "Warning: Invalid instance data for" << instanceName
+                       << "(not a map), skipping";
+            continue;
+        }
+
         const YAML::Node &instanceData = instanceIter->second;
 
-        if (!instanceData.IsMap() || !instanceData["module"]) {
-            qWarning() << "Warning: Invalid instance data for" << instanceName;
+        if (!instanceData["module"] || !instanceData["module"].IsScalar()) {
+            qWarning() << "Warning: Invalid module name for instance" << instanceName;
             continue;
         }
 
@@ -315,21 +424,43 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
         out << "    " << moduleName << " ";
 
         /* Add parameters if they exist */
-        if (instanceData["parameter"] && instanceData["parameter"].IsMap()) {
-            out << "#(\n";
+        if (instanceData["parameter"]) {
+            if (!instanceData["parameter"].IsMap()) {
+                qWarning() << "Warning: 'parameter' section for instance" << instanceName
+                           << "is not a map, ignoring";
+            } else if (instanceData["parameter"].size() == 0) {
+                qWarning() << "Warning: 'parameter' section for instance" << instanceName
+                           << "is empty, ignoring";
+            } else {
+                out << "#(\n";
 
-            QStringList paramList;
-            for (auto paramIter = instanceData["parameter"].begin();
-                 paramIter != instanceData["parameter"].end();
-                 ++paramIter) {
-                const QString paramName = QString::fromStdString(paramIter->first.as<std::string>());
-                const QString paramValue = QString::fromStdString(
-                    paramIter->second.as<std::string>());
+                QStringList paramList;
+                for (auto paramIter = instanceData["parameter"].begin();
+                     paramIter != instanceData["parameter"].end();
+                     ++paramIter) {
+                    if (!paramIter->first.IsScalar()) {
+                        qWarning() << "Warning: Invalid parameter name in instance" << instanceName;
+                        continue;
+                    }
 
-                paramList.append(QString("        .%1(%2)").arg(paramName, paramValue));
+                    if (!paramIter->second.IsScalar()) {
+                        qWarning()
+                            << "Warning: Parameter"
+                            << QString::fromStdString(paramIter->first.as<std::string>())
+                            << "in instance" << instanceName << "has a non-scalar value, skipping";
+                        continue;
+                    }
+
+                    const QString paramName = QString::fromStdString(
+                        paramIter->first.as<std::string>());
+                    const QString paramValue = QString::fromStdString(
+                        paramIter->second.as<std::string>());
+
+                    paramList.append(QString("        .%1(%2)").arg(paramName).arg(paramValue));
+                }
+
+                out << paramList.join(",\n") << "\n    ) ";
             }
-
-            out << paramList.join(",\n") << "\n    ) ";
         }
 
         out << instanceName << " (\n";
@@ -342,55 +473,131 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
     }
 
     /* Generate wire declarations */
-    for (auto netIter = netlistData["net"].begin(); netIter != netlistData["net"].end(); ++netIter) {
-        const QString     netName     = QString::fromStdString(netIter->first.as<std::string>());
-        const YAML::Node &connections = netIter->second;
+    if (netlistData["net"]) {
+        if (!netlistData["net"].IsMap()) {
+            qWarning() << "Warning: 'net' section is not a map, skipping wire declarations";
+        } else if (netlistData["net"].size() == 0) {
+            qWarning() << "Warning: 'net' section is empty, no wire declarations to generate";
+        } else {
+            for (auto netIter = netlistData["net"].begin(); netIter != netlistData["net"].end();
+                 ++netIter) {
+                if (!netIter->first.IsScalar()) {
+                    qWarning() << "Warning: Invalid net name, skipping";
+                    continue;
+                }
 
-        if (!connections.IsSequence() || connections.size() == 0) {
-            qWarning() << "Warning: Invalid net data for" << netName;
-            continue;
+                const QString netName = QString::fromStdString(netIter->first.as<std::string>());
+
+                if (!netIter->second) {
+                    qWarning() << "Warning: Net" << netName << "has null data, skipping";
+                    continue;
+                }
+
+                if (!netIter->second.IsSequence()) {
+                    qWarning() << "Warning: Net" << netName << "is not a sequence, skipping";
+                    continue;
+                }
+
+                const YAML::Node &connections = netIter->second;
+
+                if (connections.size() == 0) {
+                    qWarning() << "Warning: Net" << netName << "has no connections, skipping";
+                    continue;
+                }
+
+                /* Determine wire type based on the first connection */
+                /* In a real implementation, this would need validation across all connections */
+                const YAML::Node &firstConnection = connections[0];
+
+                if (!firstConnection.IsMap()) {
+                    qWarning() << "Warning: First connection of net" << netName
+                               << "is not a map, skipping";
+                    continue;
+                }
+
+                if (!firstConnection["instance"] || !firstConnection["instance"].IsScalar()
+                    || !firstConnection["port"] || !firstConnection["port"].IsScalar()) {
+                    qWarning() << "Warning: Invalid connection data in net" << netName
+                               << ", skipping";
+                    continue;
+                }
+
+                const QString instanceName = QString::fromStdString(
+                    firstConnection["instance"].as<std::string>());
+                const QString portName = QString::fromStdString(
+                    firstConnection["port"].as<std::string>());
+
+                /* Check if instance exists */
+                if (!netlistData["instance"]
+                    || !netlistData["instance"][instanceName.toStdString()]) {
+                    qWarning() << "Warning: Instance" << instanceName << "referenced in net"
+                               << netName << "not found in netlist, skipping";
+                    continue;
+                }
+
+                /* Get module name for this instance */
+                if (!netlistData["instance"][instanceName.toStdString()]["module"]
+                    || !netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
+                    qWarning() << "Warning: Invalid module name for instance" << instanceName
+                               << ", skipping";
+                    continue;
+                }
+
+                const QString moduleName = QString::fromStdString(
+                    netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
+
+                /* Get port type from module definition */
+                if (!moduleManager) {
+                    qWarning() << "Warning: Module manager is null, skipping wire declaration for"
+                               << netName;
+                    continue;
+                }
+
+                if (!moduleManager->isModuleExist(moduleName)) {
+                    qWarning() << "Warning: Module" << moduleName
+                               << "not found in module library, skipping";
+                    continue;
+                }
+
+                YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+                if (!moduleData) {
+                    qWarning() << "Warning: Failed to get module data for" << moduleName
+                               << ", skipping";
+                    continue;
+                }
+
+                if (!moduleData["port"]) {
+                    qWarning() << "Warning: Module" << moduleName
+                               << "has no port section, skipping";
+                    continue;
+                }
+
+                if (!moduleData["port"].IsMap()) {
+                    qWarning() << "Warning: Port section of module" << moduleName
+                               << "is not a map, skipping";
+                    continue;
+                }
+
+                if (!moduleData["port"][portName.toStdString()]) {
+                    qWarning() << "Warning: Port" << portName << "not found in module" << moduleName
+                               << ", skipping";
+                    continue;
+                }
+
+                const YAML::Node &portData = moduleData["port"][portName.toStdString()];
+                QString           portType = "wire"; // Default type
+
+                if (portData["type"] && portData["type"].IsScalar()) {
+                    portType = QString::fromStdString(portData["type"].as<std::string>());
+                }
+
+                /* Generate wire declaration */
+                out << "    wire " << portType << " " << netName << ";\n";
+            }
         }
-
-        /* Determine wire type based on the first connection */
-        /* In a real implementation, this would need validation across all connections */
-        const YAML::Node &firstConnection = connections[0];
-
-        if (!firstConnection.IsMap() || !firstConnection["instance"] || !firstConnection["port"]) {
-            qWarning() << "Warning: Invalid connection data in net" << netName;
-            continue;
-        }
-
-        const QString instanceName = QString::fromStdString(
-            firstConnection["instance"].as<std::string>());
-        const QString portName = QString::fromStdString(firstConnection["port"].as<std::string>());
-
-        /* Get module name for this instance */
-        const QString moduleName = QString::fromStdString(
-            netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
-
-        /* Get port type from module definition */
-        if (!moduleManager->isModuleExist(moduleName)) {
-            qWarning() << "Warning: Module" << moduleName << "not found in module library";
-            continue;
-        }
-
-        YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
-
-        if (!moduleData["port"] || !moduleData["port"].IsMap()
-            || !moduleData["port"][portName.toStdString()]) {
-            qWarning() << "Warning: Port" << portName << "not found in module" << moduleName;
-            continue;
-        }
-
-        const YAML::Node &portData = moduleData["port"][portName.toStdString()];
-        QString           portType = "wire"; // Default type
-
-        if (portData["type"]) {
-            portType = QString::fromStdString(portData["type"].as<std::string>());
-        }
-
-        /* Generate wire declaration */
-        out << "    wire " << portType << " " << netName << ";\n";
+    } else {
+        qWarning()
+            << "Warning: No 'net' section in netlist, no wire declarations will be generated";
     }
 
     /* Close module */
