@@ -285,7 +285,7 @@ public slots:
      * @retval true if all matching libraries are successfully removed.
      * @retval false if removal of any matching libraries fails.
      */
-    bool remove(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
+    bool remove(const QRegularExpression &libraryNameRegex);
 
     /**
      * @brief Remove multiple libraries by a list of basenames.
@@ -379,7 +379,7 @@ public slots:
      * @retval true All matching modules are successfully processed.
      * @retval false Errors occur during module removal or module saving.
      */
-    bool removeModule(const QRegularExpression &moduleNameRegex = QRegularExpression(".*"));
+    bool removeModule(const QRegularExpression &moduleNameRegex);
 
     /**
      * @brief Add a bus interface to a module.
@@ -389,32 +389,67 @@ public slots:
      *          module's YAML with the specified port name and mode.
      * @param moduleName Name of the module to add the bus interface to.
      * @param busName Name of the bus to add.
-     * @param portName Name of the port to connect the bus to.
-     * @param portMode Mode of the port (e.g., "master", "slave").
+     * @param busMode Mode of the bus (e.g., "master", "slave").
+     * @param busInterface Interface name of the bus.
      * @retval true Bus interface successfully added.
      * @retval false Failed to add bus interface.
      */
     bool addModuleBus(
         const QString &moduleName,
         const QString &busName,
-        const QString &portName,
-        const QString &portMode);
+        const QString &busMode,
+        const QString &busInterface);
 
     /**
      * @brief Add a bus interface to a module using LLM API for signal matching.
      * @details This method uses a large language model to match bus signals to module ports.
      * @param moduleName Name of the module.
      * @param busName Name of the bus.
-     * @param portName Name of the port (interface name).
-     * @param portMode Mode of the port (e.g., "master", "slave").
+     * @param busMode Mode of the bus (e.g., "master", "slave").
+     * @param busInterface Interface name of the bus.
      * @retval true Bus interface successfully added.
      * @retval false Failed to add bus interface.
      */
     bool addModuleBusWithLLM(
         const QString &moduleName,
         const QString &busName,
-        const QString &portName,
-        const QString &portMode);
+        const QString &busMode,
+        const QString &busInterface);
+    /**
+     * @brief Remove bus interfaces from a module.
+     * @details This function removes bus interfaces that match the given regex
+     *          from the specified module by updating the module's YAML data.
+     *          If no bus interfaces match the regex, no changes are made.
+     * @param moduleName Name of the module to remove bus interfaces from.
+     * @param busInterfaceRegex Regex to match bus interfaces for removal.
+     * @retval true Bus interfaces successfully removed or none matched.
+     * @retval false Failed to remove bus interfaces.
+     */
+    bool removeModuleBus(const QString &moduleName, const QRegularExpression &busInterfaceRegex);
+
+    /**
+     * @brief List all bus interfaces in a module.
+     * @details Returns a list of all bus interface names defined in the
+     *          specified module's YAML data. If the module has no bus
+     *          interfaces defined, returns an empty list.
+     * @param moduleName Name of the module to list bus interfaces from.
+     * @param busInterfaceRegex Regex to match bus interfaces to list.
+     * @return QStringList List of bus interface names in the module.
+     */
+    QStringList listModuleBus(
+        const QString            &moduleName,
+        const QRegularExpression &busInterfaceRegex = QRegularExpression(".*"));
+
+    /**
+     * @brief Show detailed information about bus interfaces in a module.
+     * @details Returns a YAML node containing detailed information about bus
+     *          interfaces that match the given regex in the specified module.
+     *          This includes interface names, modes, and signal mappings.
+     * @param moduleName Name of the module to show bus interfaces from.
+     * @param busInterfaceRegex Regex to match bus interfaces to show.
+     * @return YAML::Node YAML node containing matching bus interface details.
+     */
+    YAML::Node showModuleBus(const QString &moduleName, const QRegularExpression &busInterfaceRegex);
 
 private:
     /* Internal used project manager. */

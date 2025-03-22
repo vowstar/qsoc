@@ -699,8 +699,8 @@ bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
 bool QSocModuleManager::addModuleBus(
     const QString &moduleName,
     const QString &busName,
-    const QString &portName,
-    const QString &portMode)
+    const QString &busMode,
+    const QString &busInterface)
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
@@ -770,20 +770,21 @@ bool QSocModuleManager::addModuleBus(
     QMap<QString, QVector<QString>> groups
         = QStaticStringWeaver::clusterStrings(groupModule, candidateSubstrings);
 
-    /* Step 3: Find best matching group for the port name hint */
+    /* Step 3: Find best matching group for the bus interface hint */
     QList<QString> candidateMarkers = candidateSubstrings.keys();
     std::sort(candidateMarkers.begin(), candidateMarkers.end(), [](const QString &a, const QString &b) {
         return a.size() > b.size();
     });
 
-    /* Find best matching group markers for the port name hint */
+    /* Find best matching group markers for the bus interface hint */
     QVector<QString> bestHintGroupMarkers;
 
-    /* Try to find markers using the original port name without hardcoding prefixes */
-    QString bestMarker = QStaticStringWeaver::findBestGroupMarkerForHint(portName, candidateMarkers);
+    /* Try to find markers using the original bus interface without hardcoding prefixes */
+    QString bestMarker
+        = QStaticStringWeaver::findBestGroupMarkerForHint(busInterface, candidateMarkers);
     if (!bestMarker.isEmpty()) {
         bestHintGroupMarkers.append(bestMarker);
-        qDebug() << "Best matching marker:" << bestMarker << "for hint:" << portName;
+        qDebug() << "Best matching marker:" << bestMarker << "for hint:" << busInterface;
     } else {
         /* If no marker found, use empty string */
         bestHintGroupMarkers.append("");
@@ -829,12 +830,12 @@ bool QSocModuleManager::addModuleBus(
     }
 
     /* Add bus interface to module YAML */
-    moduleYaml["bus"][portName.toStdString()]["bus"]  = busName.toStdString();
-    moduleYaml["bus"][portName.toStdString()]["mode"] = portMode.toStdString();
+    moduleYaml["bus"][busInterface.toStdString()]["bus"]  = busName.toStdString();
+    moduleYaml["bus"][busInterface.toStdString()]["mode"] = busMode.toStdString();
 
     /* Add signal mappings to the bus interface */
     for (auto it = matching.begin(); it != matching.end(); ++it) {
-        moduleYaml["bus"][portName.toStdString()]["mapping"][it.key().toStdString()]
+        moduleYaml["bus"][busInterface.toStdString()]["mapping"][it.key().toStdString()]
             = it.value().toStdString();
     }
 
@@ -845,8 +846,8 @@ bool QSocModuleManager::addModuleBus(
 bool QSocModuleManager::addModuleBusWithLLM(
     const QString &moduleName,
     const QString &busName,
-    const QString &portName,
-    const QString &portMode)
+    const QString &busMode,
+    const QString &busInterface)
 {
     /* Validate llmService */
     if (!llmService) {
@@ -924,7 +925,7 @@ bool QSocModuleManager::addModuleBusWithLLM(
               "Return a JSON object where keys are bus signals and values are module ports. ")
               .arg(moduleName)
               .arg(busName)
-              .arg(portName)
+              .arg(busInterface)
               .arg(groupModule.join(", "))
               .arg(groupBus.join(", "));
 
@@ -957,17 +958,194 @@ bool QSocModuleManager::addModuleBusWithLLM(
     }
 
     /* Add bus interface to module YAML */
-    moduleYaml["bus"][portName.toStdString()]["bus"]  = busName.toStdString();
-    moduleYaml["bus"][portName.toStdString()]["mode"] = portMode.toStdString();
+    moduleYaml["bus"][busInterface.toStdString()]["bus"]  = busName.toStdString();
+    moduleYaml["bus"][busInterface.toStdString()]["mode"] = busMode.toStdString();
 
     /* Add signal mappings to the bus interface */
     for (auto it = matching.begin(); it != matching.end(); ++it) {
-        moduleYaml["bus"][portName.toStdString()]["mapping"][it.key().toStdString()]
+        moduleYaml["bus"][busInterface.toStdString()]["mapping"][it.key().toStdString()]
             = it.value().toStdString();
     }
 
     /* Update module YAML */
     return updateModuleYaml(moduleName, moduleYaml);
+}
+
+bool QSocModuleManager::removeModuleBus(
+    const QString &moduleName, const QRegularExpression &busInterfaceRegex)
+{
+    /* Validate projectManager and its path */
+    if (!isModulePathValid()) {
+        qCritical() << "Error: projectManager is null or invalid module path.";
+        return false;
+    }
+
+    /* Check if module exists */
+    if (!isModuleExist(moduleName)) {
+        qCritical() << "Error: Module does not exist:" << moduleName;
+        return false;
+    }
+
+    /* Validate busInterfaceRegex */
+    if (!QStaticRegex::isNameRegexValid(busInterfaceRegex)) {
+        qCritical() << "Error: Invalid or empty regex:" << busInterfaceRegex.pattern();
+        return false;
+    }
+
+    /* Get module YAML */
+    YAML::Node moduleYaml = getModuleYaml(moduleName);
+
+    /* Check if the module has any bus interfaces defined */
+    if (!moduleYaml["bus"]) {
+        qDebug() << "Module doesn't have any bus interfaces:" << moduleName;
+        return true; /* Return true as there's nothing to remove */
+    }
+
+    /* Keep track of whether we've removed anything */
+    bool removedAny = false;
+
+    /* Create a list of interfaces to remove (to avoid modifying during iteration) */
+    std::vector<std::string> interfacesToRemove;
+
+    /* Iterate through bus interfaces and collect ones matching the regex */
+    for (YAML::const_iterator it = moduleYaml["bus"].begin(); it != moduleYaml["bus"].end(); ++it) {
+        const std::string busInterfaceNameStd = it->first.as<std::string>();
+        const QString     busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
+
+        if (QStaticRegex::isNameExactMatch(busInterfaceName, busInterfaceRegex)) {
+            qDebug() << "Found matching bus interface to remove:" << busInterfaceName;
+            interfacesToRemove.push_back(busInterfaceNameStd);
+            removedAny = true;
+        }
+    }
+
+    /* Remove each identified interface */
+    for (const std::string &interfaceName : interfacesToRemove) {
+        moduleYaml["bus"].remove(interfaceName);
+    }
+
+    /* If the bus node is now empty, remove it */
+    if (moduleYaml["bus"] && moduleYaml["bus"].size() == 0) {
+        moduleYaml.remove("bus");
+    }
+
+    /* Update module YAML if we made changes */
+    if (removedAny) {
+        return updateModuleYaml(moduleName, moduleYaml);
+    }
+
+    return true;
+}
+
+QStringList QSocModuleManager::listModuleBus(
+    const QString &moduleName, const QRegularExpression &busInterfaceRegex)
+{
+    QStringList result;
+
+    /* Validate projectManager and its path */
+    if (!isModulePathValid()) {
+        qCritical() << "Error: projectManager is null or invalid module path.";
+        return result;
+    }
+
+    /* Check if module exists */
+    if (!isModuleExist(moduleName)) {
+        qCritical() << "Error: Module does not exist:" << moduleName;
+        return result;
+    }
+
+    /* Validate busInterfaceRegex */
+    if (!QStaticRegex::isNameRegexValid(busInterfaceRegex)) {
+        qCritical() << "Error: Invalid or empty regex:" << busInterfaceRegex.pattern();
+        return result;
+    }
+
+    /* Get module YAML */
+    YAML::Node moduleYaml = getModuleYaml(moduleName);
+
+    /* Check if the module has any bus interfaces defined */
+    if (!moduleYaml["bus"]) {
+        qDebug() << "Module doesn't have any bus interfaces:" << moduleName;
+        return result;
+    }
+
+    /* Iterate through bus interfaces and collect interface names that match the regex */
+    for (YAML::const_iterator it = moduleYaml["bus"].begin(); it != moduleYaml["bus"].end(); ++it) {
+        const std::string busInterfaceNameStd = it->first.as<std::string>();
+        const QString     busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
+
+        /* Check if the interface name matches the regex */
+        if (QStaticRegex::isNameExactMatch(busInterfaceName, busInterfaceRegex)) {
+            /* Get the bus name associated with this interface */
+            if (it->second["bus"]) {
+                const std::string busNameStd = it->second["bus"].as<std::string>();
+                const QString     busName    = QString::fromStdString(busNameStd);
+
+                /* Get the mode if available */
+                QString mode = "unknown";
+                if (it->second["mode"]) {
+                    mode = QString::fromStdString(it->second["mode"].as<std::string>());
+                }
+
+                /* Format the result string: "interface_name [bus_name, mode]" */
+                result.append(QString("%1 [%2, %3]").arg(busInterfaceName).arg(busName).arg(mode));
+            } else {
+                /* In case bus name is missing, just add the interface name */
+                result.append(busInterfaceName);
+            }
+        }
+    }
+
+    return result;
+}
+
+YAML::Node QSocModuleManager::showModuleBus(
+    const QString &moduleName, const QRegularExpression &busInterfaceRegex)
+{
+    YAML::Node result;
+
+    /* Validate projectManager and its path */
+    if (!isModulePathValid()) {
+        qCritical() << "Error: projectManager is null or invalid module path.";
+        return result;
+    }
+
+    /* Check if module exists */
+    if (!isModuleExist(moduleName)) {
+        qCritical() << "Error: Module does not exist:" << moduleName;
+        return result;
+    }
+
+    /* Validate busInterfaceRegex */
+    if (!QStaticRegex::isNameRegexValid(busInterfaceRegex)) {
+        qCritical() << "Error: Invalid or empty regex:" << busInterfaceRegex.pattern();
+        return result;
+    }
+
+    /* Get module YAML */
+    YAML::Node moduleYaml = getModuleYaml(moduleName);
+
+    /* Check if the module has any bus interfaces defined */
+    if (!moduleYaml["bus"]) {
+        qDebug() << "Module doesn't have any bus interfaces:" << moduleName;
+        return result;
+    }
+
+    /* Create a "bus" node in the result */
+    result["bus"] = YAML::Node(YAML::NodeType::Map);
+
+    /* Iterate through bus interfaces and collect ones matching the regex */
+    for (YAML::const_iterator it = moduleYaml["bus"].begin(); it != moduleYaml["bus"].end(); ++it) {
+        const std::string busInterfaceNameStd = it->first.as<std::string>();
+        const QString     busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
+
+        if (QStaticRegex::isNameExactMatch(busInterfaceName, busInterfaceRegex)) {
+            qDebug() << "Found matching bus interface:" << busInterfaceName;
+            result["bus"][busInterfaceNameStd] = it->second;
+        }
+    }
+
+    return result;
 }
 
 YAML::Node QSocModuleManager::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
