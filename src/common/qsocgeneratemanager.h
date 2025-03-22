@@ -123,6 +123,16 @@ public slots:
      */
     bool generateVerilog(const QString &outputFileName);
 
+    /**
+     * @brief Format Verilog file using verible-verilog-format tool.
+     * @details Checks if verible-verilog-format is available in the system and uses it
+     *          to format the generated Verilog file with standardized style settings.
+     * @param filePath Path to the Verilog file to format.
+     * @retval true File formatted successfully.
+     * @retval false Failed to format file or tool not available.
+     */
+    bool formatVerilogFile(const QString &filePath);
+
 private:
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;

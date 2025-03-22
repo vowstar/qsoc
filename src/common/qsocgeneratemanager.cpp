@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QTextStream>
 
@@ -808,5 +809,57 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
     outputFile.close();
     qInfo() << "Successfully generated Verilog file:" << outputFilePath;
 
+    /* Format generated Verilog file if verible-verilog-format is available */
+    formatVerilogFile(outputFilePath);
+
     return true;
+}
+
+bool QSoCGenerateManager::formatVerilogFile(const QString &filePath)
+{
+    /* Check if verible-verilog-format tool is available in the system */
+    QProcess which;
+    which.start("which", QStringList() << "verible-verilog-format");
+    which.waitForFinished();
+
+    if (which.exitCode() != 0) {
+        /* Tool not found, silently return */
+        qDebug() << "verible-verilog-format not found, skipping formatting";
+        return false;
+    }
+
+    /* Tool found, proceed with formatting */
+    qInfo() << "Formatting Verilog file using verible-verilog-format...";
+
+    QProcess    formatter;
+    QStringList args;
+    args << "--inplace"
+         << "--column_limit" << "119"
+         << "--indentation_spaces" << "4"
+         << "--line_break_penalty" << "4"
+         << "--wrap_spaces" << "4"
+         << "--port_declarations_alignment" << "align"
+         << "--port_declarations_indentation" << "indent"
+         << "--formal_parameters_alignment" << "align"
+         << "--formal_parameters_indentation" << "indent"
+         << "--assignment_statement_alignment" << "align"
+         << "--enum_assignment_statement_alignment" << "align"
+         << "--class_member_variable_alignment" << "align"
+         << "--module_net_variable_alignment" << "align"
+         << "--named_parameter_alignment" << "align"
+         << "--named_parameter_indentation" << "indent"
+         << "--named_port_alignment" << "align"
+         << "--named_port_indentation" << "indent"
+         << "--struct_union_members_alignment" << "align" << filePath;
+
+    formatter.start("verible-verilog-format", args);
+    formatter.waitForFinished();
+
+    if (formatter.exitCode() == 0) {
+        qInfo() << "Successfully formatted Verilog file";
+        return true;
+    } else {
+        qWarning() << "Error formatting Verilog file:" << formatter.errorString();
+        return false;
+    }
 }
