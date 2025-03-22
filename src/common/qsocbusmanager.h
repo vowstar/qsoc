@@ -163,7 +163,7 @@ public slots:
      * @retval true if all matching libraries are successfully removed.
      * @retval false if removal of any matching libraries fails.
      */
-    bool remove(const QRegularExpression &libraryNameRegex = QRegularExpression(".*"));
+    bool remove(const QRegularExpression &libraryNameRegex);
 
     /**
      * @brief Remove multiple libraries by a list of basenames.
@@ -245,7 +245,7 @@ public slots:
      * @retval true All matching buses are successfully processed.
      * @retval false Errors occur during bus removal or bus saving.
      */
-    bool removeBus(const QRegularExpression &busNameRegex = QRegularExpression(".*"));
+    bool removeBus(const QRegularExpression &busNameRegex);
 
     /**
      * @brief Get the Bus YAML object.
