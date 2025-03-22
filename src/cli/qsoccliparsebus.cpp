@@ -97,12 +97,12 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
             return showErrorWithHelp(
                 1,
                 QCoreApplication::translate(
-                    "main", "Error: multiple projects found, please specify one using -p option."));
-        } else if (projectNameList.isEmpty()) {
-            return showErrorWithHelp(
-                1, QCoreApplication::translate("main", "Error: no project found."));
+                    "main",
+                    "Error: multiple projects found, please specify the project name.\n"
+                    "Available projects are:\n%1\n")
+                    .arg(projectNameList.join("\n")));
         }
-        projectManager.load(projectNameList.first());
+        projectManager.loadFirst();
     }
     /* Check if both busName and libraryName are empty */
     if (busName.isEmpty() && libraryName.isEmpty()) {
