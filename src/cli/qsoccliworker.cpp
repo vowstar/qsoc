@@ -2,6 +2,10 @@
 
 #include "common/config.h"
 #include "common/qslangdriver.h"
+#include "common/qsocbusmanager.h"
+#include "common/qsocgeneratemanager.h"
+#include "common/qsocmodulemanager.h"
+#include "common/qsocprojectmanager.h"
 #include "common/qstaticlog.h"
 
 #include <QString>
@@ -176,8 +180,10 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
         return showErrorWithHelp(
             1, QCoreApplication::translate("main", "Error: not implemented schematic yet."));
     } else if (command == "generate") {
-        return showErrorWithHelp(
-            1, QCoreApplication::translate("main", "Error: not implemented generate yet."));
+        nextArguments.removeOne(command);
+        if (!parseGenerate(nextArguments)) {
+            return false;
+        }
     } else {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: unknown subcommand: %1.").arg(command));

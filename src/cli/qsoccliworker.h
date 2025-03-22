@@ -277,6 +277,24 @@ private:
     bool parseBusShow(const QStringList &appArguments);
 
     /**
+     * @brief Parse the generate commandline arguments.
+     * @details This function will parse the generate command line arguments.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseGenerate(const QStringList &appArguments);
+
+    /**
+     * @brief Parse the generate verilog command line arguments.
+     * @details This function will parse the generate verilog command line arguments.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseGenerateVerilog(const QStringList &appArguments);
+
+    /**
      * @brief Show application name and version and emit exit with exitCode.
      * @details This function will show application name and version and emit
      *          exit with exitCode.
