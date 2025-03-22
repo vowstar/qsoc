@@ -982,7 +982,7 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
     }
 
     const QString &libraryName = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString &moduleName  = parser.isSet("module") ? parser.value("module") : "";
+    const QString &moduleName  = parser.isSet("module") ? parser.value("module") : ".*";
     const QString &busName     = parser.isSet("bus") ? parser.value("bus") : ".*";
 
     /* Validate required parameters */
