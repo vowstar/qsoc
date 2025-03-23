@@ -690,10 +690,6 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     continue;
                 }
 
-                /* Debug connections type */
-                qDebug() << "Net:" << netName << "connections type:" << connections.Type()
-                         << "size:" << connections.size();
-
                 /* Safer direct access approach without relying on iterators */
                 QString instanceName;
                 QString portName;
@@ -831,16 +827,7 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 
                 /* Build port connection mapping for each instance */
                 try {
-                    qDebug() << "Building connection map for net:" << netName
-                             << "with connections size:" << connections.size();
-
-                    /* Dump raw YAML structure for debugging */
-                    std::stringstream ss;
-                    ss << netlistData["net"][netName.toStdString()];
-                    qDebug() << "Raw YAML data for net:" << netName
-                             << "is:" << QString::fromStdString(ss.str());
-
-                    /* Directly build connections from netlistData instead of using the connections variable */
+                    /* Directly build connections from netlistData */
                     const YAML::Node &netNode = netlistData["net"][netName.toStdString()];
                     if (netNode.IsMap()) {
                         for (const auto &instancePair : netNode) {
@@ -854,39 +841,14 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                                     QString portName = QString::fromStdString(
                                         instancePair.second["port"].as<std::string>());
 
-                                    qDebug() << "Adding direct connection:" << instanceName << "."
-                                             << portName << "for net:" << netName;
-
                                     /* Add to the connection map */
                                     if (!instancePortConnections.contains(instanceName)) {
                                         instancePortConnections[instanceName]
                                             = QMap<QString, QString>();
-                                        qDebug() << "Creating connection map for instance:"
-                                                 << instanceName;
                                     }
                                     instancePortConnections[instanceName][portName] = netName;
-                                    qDebug() << "Added direct to connection map:" << instanceName
-                                             << portName << "->" << netName;
                                 }
                             }
-                        }
-                    }
-
-                    // Dump the contents of instancePortConnections after adding
-                    qDebug() << "Connection map now has" << instancePortConnections.size()
-                             << "instances";
-                    for (auto instIt = instancePortConnections.begin();
-                         instIt != instancePortConnections.end();
-                         ++instIt) {
-                        qDebug() << "Instance" << instIt.key() << "has" << instIt.value().size()
-                                 << "port connections";
-
-                        /* Print all connections for this instance */
-                        QMapIterator<QString, QString> portIter(instIt.value());
-                        while (portIter.hasNext()) {
-                            portIter.next();
-                            qDebug()
-                                << "  Port:" << portIter.key() << "-> Net:" << portIter.value();
                         }
                     }
                 } catch (const std::exception &e) {
@@ -988,24 +950,6 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                 QMap<QString, QString> portMap;
                 if (instancePortConnections.contains(instanceName)) {
                     portMap = instancePortConnections[instanceName];
-                    qDebug() << "Found" << portMap.size() << "connections for instance"
-                             << instanceName;
-
-                    /* Debug: list all connections in the map */
-                    QMapIterator<QString, QString> mapIter(portMap);
-                    while (mapIter.hasNext()) {
-                        mapIter.next();
-                        qDebug() << "  Map entry:" << mapIter.key() << "->" << mapIter.value();
-                    }
-                } else {
-                    qDebug() << "No connections found for instance" << instanceName << "in map";
-                    qDebug() << "instancePortConnections has" << instancePortConnections.size()
-                             << "entries";
-                    QMapIterator<QString, QMap<QString, QString>> instIter(instancePortConnections);
-                    while (instIter.hasNext()) {
-                        instIter.next();
-                        qDebug() << "  Instance in map:" << instIter.key();
-                    }
                 }
 
                 /* Iterate through all ports in the module definition */
@@ -1019,14 +963,9 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 
                     QString portName = QString::fromStdString(portIter->first.as<std::string>());
 
-                    /* Debug output to help diagnose connection issues */
-                    qDebug() << "Checking port:" << portName << "for instance:" << instanceName
-                             << "Map contains:" << portMap.contains(portName);
-
                     /* Check if this port has a connection */
                     if (portMap.contains(portName)) {
                         QString wireConnection = portMap[portName];
-                        qDebug() << "  Connection found:" << portName << "->" << wireConnection;
                         portConnections.append(
                             QString("        .%1(%2)").arg(portName).arg(wireConnection));
                     } else {
