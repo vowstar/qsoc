@@ -7,6 +7,7 @@
 #include "common/qsocprojectmanager.h"
 
 #include <QObject>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 
@@ -132,6 +133,25 @@ public slots:
      * @retval false Failed to format file or tool not available.
      */
     bool formatVerilogFile(const QString &filePath);
+
+    /**
+     * @brief Get the width of a port from its port data.
+     * @details Extracts the width information from a port's type field.
+     *          For a port with width [a:b], the width is abs(a-b)+1.
+     *          If no width is specified, assumes width is 1.
+     * @param portData YAML Node containing the port data.
+     * @return The calculated port width.
+     */
+    int getPortWidth(const YAML::Node &portData);
+
+    /**
+     * @brief Check if all connected ports have consistent widths.
+     * @details Verifies that all ports connected to a wire have the same width.
+     * @param connections List of instance-port pairs to check.
+     * @retval true All ports have consistent widths.
+     * @retval false Port width mismatch detected.
+     */
+    bool checkPortWidthConsistency(const QList<QPair<QString, QString>> &connections);
 
 private:
     /** Project manager. */

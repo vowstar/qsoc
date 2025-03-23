@@ -472,6 +472,76 @@ bool QSoCGenerateManager::processNetlist()
     }
 }
 
+int QSoCGenerateManager::getPortWidth(const YAML::Node &portData)
+{
+    /* Default width is 1 if no width information is available */
+    int width = 1;
+
+    if (portData["type"] && portData["type"].IsScalar()) {
+        QString typeString = QString::fromStdString(portData["type"].as<std::string>());
+
+        /* Extract width information from type string (e.g. "logic[39:0]") */
+        QRegularExpression widthRegex("\\[(\\d+):(\\d+)\\]");
+        if (widthRegex.match(typeString).hasMatch()) {
+            int msb = widthRegex.match(typeString).captured(1).toInt();
+            int lsb = widthRegex.match(typeString).captured(2).toInt();
+            width   = qAbs(msb - lsb) + 1;
+        }
+    }
+
+    return width;
+}
+
+bool QSoCGenerateManager::checkPortWidthConsistency(const QList<QPair<QString, QString>> &connections)
+{
+    if (connections.isEmpty()) {
+        return true; /* No connections to check */
+    }
+
+    int expectedWidth = -1;
+
+    /* Check each connection's port width */
+    for (const auto &conn : connections) {
+        const QString &instanceName = conn.first;
+        const QString &portName     = conn.second;
+
+        /* Get instance's module name */
+        if (!netlistData["instance"][instanceName.toStdString()]
+            || !netlistData["instance"][instanceName.toStdString()]["module"]
+            || !netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
+            continue; /* Skip invalid instance */
+        }
+
+        const QString moduleName = QString::fromStdString(
+            netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
+
+        /* Get module definition */
+        if (!moduleManager || !moduleManager->isModuleExist(moduleName)) {
+            continue; /* Skip if module not found */
+        }
+
+        YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+        if (!moduleData["port"] || !moduleData["port"].IsMap()
+            || !moduleData["port"][portName.toStdString()]) {
+            continue; /* Skip if port not found */
+        }
+
+        const YAML::Node &portData  = moduleData["port"][portName.toStdString()];
+        int               portWidth = getPortWidth(portData);
+
+        /* Set expected width if not set yet */
+        if (expectedWidth == -1) {
+            expectedWidth = portWidth;
+        }
+        /* Check if this port width matches the expected width */
+        else if (portWidth != expectedWidth) {
+            return false; /* Width mismatch found */
+        }
+    }
+
+    return true;
+}
+
 bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 {
     /* Check if netlistData is valid */
@@ -681,6 +751,29 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     out << "    wire " << netName << ";\n";
                 } else {
                     out << "    wire " << wireWidth << " " << netName << ";\n";
+                }
+
+                /* Build a list of instance-port pairs for width check */
+                QList<QPair<QString, QString>> portPairs;
+                for (size_t i = 0; i < connections.size(); i++) {
+                    const YAML::Node &conn = connections[i];
+                    if (!conn.IsMap() || !conn["instance"] || !conn["instance"].IsScalar()
+                        || !conn["port"] || !conn["port"].IsScalar()) {
+                        continue;
+                    }
+
+                    QString connInstance = QString::fromStdString(
+                        conn["instance"].as<std::string>());
+                    QString connPort = QString::fromStdString(conn["port"].as<std::string>());
+
+                    portPairs.append(qMakePair(connInstance, connPort));
+                }
+
+                /* Check port width consistency */
+                if (!checkPortWidthConsistency(portPairs)) {
+                    qWarning() << "Warning: Port width mismatch detected for net" << netName;
+                    out << "    /* TODO: width mismatch on net " << netName
+                        << ", please check connected ports */\n";
                 }
 
                 /* Build port connection mapping for each instance */
