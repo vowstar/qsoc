@@ -365,21 +365,33 @@ bool QSoCGenerateManager::processNetlist()
 
                     qInfo() << "Creating net for bus signal:" << signalName.c_str();
 
-                    /* Create a net for this signal as a sequence */
-                    netlistData["net"][netName] = YAML::Node(YAML::NodeType::Sequence);
+                    /* Create a net for this signal as a map (not sequence) */
+                    netlistData["net"][netName] = YAML::Node(YAML::NodeType::Map);
 
                     /* Add each connection to this net */
                     for (const Connection &conn : validConnections) {
                         try {
-                            /* Get module data again */
+                            /* Skip if module definition not available */
+                            if (!moduleManager->isModuleExist(conn.moduleName.c_str())) {
+                                qWarning() << "Warning: Module" << conn.moduleName.c_str()
+                                           << "not found, skipping";
+                                continue;
+                            }
+
                             YAML::Node moduleData = moduleManager->getModuleYaml(
                                 QString::fromStdString(conn.moduleName));
 
-                            /* Get port mapping */
+                            if (!moduleData["bus"] || !moduleData["bus"].IsMap()) {
+                                qWarning() << "Warning: No bus section in module"
+                                           << conn.moduleName.c_str() << ", skipping";
+                                continue;
+                            }
+
+                            /* Find the mapped port for this signal */
                             std::string mappedPortName;
                             bool        mappingFound = false;
 
-                            /* Try with the exact port name */
+                            /* Try with direct port name */
                             if (moduleData["bus"][conn.portName]
                                 && moduleData["bus"][conn.portName]["mapping"]
                                 && moduleData["bus"][conn.portName]["mapping"].IsMap()
@@ -391,7 +403,7 @@ bool QSoCGenerateManager::processNetlist()
                                           .as<std::string>();
                                 mappingFound = true;
                             }
-                            /* Try with the stripped port name (without pad_ prefix) */
+                            /* Try with pad_ stripped port name */
                             else if (
                                 conn.portName.compare(0, 4, "pad_") == 0
                                 && moduleData["bus"][conn.portName.substr(4)]
@@ -424,11 +436,17 @@ bool QSoCGenerateManager::processNetlist()
                                 continue;
                             }
 
-                            /* Create a connection entry in the sequence format */
-                            YAML::Node connectionNode;
-                            connectionNode["instance"] = conn.instanceName;
-                            connectionNode["port"]     = mappedPortName;
-                            netlistData["net"][netName].push_back(connectionNode);
+                            /* Create the connection node with proper structure */
+                            YAML::Node portNode = YAML::Node(YAML::NodeType::Map);
+                            portNode["port"]    = mappedPortName;
+
+                            /* Add instance->port mapping to the net */
+                            netlistData["net"][netName][conn.instanceName] = portNode;
+
+                            /* Debug the structure we just created */
+                            qDebug() << "Added connection to net:" << netName.c_str()
+                                     << "instance:" << conn.instanceName.c_str()
+                                     << "port:" << mappedPortName.c_str();
 
                         } catch (const YAML::Exception &e) {
                             qWarning() << "YAML exception adding connection to net:" << e.what();
@@ -442,6 +460,25 @@ bool QSoCGenerateManager::processNetlist()
                     /* If no connections were added to this net, remove it */
                     if (netlistData["net"][netName].size() == 0) {
                         netlistData["net"].remove(netName);
+                    }
+                    /* Add debug output to verify structure */
+                    else {
+                        qDebug() << "Created net:" << netName.c_str() << "with structure:";
+                        for (auto connIter = netlistData["net"][netName].begin();
+                             connIter != netlistData["net"][netName].end();
+                             ++connIter) {
+                            if (connIter->first.IsScalar()) {
+                                qDebug()
+                                    << "  Instance:"
+                                    << QString::fromStdString(connIter->first.as<std::string>());
+                                if (connIter->second.IsMap() && connIter->second["port"]
+                                    && connIter->second["port"].IsScalar()) {
+                                    qDebug() << "    Port:"
+                                             << QString::fromStdString(
+                                                    connIter->second["port"].as<std::string>());
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -640,9 +677,9 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     continue;
                 }
 
-                /* Net connections should be a sequence of instance-port pairs */
-                if (!netIter->second.IsSequence()) {
-                    qWarning() << "Warning: Net" << netName << "is not a sequence, skipping";
+                /* Net connections should be a map of instance-port pairs */
+                if (!netIter->second.IsMap()) {
+                    qWarning() << "Warning: Net" << netName << "is not a map, skipping";
                     continue;
                 }
 
@@ -653,27 +690,36 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     continue;
                 }
 
-                /* Determine wire type based on the first connection */
-                /* In a real implementation, this would need validation across all connections */
-                const YAML::Node &firstConnection = connections[0];
+                /* Debug connections type */
+                qDebug() << "Net:" << netName << "connections type:" << connections.Type()
+                         << "size:" << connections.size();
 
-                if (!firstConnection.IsMap()) {
-                    qWarning() << "Warning: First connection of net" << netName
-                               << "is not a map, skipping";
-                    continue;
+                /* Safer direct access approach without relying on iterators */
+                QString instanceName;
+                QString portName;
+                bool    validFirstConnection = false;
+
+                /* Just try first connection in the map directly */
+                try {
+                    auto connIter = connections.begin();
+                    if (connIter != connections.end() && connIter->first.IsScalar()) {
+                        instanceName = QString::fromStdString(connIter->first.as<std::string>());
+
+                        if (connIter->second.IsMap() && connIter->second["port"]
+                            && connIter->second["port"].IsScalar()) {
+                            portName = QString::fromStdString(
+                                connIter->second["port"].as<std::string>());
+                            validFirstConnection = true;
+                        }
+                    }
+                } catch (const std::exception &e) {
+                    qWarning() << "Exception getting first connection:" << e.what();
                 }
 
-                if (!firstConnection["instance"] || !firstConnection["instance"].IsScalar()
-                    || !firstConnection["port"] || !firstConnection["port"].IsScalar()) {
-                    qWarning() << "Warning: Invalid connection data in net" << netName
-                               << ", skipping";
+                if (!validFirstConnection) {
+                    qWarning() << "Warning: No valid connections found for net" << netName;
                     continue;
                 }
-
-                const QString instanceName = QString::fromStdString(
-                    firstConnection["instance"].as<std::string>());
-                const QString portName = QString::fromStdString(
-                    firstConnection["port"].as<std::string>());
 
                 /* Check if instance exists */
                 if (!netlistData["instance"]
@@ -758,18 +804,22 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 
                 /* Build a list of instance-port pairs for width check */
                 QList<QPair<QString, QString>> portPairs;
-                for (size_t i = 0; i < connections.size(); i++) {
-                    const YAML::Node &conn = connections[i];
-                    if (!conn.IsMap() || !conn["instance"] || !conn["instance"].IsScalar()
-                        || !conn["port"] || !conn["port"].IsScalar()) {
-                        continue;
+
+                /* Collect port pairs using iterator directly */
+                try {
+                    for (auto connIter = connections.begin(); connIter != connections.end();
+                         ++connIter) {
+                        if (connIter->first.IsScalar() && connIter->second.IsMap()
+                            && connIter->second["port"] && connIter->second["port"].IsScalar()) {
+                            QString connInstance = QString::fromStdString(
+                                connIter->first.as<std::string>());
+                            QString connPort = QString::fromStdString(
+                                connIter->second["port"].as<std::string>());
+                            portPairs.append(qMakePair(connInstance, connPort));
+                        }
                     }
-
-                    QString connInstance = QString::fromStdString(
-                        conn["instance"].as<std::string>());
-                    QString connPort = QString::fromStdString(conn["port"].as<std::string>());
-
-                    portPairs.append(qMakePair(connInstance, connPort));
+                } catch (const std::exception &e) {
+                    qWarning() << "Exception collecting port pairs:" << e.what();
                 }
 
                 /* Check port width consistency */
@@ -780,22 +830,67 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                 }
 
                 /* Build port connection mapping for each instance */
-                for (size_t i = 0; i < connections.size(); i++) {
-                    const YAML::Node &conn = connections[i];
-                    if (!conn.IsMap() || !conn["instance"] || !conn["instance"].IsScalar()
-                        || !conn["port"] || !conn["port"].IsScalar()) {
-                        continue;
+                try {
+                    qDebug() << "Building connection map for net:" << netName
+                             << "with connections size:" << connections.size();
+
+                    /* Dump raw YAML structure for debugging */
+                    std::stringstream ss;
+                    ss << netlistData["net"][netName.toStdString()];
+                    qDebug() << "Raw YAML data for net:" << netName
+                             << "is:" << QString::fromStdString(ss.str());
+
+                    /* Directly build connections from netlistData instead of using the connections variable */
+                    const YAML::Node &netNode = netlistData["net"][netName.toStdString()];
+                    if (netNode.IsMap()) {
+                        for (const auto &instancePair : netNode) {
+                            if (instancePair.first.IsScalar()) {
+                                QString instanceName = QString::fromStdString(
+                                    instancePair.first.as<std::string>());
+
+                                /* Verify this is a valid instance with a port */
+                                if (instancePair.second.IsMap() && instancePair.second["port"]
+                                    && instancePair.second["port"].IsScalar()) {
+                                    QString portName = QString::fromStdString(
+                                        instancePair.second["port"].as<std::string>());
+
+                                    qDebug() << "Adding direct connection:" << instanceName << "."
+                                             << portName << "for net:" << netName;
+
+                                    /* Add to the connection map */
+                                    if (!instancePortConnections.contains(instanceName)) {
+                                        instancePortConnections[instanceName]
+                                            = QMap<QString, QString>();
+                                        qDebug() << "Creating connection map for instance:"
+                                                 << instanceName;
+                                    }
+                                    instancePortConnections[instanceName][portName] = netName;
+                                    qDebug() << "Added direct to connection map:" << instanceName
+                                             << portName << "->" << netName;
+                                }
+                            }
+                        }
                     }
 
-                    QString connInstance = QString::fromStdString(
-                        conn["instance"].as<std::string>());
-                    QString connPort = QString::fromStdString(conn["port"].as<std::string>());
+                    // Dump the contents of instancePortConnections after adding
+                    qDebug() << "Connection map now has" << instancePortConnections.size()
+                             << "instances";
+                    for (auto instIt = instancePortConnections.begin();
+                         instIt != instancePortConnections.end();
+                         ++instIt) {
+                        qDebug() << "Instance" << instIt.key() << "has" << instIt.value().size()
+                                 << "port connections";
 
-                    /* Add to the connection map */
-                    if (!instancePortConnections.contains(connInstance)) {
-                        instancePortConnections[connInstance] = QMap<QString, QString>();
+                        /* Print all connections for this instance */
+                        QMapIterator<QString, QString> portIter(instIt.value());
+                        while (portIter.hasNext()) {
+                            portIter.next();
+                            qDebug()
+                                << "  Port:" << portIter.key() << "-> Net:" << portIter.value();
+                        }
                     }
-                    instancePortConnections[connInstance][connPort] = netName;
+                } catch (const std::exception &e) {
+                    qWarning() << "Exception building connection map:" << e.what();
                 }
             }
             out << "\n";
@@ -893,6 +988,24 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                 QMap<QString, QString> portMap;
                 if (instancePortConnections.contains(instanceName)) {
                     portMap = instancePortConnections[instanceName];
+                    qDebug() << "Found" << portMap.size() << "connections for instance"
+                             << instanceName;
+
+                    /* Debug: list all connections in the map */
+                    QMapIterator<QString, QString> mapIter(portMap);
+                    while (mapIter.hasNext()) {
+                        mapIter.next();
+                        qDebug() << "  Map entry:" << mapIter.key() << "->" << mapIter.value();
+                    }
+                } else {
+                    qDebug() << "No connections found for instance" << instanceName << "in map";
+                    qDebug() << "instancePortConnections has" << instancePortConnections.size()
+                             << "entries";
+                    QMapIterator<QString, QMap<QString, QString>> instIter(instancePortConnections);
+                    while (instIter.hasNext()) {
+                        instIter.next();
+                        qDebug() << "  Instance in map:" << instIter.key();
+                    }
                 }
 
                 /* Iterate through all ports in the module definition */
@@ -906,10 +1019,16 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 
                     QString portName = QString::fromStdString(portIter->first.as<std::string>());
 
+                    /* Debug output to help diagnose connection issues */
+                    qDebug() << "Checking port:" << portName << "for instance:" << instanceName
+                             << "Map contains:" << portMap.contains(portName);
+
                     /* Check if this port has a connection */
                     if (portMap.contains(portName)) {
+                        QString wireConnection = portMap[portName];
+                        qDebug() << "  Connection found:" << portName << "->" << wireConnection;
                         portConnections.append(
-                            QString("        .%1(%2)").arg(portName).arg(portMap[portName]));
+                            QString("        .%1(%2)").arg(portName).arg(wireConnection));
                     } else {
                         /* Port exists in module but has no connection */
                         QString direction = "signal";
