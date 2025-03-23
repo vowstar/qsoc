@@ -707,17 +707,121 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
     out << " */\n\n";
 
     /* Generate module declaration */
-    out << "module " << outputFileName << " (\n";
+    out << "module " << outputFileName;
+
+    /* Add module parameters if they exist */
+    if (netlistData["parameter"] && netlistData["parameter"].IsMap()
+        && netlistData["parameter"].size() > 0) {
+        out << " #(\n";
+        QStringList paramDeclarations;
+
+        for (auto paramIter = netlistData["parameter"].begin();
+             paramIter != netlistData["parameter"].end();
+             ++paramIter) {
+            if (!paramIter->first.IsScalar()) {
+                qWarning() << "Warning: Invalid parameter name, skipping";
+                continue;
+            }
+
+            const QString paramName = QString::fromStdString(paramIter->first.as<std::string>());
+
+            if (!paramIter->second.IsMap()) {
+                qWarning() << "Warning: Parameter" << paramName << "has invalid format, skipping";
+                continue;
+            }
+
+            QString paramType  = ""; // Default to empty for Verilog 2001
+            QString paramValue = "";
+
+            if (paramIter->second["type"] && paramIter->second["type"].IsScalar()) {
+                paramType = QString::fromStdString(paramIter->second["type"].as<std::string>());
+                // Strip out 'logic' keyword for Verilog 2001 compatibility
+                paramType = paramType.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+
+                // Add a space if type isn't empty after processing
+                if (!paramType.isEmpty() && !paramType.endsWith(" ")) {
+                    paramType += " ";
+                }
+            }
+
+            if (paramIter->second["value"] && paramIter->second["value"].IsScalar()) {
+                paramValue = QString::fromStdString(paramIter->second["value"].as<std::string>());
+            }
+
+            paramDeclarations.append(
+                QString("    parameter %1%2 = %3").arg(paramType).arg(paramName).arg(paramValue));
+        }
+
+        if (!paramDeclarations.isEmpty()) {
+            out << paramDeclarations.join(",\n") << "\n";
+        }
+        out << ")";
+    }
+
+    /* Start port list */
+    out << " (";
 
     /* Collect all ports for module interface */
-    QStringList ports;
+    QStringList            ports;
+    QMap<QString, QString> portToNetConnections; /* Map of port name to connected net name */
 
-    /* For simplicity, all nets connected to the world outside will be considered ports */
-    /* In a real implementation, this would need more sophisticated logic */
+    /* Process port section if it exists */
+    if (netlistData["port"] && netlistData["port"].IsMap()) {
+        for (auto portIter = netlistData["port"].begin(); portIter != netlistData["port"].end();
+             ++portIter) {
+            if (!portIter->first.IsScalar()) {
+                qWarning() << "Warning: Invalid port name, skipping";
+                continue;
+            }
+
+            const QString portName = QString::fromStdString(portIter->first.as<std::string>());
+
+            if (!portIter->second.IsMap()) {
+                qWarning() << "Warning: Port" << portName << "has invalid format, skipping";
+                continue;
+            }
+
+            QString direction = "input";
+            QString type      = ""; /* Empty type by default for Verilog 2001 */
+
+            if (portIter->second["direction"] && portIter->second["direction"].IsScalar()) {
+                QString dirStr = QString::fromStdString(
+                                     portIter->second["direction"].as<std::string>())
+                                     .toLower();
+
+                /* Handle both full and abbreviated forms */
+                if (dirStr == "out" || dirStr == "output") {
+                    direction = "output";
+                } else if (dirStr == "in" || dirStr == "input") {
+                    direction = "input";
+                } else if (dirStr == "inout") {
+                    direction = "inout";
+                }
+            }
+
+            if (portIter->second["type"] && portIter->second["type"].IsScalar()) {
+                type = QString::fromStdString(portIter->second["type"].as<std::string>());
+                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
+                type = type.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+            }
+
+            /* Store the connection information if present */
+            if (portIter->second["connect"] && portIter->second["connect"].IsScalar()) {
+                QString connectedNet = QString::fromStdString(
+                    portIter->second["connect"].as<std::string>());
+                portToNetConnections[portName] = connectedNet;
+            }
+
+            /* Add port declaration */
+            ports.append(QString("%1 %2").arg(direction).arg(
+                type.isEmpty() ? portName : type + " " + portName));
+        }
+    }
 
     /* Close module declaration */
     if (!ports.isEmpty()) {
-        out << "    " << ports.join(",\n    ") << "\n";
+        /* If we have parameters, add a comma after them */
+        out << "\n    " << ports.join(",\n    ") << "\n";
     }
     out << ");\n\n";
 
@@ -802,8 +906,20 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                         << " has multiple drivers - potential conflict */\n";
                 }
 
-                /* Add the actual wire declaration */
-                out << "    wire " << netName << ";\n";
+                /* Check if this net is connected to a top-level port */
+                bool connectedToTopPort = false;
+                for (auto it = portToNetConnections.begin(); it != portToNetConnections.end();
+                     ++it) {
+                    if (it.value() == netName) {
+                        connectedToTopPort = true;
+                        break;
+                    }
+                }
+
+                /* Only declare wire if not connected to top-level port to avoid redundancy */
+                if (!connectedToTopPort) {
+                    out << "    wire " << netName << ";\n";
+                }
 
                 /* Build port connection mapping for each instance */
                 try {
