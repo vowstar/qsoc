@@ -579,6 +579,77 @@ bool QSoCGenerateManager::checkPortWidthConsistency(const QList<QPair<QString, Q
     return true;
 }
 
+QSoCGenerateManager::PortDirectionStatus QSoCGenerateManager::checkPortDirectionConsistency(
+    const QList<QPair<QString, QString>> &connections)
+{
+    if (connections.isEmpty()) {
+        return PortDirectionStatus::Underdrive; /* No connections means no drivers */
+    }
+
+    int outputCount = 0;
+    int inputCount  = 0;
+    int inoutCount  = 0;
+
+    /* Check each connection's port direction */
+    for (const auto &conn : connections) {
+        const QString &instanceName = conn.first;
+        const QString &portName     = conn.second;
+
+        /* Get instance's module name */
+        if (!netlistData["instance"][instanceName.toStdString()]
+            || !netlistData["instance"][instanceName.toStdString()]["module"]
+            || !netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
+            continue; /* Skip invalid instance */
+        }
+
+        const QString moduleName = QString::fromStdString(
+            netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
+
+        /* Get module definition */
+        if (!moduleManager || !moduleManager->isModuleExist(moduleName)) {
+            continue; /* Skip if module not found */
+        }
+
+        YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+        if (!moduleData["port"] || !moduleData["port"].IsMap()
+            || !moduleData["port"][portName.toStdString()]) {
+            continue; /* Skip if port not found */
+        }
+
+        const YAML::Node &portData = moduleData["port"][portName.toStdString()];
+
+        /* Get port direction */
+        QString direction = "input"; /* Default to input if not specified */
+        if (portData["direction"] && portData["direction"].IsScalar()) {
+            direction = QString::fromStdString(portData["direction"].as<std::string>()).toLower();
+        }
+
+        /* Count by direction */
+        if (direction == "output" || direction == "out") {
+            outputCount++;
+        } else if (direction == "inout") {
+            inoutCount++;
+        } else if (direction == "input" || direction == "in") {
+            inputCount++;
+        } else {
+            inputCount++; /* Treat unknown directions as input */
+        }
+    }
+
+    /* Check for underdrive - all ports are inputs */
+    if (outputCount == 0 && inoutCount == 0 && inputCount > 0) {
+        return PortDirectionStatus::Underdrive;
+    }
+
+    /* Check for multidrive - multiple output or inout ports */
+    if (outputCount + inoutCount > 1) {
+        return PortDirectionStatus::Multidrive;
+    }
+
+    /* Otherwise, valid connection pattern */
+    return PortDirectionStatus::Valid;
+}
+
 bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 {
     /* Check if netlistData is valid */
@@ -690,132 +761,26 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     continue;
                 }
 
-                /* Safer direct access approach without relying on iterators */
-                QString instanceName;
-                QString portName;
-                bool    validFirstConnection = false;
-
-                /* Just try first connection in the map directly */
-                try {
-                    auto connIter = connections.begin();
-                    if (connIter != connections.end() && connIter->first.IsScalar()) {
-                        instanceName = QString::fromStdString(connIter->first.as<std::string>());
-
-                        if (connIter->second.IsMap() && connIter->second["port"]
-                            && connIter->second["port"].IsScalar()) {
-                            portName = QString::fromStdString(
-                                connIter->second["port"].as<std::string>());
-                            validFirstConnection = true;
-                        }
-                    }
-                } catch (const std::exception &e) {
-                    qWarning() << "Exception getting first connection:" << e.what();
-                }
-
-                if (!validFirstConnection) {
-                    qWarning() << "Warning: No valid connections found for net" << netName;
-                    continue;
-                }
-
-                /* Check if instance exists */
-                if (!netlistData["instance"]
-                    || !netlistData["instance"][instanceName.toStdString()]) {
-                    qWarning() << "Warning: Instance" << instanceName << "referenced in net"
-                               << netName << "not found in netlist, skipping";
-                    continue;
-                }
-
-                /* Get module name for this instance */
-                if (!netlistData["instance"][instanceName.toStdString()]["module"]
-                    || !netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
-                    qWarning() << "Warning: Invalid module name for instance" << instanceName
-                               << ", skipping";
-                    continue;
-                }
-
-                const QString moduleName = QString::fromStdString(
-                    netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
-
-                /* Get port type from module definition */
-                if (!moduleManager) {
-                    qWarning() << "Warning: Module manager is null, skipping wire declaration for"
-                               << netName;
-                    continue;
-                }
-
-                if (!moduleManager->isModuleExist(moduleName)) {
-                    qWarning() << "Warning: Module" << moduleName
-                               << "not found in module library, skipping";
-                    continue;
-                }
-
-                YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
-                if (!moduleData) {
-                    qWarning() << "Warning: Failed to get module data for" << moduleName
-                               << ", skipping";
-                    continue;
-                }
-
-                if (!moduleData["port"]) {
-                    qWarning() << "Warning: Module" << moduleName
-                               << "has no port section, skipping";
-                    continue;
-                }
-
-                if (!moduleData["port"].IsMap()) {
-                    qWarning() << "Warning: Port section of module" << moduleName
-                               << "is not a map, skipping";
-                    continue;
-                }
-
-                if (!moduleData["port"][portName.toStdString()]) {
-                    qWarning() << "Warning: Port" << portName << "not found in module" << moduleName
-                               << ", skipping";
-                    continue;
-                }
-
-                const YAML::Node &portData = moduleData["port"][portName.toStdString()];
-
-                QString wireWidth = "";
-
-                /* Parse width information from type field */
-                if (portData["type"] && portData["type"].IsScalar()) {
-                    QString typeString = QString::fromStdString(portData["type"].as<std::string>());
-
-                    /* Extract width information from type string (e.g. "logic[39:0]") */
-                    QRegularExpression widthRegex("\\[(\\d+):(\\d+)\\]");
-                    if (widthRegex.match(typeString).hasMatch()) {
-                        int msb   = widthRegex.match(typeString).captured(1).toInt();
-                        int lsb   = widthRegex.match(typeString).captured(2).toInt();
-                        wireWidth = QString("[%1:%2]").arg(msb).arg(lsb);
-                    }
-                }
-
-                /* Generate wire declaration */
-                if (wireWidth.isEmpty()) {
-                    out << "    wire " << netName << ";\n";
-                } else {
-                    out << "    wire " << wireWidth << " " << netName << ";\n";
-                }
-
                 /* Build a list of instance-port pairs for width check */
                 QList<QPair<QString, QString>> portPairs;
 
-                /* Collect port pairs using iterator directly */
-                try {
-                    for (auto connIter = connections.begin(); connIter != connections.end();
-                         ++connIter) {
-                        if (connIter->first.IsScalar() && connIter->second.IsMap()
-                            && connIter->second["port"] && connIter->second["port"].IsScalar()) {
-                            QString connInstance = QString::fromStdString(
-                                connIter->first.as<std::string>());
-                            QString connPort = QString::fromStdString(
-                                connIter->second["port"].as<std::string>());
-                            portPairs.append(qMakePair(connInstance, connPort));
+                /* Build port pairs from netlistData */
+                const YAML::Node &netNode = netlistData["net"][netName.toStdString()];
+                if (netNode.IsMap()) {
+                    for (const auto &instancePair : netNode) {
+                        if (instancePair.first.IsScalar()) {
+                            QString instanceName = QString::fromStdString(
+                                instancePair.first.as<std::string>());
+
+                            /* Verify this is a valid instance with a port */
+                            if (instancePair.second.IsMap() && instancePair.second["port"]
+                                && instancePair.second["port"].IsScalar()) {
+                                QString portName = QString::fromStdString(
+                                    instancePair.second["port"].as<std::string>());
+                                portPairs.append(qMakePair(instanceName, portName));
+                            }
                         }
                     }
-                } catch (const std::exception &e) {
-                    qWarning() << "Exception collecting port pairs:" << e.what();
                 }
 
                 /* Check port width consistency */
@@ -824,6 +789,21 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     out << "    /* TODO: width mismatch on net " << netName
                         << ", please check connected ports */\n";
                 }
+
+                /* Check port direction consistency */
+                PortDirectionStatus dirStatus = checkPortDirectionConsistency(portPairs);
+                if (dirStatus == PortDirectionStatus::Underdrive) {
+                    qWarning() << "Warning: Net" << netName
+                               << "has only input ports, missing driver";
+                    out << "    /* TODO: Net " << netName << " is undriven - missing source */\n";
+                } else if (dirStatus == PortDirectionStatus::Multidrive) {
+                    qWarning() << "Warning: Net" << netName << "has multiple output/inout ports";
+                    out << "    /* TODO: Net " << netName
+                        << " has multiple drivers - potential conflict */\n";
+                }
+
+                /* Add the actual wire declaration */
+                out << "    wire " << netName << ";\n";
 
                 /* Build port connection mapping for each instance */
                 try {

@@ -30,7 +30,7 @@ public:
      * @param[in] busManager bus manager.
      * @param[in] llmService LLM service.
      */
-    explicit QSoCGenerateManager(
+    QSoCGenerateManager(
         QObject            *parent         = nullptr,
         QSocProjectManager *projectManager = nullptr,
         QSocModuleManager  *moduleManager  = nullptr,
@@ -154,6 +154,15 @@ public slots:
     bool checkPortWidthConsistency(const QList<QPair<QString, QString>> &connections);
 
 private:
+    /**
+     * @brief Port direction status enum for connection validation
+     */
+    enum class PortDirectionStatus {
+        Valid,      /* Net has at least one output/inout and any number of inputs */
+        Underdrive, /* Net has only input ports, no drivers */
+        Multidrive  /* Net has multiple output/inout ports */
+    };
+
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;
     /** Module manager. */
@@ -164,6 +173,19 @@ private:
     QLLMService *llmService = nullptr;
     /** Netlist data. */
     YAML::Node netlistData;
+
+    /**
+     * @brief Check the direction consistency of ports connected to a net
+     *
+     * Validates that nets have the proper driving pattern by checking port directions:
+     * - Ensures nets have a source (at least one output or inout port)
+     * - Ensures nets don't have multiple drivers (more than one output or inout port)
+     *
+     * @param connections List of instance-port pairs to check
+     * @return PortDirectionStatus Status of the connection (Valid, Underdrive, or Multidrive)
+     */
+    PortDirectionStatus checkPortDirectionConsistency(
+        const QList<QPair<QString, QString>> &connections);
 };
 
 #endif // QSOCGENERATEMANAGER_H
