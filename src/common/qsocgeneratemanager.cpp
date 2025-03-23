@@ -1028,12 +1028,12 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                         }
                     }
 
-                    /* Create header for TODO comment */
+                    /* Create header for FIXME comment */
                     if (connectedToTopPort) {
-                        out << "    /* TODO: Port " << connectedPortName << " (net " << netName
+                        out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
                             << ") width mismatch - please check connected ports:\n";
                     } else {
-                        out << "    /* TODO: Net " << netName
+                        out << "    /* FIXME: Net " << netName
                             << " width mismatch - please check connected ports:\n";
                     }
 
@@ -1075,10 +1075,11 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     qWarning() << "Warning: Net" << netName
                                << "has only input ports, missing driver";
                     if (connectedToTopPort) {
-                        out << "    /* TODO: Port " << connectedPortName << " (net " << netName
+                        out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
                             << ") is undriven - missing source:\n";
                     } else {
-                        out << "    /* TODO: Net " << netName << " is undriven - missing source:\n";
+                        out << "    /* FIXME: Net " << netName
+                            << " is undriven - missing source:\n";
                     }
 
                     /* Add detailed information for each connected port */
@@ -1102,10 +1103,10 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                 } else if (dirStatus == PortDirectionStatus::Multidrive) {
                     qWarning() << "Warning: Net" << netName << "has multiple output/inout ports";
                     if (connectedToTopPort) {
-                        out << "    /* TODO: Port " << connectedPortName << " (net " << netName
+                        out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
                             << ") has multiple drivers - potential conflict:\n";
                     } else {
-                        out << "    /* TODO: Net " << netName
+                        out << "    /* FIXME: Net " << netName
                             << " has multiple drivers - potential conflict:\n";
                     }
 
@@ -1177,16 +1178,16 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     bool widthMismatch = !portWidth.isEmpty() && !netWidth.isEmpty()
                                          && portWidth != netWidth;
 
-                    /* Add width mismatch TODO comment if needed */
+                    /* Add width mismatch FIXME comment if needed */
                     if (widthMismatch) {
-                        out << "    /* TODO: Port " << connectedPortName << " (net " << netName
+                        out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
                             << ") width mismatch - port width: " << portWidth
                             << ", net width: " << netWidth << " */\n";
                     }
 
                     /* Add direction warning if needed */
                     if (portDirection == "inout") {
-                        out << "    /* TODO: Port " << connectedPortName
+                        out << "    /* FIXME: Port " << connectedPortName
                             << " is inout - verify bidirectional behavior */\n";
                     }
                 }
@@ -1312,7 +1313,7 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                             direction = QString::fromStdString(
                                 portIter->second["direction"].as<std::string>());
                         }
-                        portConnections.append(QString("        .%1(/* TODO: %2 %3 missing */)")
+                        portConnections.append(QString("        .%1(/* FIXME: %2 %3 missing */)")
                                                    .arg(portName)
                                                    .arg(direction)
                                                    .arg(portName));
