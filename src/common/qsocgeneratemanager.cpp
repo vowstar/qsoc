@@ -784,12 +784,60 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
         /* Get the port connections for this instance */
         QStringList portConnections;
 
-        if (instancePortConnections.contains(instanceName)) {
-            QMap<QString, QString>        &portMap = instancePortConnections[instanceName];
-            QMapIterator<QString, QString> it(portMap);
-            while (it.hasNext()) {
-                it.next();
-                portConnections.append(QString("        .%1(%2)").arg(it.key()).arg(it.value()));
+        /* Get module definition to ensure all ports are listed */
+        if (moduleManager && moduleManager->isModuleExist(moduleName)) {
+            YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+
+            if (moduleData["port"] && moduleData["port"].IsMap()) {
+                /* Get the existing connections map for this instance */
+                QMap<QString, QString> portMap;
+                if (instancePortConnections.contains(instanceName)) {
+                    portMap = instancePortConnections[instanceName];
+                }
+
+                /* Iterate through all ports in the module definition */
+                for (auto portIter = moduleData["port"].begin();
+                     portIter != moduleData["port"].end();
+                     ++portIter) {
+                    if (!portIter->first.IsScalar()) {
+                        qWarning() << "Warning: Invalid port name in module" << moduleName;
+                        continue;
+                    }
+
+                    QString portName = QString::fromStdString(portIter->first.as<std::string>());
+
+                    /* Check if this port has a connection */
+                    if (portMap.contains(portName)) {
+                        portConnections.append(
+                            QString("        .%1(%2)").arg(portName).arg(portMap[portName]));
+                    } else {
+                        /* Port exists in module but has no connection */
+                        QString direction = "signal";
+                        if (portIter->second && portIter->second["direction"]
+                            && portIter->second["direction"].IsScalar()) {
+                            direction = QString::fromStdString(
+                                portIter->second["direction"].as<std::string>());
+                        }
+                        portConnections.append(QString("        .%1(/* TODO: %2 %3 missing */)")
+                                                   .arg(portName)
+                                                   .arg(direction)
+                                                   .arg(portName));
+                    }
+                }
+            } else {
+                qWarning() << "Warning: Module" << moduleName << "has no valid port section";
+            }
+        } else {
+            qWarning() << "Warning: Failed to get module definition for" << moduleName;
+
+            /* Fall back to existing connections if module definition not available */
+            if (instancePortConnections.contains(instanceName)) {
+                QMap<QString, QString>        &portMap = instancePortConnections[instanceName];
+                QMapIterator<QString, QString> it(portMap);
+                while (it.hasNext()) {
+                    it.next();
+                    portConnections.append(QString("        .%1(%2)").arg(it.key()).arg(it.value()));
+                }
             }
         }
 
