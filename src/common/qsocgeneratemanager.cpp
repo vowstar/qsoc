@@ -616,6 +616,9 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
     /* Build a mapping of all connections for each instance and port */
     QMap<QString, QMap<QString, QString>> instancePortConnections;
 
+    /* Add connections (wires) section comment */
+    out << "    /* Wire declarations */\n";
+
     /* Generate wire declarations FIRST */
     if (netlistData["net"]) {
         if (!netlistData["net"].IsMap()) {
@@ -795,11 +798,15 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     instancePortConnections[connInstance][connPort] = netName;
                 }
             }
+            out << "\n";
         }
     } else {
         qWarning()
             << "Warning: No 'net' section in netlist, no wire declarations will be generated";
     }
+
+    /* Add instances section comment */
+    out << "    /* Module instantiations */\n";
 
     /* Generate instance declarations after wire declarations */
     for (auto instanceIter = netlistData["instance"].begin();
