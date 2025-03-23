@@ -906,20 +906,8 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                         << " has multiple drivers - potential conflict */\n";
                 }
 
-                /* Check if this net is connected to a top-level port */
-                bool connectedToTopPort = false;
-                for (auto it = portToNetConnections.begin(); it != portToNetConnections.end();
-                     ++it) {
-                    if (it.value() == netName) {
-                        connectedToTopPort = true;
-                        break;
-                    }
-                }
-
-                /* Only declare wire if not connected to top-level port to avoid redundancy */
-                if (!connectedToTopPort) {
-                    out << "    wire " << netName << ";\n";
-                }
+                /* Always declare wire for all nets */
+                out << "    wire " << netName << ";\n";
 
                 /* Build port connection mapping for each instance */
                 try {
@@ -1102,7 +1090,82 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
             out << portConnections.join(",\n") << "\n";
         }
 
-        out << "    );\n\n";
+        out << "    );\n";
+    }
+
+    /* Generate port connection assignments */
+    if (!portToNetConnections.isEmpty()) {
+        out << "\n    /* Port connection assignments */\n";
+        out << "    /* Note: These assignments connect top-level ports to internal wires */\n";
+
+        for (auto it = portToNetConnections.begin(); it != portToNetConnections.end(); ++it) {
+            const QString &portName = it.key();
+            const QString &netName  = it.value();
+
+            /* Get port direction and width */
+            QString portDirection = "input"; // Default
+            QString portWidth     = "";
+
+            if (netlistData["port"] && netlistData["port"][portName.toStdString()]
+                && netlistData["port"][portName.toStdString()]["direction"]
+                && netlistData["port"][portName.toStdString()]["direction"].IsScalar()) {
+                QString dirStr
+                    = QString::fromStdString(
+                          netlistData["port"][portName.toStdString()]["direction"].as<std::string>())
+                          .toLower();
+
+                /* Handle both full and abbreviated forms */
+                if (dirStr == "out" || dirStr == "output") {
+                    portDirection = "output";
+                } else if (dirStr == "in" || dirStr == "input") {
+                    portDirection = "input";
+                } else if (dirStr == "inout") {
+                    portDirection = "inout";
+                }
+            }
+
+            /* Get port type/width */
+            if (netlistData["port"] && netlistData["port"][portName.toStdString()]
+                && netlistData["port"][portName.toStdString()]["type"]
+                && netlistData["port"][portName.toStdString()]["type"].IsScalar()) {
+                portWidth = QString::fromStdString(
+                    netlistData["port"][portName.toStdString()]["type"].as<std::string>());
+            }
+
+            /* Get net width */
+            QString netWidth = "";
+            if (netlistData["net"] && netlistData["net"][netName.toStdString()]
+                && netlistData["net"][netName.toStdString()]["type"]
+                && netlistData["net"][netName.toStdString()]["type"].IsScalar()) {
+                netWidth = QString::fromStdString(
+                    netlistData["net"][netName.toStdString()]["type"].as<std::string>());
+            }
+
+            /* Check width compatibility */
+            bool widthMismatch = !portWidth.isEmpty() && !netWidth.isEmpty()
+                                 && portWidth != netWidth;
+
+            /* Generate the appropriate assign statement based on port direction */
+            if (portDirection == "input") {
+                out << "    assign " << netName << " = " << portName;
+                if (widthMismatch) {
+                    out << "; /* TODO: Width mismatch - port: " << portWidth
+                        << ", net: " << netWidth << " */";
+                }
+                out << ";\n";
+            } else if (portDirection == "output") {
+                out << "    assign " << portName << " = " << netName;
+                if (widthMismatch) {
+                    out << "; /* TODO: Width mismatch - port: " << portWidth
+                        << ", net: " << netWidth << " */";
+                }
+                out << ";\n";
+            } else if (portDirection == "inout") {
+                out << "    /* TODO: inout port " << portName << " connected to net " << netName
+                    << " */\n";
+            }
+        }
+        out << "\n";
     }
 
     /* Close module */
