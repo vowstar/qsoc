@@ -189,16 +189,29 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
             outputStream << content;
             tempFile.flush();
             tempFile.close();
-
-            const QString args
-                = "slang -f \"" + tempFile.fileName()
-                  + "\" --ignore-unknown-modules --single-unit --compat vcs --error-limit=0"
-                  + " -Wunknown-sys-name" + " --ignore-directive delay_mode_path"
-                  + " --ignore-directive suppress_faults" + " --ignore-directive enable_portfaults"
-                  + " --ignore-directive disable_portfaults"
-                  + " --ignore-directive nosuppress_faults"
-                  + " --ignore-directive delay_mode_distributed"
-                  + " --ignore-directive delay_mode_unit";
+            /* clang-format off */
+            const QString args = QStringLiteral(R"(
+                slang
+                --ignore-unknown-modules
+                --single-unit
+                --compat vcs
+                --timescale 1ns/10ps
+                --error-limit=0
+                -Wunknown-sys-name
+                -Wbitwise-op-mismatch
+                -Wcomparison-mismatch
+                -Wunconnected-port
+                -Wsign-compare
+                --ignore-directive delay_mode_path
+                --ignore-directive suppress_faults
+                --ignore-directive enable_portfaults
+                --ignore-directive disable_portfaults
+                --ignore-directive nosuppress_faults
+                --ignore-directive delay_mode_distributed
+                --ignore-directive delay_mode_unit
+                -f "%1"
+            )").arg(tempFile.fileName());
+            /* clang-format on */
 
             QStaticLog::logV(Q_FUNC_INFO, "TemporaryFile name:" + tempFile.fileName());
             QStaticLog::logV(Q_FUNC_INFO, "Content list begin");
