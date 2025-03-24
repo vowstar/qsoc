@@ -1374,26 +1374,32 @@ bool QSoCGenerateManager::formatVerilogFile(const QString &filePath)
     /* Tool found, proceed with formatting */
     qInfo() << "Formatting Verilog file using verible-verilog-format...";
 
-    QProcess    formatter;
-    QStringList args;
-    args << "--inplace"
-         << "--column_limit" << "119"
-         << "--indentation_spaces" << "4"
-         << "--line_break_penalty" << "4"
-         << "--wrap_spaces" << "4"
-         << "--port_declarations_alignment" << "align"
-         << "--port_declarations_indentation" << "indent"
-         << "--formal_parameters_alignment" << "align"
-         << "--formal_parameters_indentation" << "indent"
-         << "--assignment_statement_alignment" << "align"
-         << "--enum_assignment_statement_alignment" << "align"
-         << "--class_member_variable_alignment" << "align"
-         << "--module_net_variable_alignment" << "align"
-         << "--named_parameter_alignment" << "align"
-         << "--named_parameter_indentation" << "indent"
-         << "--named_port_alignment" << "align"
-         << "--named_port_indentation" << "indent"
-         << "--struct_union_members_alignment" << "align" << filePath;
+    QProcess formatter;
+    /* clang-format off */
+    const QString argsStr = QStringLiteral(R"(
+        --inplace
+        --column_limit 119
+        --indentation_spaces 4
+        --line_break_penalty 4
+        --wrap_spaces 4
+        --port_declarations_alignment align
+        --port_declarations_indentation indent
+        --formal_parameters_alignment align
+        --formal_parameters_indentation indent
+        --assignment_statement_alignment align
+        --enum_assignment_statement_alignment align
+        --class_member_variable_alignment align
+        --module_net_variable_alignment align
+        --named_parameter_alignment align
+        --named_parameter_indentation indent
+        --named_port_alignment align
+        --named_port_indentation indent
+        --struct_union_members_alignment align
+    )");
+    /* clang-format on */
+
+    QStringList args = argsStr.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    args << filePath;
 
     formatter.start("verible-verilog-format", args);
     formatter.waitForFinished();
