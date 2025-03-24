@@ -10,7 +10,14 @@ SoC systems.
 
 ### Environment Setup
 
+QSoC uses Nix to provide a consistent and reproducible development environment
+with all dependencies automatically managed:
+
 ```bash
+# Enter the development environment
+nix develop
+
+# Once inside the Nix environment, you can run development commands
 cmake -B build -G Ninja
 ```
 
