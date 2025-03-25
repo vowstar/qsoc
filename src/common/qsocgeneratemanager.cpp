@@ -1607,20 +1607,29 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                         numInfo.value & ((1ULL << portWidth) - 1));
                                             }
 
-                                            tieValue = QString(
-                                                           "%1 /* FIXME: Value %2 wider than port "
-                                                           "width %3 bits */")
-                                                           .arg(truncatedValue)
-                                                           .arg(numInfo.formatVerilog())
-                                                           .arg(portWidth);
-                                        } else {
-                                            /* For 1-bit ports, use simpler format without unnecessary width prefix */
-                                            if (portWidth == 1 && numInfo.value <= 1) {
-                                                tieValue = QString("%1'd%2").arg(portWidth).arg(
-                                                    numInfo.value);
+                                            /* Format the tie value */
+                                            if (numInfo.width > portWidth) {
+                                                /* Value is wider than port - truncate to port width but keep FIXME comment */
+
+                                                /* Create a copy of numInfo with truncated width and value */
+                                                NumberInfo truncatedInfo = numInfo;
+                                                truncatedInfo.width      = portWidth;
+                                                truncatedInfo.value &= ((1ULL << portWidth) - 1);
+                                                truncatedInfo.hasExplicitWidth = true;
+
+                                                /* Format using the original base but with truncated width */
+                                                tieValue = QString(
+                                                               "%1 /* FIXME: Value %2 wider than "
+                                                               "port width %3 bits */")
+                                                               .arg(truncatedInfo.formatVerilog())
+                                                               .arg(numInfo.formatVerilog())
+                                                               .arg(portWidth);
                                             } else {
+                                                /* Use original formatting for all widths */
                                                 tieValue = numInfo.formatVerilog();
                                             }
+                                        } else {
+                                            tieValue = numInfo.formatVerilog();
                                         }
 
                                         /* Check for invert attribute */
