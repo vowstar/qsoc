@@ -1313,8 +1313,46 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                 /* Only declare wire if not connected to top-level port to avoid redundancy */
                 if (!connectedToTopPort) {
-                    /* Add wire declaration for this net */
-                    out << "    wire " << netName << ";\n";
+                    /* Get net width from all ports connected to this net */
+                    QString netWidth = "";
+                    int     maxWidth = 0;
+
+                    /* Find the port with the maximum width */
+                    for (const auto &detail : portDetails) {
+                        if (!detail.width.isEmpty()) {
+                            /* Attempt to extract width value from format like [31:0] or [7] */
+                            QRegularExpression widthRegex("\\[\\s*(\\d+)\\s*(?::\\s*\\d+)?\\s*\\]");
+                            auto               match = widthRegex.match(detail.width);
+                            if (match.hasMatch()) {
+                                bool ok    = false;
+                                int  width = match.captured(1).toInt(&ok)
+                                            + 1; // Add 1 because [31:0] means 32 bits
+                                if (ok && width > maxWidth) {
+                                    maxWidth = width;
+                                    netWidth = detail.width;
+                                }
+                            } else if (maxWidth == 0) {
+                                /* If no width number found but we have a type string, use it as fallback */
+                                netWidth = detail.width;
+                            }
+                        }
+                    }
+
+                    /* If no width found from ports, try from net type as fallback */
+                    if (netWidth.isEmpty() && netlistData["net"]
+                        && netlistData["net"][netName.toStdString()]
+                        && netlistData["net"][netName.toStdString()]["type"]
+                        && netlistData["net"][netName.toStdString()]["type"].IsScalar()) {
+                        netWidth = QString::fromStdString(
+                            netlistData["net"][netName.toStdString()]["type"].as<std::string>());
+                    }
+
+                    /* Add wire declaration for this net with width information if available */
+                    if (!netWidth.isEmpty()) {
+                        out << "    wire " << netWidth << " " << netName << ";\n";
+                    } else {
+                        out << "    wire " << netName << ";\n";
+                    }
                 } else {
                     /* Check for width mismatches between port and net */
                     QString portWidth     = "";
