@@ -821,12 +821,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 }
             }
 
-            if (portIter->second["type"] && portIter->second["type"].IsScalar()) {
-                type = QString::fromStdString(portIter->second["type"].as<std::string>());
-                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                type = type.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
-            }
-
             /* Store the connection information if present */
             if (portIter->second["connect"] && portIter->second["connect"].IsScalar()) {
                 QString connectedNet = QString::fromStdString(
@@ -1000,15 +994,32 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                             /* Get port width */
                             QString portWidth = "";
-                            if (netlistData["port"][connectedPortName.toStdString()]["type"]
-                                && netlistData["port"][connectedPortName.toStdString()]["type"]
-                                       .IsScalar()) {
-                                portWidth = QString::fromStdString(
-                                    netlistData["port"][connectedPortName.toStdString()]["type"]
-                                        .as<std::string>());
-                                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                                portWidth
-                                    = portWidth.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                            if (netlistData["port"]
+                                && netlistData["port"][connectedPortName.toStdString()]) {
+                                auto portNode = netlistData["port"][connectedPortName.toStdString()];
+
+                                /* Get port direction */
+                                QString portDirection = "unknown";
+                                if (portNode["direction"] && portNode["direction"].IsScalar()) {
+                                    QString dirStr = QString::fromStdString(
+                                                         portNode["direction"].as<std::string>())
+                                                         .toLower();
+
+                                    /* Handle both full and abbreviated forms */
+                                    if (dirStr == "out" || dirStr == "output") {
+                                        portDirection = "output";
+                                    } else if (dirStr == "in" || dirStr == "input") {
+                                        portDirection = "input";
+                                    } else if (dirStr == "inout") {
+                                        portDirection = "inout";
+                                    }
+                                }
+
+                                /* Get port width/type */
+                                if (portNode["type"] && portNode["type"].IsScalar()) {
+                                    portWidth = QString::fromStdString(
+                                        portNode["type"].as<std::string>());
+                                }
                             }
 
                             /* Add to detailed port information with reversed direction */
@@ -1491,19 +1502,161 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             }
                         }
 
-                        /* Format FIXME message with width if available */
-                        if (width.isEmpty()) {
-                            portConnections.append(QString("        .%1(/* FIXME: %2 %3 missing */)")
-                                                       .arg(portName)
-                                                       .arg(direction)
-                                                       .arg(portName));
-                        } else {
+                        /* Check for tie attribute in instance's port */
+                        bool    hasTie    = false;
+                        bool    hasInvert = false;
+                        QString tieValue;
+                        int     portWidth = 1; /* Default width if not specified */
+
+                        /* Extract port width for bit size validation */
+                        if (!width.isEmpty()) {
+                            QRegularExpression widthRegex("\\[(\\d+)(?::\\d+)?\\]");
+                            auto               match = widthRegex.match(width);
+                            if (match.hasMatch()) {
+                                bool ok  = false;
+                                int  msb = match.captured(1).toInt(&ok);
+                                if (ok) {
+                                    portWidth = msb + 1; /* [7:0] means 8 bits */
+                                }
+                            }
+                        }
+
+                        /* Check if this port is already connected to any net in the design */
+                        bool isConnectedToNet = false;
+                        if (netlistData["net"] && netlistData["net"].IsMap()) {
+                            for (auto netIter = netlistData["net"].begin();
+                                 netIter != netlistData["net"].end() && !isConnectedToNet;
+                                 ++netIter) {
+                                if (netIter->second.IsMap()
+                                    && netIter->second[instanceName.toStdString()]
+                                    && netIter->second[instanceName.toStdString()].IsMap()
+                                    && netIter->second[instanceName.toStdString()]["port"]
+                                    && netIter->second[instanceName.toStdString()]["port"]
+                                           .IsScalar()) {
+                                    QString connectedPort = QString::fromStdString(
+                                        netIter->second[instanceName.toStdString()]["port"]
+                                            .as<std::string>());
+
+                                    if (connectedPort == portName) {
+                                        isConnectedToNet = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        /* Only proceed with tie if port is not connected to a net */
+                        if (!isConnectedToNet) {
+                            /* Check if instance has tie attribute for this port */
+                            if (netlistData["instance"]
+                                && netlistData["instance"][instanceName.toStdString()]
+                                && netlistData["instance"][instanceName.toStdString()]["port"]
+                                && netlistData["instance"][instanceName.toStdString()]["port"]
+                                              [portName.toStdString()]) {
+                                auto portNode = netlistData["instance"][instanceName.toStdString()]
+                                                           ["port"][portName.toStdString()];
+
+                                /* Check for tie attribute */
+                                if (portNode["tie"] && portNode["tie"].IsScalar()) {
+                                    QString tieStr = QString::fromStdString(
+                                        portNode["tie"].as<std::string>());
+
+                                    /* Parse the tie value using our number parser */
+                                    NumberInfo numInfo = parseNumber(tieStr);
+
+                                    /* Only apply tie to input ports */
+                                    if (direction.toLower() == "input"
+                                        || direction.toLower() == "in") {
+                                        hasTie = true;
+
+                                        /* Format the tie value */
+                                        if (numInfo.width > portWidth) {
+                                            /* Value is wider than port - truncate to port width but keep FIXME comment */
+                                            QString truncatedValue;
+
+                                            /* For 1-bit ports, simplify to just 1 or 0 */
+                                            if (portWidth == 1) {
+                                                /* For 1-bit port, just extract the LSB */
+                                                truncatedValue
+                                                    = QString("%1'd%2").arg(portWidth).arg(
+                                                        numInfo.value & 0x1);
+                                            } else {
+                                                /* For wider ports, format properly with width prefix */
+                                                truncatedValue
+                                                    = QString("%1'd%2").arg(portWidth).arg(
+                                                        numInfo.value & ((1ULL << portWidth) - 1));
+                                            }
+
+                                            tieValue = QString(
+                                                           "%1 /* FIXME: Value %2 wider than port "
+                                                           "width %3 bits */")
+                                                           .arg(truncatedValue)
+                                                           .arg(numInfo.formatVerilog())
+                                                           .arg(portWidth);
+                                        } else {
+                                            /* For 1-bit ports, use simpler format without unnecessary width prefix */
+                                            if (portWidth == 1 && numInfo.value <= 1) {
+                                                tieValue = QString("%1'd%2").arg(portWidth).arg(
+                                                    numInfo.value);
+                                            } else {
+                                                tieValue = numInfo.formatVerilog();
+                                            }
+                                        }
+
+                                        /* Check for invert attribute */
+                                        if (portNode["invert"] && portNode["invert"].IsScalar()) {
+                                            QString invertStr = QString::fromStdString(
+                                                portNode["invert"].as<std::string>());
+                                            if (invertStr.toLower() == "true" || invertStr == "1") {
+                                                hasInvert = true;
+                                                /* If we need to invert, apply logical NOT (~) to the value */
+                                                tieValue = QString("~(%1)").arg(tieValue);
+                                            }
+                                        }
+                                    } else {
+                                        /* Add warning for non-input ports with tie */
+                                        tieValue = QString(
+                                                       "/* FIXME: 'tie' attribute for %1 port %2 "
+                                                       "ignored */")
+                                                       .arg(direction.toLower())
+                                                       .arg(portName);
+                                    }
+                                }
+                                /* If no tie but has invert attribute on an input port, warn about missing tie */
+                                else if (
+                                    portNode["invert"] && portNode["invert"].IsScalar()
+                                    && (direction.toLower() == "input"
+                                        || direction.toLower() == "in")) {
+                                    tieValue = QString(
+                                                   "/* FIXME: 'invert' attribute on %1 port %2 "
+                                                   "without 'tie' attribute */")
+                                                   .arg(direction.toLower())
+                                                   .arg(portName);
+                                }
+                            }
+                        }
+
+                        /* Format port connection based on connection status and tie attribute */
+                        if (hasTie
+                            && (direction.toLower() == "input" || direction.toLower() == "in")) {
                             portConnections.append(
-                                QString("        .%1(/* FIXME: %2 %3 %4 missing */)")
-                                    .arg(portName)
-                                    .arg(direction)
-                                    .arg(width)
-                                    .arg(portName));
+                                QString("        .%1(%2)").arg(portName).arg(tieValue));
+                        } else {
+                            /* Format FIXME message with width if available */
+                            if (width.isEmpty()) {
+                                portConnections.append(
+                                    QString("        .%1(/* FIXME: %2 %3 missing */)")
+                                        .arg(portName)
+                                        .arg(direction)
+                                        .arg(portName));
+                            } else {
+                                portConnections.append(
+                                    QString("        .%1(/* FIXME: %2 %3 %4 missing */)")
+                                        .arg(portName)
+                                        .arg(direction)
+                                        .arg(width)
+                                        .arg(portName));
+                            }
                         }
                     }
                 }
@@ -1599,4 +1752,173 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
         qWarning() << "Error formatting Verilog file:" << formatter.errorString();
         return false;
     }
+}
+
+QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
+{
+    NumberInfo result;
+    result.originalString   = numStr;
+    result.base             = NumberInfo::Base::Unknown;
+    result.value            = 0;
+    result.width            = 0;
+    result.hasExplicitWidth = false;
+
+    /* Remove all underscores from the string (Verilog style) */
+    QString cleanStr = numStr;
+    cleanStr.remove('_');
+
+    if (cleanStr.isEmpty()) {
+        qWarning() << "Empty number string";
+        return result;
+    }
+
+    /* Check for Verilog-style format with vector range: [31:0] */
+    QRegularExpression      vectorWidthRegex(R"(\[(\d+)\s*:\s*(\d+)\])");
+    QRegularExpressionMatch vectorWidthMatch = vectorWidthRegex.match(cleanStr);
+
+    if (vectorWidthMatch.hasMatch()) {
+        bool msb_ok = false;
+        bool lsb_ok = false;
+        int  msb    = vectorWidthMatch.captured(1).toInt(&msb_ok);
+        int  lsb    = vectorWidthMatch.captured(2).toInt(&lsb_ok);
+
+        if (msb_ok && lsb_ok) {
+            result.width            = msb - lsb + 1;
+            result.hasExplicitWidth = true;
+
+            /* Remove the vector range from the string for further processing */
+            cleanStr.remove(vectorWidthRegex);
+        }
+    }
+
+    /* Check for Verilog-style format: <width>'<base><value> */
+    QRegularExpression      verilogNumberRegex(R"((\d+)'([bdohxBDOHX])([0-9a-fA-F]+))");
+    QRegularExpressionMatch verilogMatch = verilogNumberRegex.match(cleanStr);
+
+    if (verilogMatch.hasMatch()) {
+        /* Extract width, base, and value from the Verilog format */
+        bool widthOk = false;
+        int  width   = verilogMatch.captured(1).toInt(&widthOk);
+
+        if (widthOk && !result.hasExplicitWidth) {
+            result.width            = width;
+            result.hasExplicitWidth = true;
+        }
+
+        QChar   baseChar = verilogMatch.captured(2).at(0).toLower();
+        QString valueStr = verilogMatch.captured(3);
+
+        /* Determine the base from the base character */
+        switch (baseChar.toLatin1()) {
+        case 'b': /* Binary */
+            result.base  = NumberInfo::Base::Binary;
+            result.value = valueStr.toLongLong(nullptr, 2);
+            break;
+        case 'o': /* Octal */
+            result.base  = NumberInfo::Base::Octal;
+            result.value = valueStr.toLongLong(nullptr, 8);
+            break;
+        case 'd': /* Decimal */
+            result.base  = NumberInfo::Base::Decimal;
+            result.value = valueStr.toLongLong(nullptr, 10);
+            break;
+        case 'h': /* Hexadecimal */
+        case 'x': /* Alternative for Hexadecimal */
+            result.base  = NumberInfo::Base::Hexadecimal;
+            result.value = valueStr.toLongLong(nullptr, 16);
+            break;
+        default:
+            qWarning() << "Unknown base character in Verilog number:" << baseChar;
+        }
+    } else {
+        /* Handle standalone Verilog-style base prefixes (without width): 'b, 'h, 'o, 'd */
+        QRegularExpression      verilogBaseRegex(R"('([bdohxBDOHX])([0-9a-fA-F]+))");
+        QRegularExpressionMatch verilogBaseMatch = verilogBaseRegex.match(cleanStr);
+
+        if (verilogBaseMatch.hasMatch()) {
+            QChar   baseChar = verilogBaseMatch.captured(1).at(0).toLower();
+            QString valueStr = verilogBaseMatch.captured(2);
+
+            /* Determine the base from the base character */
+            switch (baseChar.toLatin1()) {
+            case 'b': /* Binary */
+                result.base  = NumberInfo::Base::Binary;
+                result.value = valueStr.toLongLong(nullptr, 2);
+                break;
+            case 'o': /* Octal */
+                result.base  = NumberInfo::Base::Octal;
+                result.value = valueStr.toLongLong(nullptr, 8);
+                break;
+            case 'd': /* Decimal */
+                result.base  = NumberInfo::Base::Decimal;
+                result.value = valueStr.toLongLong(nullptr, 10);
+                break;
+            case 'h': /* Hexadecimal */
+            case 'x': /* Alternative for Hexadecimal */
+                result.base  = NumberInfo::Base::Hexadecimal;
+                result.value = valueStr.toLongLong(nullptr, 16);
+                break;
+            default:
+                qWarning() << "Unknown base character in Verilog number:" << baseChar;
+            }
+        } else {
+            /* Try C-style format */
+            if (cleanStr.startsWith("0x") || cleanStr.startsWith("0X")) {
+                /* Hexadecimal */
+                result.base  = NumberInfo::Base::Hexadecimal;
+                result.value = cleanStr.toLongLong(nullptr, 16);
+            } else if (cleanStr.startsWith("0b") || cleanStr.startsWith("0B")) {
+                /* Binary (C++14 style) */
+                result.base  = NumberInfo::Base::Binary;
+                result.value = cleanStr.mid(2).toLongLong(nullptr, 2);
+            } else if (cleanStr.startsWith("0") && cleanStr.length() > 1) {
+                /* Octal */
+                result.base  = NumberInfo::Base::Octal;
+                result.value = cleanStr.toLongLong(nullptr, 8);
+            } else {
+                /* Decimal */
+                result.base  = NumberInfo::Base::Decimal;
+                bool ok      = false;
+                result.value = cleanStr.toLongLong(&ok, 10);
+
+                if (!ok) {
+                    qWarning() << "Failed to parse decimal number:" << cleanStr;
+                }
+            }
+        }
+    }
+
+    /* Calculate width if not explicitly provided */
+    if (!result.hasExplicitWidth) {
+        if (result.value == 0) {
+            result.width = 1; /* Special case for zero */
+        } else {
+            /* Calculate minimum required width based on the value */
+            quint64 tempValue       = result.value;
+            int     calculatedWidth = 0;
+
+            while (tempValue > 0) {
+                tempValue >>= 1;
+                calculatedWidth++;
+            }
+
+            /* Round up to common bit widths for convenience */
+            if (calculatedWidth <= 8) {
+                result.width = 8;
+            } else if (calculatedWidth <= 16) {
+                result.width = 16;
+            } else if (calculatedWidth <= 32) {
+                result.width = 32;
+            } else {
+                result.width = 64;
+            }
+        }
+    }
+
+    /* Add debug output */
+    qDebug() << "Parsed number:" << numStr << "Value:" << result.value
+             << "Base:" << static_cast<int>(result.base) << "Width:" << result.width
+             << (result.hasExplicitWidth ? "(explicit)" : "(calculated)");
+
+    return result;
 }

@@ -118,6 +118,107 @@ public:
     };
 
     /**
+     * @brief NumberInfo structure to represent numeric literals with format information
+     */
+    struct NumberInfo
+    {
+        enum class Base {
+            Binary      = 2,  /**< Base-2 (binary) number representation */
+            Octal       = 8,  /**< Base-8 (octal) number representation */
+            Decimal     = 10, /**< Base-10 (decimal) number representation */
+            Hexadecimal = 16, /**< Base-16 (hexadecimal) number representation */
+            Unknown     = 0   /**< Unknown or undefined numeric base */
+        };
+
+        QString originalString;   /**< Original string representation */
+        Base    base;             /**< Numeric base (2, 8, 10, 16) */
+        quint64 value;            /**< Actual numeric value */
+        int     width;            /**< Bit width (either specified or calculated) */
+        bool    hasExplicitWidth; /**< Whether width was explicitly specified */
+
+        /**
+         * @brief Format the value according to its base
+         * @return Formatted string (without width prefix)
+         */
+        QString format() const
+        {
+            switch (base) {
+            case Base::Binary:
+                return QString("'b%1").arg(QString::number(value, 2));
+            case Base::Octal:
+                return QString("'o%1").arg(QString::number(value, 8));
+            case Base::Decimal:
+                return QString("'d%1").arg(QString::number(value, 10));
+            case Base::Hexadecimal:
+                return QString("'h%1").arg(QString::number(value, 16));
+            default:
+                return QString::number(value, 10);
+            }
+        }
+
+        /**
+         * @brief Format the value with width prefix according to Verilog conventions
+         * @return Complete Verilog-style formatted number string
+         */
+        QString formatVerilog() const
+        {
+            if (width > 0) {
+                return QString("%1%2").arg(width).arg(format());
+            } else {
+                return format();
+            }
+        }
+
+        /**
+         * @brief Format the value in C-style syntax
+         * @return C-style formatted number string
+         */
+        QString formatC() const
+        {
+            switch (base) {
+            case Base::Binary:
+                return QString("0b%1").arg(QString::number(value, 2));
+            case Base::Octal:
+                return QString("0%1").arg(QString::number(value, 8));
+            case Base::Hexadecimal:
+                return QString("0x%1").arg(QString::number(value, 16));
+            default:
+                return QString::number(value, 10);
+            }
+        }
+
+        /**
+         * @brief Format the value with proper bit width (padded zeros)
+         * @return Formatted string with proper bit width
+         */
+        QString formatWithBitWidth() const
+        {
+            QString result;
+
+            switch (base) {
+            case Base::Binary:
+                result = QString::number(value, 2).rightJustified(width, '0');
+                return QString("'b%1").arg(result);
+            case Base::Octal: {
+                /* Calculate how many octal digits are needed */
+                int octalDigits = (width + 2) / 3; /* Ceiling division */
+                result          = QString::number(value, 8).rightJustified(octalDigits, '0');
+                return QString("'o%1").arg(result);
+            }
+            case Base::Hexadecimal: {
+                /* Calculate how many hex digits are needed */
+                int hexDigits = (width + 3) / 4; /* Ceiling division */
+                result        = QString::number(value, 16).rightJustified(hexDigits, '0');
+                return QString("'h%1").arg(result);
+            }
+            case Base::Decimal:
+            default:
+                return QString("'d%1").arg(value);
+            }
+        }
+    };
+
+    /**
      * @brief Check port width consistency for a list of connections
      * @param connections List of port connections to check
      * @return Whether all ports have consistent width
@@ -130,6 +231,21 @@ public:
      * @return PortDirectionStatus Status of the connection (OK, Undriven, or Multidrive)
      */
     PortDirectionStatus checkPortDirectionConsistency(const QList<PortConnection> &connections);
+
+    /**
+     * @brief Parse a Verilog or C-style numeric literal
+     *
+     * Handles formats like:
+     * - Standard: 123, 0xFF, 0644
+     * - Verilog: 8'b10101010, 32'hDEADBEEF
+     * - With underscores: 32'h1234_5678, 16'b1010_1010
+     *
+     * If width is not specified, calculates a reasonable width based on the value.
+     *
+     * @param numStr Input string containing the numeric literal
+     * @return NumberInfo struct with parsed information
+     */
+    NumberInfo parseNumber(const QString &numStr);
 
 public slots:
     /**
