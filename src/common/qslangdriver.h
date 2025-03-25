@@ -3,13 +3,15 @@
 
 #include "common/qsocprojectmanager.h"
 
+#include <memory>
 #include <QDir>
-#include <QMap>
 #include <QObject>
 #include <QString>
 #include <QStringList>
 
 #include <nlohmann/json.hpp>
+#include <slang/ast/Compilation.h>
+#include <slang/ast/symbols/InstanceSymbols.h>
 
 using json = nlohmann::json;
 
@@ -108,10 +110,10 @@ public slots:
 private:
     /* Pointer of project manager. */
     QSocProjectManager *projectManager = nullptr;
-
+    /* Compilation object to store parsing results */
+    std::unique_ptr<slang::ast::Compilation> compilation = nullptr;
     /* Abstract Syntax Tree JSON data. */
     json ast;
-
     /* Module list. */
     QStringList moduleList;
 };

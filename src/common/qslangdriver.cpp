@@ -1,5 +1,4 @@
 #include "common/qslangdriver.h"
-
 #include "common/qstaticlog.h"
 
 #include <QFile>
@@ -12,7 +11,6 @@
 #include <stdexcept>
 #include <string>
 
-#include <fmt/core.h>
 #include <slang/ast/ASTSerializer.h>
 #include <slang/ast/Compilation.h>
 #include <slang/ast/symbols/CompilationUnitSymbols.h>
@@ -98,7 +96,8 @@ bool QSlangDriver::parseArgs(const QString &args)
         }
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
-        auto compilation = driver.createCompilation();
+        /* Move the compilation object to class member */
+        compilation = std::move(driver.createCompilation());
         if (!driver.reportCompilation(*compilation, false)) {
             if (!slang::OS::capturedStdout.empty()) {
                 QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
@@ -111,21 +110,25 @@ bool QSlangDriver::parseArgs(const QString &args)
         result = true;
         QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
 
-        slang::JsonWriter              writer;
-        const std::vector<std::string> astJsonScopes;
-        slang::ast::ASTSerializer      serializer(*compilation, writer);
+        slang::JsonWriter         writer;
+        slang::ast::ASTSerializer serializer(*compilation, writer);
 
-        if (astJsonScopes.empty()) {
-            serializer.serialize(compilation->getRoot());
-        } else {
-            for (const auto &scopeName : astJsonScopes) {
-                const auto *sym = compilation->getRoot().lookupName(scopeName);
-                if (sym)
-                    serializer.serialize(*sym);
-            }
-        }
+        serializer.serialize(compilation->getRoot());
 
-        ast = json::parse(std::string(writer.view()).c_str());
+        /* Define a SAX callback to limit parsing depth */
+        json::parser_callback_t callback =
+            [](int depth, json::parse_event_t event, json &parsed) -> bool {
+            /* Skip parsing when depth exceeds 4 levels */
+            if (depth > 6)
+                return false;
+            return true;
+        };
+
+        /* Parse JSON with depth limitation using callback */
+        auto jsonStr = std::string(writer.view());
+        ast          = json::parse(jsonStr, callback);
+
+        /* Print partial AST */
         QStaticLog::logV(Q_FUNC_INFO, ast.dump(4).c_str());
     } catch (const std::exception &e) {
         /* Handle error */
@@ -247,6 +250,8 @@ const json &QSlangDriver::getModuleAst(const QString &moduleName)
 
 const QStringList &QSlangDriver::getModuleList()
 {
+    /* Clear the module list before populating */
+    moduleList.clear();
     if (ast.contains("members")) {
         for (const json &member : ast["members"]) {
             if (member.contains("kind") && member["kind"] == "Instance") {
