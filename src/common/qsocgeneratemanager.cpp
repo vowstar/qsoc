@@ -730,15 +730,16 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                 continue;
             }
 
-            QString paramType  = ""; // Default to empty for Verilog 2001
+            /* Default to empty for Verilog 2001 */
+            QString paramType  = "";
             QString paramValue = "";
 
             if (paramIter->second["type"] && paramIter->second["type"].IsScalar()) {
                 paramType = QString::fromStdString(paramIter->second["type"].as<std::string>());
-                // Strip out 'logic' keyword for Verilog 2001 compatibility
+                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
                 paramType = paramType.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
 
-                // Add a space if type isn't empty after processing
+                /* Add a space if type isn't empty after processing */
                 if (!paramType.isEmpty() && !paramType.endsWith(" ")) {
                     paramType += " ";
                 }
@@ -924,9 +925,9 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 
                 /* Build a list of instance-port pairs for width check */
                 QList<QPair<QString, QString>> portPairs;
-                /* Collect detailed port information for each connection */
-                QList<QPair<QString, QPair<QString, QPair<QString, QString>>>>
-                    portDetails; // <instanceName, <portName, <width, direction>>>
+                /* Collect detailed port information for each connection
+                   <instanceName, <portName, <width, direction>>> */
+                QList<QPair<QString, QPair<QString, QPair<QString, QString>>>> portDetails;
 
                 /* Build port pairs from netlistData */
                 const YAML::Node &netNode = netlistData["net"][netName.toStdString()];
@@ -1137,7 +1138,7 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     /* Check for width mismatches between port and net */
                     QString portWidth     = "";
                     QString netWidth      = "";
-                    QString portDirection = "input"; // Default
+                    QString portDirection = "input";
 
                     /* Get port information */
                     if (netlistData["port"]
