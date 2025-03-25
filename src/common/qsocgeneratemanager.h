@@ -14,10 +14,10 @@
 #include <yaml-cpp/yaml.h>
 
 /**
- * @brief The QSoCGenerateManager class.
+ * @brief The QSocGenerateManager class.
  * @details This class is used to generate RTL code from netlist files.
  */
-class QSoCGenerateManager : public QObject
+class QSocGenerateManager : public QObject
 {
     Q_OBJECT
 public:
@@ -30,12 +30,106 @@ public:
      * @param[in] busManager bus manager.
      * @param[in] llmService LLM service.
      */
-    QSoCGenerateManager(
+    QSocGenerateManager(
         QObject            *parent         = nullptr,
         QSocProjectManager *projectManager = nullptr,
         QSocModuleManager  *moduleManager  = nullptr,
         QSocBusManager     *busManager     = nullptr,
         QLLMService        *llmService     = nullptr);
+
+    /**
+     * @brief Enum for port direction check results
+     */
+    enum class PortDirectionStatus {
+        Valid,     /**< Consistent port directions */
+        Undriven,  /**< Net has only input ports */
+        Multidrive /**< Net has multiple output/inout ports */
+    };
+
+    /**
+     * @brief Enum to distinguish between module ports and top-level ports
+     */
+    enum class PortType {
+        Module,  /* Instance/module port */
+        TopLevel /* Top-level port */
+    };
+
+    /**
+     * @brief Structure to represent a port connection with type information
+     */
+    struct PortConnection
+    {
+        PortType type;
+        QString  instanceName; /* For Module type only, empty for TopLevel */
+        QString  portName;
+
+        PortConnection(PortType t, const QString &inst, const QString &port)
+            : type(t)
+            , instanceName(inst)
+            , portName(port)
+        {}
+
+        static PortConnection createModulePort(const QString &inst, const QString &port)
+        {
+            return PortConnection(PortType::Module, inst, port);
+        }
+
+        static PortConnection createTopLevelPort(const QString &port)
+        {
+            return PortConnection(PortType::TopLevel, "", port);
+        }
+    };
+
+    /**
+     * @brief Structure to represent detailed port information
+     */
+    struct PortDetailInfo
+    {
+        PortType type;
+        QString  instanceName; /* For Module type only, empty for TopLevel */
+        QString  portName;
+        QString  width;
+        QString  direction;
+
+        PortDetailInfo(
+            PortType       t,
+            const QString &inst,
+            const QString &port,
+            const QString &w,
+            const QString &dir)
+            : type(t)
+            , instanceName(inst)
+            , portName(port)
+            , width(w)
+            , direction(dir)
+        {}
+
+        static PortDetailInfo createModulePort(
+            const QString &inst, const QString &port, const QString &w, const QString &dir)
+        {
+            return PortDetailInfo(PortType::Module, inst, port, w, dir);
+        }
+
+        static PortDetailInfo createTopLevelPort(
+            const QString &port, const QString &w, const QString &dir)
+        {
+            return PortDetailInfo(PortType::TopLevel, "", port, w, dir);
+        }
+    };
+
+    /**
+     * @brief Check port width consistency for a list of connections
+     * @param connections List of port connections to check
+     * @return Whether all ports have consistent width
+     */
+    bool checkPortWidthConsistency(const QList<PortConnection> &connections);
+
+    /**
+     * @brief Check port direction consistency for a list of connections
+     * @param connections List of port connections to check
+     * @return PortDirectionStatus Status of the connection (OK, Undriven, or Multidrive)
+     */
+    PortDirectionStatus checkPortDirectionConsistency(const QList<PortConnection> &connections);
 
 public slots:
     /**
@@ -125,8 +219,8 @@ public slots:
     bool generateVerilog(const QString &outputFileName);
 
     /**
-     * @brief Format Verilog file using verible-verilog-format tool.
-     * @details Checks if verible-verilog-format is available in the system and uses it
+     * @brief Format a Verilog file using the verible-verilog-format tool.
+     * @details This function calls the external verible-verilog-format tool
      *          to format the generated Verilog file with standardized style settings.
      * @param filePath Path to the Verilog file to format.
      * @retval true File formatted successfully.
@@ -134,35 +228,7 @@ public slots:
      */
     bool formatVerilogFile(const QString &filePath);
 
-    /**
-     * @brief Get the width of a port from its port data.
-     * @details Extracts the width information from a port's type field.
-     *          For a port with width [a:b], the width is abs(a-b)+1.
-     *          If no width is specified, assumes width is 1.
-     * @param portData YAML Node containing the port data.
-     * @return The calculated port width.
-     */
-    int getPortWidth(const YAML::Node &portData);
-
-    /**
-     * @brief Check if all connected ports have consistent widths.
-     * @details Verifies that all ports connected to a wire have the same width.
-     * @param connections List of instance-port pairs to check.
-     * @retval true All ports have consistent widths.
-     * @retval false Port width mismatch detected.
-     */
-    bool checkPortWidthConsistency(const QList<QPair<QString, QString>> &connections);
-
 private:
-    /**
-     * @brief Port direction status enum for connection validation
-     */
-    enum class PortDirectionStatus {
-        Valid,     /* Valid connection pattern */
-        Undriven,  /* Net has only input ports, no drivers */
-        Multidrive /* Net has multiple output/inout ports */
-    };
-
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;
     /** Module manager. */
@@ -173,19 +239,6 @@ private:
     QLLMService *llmService = nullptr;
     /** Netlist data. */
     YAML::Node netlistData;
-
-    /**
-     * @brief Check the direction consistency of ports connected to a net
-     *
-     * Validates that nets have the proper driving pattern by checking port directions:
-     * - Ensures nets have a source (at least one output or inout port)
-     * - Ensures nets don't have multiple drivers (more than one output or inout port)
-     *
-     * @param connections List of instance-port pairs to check
-     * @return PortDirectionStatus Status of the connection (Valid, Undriven, or Multidrive)
-     */
-    PortDirectionStatus checkPortDirectionConsistency(
-        const QList<QPair<QString, QString>> &connections);
 };
 
 #endif // QSOCGENERATEMANAGER_H

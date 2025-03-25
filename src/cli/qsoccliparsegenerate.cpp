@@ -99,7 +99,7 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
     QLLMService         llmService(this, &socConfig);
     QSocBusManager      busManager(this, &projectManager);
     QSocModuleManager   moduleManager(this, &projectManager, &busManager, &llmService);
-    QSoCGenerateManager generateManager(this, &projectManager, &moduleManager, &busManager);
+    QSocGenerateManager generateManager(this, &projectManager, &moduleManager, &busManager);
 
     /* Load modules */
     if (!moduleManager.load(QRegularExpression(".*"))) {

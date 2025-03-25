@@ -12,77 +12,62 @@
 #include <fstream>
 #include <iostream>
 
-QSoCGenerateManager::QSoCGenerateManager(
+QSocGenerateManager::QSocGenerateManager(
     QObject            *parent,
     QSocProjectManager *projectManager,
     QSocModuleManager  *moduleManager,
     QSocBusManager     *busManager,
     QLLMService        *llmService)
     : QObject(parent)
+    , projectManager(projectManager)
+    , moduleManager(moduleManager)
+    , busManager(busManager)
+    , llmService(llmService)
 {
-    /* Set projectManager */
-    setProjectManager(projectManager);
-    /* Set moduleManager */
-    setModuleManager(moduleManager);
-    /* Set busManager */
-    setBusManager(busManager);
-    /* Set llmService */
-    setLLMService(llmService);
+    /* Empty constructor */
 }
 
-void QSoCGenerateManager::setProjectManager(QSocProjectManager *projectManager)
+void QSocGenerateManager::setProjectManager(QSocProjectManager *projectManager)
 {
-    /* Set projectManager */
-    if (projectManager) {
-        this->projectManager = projectManager;
-    }
+    this->projectManager = projectManager;
 }
 
-void QSoCGenerateManager::setModuleManager(QSocModuleManager *moduleManager)
+void QSocGenerateManager::setModuleManager(QSocModuleManager *moduleManager)
 {
-    /* Set moduleManager */
-    if (moduleManager) {
-        this->moduleManager = moduleManager;
-    }
+    this->moduleManager = moduleManager;
 }
 
-void QSoCGenerateManager::setBusManager(QSocBusManager *busManager)
+void QSocGenerateManager::setBusManager(QSocBusManager *busManager)
 {
-    /* Set busManager */
-    if (busManager) {
-        this->busManager = busManager;
-    }
+    this->busManager = busManager;
 }
 
-void QSoCGenerateManager::setLLMService(QLLMService *llmService)
+void QSocGenerateManager::setLLMService(QLLMService *llmService)
 {
-    /* Set llmService */
-    if (llmService) {
-        this->llmService = llmService;
-    }
+    this->llmService = llmService;
 }
 
-QSocProjectManager *QSoCGenerateManager::getProjectManager()
+QSocProjectManager *QSocGenerateManager::getProjectManager()
 {
     return projectManager;
 }
 
-QSocModuleManager *QSoCGenerateManager::getModuleManager()
+QSocModuleManager *QSocGenerateManager::getModuleManager()
 {
     return moduleManager;
 }
 
-QSocBusManager *QSoCGenerateManager::getBusManager()
+QSocBusManager *QSocGenerateManager::getBusManager()
 {
     return busManager;
 }
 
-QLLMService *QSoCGenerateManager::getLLMService()
+QLLMService *QSocGenerateManager::getLLMService()
 {
     return llmService;
 }
 
-bool QSoCGenerateManager::loadNetlist(const QString &netlistFilePath)
+bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
 {
     /* Check if the file exists */
     if (!QFile::exists(netlistFilePath)) {
@@ -128,7 +113,7 @@ bool QSoCGenerateManager::loadNetlist(const QString &netlistFilePath)
     }
 }
 
-bool QSoCGenerateManager::processNetlist()
+bool QSocGenerateManager::processNetlist()
 {
     try {
         /* Check if netlistData is valid */
@@ -509,148 +494,184 @@ bool QSoCGenerateManager::processNetlist()
     }
 }
 
-int QSoCGenerateManager::getPortWidth(const YAML::Node &portData)
+/**
+ * @brief Check port width consistency
+ * @param portConnections   List of port connections to check
+ * @return  true if consistent, false if mismatch detected
+ */
+bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> &connections)
 {
-    /* Default width is 1 if no width information is available */
-    int width = 1;
-
-    if (portData["type"] && portData["type"].IsScalar()) {
-        QString typeString = QString::fromStdString(portData["type"].as<std::string>());
-
-        /* Extract width information from type string (e.g. "logic[39:0]") */
-        QRegularExpression widthRegex("\\[(\\d+):(\\d+)\\]");
-        if (widthRegex.match(typeString).hasMatch()) {
-            int msb = widthRegex.match(typeString).captured(1).toInt();
-            int lsb = widthRegex.match(typeString).captured(2).toInt();
-            width   = qAbs(msb - lsb) + 1;
-        }
+    /* If there's only 0 or 1 port, it's trivially consistent */
+    if (connections.size() <= 1) {
+        return true;
     }
 
-    return width;
-}
+    /* Get port widths for all connections */
+    QMap<QPair<QString, QString>, QString> portWidths;
 
-bool QSoCGenerateManager::checkPortWidthConsistency(const QList<QPair<QString, QString>> &connections)
-{
-    if (connections.isEmpty()) {
-        return true; /* No connections to check */
-    }
-
-    int expectedWidth = -1;
-
-    /* Check each connection's port width */
     for (const auto &conn : connections) {
-        const QString &instanceName = conn.first;
-        const QString &portName     = conn.second;
+        QString instanceName = conn.instanceName;
+        QString portName     = conn.portName;
 
-        /* Get instance's module name */
-        if (!netlistData["instance"][instanceName.toStdString()]
-            || !netlistData["instance"][instanceName.toStdString()]["module"]
-            || !netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
-            continue; /* Skip invalid instance */
-        }
+        if (conn.type == PortType::TopLevel) {
+            /* Handle top-level port */
+            if (netlistData["port"] && netlistData["port"][portName.toStdString()]
+                && netlistData["port"][portName.toStdString()]["type"]
+                && netlistData["port"][portName.toStdString()]["type"].IsScalar()) {
+                /* Get port width from netlist data */
+                QString width = QString::fromStdString(
+                    netlistData["port"][portName.toStdString()]["type"].as<std::string>());
+                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
+                width = width.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                portWidths[qMakePair(instanceName, portName)] = width;
+            } else {
+                /* Default width if not specified */
+                portWidths[qMakePair(instanceName, portName)] = "";
+            }
+        } else {
+            /* Handle module port */
+            if (netlistData["instance"][instanceName.toStdString()]
+                && netlistData["instance"][instanceName.toStdString()]["module"]
+                && netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
+                QString moduleName = QString::fromStdString(
+                    netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
 
-        const QString moduleName = QString::fromStdString(
-            netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
+                /* Get port width from module definition */
+                if (moduleManager && moduleManager->isModuleExist(moduleName)) {
+                    YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
 
-        /* Get module definition */
-        if (!moduleManager || !moduleManager->isModuleExist(moduleName)) {
-            continue; /* Skip if module not found */
-        }
-
-        YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
-        if (!moduleData["port"] || !moduleData["port"].IsMap()
-            || !moduleData["port"][portName.toStdString()]) {
-            continue; /* Skip if port not found */
-        }
-
-        const YAML::Node &portData  = moduleData["port"][portName.toStdString()];
-        int               portWidth = getPortWidth(portData);
-
-        /* Set expected width if not set yet */
-        if (expectedWidth == -1) {
-            expectedWidth = portWidth;
-        }
-        /* Check if this port width matches the expected width */
-        else if (portWidth != expectedWidth) {
-            return false; /* Width mismatch found */
+                    if (moduleData["port"] && moduleData["port"].IsMap()
+                        && moduleData["port"][portName.toStdString()]["type"]
+                        && moduleData["port"][portName.toStdString()]["type"].IsScalar()) {
+                        QString width = QString::fromStdString(
+                            moduleData["port"][portName.toStdString()]["type"].as<std::string>());
+                        /* Strip out 'logic' keyword for Verilog 2001 compatibility */
+                        width = width.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                        portWidths[qMakePair(instanceName, portName)] = width;
+                    } else {
+                        /* Default width if not specified */
+                        portWidths[qMakePair(instanceName, portName)] = "";
+                    }
+                }
+            }
         }
     }
 
+    /* Compare port widths for consistency */
+    QString referenceWidth;
+    bool    firstPort = true;
+
+    for (auto it = portWidths.constBegin(); it != portWidths.constEnd(); ++it) {
+        if (firstPort) {
+            referenceWidth = it.value();
+            firstPort      = false;
+        } else if (!it.value().isEmpty() && !referenceWidth.isEmpty() && it.value() != referenceWidth) {
+            /* Width mismatch detected */
+            return false;
+        }
+    }
+
+    /* All widths are consistent or some are unspecified */
     return true;
 }
 
-QSoCGenerateManager::PortDirectionStatus QSoCGenerateManager::checkPortDirectionConsistency(
-    const QList<QPair<QString, QString>> &connections)
+/**
+ * @brief Check port direction consistency
+ * @param portConnections   List of port connections to check
+ * @return  PortDirectionStatus indicating the status (OK, Undriven, or Multidrive)
+ */
+QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirectionConsistency(
+    const QList<PortConnection> &connections)
 {
-    if (connections.isEmpty()) {
-        return PortDirectionStatus::Undriven; /* No connections means no drivers */
-    }
+    int outputCount  = 0;
+    int inputCount   = 0;
+    int inoutCount   = 0;
+    int unknownCount = 0;
 
-    int outputCount = 0;
-    int inputCount  = 0;
-    int inoutCount  = 0;
-
-    /* Check each connection's port direction */
+    /* Count input/output ports */
     for (const auto &conn : connections) {
-        const QString &instanceName = conn.first;
-        const QString &portName     = conn.second;
+        QString direction = "unknown";
 
-        /* Get instance's module name */
-        if (!netlistData["instance"][instanceName.toStdString()]
-            || !netlistData["instance"][instanceName.toStdString()]["module"]
-            || !netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
-            continue; /* Skip invalid instance */
+        if (conn.type == PortType::TopLevel) {
+            /* For top-level ports, we need to reverse the direction for internal net perspective
+             * e.g., a top-level output is actually an input from the internal net's perspective */
+            if (netlistData["port"] && netlistData["port"][conn.portName.toStdString()]
+                && netlistData["port"][conn.portName.toStdString()]["direction"]
+                && netlistData["port"][conn.portName.toStdString()]["direction"].IsScalar()) {
+                QString dirStr = QString::fromStdString(
+                                     netlistData["port"][conn.portName.toStdString()]["direction"]
+                                         .as<std::string>())
+                                     .toLower();
+
+                /* Reverse direction for internal net perspective */
+                if (dirStr == "out" || dirStr == "output") {
+                    direction = "input"; /* Top-level output is an input for internal nets */
+                } else if (dirStr == "in" || dirStr == "input") {
+                    direction = "output"; /* Top-level input is an output for internal nets */
+                } else if (dirStr == "inout") {
+                    direction = "inout";
+                }
+            }
+        } else {
+            /* Regular module port */
+            if (netlistData["instance"][conn.instanceName.toStdString()]
+                && netlistData["instance"][conn.instanceName.toStdString()]["module"]
+                && netlistData["instance"][conn.instanceName.toStdString()]["module"].IsScalar()) {
+                QString moduleName = QString::fromStdString(
+                    netlistData["instance"][conn.instanceName.toStdString()]["module"]
+                        .as<std::string>());
+
+                /* Get port direction from module definition */
+                if (moduleManager && moduleManager->isModuleExist(moduleName)) {
+                    YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+
+                    if (moduleData["port"] && moduleData["port"].IsMap()
+                        && moduleData["port"][conn.portName.toStdString()]["direction"]
+                        && moduleData["port"][conn.portName.toStdString()]["direction"].IsScalar()) {
+                        direction = QString::fromStdString(
+                                        moduleData["port"][conn.portName.toStdString()]["direction"]
+                                            .as<std::string>())
+                                        .toLower();
+
+                        /* Handle both full and abbreviated forms */
+                        if (direction == "out" || direction == "output") {
+                            direction = "output";
+                        } else if (direction == "in" || direction == "input") {
+                            direction = "input";
+                        } else if (direction == "inout") {
+                            direction = "inout";
+                        }
+                    }
+                }
+            }
         }
 
-        const QString moduleName = QString::fromStdString(
-            netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
-
-        /* Get module definition */
-        if (!moduleManager || !moduleManager->isModuleExist(moduleName)) {
-            continue; /* Skip if module not found */
-        }
-
-        YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
-        if (!moduleData["port"] || !moduleData["port"].IsMap()
-            || !moduleData["port"][portName.toStdString()]) {
-            continue; /* Skip if port not found */
-        }
-
-        const YAML::Node &portData = moduleData["port"][portName.toStdString()];
-
-        /* Get port direction */
-        QString direction = "input"; /* Default to input if not specified */
-        if (portData["direction"] && portData["direction"].IsScalar()) {
-            direction = QString::fromStdString(portData["direction"].as<std::string>()).toLower();
-        }
-
-        /* Count by direction */
-        if (direction == "output" || direction == "out") {
+        /* Count directions */
+        if (direction == "input") {
+            inputCount++;
+        } else if (direction == "output") {
             outputCount++;
         } else if (direction == "inout") {
             inoutCount++;
-        } else if (direction == "input" || direction == "in") {
-            inputCount++;
         } else {
-            inputCount++; /* Treat unknown directions as input */
+            unknownCount++;
         }
     }
 
-    /* Check for undriven - all ports are inputs */
-    if (outputCount == 0 && inoutCount == 0 && inputCount > 0) {
+    /* Check for errors */
+    if (outputCount == 0 && inoutCount == 0) {
+        /* No output/inout, only inputs or unknowns - net is undriven */
         return PortDirectionStatus::Undriven;
-    }
-
-    /* Check for multidrive - multiple output or inout ports */
-    if (outputCount + inoutCount > 1) {
+    } else if (outputCount + inoutCount > 1) {
+        /* Multiple output or inout ports - potential conflict */
         return PortDirectionStatus::Multidrive;
+    } else {
+        /* Normal case: one driver, multiple inputs */
+        return PortDirectionStatus::Valid;
     }
-
-    /* Otherwise, valid connection pattern */
-    return PortDirectionStatus::Valid;
 }
 
-bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
+bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 {
     /* Check if netlistData is valid */
     if (!netlistData["instance"]) {
@@ -924,12 +945,82 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                 }
 
                 /* Build a list of instance-port pairs for width check */
-                QList<QPair<QString, QString>> portPairs;
-                /* Collect detailed port information for each connection
-                   <instanceName, <portName, <width, direction>>> */
-                QList<QPair<QString, QPair<QString, QPair<QString, QString>>>> portDetails;
+                QList<PortConnection> portConnections;
+                /* Collect detailed port information for each connection */
+                QList<PortDetailInfo> portDetails;
 
-                /* Build port pairs from netlistData */
+                /* Check if this net is connected to a top-level port */
+                bool    connectedToTopPort = false;
+                QString connectedPortName;
+                QString topLevelPortDirection = "unknown";
+
+                /* Check if this net is connected to a top-level port */
+                for (auto it = portToNetConnections.begin(); it != portToNetConnections.end();
+                     ++it) {
+                    if (it.value() == netName) {
+                        connectedToTopPort = true;
+                        connectedPortName  = it.key();
+
+                        /* Get the port direction */
+                        if (netlistData["port"]
+                            && netlistData["port"][connectedPortName.toStdString()]
+                            && netlistData["port"][connectedPortName.toStdString()]["direction"]
+                            && netlistData["port"][connectedPortName.toStdString()]["direction"]
+                                   .IsScalar()) {
+                            QString dirStr = QString::fromStdString(
+                                                 netlistData["port"][connectedPortName.toStdString()]
+                                                            ["direction"]
+                                                                .as<std::string>())
+                                                 .toLower();
+
+                            /* Store original direction for later use */
+                            if (dirStr == "out" || dirStr == "output") {
+                                topLevelPortDirection = "output";
+                            } else if (dirStr == "in" || dirStr == "input") {
+                                topLevelPortDirection = "input";
+                            } else if (dirStr == "inout") {
+                                topLevelPortDirection = "inout";
+                            }
+
+                            /* Reverse the direction for internal checking */
+                            QString reversedDirection;
+                            if (topLevelPortDirection == "output") {
+                                reversedDirection
+                                    = "input"; /* Top-level output is an input for internal nets */
+                            } else if (topLevelPortDirection == "input") {
+                                reversedDirection
+                                    = "output"; /* Top-level input is an output for internal nets */
+                            } else if (topLevelPortDirection == "inout") {
+                                reversedDirection = "inout"; /* Bidirectional remains bidirectional */
+                            }
+
+                            /* Add top-level port to connection list */
+                            portConnections.append(
+                                PortConnection::createTopLevelPort(connectedPortName));
+
+                            /* Get port width */
+                            QString portWidth = "";
+                            if (netlistData["port"][connectedPortName.toStdString()]["type"]
+                                && netlistData["port"][connectedPortName.toStdString()]["type"]
+                                       .IsScalar()) {
+                                portWidth = QString::fromStdString(
+                                    netlistData["port"][connectedPortName.toStdString()]["type"]
+                                        .as<std::string>());
+                                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
+                                portWidth
+                                    = portWidth.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                            }
+
+                            /* Add to detailed port information with reversed direction */
+                            portDetails.append(
+                                PortDetailInfo::createTopLevelPort(
+                                    connectedPortName, portWidth, reversedDirection));
+                        }
+                        break;
+                    }
+                }
+
+                /* Build port connections from netlistData */
                 const YAML::Node &netNode = netlistData["net"][netName.toStdString()];
                 if (netNode.IsMap()) {
                     for (const auto &instancePair : netNode) {
@@ -942,7 +1033,10 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                                 && instancePair.second["port"].IsScalar()) {
                                 QString portName = QString::fromStdString(
                                     instancePair.second["port"].as<std::string>());
-                                portPairs.append(qMakePair(instanceName, portName));
+
+                                /* Create a module port connection */
+                                portConnections.append(
+                                    PortConnection::createModulePort(instanceName, portName));
 
                                 /* Get additional details for this port */
                                 QString portWidth     = "";
@@ -1006,29 +1100,19 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                                 }
 
                                 /* Add to detailed port information */
-                                portDetails.append(qMakePair(
-                                    instanceName,
-                                    qMakePair(portName, qMakePair(portWidth, portDirection))));
+                                portDetails.append(
+                                    PortDetailInfo::createModulePort(
+                                        instanceName, portName, portWidth, portDirection));
                             }
                         }
                     }
                 }
 
                 /* Check port width consistency */
-                if (!checkPortWidthConsistency(portPairs)) {
+                if (!checkPortWidthConsistency(portConnections)) {
                     qWarning() << "Warning: Port width mismatch detected for net" << netName;
-                    /* Check if this net is connected to a top-level port for error message */
-                    bool    connectedToTopPort = false;
-                    QString connectedPortName;
-                    for (auto it = portToNetConnections.begin(); it != portToNetConnections.end();
-                         ++it) {
-                        if (it.value() == netName) {
-                            connectedToTopPort = true;
-                            connectedPortName  = it.key();
-                            break;
-                        }
-                    }
 
+                    /* FIXME: Port width mismatch detected for net */
                     /* Create header for FIXME comment */
                     if (connectedToTopPort) {
                         out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
@@ -1040,37 +1124,51 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 
                     /* Add detailed information for each connected port */
                     for (const auto &detail : portDetails) {
-                        const QString &instanceName = detail.first;
-                        const QString &portName     = detail.second.first;
-                        const QString &width        = detail.second.second.first;
-                        const QString &direction    = detail.second.second.second;
+                        if (detail.type == PortType::TopLevel) {
+                            /* For top-level ports, we need to display the original direction, not the reversed one */
+                            QString displayDirection = detail.direction;
+                            /* input -> output, output -> input, inout -> inout */
+                            if (displayDirection == "input") {
+                                displayDirection = "output";
+                            } else if (displayDirection == "output") {
+                                displayDirection = "input";
+                            }
 
-                        out << "     *   Module: "
-                            << netlistData["instance"][instanceName.toStdString()]["module"]
-                                   .as<std::string>()
-                                   .c_str()
-                            << ", Instance: " << instanceName << ", Port: " << portName
-                            << ", Direction: " << direction
-                            << ", Width: " << (width.isEmpty() ? "default" : width) << "\n";
+                            out << "     *   Top-Level Port: " << detail.portName
+                                << ", Direction: " << displayDirection << ", Width: "
+                                << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                        } else {
+                            /* Regular instance port */
+                            if (netlistData["instance"][detail.instanceName.toStdString()]
+                                && netlistData["instance"][detail.instanceName.toStdString()]
+                                              ["module"]
+                                && netlistData["instance"][detail.instanceName.toStdString()]
+                                              ["module"]
+                                                  .IsScalar()) {
+                                out << "     *   Module: "
+                                    << netlistData["instance"][detail.instanceName.toStdString()]
+                                                  ["module"]
+                                                      .as<std::string>()
+                                                      .c_str()
+                                    << ", Instance: " << detail.instanceName
+                                    << ", Port: " << detail.portName
+                                    << ", Direction: " << detail.direction << ", Width: "
+                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                            } else {
+                                /* Handle case where instance data might be invalid */
+                                out << "     *   Instance: " << detail.instanceName
+                                    << ", Port: " << detail.portName
+                                    << ", Direction: " << detail.direction << ", Width: "
+                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                            }
+                        }
                     }
 
                     out << "     */\n";
                 }
 
                 /* Check port direction consistency */
-                PortDirectionStatus dirStatus = checkPortDirectionConsistency(portPairs);
-
-                /* Check if this net is connected to a top-level port */
-                bool    connectedToTopPort = false;
-                QString connectedPortName;
-                for (auto it = portToNetConnections.begin(); it != portToNetConnections.end();
-                     ++it) {
-                    if (it.value() == netName) {
-                        connectedToTopPort = true;
-                        connectedPortName  = it.key();
-                        break;
-                    }
-                }
+                PortDirectionStatus dirStatus = checkPortDirectionConsistency(portConnections);
 
                 if (dirStatus == PortDirectionStatus::Undriven) {
                     qWarning() << "Warning: Net" << netName
@@ -1085,18 +1183,44 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 
                     /* Add detailed information for each connected port */
                     for (const auto &detail : portDetails) {
-                        const QString &instanceName = detail.first;
-                        const QString &portName     = detail.second.first;
-                        const QString &width        = detail.second.second.first;
-                        const QString &direction    = detail.second.second.second;
+                        if (detail.type == PortType::TopLevel) {
+                            /* For top-level ports, we need to display the original direction, not the reversed one */
+                            QString displayDirection = detail.direction;
+                            if (displayDirection == "input") {
+                                displayDirection = "output";
+                            } else if (displayDirection == "output") {
+                                displayDirection = "input";
+                            }
+                            /* inout remains inout */
 
-                        out << "     *   Module: "
-                            << netlistData["instance"][instanceName.toStdString()]["module"]
-                                   .as<std::string>()
-                                   .c_str()
-                            << ", Instance: " << instanceName << ", Port: " << portName
-                            << ", Direction: " << direction
-                            << ", Width: " << (width.isEmpty() ? "default" : width) << "\n";
+                            out << "     *   Top-Level Port: " << detail.portName
+                                << ", Direction: " << displayDirection << ", Width: "
+                                << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                        } else {
+                            /* Regular instance port */
+                            if (netlistData["instance"][detail.instanceName.toStdString()]
+                                && netlistData["instance"][detail.instanceName.toStdString()]
+                                              ["module"]
+                                && netlistData["instance"][detail.instanceName.toStdString()]
+                                              ["module"]
+                                                  .IsScalar()) {
+                                out << "     *   Module: "
+                                    << netlistData["instance"][detail.instanceName.toStdString()]
+                                                  ["module"]
+                                                      .as<std::string>()
+                                                      .c_str()
+                                    << ", Instance: " << detail.instanceName
+                                    << ", Port: " << detail.portName
+                                    << ", Direction: " << detail.direction << ", Width: "
+                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                            } else {
+                                /* Handle case where instance data might be invalid */
+                                out << "     *   Instance: " << detail.instanceName
+                                    << ", Port: " << detail.portName
+                                    << ", Direction: " << detail.direction << ", Width: "
+                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                            }
+                        }
                     }
 
                     out << "     */\n";
@@ -1113,18 +1237,44 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
 
                     /* Add detailed information for each connected port */
                     for (const auto &detail : portDetails) {
-                        const QString &instanceName = detail.first;
-                        const QString &portName     = detail.second.first;
-                        const QString &width        = detail.second.second.first;
-                        const QString &direction    = detail.second.second.second;
+                        if (detail.type == PortType::TopLevel) {
+                            /* For top-level ports, we need to display the original direction, not the reversed one */
+                            QString displayDirection = detail.direction;
+                            if (displayDirection == "input") {
+                                displayDirection = "output";
+                            } else if (displayDirection == "output") {
+                                displayDirection = "input";
+                            }
+                            /* inout remains inout */
 
-                        out << "     *   Module: "
-                            << netlistData["instance"][instanceName.toStdString()]["module"]
-                                   .as<std::string>()
-                                   .c_str()
-                            << ", Instance: " << instanceName << ", Port: " << portName
-                            << ", Direction: " << direction
-                            << ", Width: " << (width.isEmpty() ? "default" : width) << "\n";
+                            out << "     *   Top-Level Port: " << detail.portName
+                                << ", Direction: " << displayDirection << ", Width: "
+                                << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                        } else {
+                            /* Regular instance port */
+                            if (netlistData["instance"][detail.instanceName.toStdString()]
+                                && netlistData["instance"][detail.instanceName.toStdString()]
+                                              ["module"]
+                                && netlistData["instance"][detail.instanceName.toStdString()]
+                                              ["module"]
+                                                  .IsScalar()) {
+                                out << "     *   Module: "
+                                    << netlistData["instance"][detail.instanceName.toStdString()]
+                                                  ["module"]
+                                                      .as<std::string>()
+                                                      .c_str()
+                                    << ", Instance: " << detail.instanceName
+                                    << ", Port: " << detail.portName
+                                    << ", Direction: " << detail.direction << ", Width: "
+                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                            } else {
+                                /* Handle case where instance data might be invalid */
+                                out << "     *   Instance: " << detail.instanceName
+                                    << ", Port: " << detail.portName
+                                    << ", Direction: " << detail.direction << ", Width: "
+                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                            }
+                        }
                     }
 
                     out << "     */\n";
@@ -1359,7 +1509,7 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
     return true;
 }
 
-bool QSoCGenerateManager::formatVerilogFile(const QString &filePath)
+bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
 {
     /* Check if verible-verilog-format tool is available in the system */
     QProcess which;
