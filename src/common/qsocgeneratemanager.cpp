@@ -1459,15 +1459,52 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     } else {
                         /* Port exists in module but has no connection */
                         QString direction = "signal";
+                        QString width     = "";
+
                         if (portIter->second && portIter->second["direction"]
                             && portIter->second["direction"].IsScalar()) {
                             direction = QString::fromStdString(
                                 portIter->second["direction"].as<std::string>());
                         }
-                        portConnections.append(QString("        .%1(/* FIXME: %2 %3 missing */)")
-                                                   .arg(portName)
-                                                   .arg(direction)
-                                                   .arg(portName));
+
+                        /* Get port width/type */
+                        if (portIter->second && portIter->second["type"]
+                            && portIter->second["type"].IsScalar()) {
+                            QString type = QString::fromStdString(
+                                portIter->second["type"].as<std::string>());
+
+                            /* Strip out 'logic' keyword for Verilog 2001 compatibility */
+                            type = type.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+
+                            /* Extract width information if it exists in format [x:y] or [x] */
+                            QRegularExpression widthRegex(
+                                "\\[\\s*(\\d+)\\s*(?::\\s*(\\d+))?\\s*\\]");
+                            auto match = widthRegex.match(type);
+                            if (match.hasMatch()) {
+                                if (match.captured(2).isEmpty()) {
+                                    /* Format [x] */
+                                    width = match.captured(0);
+                                } else {
+                                    /* Format [x:y] */
+                                    width = match.captured(0);
+                                }
+                            }
+                        }
+
+                        /* Format FIXME message with width if available */
+                        if (width.isEmpty()) {
+                            portConnections.append(QString("        .%1(/* FIXME: %2 %3 missing */)")
+                                                       .arg(portName)
+                                                       .arg(direction)
+                                                       .arg(portName));
+                        } else {
+                            portConnections.append(
+                                QString("        .%1(/* FIXME: %2 %3 %4 missing */)")
+                                    .arg(portName)
+                                    .arg(direction)
+                                    .arg(width)
+                                    .arg(portName));
+                        }
                     }
                 }
             } else {
