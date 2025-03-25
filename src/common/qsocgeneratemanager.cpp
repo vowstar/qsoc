@@ -884,12 +884,32 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 const QString portName = QString::fromStdString(
                                     instancePair.second["port"].as<std::string>());
 
+                                /* Check if this port has invert attribute */
+                                bool hasInvert = false;
+                                if (netlistData["instance"]
+                                    && netlistData["instance"][instanceName.toStdString()]
+                                    && netlistData["instance"][instanceName.toStdString()]["port"]
+                                    && netlistData["instance"][instanceName.toStdString()]["port"]
+                                                  [portName.toStdString()]) {
+                                    auto portNode
+                                        = netlistData["instance"][instanceName.toStdString()]
+                                                     ["port"][portName.toStdString()];
+                                    if (portNode["invert"] && portNode["invert"].IsScalar()) {
+                                        /* Use direct YAML boolean parsing */
+                                        if (portNode["invert"].as<bool>()) {
+                                            hasInvert = true;
+                                        }
+                                    }
+                                }
+
                                 /* If connected to top-level port, use the port name instead of net name */
                                 if (connectedToTopPort) {
                                     instancePortConnections[instanceName][portName]
-                                        = connectedPortName;
+                                        = hasInvert ? QString("~%1").arg(connectedPortName)
+                                                    : connectedPortName;
                                 } else {
-                                    instancePortConnections[instanceName][portName] = netName;
+                                    instancePortConnections[instanceName][portName]
+                                        = hasInvert ? QString("~%1").arg(netName) : netName;
                                 }
                             }
                         }
@@ -1605,10 +1625,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                                         /* Check for invert attribute */
                                         if (portNode["invert"] && portNode["invert"].IsScalar()) {
-                                            QString invertStr = QString::fromStdString(
-                                                portNode["invert"].as<std::string>());
-                                            if (invertStr.toLower() == "true" || invertStr == "1") {
-                                                hasInvert = true;
+                                            /* Use direct YAML boolean parsing instead of string conversion */
+                                            if (portNode["invert"].as<bool>()) {
                                                 /* If we need to invert, apply logical NOT (~) to the value */
                                                 tieValue = QString("~(%1)").arg(tieValue);
                                             }
