@@ -158,9 +158,9 @@ private:
      * @brief Port direction status enum for connection validation
      */
     enum class PortDirectionStatus {
-        Valid,      /* Net has at least one output/inout and any number of inputs */
-        Underdrive, /* Net has only input ports, no drivers */
-        Multidrive  /* Net has multiple output/inout ports */
+        Valid,     /* Valid connection pattern */
+        Undriven,  /* Net has only input ports, no drivers */
+        Multidrive /* Net has multiple output/inout ports */
     };
 
     /** Project manager. */
@@ -182,7 +182,7 @@ private:
      * - Ensures nets don't have multiple drivers (more than one output or inout port)
      *
      * @param connections List of instance-port pairs to check
-     * @return PortDirectionStatus Status of the connection (Valid, Underdrive, or Multidrive)
+     * @return PortDirectionStatus Status of the connection (Valid, Undriven, or Multidrive)
      */
     PortDirectionStatus checkPortDirectionConsistency(
         const QList<QPair<QString, QString>> &connections);

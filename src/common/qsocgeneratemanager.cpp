@@ -583,7 +583,7 @@ QSoCGenerateManager::PortDirectionStatus QSoCGenerateManager::checkPortDirection
     const QList<QPair<QString, QString>> &connections)
 {
     if (connections.isEmpty()) {
-        return PortDirectionStatus::Underdrive; /* No connections means no drivers */
+        return PortDirectionStatus::Undriven; /* No connections means no drivers */
     }
 
     int outputCount = 0;
@@ -636,9 +636,9 @@ QSoCGenerateManager::PortDirectionStatus QSoCGenerateManager::checkPortDirection
         }
     }
 
-    /* Check for underdrive - all ports are inputs */
+    /* Check for undriven - all ports are inputs */
     if (outputCount == 0 && inoutCount == 0 && inputCount > 0) {
-        return PortDirectionStatus::Underdrive;
+        return PortDirectionStatus::Undriven;
     }
 
     /* Check for multidrive - multiple output or inout ports */
@@ -1071,7 +1071,7 @@ bool QSoCGenerateManager::generateVerilog(const QString &outputFileName)
                     }
                 }
 
-                if (dirStatus == PortDirectionStatus::Underdrive) {
+                if (dirStatus == PortDirectionStatus::Undriven) {
                     qWarning() << "Warning: Net" << netName
                                << "has only input ports, missing driver";
                     if (connectedToTopPort) {
