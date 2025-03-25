@@ -50,8 +50,8 @@ public:
      * @brief Enum to distinguish between module ports and top-level ports
      */
     enum class PortType {
-        Module,  /* Instance/module port */
-        TopLevel /* Top-level port */
+        Module,  /**< Instance/module port */
+        TopLevel /**< Top-level port */
     };
 
     /**
@@ -60,7 +60,7 @@ public:
     struct PortConnection
     {
         PortType type;
-        QString  instanceName; /* For Module type only, empty for TopLevel */
+        QString  instanceName; /**< For Module type only, empty for TopLevel */
         QString  portName;
 
         PortConnection(PortType t, const QString &inst, const QString &port)
@@ -86,7 +86,7 @@ public:
     struct PortDetailInfo
     {
         PortType type;
-        QString  instanceName; /* For Module type only, empty for TopLevel */
+        QString  instanceName; /**< For Module type only, empty for TopLevel */
         QString  portName;
         QString  width;
         QString  direction;
