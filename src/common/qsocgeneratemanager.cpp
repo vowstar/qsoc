@@ -1590,46 +1590,44 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                         hasTie = true;
 
                                         /* Format the tie value */
-                                        if (numInfo.width > portWidth) {
-                                            /* Value is wider than port - truncate to port width but keep FIXME comment */
-                                            QString truncatedValue;
+                                        /* Create a copy of numInfo with adjusted width */
+                                        NumberInfo adjustedInfo = numInfo;
 
-                                            /* For 1-bit ports, simplify to just 1 or 0 */
-                                            if (portWidth == 1) {
-                                                /* For 1-bit port, just extract the LSB */
-                                                truncatedValue
-                                                    = QString("%1'd%2").arg(portWidth).arg(
-                                                        numInfo.value & 0x1);
+                                        /* Special handling for overflow detection */
+                                        if (numInfo.overflowDetected) {
+                                            /* For overflow values, keep the original string representation */
+                                            if (numInfo.width > portWidth) {
+                                                tieValue = QString(
+                                                               "%1 /* FIXME: Value width %2 bits "
+                                                               "exceeds port width %3 bits */")
+                                                               .arg(numInfo.originalString)
+                                                               .arg(numInfo.width)
+                                                               .arg(portWidth);
                                             } else {
-                                                /* For wider ports, format properly with width prefix */
-                                                truncatedValue
-                                                    = QString("%1'd%2").arg(portWidth).arg(
-                                                        numInfo.value & ((1ULL << portWidth) - 1));
+                                                tieValue = numInfo.originalString;
+                                            }
+                                        } else {
+                                            /* Normal handling for regular values */
+                                            adjustedInfo.width            = portWidth;
+                                            adjustedInfo.hasExplicitWidth = true;
+
+                                            /* Only truncate value when port width is within 64 bits */
+                                            if (portWidth <= 64) {
+                                                adjustedInfo.value &= ((1ULL << portWidth) - 1);
                                             }
 
-                                            /* Format the tie value */
                                             if (numInfo.width > portWidth) {
-                                                /* Value is wider than port - truncate to port width but keep FIXME comment */
-
-                                                /* Create a copy of numInfo with truncated width and value */
-                                                NumberInfo truncatedInfo = numInfo;
-                                                truncatedInfo.width      = portWidth;
-                                                truncatedInfo.value &= ((1ULL << portWidth) - 1);
-                                                truncatedInfo.hasExplicitWidth = true;
-
-                                                /* Format using the original base but with truncated width */
+                                                /* Value is wider than port - show FIXME comment but use proper width */
                                                 tieValue = QString(
                                                                "%1 /* FIXME: Value %2 wider than "
                                                                "port width %3 bits */")
-                                                               .arg(truncatedInfo.formatVerilog())
+                                                               .arg(adjustedInfo.formatVerilog())
                                                                .arg(numInfo.formatVerilog())
                                                                .arg(portWidth);
                                             } else {
-                                                /* Use original formatting for all widths */
-                                                tieValue = numInfo.formatVerilog();
+                                                /* Use adjusted formatting with correct width, preserving original base */
+                                                tieValue = adjustedInfo.formatVerilog();
                                             }
-                                        } else {
-                                            tieValue = numInfo.formatVerilog();
                                         }
 
                                         /* Check for invert attribute */
@@ -1789,6 +1787,7 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
     result.value            = 0;
     result.width            = 0;
     result.hasExplicitWidth = false;
+    result.overflowDetected = false;
 
     /* Remove all underscores from the string (Verilog style) */
     QString cleanStr = numStr;
@@ -1830,6 +1829,12 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
         if (widthOk && !result.hasExplicitWidth) {
             result.width            = width;
             result.hasExplicitWidth = true;
+
+            /* Check for potential overflow (width > 64 bits) */
+            if (width > 64) {
+                result.overflowDetected = true;
+                qWarning() << "Number width exceeds 64 bits, using original string:" << numStr;
+            }
         }
 
         QChar   baseChar = verilogMatch.captured(2).at(0).toLower();
@@ -1838,21 +1843,49 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
         /* Determine the base from the base character */
         switch (baseChar.toLatin1()) {
         case 'b': /* Binary */
-            result.base  = NumberInfo::Base::Binary;
-            result.value = valueStr.toLongLong(nullptr, 2);
+            result.base = NumberInfo::Base::Binary;
+            {
+                bool ok      = false;
+                result.value = valueStr.toLongLong(&ok, 2);
+                if (!ok) {
+                    result.overflowDetected = true;
+                    qWarning() << "Binary value overflow, using original string:" << numStr;
+                }
+            }
             break;
         case 'o': /* Octal */
-            result.base  = NumberInfo::Base::Octal;
-            result.value = valueStr.toLongLong(nullptr, 8);
+            result.base = NumberInfo::Base::Octal;
+            {
+                bool ok      = false;
+                result.value = valueStr.toLongLong(&ok, 8);
+                if (!ok) {
+                    result.overflowDetected = true;
+                    qWarning() << "Octal value overflow, using original string:" << numStr;
+                }
+            }
             break;
         case 'd': /* Decimal */
-            result.base  = NumberInfo::Base::Decimal;
-            result.value = valueStr.toLongLong(nullptr, 10);
+            result.base = NumberInfo::Base::Decimal;
+            {
+                bool ok      = false;
+                result.value = valueStr.toLongLong(&ok, 10);
+                if (!ok) {
+                    result.overflowDetected = true;
+                    qWarning() << "Decimal value overflow, using original string:" << numStr;
+                }
+            }
             break;
         case 'h': /* Hexadecimal */
         case 'x': /* Alternative for Hexadecimal */
-            result.base  = NumberInfo::Base::Hexadecimal;
-            result.value = valueStr.toLongLong(nullptr, 16);
+            result.base = NumberInfo::Base::Hexadecimal;
+            {
+                bool ok      = false;
+                result.value = valueStr.toLongLong(&ok, 16);
+                if (!ok) {
+                    result.overflowDetected = true;
+                    qWarning() << "Hexadecimal value overflow, using original string:" << numStr;
+                }
+            }
             break;
         default:
             qWarning() << "Unknown base character in Verilog number:" << baseChar;
@@ -1869,21 +1902,50 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
             /* Determine the base from the base character */
             switch (baseChar.toLatin1()) {
             case 'b': /* Binary */
-                result.base  = NumberInfo::Base::Binary;
-                result.value = valueStr.toLongLong(nullptr, 2);
+                result.base = NumberInfo::Base::Binary;
+                {
+                    bool ok      = false;
+                    result.value = valueStr.toLongLong(&ok, 2);
+                    if (!ok) {
+                        result.overflowDetected = true;
+                        qWarning() << "Binary value overflow, using original string:" << numStr;
+                    }
+                }
                 break;
             case 'o': /* Octal */
-                result.base  = NumberInfo::Base::Octal;
-                result.value = valueStr.toLongLong(nullptr, 8);
+                result.base = NumberInfo::Base::Octal;
+                {
+                    bool ok      = false;
+                    result.value = valueStr.toLongLong(&ok, 8);
+                    if (!ok) {
+                        result.overflowDetected = true;
+                        qWarning() << "Octal value overflow, using original string:" << numStr;
+                    }
+                }
                 break;
             case 'd': /* Decimal */
-                result.base  = NumberInfo::Base::Decimal;
-                result.value = valueStr.toLongLong(nullptr, 10);
+                result.base = NumberInfo::Base::Decimal;
+                {
+                    bool ok      = false;
+                    result.value = valueStr.toLongLong(&ok, 10);
+                    if (!ok) {
+                        result.overflowDetected = true;
+                        qWarning() << "Decimal value overflow, using original string:" << numStr;
+                    }
+                }
                 break;
             case 'h': /* Hexadecimal */
             case 'x': /* Alternative for Hexadecimal */
-                result.base  = NumberInfo::Base::Hexadecimal;
-                result.value = valueStr.toLongLong(nullptr, 16);
+                result.base = NumberInfo::Base::Hexadecimal;
+                {
+                    bool ok      = false;
+                    result.value = valueStr.toLongLong(&ok, 16);
+                    if (!ok) {
+                        result.overflowDetected = true;
+                        qWarning()
+                            << "Hexadecimal value overflow, using original string:" << numStr;
+                    }
+                }
                 break;
             default:
                 qWarning() << "Unknown base character in Verilog number:" << baseChar;
@@ -1909,7 +1971,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
                 result.value = cleanStr.toLongLong(&ok, 10);
 
                 if (!ok) {
-                    qWarning() << "Failed to parse decimal number:" << cleanStr;
+                    result.overflowDetected = true;
+                    qWarning() << "Failed to parse decimal number (potential overflow), using "
+                                  "original string:"
+                               << cleanStr;
                 }
             }
         }
@@ -1917,7 +1982,34 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
 
     /* Calculate width if not explicitly provided */
     if (!result.hasExplicitWidth) {
-        if (result.value == 0) {
+        if (result.overflowDetected) {
+            /* For overflow values, set a reasonable width based on the original string */
+            if (result.originalString.toLower().contains('h')) {
+                /* Hex values: each digit is 4 bits */
+                int digits = result.originalString.length();
+                /* Rough estimate, removing prefix parts */
+                result.width = (digits - 3) * 4; /* Assuming format like "N'h..." */
+            } else if (result.originalString.toLower().contains('b')) {
+                /* Binary values: each digit is 1 bit */
+                int digits = result.originalString.length();
+                /* Rough estimate, removing prefix parts */
+                result.width = digits - 3; /* Assuming format like "N'b..." */
+            } else if (result.originalString.toLower().contains('o')) {
+                /* Octal values: each digit is 3 bits */
+                int digits = result.originalString.length();
+                /* Rough estimate, removing prefix parts */
+                result.width = (digits - 3) * 3; /* Assuming format like "N'o..." */
+            } else {
+                /* Decimal values */
+                if (result.originalString.length() > 20) {
+                    result.width = 128; /* Very large numbers */
+                } else if (result.originalString.length() > 10) {
+                    result.width = 64; /* Medium large numbers */
+                } else {
+                    result.width = 32; /* Regular numbers */
+                }
+            }
+        } else if (result.value == 0) {
             result.width = 1; /* Special case for zero */
         } else {
             /* Calculate minimum required width based on the value */
@@ -1945,7 +2037,8 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
     /* Add debug output */
     qDebug() << "Parsed number:" << numStr << "Value:" << result.value
              << "Base:" << static_cast<int>(result.base) << "Width:" << result.width
-             << (result.hasExplicitWidth ? "(explicit)" : "(calculated)");
+             << (result.hasExplicitWidth ? "(explicit)" : "(calculated)")
+             << (result.overflowDetected ? " (overflow detected)" : "");
 
     return result;
 }

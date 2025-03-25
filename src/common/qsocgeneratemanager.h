@@ -135,6 +135,7 @@ public:
         quint64 value;            /**< Actual numeric value */
         int     width;            /**< Bit width (either specified or calculated) */
         bool    hasExplicitWidth; /**< Whether width was explicitly specified */
+        bool overflowDetected; /**< Whether the number is too large for quint64 or parsing failed */
 
         /**
          * @brief Format the value according to its base
@@ -162,6 +163,11 @@ public:
          */
         QString formatVerilog() const
         {
+            /* If overflow was detected, use the original string to preserve large values */
+            if (overflowDetected) {
+                return originalString;
+            }
+
             if (width > 0) {
                 return QString("%1%2").arg(width).arg(format());
             } else {
