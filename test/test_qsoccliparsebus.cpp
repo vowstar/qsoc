@@ -130,6 +130,7 @@ private slots:
         }
     }
 
+    /* Test bus import command with APB bus definition */
     void testBusImport()
     {
         messageList.clear();
@@ -152,6 +153,7 @@ private slots:
         QVERIFY(true);
     }
 
+    /* Test bus list command */
     void testBusList()
     {
         messageList.clear();
@@ -164,6 +166,7 @@ private slots:
         QVERIFY(true);
     }
 
+    /* Test bus show command for APB bus */
     void testBusShow()
     {
         messageList.clear();
@@ -177,6 +180,7 @@ private slots:
         QVERIFY(true);
     }
 
+    /* Test multiple bus imports */
     void testBusImportMultiple()
     {
         messageList.clear();
@@ -199,6 +203,7 @@ private slots:
         QVERIFY(true);
     }
 
+    /* Test bus removal command */
     void testBusRemove()
     {
         messageList.clear();
@@ -212,6 +217,7 @@ private slots:
         QVERIFY(true);
     }
 
+    /* Test bus show command for non-existent bus */
     void testBusNonExistent()
     {
         messageList.clear();
@@ -225,22 +231,21 @@ private slots:
         QVERIFY(true);
     }
 
+    /* Test bus commands with verbosity levels */
     void testBusWithVerbosityLevels()
     {
-        /* Just test with a single verbosity level to avoid issues */
+        /* Test with verbosity level 3 (info) */
         messageList.clear();
         QSocCliWorker socCliWorker;
-
-        /* Create arguments with verbosity level 3 (info) */
         QStringList appArguments = {"qsoc", "--verbose=3", "bus", "list", "-p", "bus_test_project"};
-
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Don't verify specific output, just that the command runs without crashing */
+        /* Accept test if command runs without crashing */
         QVERIFY(true);
     }
 
+    /* Test bus command with invalid option */
     void testBusWithInvalidOption()
     {
         messageList.clear();
@@ -254,6 +259,7 @@ private slots:
         QVERIFY(true);
     }
 
+    /* Test bus command with missing required argument */
     void testBusWithMissingRequiredArgument()
     {
         messageList.clear();
@@ -269,6 +275,7 @@ private slots:
         QVERIFY(true);
     }
 
+    /* Test bus commands with relative paths */
     void testBusWithRelativePaths()
     {
         /* Create temporary directory for test */
@@ -301,6 +308,57 @@ private slots:
 
         /* Clean up */
         QFile::remove("./bus_temp_dir/temp_apb.csv");
+    }
+
+    /* Test bus export functionality */
+    void testBusExport()
+    {
+        /* First re-import a bus for testing export */
+        {
+            QSocCliWorker     socCliWorker;
+            const QStringList appArguments
+                = {"qsoc",
+                   "bus",
+                   "import",
+                   "-p",
+                   "bus_test_project",
+                   "-l",
+                   "test_lib",
+                   "-b",
+                   "apb_export_test",
+                   "test_apb.csv"};
+            socCliWorker.setup(appArguments, false);
+            socCliWorker.run();
+        }
+
+        /* Create a temporary directory for export */
+        QDir exportDir;
+        exportDir.mkpath("./bus_export_dir");
+
+        /* Now test export */
+        messageList.clear();
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc",
+               "bus",
+               "export",
+               "-p",
+               "bus_test_project",
+               "-b",
+               "apb_export_test",
+               "-d",
+               "./bus_export_dir",
+               "./bus_export_dir/exported_apb.csv"};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Accept test if command runs without crashing */
+        QVERIFY(true);
+
+        /* Clean up */
+        if (QDir("./bus_export_dir").exists()) {
+            QDir("./bus_export_dir").removeRecursively();
+        }
     }
 };
 
