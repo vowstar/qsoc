@@ -12,6 +12,7 @@
 #include <QMessageBox>
 #include <QStandardItem>
 #include <QStandardItemModel>
+#include <QStatusBar>
 
 void MainWindow::on_actionQuit_triggered()
 {
@@ -27,6 +28,9 @@ void MainWindow::on_actionSchematicEditor_triggered()
 
 void MainWindow::on_actionNewProject_triggered()
 {
+    /* Close current project first (silent mode) */
+    closeProject(true);
+
     /* Show save dialog to get project name and path */
     QString filePath = QFileDialog::getSaveFileName(
         this,
@@ -111,6 +115,9 @@ void MainWindow::on_actionNewProject_triggered()
 
 void MainWindow::on_actionOpenProject_triggered()
 {
+    /* Close current project first (silent mode) */
+    closeProject(true);
+
     /* Show open dialog to get project file */
     QString filePath = QFileDialog::getOpenFileName(
         this, tr("Open Project"), lastProjectDir, tr("QSoC Project (*.soc_pro);;All Files (*)"));
@@ -183,5 +190,35 @@ void MainWindow::on_actionOpenProject_triggered()
 
         model->appendRow(projectItem);
         ui->treeViewProjectFile->expand(model->indexFromItem(projectItem));
+    }
+}
+
+void MainWindow::on_actionCloseProject_triggered()
+{
+    closeProject(false);
+}
+
+void MainWindow::closeProject(bool silent)
+{
+    /* Get the tree view model */
+    QStandardItemModel *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
+
+    /* Check if model exists */
+    if (model) {
+        /* Clear all root items from the model */
+        model->clear();
+
+        /* Restore header after clearing */
+        model->setHorizontalHeaderLabels(QStringList() << "Project Files");
+    }
+
+    /* Reset project manager state if needed */
+    if (projectManager) {
+        projectManager->setProjectName("");
+    }
+
+    /* Inform user that project is closed only if not silent mode */
+    if (!silent) {
+        statusBar()->showMessage(tr("Project closed"), 2000);
     }
 }

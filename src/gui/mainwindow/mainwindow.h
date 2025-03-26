@@ -55,7 +55,12 @@ private slots:
 
     void on_actionOpenProject_triggered();
 
+    void on_actionCloseProject_triggered();
+
 private:
+    /* Close the current project with option for silent mode */
+    void closeProject(bool silent = false);
+
     /* Main window UI */
     Ui::MainWindow *ui;
     /* Last used project directory */
