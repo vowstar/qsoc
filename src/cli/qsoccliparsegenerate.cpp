@@ -115,6 +115,14 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
 
     /* Generate Verilog code for each netlist file  */
     for (const QString &netlistFilePath : filePathList) {
+        /* Check if the netlist file exists before trying to load it */
+        if (!QFile::exists(netlistFilePath)) {
+            return showError(
+                1,
+                QCoreApplication::translate("main", "Error: Netlist file does not exist: \"%1\"")
+                    .arg(netlistFilePath));
+        }
+
         /* Load the netlist file */
         if (!generateManager.loadNetlist(netlistFilePath)) {
             return showError(
