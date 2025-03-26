@@ -18,7 +18,7 @@ QSocCliWorker::QSocCliWorker(QObject *parent)
     parser.setApplicationDescription(
         QCoreApplication::translate("main", "Generate SoC components via the command line."));
     parser.setOptionsAfterPositionalArgumentsMode(QCommandLineParser::ParseAsOptions);
-    /* Set up manager objects */
+    /* Initialize QObject hierarchy with parent-child relationships for automatic memory management */
     projectManager  = new QSocProjectManager(this);
     socConfig       = new QSocConfig(this, projectManager);
     llmService      = new QLLMService(this, socConfig);
