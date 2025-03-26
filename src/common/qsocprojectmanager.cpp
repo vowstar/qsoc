@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QStringList>
+#include <QTextStream>
 #include <QVersionNumber>
 
 #include <fstream>
@@ -28,10 +29,10 @@ QSocProjectManager::QSocProjectManager(QObject *parent)
     currentPath = QDir::currentPath();
     /* Set project default paths */
     setProjectPath(currentPath);
-    setBusPath(currentPath + "/bus");
-    setModulePath(currentPath + "/module");
-    setSchematicPath(currentPath + "/schematic");
-    setOutputPath(currentPath + "/output");
+    setBusPath(QDir(currentPath).filePath("bus"));
+    setModulePath(QDir(currentPath).filePath("module"));
+    setSchematicPath(QDir(currentPath).filePath("schematic"));
+    setOutputPath(QDir(currentPath).filePath("output"));
 }
 
 QSocProjectManager::~QSocProjectManager() = default;
@@ -88,7 +89,8 @@ bool QSocProjectManager::isExist(const QString &projectName)
         return false;
     }
     /* Check project file */
-    const QString &projectFilePath = QString(projectPath + "/" + projectName + ".soc_pro");
+    const QString &projectFilePath
+        = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
     if (QFile::exists(projectFilePath)) {
         result = true;
     }
@@ -102,26 +104,47 @@ bool QSocProjectManager::mkpath()
         qCritical() << "Error: Failed to create project directory.";
         return false;
     }
+
+    /* Create .gitignore file */
+    const QString gitignorePath = QDir(projectPath).filePath(".gitignore");
+    if (!QFile::exists(gitignorePath)) {
+        QFile gitignoreFile(gitignorePath);
+        if (gitignoreFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&gitignoreFile);
+            out << "qsoc.fl.*" << Qt::endl;
+            gitignoreFile.close();
+        } else {
+            qWarning() << "Warning: Failed to create .gitignore file in project directory.";
+        }
+    }
+
     /* Check and create bus directory */
     if (!QDir().mkpath(busPath)) {
         qCritical() << "Error: Failed to create bus directory.";
         return false;
     }
+    QFile(QDir(busPath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
+
     /* Check and create module directory */
     if (!QDir().mkpath(modulePath)) {
         qCritical() << "Error: Failed to create module directory.";
         return false;
     }
+    QFile(QDir(modulePath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
+
     /* Check and create schematic directory */
     if (!QDir().mkpath(schematicPath)) {
         qCritical() << "Error: Failed to create schematic directory.";
         return false;
     }
+    QFile(QDir(schematicPath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
+
     /* Check and create output directory */
     if (!QDir().mkpath(outputPath)) {
         qCritical() << "Error: Failed to create output directory.";
         return false;
     }
+    QFile(QDir(outputPath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
     return true;
 }
 
@@ -139,8 +162,9 @@ bool QSocProjectManager::save(const QString &projectName)
         return false;
     }
     /* Save project file */
-    const QString &projectFilePath = QString(projectPath + "/" + projectName + ".soc_pro");
-    std::ofstream  outputFileStream(projectFilePath.toStdString());
+    const QString &projectFilePath
+        = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
+    std::ofstream outputFileStream(projectFilePath.toStdString());
     /* Serialize project yaml data */
     outputFileStream << getProjectYaml();
 
@@ -155,7 +179,7 @@ bool QSocProjectManager::load(const QString &projectName)
         return false;
     }
     /* Load project file */
-    const QString &filePath = QString(projectPath + "/" + projectName + ".soc_pro");
+    const QString &filePath = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
     /* Check the existence of project files */
     if (!QFile::exists(filePath)) {
         qCritical() << "Error: project file not found.";
@@ -173,7 +197,7 @@ bool QSocProjectManager::load(const QString &projectName)
         return false;
     }
     /* Set project name */
-    setProjectName(filePath.split('/').last().split('.').first());
+    setProjectName(QFileInfo(filePath).completeBaseName());
     /* Set project paths */
     setProjectPath(QFileInfo(filePath).absoluteDir().absolutePath());
     setProjectNode(localProjectNode);
@@ -204,7 +228,7 @@ bool QSocProjectManager::loadFirst()
         qCritical() << "Error: project file not found.";
         return false;
     }
-    const QString localProjectName = filePath.split('/').last().split('.').first();
+    const QString localProjectName = QFileInfo(filePath).completeBaseName();
     /* Load the project */
     load(localProjectName);
 
@@ -224,7 +248,7 @@ bool QSocProjectManager::remove(const QString &projectName)
         return false;
     }
     /* Remove project file */
-    const QString &filePath = QString(projectPath + "/" + projectName + ".soc_pro");
+    const QString &filePath = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
     if (!QFile::remove(filePath)) {
         qCritical() << "Error: failed to remove project file.";
         return false;
@@ -249,7 +273,7 @@ QStringList QSocProjectManager::list(const QRegularExpression &projectNameRegex)
     /* Add matching file basenames from projectDir to result list. */
     foreach (const QString &filename, projectDir.entryList()) {
         if (projectNameRegex.match(filename).hasMatch()) {
-            result.append(filename.split('.').first());
+            result.append(QFileInfo(filename).completeBaseName());
         }
     }
     return result;
@@ -459,10 +483,10 @@ void QSocProjectManager::setCurrentPath(const QString &currentPath)
 
     /* Set project current paths */
     setProjectPath(this->currentPath);
-    setBusPath(this->currentPath + "/bus");
-    setModulePath(this->currentPath + "/module");
-    setSchematicPath(this->currentPath + "/schematic");
-    setOutputPath(this->currentPath + "/output");
+    setBusPath(QDir(this->currentPath).filePath("bus"));
+    setModulePath(QDir(this->currentPath).filePath("module"));
+    setSchematicPath(QDir(this->currentPath).filePath("schematic"));
+    setOutputPath(QDir(this->currentPath).filePath("output"));
 }
 
 const QString &QSocProjectManager::getCurrentPath()
