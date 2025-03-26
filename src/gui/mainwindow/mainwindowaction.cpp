@@ -75,6 +75,18 @@ void MainWindow::on_actionNewProject_triggered()
         /* Store full path in item data */
         projectItem->setData(projectDir, Qt::UserRole);
 
+        /* List all subdirectories in projectDir */
+        QDir          dir(projectDir);
+        QFileInfoList dirList = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+
+        /* Add each subdirectory to the tree */
+        foreach (const QFileInfo &dirInfo, dirList) {
+            QStandardItem *folderItem = new QStandardItem(dirInfo.fileName());
+            folderItem->setIcon(QIcon::fromTheme("document-open"));
+            folderItem->setData(dirInfo.absoluteFilePath(), Qt::UserRole);
+            projectItem->appendRow(folderItem);
+        }
+
         model->appendRow(projectItem);
         ui->treeViewProjectFile->expand(model->indexFromItem(projectItem));
     }
