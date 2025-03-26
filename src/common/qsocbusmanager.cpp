@@ -272,7 +272,7 @@ bool QSocBusManager::saveLibraryYaml(const QString &libraryName, const YAML::Nod
     }
     /* Check file path */
     const QString &busPath  = projectManager->getBusPath();
-    const QString &filePath = busPath + "/" + libraryName + ".soc_bus";
+    const QString &filePath = QDir(busPath).filePath(QString("%1.soc_bus").arg(libraryName));
     if (QFile::exists(filePath)) {
         /* Load library YAML file */
         std::ifstream inputFileStream(filePath.toStdString());

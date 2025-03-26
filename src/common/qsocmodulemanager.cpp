@@ -220,7 +220,7 @@ bool QSocModuleManager::saveLibraryYaml(const QString &libraryName, const YAML::
     }
     /* Check file path */
     const QString &modulePath = projectManager->getModulePath();
-    const QString &filePath   = modulePath + "/" + libraryName + ".soc_mod";
+    const QString &filePath   = QDir(modulePath).filePath(QString("%1.soc_mod").arg(libraryName));
     if (QFile::exists(filePath)) {
         /* Load library YAML file */
         std::ifstream inputFileStream(filePath.toStdString());
