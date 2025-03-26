@@ -3,6 +3,7 @@
 
 #include "common/qllmservice.h"
 #include "common/qsocbusmanager.h"
+#include "common/qsocconfig.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
 
@@ -36,6 +37,12 @@ public:
         QSocModuleManager  *moduleManager  = nullptr,
         QSocBusManager     *busManager     = nullptr,
         QLLMService        *llmService     = nullptr);
+
+    /**
+     * @brief Destructor for QSocGenerateManager.
+     * @details This destructor will free all the allocated resources.
+     */
+    ~QSocGenerateManager() override;
 
     /**
      * @brief Enum for port direction check results

@@ -1,5 +1,6 @@
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "qsoc_test.h"
 
 #include <QDir>
 #include <QFile>
@@ -25,8 +26,22 @@ class Test : public QObject
 {
     Q_OBJECT
 
+private:
+    static QStringList messageList;
+
+    static void messageOutput(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+    {
+        Q_UNUSED(type);
+        Q_UNUSED(context);
+        messageList << msg;
+    }
+
 private slots:
-    void initTestCase() { TestApp::instance(); }
+    void initTestCase()
+    {
+        TestApp::instance();
+        qInstallMessageHandler(messageOutput);
+    }
 
     void testGenerateCommandHelp()
     {
@@ -87,6 +102,8 @@ private slots:
     }
 };
 
-QTEST_APPLESS_MAIN(Test)
+QStringList Test::messageList;
+
+QSOC_TEST_MAIN(Test)
 
 #include "test_qsoccliparsegenerate.moc"

@@ -2,6 +2,7 @@
 #define QSOCMODULEMANAGER_H
 
 #include "common/qllmservice.h"
+#include "common/qslangdriver.h"
 #include "common/qsocbusmanager.h"
 #include "common/qsocprojectmanager.h"
 
@@ -34,6 +35,12 @@ public:
         QSocProjectManager *projectManager = nullptr,
         QSocBusManager     *busManager     = nullptr,
         QLLMService        *llmService     = nullptr);
+
+    /**
+     * @brief Destructor for QSlangDriver.
+     * @details This destructor will free all the allocated resources.
+     */
+    ~QSocModuleManager() override;
 
 public slots:
     /**
@@ -452,14 +459,17 @@ public slots:
     YAML::Node showModuleBus(const QString &moduleName, const QRegularExpression &busInterfaceRegex);
 
 private:
-    /* Internal used project manager. */
+    /* Project manager. */
     QSocProjectManager *projectManager = nullptr;
 
-    /* Internal used bus manager. */
+    /* Bus manager. */
     QSocBusManager *busManager = nullptr;
 
-    /* Internal used LLM service. */
+    /* LLM service. */
     QLLMService *llmService = nullptr;
+
+    /* Slang driver. */
+    QSlangDriver *slangDriver = nullptr;
 
     /* This QMap, libraryMap, maps library names to sets of module names.
        Each key in the map is a library name (QString).

@@ -85,14 +85,13 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
             1, QCoreApplication::translate("main", "Error: missing bus definition CSV files."));
     }
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -102,7 +101,7 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
     /* Check if both busName and libraryName are empty */
     if (busName.isEmpty() && libraryName.isEmpty()) {
@@ -119,9 +118,8 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
         return showErrorWithHelp(
             1, QCoreApplication::translate("main", "Error: library name is empty."));
     }
-
-    QSocBusManager busManager(this, &projectManager);
-    if (!busManager.importFromFileList(libraryName, busName, filePathList)) {
+    /* Import buses */
+    if (!busManager->importFromFileList(libraryName, busName, filePathList)) {
         return showErrorWithHelp(1, QCoreApplication::translate("main", "Error: import failed."));
     }
 
@@ -164,14 +162,13 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         busNameList.end());
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -181,14 +178,14 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
     /* Check if bus path is valid */
-    if (!projectManager.isValidBusPath()) {
+    if (!projectManager->isValidBusPath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid bus directory: %1")
-                .arg(projectManager.getBusPath()));
+                .arg(projectManager->getBusPath()));
     }
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
@@ -217,10 +214,8 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: invalid regular expression of bus name: %1")
                 .arg(invalidBusName));
     }
-    /* Setup bus manager */
-    QSocBusManager busManager(this, &projectManager);
     /* Load buses */
-    if (!busManager.load(libraryNameRegex)) {
+    if (!busManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
@@ -229,7 +224,7 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
     /* Remove buses */
     for (const QString &busName : busNameList) {
         const QRegularExpression busNameRegex(busName);
-        if (!busManager.removeBus(busNameRegex)) {
+        if (!busManager->removeBus(busNameRegex)) {
             return showErrorWithHelp(
                 1,
                 QCoreApplication::translate("main", "Error: could not remove bus: %1").arg(busName));
@@ -276,14 +271,13 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         busNameList.end());
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -293,14 +287,14 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
     /* Check if bus path is valid */
-    if (!projectManager.isValidBusPath()) {
+    if (!projectManager->isValidBusPath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid bus directory: %1")
-                .arg(projectManager.getBusPath()));
+                .arg(projectManager->getBusPath()));
     }
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
@@ -329,10 +323,8 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: invalid regular expression of bus name: %1")
                 .arg(invalidBusName));
     }
-    /* Setup bus manager */
-    QSocBusManager busManager(this, &projectManager);
     /* Load buses */
-    if (!busManager.load(libraryNameRegex)) {
+    if (!busManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
@@ -341,7 +333,7 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
     /* list buses */
     for (const QString &busName : busNameList) {
         const QRegularExpression busNameRegex(busName);
-        const QStringList        result = busManager.listBus(busNameRegex);
+        const QStringList        result = busManager->listBus(busNameRegex);
         showInfo(0, result.join("\n"));
     }
 
@@ -385,14 +377,13 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         busNameList.end());
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -402,14 +393,14 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
     /* Check if bus path is valid */
-    if (!projectManager.isValidBusPath()) {
+    if (!projectManager->isValidBusPath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid bus directory: %1")
-                .arg(projectManager.getBusPath()));
+                .arg(projectManager->getBusPath()));
     }
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
@@ -438,10 +429,8 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: invalid regular expression of bus name: %1")
                 .arg(invalidBusName));
     }
-    /* Setup bus manager */
-    QSocBusManager busManager(this, &projectManager);
     /* Load buses */
-    if (!busManager.load(libraryNameRegex)) {
+    if (!busManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
@@ -451,7 +440,7 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
     for (const QString &busName : busNameList) {
         const QRegularExpression busNameRegex(busName);
         /* Show details about the bus */
-        showInfo(0, QStaticDataSedes::serializeYaml(busManager.getBusYamls(busNameRegex)));
+        showInfo(0, QStaticDataSedes::serializeYaml(busManager->getBusYamls(busNameRegex)));
     }
 
     return true;

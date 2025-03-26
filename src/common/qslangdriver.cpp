@@ -24,14 +24,25 @@
 
 QSlangDriver::QSlangDriver(QObject *parent, QSocProjectManager *projectManager)
     : QObject(parent)
+    , projectManager(projectManager)
 {
-    /* Set project manager */
+    /* All private members set by constructor */
+}
+
+QSlangDriver::~QSlangDriver() = default;
+
+void QSlangDriver::setProjectManager(QSocProjectManager *projectManager)
+{
+    /* Set projectManager */
     if (projectManager) {
         this->projectManager = projectManager;
     }
 }
 
-QSlangDriver::~QSlangDriver() {}
+QSocProjectManager *QSlangDriver::getProjectManager()
+{
+    return projectManager;
+}
 
 bool QSlangDriver::parseArgs(const QString &args)
 {

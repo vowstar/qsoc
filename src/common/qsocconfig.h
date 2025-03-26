@@ -34,6 +34,12 @@ public:
      */
     explicit QSocConfig(QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
 
+    /**
+     * @brief Destructor for QSocConfig.
+     * @details This destructor will free all the allocated resources.
+     */
+    ~QSocConfig() override;
+
 public slots:
     /**
      * @brief Set the project manager.

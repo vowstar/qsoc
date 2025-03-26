@@ -24,6 +24,12 @@ public:
      */
     explicit QSocBusManager(QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
 
+    /**
+     * @brief Destructor for QSocBusManager.
+     * @details This destructor will free all the allocated resources.
+     */
+    ~QSocBusManager() override;
+
 public slots:
     /**
      * @brief Set the project manager.

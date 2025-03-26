@@ -32,6 +32,8 @@ QSocProjectManager::QSocProjectManager(QObject *parent)
     setOutputPath(QDir::currentPath() + "/output");
 }
 
+QSocProjectManager::~QSocProjectManager() = default;
+
 void QSocProjectManager::setEnv(const QString &key, const QString &value)
 {
     env[key] = value;

@@ -1,5 +1,6 @@
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "qsoc_test.h"
 
 #include <QDir>
 #include <QFile>
@@ -305,6 +306,6 @@ private slots:
 
 QStringList Test::messageList;
 
-QTEST_APPLESS_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 
 #include "test_qsoccliparsebus.moc"

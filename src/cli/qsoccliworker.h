@@ -1,6 +1,13 @@
 #ifndef QSOCCLIWORKER_H
 #define QSOCCLIWORKER_H
 
+#include "common/qllmservice.h"
+#include "common/qsocbusmanager.h"
+#include "common/qsocconfig.h"
+#include "common/qsocgeneratemanager.h"
+#include "common/qsocmodulemanager.h"
+#include "common/qsocprojectmanager.h"
+
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QFileInfo>
@@ -28,12 +35,12 @@ public:
      * @brief Destructor for QSocCliWorker.
      * @details This destructor will free the command line parser.
      */
-    ~QSocCliWorker();
+    ~QSocCliWorker() override;
 
     /**
      * @brief Setup the command line parser.
      * @details This function will setup the command line parser.
-     * @param appArguments command line arguments for the application.
+     * @param[in] appArguments command line arguments for the application.
      * @param isGui indicates whether the application is running in GUI mode or
      *        not, default is false.
      *        - true indicates GUI mode.
@@ -64,6 +71,13 @@ private:
     /* ExitCode of the application. */
     int exitCode;
 
+    QSocProjectManager  *projectManager  = nullptr;
+    QSocConfig          *socConfig       = nullptr;
+    QLLMService         *llmService      = nullptr;
+    QSocModuleManager   *moduleManager   = nullptr;
+    QSocBusManager      *busManager      = nullptr;
+    QSocGenerateManager *generateManager = nullptr;
+
     /**
      * @brief Parse the application command line arguments.
      * @details This function will parse the application command line arguments.
@@ -89,7 +103,6 @@ private:
      * @param appArguments command line arguments.
      * @retval true Parse successfully.
      * @retval false Parse failed.
-
      */
     bool parseProjectCreate(const QStringList &appArguments);
 
@@ -300,7 +313,6 @@ private:
      *          exit with exitCode.
      * @param exitCode exit code to emit.
      * @return bool always true.
-
      */
     bool showVersion(int exitCode);
 

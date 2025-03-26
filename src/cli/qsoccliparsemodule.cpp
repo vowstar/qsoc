@@ -98,14 +98,13 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
             1, QCoreApplication::translate("main", "Error: missing verilog files."));
     }
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -115,18 +114,16 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
-    if (!projectManager.isValidModulePath()) {
+    if (!projectManager->isValidModulePath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
-                .arg(projectManager.getModulePath()));
+                .arg(projectManager->getModulePath()));
     }
-    /* Setup module manager */
-    QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager);
-    QString           filelistPath = "";
+
+    QString filelistPath = "";
     if (parser.isSet("filelist")) {
         filelistPath = parser.value("filelist");
     }
@@ -136,7 +133,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of module name."));
     }
-    if (!moduleManager.importFromFileList(libraryName, moduleNameRegex, filelistPath, filePathList)) {
+    if (!moduleManager->importFromFileList(libraryName, moduleNameRegex, filelistPath, filePathList)) {
         return showErrorWithHelp(1, QCoreApplication::translate("main", "Error: import failed."));
     }
 
@@ -179,14 +176,13 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         moduleNameList.end());
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -196,14 +192,14 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
     /* Check if module path is valid */
-    if (!projectManager.isValidModulePath()) {
+    if (!projectManager->isValidModulePath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
-                .arg(projectManager.getModulePath()));
+                .arg(projectManager->getModulePath()));
     }
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
@@ -232,11 +228,8 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
                 .arg(invalidModuleName));
     }
-    /* Setup module manager */
-    QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager);
     /* Load modules */
-    if (!moduleManager.load(libraryNameRegex)) {
+    if (!moduleManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
@@ -245,7 +238,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
     /* Remove modules */
     for (const QString &moduleName : moduleNameList) {
         const QRegularExpression moduleNameRegex(moduleName);
-        if (!moduleManager.removeModule(moduleNameRegex)) {
+        if (!moduleManager->removeModule(moduleNameRegex)) {
             return showErrorWithHelp(
                 1,
                 QCoreApplication::translate("main", "Error: could not remove module: %1")
@@ -293,14 +286,13 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         moduleNameList.end());
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -310,14 +302,14 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
     /* Check if module path is valid */
-    if (!projectManager.isValidModulePath()) {
+    if (!projectManager->isValidModulePath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
-                .arg(projectManager.getModulePath()));
+                .arg(projectManager->getModulePath()));
     }
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
@@ -346,11 +338,8 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
                 .arg(invalidModuleName));
     }
-    /* Setup module manager */
-    QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager);
     /* Load modules */
-    if (!moduleManager.load(libraryNameRegex)) {
+    if (!moduleManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
@@ -359,7 +348,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
     /* list modules */
     for (const QString &moduleName : moduleNameList) {
         const QRegularExpression moduleNameRegex(moduleName);
-        const QStringList        result = moduleManager.listModule(moduleNameRegex);
+        const QStringList        result = moduleManager->listModule(moduleNameRegex);
         showInfo(0, result.join("\n"));
     }
 
@@ -403,14 +392,13 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         moduleNameList.end());
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -420,14 +408,14 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
     /* Check if module path is valid */
-    if (!projectManager.isValidModulePath()) {
+    if (!projectManager->isValidModulePath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
-                .arg(projectManager.getModulePath()));
+                .arg(projectManager->getModulePath()));
     }
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
@@ -456,13 +444,8 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
                 .arg(invalidModuleName));
     }
-    /* Setup module manager */
-    QSocConfig        socConfig(this, &projectManager);
-    QLLMService       llmService(this, &socConfig);
-    QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager, &llmService);
     /* Load modules */
-    if (!moduleManager.load(libraryNameRegex)) {
+    if (!moduleManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
@@ -472,7 +455,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
     for (const QString &moduleName : moduleNameList) {
         const QRegularExpression moduleNameRegex(moduleName);
         /* Show details about the module */
-        showInfo(0, QStaticDataSedes::serializeYaml(moduleManager.getModuleYamls(moduleNameRegex)));
+        showInfo(0, QStaticDataSedes::serializeYaml(moduleManager->getModuleYamls(moduleNameRegex)));
     }
 
     return true;
@@ -593,14 +576,13 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
     }
 
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -610,14 +592,14 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
     /* Check if module path is valid */
-    if (!projectManager.isValidModulePath()) {
+    if (!projectManager->isValidModulePath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
-                .arg(projectManager.getModulePath()));
+                .arg(projectManager->getModulePath()));
     }
     /* Check if library name is valid */
     const QRegularExpression libraryNameRegex(libraryName);
@@ -644,21 +626,15 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
                 .arg(moduleName));
     }
-
-    /* Setup module manager */
-    QSocConfig        socConfig(this, &projectManager);
-    QLLMService       llmService(this, &socConfig);
-    QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager, &llmService);
     /* Load modules */
-    if (!moduleManager.load(libraryNameRegex)) {
+    if (!moduleManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
                 .arg(libraryName));
     }
     /* Load bus library */
-    if (!busManager.load(busLibraryRegex)) {
+    if (!busManager->load(busLibraryRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load bus library: %1")
@@ -669,10 +645,10 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
     bool success = false;
     if (useAI) {
         /* Call the LLM-based method if AI option is set */
-        success = moduleManager.addModuleBusWithLLM(moduleName, busName, busMode, busInterface);
+        success = moduleManager->addModuleBusWithLLM(moduleName, busName, busMode, busInterface);
     } else {
         /* Call the standard method if AI option is not set */
-        success = moduleManager.addModuleBus(moduleName, busName, busMode, busInterface);
+        success = moduleManager->addModuleBus(moduleName, busName, busMode, busInterface);
     }
 
     if (!success) {
@@ -729,14 +705,13 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
     }
 
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -746,15 +721,15 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
 
     /* Check if module path is valid */
-    if (!projectManager.isValidModulePath()) {
+    if (!projectManager->isValidModulePath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
-                .arg(projectManager.getModulePath()));
+                .arg(projectManager->getModulePath()));
     }
 
     /* Check if library name is valid */
@@ -785,12 +760,8 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
                 .arg(busName));
     }
 
-    /* Setup module manager */
-    QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager);
-
     /* Load modules */
-    if (!moduleManager.load(libraryNameRegex)) {
+    if (!moduleManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
@@ -798,7 +769,7 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
     }
 
     /* Find modules matching the pattern */
-    const QStringList moduleList = moduleManager.listModule(moduleNameRegex);
+    const QStringList moduleList = moduleManager->listModule(moduleNameRegex);
     if (moduleList.isEmpty()) {
         return showErrorWithHelp(
             1,
@@ -809,7 +780,7 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
     /* Process each module */
     bool allSucceeded = true;
     for (const QString &currentModule : moduleList) {
-        if (!moduleManager.removeModuleBus(currentModule, busInterfaceRegex)) {
+        if (!moduleManager->removeModuleBus(currentModule, busInterfaceRegex)) {
             showError(
                 1,
                 QCoreApplication::translate(
@@ -860,14 +831,13 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
     const QString    &busName      = cmdArguments.isEmpty() ? ".*" : cmdArguments.first();
 
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -877,15 +847,15 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
 
     /* Check if module path is valid */
-    if (!projectManager.isValidModulePath()) {
+    if (!projectManager->isValidModulePath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
-                .arg(projectManager.getModulePath()));
+                .arg(projectManager->getModulePath()));
     }
 
     /* Check if library name is valid */
@@ -916,12 +886,8 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
                 .arg(busName));
     }
 
-    /* Setup module manager */
-    QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager);
-
     /* Load modules */
-    if (!moduleManager.load(libraryNameRegex)) {
+    if (!moduleManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
@@ -929,7 +895,7 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
     }
 
     /* Find modules matching the pattern */
-    const QStringList moduleList = moduleManager.listModule(moduleNameRegex);
+    const QStringList moduleList = moduleManager->listModule(moduleNameRegex);
     if (moduleList.isEmpty()) {
         return showErrorWithHelp(
             1,
@@ -940,7 +906,7 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
     /* List bus interfaces for each module */
     for (const QString &currentModule : moduleList) {
         const QStringList busInterfaces
-            = moduleManager.listModuleBus(currentModule, busInterfaceRegex);
+            = moduleManager->listModuleBus(currentModule, busInterfaceRegex);
 
         if (busInterfaces.isEmpty()) {
             showInfo(
@@ -998,14 +964,13 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
     }
 
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -1015,15 +980,15 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
 
     /* Check if module path is valid */
-    if (!projectManager.isValidModulePath()) {
+    if (!projectManager->isValidModulePath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid module directory: %1")
-                .arg(projectManager.getModulePath()));
+                .arg(projectManager->getModulePath()));
     }
 
     /* Check if library name is valid */
@@ -1054,14 +1019,8 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
                 .arg(busName));
     }
 
-    /* Setup module manager */
-    QSocConfig        socConfig(this, &projectManager);
-    QLLMService       llmService(this, &socConfig);
-    QSocBusManager    busManager(this, &projectManager);
-    QSocModuleManager moduleManager(this, &projectManager, &busManager, &llmService);
-
     /* Load modules */
-    if (!moduleManager.load(libraryNameRegex)) {
+    if (!moduleManager->load(libraryNameRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load library: %1")
@@ -1069,7 +1028,7 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
     }
 
     /* Find modules matching the pattern */
-    const QStringList moduleList = moduleManager.listModule(moduleNameRegex);
+    const QStringList moduleList = moduleManager->listModule(moduleNameRegex);
     if (moduleList.isEmpty()) {
         return showErrorWithHelp(
             1,
@@ -1079,7 +1038,7 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
 
     /* Show detailed bus information for each module */
     for (const QString &currentModule : moduleList) {
-        const YAML::Node busDetails = moduleManager.showModuleBus(currentModule, busInterfaceRegex);
+        const YAML::Node busDetails = moduleManager->showModuleBus(currentModule, busInterfaceRegex);
 
         if (!busDetails["bus"] || busDetails["bus"].size() == 0) {
             showInfo(

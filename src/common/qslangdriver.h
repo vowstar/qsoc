@@ -35,9 +35,25 @@ public:
      * @brief Destructor for QSlangDriver.
      * @details This destructor will free all the allocated resources.
      */
-    ~QSlangDriver();
+    ~QSlangDriver() override;
 
 public slots:
+    /**
+     * @brief Set the project manager.
+     * @details Assigns a new project manager to this object. The project
+     *          manager is used for managing various project-related
+     *          functionalities.
+     * @param projectManager Pointer to the new project manager.
+     */
+    void setProjectManager(QSocProjectManager *projectManager);
+
+    /**
+     * @brief Get the project manager.
+     * @details Retrieves the currently assigned project manager. This manager
+     *          is responsible for handling various aspects of the project.
+     * @return QSocProjectManager * Pointer to the current project manager.
+     */
+    QSocProjectManager *getProjectManager();
     /**
      * @brief Parse command line arguments.
      * @details This function will parse command line arguments.

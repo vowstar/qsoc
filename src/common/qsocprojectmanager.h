@@ -25,6 +25,12 @@ public:
      */
     explicit QSocProjectManager(QObject *parent = nullptr);
 
+    /**
+     * @brief Destructor for QSocProjectManager.
+     * @details This destructor will free all the allocated resources.
+     */
+    ~QSocProjectManager() override;
+
 public slots:
     /**
      * @brief Set project environment variable.

@@ -1,3 +1,4 @@
+#include "qsoc_test.h"
 #include <QtTest>
 
 class Test : public QObject
@@ -8,6 +9,6 @@ private slots:
     void parseArgs() {};
 };
 
-QTEST_APPLESS_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 
 #include "test_qslangdriver.moc"

@@ -19,21 +19,15 @@
 
 QLLMService::QLLMService(QObject *parent, QSocConfig *config)
     : QObject(parent)
+    , config(config)
 {
     /* Initialize network manager */
     networkManager = new QNetworkAccessManager(this);
-
-    /* Set config and load settings */
-    setConfig(config);
-
     /* Configure network proxy */
     setupNetworkProxy();
 }
 
-QLLMService::~QLLMService()
-{
-    /* QNetworkAccessManager is a QObject child class and will be cleaned up automatically */
-}
+QLLMService::~QLLMService() = default;
 
 /* Configuration related methods */
 

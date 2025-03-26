@@ -93,24 +93,24 @@ bool QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
     }
 
     /* Pass projectName to projectManager */
-    const QString     &projectName = cmdArguments.first();
-    QSocProjectManager projectManager(this);
+    const QString &projectName = cmdArguments.first();
+
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("bus")) {
-        projectManager.setBusPath(parser.value("bus"));
+        projectManager->setBusPath(parser.value("bus"));
     }
     if (parser.isSet("module")) {
-        projectManager.setModulePath(parser.value("module"));
+        projectManager->setModulePath(parser.value("module"));
     }
     if (parser.isSet("schematic")) {
-        projectManager.setSchematicPath(parser.value("schematic"));
+        projectManager->setSchematicPath(parser.value("schematic"));
     }
     if (parser.isSet("output")) {
-        projectManager.setOutputPath(parser.value("output"));
+        projectManager->setOutputPath(parser.value("output"));
     }
-    if (!projectManager.save(projectName)) {
+    if (!projectManager->save(projectName)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to create project %1.")
@@ -153,13 +153,13 @@ bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
     }
     /* Pass projectName to projectManager */
-    const QString     &projectName = cmdArguments.first();
-    QSocProjectManager projectManager(this);
+    const QString &projectName = cmdArguments.first();
+
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     /* Load project by name from project path */
-    if (!projectManager.load(projectName)) {
+    if (!projectManager->load(projectName)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to load project %1.")
@@ -167,19 +167,19 @@ bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
     }
     /* Update project config with new paths */
     if (parser.isSet("bus")) {
-        projectManager.setBusPath(parser.value("bus"));
+        projectManager->setBusPath(parser.value("bus"));
     }
     if (parser.isSet("module")) {
-        projectManager.setModulePath(parser.value("module"));
+        projectManager->setModulePath(parser.value("module"));
     }
     if (parser.isSet("schematic")) {
-        projectManager.setSchematicPath(parser.value("schematic"));
+        projectManager->setSchematicPath(parser.value("schematic"));
     }
     if (parser.isSet("output")) {
-        projectManager.setOutputPath(parser.value("output"));
+        projectManager->setOutputPath(parser.value("output"));
     }
     /* Save project config */
-    if (!projectManager.save(projectName)) {
+    if (!projectManager->save(projectName)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to update project %1.")
@@ -209,20 +209,20 @@ bool QSocCliWorker::parseProjectRemove(const QStringList &appArguments)
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
     }
     /* Pass projectName to projectManager */
-    const QString     &projectName = cmdArguments.first();
-    QSocProjectManager projectManager(this);
+    const QString &projectName = cmdArguments.first();
+
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     /* Check if project exists */
-    if (!projectManager.isExist(projectName)) {
+    if (!projectManager->isExist(projectName)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to find project %1.")
                 .arg(projectName));
     }
     /* Remove project file */
-    if (!projectManager.remove(projectName)) {
+    if (!projectManager->remove(projectName)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to remove project %1.")
@@ -255,12 +255,11 @@ bool QSocCliWorker::parseProjectList(const QStringList &appArguments)
     const QString projectNameRegexStr = cmdArguments.isEmpty() ? ".*" : cmdArguments.first();
     const QRegularExpression projectNameRegex(projectNameRegexStr);
     /* Pass ProjectPath to projectManager */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     /* List projects */
-    const QStringList projectNameList = projectManager.list(projectNameRegex);
+    const QStringList projectNameList = projectManager->list(projectNameRegex);
     /* Show project list */
     if (projectNameList.isEmpty()) {
         /* Output nothing */
@@ -290,20 +289,19 @@ bool QSocCliWorker::parseProjectShow(const QStringList &appArguments)
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
     }
     /* Pass projectName to projectManager */
-    const QString     &projectName = cmdArguments.first();
-    QSocProjectManager projectManager(this);
+    const QString &projectName = cmdArguments.first();
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     /* Load project by name from project path */
-    if (!projectManager.load(projectName)) {
+    if (!projectManager->load(projectName)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to load project %1.")
                 .arg(projectName));
     }
     /* Show details about the project */
-    showInfo(0, QStaticDataSedes::serializeYaml(projectManager.getProjectYaml()));
+    showInfo(0, QStaticDataSedes::serializeYaml(projectManager->getProjectYaml()));
 
     return true;
 }

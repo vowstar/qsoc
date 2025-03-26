@@ -14,10 +14,12 @@
 
 QSocBusManager::QSocBusManager(QObject *parent, QSocProjectManager *projectManager)
     : QObject{parent}
+    , projectManager(projectManager)
 {
-    /* Set projectManager */
-    setProjectManager(projectManager);
+    /* All private members set by constructor */
 }
+
+QSocBusManager::~QSocBusManager() = default;
 
 void QSocBusManager::setProjectManager(QSocProjectManager *projectManager)
 {

@@ -24,6 +24,8 @@ QSocConfig::QSocConfig(QObject *parent, QSocProjectManager *projectManager)
     loadConfig();
 }
 
+QSocConfig::~QSocConfig() = default;
+
 void QSocConfig::setProjectManager(QSocProjectManager *projectManager)
 {
     /* Only reload if project manager changes */

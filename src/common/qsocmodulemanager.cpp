@@ -1,8 +1,5 @@
 #include "common/qsocmodulemanager.h"
 
-#include "common/qslangdriver.h"
-#include "common/qsocbusmanager.h"
-#include "common/qsocconfig.h"
 #include "common/qstaticregex.h"
 #include "common/qstaticstringweaver.h"
 
@@ -22,11 +19,11 @@ QSocModuleManager::QSocModuleManager(
     , busManager(busManager)
     , llmService(llmService)
 {
-    /* Set projectManager */
-    setProjectManager(projectManager);
-    /* Set busManager */
-    setBusManager(busManager);
+    /* All private members set by constructor */
+    slangDriver = new QSlangDriver(this, projectManager);
 }
+
+QSocModuleManager::~QSocModuleManager() = default;
 
 void QSocModuleManager::setProjectManager(QSocProjectManager *projectManager)
 {
@@ -44,9 +41,24 @@ void QSocModuleManager::setBusManager(QSocBusManager *busManager)
     }
 }
 
+void QSocModuleManager::setLLMService(QLLMService *llmService)
+{
+    this->llmService = llmService;
+}
+
 QSocProjectManager *QSocModuleManager::getProjectManager()
 {
     return projectManager;
+}
+
+QSocBusManager *QSocModuleManager::getBusManager()
+{
+    return busManager;
+}
+
+QLLMService *QSocModuleManager::getLLMService()
+{
+    return llmService;
 }
 
 bool QSocModuleManager::isModulePathValid()
@@ -81,10 +93,9 @@ bool QSocModuleManager::importFromFileList(
         return false;
     }
 
-    QSlangDriver driver(this, projectManager);
-    if (driver.parseFileList(fileListPath, filePathList)) {
+    if (slangDriver->parseFileList(fileListPath, filePathList)) {
         /* Parse success */
-        QStringList moduleList = driver.getModuleList();
+        QStringList moduleList = slangDriver->getModuleList();
         if (moduleList.isEmpty()) {
             /* No module found */
             qCritical() << "Error: no module found.";
@@ -101,7 +112,7 @@ bool QSocModuleManager::importFromFileList(
                 effectiveName = moduleName.toLower();
                 qDebug() << "Pick library filename:" << effectiveName;
             }
-            const json       &moduleAst  = driver.getModuleAst(moduleName);
+            const json       &moduleAst  = slangDriver->getModuleAst(moduleName);
             const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
             /* Add module to library yaml */
             libraryYaml[moduleName.toStdString()] = moduleYaml;
@@ -118,7 +129,7 @@ bool QSocModuleManager::importFromFileList(
                     effectiveName = moduleName.toLower();
                     qDebug() << "Pick library filename:" << effectiveName;
                 }
-                const json       &moduleAst           = driver.getModuleAst(moduleName);
+                const json       &moduleAst           = slangDriver->getModuleAst(moduleName);
                 const YAML::Node &moduleYaml          = getModuleYaml(moduleAst);
                 libraryYaml[moduleName.toStdString()] = moduleYaml;
                 hasMatch                              = true;
@@ -1212,19 +1223,4 @@ void QSocModuleManager::libraryMapRemove(const QString &libraryName, const QStri
             libraryMap.remove(libraryName);
         }
     }
-}
-
-void QSocModuleManager::setLLMService(QLLMService *llmService)
-{
-    this->llmService = llmService;
-}
-
-QLLMService *QSocModuleManager::getLLMService()
-{
-    return llmService;
-}
-
-QSocBusManager *QSocModuleManager::getBusManager()
-{
-    return busManager;
 }

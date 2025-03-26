@@ -66,14 +66,13 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
     }
 
     /* Setup project manager and project path  */
-    QSocProjectManager projectManager(this);
     if (parser.isSet("directory")) {
-        projectManager.setProjectPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
-        projectManager.load(parser.value("project"));
+        projectManager->load(parser.value("project"));
     } else {
-        const QStringList &projectNameList = projectManager.list(QRegularExpression(".*"));
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
         if (projectNameList.length() > 1) {
             return showErrorWithHelp(
                 1,
@@ -83,32 +82,25 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
                     "Available projects are:\n%1\n")
                     .arg(projectNameList.join("\n")));
         }
-        projectManager.loadFirst();
+        projectManager->loadFirst();
     }
 
     /* Check if output path is valid */
-    if (!projectManager.isValidOutputPath()) {
+    if (!projectManager->isValidOutputPath()) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: invalid output directory: %1")
-                .arg(projectManager.getOutputPath()));
+                .arg(projectManager->getOutputPath()));
     }
 
-    /* Setup generate manager */
-    QSocConfig          socConfig(this, &projectManager);
-    QLLMService         llmService(this, &socConfig);
-    QSocBusManager      busManager(this, &projectManager);
-    QSocModuleManager   moduleManager(this, &projectManager, &busManager, &llmService);
-    QSocGenerateManager generateManager(this, &projectManager, &moduleManager, &busManager);
-
     /* Load modules */
-    if (!moduleManager.load(QRegularExpression(".*"))) {
+    if (!moduleManager->load(QRegularExpression(".*"))) {
         return showErrorWithHelp(
             1, QCoreApplication::translate("main", "Error: could not load library"));
     }
 
     /* Load buses */
-    if (!busManager.load(QRegularExpression(".*"))) {
+    if (!busManager->load(QRegularExpression(".*"))) {
         return showErrorWithHelp(
             1, QCoreApplication::translate("main", "Error: could not load buses"));
     }
@@ -124,7 +116,7 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         }
 
         /* Load the netlist file */
-        if (!generateManager.loadNetlist(netlistFilePath)) {
+        if (!generateManager->loadNetlist(netlistFilePath)) {
             return showError(
                 1,
                 QCoreApplication::translate("main", "Error: failed to load netlist file: %1")
@@ -132,7 +124,7 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         }
 
         /* Process the netlist */
-        if (!generateManager.processNetlist()) {
+        if (!generateManager->processNetlist()) {
             return showError(
                 1,
                 QCoreApplication::translate("main", "Error: failed to process netlist file: %1")
@@ -142,7 +134,7 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         /* Generate Verilog code */
         QFileInfo fileInfo(netlistFilePath);
         QString   outputFileName = fileInfo.baseName();
-        if (!generateManager.generateVerilog(outputFileName)) {
+        if (!generateManager->generateVerilog(outputFileName)) {
             return showError(
                 1,
                 QCoreApplication::translate("main", "Error: failed to generate Verilog code for: %1")
@@ -152,7 +144,7 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         showInfo(
             0,
             QCoreApplication::translate("main", "Successfully generated Verilog code: %1")
-                .arg(QDir(projectManager.getOutputPath()).filePath(outputFileName + ".v")));
+                .arg(QDir(projectManager->getOutputPath()).filePath(outputFileName + ".v")));
     }
 
     return true;

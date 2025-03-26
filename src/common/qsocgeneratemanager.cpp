@@ -24,8 +24,10 @@ QSocGenerateManager::QSocGenerateManager(
     , busManager(busManager)
     , llmService(llmService)
 {
-    /* Empty constructor */
+    /* All private members set by constructor */
 }
+
+QSocGenerateManager::~QSocGenerateManager() = default;
 
 void QSocGenerateManager::setProjectManager(QSocProjectManager *projectManager)
 {

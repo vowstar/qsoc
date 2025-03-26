@@ -2,10 +2,6 @@
 
 #include "common/config.h"
 #include "common/qslangdriver.h"
-#include "common/qsocbusmanager.h"
-#include "common/qsocgeneratemanager.h"
-#include "common/qsocmodulemanager.h"
-#include "common/qsocprojectmanager.h"
 #include "common/qstaticlog.h"
 
 #include <QString>
@@ -22,9 +18,16 @@ QSocCliWorker::QSocCliWorker(QObject *parent)
     parser.setApplicationDescription(
         QCoreApplication::translate("main", "Generate SoC components via the command line."));
     parser.setOptionsAfterPositionalArgumentsMode(QCommandLineParser::ParseAsOptions);
+    /* Set up manager objects */
+    projectManager  = new QSocProjectManager(this);
+    socConfig       = new QSocConfig(this, projectManager);
+    llmService      = new QLLMService(this, socConfig);
+    busManager      = new QSocBusManager(this, projectManager);
+    moduleManager   = new QSocModuleManager(this, projectManager, busManager, llmService);
+    generateManager = new QSocGenerateManager(this, projectManager, moduleManager, busManager);
 }
 
-QSocCliWorker::~QSocCliWorker() {}
+QSocCliWorker::~QSocCliWorker() = default;
 
 void QSocCliWorker::setup(const QStringList &appArguments, bool isGui)
 {

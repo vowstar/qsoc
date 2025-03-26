@@ -45,6 +45,7 @@ public:
 
     /**
      * @brief Constructor for QLLMService
+     * @details This constructor will initialize the resources.
      * @param parent Parent object
      * @param config Configuration manager, can be nullptr
      */
@@ -52,8 +53,9 @@ public:
 
     /**
      * @brief Destructor for QLLMService
+     * @details This destructor will free all the allocated resources.
      */
-    ~QLLMService();
+    ~QLLMService() override;
 
 public slots:
     /* Configuration related methods */
