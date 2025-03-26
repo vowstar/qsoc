@@ -252,6 +252,13 @@ public slots:
     const QString &getOutputPath();
 
     /**
+     * @brief Get the current path
+     * @details This function will return the current working path.
+     * @return QString & The current path.
+     */
+    const QString &getCurrentPath();
+
+    /**
      * @brief Set project node.
      * @details This function will set project YAML node.
      * @param projectNode The project node.
@@ -300,6 +307,18 @@ public slots:
      */
     void setOutputPath(const QString &outputPath);
 
+    /**
+     * @brief Set the current path and update all project-related paths
+     * @details This function sets the current path and updates all other paths based on it:
+     *          - Project path is set to the current path
+     *          - Bus path is set to current path + "/bus"
+     *          - Module path is set to current path + "/module"
+     *          - Schematic path is set to current path + "/schematic"
+     *          - Output path is set to current path + "/output"
+     * @param currentPath The new current path to set
+     */
+    void setCurrentPath(const QString &currentPath);
+
 private:
     /* Project environment variables map. */
     QMap<QString, QString> env;
@@ -324,6 +343,9 @@ private:
 
     /* Project output path. */
     QString outputPath;
+
+    /* Current path. */
+    QString currentPath;
 
     /**
      * @brief Get simplified path.

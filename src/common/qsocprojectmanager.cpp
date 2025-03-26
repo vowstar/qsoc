@@ -24,12 +24,14 @@ QSocProjectManager::QSocProjectManager(QObject *parent)
     }
     /* Set project default name */
     setProjectName("");
+    /* Initialize current path */
+    currentPath = QDir::currentPath();
     /* Set project default paths */
-    setProjectPath(QDir::currentPath());
-    setBusPath(QDir::currentPath() + "/bus");
-    setModulePath(QDir::currentPath() + "/module");
-    setSchematicPath(QDir::currentPath() + "/schematic");
-    setOutputPath(QDir::currentPath() + "/output");
+    setProjectPath(currentPath);
+    setBusPath(currentPath + "/bus");
+    setModulePath(currentPath + "/module");
+    setSchematicPath(currentPath + "/schematic");
+    setOutputPath(currentPath + "/output");
 }
 
 QSocProjectManager::~QSocProjectManager() = default;
@@ -449,4 +451,21 @@ void QSocProjectManager::setSchematicPath(const QString &schematicPath)
 void QSocProjectManager::setOutputPath(const QString &outputPath)
 {
     this->outputPath = getExpandPath(outputPath);
+}
+
+void QSocProjectManager::setCurrentPath(const QString &currentPath)
+{
+    this->currentPath = getExpandPath(currentPath);
+
+    /* Set project current paths */
+    setProjectPath(this->currentPath);
+    setBusPath(this->currentPath + "/bus");
+    setModulePath(this->currentPath + "/module");
+    setSchematicPath(this->currentPath + "/schematic");
+    setOutputPath(this->currentPath + "/output");
+}
+
+const QString &QSocProjectManager::getCurrentPath()
+{
+    return currentPath;
 }
