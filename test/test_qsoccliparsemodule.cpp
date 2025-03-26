@@ -93,7 +93,7 @@ private slots:
         }
     }
 
-    // Test if module command exists
+    /* Test if module command exists */
     void testModuleCommandExists()
     {
         messageList.clear();
@@ -102,11 +102,11 @@ private slots:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        // Check if help was displayed without errors
+        /* Check if help was displayed without errors */
         QVERIFY(messageList.size() > 0);
     }
 
-    // Test if module import command exists
+    /* Test if module import command exists */
     void testModuleImportCommandExists()
     {
         messageList.clear();
@@ -115,7 +115,7 @@ private slots:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        // Check if help was displayed without errors
+        /* Check if help was displayed without errors */
         QVERIFY(messageList.size() > 0);
     }
 };

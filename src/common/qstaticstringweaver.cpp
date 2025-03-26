@@ -313,12 +313,14 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
     /* Generate additional part-based variation pattern matches */
     /* These are dynamic partial matches that we'll compare against substrings */
     QVector<QStringList> partVariations;
-    partVariations.append(parts); // Original parts order
+    /* Original parts order */
+    partVariations.append(parts);
 
     if (parts.size() > 1 && parts.size() <= 6) {
         QStringList reversed = parts;
         std::reverse(reversed.begin(), reversed.end());
-        partVariations.append(reversed); // Reversed parts order
+        /* Reversed parts order */
+        partVariations.append(reversed);
     }
 
     /* Remove duplicates from variations */
@@ -383,14 +385,16 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
 
                     /* Count matched parts in this window */
                     for (const QString &part : partVariation) {
-                        if (part.length() >= 2) { // Only consider significant parts
+                        /* Only consider significant parts */
+                        if (part.length() >= 2) {
                             int partPos = window.indexOf(part, qMax(0, lastMatchPos));
                             if (partPos != -1) {
                                 matchedPartsCount += 1.0;
                                 lastMatchPos = partPos + part.length();
                             } else {
                                 /* Try fuzzy part match if exact match fails */
-                                double bestPartSim = 0.5; // Threshold for fuzzy matching
+                                /* Threshold for fuzzy matching */
+                                double bestPartSim = 0.5;
                                 for (int wpos = 0; wpos < window.length() - 1; wpos++) {
                                     int maxPartLen = qMin(part.length() + 2, window.length() - wpos);
                                     for (int plen = qMax(2, part.length() - 1); plen <= maxPartLen;
@@ -404,8 +408,8 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
                                     }
                                 }
                                 if (bestPartSim > 0.5) {
-                                    matchedPartsCount += bestPartSim
-                                                         * 0.8; // Partial credit for fuzzy match
+                                    /* Partial credit for fuzzy match */
+                                    matchedPartsCount += bestPartSim * 0.8;
                                 }
                             }
                         }
@@ -521,14 +525,16 @@ double QStaticStringWeaver::trimmedSimilarity(
 
         /* Mark positions where common parts appear with placeholder characters */
         for (const QString &part : commonParts) {
+            /* Skip too short parts */
             if (part.length() < 2)
-                continue; // Skip too short parts
+                continue;
 
             /* Find in s1 */
             int pos = 0;
             while ((pos = s1Lower.indexOf(part, pos)) != -1) {
                 for (int i = 0; i < part.length(); i++) {
-                    s1Mask[pos + i] = '*'; // Mark as matched
+                    /* Mark as matched */
+                    s1Mask[pos + i] = '*';
                 }
                 pos += part.length();
             }
@@ -537,7 +543,8 @@ double QStaticStringWeaver::trimmedSimilarity(
             pos = 0;
             while ((pos = s2Lower.indexOf(part, pos)) != -1) {
                 for (int i = 0; i < part.length(); i++) {
-                    s2Mask[pos + i] = '*'; // Mark as matched
+                    /* Mark as matched */
+                    s2Mask[pos + i] = '*';
                 }
                 pos += part.length();
             }
@@ -772,7 +779,8 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
                 double partSim = similarity(p1, p2);
                 bestPartSim    = qMax(bestPartSim, partSim);
             }
-            if (bestPartSim > 0.7) { // Threshold for considering a part matched
+            /* Threshold for considering a part matched */
+            if (bestPartSim > 0.7) {
                 matchedParts++;
                 totalPartSim += bestPartSim;
             }

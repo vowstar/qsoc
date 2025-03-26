@@ -1326,9 +1326,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             QRegularExpression widthRegex("\\[\\s*(\\d+)\\s*(?::\\s*\\d+)?\\s*\\]");
                             auto               match = widthRegex.match(detail.width);
                             if (match.hasMatch()) {
-                                bool ok    = false;
-                                int  width = match.captured(1).toInt(&ok)
-                                            + 1; // Add 1 because [31:0] means 32 bits
+                                bool ok = false;
+                                /* Extract the highest bit number and add 1 to get the width (e.g., [31:0] means 32 bits) */
+                                int width = match.captured(1).toInt(&ok) + 1;
                                 if (ok && width > maxWidth) {
                                     maxWidth = width;
                                     netWidth = detail.width;

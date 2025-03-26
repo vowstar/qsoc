@@ -44,16 +44,17 @@ private slots:
 
     void cleanupTestCase()
     {
-        // 处理所有待处理的事件
+        /* Process all pending events */
         for (int i = 0; i < 10; i++) {
             QCoreApplication::processEvents();
-            QThread::msleep(10); // 短暂延迟确保事件完全处理
+            /* Short delay to ensure events are fully processed */
+            QThread::msleep(10);
         }
 
-        // 断开所有可能的信号槽连接
+        /* Disconnect all possible signal-slot connections */
         QObject::disconnect();
 
-        // 再次处理所有事件
+        /* Process all events again */
         QCoreApplication::processEvents();
     }
 
