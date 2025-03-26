@@ -1,8 +1,8 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include "common/qsocprojectmanager.h"
 #include "gui/schematicwindow/schematicwindow.h"
-
 #include <QMainWindow>
 
 QT_BEGIN_NAMESPACE
@@ -46,11 +46,20 @@ private slots:
      */
     void on_actionSchematicEditor_triggered();
 
+    /**
+     * @brief New project action.
+     * @details This function will create a new project.
+     */
+    void on_actionNewProject_triggered();
+
 private:
-    /* Main window UI. */
+    /* Main window UI */
     Ui::MainWindow *ui;
 
-    /* Schematic window object. */
+    /* Project manager instance (parent-managed) */
+    QSocProjectManager *projectManager = nullptr;
+
+    /* Schematic window object */
     SchematicWindow schematicWindow;
 };
 #endif // MAINWINDOW_H
