@@ -41,19 +41,34 @@ public:
 private slots:
     /**
      * @brief Quit action.
-     * @details This function will quit the application.
+     * @details This function triggers the main window's close event when
+     *          the user selects the "Quit" action from the menu or toolbar.
+     *          It uses Qt's standard close() mechanism which will prompt
+     *          for saving any unsaved changes if implemented.
      */
     void on_actionQuit_triggered();
 
     /**
      * @brief Open schematic editor.
-     * @details This function will open the schematic editor.
+     * @details This function configures and displays the schematic editor window.
+     *          It sets the schematic window's parent to the main window,
+     *          configures it as an independent window using Qt::Window flag,
+     *          and then displays it to the user. The schematic editor allows
+     *          users to create and edit circuit diagrams.
      */
     void on_actionSchematicEditor_triggered();
 
     /**
      * @brief New project action.
-     * @details This function will create a new project.
+     * @details This function manages the complete workflow of creating a new project:
+     *          1. Closes any existing project silently
+     *          2. Shows a save dialog for the user to specify project name and location
+     *          3. Extracts project information from the selected path
+     *          4. Configures the project manager with the new project details
+     *          5. Creates the project directory structure
+     *          6. Handles error conditions with appropriate user feedback
+     *          7. Updates the lastProjectDir for future use
+     *          8. Sets up the project tree view to display the new project structure
      */
     void on_actionNewProject_triggered();
 
@@ -61,13 +76,23 @@ private slots:
      * @brief Open an existing project.
      * @details This function handles opening an existing project file,
      *          loading its configuration, and displaying it in the tree view.
+     *          It performs the following steps:
+     *          1. Closes any existing project silently
+     *          2. Shows an open dialog for the user to select a project file
+     *          3. Extracts project information from the selected file
+     *          4. Configures the project manager and loads the project
+     *          5. Handles error conditions with appropriate user feedback
+     *          6. Updates the lastProjectDir for future use
+     *          7. Displays the project structure in the tree view
      */
     void on_actionOpenProject_triggered();
 
     /**
      * @brief Close the current project.
-     * @details This function closes the currently open project and
-     *          clears the project tree view.
+     * @details This function calls the private closeProject method with
+     *          silent=false parameter to close the currently open project
+     *          while providing feedback to the user via the status bar.
+     *          It clears the project tree view and resets project manager state.
      */
     void on_actionCloseProject_triggered();
 
