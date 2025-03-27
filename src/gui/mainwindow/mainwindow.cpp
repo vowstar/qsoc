@@ -15,6 +15,7 @@ MainWindow::MainWindow(QWidget *parent)
     projectManager = new QSocProjectManager(this);
 
     /* Configure UI elements */
+    ui->toolButtonBusEditor->setDefaultAction(ui->actionBusEditor);
     ui->toolButtonSchematicEditor->setDefaultAction(ui->actionSchematicEditor);
     ui->toolButtonModuleEditor->setDefaultAction(ui->actionModuleEditor);
 

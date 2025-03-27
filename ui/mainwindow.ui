@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>800</width>
+    <width>931</width>
     <height>600</height>
    </rect>
   </property>
@@ -17,6 +17,48 @@
    <layout class="QGridLayout" name="gridLayoutCentralWidget">
     <item row="0" column="0">
      <layout class="QVBoxLayout" name="verticalLayoutToolList">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayoutBusEditor">
+        <item>
+         <widget class="QToolButton" name="toolButtonBusEditor">
+          <property name="iconSize">
+           <size>
+            <width>50</width>
+            <height>50</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QVBoxLayout" name="verticalLayoutBusEditor">
+          <item>
+           <widget class="QLabel" name="labelBusEditor">
+            <property name="font">
+             <font>
+              <bold>true</bold>
+             </font>
+            </property>
+            <property name="text">
+             <string>Bus Editor</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="labelBusEditorDetail">
+            <property name="font">
+             <font>
+              <italic>true</italic>
+             </font>
+            </property>
+            <property name="text">
+             <string>Edit the project bus definition</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </item>
       <item>
        <layout class="QHBoxLayout" name="horizontalLayoutSchematicEditor">
         <item>
@@ -104,7 +146,7 @@
       <item>
        <spacer name="verticalSpacerToolList">
         <property name="orientation">
-         <enum>Qt::Vertical</enum>
+         <enum>Qt::Orientation::Vertical</enum>
         </property>
         <property name="sizeHint" stdset="0">
          <size>
@@ -123,8 +165,8 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>800</width>
-     <height>23</height>
+     <width>931</width>
+     <height>24</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">
@@ -148,6 +190,7 @@
     <property name="title">
      <string>Tools</string>
     </property>
+    <addaction name="actionBusEditor"/>
     <addaction name="actionSchematicEditor"/>
     <addaction name="actionModuleEditor"/>
    </widget>
@@ -166,11 +209,11 @@
    <property name="minimumSize">
     <size>
      <width>300</width>
-     <height>108</height>
+     <height>109</height>
     </size>
    </property>
    <property name="features">
-    <set>QDockWidget::NoDockWidgetFeatures</set>
+    <set>QDockWidget::DockWidgetFeature::NoDockWidgetFeatures</set>
    </property>
    <property name="windowTitle">
     <string extracomment="List of project files">Project Files</string>
@@ -212,8 +255,7 @@
   </widget>
   <action name="actionNewProject">
    <property name="icon">
-    <iconset theme="document-new">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="document-new"/>
    </property>
    <property name="text">
     <string>&amp;New Project</string>
@@ -227,8 +269,7 @@
   </action>
   <action name="actionOpenProject">
    <property name="icon">
-    <iconset theme="document-open">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="document-open"/>
    </property>
    <property name="text">
     <string>&amp;Open Project</string>
@@ -242,8 +283,7 @@
   </action>
   <action name="actionCloseProject">
    <property name="icon">
-    <iconset theme="document-close">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="document-close"/>
    </property>
    <property name="text">
     <string>Close Project</string>
@@ -254,8 +294,7 @@
   </action>
   <action name="actionQuit">
    <property name="icon">
-    <iconset theme="window-close">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="window-close"/>
    </property>
    <property name="text">
     <string>&amp;Quit</string>
@@ -269,8 +308,7 @@
   </action>
   <action name="actionRefresh">
    <property name="icon">
-    <iconset theme="view-refresh">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="view-refresh"/>
    </property>
    <property name="text">
     <string>Refresh</string>
@@ -282,25 +320,9 @@
     <string>F5</string>
    </property>
   </action>
-  <action name="actionSchematicEditor">
-   <property name="icon">
-    <iconset theme="applications-schematic">
-     <normaloff>.</normaloff>.</iconset>
-   </property>
-   <property name="text">
-    <string>Schematic &amp;Editor</string>
-   </property>
-   <property name="statusTip">
-    <string>Edit schematic (Ctrl+E)</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+E</string>
-   </property>
-  </action>
   <action name="actionOpenProjectInFileExplorer">
    <property name="icon">
-    <iconset theme="document-open-in-explorer">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="document-open-in-explorer"/>
    </property>
    <property name="text">
     <string>Open In File Explorer</string>
@@ -312,7 +334,21 @@
     <string>Open project directory in file browser</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::TextHeuristicRole</enum>
+    <enum>QAction::MenuRole::TextHeuristicRole</enum>
+   </property>
+  </action>
+  <action name="actionBusEditor">
+   <property name="icon">
+    <iconset theme="applications-bus"/>
+   </property>
+   <property name="text">
+    <string>&amp;Bus Editor</string>
+   </property>
+   <property name="statusTip">
+    <string>Edit project bus definitions (CTRL+B)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+B</string>
    </property>
   </action>
   <action name="actionModuleEditor">
@@ -327,6 +363,20 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+L</string>
+   </property>
+  </action>
+  <action name="actionSchematicEditor">
+   <property name="icon">
+    <iconset theme="applications-schematic"/>
+   </property>
+   <property name="text">
+    <string>Schematic &amp;Editor</string>
+   </property>
+   <property name="statusTip">
+    <string>Edit schematic (Ctrl+E)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+E</string>
    </property>
   </action>
  </widget>
