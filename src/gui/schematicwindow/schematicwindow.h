@@ -10,6 +10,10 @@
 #include <qschematic/settings.hpp>
 #include <qschematic/view.hpp>
 
+namespace ModuleLibrary {
+class ModuleWidget;
+}
+
 QT_BEGIN_NAMESPACE
 namespace Ui {
 class SchematicWindow;
@@ -84,6 +88,19 @@ private slots:
     void on_actionQuit_triggered();
 
 private:
+    /**
+     * @brief Initialize the module library.
+     * @details This function initializes the module library.
+     */
+    void initializeModuleLibrary();
+
+    /**
+     * @brief Add a module to the schematic.
+     * @details This function adds a module to the schematic.
+     * @param[in] item Item to add
+     */
+    void addModuleToSchematic(const QSchematic::Items::Item *item);
+
     /* Main window UI. */
     Ui::SchematicWindow *ui;
 
@@ -92,5 +109,8 @@ private:
 
     /* Schematic settings. */
     QSchematic::Settings settings;
+
+    /* Module library widget. */
+    ModuleLibrary::ModuleWidget *moduleLibraryWidget;
 };
 #endif // SCHEMATICWINDOW_H
