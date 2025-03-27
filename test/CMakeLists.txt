@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.5)
 
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
+
 project(test LANGUAGES CXX)
+
+# Add CMAKE_MODULE_PATH to find custom modules if not already set
+if(NOT CMAKE_MODULE_PATH)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/../cmake")
+endif()
 
 enable_testing()
 
@@ -86,6 +94,31 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${QSCHEMATIC_LIBRARIES}
     )
 endfunction()
+
+# Add SPDX headers to test files if enabled
+if(ENABLE_SPDX_HEADERS)
+    include(AddSpdxHeaders)
+
+    # Get all test files
+    file(GLOB TEST_CPP_FILES "${CMAKE_CURRENT_LIST_DIR}/*.cpp")
+    file(GLOB TEST_H_FILES "${CMAKE_CURRENT_LIST_DIR}/*.h")
+
+    # Create a list of all test files
+    set(ALL_TEST_FILES ${TEST_CPP_FILES} ${TEST_H_FILES})
+
+    # Create a custom target for all test files
+    add_custom_target(test_all_files SOURCES ${ALL_TEST_FILES})
+
+    # Add SPDX headers to all test files
+    add_custom_target(
+        test_add_spdx_headers
+        COMMENT "Adding SPDX headers to all test files"
+    )
+
+    # Add dependency to make test_add_spdx_headers run after the test_all_files_add_spdx_headers
+    add_spdx_headers(TARGET test_all_files)
+    add_dependencies(test_add_spdx_headers test_all_files_add_spdx_headers)
+endif()
 
 qt_add_test_target("test_qslangdriver")
 qt_add_test_target("test_qsoccliworker")
