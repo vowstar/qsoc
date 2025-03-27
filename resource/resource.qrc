@@ -5,6 +5,7 @@
         <file>icon/dark/scalable/applications-bus.svg</file>
         <file>icon/dark/scalable/applications-module.svg</file>
         <file>icon/dark/scalable/applications-schematic.svg</file>
+        <file>icon/dark/scalable/applications-net.svg</file>
         <file>icon/dark/scalable/document-close.svg</file>
         <file>icon/dark/scalable/document-new.svg</file>
         <file>icon/dark/scalable/document-open-in-explorer.svg</file>
@@ -29,6 +30,7 @@
         <file>icon/light/scalable/applications-bus.svg</file>
         <file>icon/light/scalable/applications-module.svg</file>
         <file>icon/light/scalable/applications-schematic.svg</file>
+        <file>icon/light/scalable/applications-net.svg</file>
         <file>icon/light/scalable/document-close.svg</file>
         <file>icon/light/scalable/document-new.svg</file>
         <file>icon/light/scalable/document-open-in-explorer.svg</file>

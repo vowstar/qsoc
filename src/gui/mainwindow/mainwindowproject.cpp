@@ -136,7 +136,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         outputDir.setNameFilters(QStringList() << "*.soc_net");
         foreach (QString outputFileName, outputDir.entryList(QDir::Files)) {
             QStandardItem *outputFileItem = new QStandardItem(outputFileName);
-            outputFileItem->setIcon(QIcon::fromTheme("document-open"));
+            outputFileItem->setIcon(QIcon::fromTheme("applications-net"));
             outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
             outputDirItem->appendRow(outputFileItem);
         }
