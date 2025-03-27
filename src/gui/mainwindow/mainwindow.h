@@ -126,6 +126,11 @@ private:
      *          path in the item's user data for later access. File types are
      *          processed separately to allow for different icon assignment
      *          in future implementations.
+     *
+     *          The function automatically expands parent nodes after adding
+     *          child items - the project node is always expanded, while
+     *          directory nodes (Bus, Module, Schematic, Output) are expanded
+     *          only if they contain at least one file.
      */
     void setupProjectTreeView(const QString &projectName);
 

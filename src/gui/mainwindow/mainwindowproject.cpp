@@ -92,6 +92,10 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
             busFileItem->setData(busDir.filePath(busFileName), Qt::UserRole);
             busDirItem->appendRow(busFileItem);
         }
+        /* Expand Bus node if it has children */
+        if (busDirItem->hasChildren()) {
+            ui->treeViewProjectFile->setExpanded(model->indexFromItem(busDirItem), true);
+        }
 
         /* Add Module files (*.soc_mod) to Module node */
         QDir        moduleDir(projectManager->getModulePath());
@@ -104,6 +108,10 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
             moduleFileItem->setData(moduleDir.filePath(moduleFileName), Qt::UserRole);
             moduleDirItem->appendRow(moduleFileItem);
         }
+        /* Expand Module node if it has children */
+        if (moduleDirItem->hasChildren()) {
+            ui->treeViewProjectFile->setExpanded(model->indexFromItem(moduleDirItem), true);
+        }
 
         /* Add Schematic files (*.soc_sch) to Schematic node */
         QDir        schematicDir(projectManager->getSchematicPath());
@@ -115,6 +123,10 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
             schematicFileItem->setIcon(QIcon::fromTheme("applications-schematic"));
             schematicFileItem->setData(schematicDir.filePath(schematicFileName), Qt::UserRole);
             schematicDirItem->appendRow(schematicFileItem);
+        }
+        /* Expand Schematic node if it has children */
+        if (schematicDirItem->hasChildren()) {
+            ui->treeViewProjectFile->setExpanded(model->indexFromItem(schematicDirItem), true);
         }
 
         /* Add Output files to Output node - each file type separately */
@@ -146,8 +158,13 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
             outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
             outputDirItem->appendRow(outputFileItem);
         }
+        /* Expand Output node if it has children */
+        if (outputDirItem->hasChildren()) {
+            ui->treeViewProjectFile->setExpanded(model->indexFromItem(outputDirItem), true);
+        }
 
         model->appendRow(projectItem);
+        /* Always expand the project item to show directories */
         ui->treeViewProjectFile->expand(model->indexFromItem(projectItem));
     }
 }
