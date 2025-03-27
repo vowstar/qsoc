@@ -88,7 +88,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         busDir.setNameFilters(busFilters);
         foreach (QString busFileName, busDir.entryList(QDir::Files)) {
             QStandardItem *busFileItem = new QStandardItem(busFileName);
-            busFileItem->setIcon(QIcon::fromTheme("document-open"));
+            busFileItem->setIcon(QIcon::fromTheme("applications-bus"));
             busFileItem->setData(busDir.filePath(busFileName), Qt::UserRole);
             busDirItem->appendRow(busFileItem);
         }
@@ -100,7 +100,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         moduleDir.setNameFilters(moduleFilters);
         foreach (QString moduleFileName, moduleDir.entryList(QDir::Files)) {
             QStandardItem *moduleFileItem = new QStandardItem(moduleFileName);
-            moduleFileItem->setIcon(QIcon::fromTheme("document-open"));
+            moduleFileItem->setIcon(QIcon::fromTheme("applications-module"));
             moduleFileItem->setData(moduleDir.filePath(moduleFileName), Qt::UserRole);
             moduleDirItem->appendRow(moduleFileItem);
         }
@@ -112,7 +112,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         schematicDir.setNameFilters(schematicFilters);
         foreach (QString schematicFileName, schematicDir.entryList(QDir::Files)) {
             QStandardItem *schematicFileItem = new QStandardItem(schematicFileName);
-            schematicFileItem->setIcon(QIcon::fromTheme("document-open"));
+            schematicFileItem->setIcon(QIcon::fromTheme("applications-schematic"));
             schematicFileItem->setData(schematicDir.filePath(schematicFileName), Qt::UserRole);
             schematicDirItem->appendRow(schematicFileItem);
         }
