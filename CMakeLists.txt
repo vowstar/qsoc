@@ -1,9 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
+
 cmake_minimum_required(VERSION 3.5)
+
+# Add CMAKE_MODULE_PATH to find custom modules
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # Options
 option(ENABLE_CLANG_TIDY "Enable static analysis with clang-tidy" ON)
 option(ENABLE_UNIT_TEST  "Enable unit test"                       ON)
 option(ENABLE_DOXYGEN    "Enable static analysis with clang-tidy" OFF)
+option(ENABLE_SPDX_HEADERS "Enable adding SPDX headers to source files" OFF)
 # CMake Settings
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
@@ -310,4 +317,10 @@ if (ENABLE_UNIT_TEST)
     enable_testing()
     add_test(NAME test_cmd_version COMMAND ${PROJECT_NAME} -v)
     add_subdirectory(test)
+endif()
+
+# Add SPDX headers to source files if enabled
+if(ENABLE_SPDX_HEADERS)
+    include(AddSpdxHeaders)
+    add_spdx_headers(TARGET ${PROJECT_NAME})
 endif()
