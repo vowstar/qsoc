@@ -15,14 +15,16 @@ A CMake module to automatically add SPDX license and copyright headers to C++ so
 - When SPDX header already exists, only updates the year information while preserving the original license and author
 - Works cross-platform (Linux, macOS, Windows)
 - Can be enabled/disabled via CMake option
+- When disabled (ENABLE_SPDX_HEADERS=OFF), all SPDX header operations are skipped and no dependencies are created
+- Automatically disables SPDX headers if git is not available and no copyright information is provided
 
 ### Usage in CMakeLists.txt
 
 The module is included in the main CMakeLists.txt and can be controlled with the `ENABLE_SPDX_HEADERS` option:
 
 ```cmake
-# Enable or disable SPDX headers (default: ON)
-option(ENABLE_SPDX_HEADERS "Enable adding SPDX headers to source files" ON)
+# Enable or disable SPDX headers (default: OFF)
+option(ENABLE_SPDX_HEADERS "Enable adding SPDX headers to source files" OFF)
 
 # ... later in the file ...
 
@@ -101,3 +103,12 @@ Where the year range is automatically determined:
 
 - Single year (e.g., "2025") if the file was created in the current year
 - Year range (e.g., "2023-2025") if the file was first committed in a previous year
+
+### Notes on Git Dependency
+
+If git is not available on the system and no copyright information is provided, SPDX header generation will be automatically disabled, even if `ENABLE_SPDX_HEADERS` is set to ON. To use SPDX headers without git, you must explicitly specify:
+
+```bash
+cmake -B build -G Ninja -DENABLE_SPDX_HEADERS=ON \
+  -DSPDX_COPYRIGHT_HOLDER="Your Name <your.email@example.com>"
+```

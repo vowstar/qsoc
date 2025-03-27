@@ -73,6 +73,13 @@ endfunction()
 
 # Function to add SPDX headers to source files
 function(add_spdx_headers)
+    # First check if SPDX headers are enabled globally
+    if(NOT ENABLE_SPDX_HEADERS)
+        # Skip all SPDX header operations when disabled
+        message(STATUS "SPDX headers are disabled, skipping for all targets")
+        return()
+    endif()
+
     # Parse arguments
     set(options "")
     set(oneValueArgs TARGET LICENSE COPYRIGHT_HOLDER COPYRIGHT_YEAR_START)
@@ -82,6 +89,12 @@ function(add_spdx_headers)
     # Check if TARGET is provided
     if(NOT SPDX_TARGET)
         message(FATAL_ERROR "TARGET must be specified for add_spdx_headers")
+        return()
+    endif()
+
+    # If git is not available and user didn't specify copyright info, automatically disable SPDX headers
+    if(NOT GIT_EXECUTABLE AND NOT SPDX_COPYRIGHT_HOLDER)
+        message(STATUS "Git not found and no COPYRIGHT_HOLDER specified, skipping SPDX headers for target ${SPDX_TARGET}")
         return()
     endif()
 
@@ -103,7 +116,13 @@ function(add_spdx_headers)
     endif()
 
     if(NOT SPDX_COPYRIGHT_YEAR_START)
-        set(SPDX_COPYRIGHT_YEAR_START "2023")
+        # If git is not available for determining years, try to use explicit year or current year
+        if(NOT GIT_EXECUTABLE)
+            set(SPDX_COPYRIGHT_YEAR_START "${CURRENT_YEAR}")
+            message(STATUS "Git not found, using current year (${CURRENT_YEAR}) as start year for copyright")
+        else()
+            set(SPDX_COPYRIGHT_YEAR_START "2023")
+        endif()
     endif()
 
     # Get all source files from the target
