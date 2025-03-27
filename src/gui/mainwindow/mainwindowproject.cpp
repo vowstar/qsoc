@@ -40,6 +40,52 @@ void MainWindow::closeProject(bool silent)
     }
 }
 
+/* Private helper function to setup the project tree view */
+void MainWindow::setupProjectTreeView(const QString &projectName)
+{
+    /* Create/update tree view model */
+    if (!ui->treeViewProjectFile->model()) {
+        QStandardItemModel *model = new QStandardItemModel(this);
+        model->setHorizontalHeaderLabels(QStringList() << "Project Files");
+        ui->treeViewProjectFile->setModel(model);
+    }
+
+    /* Add project to tree view */
+    QStandardItemModel *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
+    if (model) {
+        QStandardItem *projectItem = new QStandardItem(QString("%1.soc_pro").arg(projectName));
+
+        /* Set icon using theme system */
+        projectItem->setIcon(QIcon::fromTheme("document-open"));
+        /* Store full path in item data */
+        projectItem->setData(projectManager->getProjectPath(), Qt::UserRole);
+
+        /* Add project directories as child nodes */
+        QStandardItem *busDirItem = new QStandardItem(tr("Bus"));
+        busDirItem->setIcon(QIcon::fromTheme("document-open"));
+        busDirItem->setData(projectManager->getBusPath(), Qt::UserRole);
+        projectItem->appendRow(busDirItem);
+
+        QStandardItem *moduleDirItem = new QStandardItem(tr("Module"));
+        moduleDirItem->setIcon(QIcon::fromTheme("document-open"));
+        moduleDirItem->setData(projectManager->getModulePath(), Qt::UserRole);
+        projectItem->appendRow(moduleDirItem);
+
+        QStandardItem *schematicDirItem = new QStandardItem(tr("Schematic"));
+        schematicDirItem->setIcon(QIcon::fromTheme("document-open"));
+        schematicDirItem->setData(projectManager->getSchematicPath(), Qt::UserRole);
+        projectItem->appendRow(schematicDirItem);
+
+        QStandardItem *outputDirItem = new QStandardItem(tr("Output"));
+        outputDirItem->setIcon(QIcon::fromTheme("document-open"));
+        outputDirItem->setData(projectManager->getOutputPath(), Qt::UserRole);
+        projectItem->appendRow(outputDirItem);
+
+        model->appendRow(projectItem);
+        ui->treeViewProjectFile->expand(model->indexFromItem(projectItem));
+    }
+}
+
 void MainWindow::on_actionNewProject_triggered()
 {
     /* Close current project first (silent mode) */
@@ -84,47 +130,8 @@ void MainWindow::on_actionNewProject_triggered()
         lastProjectDir = fileInfo.absolutePath();
     }
 
-    /* Create/update tree view model */
-    if (!ui->treeViewProjectFile->model()) {
-        QStandardItemModel *model = new QStandardItemModel(this);
-        model->setHorizontalHeaderLabels(QStringList() << "Project Files");
-        ui->treeViewProjectFile->setModel(model);
-    }
-
-    /* Add new project to tree view */
-    QStandardItemModel *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
-    if (model) {
-        QStandardItem *projectItem = new QStandardItem(QString("%1.soc_pro").arg(projectName));
-
-        /* Set icon using theme system */
-        projectItem->setIcon(QIcon::fromTheme("document-open"));
-        /* Store full path in item data */
-        projectItem->setData(projectManager->getProjectPath(), Qt::UserRole);
-
-        /* Add project directories as child nodes */
-        QStandardItem *busDirItem = new QStandardItem(tr("Bus"));
-        busDirItem->setIcon(QIcon::fromTheme("document-open"));
-        busDirItem->setData(projectManager->getBusPath(), Qt::UserRole);
-        projectItem->appendRow(busDirItem);
-
-        QStandardItem *moduleDirItem = new QStandardItem(tr("Module"));
-        moduleDirItem->setIcon(QIcon::fromTheme("document-open"));
-        moduleDirItem->setData(projectManager->getModulePath(), Qt::UserRole);
-        projectItem->appendRow(moduleDirItem);
-
-        QStandardItem *schematicDirItem = new QStandardItem(tr("Schematic"));
-        schematicDirItem->setIcon(QIcon::fromTheme("document-open"));
-        schematicDirItem->setData(projectManager->getSchematicPath(), Qt::UserRole);
-        projectItem->appendRow(schematicDirItem);
-
-        QStandardItem *outputDirItem = new QStandardItem(tr("Output"));
-        outputDirItem->setIcon(QIcon::fromTheme("document-open"));
-        outputDirItem->setData(projectManager->getOutputPath(), Qt::UserRole);
-        projectItem->appendRow(outputDirItem);
-
-        model->appendRow(projectItem);
-        ui->treeViewProjectFile->expand(model->indexFromItem(projectItem));
-    }
+    /* Setup project tree view */
+    setupProjectTreeView(projectName);
 }
 
 void MainWindow::on_actionOpenProject_triggered()
@@ -164,47 +171,8 @@ void MainWindow::on_actionOpenProject_triggered()
         lastProjectDir = projectDir;
     }
 
-    /* Create/update tree view model */
-    if (!ui->treeViewProjectFile->model()) {
-        QStandardItemModel *model = new QStandardItemModel(this);
-        model->setHorizontalHeaderLabels(QStringList() << "Project Files");
-        ui->treeViewProjectFile->setModel(model);
-    }
-
-    /* Add project to tree view */
-    QStandardItemModel *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
-    if (model) {
-        QStandardItem *projectItem = new QStandardItem(QString("%1.soc_pro").arg(projectName));
-
-        /* Set icon using theme system */
-        projectItem->setIcon(QIcon::fromTheme("document-open"));
-        /* Store full path in item data */
-        projectItem->setData(projectManager->getProjectPath(), Qt::UserRole);
-
-        /* Add project directories as child nodes */
-        QStandardItem *busDirItem = new QStandardItem(tr("Bus"));
-        busDirItem->setIcon(QIcon::fromTheme("document-open"));
-        busDirItem->setData(projectManager->getBusPath(), Qt::UserRole);
-        projectItem->appendRow(busDirItem);
-
-        QStandardItem *moduleDirItem = new QStandardItem(tr("Module"));
-        moduleDirItem->setIcon(QIcon::fromTheme("document-open"));
-        moduleDirItem->setData(projectManager->getModulePath(), Qt::UserRole);
-        projectItem->appendRow(moduleDirItem);
-
-        QStandardItem *schematicDirItem = new QStandardItem(tr("Schematic"));
-        schematicDirItem->setIcon(QIcon::fromTheme("document-open"));
-        schematicDirItem->setData(projectManager->getSchematicPath(), Qt::UserRole);
-        projectItem->appendRow(schematicDirItem);
-
-        QStandardItem *outputDirItem = new QStandardItem(tr("Output"));
-        outputDirItem->setIcon(QIcon::fromTheme("document-open"));
-        outputDirItem->setData(projectManager->getOutputPath(), Qt::UserRole);
-        projectItem->appendRow(outputDirItem);
-
-        model->appendRow(projectItem);
-        ui->treeViewProjectFile->expand(model->indexFromItem(projectItem));
-    }
+    /* Setup project tree view */
+    setupProjectTreeView(projectName);
 }
 
 void MainWindow::on_actionCloseProject_triggered()

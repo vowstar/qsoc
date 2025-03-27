@@ -81,6 +81,16 @@ private:
      */
     void closeProject(bool silent = false);
 
+    /**
+     * @brief Sets up the project tree view with directories
+     * @param projectName Name of the project to display in tree
+     * @details Creates a tree view model if not exists, adds the project
+     *          as root item with its directory structure (Bus, Module,
+     *          Schematic, Output) as child nodes, sets appropriate icons,
+     *          and expands the tree view to show the project structure.
+     */
+    void setupProjectTreeView(const QString &projectName);
+
     /* Main window UI */
     Ui::MainWindow *ui;
     /* Last used project directory */
