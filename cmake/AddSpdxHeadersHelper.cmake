@@ -32,7 +32,7 @@ file(READ "${FILE_PATH}" ORIGINAL_CONTENT)
 # Check if file already has SPDX header
 if(ORIGINAL_CONTENT MATCHES "SPDX-License-Identifier:")
     # SPDX header already exists, extract and update only the year
-    
+
     # Extract the current license identifier
     string(REGEX MATCH "SPDX-License-Identifier: ([^\n\r]*)" LICENSE_MATCH "${ORIGINAL_CONTENT}")
     if(LICENSE_MATCH)
@@ -40,7 +40,7 @@ if(ORIGINAL_CONTENT MATCHES "SPDX-License-Identifier:")
     else()
         set(EXISTING_LICENSE "${LICENSE}")
     endif()
-    
+
     # Extract the current copyright holder
     string(REGEX MATCH "SPDX-FileCopyrightText: [0-9-]+ ([^\n\r]*)" COPYRIGHT_MATCH "${ORIGINAL_CONTENT}")
     if(COPYRIGHT_MATCH)
@@ -48,35 +48,35 @@ if(ORIGINAL_CONTENT MATCHES "SPDX-License-Identifier:")
     else()
         set(EXISTING_COPYRIGHT_HOLDER "${COPYRIGHT_HOLDER}")
     endif()
-    
+
     # Prepare updated SPDX headers
     set(SPDX_LINE1 "// SPDX-License-Identifier: ${EXISTING_LICENSE}")
     set(SPDX_LINE2 "// SPDX-FileCopyrightText: ${COPYRIGHT_YEAR} ${EXISTING_COPYRIGHT_HOLDER}")
-    
+
     # Replace the existing SPDX headers
     string(REGEX REPLACE "(// SPDX-License-Identifier: [^\n\r]*\n// SPDX-FileCopyrightText: [^\n\r]*)" "${SPDX_LINE1}\n${SPDX_LINE2}" UPDATED_CONTENT "${ORIGINAL_CONTENT}")
-    
+
     # Write the updated content to the temporary file
     file(WRITE "${TEMP_FILE}" "${UPDATED_CONTENT}")
-    
+
     # Replace the original file with the temporary file
     file(RENAME "${TEMP_FILE}" "${FILE_PATH}")
-    
+
     # Inform the user
     message(STATUS "Updated SPDX header year in ${FILE_PATH}")
 else()
     # No SPDX header exists, add a new one
-    
+
     # Prepare the SPDX headers with explicit newlines
     set(SPDX_LINE1 "// SPDX-License-Identifier: ${LICENSE}")
     set(SPDX_LINE2 "// SPDX-FileCopyrightText: ${COPYRIGHT_YEAR} ${COPYRIGHT_HOLDER}")
-    
+
     # Write the headers and original content to the temporary file
     file(WRITE "${TEMP_FILE}" "${SPDX_LINE1}\n${SPDX_LINE2}\n\n${ORIGINAL_CONTENT}")
-    
+
     # Replace the original file with the temporary file
     file(RENAME "${TEMP_FILE}" "${FILE_PATH}")
-    
+
     # Inform the user
     message(STATUS "Added SPDX header to ${FILE_PATH}")
 endif()

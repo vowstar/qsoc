@@ -22,7 +22,7 @@ function(_get_git_user_info NAME_VAR EMAIL_VAR)
             ERROR_QUIET
             OUTPUT_STRIP_TRAILING_WHITESPACE
         )
-        
+
         # Try to get user email from git config
         execute_process(
             COMMAND ${GIT_EXECUTABLE} config --get user.email
@@ -30,7 +30,7 @@ function(_get_git_user_info NAME_VAR EMAIL_VAR)
             ERROR_QUIET
             OUTPUT_STRIP_TRAILING_WHITESPACE
         )
-        
+
         # Check if both name and email were found
         if(GIT_USER_NAME AND GIT_USER_EMAIL)
             set(${NAME_VAR} "${GIT_USER_NAME}" PARENT_SCOPE)
@@ -38,7 +38,7 @@ function(_get_git_user_info NAME_VAR EMAIL_VAR)
             return()
         endif()
     endif()
-    
+
     # If git is not available or user info not found, return empty values
     set(${NAME_VAR} "" PARENT_SCOPE)
     set(${EMAIL_VAR} "" PARENT_SCOPE)
@@ -56,7 +56,7 @@ function(_get_git_file_first_year FILE_PATH YEAR_VAR)
             ERROR_QUIET
             OUTPUT_STRIP_TRAILING_WHITESPACE
         )
-        
+
         # Get the first line (first year)
         if(GIT_YEARS)
             string(REGEX REPLACE "\n.*" "" FIRST_YEAR "${GIT_YEARS}")
@@ -66,7 +66,7 @@ function(_get_git_file_first_year FILE_PATH YEAR_VAR)
             endif()
         endif()
     endif()
-    
+
     # If git is not available or file history not found, return empty value
     set(${YEAR_VAR} "" PARENT_SCOPE)
 endfunction()
@@ -127,7 +127,7 @@ function(add_spdx_headers)
 
     # Get all source files from the target
     get_target_property(target_sources ${SPDX_TARGET} SOURCES)
-    
+
     # Filter for C++ source and header files
     set(cpp_files "")
     foreach(source ${target_sources})
@@ -146,23 +146,23 @@ function(add_spdx_headers)
     foreach(source ${cpp_files})
         # Get absolute path
         get_filename_component(source_abs "${source}" ABSOLUTE)
-        
+
         # Try to get first commit year for this file from git
         _get_git_file_first_year("${source_abs}" GIT_FIRST_YEAR)
-        
+
         # Set copyright year range - use git first year if available, otherwise use default
         set(START_YEAR "${SPDX_COPYRIGHT_YEAR_START}")
         if(GIT_FIRST_YEAR)
             set(START_YEAR "${GIT_FIRST_YEAR}")
             message(STATUS "Using git first commit year for ${source}: ${START_YEAR}")
         endif()
-        
+
         # Set copyright year range
         set(COPYRIGHT_YEAR "${START_YEAR}")
         if(NOT START_YEAR STREQUAL CURRENT_YEAR)
             set(COPYRIGHT_YEAR "${START_YEAR}-${CURRENT_YEAR}")
         endif()
-        
+
         # Add custom command to add SPDX header if not already present
         add_custom_command(
             TARGET ${SPDX_TARGET}_add_spdx_headers
@@ -173,7 +173,7 @@ function(add_spdx_headers)
             VERBATIM
         )
     endforeach()
-    
+
     # Make the main target depend on the SPDX headers target
     add_dependencies(${SPDX_TARGET} ${SPDX_TARGET}_add_spdx_headers)
 endfunction()
