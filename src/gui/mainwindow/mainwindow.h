@@ -3,6 +3,7 @@
 
 #include "common/qsocprojectmanager.h"
 #include "gui/schematicwindow/schematicwindow.h"
+
 #include <QDir>
 #include <QMainWindow>
 
@@ -53,12 +54,28 @@ private slots:
      */
     void on_actionNewProject_triggered();
 
+    /**
+     * @brief Open an existing project.
+     * @details This function handles opening an existing project file,
+     *          loading its configuration, and displaying it in the tree view.
+     */
     void on_actionOpenProject_triggered();
 
+    /**
+     * @brief Close the current project.
+     * @details This function closes the currently open project and
+     *          clears the project tree view.
+     */
     void on_actionCloseProject_triggered();
 
 private:
-    /* Close the current project with option for silent mode */
+    /**
+     * @brief Close the current project with option for silent mode.
+     * @details This function handles clearing the project tree view,
+     *          resetting the project manager state, and optionally
+     *          notifying the user via the status bar.
+     * @param silent If true, suppresses the status bar notification.
+     */
     void closeProject(bool silent = false);
 
     /* Main window UI */
