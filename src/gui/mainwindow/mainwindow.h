@@ -105,6 +105,14 @@ private slots:
      */
     void on_actionOpenProjectInFileExplorer_triggered();
 
+    /**
+     * @brief Refresh the project tree view.
+     * @details This function refreshes the project tree view to display
+     *          the latest project structure. It updates the project tree
+     *          view to reflect any changes in the project directory.
+     */
+    void on_actionRefresh_triggered();
+
 private:
     /**
      * @brief Close the current project with option for silent mode.
@@ -152,4 +160,5 @@ private:
     /* Schematic window object */
     SchematicWindow schematicWindow;
 };
+
 #endif // MAINWINDOW_H

@@ -320,3 +320,28 @@ void MainWindow::on_actionOpenProjectInFileExplorer_triggered()
             tr("Could not open the project directory in file explorer."));
     }
 }
+
+void MainWindow::on_actionRefresh_triggered()
+{
+    /* Check if there's an active project */
+    if (!projectManager || projectManager->getProjectName().isEmpty()) {
+        QMessageBox::information(this, tr("No Project Open"), tr("Please open a project first."));
+        return;
+    }
+
+    /* Get current project name */
+    QString projectName = projectManager->getProjectName();
+
+    /* Clear existing tree view */
+    QStandardItemModel *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
+    if (model) {
+        model->clear();
+        model->setHorizontalHeaderLabels(QStringList() << "Project Files");
+    }
+
+    /* Reload project tree view */
+    setupProjectTreeView(projectName);
+
+    /* Show confirmation message */
+    statusBar()->showMessage(tr("Project view refreshed"), 2000);
+}
