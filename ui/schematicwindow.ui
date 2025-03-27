@@ -26,7 +26,7 @@
      <x>0</x>
      <y>0</y>
      <width>800</width>
-     <height>23</height>
+     <height>24</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">
@@ -92,14 +92,14 @@
    <property name="minimumSize">
     <size>
      <width>200</width>
-     <height>36</height>
+     <height>37</height>
     </size>
    </property>
    <property name="features">
-    <set>QDockWidget::DockWidgetClosable|QDockWidget::DockWidgetMovable</set>
+    <set>QDockWidget::DockWidgetFeature::DockWidgetClosable|QDockWidget::DockWidgetFeature::DockWidgetMovable</set>
    </property>
    <property name="allowedAreas">
-    <set>Qt::LeftDockWidgetArea|Qt::RightDockWidgetArea</set>
+    <set>Qt::DockWidgetArea::LeftDockWidgetArea|Qt::DockWidgetArea::RightDockWidgetArea</set>
    </property>
    <property name="windowTitle">
     <string extracomment="List of modules for the current project">Module List</string>
@@ -175,14 +175,14 @@
    <property name="minimumSize">
     <size>
      <width>200</width>
-     <height>108</height>
+     <height>109</height>
     </size>
    </property>
    <property name="features">
-    <set>QDockWidget::DockWidgetClosable|QDockWidget::DockWidgetMovable</set>
+    <set>QDockWidget::DockWidgetFeature::DockWidgetClosable|QDockWidget::DockWidgetFeature::DockWidgetMovable</set>
    </property>
    <property name="allowedAreas">
-    <set>Qt::LeftDockWidgetArea|Qt::RightDockWidgetArea</set>
+    <set>Qt::DockWidgetArea::LeftDockWidgetArea|Qt::DockWidgetArea::RightDockWidgetArea</set>
    </property>
    <property name="windowTitle">
     <string extracomment="Command history list for the current schematic">Command History</string>
@@ -200,8 +200,7 @@
   </widget>
   <action name="actionQuit">
    <property name="icon">
-    <iconset theme="window-close">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="window-close"/>
    </property>
    <property name="text">
     <string>&amp;Quit</string>
@@ -224,8 +223,7 @@
     <bool>true</bool>
    </property>
    <property name="icon">
-    <iconset theme="view-grid-on">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="view-grid-on"/>
    </property>
    <property name="text">
     <string>Show Grid</string>
@@ -242,8 +240,7 @@
     <bool>true</bool>
    </property>
    <property name="icon">
-    <iconset theme="view-select-item">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="view-select-item"/>
    </property>
    <property name="text">
     <string>Select Item(s)</string>
@@ -261,7 +258,7 @@
     <string>Esc</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::TextHeuristicRole</enum>
+    <enum>QAction::MenuRole::TextHeuristicRole</enum>
    </property>
   </action>
   <action name="actionAddWire">
@@ -272,8 +269,7 @@
     <bool>false</bool>
    </property>
    <property name="icon">
-    <iconset theme="view-add-wire">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="view-add-wire"/>
    </property>
    <property name="text">
     <string>Add a wire</string>
@@ -288,13 +284,12 @@
     <string>W</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::TextHeuristicRole</enum>
+    <enum>QAction::MenuRole::TextHeuristicRole</enum>
    </property>
   </action>
   <action name="actionSave">
    <property name="icon">
-    <iconset theme="document-save">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="document-save"/>
    </property>
    <property name="text">
     <string>&amp;Save</string>
@@ -311,8 +306,7 @@
   </action>
   <action name="actionPrint">
    <property name="icon">
-    <iconset theme="document-print">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="document-print"/>
    </property>
    <property name="text">
     <string>Print</string>
@@ -329,8 +323,7 @@
   </action>
   <action name="actionUndo">
    <property name="icon">
-    <iconset theme="edit-undo">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="edit-undo"/>
    </property>
    <property name="text">
     <string>Undo</string>
@@ -347,8 +340,7 @@
   </action>
   <action name="actionRedo">
    <property name="icon">
-    <iconset theme="edit-redo">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="edit-redo"/>
    </property>
    <property name="text">
     <string>Redo</string>
@@ -365,8 +357,7 @@
   </action>
   <action name="actionCut">
    <property name="icon">
-    <iconset theme="edit-cut">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="edit-cut"/>
    </property>
    <property name="text">
     <string>Cut</string>
@@ -383,8 +374,7 @@
   </action>
   <action name="actionCopy">
    <property name="icon">
-    <iconset theme="edit-copy">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="edit-copy"/>
    </property>
    <property name="text">
     <string>Copy</string>
@@ -401,8 +391,7 @@
   </action>
   <action name="actionPaste">
    <property name="icon">
-    <iconset theme="edit-paste">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="edit-paste"/>
    </property>
    <property name="text">
     <string>Paste</string>
@@ -419,8 +408,7 @@
   </action>
   <action name="actionDelete">
    <property name="icon">
-    <iconset theme="edit-delete">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="edit-delete"/>
    </property>
    <property name="text">
     <string>Delete</string>
@@ -437,8 +425,7 @@
   </action>
   <action name="actionSelectAll">
    <property name="icon">
-    <iconset theme="edit-select-all">
-     <normaloff>.</normaloff>.</iconset>
+    <iconset theme="edit-select-all"/>
    </property>
    <property name="text">
     <string>Select All</string>
