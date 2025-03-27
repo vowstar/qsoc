@@ -96,6 +96,15 @@ private slots:
      */
     void on_actionCloseProject_triggered();
 
+    /**
+     * @brief Open the project in the file explorer.
+     * @details This function triggers the system's file explorer to open
+     *          the directory of the currently loaded project, allowing users
+     *          to easily access project files and folders directly from the
+     *          file system.
+     */
+    void on_actionOpenProjectInFileExplorer_triggered();
+
 private:
     /**
      * @brief Close the current project with option for silent mode.

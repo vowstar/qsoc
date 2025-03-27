@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QIcon>
 #include <QMessageBox>
+#include <QProcess>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QStatusBar>
@@ -261,4 +262,61 @@ void MainWindow::on_actionOpenProject_triggered()
 void MainWindow::on_actionCloseProject_triggered()
 {
     closeProject(false);
+}
+
+void MainWindow::on_actionOpenProjectInFileExplorer_triggered()
+{
+    /* Check if there's an active project */
+    if (!projectManager || projectManager->getProjectName().isEmpty()) {
+        QMessageBox::information(this, tr("No Project Open"), tr("Please open a project first."));
+        return;
+    }
+
+    QString projectPath = projectManager->getProjectPath();
+
+    /* Ensure the directory exists */
+    QDir dir(projectPath);
+    if (!dir.exists()) {
+        QMessageBox::warning(
+            this,
+            tr("Directory Not Found"),
+            tr("The project directory does not exist: %1").arg(projectPath));
+        return;
+    }
+
+    bool success = false;
+
+#if defined(Q_OS_WIN)
+    /* Windows: Use explorer.exe */
+    success
+        = QProcess::startDetached("explorer", QStringList() << QDir::toNativeSeparators(projectPath));
+#elif defined(Q_OS_MAC)
+    /* macOS: Use open command */
+    success = QProcess::startDetached("open", QStringList() << projectPath);
+#else
+    /* Linux and other Unix-like systems */
+    QStringList fileManagers = {
+        "xdg-open", /**< Should be available on most Linux distributions */
+        "nautilus", /**< GNOME */
+        "dolphin",  /**< KDE */
+        "thunar",   /**< Xfce */
+        "pcmanfm",  /**< LXDE/LXQt */
+        "caja",     /**< MATE */
+        "nemo"      /**< Cinnamon */
+    };
+
+    for (const QString &fileManager : fileManagers) {
+        success = QProcess::startDetached(fileManager, QStringList() << projectPath);
+        if (success) {
+            break;
+        }
+    }
+#endif
+
+    if (!success) {
+        QMessageBox::warning(
+            this,
+            tr("Failed to Open Directory"),
+            tr("Could not open the project directory in file explorer."));
+    }
 }
