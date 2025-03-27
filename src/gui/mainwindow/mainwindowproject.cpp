@@ -56,7 +56,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         QStandardItem *projectItem = new QStandardItem(QString("%1.soc_pro").arg(projectName));
 
         /* Set icon using theme system */
-        projectItem->setIcon(QIcon::fromTheme("document-open"));
+        projectItem->setIcon(QIcon::fromTheme("applications-soc"));
         /* Store full path in item data */
         projectItem->setData(projectManager->getProjectPath(), Qt::UserRole);
 
