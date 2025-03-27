@@ -81,6 +81,72 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         outputDirItem->setData(projectManager->getOutputPath(), Qt::UserRole);
         projectItem->appendRow(outputDirItem);
 
+        /* Add Bus files (*.soc_bus) to Bus node */
+        QDir        busDir(projectManager->getBusPath());
+        QStringList busFilters;
+        busFilters << "*.soc_bus";
+        busDir.setNameFilters(busFilters);
+        foreach (QString busFileName, busDir.entryList(QDir::Files)) {
+            QStandardItem *busFileItem = new QStandardItem(busFileName);
+            busFileItem->setIcon(QIcon::fromTheme("document-open"));
+            busFileItem->setData(busDir.filePath(busFileName), Qt::UserRole);
+            busDirItem->appendRow(busFileItem);
+        }
+
+        /* Add Module files (*.soc_mod) to Module node */
+        QDir        moduleDir(projectManager->getModulePath());
+        QStringList moduleFilters;
+        moduleFilters << "*.soc_mod";
+        moduleDir.setNameFilters(moduleFilters);
+        foreach (QString moduleFileName, moduleDir.entryList(QDir::Files)) {
+            QStandardItem *moduleFileItem = new QStandardItem(moduleFileName);
+            moduleFileItem->setIcon(QIcon::fromTheme("document-open"));
+            moduleFileItem->setData(moduleDir.filePath(moduleFileName), Qt::UserRole);
+            moduleDirItem->appendRow(moduleFileItem);
+        }
+
+        /* Add Schematic files (*.soc_sch) to Schematic node */
+        QDir        schematicDir(projectManager->getSchematicPath());
+        QStringList schematicFilters;
+        schematicFilters << "*.soc_sch";
+        schematicDir.setNameFilters(schematicFilters);
+        foreach (QString schematicFileName, schematicDir.entryList(QDir::Files)) {
+            QStandardItem *schematicFileItem = new QStandardItem(schematicFileName);
+            schematicFileItem->setIcon(QIcon::fromTheme("document-open"));
+            schematicFileItem->setData(schematicDir.filePath(schematicFileName), Qt::UserRole);
+            schematicDirItem->appendRow(schematicFileItem);
+        }
+
+        /* Add Output files to Output node - each file type separately */
+        QDir outputDir(projectManager->getOutputPath());
+
+        /* Add .soc_net files */
+        outputDir.setNameFilters(QStringList() << "*.soc_net");
+        foreach (QString outputFileName, outputDir.entryList(QDir::Files)) {
+            QStandardItem *outputFileItem = new QStandardItem(outputFileName);
+            outputFileItem->setIcon(QIcon::fromTheme("document-open"));
+            outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
+            outputDirItem->appendRow(outputFileItem);
+        }
+
+        /* Add .v (Verilog) files */
+        outputDir.setNameFilters(QStringList() << "*.v");
+        foreach (QString outputFileName, outputDir.entryList(QDir::Files)) {
+            QStandardItem *outputFileItem = new QStandardItem(outputFileName);
+            outputFileItem->setIcon(QIcon::fromTheme("document-open"));
+            outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
+            outputDirItem->appendRow(outputFileItem);
+        }
+
+        /* Add .csv files */
+        outputDir.setNameFilters(QStringList() << "*.csv");
+        foreach (QString outputFileName, outputDir.entryList(QDir::Files)) {
+            QStandardItem *outputFileItem = new QStandardItem(outputFileName);
+            outputFileItem->setIcon(QIcon::fromTheme("document-open"));
+            outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
+            outputDirItem->appendRow(outputFileItem);
+        }
+
         model->appendRow(projectItem);
         ui->treeViewProjectFile->expand(model->indexFromItem(projectItem));
     }

@@ -113,6 +113,19 @@ private:
      *          as root item with its directory structure (Bus, Module,
      *          Schematic, Output) as child nodes, sets appropriate icons,
      *          and expands the tree view to show the project structure.
+     *
+     *          This function also scans and displays files in each directory:
+     *          - *.soc_bus files in Bus directory
+     *          - *.soc_mod files in Module directory
+     *          - *.soc_sch files in Schematic directory
+     *          - *.soc_net files in Output directory
+     *          - *.v (Verilog) files in Output directory
+     *          - *.csv files in Output directory
+     *
+     *          Each file is displayed with a document icon and stores its full
+     *          path in the item's user data for later access. File types are
+     *          processed separately to allow for different icon assignment
+     *          in future implementations.
      */
     void setupProjectTreeView(const QString &projectName);
 
