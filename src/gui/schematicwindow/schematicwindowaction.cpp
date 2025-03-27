@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
+
 #include "gui/schematicwindow/schematicwindow.h"
 
 #include "./ui_schematicwindow.h"

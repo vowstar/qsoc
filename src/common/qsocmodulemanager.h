@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
+
 #ifndef QSOCMODULEMANAGER_H
 #define QSOCMODULEMANAGER_H
 

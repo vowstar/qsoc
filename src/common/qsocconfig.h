@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
+
 #ifndef QSOCCONFIG_H
 #define QSOCCONFIG_H
 
