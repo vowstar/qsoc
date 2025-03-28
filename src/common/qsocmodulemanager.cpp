@@ -739,7 +739,7 @@ bool QSocModuleManager::addModuleBus(
 
     /* Get bus YAML */
     YAML::Node busYaml = busManager->getBusYaml(busName);
-    if (!busYaml) {
+    if (!busManager->isBusExist(busName)) {
         qCritical() << "Error: Bus does not exist:" << busName;
         return false;
     }
@@ -892,7 +892,7 @@ bool QSocModuleManager::addModuleBusWithLLM(
 
     /* Get bus YAML */
     YAML::Node busYaml = busManager->getBusYaml(busName);
-    if (!busYaml) {
+    if (!busManager->isBusExist(busName)) {
         qCritical() << "Error: Bus does not exist:" << busName;
         return false;
     }
@@ -1313,7 +1313,7 @@ bool QSocModuleManager::explainModuleBusWithLLM(
 
     /* Get bus YAML */
     YAML::Node busYaml = busManager->getBusYaml(busName);
-    if (!busYaml) {
+    if (!busManager->isBusExist(busName)) {
         qCritical() << "Error: Bus does not exist:" << busName;
         return false;
     }
