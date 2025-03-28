@@ -461,6 +461,20 @@ public slots:
      */
     YAML::Node showModuleBus(const QString &moduleName, const QRegularExpression &busInterfaceRegex);
 
+    /**
+     * @brief Explain potential bus interfaces in a module using LLM.
+     * @details This function analyzes the module's ports and compares them with the specified bus type
+     *          to identify potential bus interface matches. It uses LLM to analyze the signals and
+     *          provide detailed information about each potential interface group.
+     * @param moduleName Name of the module to analyze.
+     * @param busName Name of the bus type to compare against.
+     * @param explanation Output string containing the LLM's analysis and explanation.
+     * @retval true Analysis completed successfully.
+     * @retval false Analysis failed or module/bus not found.
+     */
+    bool explainModuleBusWithLLM(
+        const QString &moduleName, const QString &busName, QString &explanation);
+
 private:
     /* Project manager. */
     QSocProjectManager *projectManager = nullptr;
@@ -526,6 +540,15 @@ private:
      * @param moduleName The name of the module to be removed.
      */
     void libraryMapRemove(const QString &libraryName, const QString &moduleName);
+
+    /**
+     * @brief Format LLM response into a markdown table.
+     * @details This function takes the JSON response from LLM and formats it into a
+     *          markdown table for better readability.
+     * @param jsonResponse The JSON response from LLM.
+     * @return Formatted markdown table string.
+     */
+    QString formatLLMResponseToMarkdown(const QString &jsonResponse);
 
 signals:
 };

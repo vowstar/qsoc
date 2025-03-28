@@ -246,6 +246,16 @@ private:
     bool parseModuleBusShow(const QStringList &appArguments);
 
     /**
+     * @brief Parse the module bus explain command line arguments.
+     * @details This function will parse the module bus explain command line arguments
+     *          to explain the bus interfaces of specified module.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseModuleBusExplain(const QStringList &appArguments);
+
+    /**
      * @brief Parse the bus command line arguments.
      * @details This function will parse the bus command line arguments.
      * @param appArguments command line arguments.

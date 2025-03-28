@@ -475,7 +475,8 @@ bool QSocCliWorker::parseModuleBus(const QStringList &appArguments)
             "add      Add bus definitions to modules.\n"
             "remove   Remove bus definitions from modules.\n"
             "list     List bus definitions of modules.\n"
-            "show     Show bus definitions of modules."),
+            "show     Show bus definitions of modules.\n"
+            "explain  Explain potential bus interfaces in modules."),
         "module bus <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
@@ -503,6 +504,11 @@ bool QSocCliWorker::parseModuleBus(const QStringList &appArguments)
     } else if (command == "show") {
         nextArguments.removeOne(command);
         if (!parseModuleBusShow(nextArguments)) {
+            return false;
+        }
+    } else if (command == "explain") {
+        nextArguments.removeOne(command);
+        if (!parseModuleBusExplain(nextArguments)) {
             return false;
         }
     } else {
@@ -629,19 +635,21 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
                 .arg(moduleName));
     }
-    /* Load modules */
-    if (!moduleManager->load(libraryNameRegex)) {
-        return showErrorWithHelp(
-            1,
-            QCoreApplication::translate("main", "Error: could not load library: %1")
-                .arg(libraryName));
-    }
+
     /* Load bus library */
     if (!busManager->load(busLibraryRegex)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: could not load bus library: %1")
                 .arg(busLibrary));
+    }
+
+    /* Load modules */
+    if (!moduleManager->load(libraryNameRegex)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: could not load library: %1")
+                .arg(libraryName));
     }
 
     /* Load configuration */
@@ -1062,6 +1070,139 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
             showInfo(0, QStaticDataSedes::serializeYaml(busDetails));
         }
     }
+
+    return true;
+}
+
+bool QSocCliWorker::parseModuleBusExplain(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"l", "library"},
+         QCoreApplication::translate("main", "The library base name or regex."),
+         "library base name or regex"},
+        {{"m", "module"},
+         QCoreApplication::translate("main", "The module name or regex."),
+         "module name or regex"},
+        {{"b", "bus"}, QCoreApplication::translate("main", "The specified bus name."), "bus name"},
+        {{"bl", "bus-library"},
+         QCoreApplication::translate("main", "The bus library name or regex."),
+         "bus library name or regex"},
+    });
+
+    parser.parse(appArguments);
+
+    if (parser.isSet("help")) {
+        return showHelp(0);
+    }
+
+    const QString &libraryName = parser.isSet("library") ? parser.value("library") : ".*";
+    const QString &moduleName  = parser.isSet("module") ? parser.value("module") : "";
+    const QString &busName     = parser.isSet("bus") ? parser.value("bus") : "";
+    const QString &busLibrary  = parser.isSet("bus-library") ? parser.value("bus-library") : ".*";
+
+    /* Validate required parameters */
+    if (moduleName.isEmpty()) {
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: module name is required."));
+    }
+    if (busName.isEmpty()) {
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: bus name is required."));
+    }
+
+    /* Setup project manager and project path  */
+    if (parser.isSet("directory")) {
+        projectManager->setProjectPath(parser.value("directory"));
+    }
+    if (parser.isSet("project")) {
+        projectManager->load(parser.value("project"));
+    } else {
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
+        if (projectNameList.length() > 1) {
+            return showErrorWithHelp(
+                1,
+                QCoreApplication::translate(
+                    "main",
+                    "Error: multiple projects found, please specify the project name.\n"
+                    "Available projects are:\n%1\n")
+                    .arg(projectNameList.join("\n")));
+        }
+        projectManager->loadFirst();
+    }
+
+    /* Check if module path is valid */
+    if (!projectManager->isValidModulePath()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid module directory: %1")
+                .arg(projectManager->getModulePath()));
+    }
+
+    /* Check if library name is valid */
+    const QRegularExpression libraryNameRegex(libraryName);
+    if (!libraryNameRegex.isValid()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid regular expression of library name: %1")
+                .arg(libraryName));
+    }
+
+    /* Check if module name is valid */
+    const QRegularExpression moduleNameRegex(moduleName);
+    if (!moduleNameRegex.isValid()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid regular expression of module name: %1")
+                .arg(moduleName));
+    }
+    /* Check if bus library name is valid */
+    const QRegularExpression busLibraryRegex(busLibrary);
+    if (!busLibraryRegex.isValid()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate(
+                "main", "Error: invalid regular expression of bus library name: %1")
+                .arg(busLibrary));
+    }
+
+    /* Load bus library */
+    if (!busManager->load(busLibraryRegex)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: could not load bus library: %1")
+                .arg(busLibrary));
+    }
+
+    /* Load modules */
+    if (!moduleManager->load(libraryNameRegex)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: could not load library: %1")
+                .arg(libraryName));
+    }
+
+    /* Load configuration */
+    socConfig->loadConfig();
+
+    /* Update LLM service configuration */
+    llmService->setConfig(socConfig);
+
+    /* Explain bus interface using LLM */
+    QString explanation;
+    if (!moduleManager->explainModuleBusWithLLM(moduleName, busName, explanation)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: could not explain bus interface for module: %1")
+                .arg(moduleName));
+    }
+
+    /* Show the explanation */
+    showInfo(0, explanation);
 
     return true;
 }

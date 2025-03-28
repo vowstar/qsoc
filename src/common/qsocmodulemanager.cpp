@@ -1227,3 +1227,162 @@ void QSocModuleManager::libraryMapRemove(const QString &libraryName, const QStri
         }
     }
 }
+
+QString QSocModuleManager::formatLLMResponseToMarkdown(const QString &jsonResponse)
+{
+    /* Try to parse the JSON response */
+    QJsonDocument doc = QJsonDocument::fromJson(jsonResponse.toUtf8());
+    if (doc.isNull()) {
+        qWarning() << "Failed to parse JSON response";
+        return jsonResponse; /* Return original response if parsing fails */
+    }
+
+    QJsonObject root = doc.object();
+    if (!root.contains("groups") || !root["groups"].isArray()) {
+        qWarning() << "Invalid JSON structure: missing or invalid 'groups' array";
+        return jsonResponse;
+    }
+
+    QJsonArray groups = root["groups"].toArray();
+    if (groups.isEmpty()) {
+        return "No potential bus interface groups found.";
+    }
+
+    /* Create markdown table header */
+    QString markdown
+        = "| Group Name | Data Width | Address Width | ID Width | Burst Length | Write | Read |\n";
+    markdown
+        += "|------------|------------|---------------|----------|--------------|-------|------|\n";
+
+    /* Add each group as a table row */
+    for (const QJsonValue &groupValue : groups) {
+        QJsonObject group = groupValue.toObject();
+
+        /* Extract values with fallbacks */
+        QString name    = group["name"].toString();
+        QString wData   = group["wData"].toString();
+        QString wAddr   = group["wAddr"].toString();
+        QString wID     = group["wID"].toString();
+        QString wLen    = group["wLen"].toString();
+        bool    enWrite = group["enWrite"].toBool();
+        bool    enRead  = group["enRead"].toBool();
+
+        /* Format the row */
+        markdown += QString("| %1 | %2 | %3 | %4 | %5 | %6 | %7 |\n")
+                        .arg(name)
+                        .arg(wData)
+                        .arg(wAddr)
+                        .arg(wID)
+                        .arg(wLen)
+                        .arg(enWrite ? "✓" : "✗")
+                        .arg(enRead ? "✓" : "✗");
+    }
+
+    return markdown;
+}
+
+bool QSocModuleManager::explainModuleBusWithLLM(
+    const QString &moduleName, const QString &busName, QString &explanation)
+{
+    /* Validate llmService */
+    if (!llmService) {
+        qCritical() << "Error: llmService is null.";
+        return false;
+    }
+
+    /* Validate projectManager and its path */
+    if (!isModulePathValid()) {
+        qCritical() << "Error: projectManager is null or invalid module path.";
+        return false;
+    }
+
+    /* Check if module exists */
+    if (!isModuleExist(moduleName)) {
+        qCritical() << "Error: Module does not exist:" << moduleName;
+        return false;
+    }
+
+    /* Get module YAML */
+    YAML::Node moduleYaml = getModuleYaml(moduleName);
+
+    /* Validate busManager */
+    if (!busManager) {
+        qCritical() << "Error: busManager is null.";
+        return false;
+    }
+
+    /* Get bus YAML */
+    YAML::Node busYaml = busManager->getBusYaml(busName);
+    if (!busYaml) {
+        qCritical() << "Error: Bus does not exist:" << busName;
+        return false;
+    }
+
+    /* Extract module ports from moduleYaml */
+    QVector<QString> groupModule;
+    if (moduleYaml["port"]) {
+        for (YAML::const_iterator it = moduleYaml["port"].begin(); it != moduleYaml["port"].end();
+             ++it) {
+            const std::string portNameStd = it->first.as<std::string>();
+            groupModule.append(QString::fromStdString(portNameStd));
+        }
+    }
+
+    /* Extract bus signals from busYaml */
+    QVector<QString> groupBus;
+    if (busYaml["port"]) {
+        for (YAML::const_iterator it = busYaml["port"].begin(); it != busYaml["port"].end(); ++it) {
+            const std::string portNameStd = it->first.as<std::string>();
+            groupBus.append(QString::fromStdString(portNameStd));
+        }
+    }
+
+    /* Prepare prompt for LLM */
+    QString prompt = QString(
+        "Analyze the following module ports and bus signals to identify potential bus interface "
+        "matches.\n\n");
+    prompt += "Module ports:\n";
+    for (const QString &port : groupModule) {
+        prompt += "- " + port + "\n";
+    }
+    prompt += "\nBus signals:\n";
+    for (const QString &signal : groupBus) {
+        prompt += "- " + signal + "\n";
+    }
+    prompt += "\nPlease analyze the signals and provide the following information for each "
+              "potential interface group in JSON format:\n";
+    prompt += "{\n";
+    prompt += "  \"groups\": [\n";
+    prompt += "    {\n";
+    prompt += "      \"name\": \"group name based on signal patterns\",\n";
+    prompt += "      \"wData\": \"data width\",\n";
+    prompt += "      \"wAddr\": \"address width\",\n";
+    prompt += "      \"wID\": \"ID width\",\n";
+    prompt += "      \"wLen\": \"burst length width\",\n";
+    prompt += "      \"enWrite\": true/false,\n";
+    prompt += "      \"enRead\": true/false\n";
+    prompt += "    }\n";
+    prompt += "  ]\n";
+    prompt += "}\n\n";
+    prompt += "Please provide your analysis in the exact JSON format shown above.";
+
+    /* Send request to LLM service */
+    LLMResponse response = llmService->sendRequest(
+        prompt,
+        /* Default system prompt */
+        "You are a helpful assistant that specializes in hardware "
+        "design and bus interfaces. You always respond in JSON format when requested.",
+        0.2,
+        true);
+
+    /* Return error if request failed */
+    if (!response.success) {
+        qCritical() << "Error: LLM API request failed:" << response.errorMessage;
+        return false;
+    }
+
+    /* Format the response into a markdown table */
+    explanation = formatLLMResponseToMarkdown(response.content);
+
+    return true;
+}
