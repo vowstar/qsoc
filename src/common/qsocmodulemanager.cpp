@@ -923,65 +923,31 @@ bool QSocModuleManager::addModuleBusWithLLM(
     qDebug() << "Module ports:" << groupModule;
     qDebug() << "Bus signals:" << groupBus;
 
-    /* Prepare prompt for LLM */
-    QString prompt = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
-    Analyze the following module ports and bus signals to identify potential bus interface matches.
-
-    Bus type: )" + busName + R"(
-
-    Module ports:
-    )");
-
-    for (const QString &port : groupModule) {
-        prompt += "- " + port + "\n";
-    }
-
-    prompt += QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
-
-    Bus signals:
-    )");
-
-    for (const QString &signal : groupBus) {
-        prompt += "- " + signal + "\n";
-    }
-
-    prompt += QStaticStringWeaver::stripCommonLeadingWhitespace(
-        R"(
-
-    Please analyze the signals and provide the following information ONLY for )"
-        + busName + R"( bus type.
-    If you don't find any matches for this specific bus type, return an empty groups array.
-
-    Return the information in JSON format:
-    {
-      "groups": [
-        {
-          "name": "short_verilog_interface_name",
-          "wData": "data width",
-          "wAddr": "address width",
-          "wID": "ID width",
-          "wLen": "burst length width",
-          "enWrite": true/false,
-          "enRead": true/false
-        }
-      ]
-    }
-
-    For the "name" field:
-    1. Use a short, concise name suitable for Verilog interface naming
-    2. Follow Verilog naming conventions (alphanumeric with underscores)
-    3. The name should reflect the function of the interface group
-    4. Do not use generic names like "interface1" - use functional names
-
-    Please provide your analysis in the exact JSON format shown above.
-    )");
+    /* Build prompt */
+    QString prompt
+        = QString(
+              "I need to match bus signals to module ports based on naming conventions and "
+              "semantics.\n\n"
+              "Module name: %1\n"
+              "Bus name: %2\n"
+              "Module ports:\n%4\n\n"
+              "Bus signals:\n%5\n\n"
+              "Please provide the best mapping between bus signals and module ports. "
+              "Consider matches related to: %3.\n"
+              "For unmatched bus signals, use empty string."
+              "Return a JSON object where keys are bus signals and values are module ports. ")
+              .arg(moduleName)
+              .arg(busName)
+              .arg(busInterface)
+              .arg(groupModule.join(", "))
+              .arg(groupBus.join(", "));
 
     /* Send request to LLM service */
     LLMResponse response = llmService->sendRequest(
         prompt,
         /* Default system prompt */
         "You are a helpful assistant that specializes in hardware "
-        "design and bus interfaces. You always respond in JSON format when requested.",
+        "design and bus interfaces.",
         0.2,
         true);
 
