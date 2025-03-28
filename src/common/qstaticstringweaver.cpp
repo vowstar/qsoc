@@ -882,3 +882,61 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
 
     return bestGroupMarker;
 }
+
+QString QStaticStringWeaver::stripCommonLeadingWhitespace(const QString &text)
+{
+    /* Split the text into lines */
+    QStringList lines = text.split('\n');
+
+    /* Find non-empty lines to compute common whitespace
+     * Empty lines (including those with only spaces) are not considered for common indentation, but will be preserved in the result */
+    QStringList nonEmptyLines;
+    for (const QString &line : lines) {
+        if (!line.trimmed().isEmpty()) {
+            nonEmptyLines.append(line);
+        }
+    }
+
+    if (nonEmptyLines.isEmpty()) {
+        return text;
+    }
+
+    /* Find the minimum indentation level */
+    int minIndent = INT_MAX;
+    for (const QString &line : nonEmptyLines) {
+        int leadingSpaces = 0;
+        while (leadingSpaces < line.length()
+               && (line[leadingSpaces] == ' ' || line[leadingSpaces] == '\t')) {
+            leadingSpaces++;
+        }
+        if (leadingSpaces < minIndent) {
+            minIndent = leadingSpaces;
+        }
+    }
+
+    /* If there's no common indentation, return the original text */
+    if (minIndent == INT_MAX || minIndent == 0) {
+        return text;
+    }
+
+    /* Remove the common indentation
+     * Preserve the positions of all original empty lines, only remove the common indentation from non-empty lines */
+    QStringList resultLines;
+    for (const QString &line : lines) {
+        if (line.trimmed().isEmpty()) {
+            /* Preserve empty lines as empty strings to ensure line breaks when joining */
+            resultLines.append("");
+        } else if (line.length() <= minIndent) {
+            /* In case the line length is less than or equal to the minimum indentation, treat it as an empty line */
+            resultLines.append("");
+        } else {
+            /* Remove the common indentation prefix */
+            resultLines.append(line.mid(minIndent));
+        }
+    }
+
+    /* Join the lines, preserving all empty lines */
+    QString result = resultLines.join('\n');
+
+    return result;
+}

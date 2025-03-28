@@ -180,6 +180,15 @@ public slots:
     static QString findBestGroupMarkerForHint(
         const QString &hintString, const QList<QString> &candidateMarkers);
 
+    /**
+     * @brief Strips common leading whitespace from multi-line strings
+     * @details Useful for maintaining proper indentation in here-documents
+     *          while eliminating extra indentation caused by code formatting.
+     * @param text The multi-line QString to process
+     * @return The QString with common leading whitespace removed
+     */
+    static QString stripCommonLeadingWhitespace(const QString &text);
+
 private:
     /**
      * @brief Constructor.
