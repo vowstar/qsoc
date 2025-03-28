@@ -644,6 +644,12 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
                 .arg(busLibrary));
     }
 
+    /* Load configuration */
+    socConfig->loadConfig();
+
+    /* Update LLM service configuration */
+    llmService->setConfig(socConfig);
+
     /* Add bus interface to module using AI or standard method */
     bool success = false;
     if (useAI) {
