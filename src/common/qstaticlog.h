@@ -8,6 +8,7 @@
 #include <QString>
 #include <QTextBrowser>
 #include <QtCore>
+#include <QtGlobal>
 
 /**
  * @brief The QStaticLog class.
@@ -71,6 +72,20 @@ public:
      * @retval false Richtext in colorless mode.
      */
     static bool isColorRichtext();
+
+    /**
+     * @brief Install custom message handler to redirect outputs to appropriate streams.
+     * @details Installs a message handler that directs QtInfoMsg to stdout 
+     *          and all other message types to stderr.
+     */
+    static void installMessageHandler();
+
+    /**
+     * @brief Restore the original message handler.
+     * @details Restores the message handler that was in place before
+     *          installMessageHandler was called.
+     */
+    static void restoreMessageHandler();
 
 public slots:
     /**
@@ -231,6 +246,19 @@ private:
 
     /* Color mode for richtext. */
     static bool colorRichtext;
+
+    /* Original message handler pointer. */
+    static QtMessageHandler originalHandler;
+
+    /**
+     * @brief Custom message handler function.
+     * @details Routes QtInfoMsg to stdout and all other message types to stderr.
+     *          Also calls the original handler if it exists.
+     * @param type The message type.
+     * @param context The message context.
+     * @param msg The message string.
+     */
+    static void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg);
 
     /**
      * @brief Constructor.

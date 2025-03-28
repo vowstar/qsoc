@@ -32,6 +32,9 @@ QStaticLog::Level QStaticLog::level         = QStaticLog::Level::Error;
 bool              QStaticLog::colorConsole  = true;
 bool              QStaticLog::colorRichtext = true;
 
+/* Initialize static members */
+QtMessageHandler QStaticLog::originalHandler = nullptr;
+
 void QStaticLog::logE(const QString &func, const QString &message)
 {
     if (QStaticLog::level >= QStaticLog::Level::Error) {
@@ -132,4 +135,33 @@ void QStaticLog::setColor(bool color)
 {
     QStaticLog::setColorConsole(color);
     QStaticLog::setColorRichtext(color);
+}
+
+void QStaticLog::installMessageHandler()
+{
+    /* Save the original message handler and install our custom handler */
+    originalHandler = qInstallMessageHandler(messageHandler);
+}
+
+void QStaticLog::restoreMessageHandler()
+{
+    /* Restore the original message handler */
+    qInstallMessageHandler(originalHandler);
+}
+
+void QStaticLog::messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+{
+    /* Select output stream based on message type */
+    switch (type) {
+    case QtInfoMsg:
+        /* Direct info messages to stdout */
+        fprintf(stdout, "%s\n", qPrintable(msg));
+        fflush(stdout);
+        break;
+    default:
+        /* Direct all other message types to stderr */
+        fprintf(stderr, "%s\n", qPrintable(msg));
+        fflush(stderr);
+        break;
+    }
 }

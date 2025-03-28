@@ -21,7 +21,9 @@ bool isGui(int &argc, char *argv[])
 int main(int argc, char *argv[])
 {
     int result = 0;
-
+    /* Install message handler to direct outputs to appropriate streams */
+    QStaticLog::installMessageHandler();
+    /* Check if GUI mode is requested */
     if (isGui(argc, argv)) {
         const QApplication app(argc, argv);
         QStaticTranslator::setup();
@@ -38,5 +40,9 @@ int main(int argc, char *argv[])
         socCliWorker.setup(app.arguments(), false);
         result = app.exec();
     }
+
+    /* Restore original message handler before exiting */
+    QStaticLog::restoreMessageHandler();
+
     return result;
 }
