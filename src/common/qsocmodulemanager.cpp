@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocmodulemanager.h"
-
 #include "common/qstaticregex.h"
 #include "common/qstaticstringweaver.h"
 
@@ -924,31 +923,65 @@ bool QSocModuleManager::addModuleBusWithLLM(
     qDebug() << "Module ports:" << groupModule;
     qDebug() << "Bus signals:" << groupBus;
 
-    /* Build prompt */
-    QString prompt
-        = QString(
-              "I need to match bus signals to module ports based on naming conventions and "
-              "semantics.\n\n"
-              "Module name: %1\n"
-              "Bus name: %2\n"
-              "Module ports:\n%4\n\n"
-              "Bus signals:\n%5\n\n"
-              "Please provide the best mapping between bus signals and module ports. "
-              "Consider matches related to: %3.\n"
-              "For unmatched bus signals, use empty string."
-              "Return a JSON object where keys are bus signals and values are module ports. ")
-              .arg(moduleName)
-              .arg(busName)
-              .arg(busInterface)
-              .arg(groupModule.join(", "))
-              .arg(groupBus.join(", "));
+    /* Prepare prompt for LLM */
+    QString prompt = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
+    Analyze the following module ports and bus signals to identify potential bus interface matches.
+
+    Bus type: )" + busName + R"(
+
+    Module ports:
+    )");
+
+    for (const QString &port : groupModule) {
+        prompt += "- " + port + "\n";
+    }
+
+    prompt += QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
+
+    Bus signals:
+    )");
+
+    for (const QString &signal : groupBus) {
+        prompt += "- " + signal + "\n";
+    }
+
+    prompt += QStaticStringWeaver::stripCommonLeadingWhitespace(
+        R"(
+
+    Please analyze the signals and provide the following information ONLY for )"
+        + busName + R"( bus type.
+    If you don't find any matches for this specific bus type, return an empty groups array.
+
+    Return the information in JSON format:
+    {
+      "groups": [
+        {
+          "name": "short_verilog_interface_name",
+          "wData": "data width",
+          "wAddr": "address width",
+          "wID": "ID width",
+          "wLen": "burst length width",
+          "enWrite": true/false,
+          "enRead": true/false
+        }
+      ]
+    }
+
+    For the "name" field:
+    1. Use a short, concise name suitable for Verilog interface naming
+    2. Follow Verilog naming conventions (alphanumeric with underscores)
+    3. The name should reflect the function of the interface group
+    4. Do not use generic names like "interface1" - use functional names
+
+    Please provide your analysis in the exact JSON format shown above.
+    )");
 
     /* Send request to LLM service */
     LLMResponse response = llmService->sendRequest(
         prompt,
         /* Default system prompt */
         "You are a helpful assistant that specializes in hardware "
-        "design and bus interfaces.",
+        "design and bus interfaces. You always respond in JSON format when requested.",
         0.2,
         true);
 
@@ -1338,33 +1371,57 @@ bool QSocModuleManager::explainModuleBusWithLLM(
     }
 
     /* Prepare prompt for LLM */
-    QString prompt = QString(
-        "Analyze the following module ports and bus signals to identify potential bus interface "
-        "matches.\n\n");
-    prompt += "Module ports:\n";
+    QString prompt = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
+    Analyze the following module ports and bus signals to identify potential bus interface matches.
+
+    Bus type: )" + busName + R"(
+
+    Module ports:
+    )");
+
     for (const QString &port : groupModule) {
         prompt += "- " + port + "\n";
     }
-    prompt += "\nBus signals:\n";
+
+    prompt += QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
+
+    Bus signals:
+    )");
+
     for (const QString &signal : groupBus) {
         prompt += "- " + signal + "\n";
     }
-    prompt += "\nPlease analyze the signals and provide the following information for each "
-              "potential interface group in JSON format:\n";
-    prompt += "{\n";
-    prompt += "  \"groups\": [\n";
-    prompt += "    {\n";
-    prompt += "      \"name\": \"group name based on signal patterns\",\n";
-    prompt += "      \"wData\": \"data width\",\n";
-    prompt += "      \"wAddr\": \"address width\",\n";
-    prompt += "      \"wID\": \"ID width\",\n";
-    prompt += "      \"wLen\": \"burst length width\",\n";
-    prompt += "      \"enWrite\": true/false,\n";
-    prompt += "      \"enRead\": true/false\n";
-    prompt += "    }\n";
-    prompt += "  ]\n";
-    prompt += "}\n\n";
-    prompt += "Please provide your analysis in the exact JSON format shown above.";
+
+    prompt += QStaticStringWeaver::stripCommonLeadingWhitespace(
+        R"(
+
+    Please analyze the signals and provide the following information ONLY for )"
+        + busName + R"( bus type.
+    If you don't find any matches for this specific bus type, return an empty groups array.
+
+    Return the information in JSON format:
+    {
+      "groups": [
+        {
+          "name": "short_verilog_interface_name",
+          "wData": "data width",
+          "wAddr": "address width",
+          "wID": "ID width",
+          "wLen": "burst length width",
+          "enWrite": true/false,
+          "enRead": true/false
+        }
+      ]
+    }
+
+    For the "name" field:
+    1. Use a short, concise name suitable for Verilog interface naming
+    2. Follow Verilog naming conventions (alphanumeric with underscores)
+    3. The name should reflect the function of the interface group
+    4. Do not use generic names like "interface1" - use functional names
+
+    Please provide your analysis in the exact JSON format shown above.
+    )");
 
     /* Send request to LLM service */
     LLMResponse response = llmService->sendRequest(
