@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
+// SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qstaticmarkdown.h"
 #include <algorithm>
@@ -112,7 +112,7 @@ QString QStaticMarkdown::renderTable(const QStringList &headers, const QVector<Q
     std::string templateStr =
         /* Header row with column names */
         "{% for col in columns %}"
-        "| {{ col.name | pad(col.width) }} "
+        "|{{ col.name | pad(col.width) }}"
         "{% endfor %}|\n"
 
         /* Separator row with alignment indicators */
@@ -123,7 +123,7 @@ QString QStaticMarkdown::renderTable(const QStringList &headers, const QVector<Q
         /* Data rows */
         "{% for row in rows %}"
         "{% for i in range(end=columns.size) %}"
-        "| {{ row[i] | pad(columns[i].width) }} "
+        "|{{ row[i] | pad(columns[i].width) }}"
         "{% endfor %}|\n"
         "{% endfor %}";
 
@@ -140,8 +140,8 @@ QString QStaticMarkdown::renderTable(const QStringList &headers, const QVector<Q
 
         /* Header row */
         for (int i = 0; i < headers.size(); ++i) {
-            QString paddedHeader = headers[i].leftJustified(columnWidths[i], ' ');
-            table += "| " + paddedHeader + " ";
+            QString paddedHeader = padText(headers[i], columnWidths[i]);
+            table += "|" + paddedHeader;
         }
         table += "|\n";
 
@@ -151,8 +151,8 @@ QString QStaticMarkdown::renderTable(const QStringList &headers, const QVector<Q
         /* Data rows */
         for (const QStringList &row : rows) {
             for (int i = 0; i < row.size() && i < headers.size(); ++i) {
-                QString paddedCell = row[i].leftJustified(columnWidths[i], ' ');
-                table += "| " + paddedCell + " ";
+                QString paddedCell = padText(row[i], columnWidths[i]);
+                table += "|" + paddedCell;
             }
             table += "|\n";
         }
@@ -179,7 +179,7 @@ QVector<int> QStaticMarkdown::calculateColumnWidths(
         }
     }
 
-    /* Add padding for better readability */
+    /* Add padding for better readability (reduced from 2 to 1) */
     for (int i = 0; i < columnCount; ++i) {
         widths[i] += 2; /* Add 2 spaces padding (one on each side) */
     }
@@ -194,17 +194,28 @@ QString QStaticMarkdown::createSeparatorLine(
 
     for (int i = 0; i < columnWidths.size(); ++i) {
         QString align = i < alignment.size() ? alignment[i].toLower() : "center";
+        int     width = columnWidths[i];
 
         if (align == "left") {
-            separator += "|:" + QString(columnWidths[i] - 1, '-');
+            separator += "|:" + QString(width - 1, '-');
         } else if (align == "right") {
-            separator += "|" + QString(columnWidths[i] - 1, '-') + ":";
+            separator += "|" + QString(width - 1, '-') + ":";
         } else {
             /* Default is center alignment */
-            separator += "|:" + QString(columnWidths[i] - 2, '-') + ":";
+            /* Use exact same width calculation as in the template */
+            separator += "|:" + QString(width - 2, '-') + ":";
         }
     }
 
     separator += "|";
     return separator;
+}
+
+QString QStaticMarkdown::padText(const QString &text, int width)
+{
+    int padding  = std::max(0, width - static_cast<int>(text.length()));
+    int leftPad  = padding / 2;
+    int rightPad = padding - leftPad;
+
+    return QString(leftPad, ' ') + text + QString(rightPad, ' ');
 }

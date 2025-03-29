@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
+// SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #ifndef QSTATICMARKDOWN_H
 #define QSTATICMARKDOWN_H
@@ -52,6 +52,15 @@ public:
      * @return QString The formatted Markdown table string
      */
     static QString renderTable(const QStringList &headers, const QVector<QStringList> &rows);
+
+    /**
+     * @brief Pads text with spaces to center it within a specified width
+     *
+     * @param text The text to pad
+     * @param width The total width to pad to
+     * @return Padded text
+     */
+    static QString padText(const QString &text, int width);
 
 private:
     /**
