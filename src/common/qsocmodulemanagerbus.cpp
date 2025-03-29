@@ -480,10 +480,10 @@ QString QSocModuleManager::formatLLMResponseToMarkdown(const QString &jsonRespon
     }
 
     /* Create markdown table header */
-    QString markdown
-        = "| Group Name | Data Width | Address Width | ID Width | Burst Length | Write | Read |\n";
-    markdown
-        += "|------------|------------|---------------|----------|--------------|-------|------|\n";
+    QString markdown = "| Group Name | Type | Data Width | Address Width | ID Width | Burst Length "
+                       "| Write | Read |\n";
+    markdown += "|------------|------|------------|---------------|----------|--------------|------"
+                "-|------|\n";
 
     /* Add each group as a table row */
     for (const QJsonValue &groupValue : groups) {
@@ -491,6 +491,7 @@ QString QSocModuleManager::formatLLMResponseToMarkdown(const QString &jsonRespon
 
         /* Extract values with fallbacks */
         QString name    = group["name"].toString();
+        QString type    = group["type"].toString();
         QString wData   = group["wData"].toString();
         QString wAddr   = group["wAddr"].toString();
         QString wID     = group["wID"].toString();
@@ -499,8 +500,9 @@ QString QSocModuleManager::formatLLMResponseToMarkdown(const QString &jsonRespon
         bool    enRead  = group["enRead"].toBool();
 
         /* Format the row */
-        markdown += QString("| %1 | %2 | %3 | %4 | %5 | %6 | %7 |\n")
+        markdown += QString("| %1 | %2 | %3 | %4 | %5 | %6 | %7 | %8 |\n")
                         .arg(name)
+                        .arg(type)
                         .arg(wData)
                         .arg(wAddr)
                         .arg(wID)
@@ -592,7 +594,6 @@ bool QSocModuleManager::explainModuleBusWithLLM(
 
     prompt += QStaticStringWeaver::stripCommonLeadingWhitespace(
         R"(
-
     Please analyze the signals and provide the following information ONLY for )"
         + busName + R"( bus type.
     If you don't find any matches for this specific bus type, return an empty groups array.
@@ -601,6 +602,7 @@ bool QSocModuleManager::explainModuleBusWithLLM(
     {
       "groups": [
         {
+          "type": "master/slave",
           "name": "short_verilog_interface_name",
           "wData": "data width",
           "wAddr": "address width",
@@ -611,6 +613,10 @@ bool QSocModuleManager::explainModuleBusWithLLM(
         }
       ]
     }
+
+    For the "type" field:
+    1. Use "master" if the interface is a master interface
+    2. Use "slave" if the interface is a slave interface
 
     For the "name" field:
     1. Use a short, concise name suitable for Verilog interface naming
