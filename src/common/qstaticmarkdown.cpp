@@ -108,57 +108,30 @@ QString QStaticMarkdown::renderTable(const QStringList &headers, const QVector<Q
         return std::string(leftPad, ' ') + text + std::string(rightPad, ' ');
     });
 
-    /* Define the Markdown table template */
-    std::string templateStr =
-        /* Header row with column names */
-        "{% for col in columns %}"
-        "|{{ col.name | pad(col.width) }}"
-        "{% endfor %}|\n"
+    /* Create a manual table string instead of using Inja template which has issues with pipe characters */
+    QString table;
 
-        /* Separator row with alignment indicators */
-        "{% for col in columns %}"
-        "|{{ \":\" }}{{ \"---\" | pad(col.width - 2) }}{{ \":\" }}"
-        "{% endfor %}|\n"
+    /* Header row */
+    for (int i = 0; i < headers.size(); ++i) {
+        QString paddedHeader = padText(headers[i], columnWidths[i]);
+        table += "|" + paddedHeader;
+    }
+    table += "|\n";
 
-        /* Data rows */
-        "{% for row in rows %}"
-        "{% for i in range(end=columns.size) %}"
-        "|{{ row[i] | pad(columns[i].width) }}"
-        "{% endfor %}|\n"
-        "{% endfor %}";
+    /* Separator row */
+    table += createSeparatorLine(columnWidths, alignments) + "\n";
 
-    /* Render the template with the data */
-    try {
-        std::string result = env.render(templateStr, data);
-        return QString::fromStdString(result);
-    } catch (const std::exception &e) {
-        qWarning() << "Error rendering Markdown table:" << e.what();
-
-        /* Fallback to basic table formatting if template rendering fails */
-        QString separator = createSeparatorLine(columnWidths, alignments);
-        QString table;
-
-        /* Header row */
-        for (int i = 0; i < headers.size(); ++i) {
-            QString paddedHeader = padText(headers[i], columnWidths[i]);
-            table += "|" + paddedHeader;
+    /* Data rows */
+    for (int j = 0; j < rows.size(); ++j) {
+        const QStringList &row = rows[j];
+        for (int i = 0; i < row.size() && i < headers.size(); ++i) {
+            QString paddedCell = padText(row[i], columnWidths[i]);
+            table += "|" + paddedCell;
         }
         table += "|\n";
-
-        /* Separator row */
-        table += separator + "\n";
-
-        /* Data rows */
-        for (const QStringList &row : rows) {
-            for (int i = 0; i < row.size() && i < headers.size(); ++i) {
-                QString paddedCell = padText(row[i], columnWidths[i]);
-                table += "|" + paddedCell;
-            }
-            table += "|\n";
-        }
-
-        return table;
     }
+
+    return table;
 }
 
 QVector<int> QStaticMarkdown::calculateColumnWidths(
