@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocgeneratemanager.h"
+#include "common/qstaticstringweaver.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -1785,7 +1786,7 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
 
     QProcess formatter;
     /* clang-format off */
-    const QString argsStr = QStringLiteral(R"(
+    const QString argsStr = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
         --inplace
         --column_limit 119
         --indentation_spaces 4
