@@ -93,6 +93,19 @@ else()
     message(STATUS "Use local nlohmann_json library: ${JSON_LIBRARIES} ${JSON_INCLUDE_DIRS}")
 endif()
 
+# INJA
+pkg_check_modules(INJA IMPORTED_TARGET inja>=3.0.0)
+if (INJA_FOUND)
+    message(STATUS "Use system inja library: ${INJA_LIBRARIES} ${INJA_VERSION}")
+else()
+    add_subdirectory(external/inja)
+    set(INJA_INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/inja/include"
+    )
+    set(INJA_LIBRARIES inja)
+    message(STATUS "Use local inja library: ${INJA_LIBRARIES} ${INJA_INCLUDE_DIRS}")
+endif()
+
 # YAML
 pkg_check_modules(YAML IMPORTED_TARGET yaml-cpp>=0.7.0)
 if (YAML_FOUND)
@@ -213,6 +226,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${SQLITE3_INCLUDE_DIRS}"
     "${SVLANG_INCLUDE_DIRS}"
     "${JSON_INCLUDE_DIRS}"
+    "${INJA_INCLUDE_DIRS}"
     "${YAML_INCLUDE_DIRS}"
     "${CSV_INCLUDE_DIRS}"
     "${GPDS_INCLUDE_DIRS}"
@@ -231,6 +245,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${SQLITE3_LIBRARIES}
     ${SVLANG_LIBRARIES}
     ${JSON_LIBRARIES}
+    ${INJA_LIBRARIES}
     ${YAML_LIBRARIES}
     ${CSV_LIBRARIES}
     ${GPDS_LIBRARIES}

@@ -16,3 +16,6 @@
 [submodule "external/csv"]
 	path = external/csv
 	url = git@github.com:d99kris/rapidcsv.git
+[submodule "external/inja"]
+	path = external/inja
+	url = git@github.com:pantor/inja.git

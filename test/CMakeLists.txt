@@ -69,6 +69,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         "${SQLITE3_INCLUDE_DIRS}"
         "${SVLANG_INCLUDE_DIRS}"
         "${JSON_INCLUDE_DIRS}"
+        "${INJA_INCLUDE_DIRS}"
         "${YAML_INCLUDE_DIRS}"
         "${CSV_INCLUDE_DIRS}"
         "${GPDS_INCLUDE_DIRS}"
@@ -88,6 +89,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${SQLITE3_LIBRARIES}
         ${SVLANG_LIBRARIES}
         ${JSON_LIBRARIES}
+        ${INJA_LIBRARIES}
         ${YAML_LIBRARIES}
         ${CSV_LIBRARIES}
         ${GPDS_LIBRARIES}
