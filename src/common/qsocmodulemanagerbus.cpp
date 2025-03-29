@@ -6,10 +6,6 @@
 #include "common/qstaticstringweaver.h"
 
 #include <QDebug>
-#include <QDir>
-#include <QFile>
-
-#include <fstream>
 
 bool QSocModuleManager::addModuleBus(
     const QString &moduleName,

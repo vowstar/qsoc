@@ -5,11 +5,8 @@
 #include "common/qstaticregex.h"
 #include "common/qstaticstringweaver.h"
 
-#include <QDebug>
-#include <QDir>
-#include <QFile>
-
 #include <fstream>
+#include <QDebug>
 
 QSocModuleManager::QSocModuleManager(
     QObject            *parent,
