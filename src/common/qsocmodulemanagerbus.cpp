@@ -594,6 +594,7 @@ bool QSocModuleManager::explainModuleBusWithLLM(
 
     prompt += QStaticStringWeaver::stripCommonLeadingWhitespace(
         R"(
+
     Please analyze the signals and provide the following information ONLY for )"
         + busName + R"( bus type.
     If you don't find any matches for this specific bus type, return an empty groups array.
