@@ -575,19 +575,19 @@ bool QSocModuleManager::explainModuleBusWithLLM(
         }
     }
 
-    /* Prepare prompt for LLM */
-    // Build module ports list
+    /* Build module ports list */
     QString portsList;
     for (const QString &port : groupModule) {
         portsList += "- " + port + "\n";
     }
 
-    // Build bus signals list
+    /* Build bus signals list */
     QString signalsList;
     for (const QString &signal : groupBus) {
         signalsList += "- " + signal + "\n";
     }
 
+    /* Prepare prompt for LLM */
     /* clang-format off */
     QString prompt = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
         Analyze the following module ports and bus signals to identify potential bus interface matches.
