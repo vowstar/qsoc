@@ -3,6 +3,7 @@
 
 #include "common/qslangdriver.h"
 #include "common/qstaticlog.h"
+#include "common/qstaticstringweaver.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -207,7 +208,7 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
             tempFile.flush();
             tempFile.close();
             /* clang-format off */
-            const QString args = QStringLiteral(R"(
+            const QString args = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
                 slang
                 --ignore-unknown-modules
                 --single-unit
