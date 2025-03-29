@@ -541,15 +541,6 @@ private:
      */
     void libraryMapRemove(const QString &libraryName, const QString &moduleName);
 
-    /**
-     * @brief Format LLM response into a markdown table.
-     * @details This function takes the JSON response from LLM and formats it into a
-     *          markdown table for better readability.
-     * @param jsonResponse The JSON response from LLM.
-     * @return Formatted markdown table string.
-     */
-    QString formatLLMResponseToMarkdown(const QString &jsonResponse);
-
 signals:
 };
 

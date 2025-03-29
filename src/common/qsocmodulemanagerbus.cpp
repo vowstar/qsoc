@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocmodulemanager.h"
+#include "common/qstaticmarkdown.h"
 #include "common/qstaticregex.h"
 #include "common/qstaticstringweaver.h"
 
@@ -464,61 +465,6 @@ YAML::Node QSocModuleManager::showModuleBus(
     return result;
 }
 
-QString QSocModuleManager::formatLLMResponseToMarkdown(const QString &jsonResponse)
-{
-    /* Try to parse the JSON response */
-    QJsonDocument doc = QJsonDocument::fromJson(jsonResponse.toUtf8());
-    if (doc.isNull()) {
-        qWarning() << "Failed to parse JSON response";
-        return jsonResponse; /* Return original response if parsing fails */
-    }
-
-    QJsonObject root = doc.object();
-    if (!root.contains("groups") || !root["groups"].isArray()) {
-        qWarning() << "Invalid JSON structure: missing or invalid 'groups' array";
-        return jsonResponse;
-    }
-
-    QJsonArray groups = root["groups"].toArray();
-    if (groups.isEmpty()) {
-        return "No potential bus interface groups found.";
-    }
-
-    /* Create markdown table header */
-    QString markdown = "| Group Name | Type | Data Width | Address Width | ID Width | Burst Length "
-                       "| Write | Read |\n";
-    markdown += "|------------|------|------------|---------------|----------|--------------|------"
-                "-|------|\n";
-
-    /* Add each group as a table row */
-    for (const QJsonValue &groupValue : groups) {
-        QJsonObject group = groupValue.toObject();
-
-        /* Extract values with fallbacks */
-        QString name    = group["name"].toString();
-        QString type    = group["type"].toString();
-        QString wData   = group["wData"].toString();
-        QString wAddr   = group["wAddr"].toString();
-        QString wID     = group["wID"].toString();
-        QString wLen    = group["wLen"].toString();
-        bool    enWrite = group["enWrite"].toBool();
-        bool    enRead  = group["enRead"].toBool();
-
-        /* Format the row */
-        markdown += QString("| %1 | %2 | %3 | %4 | %5 | %6 | %7 | %8 |\n")
-                        .arg(name)
-                        .arg(type)
-                        .arg(wData)
-                        .arg(wAddr)
-                        .arg(wID)
-                        .arg(wLen)
-                        .arg(enWrite ? "✓" : "✗")
-                        .arg(enRead ? "✓" : "✗");
-    }
-
-    return markdown;
-}
-
 bool QSocModuleManager::explainModuleBusWithLLM(
     const QString &moduleName, const QString &busName, QString &explanation)
 {
@@ -652,7 +598,7 @@ bool QSocModuleManager::explainModuleBusWithLLM(
     }
 
     /* Format the response into a markdown table */
-    explanation = formatLLMResponseToMarkdown(response.content);
+    explanation = QStaticMarkdown::formatJsonToMarkdownTable(response.content);
 
     return true;
 }
