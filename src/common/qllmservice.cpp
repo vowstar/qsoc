@@ -135,11 +135,11 @@ LLMResponse QLLMService::sendRequest(
     QNetworkRequest request = prepareRequest();
 
     /* Build request payload */
-    QJsonDocument payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode);
+    json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode);
 
     /* Send request and wait for response */
     QEventLoop     loop;
-    QNetworkReply *reply = networkManager->post(request, payload.toJson());
+    QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
 
     QObject::connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
     loop.exec();
@@ -172,10 +172,10 @@ void QLLMService::sendRequestAsync(
     QNetworkRequest request = prepareRequest();
 
     /* Build request payload */
-    QJsonDocument payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode);
+    json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode);
 
     /* Send asynchronous request */
-    QNetworkReply *reply = networkManager->post(request, payload.toJson());
+    QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
 
     /* Connect finished signal to handler function */
     QObject::connect(reply, &QNetworkReply::finished, [this, reply, callback]() {
@@ -199,15 +199,19 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
     QString content = response.content.trimmed();
 
     /* Method 1: If the entire response is a JSON object */
-    QJsonDocument jsonDoc = QJsonDocument::fromJson(content.toUtf8());
-    if (jsonDoc.isObject()) {
-        QJsonObject obj = jsonDoc.object();
-        for (auto it = obj.begin(); it != obj.end(); ++it) {
-            if (it.value().isString()) {
-                mappings[it.key()] = it.value().toString();
+    try {
+        json jsonObj = json::parse(content.toStdString());
+        if (jsonObj.is_object()) {
+            for (auto it = jsonObj.begin(); it != jsonObj.end(); ++it) {
+                if (it.value().is_string()) {
+                    mappings[QString::fromStdString(it.key())] = QString::fromStdString(
+                        it.value().get<std::string>());
+                }
             }
+            return mappings;
         }
-        return mappings;
+    } catch (const json::parse_error &) {
+        // Continue with other methods if JSON parsing fails
     }
 
     /* Method 2: Extract JSON object from text */
@@ -215,17 +219,20 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
     QRegularExpressionMatch match = jsonRegex.match(content);
 
     if (match.hasMatch()) {
-        QString       jsonString = match.captured(0);
-        QJsonDocument mappingDoc = QJsonDocument::fromJson(jsonString.toUtf8());
-
-        if (mappingDoc.isObject()) {
-            QJsonObject mappingObj = mappingDoc.object();
-            for (auto it = mappingObj.begin(); it != mappingObj.end(); ++it) {
-                if (it.value().isString()) {
-                    mappings[it.key()] = it.value().toString();
+        QString jsonString = match.captured(0);
+        try {
+            json mappingJson = json::parse(jsonString.toStdString());
+            if (mappingJson.is_object()) {
+                for (auto it = mappingJson.begin(); it != mappingJson.end(); ++it) {
+                    if (it.value().is_string()) {
+                        mappings[QString::fromStdString(it.key())] = QString::fromStdString(
+                            it.value().get<std::string>());
+                    }
                 }
+                return mappings;
             }
-            return mappings;
+        } catch (const json::parse_error &) {
+            // Continue with other methods if JSON parsing fails
         }
     }
 
@@ -346,7 +353,7 @@ QUrl QLLMService::getDefaultApiEndpoint(Provider provider) const
     /* Default endpoints for each provider */
     switch (provider) {
     case DEEPSEEK:
-        return QUrl("https://api.deepseek.com/v1/chat/completions");
+        return QUrl("https://api.deepseek.com/chat/completions");
     case OPENAI:
         return QUrl("https://api.openai.com/v1/chat/completions");
     case GROQ:
@@ -408,110 +415,112 @@ QNetworkRequest QLLMService::prepareRequest() const
     return request;
 }
 
-QJsonDocument QLLMService::buildRequestPayload(
+json QLLMService::buildRequestPayload(
     const QString &prompt, const QString &systemPrompt, double temperature, bool jsonMode) const
 {
-    QJsonObject payload;
+    json payload;
 
     switch (provider) {
     case DEEPSEEK: {
         /* Set model from stored value or use default */
-        payload["model"] = aiModel.isEmpty() ? "deepseek-chat" : aiModel;
+        payload["model"] = aiModel.isEmpty() ? "deepseek-chat" : aiModel.toStdString();
 
         /* Create messages array with system and user messages */
-        QJsonArray messages;
+        json messages = json::array();
 
         /* Add system message */
-        QJsonObject systemMessage;
+        json systemMessage;
         systemMessage["role"]    = "system";
-        systemMessage["content"] = systemPrompt;
-        messages.append(systemMessage);
+        systemMessage["content"] = systemPrompt.toStdString();
+        messages.push_back(systemMessage);
 
         /* Add user message */
-        QJsonObject userMessage;
+        json userMessage;
         userMessage["role"]    = "user";
-        userMessage["content"] = prompt;
-        messages.append(userMessage);
+        userMessage["content"] = prompt.toStdString();
+        messages.push_back(userMessage);
 
         payload["messages"]    = messages;
+        payload["stream"]      = false;
         payload["temperature"] = temperature;
 
-        if (jsonMode) {
-            payload["response_format"] = QJsonObject{{"type", "json_object"}};
+        /* Only add JSON format for models that support it (deepseek-reasoner doesn't) */
+        if (jsonMode && !aiModel.contains("reasoner", Qt::CaseInsensitive)) {
+            payload["response_format"] = {{"type", "json_object"}};
         }
         break;
     }
     case OPENAI: {
         /* Set model from stored value or use default */
-        payload["model"] = aiModel.isEmpty() ? "gpt-4o-mini" : aiModel;
+        payload["model"] = aiModel.isEmpty() ? "gpt-4o-mini" : aiModel.toStdString();
 
-        QJsonArray messages;
+        json messages = json::array();
 
         /* Add system message */
-        QJsonObject systemMessage;
+        json systemMessage;
         systemMessage["role"]    = "system";
-        systemMessage["content"] = systemPrompt;
-        messages.append(systemMessage);
+        systemMessage["content"] = systemPrompt.toStdString();
+        messages.push_back(systemMessage);
 
         /* Add user message */
-        QJsonObject userMessage;
+        json userMessage;
         userMessage["role"]    = "user";
-        userMessage["content"] = prompt;
-        messages.append(userMessage);
+        userMessage["content"] = prompt.toStdString();
+        messages.push_back(userMessage);
 
         payload["messages"]    = messages;
         payload["temperature"] = temperature;
         if (jsonMode) {
-            payload["response_format"] = QJsonObject{{"type", "json_object"}};
+            payload["response_format"] = {{"type", "json_object"}};
         }
         break;
     }
     case GROQ: {
         /* Set model from stored value or use default */
-        payload["model"] = aiModel.isEmpty() ? "mixtral-8x7b-32768" : aiModel;
+        payload["model"] = aiModel.isEmpty() ? "mixtral-8x7b-32768" : aiModel.toStdString();
 
-        QJsonArray messages;
+        json messages = json::array();
 
         /* Add system message */
-        QJsonObject systemMessage;
+        json systemMessage;
         systemMessage["role"]    = "system";
-        systemMessage["content"] = systemPrompt;
-        messages.append(systemMessage);
+        systemMessage["content"] = systemPrompt.toStdString();
+        messages.push_back(systemMessage);
 
         /* Add user message */
-        QJsonObject userMessage;
+        json userMessage;
         userMessage["role"]    = "user";
-        userMessage["content"] = prompt;
-        messages.append(userMessage);
+        userMessage["content"] = prompt.toStdString();
+        messages.push_back(userMessage);
 
         payload["messages"]    = messages;
         payload["temperature"] = temperature;
 
         if (jsonMode) {
-            payload["response_format"] = QJsonObject{{"type", "json_object"}};
+            payload["response_format"] = {{"type", "json_object"}};
         }
         break;
     }
     case CLAUDE: {
         /* Set model from stored value or use default */
-        payload["model"] = aiModel.isEmpty() ? "claude-3-5-sonnet-20241022" : aiModel;
+        payload["model"] = aiModel.isEmpty() ? "claude-3-5-sonnet-20241022" : aiModel.toStdString();
 
         payload["max_tokens"] = 4096;
-        payload["system"]     = systemPrompt;
+        payload["system"]     = systemPrompt.toStdString();
 
-        QJsonArray messages;
+        json messages = json::array();
 
         /* Add user message (Claude only needs the user message, with system in a separate field) */
-        QJsonObject userMessage;
+        json userMessage;
         userMessage["role"]    = "user";
-        userMessage["content"] = prompt;
-        messages.append(userMessage);
+        userMessage["content"] = prompt.toStdString();
+        messages.push_back(userMessage);
 
         payload["messages"] = messages;
 
         /* JSON mode is handled by modifying the system prompt if needed */
         if (jsonMode && !systemPrompt.isEmpty()) {
-            payload["system"] = systemPrompt + " Respond in JSON format only.";
+            payload["system"] = (systemPrompt + " Respond in JSON format only.").toStdString();
         } else if (jsonMode) {
             payload["system"] = "Respond in JSON format only.";
         }
@@ -520,7 +529,7 @@ QJsonDocument QLLMService::buildRequestPayload(
     }
     case OLLAMA: {
         /* Set model from stored value or use default */
-        payload["model"] = aiModel.isEmpty() ? "llama3" : aiModel;
+        payload["model"] = aiModel.isEmpty() ? "llama3" : aiModel.toStdString();
 
         /* Format prompt by combining system prompt and user prompt */
         QString combinedPrompt;
@@ -535,14 +544,14 @@ QJsonDocument QLLMService::buildRequestPayload(
             combinedPrompt += "\n\nRespond in JSON format only.";
         }
 
-        payload["prompt"] = combinedPrompt;
+        payload["prompt"] = combinedPrompt.toStdString();
         payload["stream"] = false;
 
         break;
     }
     }
 
-    return QJsonDocument(payload);
+    return payload;
 }
 
 LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
@@ -550,60 +559,81 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
     LLMResponse response;
 
     if (reply->error() == QNetworkReply::NoError) {
-        QByteArray    responseData = reply->readAll();
-        QJsonDocument jsonResponse = QJsonDocument::fromJson(responseData);
-        response.success           = true;
-        response.jsonDoc           = jsonResponse;
+        QByteArray responseData = reply->readAll();
 
-        /* Parse content based on different providers */
-        switch (provider) {
-        case DEEPSEEK:
-        case OPENAI:
-        case GROQ: {
-            if (jsonResponse.isObject() && jsonResponse.object().contains("choices")) {
-                QJsonArray choices = jsonResponse.object()["choices"].toArray();
-                if (!choices.isEmpty() && choices[0].isObject()) {
-                    QJsonObject choice = choices[0].toObject();
-                    if (choice.contains("message") && choice["message"].isObject()) {
-                        QJsonObject message = choice["message"].toObject();
-                        if (message.contains("content") && message["content"].isString()) {
-                            response.content = message["content"].toString();
-                        }
+        try {
+            json jsonResponse = json::parse(responseData.toStdString());
+            response.success  = true;
+            response.jsonData = jsonResponse;
+
+            /* Parse content based on different providers */
+            switch (provider) {
+            case DEEPSEEK:
+            case OPENAI:
+            case GROQ: {
+                /* First try standard OpenAI-compatible format */
+                if (jsonResponse.contains("choices") && jsonResponse["choices"].is_array()
+                    && !jsonResponse["choices"].empty()) {
+                    auto choice = jsonResponse["choices"][0];
+                    if (choice.contains("message") && choice["message"].contains("content")) {
+                        response.content = QString::fromStdString(
+                            choice["message"]["content"].get<std::string>());
+                    } else if (choice.contains("text")) {
+                        /* Handle streaming response format */
+                        response.content = QString::fromStdString(choice["text"].get<std::string>());
                     }
                 }
+                /* Handle any non-standard but valid JSON format */
+                else if (!jsonResponse.empty()) {
+                    /* For custom JSON structures, return the complete formatted JSON */
+                    response.content = QString::fromStdString(jsonResponse.dump(2));
+                }
+                break;
             }
-            break;
-        }
-        case CLAUDE: {
-            if (jsonResponse.isObject() && jsonResponse.object().contains("content")) {
-                QJsonArray contentArray = jsonResponse.object()["content"].toArray();
-                if (!contentArray.isEmpty()) {
+            case CLAUDE: {
+                if (jsonResponse.contains("content") && jsonResponse["content"].is_array()
+                    && !jsonResponse["content"].empty()) {
                     /* Get the first content item */
-                    QJsonObject firstContent = contentArray.first().toObject();
+                    auto firstContent = jsonResponse["content"][0];
 
-                    /* Extract the text field as in the Rust implementation */
+                    /* Extract the text field */
                     if (firstContent.contains("text")) {
-                        response.content = firstContent["text"].toString();
-                    } else if (firstContent.contains("type") && firstContent["type"].toString() == "text") {
-                        response.content = firstContent["text"].toString();
+                        response.content = QString::fromStdString(
+                            firstContent["text"].get<std::string>());
+                    } else if (
+                        firstContent.contains("type")
+                        && firstContent["type"].get<std::string>() == "text") {
+                        response.content = QString::fromStdString(
+                            firstContent["text"].get<std::string>());
                     }
                 }
+                break;
             }
-            break;
-        }
-        case OLLAMA: {
-            if (jsonResponse.isObject() && jsonResponse.object().contains("response")) {
-                QString responseText = jsonResponse.object()["response"].toString();
-                response.content     = responseText;
+            case OLLAMA: {
+                if (jsonResponse.contains("response")) {
+                    response.content = QString::fromStdString(
+                        jsonResponse["response"].get<std::string>());
+                }
+                break;
             }
-            break;
-        }
-        }
+            }
 
-        if (response.content.isEmpty()) {
+            // If we couldn't parse the content with specific provider rules,
+            // just convert the entire JSON to a string
+            if (response.content.isEmpty()) {
+                try {
+                    response.content = QString::fromStdString(jsonResponse.dump(2));
+                } catch (const std::exception &e) {
+                    response.success      = false;
+                    response.errorMessage = QString("Failed to extract content: %1").arg(e.what());
+                    qWarning() << "Failed to extract content from LLM response:" << e.what();
+                }
+            }
+        } catch (const json::parse_error &e) {
             response.success      = false;
-            response.errorMessage = "Could not extract content from response";
-            qWarning() << "Failed to extract content from LLM response:" << jsonResponse.toJson();
+            response.errorMessage = QString("JSON parse error: %1").arg(e.what());
+            qWarning() << "JSON parse error:" << e.what();
+            qWarning() << "Raw response:" << responseData;
         }
     } else {
         response.success      = false;

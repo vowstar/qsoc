@@ -7,8 +7,8 @@
 #include "common/qsocconfig.h"
 
 #include <functional>
+#include <nlohmann/json.hpp>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QMap>
 #include <QNetworkAccessManager>
@@ -16,16 +16,18 @@
 #include <QObject>
 #include <QString>
 
+using json = nlohmann::json;
+
 /**
  * @brief The LLMResponse struct.
  * @details This struct holds the result of an LLM request.
  */
 struct LLMResponse
 {
-    bool          success;      /* Whether the request was successful */
-    QString       content;      /* Text content returned by the LLM */
-    QJsonDocument jsonDoc;      /* Parsed JSON response if available */
-    QString       errorMessage; /* Error message if the request failed */
+    bool    success;      /* Whether the request was successful */
+    QString content;      /* Text content returned by the LLM */
+    json    jsonData;     /* Parsed JSON response if available */
+    QString errorMessage; /* Error message if the request failed */
 };
 
 /**
@@ -216,7 +218,7 @@ private:
      * @param jsonMode Whether to request JSON format output
      * @return JSON document for the request payload
      */
-    QJsonDocument buildRequestPayload(
+    json buildRequestPayload(
         const QString &prompt, const QString &systemPrompt, double temperature, bool jsonMode) const;
 
     /**
