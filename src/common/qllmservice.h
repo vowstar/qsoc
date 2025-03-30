@@ -8,9 +8,6 @@
 
 #include <functional>
 #include <nlohmann/json.hpp>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QMap>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QObject>

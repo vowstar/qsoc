@@ -3,20 +3,12 @@
 
 #include "common/qllmservice.h"
 
-#include <fstream>
 #include <QDebug>
-#include <QDir>
 #include <QEventLoop>
-#include <QFile>
-#include <QFileInfo>
 #include <QNetworkProxy>
 #include <QNetworkProxyFactory>
 #include <QNetworkRequest>
 #include <QRegularExpression>
-#include <QSettings>
-#include <QUrlQuery>
-
-#include <yaml-cpp/yaml.h>
 
 /* Constructor and Destructor */
 
