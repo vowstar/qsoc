@@ -211,7 +211,7 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
             return mappings;
         }
     } catch (const json::parse_error &) {
-        // Continue with other methods if JSON parsing fails
+        /* Continue with other methods if JSON parsing fails */
     }
 
     /* Method 2: Extract JSON object from text */
@@ -232,7 +232,7 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
                 return mappings;
             }
         } catch (const json::parse_error &) {
-            // Continue with other methods if JSON parsing fails
+            /* Continue with other methods if JSON parsing fails */
         }
     }
 
