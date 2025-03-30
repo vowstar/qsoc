@@ -4,14 +4,14 @@
 #ifndef QSTATICMARKDOWN_H
 #define QSTATICMARKDOWN_H
 
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
+#include <nlohmann/json.hpp>
 #include <QMetaEnum>
 #include <QObject>
 #include <QString>
 #include <QStringList>
 #include <QVector>
+
+using json = nlohmann::json;
 
 /**
  * @brief The QStaticMarkdown class.

@@ -6,10 +6,10 @@
 #include "common/qstaticregex.h"
 #include "common/qstaticstringweaver.h"
 
+#include <nlohmann/json.hpp>
 #include <QDebug>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
+
+using json = nlohmann::json;
 
 bool QSocModuleManager::addModuleBus(
     const QString &moduleName,
@@ -483,55 +483,67 @@ YAML::Node QSocModuleManager::showModuleBus(
 QString QSocModuleManager::formatModuleBusJsonToMarkdownTable(const QString &jsonResponse)
 {
     /* Try to parse the JSON response */
-    QJsonDocument doc = QJsonDocument::fromJson(jsonResponse.toUtf8());
-    if (doc.isNull()) {
-        qWarning() << "Failed to parse JSON response";
+    try {
+        json doc = json::parse(jsonResponse.toStdString());
+
+        /* Check if the JSON has the expected structure */
+        if (!doc.contains("groups") || !doc["groups"].is_array()) {
+            qWarning() << "Invalid JSON structure: missing or invalid 'groups' array";
+            return jsonResponse;
+        }
+
+        auto groups = doc["groups"];
+        if (groups.empty()) {
+            return "No potential bus interface groups found.";
+        }
+
+        /* Define table headers */
+        QStringList headers
+            = {"Group Name",
+               "Type",
+               "Data Width",
+               "Address Width",
+               "ID Width",
+               "Burst Length",
+               "Write",
+               "Read"};
+
+        /* Build table rows from JSON data */
+        QVector<QStringList> rows;
+        for (const auto &group : groups) {
+            /* Extract values with fallbacks */
+            QString name    = group.contains("name")
+                                  ? QString::fromStdString(group["name"].get<std::string>())
+                                  : "";
+            QString type    = group.contains("type")
+                                  ? QString::fromStdString(group["type"].get<std::string>())
+                                  : "";
+            QString wData   = group.contains("wData")
+                                  ? QString::fromStdString(group["wData"].get<std::string>())
+                                  : "";
+            QString wAddr   = group.contains("wAddr")
+                                  ? QString::fromStdString(group["wAddr"].get<std::string>())
+                                  : "";
+            QString wID     = group.contains("wID")
+                                  ? QString::fromStdString(group["wID"].get<std::string>())
+                                  : "";
+            QString wLen    = group.contains("wLen")
+                                  ? QString::fromStdString(group["wLen"].get<std::string>())
+                                  : "";
+            bool    enWrite = group.contains("enWrite") ? group["enWrite"].get<bool>() : false;
+            bool    enRead  = group.contains("enRead") ? group["enRead"].get<bool>() : false;
+
+            /* Add row to table data */
+            rows.append(
+                {name, type, wData, wAddr, wID, wLen, enWrite ? "✓" : "✗", enRead ? "✓" : "✗"});
+        }
+
+        /* Use the QStaticMarkdown class to render the markdown table */
+        return QStaticMarkdown::renderTable(headers, rows, QStaticMarkdown::Alignment::Left);
+    } catch (const json::parse_error &e) {
+        qWarning() << "Failed to parse JSON response:" << e.what();
         return jsonResponse; /* Return original response if parsing fails */
     }
-
-    QJsonObject root = doc.object();
-    if (!root.contains("groups") || !root["groups"].isArray()) {
-        qWarning() << "Invalid JSON structure: missing or invalid 'groups' array";
-        return jsonResponse;
-    }
-
-    QJsonArray groups = root["groups"].toArray();
-    if (groups.isEmpty()) {
-        return "No potential bus interface groups found.";
-    }
-
-    /* Define table headers */
-    QStringList headers
-        = {"Group Name",
-           "Type",
-           "Data Width",
-           "Address Width",
-           "ID Width",
-           "Burst Length",
-           "Write",
-           "Read"};
-
-    /* Build table rows from JSON data */
-    QVector<QStringList> rows;
-    for (const QJsonValue &groupValue : groups) {
-        QJsonObject group = groupValue.toObject();
-
-        /* Extract values with fallbacks */
-        QString name    = group["name"].toString();
-        QString type    = group["type"].toString();
-        QString wData   = group["wData"].toString();
-        QString wAddr   = group["wAddr"].toString();
-        QString wID     = group["wID"].toString();
-        QString wLen    = group["wLen"].toString();
-        bool    enWrite = group["enWrite"].toBool();
-        bool    enRead  = group["enRead"].toBool();
-
-        /* Add row to table data */
-        rows.append({name, type, wData, wAddr, wID, wLen, enWrite ? "✓" : "✗", enRead ? "✓" : "✗"});
-    }
-
-    /* Use the QStaticMarkdown class to render the markdown table */
-    return QStaticMarkdown::renderTable(headers, rows, QStaticMarkdown::Alignment::Left);
 }
 
 bool QSocModuleManager::explainModuleBusWithLLM(
