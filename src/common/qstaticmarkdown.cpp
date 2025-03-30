@@ -7,21 +7,6 @@
 #include <nlohmann/json.hpp>
 #include <QDebug>
 
-QString QStaticMarkdown::alignmentToString(QStaticMarkdown::Alignment alignment)
-{
-    switch (alignment) {
-    case Alignment::Left:
-        return "left";
-    case Alignment::Right:
-        return "right";
-    case Alignment::Center:
-        return "center";
-    default:
-        /* Default to left alignment if unknown */
-        return "left";
-    }
-}
-
 QString QStaticMarkdown::renderTable(
     const QStringList          &headers,
     const QVector<QStringList> &rows,

@@ -7,6 +7,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaEnum>
+#include <QObject>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -16,8 +18,10 @@
  * @details This class provides utility functions for rendering Markdown documents
  *          with proper formatting using the Inja template engine.
  */
-class QStaticMarkdown
+class QStaticMarkdown : public QObject
 {
+    Q_OBJECT
+
 public:
     /**
      * @brief Text alignment options for table cells
@@ -27,12 +31,18 @@ public:
         Center, /**< Center-aligned text */
         Right   /**< Right-aligned text */
     };
+    Q_ENUM(Alignment)
 
     /**
-     * @brief Default constructor for QStaticMarkdown.
-     * @details Initializes a new instance of the QStaticMarkdown class.
+     * @brief Get the static instance of this object.
+     * @details This function will return the static instance of this object.
+     * @return The static instance of this object.
      */
-    explicit QStaticMarkdown() = default;
+    static QStaticMarkdown &instance()
+    {
+        static QStaticMarkdown instance;
+        return instance;
+    }
 
     /**
      * @brief Default destructor for QStaticMarkdown.
@@ -40,6 +50,7 @@ public:
      */
     ~QStaticMarkdown() = default;
 
+public slots:
     /**
      * @brief Generate a Markdown table from column headers and data rows.
      * @details Creates a formatted Markdown table with proper column alignment based on
@@ -65,14 +76,6 @@ public:
      */
     static QString padText(const QString &text, int width, Alignment alignment = Alignment::Left);
 
-    /**
-     * @brief Convert Alignment enum to string representation
-     *
-     * @param alignment The alignment enum value
-     * @return QString The string representation ("left", "center", or "right")
-     */
-    static QString alignmentToString(Alignment alignment);
-
 private:
     /**
      * @brief Calculate the required width for each column in the table.
@@ -97,6 +100,15 @@ private:
      */
     static QString createSeparatorLine(
         const QVector<int> &columnWidths, const QVector<Alignment> &alignments);
+
+    /**
+     * @brief Constructor.
+     * @details This is a private constructor for this class to prevent
+     *          instantiation. Making the constructor private ensures that no
+     *          objects of this class can be created from outside the class,
+     *          enforcing a static-only usage pattern.
+     */
+    QStaticMarkdown() {}
 };
 
 #endif // QSTATICMARKDOWN_H
