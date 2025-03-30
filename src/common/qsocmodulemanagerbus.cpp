@@ -201,7 +201,19 @@ bool QSocModuleManager::addModuleBusWithLLM(
         for (YAML::const_iterator it = moduleYaml["port"].begin(); it != moduleYaml["port"].end();
              ++it) {
             const std::string portNameStd = it->first.as<std::string>();
-            groupModule.append(QString::fromStdString(portNameStd));
+            const QString     portName    = QString::fromStdString(portNameStd);
+            QString           typeInfo;
+            QString           direction = "";
+
+            if (it->second["type"]) {
+                typeInfo = QString::fromStdString(it->second["type"].as<std::string>());
+            }
+
+            if (it->second["direction"]) {
+                direction = QString::fromStdString(it->second["direction"].as<std::string>());
+            }
+
+            groupModule.append(direction + " " + typeInfo + " " + portName);
         }
     }
 
@@ -508,7 +520,19 @@ bool QSocModuleManager::explainModuleBusWithLLM(
         for (YAML::const_iterator it = moduleYaml["port"].begin(); it != moduleYaml["port"].end();
              ++it) {
             const std::string portNameStd = it->first.as<std::string>();
-            groupModule.append(QString::fromStdString(portNameStd));
+            const QString     portName    = QString::fromStdString(portNameStd);
+            QString           typeInfo;
+            QString           direction = "";
+
+            if (it->second["type"]) {
+                typeInfo = QString::fromStdString(it->second["type"].as<std::string>());
+            }
+
+            if (it->second["direction"]) {
+                direction = QString::fromStdString(it->second["direction"].as<std::string>());
+            }
+
+            groupModule.append(direction + " " + typeInfo + " " + portName);
         }
     }
 
