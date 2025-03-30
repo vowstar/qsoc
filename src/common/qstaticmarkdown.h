@@ -20,6 +20,15 @@ class QStaticMarkdown
 {
 public:
     /**
+     * @brief Text alignment options for table cells
+     */
+    enum class Alignment {
+        Left,   /**< Left-aligned text */
+        Center, /**< Center-aligned text */
+        Right   /**< Right-aligned text */
+    };
+
+    /**
      * @brief Default constructor for QStaticMarkdown.
      * @details Initializes a new instance of the QStaticMarkdown class.
      */
@@ -49,18 +58,31 @@ public:
      *
      * @param headers A list of column header strings
      * @param rows A vector of rows, where each row is a list of cell values
+     * @param defaultAlignment The default alignment to use for all columns
      * @return QString The formatted Markdown table string
      */
-    static QString renderTable(const QStringList &headers, const QVector<QStringList> &rows);
+    static QString renderTable(
+        const QStringList          &headers,
+        const QVector<QStringList> &rows,
+        Alignment                   defaultAlignment = Alignment::Left);
 
     /**
-     * @brief Pads text with spaces to center it within a specified width
+     * @brief Pads text with spaces according to the specified alignment within a given width
      *
      * @param text The text to pad
      * @param width The total width to pad to
+     * @param alignment The alignment to use (left, center, or right)
      * @return Padded text
      */
-    static QString padText(const QString &text, int width);
+    static QString padText(const QString &text, int width, Alignment alignment = Alignment::Left);
+
+    /**
+     * @brief Convert Alignment enum to string representation
+     *
+     * @param alignment The alignment enum value
+     * @return QString The string representation ("left", "center", or "right")
+     */
+    static QString alignmentToString(Alignment alignment);
 
 private:
     /**
@@ -81,11 +103,11 @@ private:
      *          from the data rows in a Markdown table, ensuring proper alignment.
      *
      * @param columnWidths The width of each column
-     * @param alignment The alignment type for each column (left, center, right)
+     * @param alignments The alignment type for each column
      * @return QString The formatted separator line
      */
     static QString createSeparatorLine(
-        const QVector<int> &columnWidths, const QVector<QString> &alignment);
+        const QVector<int> &columnWidths, const QVector<Alignment> &alignments);
 };
 
 #endif // QSTATICMARKDOWN_H

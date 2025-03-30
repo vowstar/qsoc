@@ -7,13 +7,29 @@
 #include <nlohmann/json.hpp>
 #include <QDebug>
 
+QString QStaticMarkdown::alignmentToString(QStaticMarkdown::Alignment alignment)
+{
+    switch (alignment) {
+    case Alignment::Left:
+        return "left";
+    case Alignment::Right:
+        return "right";
+    case Alignment::Center:
+        return "center";
+    default:
+        /* Default to left alignment if unknown */
+        return "left";
+    }
+}
+
 QString QStaticMarkdown::formatJsonToMarkdownTable(const QString &jsonResponse)
 {
     /* Try to parse the JSON response */
     QJsonDocument doc = QJsonDocument::fromJson(jsonResponse.toUtf8());
     if (doc.isNull()) {
         qWarning() << "Failed to parse JSON response";
-        return jsonResponse; /* Return original response if parsing fails */
+        /* Return original response if parsing fails */
+        return jsonResponse;
     }
 
     QJsonObject root = doc.object();
@@ -58,10 +74,13 @@ QString QStaticMarkdown::formatJsonToMarkdownTable(const QString &jsonResponse)
     }
 
     /* Render the markdown table using Inja templates */
-    return renderTable(headers, rows);
+    return renderTable(headers, rows, Alignment::Left);
 }
 
-QString QStaticMarkdown::renderTable(const QStringList &headers, const QVector<QStringList> &rows)
+QString QStaticMarkdown::renderTable(
+    const QStringList          &headers,
+    const QVector<QStringList> &rows,
+    QStaticMarkdown::Alignment  defaultAlignment)
 {
     /* Calculate column widths based on content */
     QVector<int> columnWidths = calculateColumnWidths(headers, rows);
@@ -88,24 +107,31 @@ QString QStaticMarkdown::renderTable(const QStringList &headers, const QVector<Q
         data["rows"].push_back(jsonRow);
     }
 
-    /* Define column alignments (center alignment for all columns) */
-    QVector<QString> alignments(headers.size(), "center");
+    /* Define column alignments (all columns use the default alignment) */
+    QVector<Alignment> alignments(headers.size(), defaultAlignment);
 
     /* Create Inja template environment */
     inja::Environment env;
 
     /* Add padding function for proper alignment */
-    env.add_callback("pad", 2, [](inja::Arguments &args) {
+    env.add_callback("pad", 3, [](inja::Arguments &args) {
         std::string text  = args.at(0)->get<std::string>();
         int         width = args.at(1)->get<int>();
+        std::string align = args.at(2)->get<std::string>();
 
         /* Calculate padding needed */
-        int padding  = std::max(0, width - static_cast<int>(text.length()));
-        int leftPad  = padding / 2;
-        int rightPad = padding - leftPad;
+        int padding = std::max(0, width - static_cast<int>(text.length()));
 
-        /* Apply padding */
-        return std::string(leftPad, ' ') + text + std::string(rightPad, ' ');
+        if (align == "left") {
+            return text + std::string(padding, ' ');
+        } else if (align == "right") {
+            return std::string(padding, ' ') + text;
+        } else {
+            /* Center alignment */
+            int leftPad  = padding / 2;
+            int rightPad = padding - leftPad;
+            return std::string(leftPad, ' ') + text + std::string(rightPad, ' ');
+        }
     });
 
     /* Create a manual table string instead of using Inja template which has issues with pipe characters */
@@ -113,7 +139,7 @@ QString QStaticMarkdown::renderTable(const QStringList &headers, const QVector<Q
 
     /* Header row */
     for (int i = 0; i < headers.size(); ++i) {
-        QString paddedHeader = padText(headers[i], columnWidths[i]);
+        QString paddedHeader = padText(headers[i], columnWidths[i], alignments[i]);
         table += "|" + paddedHeader;
     }
     table += "|\n";
@@ -125,7 +151,7 @@ QString QStaticMarkdown::renderTable(const QStringList &headers, const QVector<Q
     for (int j = 0; j < rows.size(); ++j) {
         const QStringList &row = rows[j];
         for (int i = 0; i < row.size() && i < headers.size(); ++i) {
-            QString paddedCell = padText(row[i], columnWidths[i]);
+            QString paddedCell = padText(row[i], columnWidths[i], alignments[i]);
             table += "|" + paddedCell;
         }
         table += "|\n";
@@ -152,30 +178,30 @@ QVector<int> QStaticMarkdown::calculateColumnWidths(
         }
     }
 
-    /* Add padding for better readability (reduced from 2 to 1) */
+    /* Add padding for better readability */
     for (int i = 0; i < columnCount; ++i) {
-        widths[i] += 2; /* Add 2 spaces padding (one on each side) */
+        /* Add 2 spaces padding (one on each side) */
+        widths[i] += 2;
     }
 
     return widths;
 }
 
 QString QStaticMarkdown::createSeparatorLine(
-    const QVector<int> &columnWidths, const QVector<QString> &alignment)
+    const QVector<int> &columnWidths, const QVector<Alignment> &alignments)
 {
     QString separator;
 
     for (int i = 0; i < columnWidths.size(); ++i) {
-        QString align = i < alignment.size() ? alignment[i].toLower() : "center";
-        int     width = columnWidths[i];
+        Alignment align = i < alignments.size() ? alignments[i] : Alignment::Left;
+        int       width = columnWidths[i];
 
-        if (align == "left") {
+        if (align == Alignment::Left) {
             separator += "|:" + QString(width - 1, '-');
-        } else if (align == "right") {
+        } else if (align == Alignment::Right) {
             separator += "|" + QString(width - 1, '-') + ":";
         } else {
             /* Default is center alignment */
-            /* Use exact same width calculation as in the template */
             separator += "|:" + QString(width - 2, '-') + ":";
         }
     }
@@ -184,11 +210,20 @@ QString QStaticMarkdown::createSeparatorLine(
     return separator;
 }
 
-QString QStaticMarkdown::padText(const QString &text, int width)
+QString QStaticMarkdown::padText(const QString &text, int width, QStaticMarkdown::Alignment alignment)
 {
-    int padding  = std::max(0, width - static_cast<int>(text.length()));
-    int leftPad  = padding / 2;
-    int rightPad = padding - leftPad;
+    int padding = std::max(0, width - static_cast<int>(text.length()));
 
-    return QString(leftPad, ' ') + text + QString(rightPad, ' ');
+    if (alignment == Alignment::Left) {
+        /* Left alignment: spaces on the right */
+        return text + QString(padding, ' ');
+    } else if (alignment == Alignment::Right) {
+        /* Right alignment: spaces on the left */
+        return QString(padding, ' ') + text;
+    } else {
+        /* Center alignment: spaces evenly distributed */
+        int leftPad  = padding / 2;
+        int rightPad = padding - leftPad;
+        return QString(leftPad, ' ') + text + QString(rightPad, ' ');
+    }
 }
