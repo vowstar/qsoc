@@ -511,27 +511,80 @@ QString QSocModuleManager::formatModuleBusJsonToMarkdownTable(const QString &jso
         /* Build table rows from JSON data */
         QVector<QStringList> rows;
         for (const auto &group : groups) {
-            /* Extract values with fallbacks */
-            QString name    = group.contains("name")
-                                  ? QString::fromStdString(group["name"].get<std::string>())
-                                  : "";
-            QString type    = group.contains("type")
-                                  ? QString::fromStdString(group["type"].get<std::string>())
-                                  : "";
-            QString wData   = group.contains("wData")
-                                  ? QString::fromStdString(group["wData"].get<std::string>())
-                                  : "";
-            QString wAddr   = group.contains("wAddr")
-                                  ? QString::fromStdString(group["wAddr"].get<std::string>())
-                                  : "";
-            QString wID     = group.contains("wID")
-                                  ? QString::fromStdString(group["wID"].get<std::string>())
-                                  : "";
-            QString wLen    = group.contains("wLen")
-                                  ? QString::fromStdString(group["wLen"].get<std::string>())
-                                  : "";
-            bool    enWrite = group.contains("enWrite") ? group["enWrite"].get<bool>() : false;
-            bool    enRead  = group.contains("enRead") ? group["enRead"].get<bool>() : false;
+            /* Extract values with fallbacks, handling both string and number types */
+            QString name, type, wData, wAddr, wID, wLen;
+            bool    enWrite = false, enRead = false;
+
+            /* Handle name (should be string) */
+            if (group.contains("name")) {
+                if (group["name"].is_string()) {
+                    name = QString::fromStdString(group["name"].get<std::string>());
+                } else {
+                    name = QString::fromStdString(group["name"].dump());
+                }
+            }
+
+            /* Handle type (should be string) */
+            if (group.contains("type")) {
+                if (group["type"].is_string()) {
+                    type = QString::fromStdString(group["type"].get<std::string>());
+                } else {
+                    type = QString::fromStdString(group["type"].dump());
+                }
+            }
+
+            /* Handle wData (could be number or string) */
+            if (group.contains("wData")) {
+                if (group["wData"].is_string()) {
+                    wData = QString::fromStdString(group["wData"].get<std::string>());
+                } else if (group["wData"].is_number()) {
+                    wData = QString::number(group["wData"].get<int>());
+                } else {
+                    wData = QString::fromStdString(group["wData"].dump());
+                }
+            }
+
+            /* Handle wAddr (could be number or string) */
+            if (group.contains("wAddr")) {
+                if (group["wAddr"].is_string()) {
+                    wAddr = QString::fromStdString(group["wAddr"].get<std::string>());
+                } else if (group["wAddr"].is_number()) {
+                    wAddr = QString::number(group["wAddr"].get<int>());
+                } else {
+                    wAddr = QString::fromStdString(group["wAddr"].dump());
+                }
+            }
+
+            /* Handle wID (could be number or string) */
+            if (group.contains("wID")) {
+                if (group["wID"].is_string()) {
+                    wID = QString::fromStdString(group["wID"].get<std::string>());
+                } else if (group["wID"].is_number()) {
+                    wID = QString::number(group["wID"].get<int>());
+                } else {
+                    wID = QString::fromStdString(group["wID"].dump());
+                }
+            }
+
+            /* Handle wLen (could be number or string) */
+            if (group.contains("wLen")) {
+                if (group["wLen"].is_string()) {
+                    wLen = QString::fromStdString(group["wLen"].get<std::string>());
+                } else if (group["wLen"].is_number()) {
+                    wLen = QString::number(group["wLen"].get<int>());
+                } else {
+                    wLen = QString::fromStdString(group["wLen"].dump());
+                }
+            }
+
+            /* Handle boolean values */
+            if (group.contains("enWrite")) {
+                enWrite = group["enWrite"].get<bool>();
+            }
+
+            if (group.contains("enRead")) {
+                enRead = group["enRead"].get<bool>();
+            }
 
             /* Add row to table data */
             rows.append(
@@ -543,6 +596,12 @@ QString QSocModuleManager::formatModuleBusJsonToMarkdownTable(const QString &jso
     } catch (const json::parse_error &e) {
         qWarning() << "Failed to parse JSON response:" << e.what();
         return jsonResponse; /* Return original response if parsing fails */
+    } catch (const json::exception &e) {
+        qWarning() << "JSON exception occurred:" << e.what();
+        return "Error processing JSON response: " + QString(e.what());
+    } catch (const std::exception &e) {
+        qWarning() << "General exception occurred:" << e.what();
+        return "Error: " + QString(e.what());
     }
 }
 
