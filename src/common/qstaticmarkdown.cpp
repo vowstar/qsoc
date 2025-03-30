@@ -22,61 +22,6 @@ QString QStaticMarkdown::alignmentToString(QStaticMarkdown::Alignment alignment)
     }
 }
 
-QString QStaticMarkdown::formatJsonToMarkdownTable(const QString &jsonResponse)
-{
-    /* Try to parse the JSON response */
-    QJsonDocument doc = QJsonDocument::fromJson(jsonResponse.toUtf8());
-    if (doc.isNull()) {
-        qWarning() << "Failed to parse JSON response";
-        /* Return original response if parsing fails */
-        return jsonResponse;
-    }
-
-    QJsonObject root = doc.object();
-    if (!root.contains("groups") || !root["groups"].isArray()) {
-        qWarning() << "Invalid JSON structure: missing or invalid 'groups' array";
-        return jsonResponse;
-    }
-
-    QJsonArray groups = root["groups"].toArray();
-    if (groups.isEmpty()) {
-        return "No potential bus interface groups found.";
-    }
-
-    /* Define table headers */
-    QStringList headers
-        = {"Group Name",
-           "Type",
-           "Data Width",
-           "Address Width",
-           "ID Width",
-           "Burst Length",
-           "Write",
-           "Read"};
-
-    /* Build table rows from JSON data */
-    QVector<QStringList> rows;
-    for (const QJsonValue &groupValue : groups) {
-        QJsonObject group = groupValue.toObject();
-
-        /* Extract values with fallbacks */
-        QString name    = group["name"].toString();
-        QString type    = group["type"].toString();
-        QString wData   = group["wData"].toString();
-        QString wAddr   = group["wAddr"].toString();
-        QString wID     = group["wID"].toString();
-        QString wLen    = group["wLen"].toString();
-        bool    enWrite = group["enWrite"].toBool();
-        bool    enRead  = group["enRead"].toBool();
-
-        /* Add row to table data */
-        rows.append({name, type, wData, wAddr, wID, wLen, enWrite ? "✓" : "✗", enRead ? "✓" : "✗"});
-    }
-
-    /* Render the markdown table using Inja templates */
-    return renderTable(headers, rows, Alignment::Left);
-}
-
 QString QStaticMarkdown::renderTable(
     const QStringList          &headers,
     const QVector<QStringList> &rows,

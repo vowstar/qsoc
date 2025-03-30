@@ -462,15 +462,25 @@ public slots:
     YAML::Node showModuleBus(const QString &moduleName, const QRegularExpression &busInterfaceRegex);
 
     /**
-     * @brief Explain potential bus interfaces in a module using LLM.
-     * @details This function analyzes the module's ports and compares them with the specified bus type
-     *          to identify potential bus interface matches. It uses LLM to analyze the signals and
-     *          provide detailed information about each potential interface group.
-     * @param moduleName Name of the module to analyze.
-     * @param busName Name of the bus type to compare against.
-     * @param explanation Output string containing the LLM's analysis and explanation.
-     * @retval true Analysis completed successfully.
-     * @retval false Analysis failed or module/bus not found.
+     * @brief Format LLM response JSON into a Markdown table for bus interface analysis
+     * @details Converts JSON containing potential bus interface groupings into a
+     *          formatted Markdown table with columns for interface properties
+     * 
+     * @param jsonResponse The JSON string from LLM containing bus interface analysis
+     * @return Formatted Markdown table as a string
+     */
+    QString formatModuleBusJsonToMarkdownTable(const QString &jsonResponse);
+
+    /**
+     * @brief Explain module bus interfaces using LLM analysis.
+     * @details This function will use the LLM service to analyze the module ports
+     *          and bus signals to identify potential bus interfaces. The
+     *          explanation is returned as a Markdown-formatted string.
+     * @param moduleName The name of the module.
+     * @param busName The name of the bus.
+     * @param explanation The explanation string to be filled.
+     * @retval true Explanation successful.
+     * @retval false Explanation failed.
      */
     bool explainModuleBusWithLLM(
         const QString &moduleName, const QString &busName, QString &explanation);

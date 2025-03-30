@@ -41,17 +41,6 @@ public:
     ~QStaticMarkdown() = default;
 
     /**
-     * @brief Render a JSON object as a formatted Markdown table.
-     * @details Converts a JSON object containing groups of data into a properly aligned
-     *          Markdown table. This function is designed to work with LLM-generated
-     *          JSON responses with a specific structure.
-     *
-     * @param jsonResponse The JSON response string to format
-     * @return QString The formatted Markdown table string
-     */
-    static QString formatJsonToMarkdownTable(const QString &jsonResponse);
-
-    /**
      * @brief Generate a Markdown table from column headers and data rows.
      * @details Creates a formatted Markdown table with proper column alignment based on
      *          the content width of each column.
