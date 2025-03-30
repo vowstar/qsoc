@@ -593,13 +593,41 @@ bool QSocModuleManager::explainModuleBusWithLLM(
         }
     }
 
-    /* Extract bus signals from busYaml */
-    QVector<QString> groupBus;
+    /* Extract bus signals from busYaml - separate master and slave */
+    QVector<QString> groupBusMaster;
+    QVector<QString> groupBusSlave;
+
     if (busYaml["port"]) {
         for (YAML::const_iterator it = busYaml["port"].begin(); it != busYaml["port"].end(); ++it) {
             const std::string portNameStd = it->first.as<std::string>();
-            groupBus.append(QString::fromStdString(portNameStd));
+            QString           portName    = QString::fromStdString(portNameStd);
+
+            /* Check for master interface */
+            if (it->second["master"] && it->second["master"].IsMap()) {
+                QString portDirection = "";
+                if (it->second["master"]["direction"]
+                    && it->second["master"]["direction"].IsScalar()) {
+                    portDirection = QString::fromStdString(
+                        it->second["master"]["direction"].as<std::string>());
+                }
+                groupBusMaster.append(portDirection + " " + portName);
+            }
+
+            /* Check for slave interface */
+            if (it->second["slave"] && it->second["slave"].IsMap()) {
+                QString portDirection = "";
+                if (it->second["slave"]["direction"]
+                    && it->second["slave"]["direction"].IsScalar()) {
+                    portDirection = QString::fromStdString(
+                        it->second["slave"]["direction"].as<std::string>());
+                }
+                groupBusSlave.append(portDirection + " " + portName);
+            }
         }
+    } else {
+        /* No port node found */
+        qCritical() << "Error: Bus has invalid structure (missing 'port' node):" << busName;
+        return false;
     }
 
     /* Build module ports list */
@@ -608,9 +636,14 @@ bool QSocModuleManager::explainModuleBusWithLLM(
         portsList += "- " + port + "\n";
     }
 
-    /* Build bus signals list */
-    QString signalsList;
-    for (const QString &signal : groupBus) {
+    /* Build bus signals list with separate master/slave sections */
+    QString signalsList = "Master Bus signals:\n";
+    for (const QString &signal : groupBusMaster) {
+        signalsList += "- " + signal + "\n";
+    }
+
+    signalsList += "\nSlave Bus signals:\n";
+    for (const QString &signal : groupBusSlave) {
         signalsList += "- " + signal + "\n";
     }
 
@@ -647,14 +680,16 @@ bool QSocModuleManager::explainModuleBusWithLLM(
         }
 
         For the "type" field:
-        1. Use "master" if the interface is a master interface
-        2. Use "slave" if the interface is a slave interface
+        1. Use "master" if the interface match the master bus signals
+        2. Use "slave" if the interface match the slave bus signals
 
         For the "name" field:
         1. Use a short, concise name suitable for Verilog interface naming
         2. Follow Verilog naming conventions (alphanumeric with underscores)
         3. The name should reflect the function of the interface group
         4. Do not use generic names like "interface1" - use functional names
+        5. "foo_bar" and "bar_foo" should be grouped together
+        6. "foo_bar" and "foo_bar_baz" should be grouped together
 
         Please provide your analysis in the exact JSON format shown above.
     )")
