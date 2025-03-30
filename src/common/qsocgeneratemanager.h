@@ -55,6 +55,7 @@ public:
         Undriven,  /**< Net has only input ports */
         Multidrive /**< Net has multiple output/inout ports */
     };
+    Q_ENUM(PortDirectionStatus)
 
     /**
      * @brief Enum to distinguish between module ports and top-level ports
@@ -63,6 +64,7 @@ public:
         Module,  /**< Instance/module port */
         TopLevel /**< Top-level port */
     };
+    Q_ENUM(PortType)
 
     /**
      * @brief Structure to represent a port connection with type information
