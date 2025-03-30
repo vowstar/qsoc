@@ -98,6 +98,11 @@ pkg_check_modules(INJA IMPORTED_TARGET inja>=3.0.0)
 if (INJA_FOUND)
     message(STATUS "Use system inja library: ${INJA_LIBRARIES} ${INJA_VERSION}")
 else()
+    set(INJA_USE_EMBEDDED_JSON OFF)
+    set(INJA_INSTALL OFF)
+    set(INJA_INSTALL_SINGLE_HEADER OFF)
+    set(INJA_EXPORT OFF)
+    set(INJA_BUILD_TESTS OFF)
     add_subdirectory(external/inja)
     set(INJA_INCLUDE_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}/external/inja/include"
