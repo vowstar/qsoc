@@ -1638,7 +1638,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                         NumberInfo adjustedInfo = numInfo;
 
                                         /* Special handling for overflow detection */
-                                        if (numInfo.overflowDetected) {
+                                        if (numInfo.errorDetected) {
                                             /* For overflow values, keep the original string representation */
                                             if (numInfo.width > portWidth) {
                                                 tieValue = QString(
@@ -1655,9 +1655,23 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                             adjustedInfo.width            = portWidth;
                                             adjustedInfo.hasExplicitWidth = true;
 
-                                            /* Only truncate value when port width is within 64 bits */
-                                            if (portWidth <= 64) {
-                                                adjustedInfo.value &= ((1ULL << portWidth) - 1);
+                                            /* Create a mask for the width */
+                                            BigUnsigned mask = BigUnsigned(0);
+                                            for (int i = 0; i < portWidth; i++) {
+                                                mask = (mask << 1) + BigUnsigned(1);
+                                            }
+                                            /* Apply mask to truncate the value */
+                                            if (adjustedInfo.value.getSign()
+                                                == BigInteger::negative) {
+                                                // For negative numbers, apply mask to magnitude and maintain sign
+                                                BigUnsigned result
+                                                    = adjustedInfo.value.getMagnitude() & mask;
+                                                adjustedInfo.value
+                                                    = BigInteger(result, BigInteger::negative);
+                                            } else {
+                                                // For non-negative numbers, just apply the mask
+                                                adjustedInfo.value = BigInteger(
+                                                    adjustedInfo.value.getMagnitude() & mask);
                                             }
 
                                             if (numInfo.width > portWidth) {
@@ -1831,7 +1845,7 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
     result.value            = 0;
     result.width            = 0;
     result.hasExplicitWidth = false;
-    result.overflowDetected = false;
+    result.errorDetected    = false;
 
     /* Remove all underscores from the string (Verilog style) */
     QString cleanStr = numStr;
@@ -1873,12 +1887,6 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
         if (widthOk && !result.hasExplicitWidth) {
             result.width            = width;
             result.hasExplicitWidth = true;
-
-            /* Check for potential overflow (width > 64 bits) */
-            if (width > 64) {
-                result.overflowDetected = true;
-                qWarning() << "Number width exceeds 64 bits, using original string:" << numStr;
-            }
         }
 
         QChar   baseChar = verilogMatch.captured(2).at(0).toLower();
@@ -1888,47 +1896,43 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
         switch (baseChar.toLatin1()) {
         case 'b': /* Binary */
             result.base = NumberInfo::Base::Binary;
-            {
-                bool ok      = false;
-                result.value = valueStr.toLongLong(&ok, 2);
-                if (!ok) {
-                    result.overflowDetected = true;
-                    qWarning() << "Binary value overflow, using original string:" << numStr;
-                }
+            try {
+                result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 2);
+            } catch (const std::exception &e) {
+                result.errorDetected = true;
+                qWarning() << "Binary value error, using original string:" << numStr
+                           << "Error:" << e.what();
             }
             break;
         case 'o': /* Octal */
             result.base = NumberInfo::Base::Octal;
-            {
-                bool ok      = false;
-                result.value = valueStr.toLongLong(&ok, 8);
-                if (!ok) {
-                    result.overflowDetected = true;
-                    qWarning() << "Octal value overflow, using original string:" << numStr;
-                }
+            try {
+                result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 8);
+            } catch (const std::exception &e) {
+                result.errorDetected = true;
+                qWarning() << "Octal value error, using original string:" << numStr
+                           << "Error:" << e.what();
             }
             break;
         case 'd': /* Decimal */
             result.base = NumberInfo::Base::Decimal;
-            {
-                bool ok      = false;
-                result.value = valueStr.toLongLong(&ok, 10);
-                if (!ok) {
-                    result.overflowDetected = true;
-                    qWarning() << "Decimal value overflow, using original string:" << numStr;
-                }
+            try {
+                result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 10);
+            } catch (const std::exception &e) {
+                result.errorDetected = true;
+                qWarning() << "Decimal value error, using original string:" << numStr
+                           << "Error:" << e.what();
             }
             break;
         case 'h': /* Hexadecimal */
         case 'x': /* Alternative for Hexadecimal */
             result.base = NumberInfo::Base::Hexadecimal;
-            {
-                bool ok      = false;
-                result.value = valueStr.toLongLong(&ok, 16);
-                if (!ok) {
-                    result.overflowDetected = true;
-                    qWarning() << "Hexadecimal value overflow, using original string:" << numStr;
-                }
+            try {
+                result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 16);
+            } catch (const std::exception &e) {
+                result.errorDetected = true;
+                qWarning() << "Hexadecimal value error, using original string:" << numStr
+                           << "Error:" << e.what();
             }
             break;
         default:
@@ -1947,48 +1951,43 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
             switch (baseChar.toLatin1()) {
             case 'b': /* Binary */
                 result.base = NumberInfo::Base::Binary;
-                {
-                    bool ok      = false;
-                    result.value = valueStr.toLongLong(&ok, 2);
-                    if (!ok) {
-                        result.overflowDetected = true;
-                        qWarning() << "Binary value overflow, using original string:" << numStr;
-                    }
+                try {
+                    result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 2);
+                } catch (const std::exception &e) {
+                    result.errorDetected = true;
+                    qWarning() << "Binary value error, using original string:" << numStr
+                               << "Error:" << e.what();
                 }
                 break;
             case 'o': /* Octal */
                 result.base = NumberInfo::Base::Octal;
-                {
-                    bool ok      = false;
-                    result.value = valueStr.toLongLong(&ok, 8);
-                    if (!ok) {
-                        result.overflowDetected = true;
-                        qWarning() << "Octal value overflow, using original string:" << numStr;
-                    }
+                try {
+                    result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 8);
+                } catch (const std::exception &e) {
+                    result.errorDetected = true;
+                    qWarning() << "Octal value error, using original string:" << numStr
+                               << "Error:" << e.what();
                 }
                 break;
             case 'd': /* Decimal */
                 result.base = NumberInfo::Base::Decimal;
-                {
-                    bool ok      = false;
-                    result.value = valueStr.toLongLong(&ok, 10);
-                    if (!ok) {
-                        result.overflowDetected = true;
-                        qWarning() << "Decimal value overflow, using original string:" << numStr;
-                    }
+                try {
+                    result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 10);
+                } catch (const std::exception &e) {
+                    result.errorDetected = true;
+                    qWarning() << "Decimal value error, using original string:" << numStr
+                               << "Error:" << e.what();
                 }
                 break;
             case 'h': /* Hexadecimal */
             case 'x': /* Alternative for Hexadecimal */
                 result.base = NumberInfo::Base::Hexadecimal;
-                {
-                    bool ok      = false;
-                    result.value = valueStr.toLongLong(&ok, 16);
-                    if (!ok) {
-                        result.overflowDetected = true;
-                        qWarning()
-                            << "Hexadecimal value overflow, using original string:" << numStr;
-                    }
+                try {
+                    result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 16);
+                } catch (const std::exception &e) {
+                    result.errorDetected = true;
+                    qWarning() << "Hexadecimal value error, using original string:" << numStr
+                               << "Error:" << e.what();
                 }
                 break;
             default:
@@ -1998,27 +1997,43 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
             /* Try C-style format */
             if (cleanStr.startsWith("0x") || cleanStr.startsWith("0X")) {
                 /* Hexadecimal */
-                result.base  = NumberInfo::Base::Hexadecimal;
-                result.value = cleanStr.toLongLong(nullptr, 16);
+                result.base = NumberInfo::Base::Hexadecimal;
+                try {
+                    result.value = stringToBigIntegerWithBase(cleanStr.mid(2).toStdString(), 16);
+                } catch (const std::exception &e) {
+                    result.errorDetected = true;
+                    qWarning() << "Hexadecimal value error, using original string:" << numStr
+                               << "Error:" << e.what();
+                }
             } else if (cleanStr.startsWith("0b") || cleanStr.startsWith("0B")) {
                 /* Binary (C++14 style) */
-                result.base  = NumberInfo::Base::Binary;
-                result.value = cleanStr.mid(2).toLongLong(nullptr, 2);
+                result.base = NumberInfo::Base::Binary;
+                try {
+                    result.value = stringToBigIntegerWithBase(cleanStr.mid(2).toStdString(), 2);
+                } catch (const std::exception &e) {
+                    result.errorDetected = true;
+                    qWarning() << "Binary value error, using original string:" << numStr
+                               << "Error:" << e.what();
+                }
             } else if (cleanStr.startsWith("0") && cleanStr.length() > 1) {
                 /* Octal */
-                result.base  = NumberInfo::Base::Octal;
-                result.value = cleanStr.toLongLong(nullptr, 8);
+                result.base = NumberInfo::Base::Octal;
+                try {
+                    result.value = stringToBigIntegerWithBase(cleanStr.toStdString(), 8);
+                } catch (const std::exception &e) {
+                    result.errorDetected = true;
+                    qWarning() << "Octal value error, using original string:" << numStr
+                               << "Error:" << e.what();
+                }
             } else {
                 /* Decimal */
-                result.base  = NumberInfo::Base::Decimal;
-                bool ok      = false;
-                result.value = cleanStr.toLongLong(&ok, 10);
-
-                if (!ok) {
-                    result.overflowDetected = true;
-                    qWarning() << "Failed to parse decimal number (potential overflow), using "
-                                  "original string:"
-                               << cleanStr;
+                result.base = NumberInfo::Base::Decimal;
+                try {
+                    result.value = stringToBigIntegerWithBase(cleanStr.toStdString(), 10);
+                } catch (const std::exception &e) {
+                    result.errorDetected = true;
+                    qWarning() << "Failed to parse decimal number, using original string:"
+                               << cleanStr << "Error:" << e.what();
                 }
             }
         }
@@ -2026,8 +2041,8 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
 
     /* Calculate width if not explicitly provided */
     if (!result.hasExplicitWidth) {
-        if (result.overflowDetected) {
-            /* For overflow values, set a reasonable width based on the original string */
+        if (result.errorDetected) {
+            /* For error values, set a reasonable width based on the original string */
             if (result.originalString.toLower().contains('h')) {
                 /* Hex values: each digit is 4 bits */
                 int digits = result.originalString.length();
@@ -2057,11 +2072,21 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
             result.width = 1; /* Special case for zero */
         } else {
             /* Calculate minimum required width based on the value */
-            quint64 tempValue       = result.value;
-            int     calculatedWidth = 0;
+            BigInteger tempValue       = result.value;
+            int        calculatedWidth = 0;
 
-            while (tempValue > 0) {
-                tempValue >>= 1;
+            /* Count how many bits are needed */
+            while (tempValue != 0) {
+                /* Shift right by one bit */
+                if (tempValue.getSign() == BigInteger::negative) {
+                    BigUnsigned magnitude = tempValue.getMagnitude();
+                    magnitude             = magnitude >> 1;
+                    tempValue             = BigInteger(magnitude, BigInteger::negative);
+                } else {
+                    BigUnsigned magnitude = tempValue.getMagnitude();
+                    magnitude             = magnitude >> 1;
+                    tempValue             = BigInteger(magnitude);
+                }
                 calculatedWidth++;
             }
 
@@ -2072,17 +2097,26 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
                 result.width = 16;
             } else if (calculatedWidth <= 32) {
                 result.width = 32;
-            } else {
+            } else if (calculatedWidth <= 64) {
                 result.width = 64;
+            } else if (calculatedWidth <= 128) {
+                result.width = 128;
+            } else if (calculatedWidth <= 256) {
+                result.width = 256;
+            } else if (calculatedWidth <= 512) {
+                result.width = 512;
+            } else {
+                result.width = 1024;
             }
         }
     }
 
     /* Add debug output */
-    qDebug() << "Parsed number:" << numStr << "Value:" << result.value
+    qDebug() << "Parsed number:" << numStr
+             << "Value:" << QString::fromStdString(bigIntegerToStringWithBase(result.value, 10))
              << "Base:" << static_cast<int>(result.base) << "Width:" << result.width
              << (result.hasExplicitWidth ? "(explicit)" : "(calculated)")
-             << (result.overflowDetected ? " (overflow detected)" : "");
+             << (result.errorDetected ? " (error detected)" : "");
 
     return result;
 }
