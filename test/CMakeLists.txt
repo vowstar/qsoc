@@ -74,6 +74,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         "${CSV_INCLUDE_DIRS}"
         "${GPDS_INCLUDE_DIRS}"
         "${QSCHEMATIC_INCLUDE_DIRS}"
+        "${BIGINT_INCLUDE_DIRS}"
     )
 
     target_link_libraries(${TARGET_NAME} PRIVATE
@@ -94,6 +95,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${CSV_LIBRARIES}
         ${GPDS_LIBRARIES}
         ${QSCHEMATIC_LIBRARIES}
+        ${BIGINT_LIBRARIES}
     )
 endfunction()
 

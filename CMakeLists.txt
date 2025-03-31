@@ -178,6 +178,19 @@ else()
     message(STATUS "Use local qschematic library: ${QSCHEMATIC_LIBRARIES} ${QSCHEMATIC_INCLUDE_DIRS}")
 endif()
 
+# BIGINT
+pkg_check_modules(BIGINT IMPORTED_TARGET bigint>=2010.04.30)
+if (BIGINT_FOUND)
+    message(STATUS "Use system bigint library: ${BIGINT_LIBRARIES} ${BIGINT_VERSION}")
+else()
+    add_subdirectory(external/bigint)
+    set(BIGINT_INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/bigint"
+    )
+    set(BIGINT_LIBRARIES bigint::bigint)
+    message(STATUS "Use local bigint library: ${BIGINT_LIBRARIES} ${BIGINT_INCLUDE_DIRS}")
+endif()
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "resource/*.qrc")
@@ -237,6 +250,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${CSV_INCLUDE_DIRS}"
     "${GPDS_INCLUDE_DIRS}"
     "${QSCHEMATIC_INCLUDE_DIRS}"
+    "${BIGINT_INCLUDE_DIRS}"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -256,6 +270,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${CSV_LIBRARIES}
     ${GPDS_LIBRARIES}
     ${QSCHEMATIC_LIBRARIES}
+    ${BIGINT_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
