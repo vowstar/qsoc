@@ -55,19 +55,8 @@ private:
         return filePath;
     }
 
-    void setupTestProject()
+    void createTestGenerateFiles()
     {
-        /* Set project name */
-        projectManager.setProjectName(projectName);
-        /* Set project path */
-        projectManager.setCurrentPath(QDir::current().filePath(projectName));
-        /* Create project directory structure */
-        projectManager.mkpath();
-        /* Save project file */
-        projectManager.save(projectName);
-        /* Load project file */
-        projectManager.load(projectName);
-
         /* Create c906 module in the module directory */
         const QString c906Content = R"(
 c906:
@@ -222,9 +211,16 @@ private slots:
     {
         TestApp::instance();
         qInstallMessageHandler(messageOutput);
-        /* Create a new project for testing */
+        /* Set project name */
         projectName = QFileInfo(__FILE__).baseName() + "_data";
-        setupTestProject();
+        /* Setup project manager */
+        projectManager.setProjectName(projectName);
+        projectManager.setCurrentPath(QDir::current().filePath(projectName));
+        projectManager.mkpath();
+        projectManager.save(projectName);
+        projectManager.load(projectName);
+        /* Create test files */
+        createTestGenerateFiles();
     }
 
     void cleanupTestCase()
