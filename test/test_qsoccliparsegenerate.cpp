@@ -58,7 +58,6 @@ private:
     void setupTestProject()
     {
         /* Set project name */
-        projectName = QFileInfo(__FILE__).baseName() + "_data";
         projectManager.setProjectName(projectName);
         /* Set project path */
         projectManager.setCurrentPath(QDir::current().filePath(projectName));
@@ -223,7 +222,18 @@ private slots:
     {
         TestApp::instance();
         qInstallMessageHandler(messageOutput);
+        /* Create a new project for testing */
+        projectName = QFileInfo(__FILE__).baseName() + "_data";
         setupTestProject();
+    }
+
+    void cleanupTestCase()
+    {
+        /* Clean up the test project directory */
+        QDir projectDir(projectManager.getCurrentPath());
+        if (projectDir.exists()) {
+            projectDir.removeRecursively();
+        }
     }
 
     void testGenerateCommandHelp()
