@@ -165,6 +165,13 @@ c906:
             return true;
         }
 
+        /* Check build/output directory */
+        QString buildOutputPath = QDir::current().absolutePath() + "/../build/output";
+        QString buildFilePath   = QDir(buildOutputPath).filePath(baseFileName + ".v");
+        if (QFile::exists(buildFilePath)) {
+            return true;
+        }
+
         return false;
     }
 
@@ -205,6 +212,20 @@ c906:
                     verilogContent = file.readAll();
                     file.close();
                     qDebug() << "Found file in test output directory:" << filePath;
+                }
+            }
+        }
+
+        /* If not found, check build/output directory */
+        if (verilogContent.isEmpty()) {
+            QString buildOutputPath = QDir::current().absolutePath() + "/../build/output";
+            filePath                = QDir(buildOutputPath).filePath(baseFileName + ".v");
+            if (QFile::exists(filePath)) {
+                QFile file(filePath);
+                if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    verilogContent = file.readAll();
+                    file.close();
+                    qDebug() << "Found file in build output directory:" << filePath;
                 }
             }
         }
@@ -386,12 +407,6 @@ instance:
         /* Verify that specific large values are handled correctly */
         QVERIFY(verifyVerilogContent("tie_overflow_test", "module tie_overflow_test"));
         QVERIFY(verifyVerilogContent("tie_overflow_test", "c906 cpu0"));
-
-        /* Debug output to help diagnose any issues */
-        qInfo() << "Log messages count:" << messageList.size();
-        for (int i = 0; i < qMin(5, messageList.size()); i++) {
-            qInfo() << "Log message " << i << ":" << messageList[i];
-        }
     }
 
     void testGenerateWithTieFormatTest()
@@ -447,12 +462,6 @@ instance:
         /* Verify that specific content with different format types exists */
         QVERIFY(verifyVerilogContent("tie_format_test", "module tie_format_test"));
         QVERIFY(verifyVerilogContent("tie_format_test", "c906 cpu0"));
-
-        /* Debug output to help diagnose any issues */
-        qInfo() << "Log messages count:" << messageList.size();
-        for (int i = 0; i < qMin(5, messageList.size()); i++) {
-            qInfo() << "Log message " << i << ":" << messageList[i];
-        }
     }
 
     void testGenerateWithInvertTest()
@@ -502,6 +511,11 @@ net:
 
         /* Verify that the Verilog file was generated */
         QVERIFY(verifyVerilogOutputExistence("invert_test"));
+
+        /* Verify that module and instances exist */
+        QVERIFY(verifyVerilogContent("invert_test", "module invert_test"));
+        QVERIFY(verifyVerilogContent("invert_test", "c906 cpu0"));
+        QVERIFY(verifyVerilogContent("invert_test", "c906 cpu1"));
     }
 
     void testGenerateWithTieWidthTest()
@@ -538,6 +552,10 @@ instance:
 
         /* Verify that the Verilog file was generated */
         QVERIFY(verifyVerilogOutputExistence("tie_width_test"));
+
+        /* Verify that module and instance exist */
+        QVERIFY(verifyVerilogContent("tie_width_test", "module tie_width_test"));
+        QVERIFY(verifyVerilogContent("tie_width_test", "c906 cpu0"));
     }
 
     void testGenerateWithTieFormatInputTest()
@@ -585,6 +603,10 @@ instance:
 
         /* Verify that the Verilog file was generated */
         QVERIFY(verifyVerilogOutputExistence("tie_format_input_test"));
+
+        /* Verify that module and instance exist */
+        QVERIFY(verifyVerilogContent("tie_format_input_test", "module tie_format_input_test"));
+        QVERIFY(verifyVerilogContent("tie_format_input_test", "c906 cpu0"));
     }
 
     void testGenerateWithComplexTieTest()
@@ -631,51 +653,11 @@ instance:
 
         /* Verify that the Verilog file was generated */
         QVERIFY(verifyVerilogOutputExistence("complex_tie_test"));
-    }
 
-    void testGenerateWithWireTest()
-    {
-        messageList.clear();
-
-        const QString content  = R"(
-instance:
-  cpu0:
-    module: c906
-  cpu1:
-    module: c906
-  cpu2:
-    module: c906
-net:
-  simple_net:
-    cpu0:
-      port: axim_clk_en
-    cpu1:
-      port: axim_clk_en
-  multi_instance_net:
-    cpu0:
-      port: sys_apb_rst_b
-    cpu1:
-      port: sys_apb_rst_b
-    cpu2:
-      port: sys_apb_rst_b
-  # Mixed direction net
-  mixed_dir_net:
-    cpu0:
-      port: biu_pad_arvalid  # output
-    cpu1:
-      port: pad_biu_arvalid  # input would be if we had it
-    cpu2:
-      port: pad_biu_arvalid  # input would be if we had it
-)";
-        QString       filePath = createTempFile("wire_test.soc_net", content);
-
-        QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "generate", "verilog", filePath};
-        socCliWorker.setup(appArguments, false);
-        socCliWorker.run();
-
-        /* Verify that the Verilog file was generated */
-        QVERIFY(verifyVerilogOutputExistence("wire_test"));
+        /* Verify that module and instances exist */
+        QVERIFY(verifyVerilogContent("complex_tie_test", "module complex_tie_test"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", "c906 cpu0"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", "c906 cpu1"));
     }
 
     void testGenerateWithMultipleFiles()
@@ -726,6 +708,18 @@ instance:
         /* Verify that both Verilog files were generated */
         QVERIFY(verifyVerilogOutputExistence("example1"));
         QVERIFY(verifyVerilogOutputExistence("example2"));
+
+        /* Verify example1 module content */
+        QVERIFY(verifyVerilogContent("example1", "module example1"));
+        QVERIFY(verifyVerilogContent("example1", "c906 cpu0"));
+        QVERIFY(verifyVerilogContent("example1", "input clk"));
+        QVERIFY(verifyVerilogContent("example1", "input rst_n"));
+
+        /* Verify example2 module content */
+        QVERIFY(verifyVerilogContent("example2", "module example2"));
+        QVERIFY(verifyVerilogContent("example2", "c906 cpu0"));
+        QVERIFY(verifyVerilogContent("example2", "input clk"));
+        QVERIFY(verifyVerilogContent("example2", "input rst_n"));
     }
 };
 

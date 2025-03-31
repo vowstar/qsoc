@@ -294,7 +294,7 @@ bool QSocCliWorker::parseProjectShow(const QStringList &appArguments)
     /* Pass projectName to projectManager */
     const QString &projectName = cmdArguments.first();
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     /* Load project by name from project path */
     if (!projectManager->load(projectName)) {

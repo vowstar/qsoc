@@ -70,8 +70,10 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
 
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        const QString dirPath = parser.value("directory");
+        projectManager->setCurrentPath(dirPath);
     }
+
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
     } else {

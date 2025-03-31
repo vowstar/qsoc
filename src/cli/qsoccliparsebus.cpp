@@ -89,7 +89,7 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
     }
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -166,7 +166,7 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
         busNameList.end());
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -275,7 +275,7 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
         busNameList.end());
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -381,7 +381,7 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
         busNameList.end());
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));

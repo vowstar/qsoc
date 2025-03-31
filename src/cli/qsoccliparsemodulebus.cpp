@@ -130,7 +130,7 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
 
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -267,7 +267,7 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
 
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -393,7 +393,7 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
 
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -526,7 +526,7 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
 
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -661,7 +661,7 @@ bool QSocCliWorker::parseModuleBusExplain(const QStringList &appArguments)
 
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
