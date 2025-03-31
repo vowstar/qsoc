@@ -33,7 +33,6 @@ class Test : public QObject
 
 private:
     static QStringList messageList;
-    QString            projectPath;
     QString            projectName;
     QSocProjectManager projectManager;
 
@@ -58,16 +57,18 @@ private:
 
     void setupTestProject()
     {
-        /* Set project path to the fixed directory */
-        projectManager.setCurrentPath(projectPath);
+        /* Set project name */
+        projectName = QFileInfo(__FILE__).baseName() + "_data";
+        projectManager.setProjectName(projectName);
+        /* Set project path */
+        projectManager.setCurrentPath(QDir::current().filePath(projectName));
         /* Create project directory structure */
         projectManager.mkpath();
-        /* Set project name */
-        projectManager.setProjectName(projectName);
         /* Save project file */
         projectManager.save(projectName);
         /* Load project file */
         projectManager.load(projectName);
+
         /* Create c906 module in the module directory */
         const QString c906Content = R"(
 c906:
@@ -120,8 +121,7 @@ c906:
 )";
 
         /* Create the module file */
-        QDir moduleDir(projectManager.getModulePath());
-
+        QDir    moduleDir(projectManager.getModulePath());
         QString modulePath = moduleDir.filePath("c906.soc_mod");
         QFile   moduleFile(modulePath);
         if (moduleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -129,9 +129,6 @@ c906:
             stream << c906Content;
             moduleFile.close();
         }
-
-        /* Create output directory for Verilog files */
-        QDir outputDir(projectManager.getOutputPath());
     }
 
     /* Look for Verilog output file in typical locations */
@@ -226,11 +223,6 @@ private slots:
     {
         TestApp::instance();
         qInstallMessageHandler(messageOutput);
-
-        /* Set project name and path */
-        projectName = "generate_test_project";
-        projectPath = QDir::current().filePath(projectName);
-
         setupTestProject();
     }
 
@@ -336,7 +328,7 @@ instance:
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -376,7 +368,7 @@ instance:
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -447,7 +439,7 @@ instance:
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -524,7 +516,7 @@ net:
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -581,7 +573,7 @@ instance:
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -648,7 +640,7 @@ instance:
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -713,7 +705,7 @@ instance:
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -785,7 +777,13 @@ instance:
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath1, filePath2};
+            = {"qsoc",
+               "generate",
+               "verilog",
+               "-d",
+               projectManager.getCurrentPath(),
+               filePath1,
+               filePath2};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
