@@ -237,13 +237,26 @@ c906:
             return false;
         }
 
-        /* Check if the content contains the text we're looking for */
-        bool result = verilogContent.contains(contentToVerify);
+        /* Helper function to normalize whitespace */
+        auto normalizeWhitespace = [](const QString &input) -> QString {
+            QString result = input;
+            // Replace all whitespace (including tabs and newlines) with a single space
+            result.replace(QRegularExpression("\\s+"), " ");
+            return result;
+        };
+
+        /* Normalize whitespace in both strings before comparing */
+        QString normalizedContent = normalizeWhitespace(verilogContent);
+        QString normalizedVerify  = normalizeWhitespace(contentToVerify);
+
+        /* Check if the normalized content contains the normalized text we're looking for */
+        bool result = normalizedContent.contains(normalizedVerify);
         qDebug() << "\n=== [DEBUG] Search result ===";
-        qDebug() << "Looking for:" << contentToVerify;
+        qDebug() << "Looking for (normalized):" << normalizedVerify;
         qDebug() << "Found:" << result;
         if (!result) {
-            qDebug() << "Content not found. File content preview:\n" << verilogContent;
+            qDebug() << "Content not found. File content preview (normalized):\n"
+                     << normalizedContent.left(500);
         }
         return result;
     }
