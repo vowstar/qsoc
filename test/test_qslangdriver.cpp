@@ -59,7 +59,8 @@ void Test::initTestCase()
 
 void Test::cleanupTestCase()
 {
-    /* Cleanup is handled automatically by QTemporaryDir */
+    /* Cleanup is handled by QTemporaryDir */
+    tempDir.remove();
 }
 
 QString Test::createTemporaryVerilogFile(const QString &content)
