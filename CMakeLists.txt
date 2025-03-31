@@ -11,6 +11,7 @@ option(ENABLE_CLANG_TIDY   "Enable static analysis with clang-tidy"        ON)
 option(ENABLE_UNIT_TEST    "Enable unit test"                              ON)
 option(ENABLE_DOXYGEN      "Enable documentation generation with Doxygen" OFF)
 option(ENABLE_SPDX_HEADERS "Enable adding SPDX headers to source files"   OFF)
+option(ENABLE_TEST_CLEANUP "Automatically cleanup test files after test"  OFF)
 # CMake Settings
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
@@ -343,4 +344,8 @@ endif()
 if(ENABLE_SPDX_HEADERS)
     include(AddSpdxHeaders)
     add_spdx_headers(TARGET ${PROJECT_NAME})
+endif()
+
+if(ENABLE_TEST_CLEANUP)
+    add_definitions(-DENABLE_TEST_CLEANUP)
 endif()
