@@ -66,11 +66,13 @@ private slots:
 
     void cleanupTestCase()
     {
+#ifdef ENABLE_TEST_CLEANUP
         /* Clean up the test project directory */
         QDir projectDir(projectManager.getCurrentPath());
         if (projectDir.exists()) {
             projectDir.removeRecursively();
         }
+#endif // ENABLE_TEST_CLEANUP
     }
 
     void createTestBusFiles()
