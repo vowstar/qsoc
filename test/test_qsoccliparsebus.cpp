@@ -39,22 +39,26 @@ private:
         messageList << msg;
     }
 
+    /* Project manager instance */
+    QSocProjectManager projectManager;
+    /* Project name */
+    QString projectName;
+
 private slots:
     void initTestCase()
     {
         TestApp::instance();
         qInstallMessageHandler(messageOutput);
 
-        /* Create a test project for bus tests */
-        QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {
-            "qsoc",
-            "project",
-            "create",
-            "bus_test_project",
-        };
-        socCliWorker.setup(appArguments, false);
-        socCliWorker.run();
+        /* Set project name */
+        projectName = QFileInfo(__FILE__).baseName() + "_data";
+
+        /* Setup project manager */
+        projectManager.setProjectName(projectName);
+        projectManager.setCurrentPath(QDir::current().filePath(projectName));
+        projectManager.mkpath();
+        projectManager.save(projectName);
+        projectManager.load(projectName);
 
         /* Create test CSV files */
         createTestBusFiles();
@@ -62,31 +66,10 @@ private slots:
 
     void cleanupTestCase()
     {
-        /* Cleanup any leftover test files */
-        QStringList filesToRemove = {"bus_test_project.soc_pro", "test_apb.csv", "test_axi.csv"};
-
-        for (const QString &file : filesToRemove) {
-            if (QFile::exists(file)) {
-                QFile::remove(file);
-            }
-        }
-
-        /* Also check for files in the build directory */
-        QString buildTestDir = QDir::currentPath() + "/build/test";
-        for (const QString &file : filesToRemove) {
-            QString buildFilePath = buildTestDir + "/" + file;
-            if (QFile::exists(buildFilePath)) {
-                QFile::remove(buildFilePath);
-            }
-        }
-
-        /* Clean up temporary directories */
-        QStringList dirsToRemove = {"./bus_temp_dir"};
-
-        for (const QString &dir : dirsToRemove) {
-            if (QDir(dir).exists()) {
-                QDir(dir).removeRecursively();
-            }
+        /* Clean up the test project directory */
+        QDir projectDir(projectManager.getCurrentPath());
+        if (projectDir.exists()) {
+            projectDir.removeRecursively();
         }
     }
 
@@ -96,17 +79,17 @@ private slots:
         QFile apbFile("test_apb.csv");
         if (apbFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&apbFile);
-            out << "Signal,Direction,Width,Description\n"
-                << "PCLK,input,1,Clock\n"
-                << "PRESETn,input,1,Reset (active low)\n"
-                << "PADDR,input,32,Address\n"
-                << "PSEL,input,1,Select\n"
-                << "PENABLE,input,1,Enable\n"
-                << "PWRITE,input,1,Write\n"
-                << "PWDATA,input,32,Write data\n"
-                << "PREADY,output,1,Ready\n"
-                << "PRDATA,output,32,Read data\n"
-                << "PSLVERR,output,1,Slave error\n";
+            out << R"(Signal,Direction,Width,Description
+PCLK,input,1,Clock
+PRESETn,input,1,Reset (active low)
+PADDR,input,32,Address
+PSEL,input,1,Select
+PENABLE,input,1,Enable
+PWRITE,input,1,Write
+PWDATA,input,32,Write data
+PREADY,output,1,Ready
+PRDATA,output,32,Read data
+PSLVERR,output,1,Slave error)";
             apbFile.close();
         }
 
@@ -114,21 +97,21 @@ private slots:
         QFile axiFile("test_axi.csv");
         if (axiFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&axiFile);
-            out << "Signal,Direction,Width,Description\n"
-                << "ACLK,input,1,Clock\n"
-                << "ARESETn,input,1,Reset (active low)\n"
-                << "AWID,input,4,Write address ID\n"
-                << "AWADDR,input,32,Write address\n"
-                << "AWLEN,input,8,Burst length\n"
-                << "AWSIZE,input,3,Burst size\n"
-                << "AWBURST,input,2,Burst type\n"
-                << "AWVALID,input,1,Write address valid\n"
-                << "AWREADY,output,1,Write address ready\n"
-                << "WDATA,input,32,Write data\n"
-                << "WSTRB,input,4,Write strobes\n"
-                << "WLAST,input,1,Write last\n"
-                << "WVALID,input,1,Write valid\n"
-                << "WREADY,output,1,Write ready\n";
+            out << R"(Signal,Direction,Width,Description
+ACLK,input,1,Clock
+ARESETn,input,1,Reset (active low)
+AWID,input,4,Write address ID
+AWADDR,input,32,Write address
+AWLEN,input,8,Burst length
+AWSIZE,input,3,Burst size
+AWBURST,input,2,Burst type
+AWVALID,input,1,Write address valid
+AWREADY,output,1,Write address ready
+WDATA,input,32,Write data
+WSTRB,input,4,Write strobes
+WLAST,input,1,Write last
+WVALID,input,1,Write valid
+WREADY,output,1,Write ready)";
             axiFile.close();
         }
     }
@@ -143,7 +126,9 @@ private slots:
                "bus",
                "import",
                "-p",
-               "bus_test_project",
+               projectName,
+               "-d",
+               projectManager.getProjectPath(),
                "-l",
                "test_lib",
                "-b",
@@ -161,7 +146,8 @@ private slots:
     {
         messageList.clear();
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "bus", "list", "-p", "bus_test_project"};
+        const QStringList appArguments
+            = {"qsoc", "bus", "list", "-p", projectName, "-d", projectManager.getProjectPath()};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -175,7 +161,15 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "bus", "show", "-p", "bus_test_project", "-b", "apb"};
+            = {"qsoc",
+               "bus",
+               "show",
+               "-p",
+               projectName,
+               "-d",
+               projectManager.getProjectPath(),
+               "-b",
+               "apb"};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -193,7 +187,9 @@ private slots:
                "bus",
                "import",
                "-p",
-               "bus_test_project",
+               projectName,
+               "-d",
+               projectManager.getProjectPath(),
                "-l",
                "test_lib",
                "-b",
@@ -212,7 +208,15 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "bus", "remove", "-p", "bus_test_project", "-b", "apb"};
+            = {"qsoc",
+               "bus",
+               "remove",
+               "-p",
+               projectName,
+               "-d",
+               projectManager.getProjectPath(),
+               "-b",
+               "apb"};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -226,7 +230,15 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "bus", "show", "-p", "bus_test_project", "-b", "non_existent_bus"};
+            = {"qsoc",
+               "bus",
+               "show",
+               "-p",
+               projectName,
+               "-d",
+               projectManager.getProjectPath(),
+               "-b",
+               "non_existent_bus"};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -240,7 +252,15 @@ private slots:
         /* Test with verbosity level 3 (info) */
         messageList.clear();
         QSocCliWorker socCliWorker;
-        QStringList appArguments = {"qsoc", "--verbose=3", "bus", "list", "-p", "bus_test_project"};
+        QStringList   appArguments
+            = {"qsoc",
+               "--verbose=3",
+               "bus",
+               "list",
+               "-p",
+               projectName,
+               "-d",
+               projectManager.getProjectPath()};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -254,7 +274,15 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "bus", "import", "--invalid-option", "-p", "bus_test_project", "test_apb.csv"};
+            = {"qsoc",
+               "bus",
+               "import",
+               "--invalid-option",
+               "-p",
+               projectName,
+               "-d",
+               projectManager.getProjectPath(),
+               "test_apb.csv"};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -268,7 +296,7 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
-            "qsoc", "bus", "import", "-p", "bus_test_project"
+            "qsoc", "bus", "import", "-p", projectName, "-d", projectManager.getProjectPath()
             /* Missing CSV file */
         };
         socCliWorker.setup(appArguments, false);
@@ -295,13 +323,13 @@ private slots:
                "bus",
                "import",
                "-p",
-               "bus_test_project",
+               projectName,
+               "-d",
+               projectManager.getProjectPath(),
                "-l",
                "temp_lib",
                "-b",
                "temp_apb",
-               "-d",
-               "./bus_temp_dir",
                "./bus_temp_dir/temp_apb.csv"};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
@@ -324,7 +352,9 @@ private slots:
                    "bus",
                    "import",
                    "-p",
-                   "bus_test_project",
+                   projectName,
+                   "-d",
+                   projectManager.getProjectPath(),
                    "-l",
                    "test_lib",
                    "-b",
@@ -346,11 +376,11 @@ private slots:
                "bus",
                "export",
                "-p",
-               "bus_test_project",
+               projectName,
+               "-d",
+               projectManager.getProjectPath(),
                "-b",
                "apb_export_test",
-               "-d",
-               "./bus_export_dir",
                "./bus_export_dir/exported_apb.csv"};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
