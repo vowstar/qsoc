@@ -150,25 +150,53 @@ c906:
     /* Get Verilog content and check if it contains specific text */
     bool verifyVerilogContent(const QString &baseFileName, const QString &contentToVerify)
     {
+        if (baseFileName.isNull() || contentToVerify.isNull()) {
+            qDebug() << "Error: baseFileName or contentToVerify is null";
+            return false;
+        }
+
         QString verilogContent;
         QString filePath;
 
+        /* Debug output */
+        qDebug() << "\n=== [DEBUG] Verifying Verilog Content ===";
+        qDebug() << "Looking for file:" << baseFileName + ".v";
+        qDebug() << "Content to verify:" << contentToVerify;
+        qDebug() << "Project output path:" << projectManager.getOutputPath();
+
         /* First try from message logs */
+        qDebug() << "\nChecking message logs:";
         for (const QString &msg : messageList) {
+            if (msg.isNull()) {
+                qDebug() << "Found null message in messageList";
+                continue;
+            }
+            qDebug() << "Message:" << msg;
             if (msg.contains("Successfully generated Verilog code:")
                 && msg.contains(baseFileName + ".v")) {
                 QRegularExpression      re("Successfully generated Verilog code: (.+\\.v)");
                 QRegularExpressionMatch match = re.match(msg);
                 if (match.hasMatch()) {
                     filePath = match.captured(1);
-                    if (QFile::exists(filePath)) {
+                    qDebug() << "Found file path from logs:" << filePath;
+                    if (!filePath.isNull() && QFile::exists(filePath)) {
                         QFile file(filePath);
                         if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
                             verilogContent = file.readAll();
                             file.close();
-                            qDebug() << "Found file from logs:" << filePath;
-                            break;
+                            if (!verilogContent.isNull()) {
+                                qDebug() << "Successfully read file from logs:" << filePath;
+                                qDebug() << "File content (first 500 chars):\n"
+                                         << verilogContent.left(500);
+                                break;
+                            } else {
+                                qDebug() << "File content is null from logs:" << filePath;
+                            }
+                        } else {
+                            qDebug() << "Failed to open file from logs:" << filePath;
                         }
+                    } else {
+                        qDebug() << "File from logs does not exist:" << filePath;
                     }
                 }
             }
@@ -177,31 +205,45 @@ c906:
         /* If not found from logs, check the project output directory */
         if (verilogContent.isEmpty()) {
             QString projectOutputPath = projectManager.getOutputPath();
-            filePath                  = QDir(projectOutputPath).filePath(baseFileName + ".v");
-            if (QFile::exists(filePath)) {
-                QFile file(filePath);
-                if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    verilogContent = file.readAll();
-                    file.close();
-                    qDebug() << "Found file in project output directory:" << filePath;
+            if (!projectOutputPath.isNull()) {
+                filePath = QDir(projectOutputPath).filePath(baseFileName + ".v");
+                qDebug() << "\nTrying project output path:" << filePath;
+                if (!filePath.isNull() && QFile::exists(filePath)) {
+                    QFile file(filePath);
+                    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                        verilogContent = file.readAll();
+                        file.close();
+                        if (!verilogContent.isNull()) {
+                            qDebug() << "Successfully read file from project output:" << filePath;
+                            qDebug() << "File content (first 500 chars):\n"
+                                     << verilogContent.left(500);
+                        } else {
+                            qDebug() << "File content is null from project output:" << filePath;
+                        }
+                    } else {
+                        qDebug() << "Failed to open file from project output:" << filePath;
+                    }
+                } else {
+                    qDebug() << "File does not exist in project output:" << filePath;
                 }
+            } else {
+                qDebug() << "Project output path is null";
             }
         }
 
-        /* Empty content means we couldn't find or read the file */
+        /* Empty content check */
         if (verilogContent.isEmpty()) {
-            qDebug() << "Could not find or read Verilog file for" << baseFileName;
+            qDebug() << "\nCould not find or read Verilog file for" << baseFileName;
             return false;
         }
 
-        /* For debugging, print the first 200 chars of content */
-        qDebug() << "File content preview (first 200 chars):" << verilogContent.left(200);
-        qDebug() << "Looking for:" << contentToVerify;
-
         /* Check if the content contains the text we're looking for */
         bool result = verilogContent.contains(contentToVerify);
+        qDebug() << "\n=== [DEBUG] Search result ===";
+        qDebug() << "Looking for:" << contentToVerify;
+        qDebug() << "Found:" << result;
         if (!result) {
-            qDebug() << "Content not found:" << contentToVerify;
+            qDebug() << "Content not found. File content preview:\n" << verilogContent;
         }
         return result;
     }
@@ -225,11 +267,13 @@ private slots:
 
     void cleanupTestCase()
     {
+#ifdef ENABLE_TEST_CLEANUP
         /* Clean up the test project directory */
         QDir projectDir(projectManager.getCurrentPath());
         if (projectDir.exists()) {
             projectDir.removeRecursively();
         }
+#endif // ENABLE_TEST_CLEANUP
     }
 
     void testGenerateCommandHelp()
@@ -378,6 +422,12 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
+        /* Print all messages for debugging */
+        qDebug() << "Message list contents:";
+        for (const QString &msg : messageList) {
+            qDebug() << msg;
+        }
+
         /* Verify that the Verilog file was generated */
         QVERIFY(verifyVerilogOutputExistence("tie_overflow_test"));
 
@@ -392,9 +442,10 @@ instance:
         QVERIFY(verifyVerilogContent("tie_overflow_test", "100'h12345678901234567890"));
 
         /* Check both possible formats for large decimal value */
-        bool hasLargeDecimal
-            = verifyVerilogContent("tie_overflow_test", "18446744073709551616")
-              || verifyVerilogContent("tie_overflow_test", "128'd18446744073709551616");
+        bool hasLargeDecimal = verifyVerilogContent("tie_overflow_test", "18446744073709551616");
+        if (!hasLargeDecimal) {
+            hasLargeDecimal = verifyVerilogContent("tie_overflow_test", "128'd18446744073709551616");
+        }
         QVERIFY(hasLargeDecimal);
 
         /* Verify 64-bit limit values */
@@ -449,6 +500,12 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
+        /* Print all messages for debugging */
+        qDebug() << "Message list contents:";
+        for (const QString &msg : messageList) {
+            qDebug() << msg;
+        }
+
         /* Verify that the Verilog file was generated */
         QVERIFY(verifyVerilogOutputExistence("tie_format_test"));
 
@@ -464,8 +521,11 @@ instance:
         /* Verify decimal format preserved */
         QVERIFY(verifyVerilogContent("tie_format_test", "1'd1"));
 
-        /* Skip binary format test since the implementation doesn't generate it */
-        /* QVERIFY(verifyVerilogContent("tie_format_test", "8'b10101010")); */
+        /* Verify binary format preserved */
+        QVERIFY(verifyVerilogContent("tie_format_test", "8'b10101010"));
+
+        /* Verify binary format preserved */
+        QVERIFY(verifyVerilogContent("tie_format_test", "64'b101010"));
 
         /* Verify 8-bit hex value - note that it appears as lowercase in the file */
         QVERIFY(verifyVerilogContent("tie_format_test", "8'haa"));
