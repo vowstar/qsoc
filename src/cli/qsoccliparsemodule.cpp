@@ -102,7 +102,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
     }
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setCurrentPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -180,7 +180,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
         moduleNameList.end());
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setCurrentPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -290,7 +290,7 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
         moduleNameList.end());
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setCurrentPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
@@ -396,7 +396,7 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
         moduleNameList.end());
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
-        projectManager->setCurrentPath(parser.value("directory"));
+        projectManager->setProjectPath(parser.value("directory"));
     }
     if (parser.isSet("project")) {
         projectManager->load(parser.value("project"));
