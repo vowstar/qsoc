@@ -151,52 +151,32 @@ c906:
     bool verifyVerilogContent(const QString &baseFileName, const QString &contentToVerify)
     {
         if (baseFileName.isNull() || contentToVerify.isNull()) {
-            qDebug() << "Error: baseFileName or contentToVerify is null";
             return false;
         }
 
         QString verilogContent;
         QString filePath;
 
-        /* Debug output */
-        qDebug() << "\n=== [DEBUG] Verifying Verilog Content ===";
-        qDebug() << "Looking for file:" << baseFileName + ".v";
-        qDebug() << "Content to verify:" << contentToVerify;
-        qDebug() << "Project output path:" << projectManager.getOutputPath();
-
         /* First try from message logs */
-        qDebug() << "\nChecking message logs:";
         for (const QString &msg : messageList) {
             if (msg.isNull()) {
-                qDebug() << "Found null message in messageList";
                 continue;
             }
-            qDebug() << "Message:" << msg;
             if (msg.contains("Successfully generated Verilog code:")
                 && msg.contains(baseFileName + ".v")) {
                 QRegularExpression      re("Successfully generated Verilog code: (.+\\.v)");
                 QRegularExpressionMatch match = re.match(msg);
                 if (match.hasMatch()) {
                     filePath = match.captured(1);
-                    qDebug() << "Found file path from logs:" << filePath;
                     if (!filePath.isNull() && QFile::exists(filePath)) {
                         QFile file(filePath);
                         if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
                             verilogContent = file.readAll();
                             file.close();
                             if (!verilogContent.isNull()) {
-                                qDebug() << "Successfully read file from logs:" << filePath;
-                                qDebug() << "File content (first 500 chars):\n"
-                                         << verilogContent.left(500);
                                 break;
-                            } else {
-                                qDebug() << "File content is null from logs:" << filePath;
                             }
-                        } else {
-                            qDebug() << "Failed to open file from logs:" << filePath;
                         }
-                    } else {
-                        qDebug() << "File from logs does not exist:" << filePath;
                     }
                 }
             }
@@ -207,33 +187,18 @@ c906:
             QString projectOutputPath = projectManager.getOutputPath();
             if (!projectOutputPath.isNull()) {
                 filePath = QDir(projectOutputPath).filePath(baseFileName + ".v");
-                qDebug() << "\nTrying project output path:" << filePath;
                 if (!filePath.isNull() && QFile::exists(filePath)) {
                     QFile file(filePath);
                     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
                         verilogContent = file.readAll();
                         file.close();
-                        if (!verilogContent.isNull()) {
-                            qDebug() << "Successfully read file from project output:" << filePath;
-                            qDebug() << "File content (first 500 chars):\n"
-                                     << verilogContent.left(500);
-                        } else {
-                            qDebug() << "File content is null from project output:" << filePath;
-                        }
-                    } else {
-                        qDebug() << "Failed to open file from project output:" << filePath;
                     }
-                } else {
-                    qDebug() << "File does not exist in project output:" << filePath;
                 }
-            } else {
-                qDebug() << "Project output path is null";
             }
         }
 
         /* Empty content check */
         if (verilogContent.isEmpty()) {
-            qDebug() << "\nCould not find or read Verilog file for" << baseFileName;
             return false;
         }
 
@@ -257,15 +222,7 @@ c906:
         QString normalizedVerify  = normalizeWhitespace(contentToVerify);
 
         /* Check if the normalized content contains the normalized text we're looking for */
-        bool result = normalizedContent.contains(normalizedVerify);
-        qDebug() << "\n=== [DEBUG] Search result ===";
-        qDebug() << "Looking for (normalized):" << normalizedVerify;
-        qDebug() << "Found:" << result;
-        if (!result) {
-            qDebug() << "Content not found. File content preview (normalized):\n"
-                     << normalizedContent.left(500);
-        }
-        return result;
+        return normalizedContent.contains(normalizedVerify);
     }
 
 private slots:
@@ -442,12 +399,6 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Print all messages for debugging */
-        qDebug() << "Message list contents:";
-        for (const QString &msg : messageList) {
-            qDebug() << msg;
-        }
-
         /* Verify that the Verilog file was generated */
         QVERIFY(verifyVerilogOutputExistence("tie_overflow_test"));
 
@@ -457,19 +408,28 @@ instance:
         /* Verify CPU instance */
         QVERIFY(verifyVerilogContent("tie_overflow_test", "c906 cpu0"));
 
-        /* Verify the tie values are correctly formatted in the output */
-        QVERIFY(verifyVerilogContent("tie_overflow_test", "128'hdeadbeefdeadbeefdeadbeefdeadbeef"));
-        QVERIFY(verifyVerilogContent("tie_overflow_test", "100'h12345678901234567890"));
+        /* Verify the tie values are correctly formatted in the output with port names */
+        QVERIFY(verifyVerilogContent(
+            "tie_overflow_test", ".pad_biu_rdata(128'hdeadbeefdeadbeefdeadbeefdeadbeef)"));
+        QVERIFY(verifyVerilogContent(
+            "tie_overflow_test",
+            ".pad_cpu_sys_cnt(64'h5678901234567890 /* FIXME: Value 100'h12345678901234567890 wider "
+            "than port width 64 bits */"));
 
-        /* Check both possible formats for large decimal value */
-        bool hasLargeDecimal = verifyVerilogContent("tie_overflow_test", "18446744073709551616");
+        /* Check large decimal value with port name */
+        bool hasLargeDecimal
+            = verifyVerilogContent("tie_overflow_test", ".pad_tdt_dm_rdata(18446744073709551616)");
         if (!hasLargeDecimal) {
-            hasLargeDecimal = verifyVerilogContent("tie_overflow_test", "128'd18446744073709551616");
+            hasLargeDecimal = verifyVerilogContent(
+                "tie_overflow_test", ".pad_tdt_dm_rdata(128'd18446744073709551616)");
         }
         QVERIFY(hasLargeDecimal);
 
-        /* Verify 64-bit limit values */
-        QVERIFY(verifyVerilogContent("tie_overflow_test", "64'hffffffffffffffff"));
+        /* Verify 64-bit limit values with port name */
+        QVERIFY(verifyVerilogContent(
+            "tie_overflow_test",
+            ".pad_biu_bid(8'hff  /* FIXME: Value 64'hffffffffffffffff wider than port width 8 bits "
+            "*/)"));
     }
 
     void testGenerateWithTieFormatTest()
@@ -520,12 +480,6 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Print all messages for debugging */
-        qDebug() << "Message list contents:";
-        for (const QString &msg : messageList) {
-            qDebug() << msg;
-        }
-
         /* Verify that the Verilog file was generated */
         QVERIFY(verifyVerilogOutputExistence("tie_format_test"));
 
@@ -535,29 +489,32 @@ instance:
         /* Verify CPU instance */
         QVERIFY(verifyVerilogContent("tie_format_test", "c906 cpu0"));
 
-        /* Verify binary format preserved */
-        QVERIFY(verifyVerilogContent("tie_format_test", "1'b0"));
+        /* Verify binary format preserved with port name */
+        QVERIFY(verifyVerilogContent("tie_format_test", ".axim_clk_en(1'b0)"));
 
-        /* Verify decimal format preserved */
-        QVERIFY(verifyVerilogContent("tie_format_test", "1'd1"));
+        /* Verify decimal format preserved with port name */
+        QVERIFY(verifyVerilogContent("tie_format_test", ".sys_apb_rst_b(1'd1)"));
 
         /* Verify biu_pad_awid is correctly marked as missing in the output */
-        QVERIFY(verifyVerilogContent("tie_format_test", "FIXME: out [7:0] biu_pad_awid missing"));
+        QVERIFY(verifyVerilogContent(
+            "tie_format_test", ".biu_pad_awid(/* FIXME: out [7:0] biu_pad_awid missing */)"));
 
-        /* Verify binary format preserved - should check for 64'b101010 from pad_cpu_sys_cnt */
-        QVERIFY(verifyVerilogContent("tie_format_test", "64'b101010"));
+        /* Verify binary format preserved with port name */
+        QVERIFY(verifyVerilogContent("tie_format_test", ".pad_cpu_sys_cnt(64'b101010)"));
 
-        /* Verify 8-bit hex value - note that it appears as lowercase in the file */
-        QVERIFY(verifyVerilogContent("tie_format_test", "8'haa"));
+        /* Verify 8-bit hex value with port name */
+        QVERIFY(verifyVerilogContent("tie_format_test", ".pad_biu_bid(8'haa)"));
 
-        /* Verify truncated hex value */
-        QVERIFY(verifyVerilogContent("tie_format_test", "8'hff"));
+        /* Verify truncated hex value with port name */
+        QVERIFY(verifyVerilogContent(
+            "tie_format_test",
+            ".pad_biu_rid(8'hff  /* FIXME: Value 16'hffff wider than port width 8 bits */)"));
 
-        /* Verify decimal value */
-        QVERIFY(verifyVerilogContent("tie_format_test", "40'd42"));
+        /* Verify decimal value with port name */
+        QVERIFY(verifyVerilogContent("tie_format_test", ".pad_cpu_rvba(40'd42)"));
 
-        /* Verify octal format is preserved */
-        QVERIFY(verifyVerilogContent("tie_format_test", "128'o77"));
+        /* Verify octal format is preserved with port name */
+        QVERIFY(verifyVerilogContent("tie_format_test", ".pad_tdt_dm_rdata(128'o77)"));
     }
 
     void testGenerateWithInvertTest()
@@ -621,7 +578,9 @@ net:
 
         /* Verify invert logic for cpu1 */
         QVERIFY(verifyVerilogContent("invert_test", "cpu1"));
-        QVERIFY(verifyVerilogContent("invert_test", ".axim_clk_en(~(1'd1"));
+        QVERIFY(verifyVerilogContent(
+            "invert_test",
+            ".axim_clk_en(~(1'd1  /* FIXME: Value 8'd1 wider than port width 1 bits */))"));
         QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid(~arvalid_net)"));
 
         /* Verify net connections */
@@ -675,15 +634,19 @@ instance:
 
         /* Verify truncation for 8-bit to 1-bit - should show FIXME comment */
         QVERIFY(verifyVerilogContent(
-            "tie_width_test", "FIXME: Value 8'b10101010 wider than port width 1 bits"));
-        QVERIFY(verifyVerilogContent("tie_width_test", ".sys_apb_rst_b(1'b0"));
+            "tie_width_test",
+            ".sys_apb_rst_b(1'b0  /* FIXME: Value 8'b10101010 wider than port width 1 bits */)"));
 
-        /* Verify zero extension for 1-bit to 8-bit (not visible in output as port is missing) */
+        /* Verify output port tie is ignored and marked missing */
+        QVERIFY(verifyVerilogContent(
+            "tie_width_test", ".biu_pad_arid(  /* FIXME: out [7:0] biu_pad_arid missing */)"));
 
         /* Verify truncation for large decimal to 8-bit */
         QVERIFY(verifyVerilogContent(
             "tie_width_test", "FIXME: Value 16'd300 wider than port width 8 bits"));
-        QVERIFY(verifyVerilogContent("tie_width_test", ".pad_biu_bid(8'd44"));
+        QVERIFY(verifyVerilogContent(
+            "tie_width_test",
+            ".pad_biu_bid(8'd44  /* FIXME: Value 16'd300 wider than port width 8 bits */)"));
     }
 
     void testGenerateWithTieFormatInputTest()
@@ -806,19 +769,27 @@ instance:
         /* Verify cpu0 tie values */
         QVERIFY(verifyVerilogContent("complex_tie_test", "cpu0"));
         QVERIFY(verifyVerilogContent("complex_tie_test", ".axim_clk_en(1'b0)"));
-        QVERIFY(verifyVerilogContent("complex_tie_test", ".sys_apb_rst_b(1'd1"));
+        QVERIFY(verifyVerilogContent(
+            "complex_tie_test",
+            ".sys_apb_rst_b(1'd1  /* FIXME: Value 8'd1 wider than port width 1 bits */)"));
+        QVERIFY(verifyVerilogContent(
+            "complex_tie_test", ".biu_pad_arid(/* FIXME: out [7:0] biu_pad_arid missing */)"));
+        QVERIFY(verifyVerilogContent(
+            "complex_tie_test", ".biu_pad_awid(/* FIXME: out [7:0] biu_pad_awid missing */)"));
 
         /* Verify the tie+invert combination */
         QVERIFY(verifyVerilogContent("complex_tie_test", ".pad_biu_bid(~(8'hff))"));
 
         /* Verify truncation with warning comment */
         QVERIFY(verifyVerilogContent(
-            "complex_tie_test", "FIXME: Value 16'habcd wider than port width 8 bits"));
-        QVERIFY(verifyVerilogContent("complex_tie_test", ".pad_biu_rid(8'hcd"));
+            "complex_tie_test",
+            ".pad_biu_rid(8'hcd  /* FIXME: Value 16'habcd wider than port width 8 bits */)"));
 
         /* Verify cpu1 ties are different from cpu0 */
         QVERIFY(verifyVerilogContent("complex_tie_test", "cpu1"));
         QVERIFY(verifyVerilogContent("complex_tie_test", ".axim_clk_en(1'b1)"));
+        QVERIFY(verifyVerilogContent(
+            "complex_tie_test", ".biu_pad_arvalid(/* FIXME: out biu_pad_arvalid missing */)"));
     }
 
     void testGenerateWithMultipleFiles()
@@ -882,12 +853,15 @@ instance:
         QVERIFY(verifyVerilogContent("example1", "c906 cpu0"));
         QVERIFY(verifyVerilogContent("example1", "input clk"));
         QVERIFY(verifyVerilogContent("example1", "input rst_n"));
+        QVERIFY(verifyVerilogContent("example1", "endmodule"));
 
         /* Verify example2 module content */
         QVERIFY(verifyVerilogContent("example2", "module example2"));
         QVERIFY(verifyVerilogContent("example2", "c906 cpu0"));
         QVERIFY(verifyVerilogContent("example2", "input clk"));
         QVERIFY(verifyVerilogContent("example2", "input rst_n"));
+        QVERIFY(verifyVerilogContent("example2", ".axim_clk_en(1'b0)"));
+        QVERIFY(verifyVerilogContent("example2", "endmodule"));
     }
 };
 
