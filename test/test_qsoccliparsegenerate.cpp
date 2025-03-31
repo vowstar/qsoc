@@ -9,7 +9,6 @@
 #include <QDir>
 #include <QFile>
 #include <QStringList>
-#include <QTemporaryDir>
 #include <QTextStream>
 #include <QtCore>
 #include <QtTest>
@@ -33,7 +32,6 @@ class Test : public QObject
 
 private:
     static QStringList messageList;
-    QTemporaryDir      tempDir;
 
     static void messageOutput(QtMsgType type, const QMessageLogContext &context, const QString &msg)
     {
@@ -44,7 +42,7 @@ private:
 
     QString createTempFile(const QString &fileName, const QString &content)
     {
-        QString filePath = tempDir.path() + "/" + fileName;
+        QString filePath = QDir::current().filePath(fileName);
         QFile   file(filePath);
         if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream stream(&file);
@@ -61,9 +59,6 @@ private:
 
         /* Set project path to the temporary directory */
         projectManager.setProjectName("test_project");
-        projectManager.setProjectPath(tempDir.path());
-        projectManager.setModulePath(QDir(tempDir.path()).filePath("module"));
-        projectManager.setOutputPath(QDir(tempDir.path()).filePath("output"));
 
         /* Create project directory structure */
         projectManager.mkpath();
@@ -121,9 +116,6 @@ c906:
 
         /* Create the module file */
         QDir moduleDir(projectManager.getModulePath());
-        if (!moduleDir.exists()) {
-            moduleDir.mkpath(".");
-        }
 
         QString modulePath = moduleDir.filePath("c906.soc_mod");
         QFile   moduleFile(modulePath);
@@ -135,9 +127,6 @@ c906:
 
         /* Create output directory for Verilog files */
         QDir outputDir(projectManager.getOutputPath());
-        if (!outputDir.exists()) {
-            outputDir.mkpath(".");
-        }
     }
 
     /* Look for Verilog output file in typical locations */
@@ -159,16 +148,9 @@ c906:
         }
 
         /* Check the test project output directory */
-        QString testOutputPath = QDir(tempDir.path()).filePath("output");
+        QString testOutputPath = QDir::current().filePath("output");
         QString testFilePath   = QDir(testOutputPath).filePath(baseFileName + ".v");
         if (QFile::exists(testFilePath)) {
-            return true;
-        }
-
-        /* Check build/output directory */
-        QString buildOutputPath = QDir::current().absolutePath() + "/../build/output";
-        QString buildFilePath   = QDir(buildOutputPath).filePath(baseFileName + ".v");
-        if (QFile::exists(buildFilePath)) {
             return true;
         }
 
@@ -204,7 +186,7 @@ c906:
 
         /* If not found from logs, check the test project output directory */
         if (verilogContent.isEmpty()) {
-            QString testOutputPath = QDir(tempDir.path()).filePath("output");
+            QString testOutputPath = QDir::current().filePath("output");
             filePath               = QDir(testOutputPath).filePath(baseFileName + ".v");
             if (QFile::exists(filePath)) {
                 QFile file(filePath);
@@ -218,7 +200,7 @@ c906:
 
         /* If not found, check build/output directory */
         if (verilogContent.isEmpty()) {
-            QString buildOutputPath = QDir::current().absolutePath() + "/../build/output";
+            QString buildOutputPath = QDir::current().filePath("output");
             filePath                = QDir(buildOutputPath).filePath(baseFileName + ".v");
             if (QFile::exists(filePath)) {
                 QFile file(filePath);
@@ -253,7 +235,6 @@ private slots:
     {
         TestApp::instance();
         qInstallMessageHandler(messageOutput);
-        QVERIFY(tempDir.isValid());
         setupTestProject();
     }
 
