@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
 #include <QDir>
@@ -53,16 +54,191 @@ private:
         return filePath;
     }
 
+    void setupTestProject()
+    {
+        /* Create a project manager */
+        QSocProjectManager projectManager;
+
+        /* Set project path to the temporary directory */
+        projectManager.setProjectName("test_project");
+        projectManager.setProjectPath(tempDir.path());
+        projectManager.setModulePath(QDir(tempDir.path()).filePath("module"));
+        projectManager.setOutputPath(QDir(tempDir.path()).filePath("output"));
+
+        /* Create project directory structure */
+        projectManager.mkpath();
+
+        /* Create c906 module in the module directory */
+        const QString c906Content = R"(
+c906:
+  port:
+    axim_clk_en:
+      type: logic
+      direction: in
+    biu_pad_arvalid:
+      type: logic
+      direction: out
+    pad_biu_arready:
+      type: logic
+      direction: in
+    pad_biu_rdata:
+      type: logic[127:0]
+      direction: in
+    pad_cpu_sys_cnt:
+      type: logic[63:0]
+      direction: in
+    pad_tdt_dm_rdata:
+      type: logic[127:0]
+      direction: in
+    pad_biu_bid:
+      type: logic[7:0]
+      direction: in
+    pad_biu_rid:
+      type: logic[7:0]
+      direction: in
+    biu_pad_arid:
+      type: logic[7:0]
+      direction: out
+    biu_pad_awid:
+      type: logic[7:0]
+      direction: out
+    sys_apb_rst_b:
+      type: logic
+      direction: in
+    pad_cpu_rvba:
+      type: logic[39:0]
+      direction: in
+    pll_core_cpuclk:
+      type: logic
+      direction: in
+    pad_cpu_rst_b:
+      type: logic
+      direction: in
+    tdt_dm_pad_wdata:
+      type: logic[127:0]
+      direction: out
+)";
+
+        /* Create the module file */
+        QDir moduleDir(projectManager.getModulePath());
+        if (!moduleDir.exists()) {
+            moduleDir.mkpath(".");
+        }
+
+        QString modulePath = moduleDir.filePath("c906.soc_mod");
+        QFile   moduleFile(modulePath);
+        if (moduleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&moduleFile);
+            stream << c906Content;
+            moduleFile.close();
+        }
+
+        /* Create output directory for Verilog files */
+        QDir outputDir(projectManager.getOutputPath());
+        if (!outputDir.exists()) {
+            outputDir.mkpath(".");
+        }
+    }
+
+    /* Look for Verilog output file in typical locations */
+    bool verifyVerilogOutputExistence(const QString &baseFileName)
+    {
+        /* First check the current project's output directory if available */
+        for (const QString &msg : messageList) {
+            if (msg.contains("Successfully generated Verilog code:")
+                && msg.contains(baseFileName + ".v")) {
+                QRegularExpression      re("Successfully generated Verilog code: (.+\\.v)");
+                QRegularExpressionMatch match = re.match(msg);
+                if (match.hasMatch()) {
+                    QString filePath = match.captured(1);
+                    if (QFile::exists(filePath)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        /* Check the test project output directory */
+        QString testOutputPath = QDir(tempDir.path()).filePath("output");
+        QString testFilePath   = QDir(testOutputPath).filePath(baseFileName + ".v");
+        if (QFile::exists(testFilePath)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /* Get Verilog content and check if it contains specific text */
+    bool verifyVerilogContent(const QString &baseFileName, const QString &contentToVerify)
+    {
+        QString verilogContent;
+        QString filePath;
+
+        /* First try from message logs */
+        for (const QString &msg : messageList) {
+            if (msg.contains("Successfully generated Verilog code:")
+                && msg.contains(baseFileName + ".v")) {
+                QRegularExpression      re("Successfully generated Verilog code: (.+\\.v)");
+                QRegularExpressionMatch match = re.match(msg);
+                if (match.hasMatch()) {
+                    filePath = match.captured(1);
+                    if (QFile::exists(filePath)) {
+                        QFile file(filePath);
+                        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                            verilogContent = file.readAll();
+                            file.close();
+                            qDebug() << "Found file from logs:" << filePath;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        /* If not found from logs, check the test project output directory */
+        if (verilogContent.isEmpty()) {
+            QString testOutputPath = QDir(tempDir.path()).filePath("output");
+            filePath               = QDir(testOutputPath).filePath(baseFileName + ".v");
+            if (QFile::exists(filePath)) {
+                QFile file(filePath);
+                if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    verilogContent = file.readAll();
+                    file.close();
+                    qDebug() << "Found file in test output directory:" << filePath;
+                }
+            }
+        }
+
+        /* Empty content means we couldn't find or read the file */
+        if (verilogContent.isEmpty()) {
+            qDebug() << "Could not find or read Verilog file for" << baseFileName;
+            return false;
+        }
+
+        /* For debugging, print the first 200 chars of content */
+        qDebug() << "File content preview (first 200 chars):" << verilogContent.left(200);
+        qDebug() << "Looking for:" << contentToVerify;
+
+        /* Check if the content contains the text we're looking for */
+        bool result = verilogContent.contains(contentToVerify);
+        if (!result) {
+            qDebug() << "Content not found:" << contentToVerify;
+        }
+        return result;
+    }
+
 private slots:
     void initTestCase()
     {
         TestApp::instance();
         qInstallMessageHandler(messageOutput);
         QVERIFY(tempDir.isValid());
+        setupTestProject();
     }
 
     void testGenerateCommandHelp()
     {
+        messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {"qsoc", "generate", "--help"};
         socCliWorker.setup(appArguments, false);
@@ -74,6 +250,7 @@ private slots:
 
     void testGenerateVerilogHelp()
     {
+        messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {"qsoc", "generate", "verilog", "--help"};
         socCliWorker.setup(appArguments, false);
@@ -85,6 +262,7 @@ private slots:
 
     void testGenerateWithInvalidOption()
     {
+        messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {"qsoc", "generate", "verilog", "--invalid-option"};
         socCliWorker.setup(appArguments, false);
@@ -96,6 +274,7 @@ private slots:
 
     void testGenerateWithMissingRequiredArgument()
     {
+        messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
             "qsoc", "generate", "verilog"
@@ -110,6 +289,7 @@ private slots:
 
     void testGenerateWithVerbosityLevels()
     {
+        messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {"qsoc", "--verbose=3", "generate", "verilog", "--help"};
         socCliWorker.setup(appArguments, false);
@@ -121,6 +301,9 @@ private slots:
 
     void testGenerateWithMaxWidthTest()
     {
+        /* Clear previous messages */
+        messageList.clear();
+
         const QString content  = R"(
 ---
 version: "1.0"
@@ -158,12 +341,20 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        /* Verify that the Verilog file was generated */
+        QVERIFY(verifyVerilogOutputExistence("max_width_test"));
+
+        /* Verify that important content is present */
+        QVERIFY(verifyVerilogContent("max_width_test", "module max_width_test"));
+        QVERIFY(verifyVerilogContent("max_width_test", "c906 cpu0"));
+        QVERIFY(verifyVerilogContent("max_width_test", "c906 cpu1"));
+        QVERIFY(verifyVerilogContent("max_width_test", "c906 cpu2"));
     }
 
     void testGenerateWithTieOverflowTest()
     {
+        messageList.clear();
+
         const QString content  = R"(
 instance:
   cpu0:
@@ -189,12 +380,24 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        /* Verify that the Verilog file was generated */
+        QVERIFY(verifyVerilogOutputExistence("tie_overflow_test"));
+
+        /* Verify that specific large values are handled correctly */
+        QVERIFY(verifyVerilogContent("tie_overflow_test", "module tie_overflow_test"));
+        QVERIFY(verifyVerilogContent("tie_overflow_test", "c906 cpu0"));
+
+        /* Debug output to help diagnose any issues */
+        qInfo() << "Log messages count:" << messageList.size();
+        for (int i = 0; i < qMin(5, messageList.size()); i++) {
+            qInfo() << "Log message " << i << ":" << messageList[i];
+        }
     }
 
     void testGenerateWithTieFormatTest()
     {
+        messageList.clear();
+
         const QString content  = R"(
 instance:
   cpu0:
@@ -238,12 +441,24 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        /* Verify that the Verilog file was generated */
+        QVERIFY(verifyVerilogOutputExistence("tie_format_test"));
+
+        /* Verify that specific content with different format types exists */
+        QVERIFY(verifyVerilogContent("tie_format_test", "module tie_format_test"));
+        QVERIFY(verifyVerilogContent("tie_format_test", "c906 cpu0"));
+
+        /* Debug output to help diagnose any issues */
+        qInfo() << "Log messages count:" << messageList.size();
+        for (int i = 0; i < qMin(5, messageList.size()); i++) {
+            qInfo() << "Log message " << i << ":" << messageList[i];
+        }
     }
 
     void testGenerateWithInvertTest()
     {
+        messageList.clear();
+
         const QString content  = R"(
 instance:
   cpu0:
@@ -285,12 +500,14 @@ net:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        /* Verify that the Verilog file was generated */
+        QVERIFY(verifyVerilogOutputExistence("invert_test"));
     }
 
     void testGenerateWithTieWidthTest()
     {
+        messageList.clear();
+
         const QString content  = R"(
 instance:
   cpu0:
@@ -319,12 +536,14 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        /* Verify that the Verilog file was generated */
+        QVERIFY(verifyVerilogOutputExistence("tie_width_test"));
     }
 
     void testGenerateWithTieFormatInputTest()
     {
+        messageList.clear();
+
         const QString content  = R"(
 instance:
   cpu0:
@@ -364,12 +583,14 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        /* Verify that the Verilog file was generated */
+        QVERIFY(verifyVerilogOutputExistence("tie_format_input_test"));
     }
 
     void testGenerateWithComplexTieTest()
     {
+        messageList.clear();
+
         const QString content  = R"(
 instance:
   cpu0:
@@ -408,12 +629,14 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        /* Verify that the Verilog file was generated */
+        QVERIFY(verifyVerilogOutputExistence("complex_tie_test"));
     }
 
     void testGenerateWithWireTest()
     {
+        messageList.clear();
+
         const QString content  = R"(
 instance:
   cpu0:
@@ -438,11 +661,11 @@ net:
   # Mixed direction net
   mixed_dir_net:
     cpu0:
-      port: biu_pad_awvalid  # output
+      port: biu_pad_arvalid  # output
     cpu1:
-      port: pad_biu_awvalid  # input
+      port: pad_biu_arvalid  # input would be if we had it
     cpu2:
-      port: pad_biu_awvalid  # input
+      port: pad_biu_arvalid  # input would be if we had it
 )";
         QString       filePath = createTempFile("wire_test.soc_net", content);
 
@@ -451,12 +674,14 @@ net:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        /* Verify that the Verilog file was generated */
+        QVERIFY(verifyVerilogOutputExistence("wire_test"));
     }
 
     void testGenerateWithMultipleFiles()
     {
+        messageList.clear();
+
         const QString content1  = R"(
 ---
 version: "1.0"
@@ -498,8 +723,9 @@ instance:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        /* Verify that both Verilog files were generated */
+        QVERIFY(verifyVerilogOutputExistence("example1"));
+        QVERIFY(verifyVerilogOutputExistence("example2"));
     }
 };
 
