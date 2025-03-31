@@ -33,6 +33,9 @@ class Test : public QObject
 
 private:
     static QStringList messageList;
+    QString            projectPath;
+    QString            projectName;
+    QSocProjectManager projectManager;
 
     static void messageOutput(QtMsgType type, const QMessageLogContext &context, const QString &msg)
     {
@@ -43,7 +46,7 @@ private:
 
     QString createTempFile(const QString &fileName, const QString &content)
     {
-        QString filePath = QDir::current().filePath(fileName);
+        QString filePath = QDir(projectManager.getOutputPath()).filePath(fileName);
         QFile   file(filePath);
         if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream stream(&file);
@@ -55,15 +58,16 @@ private:
 
     void setupTestProject()
     {
-        /* Create a project manager */
-        QSocProjectManager projectManager;
-
-        /* Set project path to the temporary directory */
-        projectManager.setProjectName("test_project");
-
+        /* Set project path to the fixed directory */
+        projectManager.setCurrentPath(projectPath);
         /* Create project directory structure */
         projectManager.mkpath();
-
+        /* Set project name */
+        projectManager.setProjectName(projectName);
+        /* Save project file */
+        projectManager.save(projectName);
+        /* Load project file */
+        projectManager.load(projectName);
         /* Create c906 module in the module directory */
         const QString c906Content = R"(
 c906:
@@ -148,10 +152,10 @@ c906:
             }
         }
 
-        /* Check the test project output directory */
-        QString testOutputPath = QDir::current().filePath("output");
-        QString testFilePath   = QDir(testOutputPath).filePath(baseFileName + ".v");
-        if (QFile::exists(testFilePath)) {
+        /* Check the project output directory */
+        QString projectOutputPath = projectManager.getOutputPath();
+        QString projectFilePath   = QDir(projectOutputPath).filePath(baseFileName + ".v");
+        if (QFile::exists(projectFilePath)) {
             return true;
         }
 
@@ -185,30 +189,16 @@ c906:
             }
         }
 
-        /* If not found from logs, check the test project output directory */
+        /* If not found from logs, check the project output directory */
         if (verilogContent.isEmpty()) {
-            QString testOutputPath = QDir::current().filePath("output");
-            filePath               = QDir(testOutputPath).filePath(baseFileName + ".v");
+            QString projectOutputPath = projectManager.getOutputPath();
+            filePath                  = QDir(projectOutputPath).filePath(baseFileName + ".v");
             if (QFile::exists(filePath)) {
                 QFile file(filePath);
                 if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
                     verilogContent = file.readAll();
                     file.close();
-                    qDebug() << "Found file in test output directory:" << filePath;
-                }
-            }
-        }
-
-        /* If not found, check build/output directory */
-        if (verilogContent.isEmpty()) {
-            QString buildOutputPath = QDir::current().filePath("output");
-            filePath                = QDir(buildOutputPath).filePath(baseFileName + ".v");
-            if (QFile::exists(filePath)) {
-                QFile file(filePath);
-                if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    verilogContent = file.readAll();
-                    file.close();
-                    qDebug() << "Found file in build output directory:" << filePath;
+                    qDebug() << "Found file in project output directory:" << filePath;
                 }
             }
         }
@@ -236,6 +226,11 @@ private slots:
     {
         TestApp::instance();
         qInstallMessageHandler(messageOutput);
+
+        /* Set project name and path */
+        projectName = "generate_test_project";
+        projectPath = QDir::current().filePath(projectName);
+
         setupTestProject();
     }
 
@@ -340,7 +335,8 @@ instance:
         QString       filePath = createTempFile("max_width_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "generate", "verilog", filePath};
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -379,7 +375,8 @@ instance:
         QString       filePath = createTempFile("tie_overflow_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "generate", "verilog", filePath};
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -449,7 +446,8 @@ instance:
         QString       filePath = createTempFile("tie_format_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "generate", "verilog", filePath};
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -525,7 +523,8 @@ net:
         QString       filePath = createTempFile("invert_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "generate", "verilog", filePath};
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -581,7 +580,8 @@ instance:
         QString       filePath = createTempFile("tie_width_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "generate", "verilog", filePath};
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -647,7 +647,8 @@ instance:
         QString       filePath = createTempFile("tie_format_input_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "generate", "verilog", filePath};
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -711,7 +712,8 @@ instance:
         QString       filePath = createTempFile("complex_tie_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "generate", "verilog", filePath};
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -782,7 +784,8 @@ instance:
         QString       filePath2 = createTempFile("example2.soc_net", content2);
 
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "generate", "verilog", filePath1, filePath2};
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectPath, filePath1, filePath2};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
