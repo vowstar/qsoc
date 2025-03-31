@@ -241,11 +241,13 @@ c906:
         auto normalizeWhitespace = [](const QString &input) -> QString {
             QString result = input;
             /* Replace all whitespace (including tabs and newlines) with a single space */
-            result.replace(QRegularExpression(R"(\s+)"), " ");
-            /* Remove whitespace before any symbol/operator/punctuation using character class */
-            result.replace(QRegularExpression(R"(\s+([\(\)\[\]\+\-\*\/\;\,\.]))"), R"(\1)");
-            /* Remove whitespace after any symbol/operator/punctuation using character class */
-            result.replace(QRegularExpression(R"(([\(\)\[\]\+\-\*\/\;\,\.])\s+)"), R"(\1)");
+            result.replace(QRegularExpression("\\s+"), " ");
+            /* Remove whitespace before any symbol/operator/punctuation */
+            result.replace(
+                QRegularExpression("\\s+([\\[\\]\\(\\)\\{\\}<>\"'`+\\-*/%&|^~!#$,.:;=@_])"), "\\1");
+            /* Remove whitespace after any symbol/operator/punctuation */
+            result.replace(
+                QRegularExpression("([\\[\\]\\(\\)\\{\\}<>\"'`+\\-*/%&|^~!#$,.:;=@_])\\s+"), "\\1");
 
             return result;
         };
@@ -803,20 +805,20 @@ instance:
 
         /* Verify cpu0 tie values */
         QVERIFY(verifyVerilogContent("complex_tie_test", "cpu0"));
-        QVERIFY(verifyVerilogContent("complex_tie_test", ".axim_clk_en     (1'b0)"));
-        QVERIFY(verifyVerilogContent("complex_tie_test", ".sys_apb_rst_b   (1'd1"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".axim_clk_en(1'b0)"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".sys_apb_rst_b(1'd1"));
 
         /* Verify the tie+invert combination */
-        QVERIFY(verifyVerilogContent("complex_tie_test", ".pad_biu_bid     (~(8'hff))"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".pad_biu_bid(~(8'hff))"));
 
         /* Verify truncation with warning comment */
         QVERIFY(verifyVerilogContent(
             "complex_tie_test", "FIXME: Value 16'habcd wider than port width 8 bits"));
-        QVERIFY(verifyVerilogContent("complex_tie_test", ".pad_biu_rid     (8'hcd"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".pad_biu_rid(8'hcd"));
 
         /* Verify cpu1 ties are different from cpu0 */
         QVERIFY(verifyVerilogContent("complex_tie_test", "cpu1"));
-        QVERIFY(verifyVerilogContent("complex_tie_test", ".axim_clk_en     (1'b1)"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".axim_clk_en(1'b1)"));
     }
 
     void testGenerateWithMultipleFiles()
