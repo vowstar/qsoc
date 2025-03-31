@@ -536,6 +536,21 @@ net:
         QVERIFY(verifyVerilogContent("invert_test", "module invert_test"));
         QVERIFY(verifyVerilogContent("invert_test", "c906 cpu0"));
         QVERIFY(verifyVerilogContent("invert_test", "c906 cpu1"));
+
+        /* Verify invert logic for cpu0 */
+        QVERIFY(verifyVerilogContent("invert_test", "cpu0"));
+        QVERIFY(verifyVerilogContent("invert_test", ".axim_clk_en     (1'd0)"));
+        QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid (~arvalid_net)"));
+
+        /* Verify invert logic for cpu1 */
+        QVERIFY(verifyVerilogContent("invert_test", "cpu1"));
+        QVERIFY(verifyVerilogContent("invert_test", ".axim_clk_en     (~(1'd1"));
+        QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid (~arvalid_net)"));
+
+        /* Verify net connections */
+        QVERIFY(verifyVerilogContent("invert_test", "wire clk_net"));
+        QVERIFY(verifyVerilogContent("invert_test", "wire reset_net"));
+        QVERIFY(verifyVerilogContent("invert_test", "wire arvalid_net"));
     }
 
     void testGenerateWithTieWidthTest()
@@ -576,6 +591,21 @@ instance:
         /* Verify that module and instance exist */
         QVERIFY(verifyVerilogContent("tie_width_test", "module tie_width_test"));
         QVERIFY(verifyVerilogContent("tie_width_test", "c906 cpu0"));
+
+        /* Verify exact width match case */
+        QVERIFY(verifyVerilogContent("tie_width_test", ".axim_clk_en     (1'b0)"));
+
+        /* Verify truncation for 8-bit to 1-bit - should show FIXME comment */
+        QVERIFY(verifyVerilogContent(
+            "tie_width_test", "FIXME: Value 8'b10101010 wider than port width 1 bits"));
+        QVERIFY(verifyVerilogContent("tie_width_test", ".sys_apb_rst_b   (1'b0"));
+
+        /* Verify zero extension for 1-bit to 8-bit (not visible in output as port is missing) */
+
+        /* Verify truncation for large decimal to 8-bit */
+        QVERIFY(verifyVerilogContent(
+            "tie_width_test", "FIXME: Value 16'd300 wider than port width 8 bits"));
+        QVERIFY(verifyVerilogContent("tie_width_test", ".pad_biu_bid     (8'd44"));
     }
 
     void testGenerateWithTieFormatInputTest()
@@ -627,6 +657,20 @@ instance:
         /* Verify that module and instance exist */
         QVERIFY(verifyVerilogContent("tie_format_input_test", "module tie_format_input_test"));
         QVERIFY(verifyVerilogContent("tie_format_input_test", "c906 cpu0"));
+
+        /* Verify binary format handling */
+        QVERIFY(verifyVerilogContent("tie_format_input_test", ".axim_clk_en     (1'b0)"));
+        QVERIFY(verifyVerilogContent("tie_format_input_test", ".sys_apb_rst_b   (1'b1)"));
+
+        /* Verify hex format handling (note: usually lowercase in output) */
+        QVERIFY(verifyVerilogContent("tie_format_input_test", ".pad_biu_bid     (8'hff)"));
+        QVERIFY(verifyVerilogContent("tie_format_input_test", ".pad_biu_rid     (8'haa)"));
+
+        /* Verify octal format handling */
+        QVERIFY(verifyVerilogContent("tie_format_input_test", ".pad_cpu_rvba    (40'o77)"));
+
+        /* Verify hex case handling in larger values */
+        QVERIFY(verifyVerilogContent("tie_format_input_test", ".pad_tdt_dm_rdata(128'hdeadbeef)"));
     }
 
     void testGenerateWithComplexTieTest()
@@ -678,6 +722,23 @@ instance:
         QVERIFY(verifyVerilogContent("complex_tie_test", "module complex_tie_test"));
         QVERIFY(verifyVerilogContent("complex_tie_test", "c906 cpu0"));
         QVERIFY(verifyVerilogContent("complex_tie_test", "c906 cpu1"));
+
+        /* Verify cpu0 tie values */
+        QVERIFY(verifyVerilogContent("complex_tie_test", "cpu0"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".axim_clk_en     (1'b0)"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".sys_apb_rst_b   (1'd1"));
+
+        /* Verify the tie+invert combination */
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".pad_biu_bid     (~(8'hff))"));
+
+        /* Verify truncation with warning comment */
+        QVERIFY(verifyVerilogContent(
+            "complex_tie_test", "FIXME: Value 16'habcd wider than port width 8 bits"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".pad_biu_rid     (8'hcd"));
+
+        /* Verify cpu1 ties are different from cpu0 */
+        QVERIFY(verifyVerilogContent("complex_tie_test", "cpu1"));
+        QVERIFY(verifyVerilogContent("complex_tie_test", ".axim_clk_en     (1'b1)"));
     }
 
     void testGenerateWithMultipleFiles()
