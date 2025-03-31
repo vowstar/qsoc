@@ -240,8 +240,13 @@ c906:
         /* Helper function to normalize whitespace */
         auto normalizeWhitespace = [](const QString &input) -> QString {
             QString result = input;
-            // Replace all whitespace (including tabs and newlines) with a single space
-            result.replace(QRegularExpression("\\s+"), " ");
+            /* Replace all whitespace (including tabs and newlines) with a single space */
+            result.replace(QRegularExpression(R"(\s+)"), " ");
+            /* Remove whitespace before any symbol/operator/punctuation using character class */
+            result.replace(QRegularExpression(R"(\s+([\(\)\[\]\+\-\*\/\;\,\.]))"), R"(\1)");
+            /* Remove whitespace after any symbol/operator/punctuation using character class */
+            result.replace(QRegularExpression(R"(([\(\)\[\]\+\-\*\/\;\,\.])\s+)"), R"(\1)");
+
             return result;
         };
 
