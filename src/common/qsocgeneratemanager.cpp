@@ -2090,24 +2090,8 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
                 calculatedWidth++;
             }
 
-            /* Round up to common bit widths for convenience */
-            if (calculatedWidth <= 8) {
-                result.width = 8;
-            } else if (calculatedWidth <= 16) {
-                result.width = 16;
-            } else if (calculatedWidth <= 32) {
-                result.width = 32;
-            } else if (calculatedWidth <= 64) {
-                result.width = 64;
-            } else if (calculatedWidth <= 128) {
-                result.width = 128;
-            } else if (calculatedWidth <= 256) {
-                result.width = 256;
-            } else if (calculatedWidth <= 512) {
-                result.width = 512;
-            } else {
-                result.width = 1024;
-            }
+            /* Use exact calculated width */
+            result.width = calculatedWidth;
         }
     }
 
