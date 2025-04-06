@@ -358,7 +358,7 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
             /* Print a success message for each removed bus interface */
             showInfo(
                 0,
-                QCoreApplication::translate("main", "Bus removed: %1 from module %2")
+                QCoreApplication::translate("main", "Success: Removed %1 from %2")
                     .arg(busName, currentModule));
         }
     }
