@@ -64,12 +64,12 @@ public:
             } else if (c >= 'A' && c <= 'F') {
                 digit = c - 'A' + 10;
             } else {
-                // Skip invalid characters
+                /* Skip invalid characters */
                 continue;
             }
 
             if (digit >= base) {
-                // Skip invalid digits for this base
+                /* Skip invalid digits for this base */
                 continue;
             }
 
@@ -226,7 +226,7 @@ public:
                     QString::fromStdString(bigIntegerToStringWithBase(value, 10)));
             case Base::Hexadecimal: {
                 QString hexStr = QString::fromStdString(bigIntegerToStringWithBase(value, 16));
-                // Always use lowercase for hex values regardless of original casing
+                /* Always use lowercase for hex values regardless of original casing */
                 return QString("'h%1").arg(hexStr.toLower());
             }
             default:
@@ -272,7 +272,7 @@ public:
                     QString::fromStdString(bigIntegerToStringWithBase(value, 8)));
             case Base::Hexadecimal: {
                 QString hexStr = QString::fromStdString(bigIntegerToStringWithBase(value, 16));
-                // Always use lowercase for hex values regardless of original casing
+                /* Always use lowercase for hex values regardless of original casing */
                 return QString("0x%1").arg(hexStr.toLower());
             }
             default:
@@ -310,7 +310,7 @@ public:
                 /* Calculate how many hex digits are needed */
                 int         hexDigits = (width + 3) / 4; /* Ceiling division */
                 std::string hexStr    = bigIntegerToStringWithBase(value, 16);
-                // Always use lowercase for hex values
+                /* Always use lowercase for hex values */
                 result = QString::fromStdString(hexStr).rightJustified(hexDigits, '0').toLower();
                 return QString("%1'h%2").arg(width).arg(result);
             }

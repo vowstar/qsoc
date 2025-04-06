@@ -1663,13 +1663,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                             /* Apply mask to truncate the value */
                                             if (adjustedInfo.value.getSign()
                                                 == BigInteger::negative) {
-                                                // For negative numbers, apply mask to magnitude and maintain sign
+                                                /* For negative numbers, apply mask to magnitude and maintain sign */
                                                 BigUnsigned result
                                                     = adjustedInfo.value.getMagnitude() & mask;
                                                 adjustedInfo.value
                                                     = BigInteger(result, BigInteger::negative);
                                             } else {
-                                                // For non-negative numbers, just apply the mask
+                                                /* For non-negative numbers, just apply the mask */
                                                 adjustedInfo.value = BigInteger(
                                                     adjustedInfo.value.getMagnitude() & mask);
                                             }
