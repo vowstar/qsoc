@@ -591,9 +591,6 @@ private slots:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* FIXME: Remove this after debugging */
-        std::cout << "messageList: " << messageList.join("\n").toStdString() << std::endl;
-
         /* Verify the output indicates success */
         QVERIFY(messageList.size() > 0);
         QVERIFY(messageList.filter(QRegularExpression(R"(Success: removed module)")).count() > 0);

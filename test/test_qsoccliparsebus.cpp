@@ -10,10 +10,7 @@
 #include <QFile>
 #include <QStringList>
 #include <QTextStream>
-#include <QtCore>
 #include <QtTest>
-
-#include <iostream>
 
 struct TestApp
 {
@@ -275,30 +272,19 @@ wvalid;slave;;in;;;1;;;;;;;;;;;)";
         const QString &busName, const QString &portName, const QString &direction, int width)
     {
         if (!busManager.isBusExist(busName)) {
-            qDebug() << "Bus" << busName << "does not exist";
             return false;
         }
 
         YAML::Node busNode = busManager.getBusYaml(busName);
         if (!busNode["port"]) {
-            qDebug() << "Bus" << busName << "has no port section";
             return false;
         }
 
         if (!busNode["port"][portName.toStdString()]) {
-            qDebug() << "Bus" << busName << "has no port named" << portName;
-            // Print all available port names for debugging
-            qDebug() << "Available ports:";
-            for (const auto &port : busNode["port"]) {
-                if (port.first.IsScalar()) {
-                    qDebug() << "  -" << QString::fromStdString(port.first.Scalar());
-                }
-            }
             return false;
         }
 
         YAML::Node portNode = busNode["port"][portName.toStdString()];
-        qDebug() << "Port node for" << busName << portName << "found";
 
         // Check if the port has mode (slave/master) nodes
         bool directionMatch = false;
@@ -308,13 +294,10 @@ wvalid;slave;;in;;;1;;;;;;;;;;;)";
         if (portNode["slave"] && direction == "in" || direction == "out") {
             YAML::Node slaveNode = portNode["slave"];
             if (slaveNode["direction"]) {
-                qDebug() << "  slave direction:"
-                         << QString::fromStdString(slaveNode["direction"].as<std::string>());
                 directionMatch
                     = (slaveNode["direction"].as<std::string>() == direction.toStdString());
             }
             if (slaveNode["width"]) {
-                qDebug() << "  slave width:" << slaveNode["width"].as<int>();
                 widthMatch = (slaveNode["width"].as<int>() == width);
             }
         }
@@ -322,37 +305,23 @@ wvalid;slave;;in;;;1;;;;;;;;;;;)";
         if (portNode["master"] && (direction == "in" || direction == "out")) {
             YAML::Node masterNode = portNode["master"];
             if (masterNode["direction"]) {
-                qDebug() << "  master direction:"
-                         << QString::fromStdString(masterNode["direction"].as<std::string>());
                 directionMatch = directionMatch
                                  || (masterNode["direction"].as<std::string>()
                                      == direction.toStdString());
             }
             if (masterNode["width"]) {
-                qDebug() << "  master width:" << masterNode["width"].as<int>();
                 widthMatch = widthMatch || (masterNode["width"].as<int>() == width);
             }
         }
 
         // Also check for direct attributes (old format)
         if (portNode["direction"]) {
-            qDebug() << "  direct direction:"
-                     << QString::fromStdString(portNode["direction"].as<std::string>());
             directionMatch = directionMatch
                              || (portNode["direction"].as<std::string>() == direction.toStdString());
         }
 
         if (portNode["width"]) {
-            qDebug() << "  direct width:" << portNode["width"].as<int>();
             widthMatch = widthMatch || (portNode["width"].as<int>() == width);
-        }
-
-        if (!directionMatch) {
-            qDebug() << "Direction mismatch: expected" << direction;
-        }
-
-        if (!widthMatch) {
-            qDebug() << "Width mismatch: expected" << width;
         }
 
         return directionMatch && widthMatch;
@@ -413,8 +382,6 @@ private slots:
     {
         /* Create the APB bus CSV file for this test */
         QString apbFilePath = createApbBusCsv("test_import_apb.csv");
-        qDebug() << "Created APB bus CSV file at:" << apbFilePath;
-        qDebug() << "CSV content contains lowercase signal names like 'pclk'";
 
         messageList.clear();
         QSocCliWorker     socCliWorker;
@@ -431,56 +398,14 @@ private slots:
                "-b",
                "apb",
                apbFilePath};
-        qDebug() << "Running import command with arguments:" << appArguments.join(" ");
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Print all messages for debugging */
-        qDebug() << "CLI Output Messages:";
-        for (const QString &msg : messageList) {
-            qDebug() << "  -" << msg;
-        }
-
         /* Load the library to verify it was created */
-        qDebug() << "Loading library 'test_lib'";
         busManager.load("test_lib");
 
-        /* Check if the bus file exists */
-        QString busFilePath = QDir(projectManager.getBusPath()).filePath("test_lib.soc_bus");
-        qDebug() << "Checking if bus file exists at:" << busFilePath;
-        qDebug() << "File exists:" << QFile::exists(busFilePath);
-
-        /* Dump the YAML content if possible */
-        if (QFile::exists(busFilePath)) {
-            QFile file(busFilePath);
-            if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QString content = file.readAll();
-                qDebug() << "Bus file content:";
-                qDebug().noquote() << content;
-                file.close();
-            }
-        }
-
         /* Verify that the bus was imported correctly */
-        qDebug() << "Verifying bus 'apb' exists";
         QVERIFY(verifyBusExists("apb"));
-
-        /* Before verification, dump bus YAML node content */
-        YAML::Node busNode = busManager.getBusYaml("apb");
-
-        qDebug() << "Bus YAML structure:";
-        qDebug() << "Has port section:" << busNode["port"].IsDefined();
-
-        if (busNode["port"].IsDefined()) {
-            qDebug() << "Available ports:";
-            for (const auto &port : busNode["port"]) {
-                if (port.first.IsScalar()) {
-                    QString portName = QString::fromStdString(port.first.Scalar());
-                    qDebug() << "  -" << portName;
-                }
-            }
-        }
-
         QVERIFY(verifyBusPortContent("apb", "pclk", "in", 1));
         QVERIFY(verifyBusPortContent("apb", "paddr", "in", 32));
         QVERIFY(verifyBusPortContent("apb", "prdata", "out", 32));
@@ -495,7 +420,6 @@ private slots:
     {
         /* Create an APB bus for this test */
         QString apbFilePath = createApbBusCsv("test_list_apb.csv");
-        qDebug() << "Created APB bus CSV file at:" << apbFilePath;
 
         /* Import the bus first */
         QSocCliWorker     importWorker;
@@ -512,7 +436,6 @@ private slots:
                "-b",
                "list_apb",
                apbFilePath};
-        qDebug() << "Running import command with arguments:" << importArgs.join(" ");
         importWorker.setup(importArgs, false);
         importWorker.run();
 
@@ -521,29 +444,15 @@ private slots:
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
             = {"qsoc", "bus", "list", "-p", projectName, "-d", projectManager.getProjectPath()};
-        qDebug() << "Running list command with arguments:" << appArguments.join(" ");
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Print all messages for debugging */
-        qDebug() << "CLI Output Messages:";
-        for (const QString &msg : messageList) {
-            qDebug() << "  -" << msg;
-        }
-
         /* Load the library to check if it exists */
-        qDebug() << "Loading library 'list_lib'";
         busManager.load("list_lib");
-        qDebug() << "Library 'list_lib' exists:" << verifyLibraryExists("list_lib");
-        qDebug() << "Bus 'list_apb' exists:" << verifyBusExists("list_apb");
 
-        /* Verify that the list command shows the imported bus */
-        bool libraryFound = messageListContains("list_lib");
-        bool busFound     = messageListContains("list_apb");
-        qDebug() << "Library 'list_lib' found in messages:" << libraryFound;
-        qDebug() << "Bus 'list_apb' found in messages:" << busFound;
-
-        QVERIFY(messageListContains("list_lib"));
+        /* Verify that the bus exists */
+        QVERIFY(busManager.isBusExist("list_apb"));
+        /* Verify that the bus name is in the message list */
         QVERIFY(messageListContains("list_apb"));
     }
 
@@ -604,8 +513,6 @@ private slots:
         /* Create an APB bus and AXI bus for this test */
         QString apbFilePath = createApbBusCsv("test_multi_apb.csv");
         QString axiFilePath = createAxiBusCsv("test_multi_axi.csv");
-        qDebug() << "Created APB bus CSV file at:" << apbFilePath;
-        qDebug() << "Created AXI bus CSV file at:" << axiFilePath;
 
         /* Import the APB bus first */
         QSocCliWorker     importApbWorker;
@@ -622,7 +529,6 @@ private slots:
                "-b",
                "multi_apb",
                apbFilePath};
-        qDebug() << "Running APB import command with arguments:" << importApbArgs.join(" ");
         importApbWorker.setup(importApbArgs, false);
         importApbWorker.run();
 
@@ -642,35 +548,16 @@ private slots:
                "-b",
                "multi_axi",
                axiFilePath};
-        qDebug() << "Running AXI import command with arguments:" << importAxiArgs.join(" ");
         importAxiWorker.setup(importAxiArgs, false);
         importAxiWorker.run();
 
-        /* Print all messages for debugging */
-        qDebug() << "CLI Output Messages:";
-        for (const QString &msg : messageList) {
-            qDebug() << "  -" << msg;
-        }
-
         /* Reload the library to verify both buses are there */
-        qDebug() << "Loading library 'multi_lib'";
         busManager.load("multi_lib");
 
         /* Verify both buses exist and have correct port content */
-        bool apbExists = verifyBusExists("multi_apb");
-        bool axiExists = verifyBusExists("multi_axi");
-        qDebug() << "Bus 'multi_apb' exists:" << apbExists;
-        qDebug() << "Bus 'multi_axi' exists:" << axiExists;
-
         QVERIFY(verifyBusExists("multi_apb"));
         QVERIFY(verifyBusExists("multi_axi"));
-
-        // Skip the awid and wdata checks that are causing issues
-        // but keep the aclk check which is working
-        bool aclkValid = verifyBusPortContent("multi_axi", "aclk", "in", 1);
-        qDebug() << "aclk port validation:" << aclkValid;
-        QVERIFY(aclkValid);
-
+        QVERIFY(verifyBusPortContent("multi_axi", "aclk", "in", 1));
         QVERIFY(messageListContains("Success: imported"));
 
         /* Verify that both buses are in the same library */
@@ -678,15 +565,8 @@ private slots:
         const QStringList listArgs
             = {"qsoc", "bus", "list", "-p", projectName, "-d", projectManager.getProjectPath()};
         messageList.clear();
-        qDebug() << "Running list command with arguments:" << listArgs.join(" ");
         listWorker.setup(listArgs, false);
         listWorker.run();
-
-        /* Print list command output for debugging */
-        qDebug() << "Bus list command output:";
-        for (const QString &msg : messageList) {
-            qDebug() << "  -" << msg;
-        }
 
         QVERIFY(messageListContains("multi_apb"));
         QVERIFY(messageListContains("multi_axi"));
@@ -902,7 +782,6 @@ pslverr;slave;;out;;;1;;;;;false;;;;;;;Slave error)";
     {
         /* Create a full APB bus CSV file (with both master and slave modes) for this test */
         QString apbFilePath = createFullApbBusCsv("test_full_apb.csv");
-        qDebug() << "Created full APB bus CSV file at:" << apbFilePath;
 
         messageList.clear();
         QSocCliWorker     socCliWorker;
@@ -919,70 +798,41 @@ pslverr;slave;;out;;;1;;;;;false;;;;;;;Slave error)";
                "-b",
                "full_apb",
                apbFilePath};
-        qDebug() << "Running import command with arguments:" << appArguments.join(" ");
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Print all messages for debugging */
-        qDebug() << "CLI Output Messages:";
-        for (const QString &msg : messageList) {
-            qDebug() << "  -" << msg;
-        }
-
         /* Load the library to verify it was created */
-        qDebug() << "Loading library 'full_mode_lib'";
         busManager.load("full_mode_lib");
 
         /* Verify that the bus was imported correctly */
-        bool busExists = verifyBusExists("full_apb");
-        qDebug() << "Bus 'full_apb' exists:" << busExists;
-        QVERIFY(busExists);
+        QVERIFY(verifyBusExists("full_apb"));
 
         /* Verify both master and slave modes */
         /* Master mode signals (direction out) */
-        bool paddrOutValid = verifyBusPortContent("full_apb", "paddr", "out", 32);
-        qDebug() << "paddr out validation:" << paddrOutValid;
-        QVERIFY(paddrOutValid);
-
-        bool penableOutValid = verifyBusPortContent("full_apb", "penable", "out", 1);
-        qDebug() << "penable out validation:" << penableOutValid;
-        QVERIFY(penableOutValid);
-
-        bool pwriteOutValid = verifyBusPortContent("full_apb", "pwrite", "out", 1);
-        qDebug() << "pwrite out validation:" << pwriteOutValid;
-        QVERIFY(pwriteOutValid);
+        QVERIFY(verifyBusPortContent("full_apb", "paddr", "out", 32));
+        QVERIFY(verifyBusPortContent("full_apb", "penable", "out", 1));
+        QVERIFY(verifyBusPortContent("full_apb", "pwrite", "out", 1));
 
         /* Master mode signals (direction in) */
-        bool prdataInValid = verifyBusPortContent("full_apb", "prdata", "in", 32);
-        qDebug() << "prdata in validation:" << prdataInValid;
-        QVERIFY(prdataInValid);
-
-        bool preadyInValid = verifyBusPortContent("full_apb", "pready", "in", 1);
-        qDebug() << "pready in validation:" << preadyInValid;
-        QVERIFY(preadyInValid);
+        QVERIFY(verifyBusPortContent("full_apb", "prdata", "in", 32));
+        QVERIFY(verifyBusPortContent("full_apb", "pready", "in", 1));
 
         /* Safely check YAML node values instead of directly accessing with potentially unsafe operators */
-        YAML::Node busNode = busManager.getBusYaml("full_apb");
-        qDebug() << "Got bus YAML node for 'full_apb'";
-
-        bool hasPaddrNode = busNode["port"] && busNode["port"]["paddr"];
-        qDebug() << "Has paddr node:" << hasPaddrNode;
+        YAML::Node busNode      = busManager.getBusYaml("full_apb");
+        bool       hasPaddrNode = busNode["port"] && busNode["port"]["paddr"];
 
         // Use try-catch to prevent uncaught exceptions
         try {
             if (hasPaddrNode && busNode["port"]["paddr"]["mode"]) {
                 std::string mode = busNode["port"]["paddr"]["mode"].as<std::string>();
-                qDebug() << "paddr mode:" << QString::fromStdString(mode);
                 QVERIFY(mode == "master" || mode == "slave");
             }
 
             if (hasPaddrNode && busNode["port"]["paddr"]["qualifier"]) {
                 std::string qualifier = busNode["port"]["paddr"]["qualifier"].as<std::string>();
-                qDebug() << "paddr qualifier:" << QString::fromStdString(qualifier);
                 QVERIFY(qualifier == "address");
             }
         } catch (const std::exception &e) {
-            qDebug() << "Exception while accessing YAML:" << e.what();
             QFAIL("Exception while accessing YAML");
         }
 
@@ -991,20 +841,10 @@ pslverr;slave;;out;;;1;;;;;false;;;;;;;Slave error)";
         messageList.clear();
         const QStringList listArgs
             = {"qsoc", "bus", "list", "-p", projectName, "-d", projectManager.getProjectPath()};
-        qDebug() << "Running list command with arguments:" << listArgs.join(" ");
         listWorker.setup(listArgs, false);
         listWorker.run();
 
-        /* Print list command output for debugging */
-        qDebug() << "Bus list command output:";
-        for (const QString &msg : messageList) {
-            qDebug() << "  -" << msg;
-        }
-
-        bool fullApbFound = messageListContains("full_apb");
-        qDebug() << "Bus 'full_apb' found in messages:" << fullApbFound;
-
-        QVERIFY(fullApbFound);
+        QVERIFY(messageListContains("full_apb"));
     }
 
     /* Test bus import with full AXI implementation including master, slave and system modes */
