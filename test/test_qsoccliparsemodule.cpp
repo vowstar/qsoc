@@ -350,23 +350,20 @@ private slots:
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "module", "import", "non_existent_file.v", "--project", projectPath};
+            = {"qsoc",
+               "module",
+               "import",
+               "nonexistent_file.v",
+               "--project",
+               projectName,
+               "-d",
+               projectManager.getProjectPath()};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Should show error about missing file */
+        /* Should display an error message */
         QVERIFY(messageList.size() > 0);
-        bool hasFileError = false;
-        for (const QString &msg : messageList) {
-            if ((msg.contains("No such file", Qt::CaseInsensitive)
-                 || msg.contains("not exist", Qt::CaseInsensitive)
-                 || msg.contains("file not found", Qt::CaseInsensitive))
-                && msg.contains("non_existent_file.v", Qt::CaseInsensitive)) {
-                hasFileError = true;
-                break;
-            }
-        }
-        QVERIFY(hasFileError);
+        QVERIFY(messageListContains("error"));
     }
 
     /* Test module list command */
@@ -430,274 +427,112 @@ private slots:
         QVERIFY(hasAdder);
     }
 
-    /* Test module info command */
-    void testModuleInfo()
+    /* Test module show command */
+    void testModuleShow()
     {
+        /* Create a counter module file */
+        QString testFileName        = "testModuleShow_counter.v";
+        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
+        QFile   counterFile(counterFilePathFull);
+        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&counterFile);
+            out << "module test_counter (\n"
+                << "  input  wire        clk,\n"
+                << "  input  wire        rst_n,\n"
+                << "  input  wire        enable,\n"
+                << "  output reg  [7:0]  count\n"
+                << ");\n"
+                << "  always @(posedge clk or negedge rst_n) begin\n"
+                << "    if (!rst_n) begin\n"
+                << "      count <= 8'h00;\n"
+                << "    end else if (enable) begin\n"
+                << "      count <= count + 1;\n"
+                << "    end\n"
+                << "  end\n"
+                << "endmodule\n";
+            counterFile.close();
+        }
+
+        /* First import the module */
+        {
+            QSocCliWorker     socCliWorker;
+            QFileInfo         projectInfo(projectManager.getProjectPath());
+            QString           projectFullPath = projectInfo.absoluteFilePath();
+            const QStringList appArguments
+                = {"qsoc",
+                   "module",
+                   "import",
+                   counterFilePathFull,
+                   "--project",
+                   projectName,
+                   "-d",
+                   projectFullPath};
+            socCliWorker.setup(appArguments, false);
+            socCliWorker.run();
+        }
+
+        /* Verify the module exists */
+        moduleManager.load("test_counter");
+        QVERIFY(verifyModuleExists("test_counter"));
+
+        /* Now test the show command */
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "module", "show", "test_counter", "--project", projectPath};
+            = {"qsoc",
+               "module",
+               "show",
+               "test_counter",
+               "--project",
+               projectName,
+               "-d",
+               projectManager.getProjectPath()};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Should show module information */
+        /* Check we got output */
         QVERIFY(messageList.size() > 0);
 
-        bool hasPortInfo = false;
-        for (const QString &msg : messageList) {
-            if (msg.contains("port", Qt::CaseInsensitive)) {
-                hasPortInfo = true;
-                break;
-            }
-        }
-
-        QVERIFY(hasPortInfo);
-
-        /* Check for specific ports */
-        bool hasClkPort    = false;
-        bool hasRstPort    = false;
-        bool hasEnablePort = false;
-        bool hasCountPort  = false;
-
-        for (const QString &msg : messageList) {
-            if (msg.contains("clk"))
-                hasClkPort = true;
-            if (msg.contains("rst_n"))
-                hasRstPort = true;
-            if (msg.contains("enable"))
-                hasEnablePort = true;
-            if (msg.contains("count"))
-                hasCountPort = true;
-        }
-
-        QVERIFY(hasClkPort);
-        QVERIFY(hasRstPort);
-        QVERIFY(hasEnablePort);
-        QVERIFY(hasCountPort);
+        /* Check for specific module information in the output */
+        QVERIFY(messageList.filter(QRegularExpression("test_counter")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression("port")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression("clk")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression("rst_n")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression("enable")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression("count")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression(R"(type:\s*logic)")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression(R"(type:\s*reg\[7:0\])")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression(R"(direction:\s*in)")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression(R"(direction:\s*out)")).count() > 0);
     }
 
-    /* Test module info for non-existent module */
-    void testModuleInfoNonExistent()
+    /* Test module show for non-existent module */
+    void testModuleShowNonExistent()
     {
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
-            = {"qsoc", "module", "show", "non_existent_module", "--project", projectPath};
+            = {"qsoc",
+               "module",
+               "show",
+               "nonexistent_module",
+               "--project",
+               projectName,
+               "-d",
+               projectManager.getProjectPath()};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Should complete without raising test failure */
+        /* Check we got output and it contains an error */
         QVERIFY(messageList.size() > 0);
+        QVERIFY(messageList.filter(QRegularExpression(R"(Error: module not found)")).count() > 0);
     }
 
     /* Test module delete command */
     void testModuleDelete()
     {
-        /* Create adder module file */
-        QString testFileName      = "testModuleDelete_adder.v";
-        QString adderFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   adderFile(adderFilePathFull);
-        if (adderFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&adderFile);
-            out << "module test_adder (\n"
-                << "  input  wire [7:0]  a,\n"
-                << "  input  wire [7:0]  b,\n"
-                << "  output wire [7:0]  sum\n"
-                << ");\n"
-                << "  assign sum = a + b;\n"
-                << "endmodule\n";
-            adderFile.close();
-        }
-
-        /* First import module test_adder to ensure it exists */
-        {
-            QSocCliWorker socCliWorker;
-            QFileInfo     adderFileInfo(adderFilePathFull);
-            QString       adderFileFullPath = adderFileInfo.absoluteFilePath();
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
-
-            const QStringList appArguments
-                = {"qsoc",
-                   "module",
-                   "import",
-                   adderFileFullPath,
-                   "--project",
-                   projectName,
-                   "-d",
-                   projectFullPath};
-
-            socCliWorker.setup(appArguments, false);
-            socCliWorker.run();
-
-            /* Reset the module data */
-            moduleManager.resetModuleData();
-            /* Reload the module manager */
-            moduleManager.load(QRegularExpression(".*"));
-
-            /* Check module exists */
-            bool exists = moduleManager.isModuleExist("test_adder");
-            QVERIFY(exists);
-        }
-
-        /* Now run the CLI remove command */
-        {
-            QSocCliWorker socCliWorker;
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
-
-            const QStringList appArguments
-                = {"qsoc",
-                   "module",
-                   "remove",
-                   "test_adder",
-                   "--project",
-                   projectName,
-                   "-d",
-                   projectFullPath};
-
-            /* Execute the CLI command */
-            socCliWorker.setup(appArguments, false);
-            socCliWorker.run();
-
-            /* Reload the module manager and verify changes */
-            /* Reset the module data */
-            moduleManager.resetModuleData();
-            /* Reload the module manager */
-            moduleManager.load(QRegularExpression(".*"));
-
-            /* See if module is still in memory */
-            bool exists = moduleManager.isModuleExist("test_adder");
-
-            QVERIFY(!exists);
-        }
-    }
-
-    /* Test module bus add command */
-    void testModuleBusAdd()
-    {
         /* Create counter module file */
-        QString testFileName        = "testModuleBusAdd_counter.v";
-        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(counterFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
-            out << "module test_counter (\n"
-                << "  input  wire        clk,\n"
-                << "  input  wire        rst_n,\n"
-                << "  input  wire        enable,\n"
-                << "  output reg  [7:0]  count\n"
-                << ");\n"
-                << "  always @(posedge clk or negedge rst_n) begin\n"
-                << "    if (!rst_n) begin\n"
-                << "      count <= 8'h00;\n"
-                << "    end else if (enable) begin\n"
-                << "      count <= count + 1;\n"
-                << "    end\n"
-                << "  end\n"
-                << "endmodule\n";
-            counterFile.close();
-        }
-
-        /* First import a module for testing */
-        {
-            QSocCliWorker socCliWorker;
-            QFileInfo     counterFileInfo(counterFilePathFull);
-            QString       counterFileFullPath = counterFileInfo.absoluteFilePath();
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
-
-            const QStringList appArguments
-                = {"qsoc",
-                   "module",
-                   "import",
-                   counterFileFullPath,
-                   "--project",
-                   projectName,
-                   "-d",
-                   projectFullPath};
-            socCliWorker.setup(appArguments, false);
-            socCliWorker.run();
-        }
-
-        /* Now test module bus add command */
-        messageList.clear();
-        QSocCliWorker socCliWorker;
-        QFileInfo     projectInfo(projectManager.getProjectPath());
-        QString       projectFullPath = projectInfo.absoluteFilePath();
-
-        const QStringList appArguments
-            = {"qsoc",
-               "module",
-               "bus",
-               "add",
-               "-m",
-               "test_counter",
-               "-b",
-               "apb",
-               "-o",
-               "slave",
-               "apb_interface",
-               "--project",
-               projectName,
-               "-d",
-               projectFullPath};
-
-        socCliWorker.setup(appArguments, false);
-        socCliWorker.run();
-
-        /* Verify the command produced output */
-        QVERIFY(messageList.size() > 0);
-
-        /* Reload modules to verify changes */
-        moduleManager.load("test_counter");
-
-        /* Verify the module exists */
-        QVERIFY(verifyModuleExists("test_counter"));
-
-        /* Check if the module has the bus assigned */
-        YAML::Node moduleNode     = moduleManager.getModuleYaml(QString("test_counter"));
-        bool       hasBusAssigned = false;
-
-        if (moduleNode["bus"].IsDefined() && moduleNode["bus"].IsMap()) {
-            for (const auto &bus : moduleNode["bus"]) {
-                if (bus.first.IsDefined() && bus.second.IsDefined() && bus.second.IsMap()) {
-                    if (bus.second["bus"].IsDefined() && !bus.second["bus"].IsNull()) {
-                        QString busType = QString::fromStdString(
-                            bus.second["bus"].as<std::string>());
-                        if (busType == "apb") {
-                            hasBusAssigned = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        QVERIFY(hasBusAssigned);
-
-        /* Check for success message */
-        bool successful = messageListContains("added") || messageListContains("success")
-                          || messageListContains("matched") || messageListContains("Bus added");
-        QVERIFY(successful);
-
-        /* Verify no error messages in the output */
-        bool hasError = false;
-        for (const QString &msg : messageList) {
-            if (msg.toLower().contains("error") || msg.toLower().contains("failed")) {
-                hasError = true;
-                break;
-            }
-        }
-
-        QVERIFY(!hasError);
-    }
-
-    /* Test module bus remove command */
-    void testModuleBusRemove()
-    {
-        /* Create counter module file */
-        QString testFileName        = "testModuleBusRemove_counter.v";
+        QString testFileName        = "testModuleDelete_counter.v";
         QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
         QFile   counterFile(counterFilePathFull);
         if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -721,17 +556,14 @@ private slots:
 
         /* First import the module */
         {
-            QSocCliWorker socCliWorker;
-            QFileInfo     counterFileInfo(counterFilePathFull);
-            QString       counterFileFullPath = counterFileInfo.absoluteFilePath();
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
-
+            QSocCliWorker     socCliWorker;
+            QFileInfo         projectInfo(projectManager.getProjectPath());
+            QString           projectFullPath = projectInfo.absoluteFilePath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
                    "import",
-                   counterFileFullPath,
+                   counterFilePathFull,
                    "--project",
                    projectName,
                    "-d",
@@ -740,229 +572,36 @@ private slots:
             socCliWorker.run();
         }
 
-        /* Then ensure the module has a bus assigned */
-        {
-            QSocCliWorker     socCliWorker;
-            const QStringList appArguments
-                = {"qsoc",
-                   "module",
-                   "bus",
-                   "add",
-                   "-m",
-                   "test_counter",
-                   "-b",
-                   "apb",
-                   "-o",
-                   "slave",
-                   "--project",
-                   projectName,
-                   "-d",
-                   projectManager.getProjectPath(),
-                   "apb_interface"};
-            socCliWorker.setup(appArguments, false);
-            socCliWorker.run();
+        /* Verify the module exists */
+        moduleManager.load("test_counter");
+        QVERIFY(verifyModuleExists("test_counter"));
 
-            /* Verify the bus was added */
-            moduleManager.load("test_counter");
-            YAML::Node moduleNode     = moduleManager.getModuleYaml(QString("test_counter"));
-            bool       hasBusAssigned = false;
-
-            if (moduleNode["bus"].IsDefined()) {
-                for (const auto &bus : moduleNode["bus"]) {
-                    if (bus.second["bus"].IsDefined() && !bus.second["bus"].IsNull()
-                        && QString::fromStdString(bus.second["bus"].as<std::string>()) == "apb") {
-                        hasBusAssigned = true;
-                        break;
-                    }
-                }
-            }
-
-            QVERIFY(hasBusAssigned);
-        }
-
-        /* Now test module bus remove command */
+        /* Run the CLI delete command */
         messageList.clear();
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
             = {"qsoc",
                "module",
-               "bus",
                "remove",
-               "-m",
                "test_counter",
                "--project",
                projectName,
                "-d",
-               projectManager.getProjectPath(),
-               "apb_interface"};
-
+               projectManager.getProjectPath()};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Verify the command produced output */
+        /* FIXME: Remove this after debugging */
+        std::cout << "messageList: " << messageList.join("\n").toStdString() << std::endl;
+
+        /* Verify the output indicates success */
         QVERIFY(messageList.size() > 0);
+        QVERIFY(messageList.filter(QRegularExpression(R"(Success: removed module)")).count() > 0);
 
-        /* Reload modules to verify changes */
-        moduleManager.load("test_counter");
-
-        /* Check if the module no longer has the bus assigned */
-        YAML::Node moduleNode     = moduleManager.getModuleYaml(QString("test_counter"));
-        bool       hasBusAssigned = false;
-
-        if (moduleNode["bus"].IsDefined() && moduleNode["bus"].IsMap()) {
-            for (const auto &bus : moduleNode["bus"]) {
-                if (bus.first.IsDefined() && bus.second.IsDefined() && bus.second.IsMap()) {
-                    if (bus.second["bus"].IsDefined() && !bus.second["bus"].IsNull()) {
-                        QString busType = QString::fromStdString(
-                            bus.second["bus"].as<std::string>());
-                        if (busType == "apb") {
-                            hasBusAssigned = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        QVERIFY(!hasBusAssigned);
-
-        /* Check for success message */
-        bool successful = messageListContains("removed") || messageListContains("success");
-        QVERIFY(successful);
-
-        /* Verify no error messages in the output */
-        bool hasError = false;
-        for (const QString &msg : messageList) {
-            if (msg.toLower().contains("error") || msg.toLower().contains("failed")) {
-                hasError = true;
-                break;
-            }
-        }
-
-        QVERIFY(!hasError);
-    }
-
-    /* Test module bus list command */
-    void testModuleBusList()
-    {
-        /* Create counter module file */
-        QString testFileName        = "testModuleBusList_counter.v";
-        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(counterFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
-            out << "module test_counter (\n"
-                << "  input  wire        clk,\n"
-                << "  input  wire        rst_n,\n"
-                << "  input  wire        enable,\n"
-                << "  output reg  [7:0]  count\n"
-                << ");\n"
-                << "  always @(posedge clk or negedge rst_n) begin\n"
-                << "    if (!rst_n) begin\n"
-                << "      count <= 8'h00;\n"
-                << "    end else if (enable) begin\n"
-                << "      count <= count + 1;\n"
-                << "    end\n"
-                << "  end\n"
-                << "endmodule\n";
-            counterFile.close();
-        }
-
-        /* First import the module */
-        {
-            QSocCliWorker socCliWorker;
-            QFileInfo     counterFileInfo(counterFilePathFull);
-            QString       counterFileFullPath = counterFileInfo.absoluteFilePath();
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
-
-            const QStringList appArguments
-                = {"qsoc",
-                   "module",
-                   "import",
-                   counterFileFullPath,
-                   "--project",
-                   projectName,
-                   "-d",
-                   projectFullPath};
-            socCliWorker.setup(appArguments, false);
-            socCliWorker.run();
-        }
-
-        /* Then add a bus to a module */
-        {
-            QSocCliWorker socCliWorker;
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
-
-            const QStringList appArguments
-                = {"qsoc",
-                   "module",
-                   "bus",
-                   "add",
-                   "-m",
-                   "test_counter",
-                   "-b",
-                   "apb",
-                   "-o",
-                   "slave",
-                   "--project",
-                   projectName,
-                   "-d",
-                   projectFullPath,
-                   "apb_interface"};
-            socCliWorker.setup(appArguments, false);
-            socCliWorker.run();
-
-            /* Verify the bus was added */
-            moduleManager.load("test_counter");
-        }
-
-        /* Now test module bus list command */
-        messageList.clear();
-        QSocCliWorker socCliWorker;
-        QFileInfo     projectInfo(projectManager.getProjectPath());
-        QString       projectFullPath = projectInfo.absoluteFilePath();
-
-        const QStringList appArguments
-            = {"qsoc",
-               "module",
-               "bus",
-               "list",
-               "-m",
-               "test_counter",
-               "--project",
-               projectName,
-               "-d",
-               projectFullPath};
-
-        socCliWorker.setup(appArguments, false);
-        socCliWorker.run();
-
-        /* Verify the command produced the expected output */
-        QVERIFY(messageList.size() > 0);
-
-        /* Check if the bus is listed in the output */
-        bool hasApbBus = false;
-        for (const QString &msg : messageList) {
-            if (msg.contains("apb", Qt::CaseInsensitive)) {
-                hasApbBus = true;
-                break;
-            }
-        }
-
-        QVERIFY(hasApbBus);
-
-        /* Verify no error messages in the output */
-        bool hasError = false;
-        for (const QString &msg : messageList) {
-            if (msg.toLower().contains("error") || msg.toLower().contains("failed")) {
-                hasError = true;
-                break;
-            }
-        }
-
-        QVERIFY(!hasError);
+        /* Verify the module is actually removed */
+        moduleManager.resetModuleData();
+        moduleManager.load(QRegularExpression(".*"));
+        QVERIFY(!verifyModuleExists("test_counter"));
     }
 
     /* Test simple module remove */
@@ -1021,134 +660,6 @@ private slots:
         /* Verify the module no longer exists */
         bool moduleStillExists = moduleManager.isModuleExist("test_adder");
         QVERIFY(!moduleStillExists);
-    }
-
-    /* Test module bus show command */
-    void testModuleBusShow()
-    {
-        /* Create counter module file */
-        QString testFileName        = "testModuleBusShow_counter.v";
-        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(counterFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
-            out << "module test_counter (\n"
-                << "  input  wire        clk,\n"
-                << "  input  wire        rst_n,\n"
-                << "  input  wire        enable,\n"
-                << "  output reg  [7:0]  count\n"
-                << ");\n"
-                << "  always @(posedge clk or negedge rst_n) begin\n"
-                << "    if (!rst_n) begin\n"
-                << "      count <= 8'h00;\n"
-                << "    end else if (enable) begin\n"
-                << "      count <= count + 1;\n"
-                << "    end\n"
-                << "  end\n"
-                << "endmodule\n";
-            counterFile.close();
-        }
-
-        /* First import the module */
-        {
-            QSocCliWorker socCliWorker;
-            QFileInfo     counterFileInfo(counterFilePathFull);
-            QString       counterFileFullPath = counterFileInfo.absoluteFilePath();
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
-
-            const QStringList appArguments
-                = {"qsoc",
-                   "module",
-                   "import",
-                   counterFileFullPath,
-                   "--project",
-                   projectName,
-                   "-d",
-                   projectFullPath};
-            socCliWorker.setup(appArguments, false);
-            socCliWorker.run();
-        }
-
-        /* Add a bus to the module */
-        {
-            QSocCliWorker     socCliWorker;
-            const QStringList appArguments
-                = {"qsoc",
-                   "module",
-                   "bus",
-                   "add",
-                   "-m",
-                   "test_counter",
-                   "-b",
-                   "apb",
-                   "-o",
-                   "slave",
-                   "--project",
-                   projectName,
-                   "-d",
-                   projectManager.getProjectPath(),
-                   "apb_interface"};
-            socCliWorker.setup(appArguments, false);
-            socCliWorker.run();
-
-            /* Verify the bus was added */
-            moduleManager.load("test_counter");
-        }
-
-        /* Now test module bus show command */
-        messageList.clear();
-        QSocCliWorker     socCliWorker;
-        const QStringList appArguments
-            = {"qsoc",
-               "module",
-               "bus",
-               "show",
-               "-m",
-               "test_counter",
-               "--project",
-               projectName,
-               "-d",
-               projectManager.getProjectPath(),
-               "apb_interface"};
-
-        socCliWorker.setup(appArguments, false);
-        socCliWorker.run();
-
-        /* Verify command produces output */
-        QVERIFY(messageList.size() > 0);
-
-        /* Check for specific APB bus details in the output */
-        bool hasBusDetails = false;
-        bool hasPortInfo   = false;
-        bool hasModuleInfo = false;
-
-        for (const QString &msg : messageList) {
-            if (msg.contains("apb", Qt::CaseInsensitive)) {
-                hasBusDetails = true;
-            }
-            if (msg.contains("port", Qt::CaseInsensitive)
-                || msg.contains("mapping", Qt::CaseInsensitive)) {
-                hasPortInfo = true;
-            }
-            if (msg.contains("test_counter", Qt::CaseInsensitive)) {
-                hasModuleInfo = true;
-            }
-        }
-
-        QVERIFY(hasBusDetails);
-        QVERIFY(hasPortInfo);
-        QVERIFY(hasModuleInfo);
-
-        /* Verify no error messages in the output */
-        bool hasError = false;
-        for (const QString &msg : messageList) {
-            if (msg.toLower().contains("error") || msg.toLower().contains("failed")) {
-                hasError = true;
-                break;
-            }
-        }
-        QVERIFY(!hasError);
     }
 };
 

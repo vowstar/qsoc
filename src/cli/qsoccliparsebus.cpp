@@ -129,7 +129,7 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
     /* Add success message to display when the bus is successfully imported */
     showInfo(
         0,
-        QCoreApplication::translate("main", "Successfully imported bus to library: %1 -> %2")
+        QCoreApplication::translate("main", "Success: imported bus to library: %1 -> %2")
             .arg(busName)
             .arg(libraryName));
 
@@ -240,7 +240,7 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
                 QCoreApplication::translate("main", "Error: could not remove bus: %1").arg(busName));
         }
         /* Add success message */
-        showInfo(0, QCoreApplication::translate("main", "Successfully removed bus: %1").arg(busName));
+        showInfo(0, QCoreApplication::translate("main", "Success: removed bus: %1").arg(busName));
     }
 
     return true;

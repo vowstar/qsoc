@@ -248,8 +248,7 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
                     .arg(moduleName));
         }
         showInfo(
-            0,
-            QCoreApplication::translate("main", "Successfully removed module: %1").arg(moduleName));
+            0, QCoreApplication::translate("main", "Success: removed module: %1").arg(moduleName));
     }
 
     return true;

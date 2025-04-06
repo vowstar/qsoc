@@ -481,17 +481,10 @@ private slots:
             }
         }
 
-        qDebug() << "Verifying port 'pclk' with direction 'in' and width 1";
         QVERIFY(verifyBusPortContent("apb", "pclk", "in", 1));
         QVERIFY(verifyBusPortContent("apb", "paddr", "in", 32));
         QVERIFY(verifyBusPortContent("apb", "prdata", "out", 32));
-
-        qDebug() << "Checking for 'Successfully imported' message";
-        bool successful = messageListContains("Successfully imported");
-        qDebug() << "Successfully imported message found:" << successful;
-
-        // Re-enable this check
-        QVERIFY(messageListContains("Successfully imported"));
+        QVERIFY(messageListContains("Success: imported"));
 
         /* Clean up the CSV file */
         QFile::remove(apbFilePath);
@@ -678,7 +671,7 @@ private slots:
         qDebug() << "aclk port validation:" << aclkValid;
         QVERIFY(aclkValid);
 
-        QVERIFY(messageListContains("Successfully imported"));
+        QVERIFY(messageListContains("Success: imported"));
 
         /* Verify that both buses are in the same library */
         QSocCliWorker     listWorker;
@@ -764,7 +757,7 @@ private slots:
         busManager.load("remove_lib");
         QVERIFY(!verifyBusExists("remove_apb"));
         QVERIFY(verifyBusExists("remove_axi"));
-        QVERIFY(messageListContains("Successfully removed"));
+        QVERIFY(messageListContains("Success: removed"));
 
         /* Clean up the CSV files */
         QFile::remove(apbFilePath);
@@ -789,9 +782,8 @@ private slots:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Verify that an error message is displayed */
-        QVERIFY(messageListContains("Error") || messageListContains("not found"));
-        QVERIFY(!messageListContains("Successfully"));
+        QVERIFY(messageListContains("Error: bus not found"));
+        QVERIFY(!messageListContains("Success"));
     }
 
     /* Test bus command with invalid option */
@@ -886,7 +878,7 @@ pslverr;slave;;out;;;1;;;;;false;;;;;;;Slave error)";
         QVERIFY(verifyBusExists("temp_apb"));
         QVERIFY(verifyBusPortContent("temp_apb", "pclk", "in", 1));
         QVERIFY(verifyLibraryExists("temp_lib"));
-        QVERIFY(messageListContains("Successfully imported"));
+        QVERIFY(messageListContains("Success: imported"));
     }
 
     /* Test showing help for bus command */
