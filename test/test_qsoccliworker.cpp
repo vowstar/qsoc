@@ -45,21 +45,7 @@ private slots:
         qInstallMessageHandler(messageOutput);
     }
 
-    void cleanupTestCase()
-    {
-        /* Process all pending events */
-        for (int i = 0; i < 10; i++) {
-            QCoreApplication::processEvents();
-            /* Short delay to ensure events are fully processed */
-            QThread::msleep(10);
-        }
-
-        /* Disconnect all possible signal-slot connections */
-        QObject::disconnect();
-
-        /* Process all events again */
-        QCoreApplication::processEvents();
-    }
+    void cleanupTestCase() { /* Do nothing */ }
 
     void optionH()
     {
