@@ -239,7 +239,6 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
                 1,
                 QCoreApplication::translate("main", "Error: could not remove bus: %1").arg(busName));
         }
-
         /* Add success message */
         showInfo(0, QCoreApplication::translate("main", "Successfully removed bus: %1").arg(busName));
     }
