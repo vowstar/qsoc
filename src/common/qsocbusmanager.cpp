@@ -324,7 +324,7 @@ QStringList QSocBusManager::listLibrary(const QRegularExpression &libraryNameReg
     return result;
 }
 
-bool QSocBusManager::isExist(const QString &libraryName)
+bool QSocBusManager::isLibraryFileExist(const QString &libraryName)
 {
     /* Validate projectManager and its bus path */
     if (!isBusPathValid()) {
@@ -354,7 +354,7 @@ bool QSocBusManager::load(const QString &libraryName)
     }
 
     /* Check if library file exists */
-    if (!isExist(libraryName)) {
+    if (!isLibraryFileExist(libraryName)) {
         qCritical() << "Error: Library file does not exist for basename:" << libraryName;
         return false;
     }

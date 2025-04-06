@@ -109,7 +109,7 @@ public slots:
      * @retval true Library file exists in the bus directory.
      * @retval false Library file does not exist in the bus directory.
      */
-    bool isExist(const QString &libraryName);
+    bool isLibraryFileExist(const QString &libraryName);
 
     /**
      * @brief Load a specific library by basename.

@@ -362,7 +362,10 @@ wvalid;slave;;in;;;1;;;;;;;;;;;)";
     }
 
     /* Check if a specific library file exists */
-    bool verifyLibraryExists(const QString &libraryName) { return busManager.isExist(libraryName); }
+    bool verifyLibraryExists(const QString &libraryName)
+    {
+        return busManager.isLibraryFileExist(libraryName);
+    }
 
     /* Check if the messageList contains a specific message */
     bool messageListContains(const QString &message)
