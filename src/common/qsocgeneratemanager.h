@@ -284,7 +284,7 @@ public:
          * @brief Format the value with proper bit width (padded zeros)
          * @return Formatted string with proper bit width
          */
-        QString formatWithBitWidth() const
+        QString formatVerilogProperWidth() const
         {
             /* If error was detected, return original string */
             if (errorDetected) {
