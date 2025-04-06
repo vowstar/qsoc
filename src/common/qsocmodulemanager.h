@@ -332,6 +332,17 @@ public slots:
     bool isModuleExist(const QString &moduleName);
 
     /**
+     * @brief Check if modules matching a regex pattern exist in moduleData
+     * @details Checks whether any module name matching the specified regular expression
+     *          exists in the moduleData YAML node. This function requires that the module
+     *          libraries have been loaded using one of the load() functions before checking.
+     * @param moduleNameRegex Regular expression to match module names
+     * @retval true At least one matching module exists in moduleData
+     * @retval false No matching modules exist or libraries not loaded
+     */
+    bool isModuleExist(const QRegularExpression &moduleNameRegex);
+
+    /**
      * @brief Get the library name for a given module
      * @details Retrieves the library name associated with the specified module
      *          from moduleData. The module library must be loaded using one of

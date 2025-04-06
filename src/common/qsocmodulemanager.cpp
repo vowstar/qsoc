@@ -642,6 +642,27 @@ bool QSocModuleManager::isModuleExist(const QString &moduleName)
     return moduleData[moduleName.toStdString()].IsDefined();
 }
 
+bool QSocModuleManager::isModuleExist(const QRegularExpression &moduleNameRegex)
+{
+    /* Validate moduleNameRegex */
+    if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
+        qCritical() << "Error: Invalid or empty regex:" << moduleNameRegex.pattern();
+        return false;
+    }
+
+    /* Iterate through each node in moduleData */
+    for (YAML::const_iterator it = moduleData.begin(); it != moduleData.end(); ++it) {
+        const QString moduleName = QString::fromStdString(it->first.as<std::string>());
+
+        /* Check if the module name matches the regex */
+        if (QStaticRegex::isNameExactMatch(moduleName, moduleNameRegex)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 QString QSocModuleManager::getModuleLibrary(const QString &moduleName)
 {
     if (!isModuleExist(moduleName)) {

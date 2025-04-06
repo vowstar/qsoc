@@ -247,6 +247,9 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
                 QCoreApplication::translate("main", "Error: could not remove module: %1")
                     .arg(moduleName));
         }
+        showInfo(
+            0,
+            QCoreApplication::translate("main", "Successfully removed module: %1").arg(moduleName));
     }
 
     return true;
@@ -454,11 +457,27 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: could not load library: %1")
                 .arg(libraryName));
     }
-    /* list modules */
+    /* List modules matching patterns */
+    bool moduleFound = false;
     for (const QString &moduleName : moduleNameList) {
-        const QRegularExpression moduleNameRegex(moduleName);
-        /* Show details about the module */
-        showInfo(0, QStaticDataSedes::serializeYaml(moduleManager->getModuleYamls(moduleNameRegex)));
+        const QRegularExpression moduleRegex(moduleName);
+        /* Check if module exists using regular expression */
+        if (moduleManager->isModuleExist(moduleRegex)) {
+            moduleFound = true;
+            /* Show module details */
+            showInfo(0, QStaticDataSedes::serializeYaml(moduleManager->getModuleYamls(moduleRegex)));
+        }
+    }
+
+    if (!moduleFound) {
+        if (moduleNameList.size() == 1) {
+            showInfo(
+                0,
+                QCoreApplication::translate("main", "Error: module not found: %1")
+                    .arg(moduleNameList.first()));
+        } else {
+            showInfo(0, QCoreApplication::translate("main", "Error: module not found"));
+        }
     }
 
     return true;
