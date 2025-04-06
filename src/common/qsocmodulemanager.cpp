@@ -141,6 +141,16 @@ bool QSocModuleManager::isModulePathValid()
     return true;
 }
 
+void QSocModuleManager::resetModuleData()
+{
+    /* Clear the library map */
+    libraryMap.clear();
+    /* Reset the module data by creating a new empty YAML node */
+    moduleData = YAML::Node();
+
+    qDebug() << "Module data has been reset.";
+}
+
 bool QSocModuleManager::importFromFileList(
     const QString            &libraryName,
     const QRegularExpression &moduleNameRegex,

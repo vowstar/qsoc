@@ -219,6 +219,12 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
                 .arg(moduleName));
     }
 
+    /* Print a success message with the bus interface information */
+    showInfo(
+        0,
+        QCoreApplication::translate("main", "Bus added: %1 with bus type %2 in %3 mode to module %4")
+            .arg(busInterface, busName, busMode, moduleName));
+
     return true;
 }
 
@@ -348,6 +354,12 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
                     "main", "Error: failed to remove bus interface from module: %1")
                     .arg(currentModule));
             allSucceeded = false;
+        } else {
+            /* Print a success message for each removed bus interface */
+            showInfo(
+                0,
+                QCoreApplication::translate("main", "Bus removed: %1 from module %2")
+                    .arg(busName, currentModule));
         }
     }
 

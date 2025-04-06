@@ -102,6 +102,15 @@ public slots:
     bool isModulePathValid();
 
     /**
+     * @brief Reset the module data in memory.
+     * @details Clears the libraryMap and moduleData members, providing a fresh
+     *          environment for the next load operation. This method does not
+     *          physically delete any files on disk, only clearing the in-memory
+     *          representation of module data.
+     */
+    void resetModuleData();
+
+    /**
      * @brief Import verilog files from file list.
      * @details This function will import verilog files from file list, and
      *          generate the module library file.
@@ -465,7 +474,7 @@ public slots:
      * @brief Format LLM response JSON into a Markdown table for bus interface analysis
      * @details Converts JSON containing potential bus interface groupings into a
      *          formatted Markdown table with columns for interface properties
-     * 
+     *
      * @param jsonResponse The JSON string from LLM containing bus interface analysis
      * @return Formatted Markdown table as a string
      */
