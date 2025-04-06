@@ -456,8 +456,8 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
     for (const QString &busName : busNameList) {
         const QRegularExpression busNameRegex(busName);
 
-        /* Check if the bus exists when it's not a regex pattern */
-        if (busName != ".*" && !busManager->isBusExist(busName)) {
+        /* Check if any bus matches the regex pattern */
+        if (!busManager->isBusExist(QRegularExpression(busName))) {
             showInfo(0, QCoreApplication::translate("main", "Error: bus not found: %1").arg(busName));
             continue;
         }
