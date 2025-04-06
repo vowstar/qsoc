@@ -279,6 +279,17 @@ public slots:
     bool isBusExist(const QString &busName);
 
     /**
+     * @brief Check if any bus matching the regex pattern exists in busData.
+     * @details This function checks if any bus with a name matching the given
+     *          regular expression exists in the busData YAML node. It iterates 
+     *          through all bus names and returns true as soon as a match is found.
+     * @param busNameRegex Regular expression pattern to match against bus names.
+     * @retval true At least one matching bus exists in busData.
+     * @retval false No matching bus exists in busData or regex is invalid.
+     */
+    bool isBusExist(const QRegularExpression &busNameRegex);
+
+    /**
      * @brief Get the library name for a specific bus.
      * @details This function retrieves the library name associated with a
      *          specific bus from busData. The bus must exist in busData

@@ -728,6 +728,27 @@ bool QSocBusManager::isBusExist(const QString &busName)
     return busData[busName.toStdString()].IsDefined();
 }
 
+bool QSocBusManager::isBusExist(const QRegularExpression &busNameRegex)
+{
+    /* Check if the regex is valid, if not, return false */
+    if (!QStaticRegex::isNameRegexValid(busNameRegex)) {
+        qWarning() << "Invalid regular expression provided.";
+        return false;
+    }
+
+    /* Iterate over the busData to find matches */
+    for (YAML::const_iterator it = busData.begin(); it != busData.end(); ++it) {
+        const QString busName = QString::fromStdString(it->first.as<std::string>());
+
+        /* Check if the bus name matches the regex */
+        if (QStaticRegex::isNameExactMatch(busName, busNameRegex)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 QString QSocBusManager::getBusLibrary(const QString &busName)
 {
     if (!isBusExist(busName)) {
