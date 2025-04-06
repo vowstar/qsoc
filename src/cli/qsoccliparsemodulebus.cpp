@@ -222,7 +222,7 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
     /* Print a success message with the bus interface information */
     showInfo(
         0,
-        QCoreApplication::translate("main", "Bus added: %1 with bus type %2 in %3 mode to module %4")
+        QCoreApplication::translate("main", "Success: added %1 (bus: %2, mode: %3) to module %4")
             .arg(busInterface, busName, busMode, moduleName));
 
     return true;
