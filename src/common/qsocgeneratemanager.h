@@ -247,6 +247,25 @@ public slots:
     bool generateVerilog(const QString &outputFileName);
 
     /**
+     * @brief Render a Jinja2 template with provided data files.
+     * @details Loads data from CSV, YAML, and JSON files, then renders a Jinja2 template
+     *          and saves the result to the output directory.
+     * @param templateFilePath Path to the Jinja2 template file.
+     * @param csvFiles List of CSV data files to load.
+     * @param yamlFiles List of YAML data files to load.
+     * @param jsonFiles List of JSON data files to load.
+     * @param outputFileName Output file name (without extension).
+     * @retval true Template rendered and saved successfully.
+     * @retval false Failed to render or save template.
+     */
+    bool renderTemplate(
+        const QString     &templateFilePath,
+        const QStringList &csvFiles,
+        const QStringList &yamlFiles,
+        const QStringList &jsonFiles,
+        const QString     &outputFileName);
+
+    /**
      * @brief Format a Verilog file using the verible-verilog-format tool.
      * @details This function calls the external verible-verilog-format tool
      *          to format the generated Verilog file with standardized style settings.

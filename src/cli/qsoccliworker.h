@@ -321,6 +321,16 @@ private:
     bool parseGenerateVerilog(const QStringList &appArguments);
 
     /**
+     * @brief Parse the generate template command line arguments.
+     * @details This function will parse the generate template command line arguments
+     *          to render Jinja2 templates with CSV, YAML, and JSON data files.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseGenerateTemplate(const QStringList &appArguments);
+
+    /**
      * @brief Show application name and version and emit exit with exitCode.
      * @details This function will show application name and version and emit
      *          exit with exitCode.
