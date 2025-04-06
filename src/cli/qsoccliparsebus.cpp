@@ -126,6 +126,13 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
         return showErrorWithHelp(1, QCoreApplication::translate("main", "Error: import failed."));
     }
 
+    /* Add success message to display when the bus is successfully imported */
+    showInfo(
+        0,
+        QCoreApplication::translate("main", "Successfully imported bus to library: %1 -> %2")
+            .arg(busName)
+            .arg(libraryName));
+
     return true;
 }
 
@@ -232,6 +239,9 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
                 1,
                 QCoreApplication::translate("main", "Error: could not remove bus: %1").arg(busName));
         }
+
+        /* Add success message */
+        showInfo(0, QCoreApplication::translate("main", "Successfully removed bus: %1").arg(busName));
     }
 
     return true;
@@ -337,7 +347,10 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
     for (const QString &busName : busNameList) {
         const QRegularExpression busNameRegex(busName);
         const QStringList        result = busManager->listBus(busNameRegex);
-        showInfo(0, result.join("\n"));
+
+        if (!result.isEmpty()) {
+            showInfo(0, result.join("\n"));
+        }
     }
 
     return true;
@@ -442,6 +455,13 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
     /* list buses */
     for (const QString &busName : busNameList) {
         const QRegularExpression busNameRegex(busName);
+
+        /* Check if the bus exists when it's not a regex pattern */
+        if (busName != ".*" && !busManager->isBusExist(busName)) {
+            showInfo(0, QCoreApplication::translate("main", "Error: bus not found: %1").arg(busName));
+            continue;
+        }
+
         /* Show details about the bus */
         showInfo(0, QStaticDataSedes::serializeYaml(busManager->getBusYamls(busNameRegex)));
     }
