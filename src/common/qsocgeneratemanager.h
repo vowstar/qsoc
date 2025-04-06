@@ -8,6 +8,7 @@
 #include "common/qsocbusmanager.h"
 #include "common/qsocconfig.h"
 #include "common/qsocmodulemanager.h"
+#include "common/qsocnumberinfo.h"
 #include "common/qsocprojectmanager.h"
 
 #include <QObject>
@@ -15,7 +16,6 @@
 #include <QString>
 #include <QStringList>
 
-#include <BigIntegerLibrary.h>
 #include <yaml-cpp/yaml.h>
 
 /**
@@ -26,59 +26,6 @@ class QSocGenerateManager : public QObject
 {
     Q_OBJECT
 public:
-    /**
-     * @brief Helper function to convert BigInteger to string with a specified base
-     * @param value BigInteger value to convert
-     * @param base Base for conversion (2, 8, 10, 16)
-     * @return String representation of the BigInteger in the specified base
-     */
-    static std::string bigIntegerToStringWithBase(const BigInteger &value, int base)
-    {
-        std::string result;
-        if (value.getSign() == BigInteger::negative) {
-            result = "-";
-            result += std::string(BigUnsignedInABase(value.getMagnitude(), base));
-        } else {
-            result = std::string(BigUnsignedInABase(value.getMagnitude(), base));
-        }
-        return result;
-    }
-
-    /**
-     * @brief Helper function to convert string to BigInteger with a specified base
-     * @param str String to convert
-     * @param base Base of the input string (2, 8, 10, 16)
-     * @return BigInteger parsed from the string
-     */
-    static BigInteger stringToBigIntegerWithBase(const std::string &str, int base)
-    {
-        BigUnsigned result(0);
-        BigUnsigned baseVal(base);
-
-        for (char c : str) {
-            int digit;
-            if (c >= '0' && c <= '9') {
-                digit = c - '0';
-            } else if (c >= 'a' && c <= 'f') {
-                digit = c - 'a' + 10;
-            } else if (c >= 'A' && c <= 'F') {
-                digit = c - 'A' + 10;
-            } else {
-                /* Skip invalid characters */
-                continue;
-            }
-
-            if (digit >= base) {
-                /* Skip invalid digits for this base */
-                continue;
-            }
-
-            result = result * baseVal + BigUnsigned(digit);
-        }
-
-        return BigInteger(result);
-    }
-
     /**
      * @brief Constructor.
      * @details This constructor will create an instance of this object.
@@ -184,145 +131,6 @@ public:
     };
 
     /**
-     * @brief NumberInfo structure to represent numeric literals with format information
-     */
-    struct NumberInfo
-    {
-        enum class Base {
-            Binary      = 2,  /**< Base-2 (binary) number representation */
-            Octal       = 8,  /**< Base-8 (octal) number representation */
-            Decimal     = 10, /**< Base-10 (decimal) number representation */
-            Hexadecimal = 16, /**< Base-16 (hexadecimal) number representation */
-            Unknown     = 0   /**< Unknown or undefined numeric base */
-        };
-
-        QString    originalString;   /**< Original string representation */
-        Base       base;             /**< Numeric base (2, 8, 10, 16) */
-        BigInteger value;            /**< Actual numeric value */
-        int        width;            /**< Bit width (either specified or calculated) */
-        bool       hasExplicitWidth; /**< Whether width was explicitly specified */
-        bool errorDetected; /**< Whether the number is too large for quint64 or parsing failed */
-
-        /**
-         * @brief Format the value according to its base
-         * @return Formatted string (without width prefix)
-         */
-        QString format() const
-        {
-            /* If error was detected, return original string */
-            if (errorDetected) {
-                return originalString;
-            }
-
-            switch (base) {
-            case Base::Binary:
-                return QString("'b%1").arg(
-                    QString::fromStdString(bigIntegerToStringWithBase(value, 2)));
-            case Base::Octal:
-                return QString("'o%1").arg(
-                    QString::fromStdString(bigIntegerToStringWithBase(value, 8)));
-            case Base::Decimal:
-                return QString("'d%1").arg(
-                    QString::fromStdString(bigIntegerToStringWithBase(value, 10)));
-            case Base::Hexadecimal: {
-                QString hexStr = QString::fromStdString(bigIntegerToStringWithBase(value, 16));
-                /* Always use lowercase for hex values regardless of original casing */
-                return QString("'h%1").arg(hexStr.toLower());
-            }
-            default:
-                return QString::fromStdString(bigIntegerToStringWithBase(value, 10));
-            }
-        }
-
-        /**
-         * @brief Format the value with width prefix according to Verilog conventions
-         * @return Complete Verilog-style formatted number string
-         */
-        QString formatVerilog() const
-        {
-            /* If error was detected, use the original string to preserve large values */
-            if (errorDetected) {
-                return originalString;
-            }
-
-            if (width > 0) {
-                return QString("%1%2").arg(width).arg(format());
-            } else {
-                return format();
-            }
-        }
-
-        /**
-         * @brief Format the value in C-style syntax
-         * @return C-style formatted number string
-         */
-        QString formatC() const
-        {
-            /* If error was detected, return original string */
-            if (errorDetected) {
-                return originalString;
-            }
-
-            switch (base) {
-            case Base::Binary:
-                return QString("0b%1").arg(
-                    QString::fromStdString(bigIntegerToStringWithBase(value, 2)));
-            case Base::Octal:
-                return QString("0%1").arg(
-                    QString::fromStdString(bigIntegerToStringWithBase(value, 8)));
-            case Base::Hexadecimal: {
-                QString hexStr = QString::fromStdString(bigIntegerToStringWithBase(value, 16));
-                /* Always use lowercase for hex values regardless of original casing */
-                return QString("0x%1").arg(hexStr.toLower());
-            }
-            default:
-                return QString::fromStdString(bigIntegerToStringWithBase(value, 10));
-            }
-        }
-
-        /**
-         * @brief Format the value with proper bit width (padded zeros)
-         * @return Formatted string with proper bit width
-         */
-        QString formatVerilogProperWidth() const
-        {
-            /* If error was detected, return original string */
-            if (errorDetected) {
-                return originalString;
-            }
-
-            QString result;
-
-            switch (base) {
-            case Base::Binary: {
-                std::string binStr = bigIntegerToStringWithBase(value, 2);
-                result             = QString::fromStdString(binStr).rightJustified(width, '0');
-                return QString("%1'b%2").arg(width).arg(result);
-            }
-            case Base::Octal: {
-                /* Calculate how many octal digits are needed */
-                int         octalDigits = (width + 2) / 3; /* Ceiling division */
-                std::string octStr      = bigIntegerToStringWithBase(value, 8);
-                result = QString::fromStdString(octStr).rightJustified(octalDigits, '0');
-                return QString("%1'o%2").arg(width).arg(result);
-            }
-            case Base::Hexadecimal: {
-                /* Calculate how many hex digits are needed */
-                int         hexDigits = (width + 3) / 4; /* Ceiling division */
-                std::string hexStr    = bigIntegerToStringWithBase(value, 16);
-                /* Always use lowercase for hex values */
-                result = QString::fromStdString(hexStr).rightJustified(hexDigits, '0').toLower();
-                return QString("%1'h%2").arg(width).arg(result);
-            }
-            case Base::Decimal:
-            default:
-                return QString("%1'd%2").arg(width).arg(
-                    QString::fromStdString(bigIntegerToStringWithBase(value, 10)));
-            }
-        }
-    };
-
-    /**
      * @brief Check port width consistency for a list of connections
      * @param connections List of port connections to check
      * @return Whether all ports have consistent width
@@ -349,7 +157,7 @@ public:
      * @param numStr Input string containing the numeric literal
      * @return NumberInfo struct with parsed information
      */
-    NumberInfo parseNumber(const QString &numStr);
+    QSocNumberInfo parseNumber(const QString &numStr);
 
 public slots:
     /**

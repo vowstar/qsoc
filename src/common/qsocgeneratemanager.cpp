@@ -1626,7 +1626,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                         portNode["tie"].as<std::string>());
 
                                     /* Parse the tie value using our number parser */
-                                    NumberInfo numInfo = parseNumber(tieStr);
+                                    QSocNumberInfo numInfo = parseNumber(tieStr);
 
                                     /* Only apply tie to input ports */
                                     if (direction.toLower() == "input"
@@ -1635,7 +1635,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                                         /* Format the tie value */
                                         /* Create a copy of numInfo with adjusted width */
-                                        NumberInfo adjustedInfo = numInfo;
+                                        QSocNumberInfo adjustedInfo = numInfo;
 
                                         /* Special handling for overflow detection */
                                         if (numInfo.errorDetected) {
@@ -1837,11 +1837,11 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
     }
 }
 
-QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
+QSocNumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
 {
-    NumberInfo result;
+    QSocNumberInfo result;
     result.originalString   = numStr;
-    result.base             = NumberInfo::Base::Unknown;
+    result.base             = QSocNumberInfo::Base::Unknown;
     result.value            = 0;
     result.width            = 0;
     result.hasExplicitWidth = false;
@@ -1895,9 +1895,9 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
         /* Determine the base from the base character */
         switch (baseChar.toLatin1()) {
         case 'b': /* Binary */
-            result.base = NumberInfo::Base::Binary;
+            result.base = QSocNumberInfo::Base::Binary;
             try {
-                result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 2);
+                result.value = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 2);
             } catch (const std::exception &e) {
                 result.errorDetected = true;
                 qWarning() << "Binary value error, using original string:" << numStr
@@ -1905,9 +1905,9 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
             }
             break;
         case 'o': /* Octal */
-            result.base = NumberInfo::Base::Octal;
+            result.base = QSocNumberInfo::Base::Octal;
             try {
-                result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 8);
+                result.value = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 8);
             } catch (const std::exception &e) {
                 result.errorDetected = true;
                 qWarning() << "Octal value error, using original string:" << numStr
@@ -1915,9 +1915,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
             }
             break;
         case 'd': /* Decimal */
-            result.base = NumberInfo::Base::Decimal;
+            result.base = QSocNumberInfo::Base::Decimal;
             try {
-                result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 10);
+                result.value
+                    = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 10);
             } catch (const std::exception &e) {
                 result.errorDetected = true;
                 qWarning() << "Decimal value error, using original string:" << numStr
@@ -1926,9 +1927,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
             break;
         case 'h': /* Hexadecimal */
         case 'x': /* Alternative for Hexadecimal */
-            result.base = NumberInfo::Base::Hexadecimal;
+            result.base = QSocNumberInfo::Base::Hexadecimal;
             try {
-                result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 16);
+                result.value
+                    = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 16);
             } catch (const std::exception &e) {
                 result.errorDetected = true;
                 qWarning() << "Hexadecimal value error, using original string:" << numStr
@@ -1950,9 +1952,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
             /* Determine the base from the base character */
             switch (baseChar.toLatin1()) {
             case 'b': /* Binary */
-                result.base = NumberInfo::Base::Binary;
+                result.base = QSocNumberInfo::Base::Binary;
                 try {
-                    result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 2);
+                    result.value
+                        = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 2);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
                     qWarning() << "Binary value error, using original string:" << numStr
@@ -1960,9 +1963,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
                 }
                 break;
             case 'o': /* Octal */
-                result.base = NumberInfo::Base::Octal;
+                result.base = QSocNumberInfo::Base::Octal;
                 try {
-                    result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 8);
+                    result.value
+                        = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 8);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
                     qWarning() << "Octal value error, using original string:" << numStr
@@ -1970,9 +1974,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
                 }
                 break;
             case 'd': /* Decimal */
-                result.base = NumberInfo::Base::Decimal;
+                result.base = QSocNumberInfo::Base::Decimal;
                 try {
-                    result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 10);
+                    result.value
+                        = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 10);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
                     qWarning() << "Decimal value error, using original string:" << numStr
@@ -1981,9 +1986,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
                 break;
             case 'h': /* Hexadecimal */
             case 'x': /* Alternative for Hexadecimal */
-                result.base = NumberInfo::Base::Hexadecimal;
+                result.base = QSocNumberInfo::Base::Hexadecimal;
                 try {
-                    result.value = stringToBigIntegerWithBase(valueStr.toStdString(), 16);
+                    result.value
+                        = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 16);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
                     qWarning() << "Hexadecimal value error, using original string:" << numStr
@@ -1997,9 +2003,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
             /* Try C-style format */
             if (cleanStr.startsWith("0x") || cleanStr.startsWith("0X")) {
                 /* Hexadecimal */
-                result.base = NumberInfo::Base::Hexadecimal;
+                result.base = QSocNumberInfo::Base::Hexadecimal;
                 try {
-                    result.value = stringToBigIntegerWithBase(cleanStr.mid(2).toStdString(), 16);
+                    result.value = QSocNumberInfo::stringToBigIntegerWithBase(
+                        cleanStr.mid(2).toStdString(), 16);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
                     qWarning() << "Hexadecimal value error, using original string:" << numStr
@@ -2007,9 +2014,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
                 }
             } else if (cleanStr.startsWith("0b") || cleanStr.startsWith("0B")) {
                 /* Binary (C++14 style) */
-                result.base = NumberInfo::Base::Binary;
+                result.base = QSocNumberInfo::Base::Binary;
                 try {
-                    result.value = stringToBigIntegerWithBase(cleanStr.mid(2).toStdString(), 2);
+                    result.value = QSocNumberInfo::stringToBigIntegerWithBase(
+                        cleanStr.mid(2).toStdString(), 2);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
                     qWarning() << "Binary value error, using original string:" << numStr
@@ -2017,9 +2025,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
                 }
             } else if (cleanStr.startsWith("0") && cleanStr.length() > 1) {
                 /* Octal */
-                result.base = NumberInfo::Base::Octal;
+                result.base = QSocNumberInfo::Base::Octal;
                 try {
-                    result.value = stringToBigIntegerWithBase(cleanStr.toStdString(), 8);
+                    result.value
+                        = QSocNumberInfo::stringToBigIntegerWithBase(cleanStr.toStdString(), 8);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
                     qWarning() << "Octal value error, using original string:" << numStr
@@ -2027,9 +2036,10 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
                 }
             } else {
                 /* Decimal */
-                result.base = NumberInfo::Base::Decimal;
+                result.base = QSocNumberInfo::Base::Decimal;
                 try {
-                    result.value = stringToBigIntegerWithBase(cleanStr.toStdString(), 10);
+                    result.value
+                        = QSocNumberInfo::stringToBigIntegerWithBase(cleanStr.toStdString(), 10);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
                     qWarning() << "Failed to parse decimal number, using original string:"
@@ -2096,8 +2106,8 @@ QSocGenerateManager::NumberInfo QSocGenerateManager::parseNumber(const QString &
     }
 
     /* Add debug output */
-    qDebug() << "Parsed number:" << numStr
-             << "Value:" << QString::fromStdString(bigIntegerToStringWithBase(result.value, 10))
+    qDebug() << "Parsed number:" << numStr << "Value:"
+             << QString::fromStdString(QSocNumberInfo::bigIntegerToStringWithBase(result.value, 10))
              << "Base:" << static_cast<int>(result.base) << "Width:" << result.width
              << (result.hasExplicitWidth ? "(explicit)" : "(calculated)")
              << (result.errorDetected ? " (error detected)" : "");
