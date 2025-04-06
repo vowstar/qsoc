@@ -34,19 +34,16 @@ class Test : public QObject
 
 private:
     static QStringList messageList;
+    QSocProjectManager projectManager;
+    QSocBusManager     busManager;
+    QString            projectName;
+
     static void messageOutput(QtMsgType type, const QMessageLogContext &context, const QString &msg)
     {
         Q_UNUSED(type);
         Q_UNUSED(context);
         messageList << msg;
     }
-
-    /* Project manager instance */
-    QSocProjectManager projectManager;
-    /* Bus manager instance */
-    QSocBusManager busManager;
-    /* Project name */
-    QString projectName;
 
     /* Create a temporary file with specified content and return its path */
     QString createTempFile(const QString &fileName, const QString &content)
