@@ -622,11 +622,11 @@ axi4:
     void testModuleBusAdd()
     {
         /* Create counter module file */
-        QString testFileName        = "test_module_bus_add.v";
-        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(counterFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
+        QString testFileName = "test_module_bus_add.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
             out << R"(
 module test_module_bus_add (
   input  wire        clk,
@@ -652,14 +652,14 @@ module test_module_bus_add (
   end
 endmodule
 )";
-            counterFile.close();
+            testFile.close();
         }
 
         /* First import a module for testing */
         {
             QSocCliWorker socCliWorker;
-            QFileInfo     counterFileInfo(counterFilePathFull);
-            QString       counterFileFullPath = counterFileInfo.absoluteFilePath();
+            QFileInfo     testFileInfo(testFilePath);
+            QString       testFilePath = testFileInfo.absoluteFilePath();
             QFileInfo     projectInfo(projectManager.getProjectPath());
             QString       projectFullPath = projectInfo.absoluteFilePath();
 
@@ -667,7 +667,7 @@ endmodule
                 = {"qsoc",
                    "module",
                    "import",
-                   counterFileFullPath,
+                   testFilePath,
                    "--project",
                    projectName,
                    "-d",
@@ -744,11 +744,11 @@ endmodule
     void testModuleBusRemove()
     {
         /* Create counter module file */
-        QString testFileName        = "test_module_bus_remove.v";
-        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(counterFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
+        QString testFileName = "test_module_bus_remove.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
             out << R"(
 module test_module_bus_remove (
   input  wire        clk,
@@ -774,14 +774,14 @@ module test_module_bus_remove (
   end
 endmodule
 )";
-            counterFile.close();
+            testFile.close();
         }
 
         /* First import the module */
         {
             QSocCliWorker socCliWorker;
-            QFileInfo     counterFileInfo(counterFilePathFull);
-            QString       counterFileFullPath = counterFileInfo.absoluteFilePath();
+            QFileInfo     testFileInfo(testFilePath);
+            QString       testFilePath = testFileInfo.absoluteFilePath();
             QFileInfo     projectInfo(projectManager.getProjectPath());
             QString       projectFullPath = projectInfo.absoluteFilePath();
 
@@ -789,7 +789,7 @@ endmodule
                 = {"qsoc",
                    "module",
                    "import",
-                   counterFileFullPath,
+                   testFilePath,
                    "--project",
                    projectName,
                    "-d",
@@ -898,11 +898,11 @@ endmodule
     void testModuleBusList()
     {
         /* Create counter module file */
-        QString testFileName        = "test_module_bus_list.v";
-        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(counterFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
+        QString testFileName = "test_module_bus_list.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
             out << R"(
 module test_module_bus_list (
   input  wire        clk,
@@ -937,7 +937,7 @@ module test_module_bus_list (
   end
 endmodule
 )";
-            counterFile.close();
+            testFile.close();
         }
 
         /* First import a module */
@@ -949,7 +949,7 @@ endmodule
                 = {"qsoc",
                    "module",
                    "import",
-                   counterFilePathFull,
+                   testFilePath,
                    "--project",
                    projectName,
                    "-d",
@@ -1042,11 +1042,11 @@ endmodule
     void testModuleBusShow()
     {
         /* Create counter module file */
-        QString testFileName        = "test_module_bus_show.v";
-        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(counterFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
+        QString testFileName = "test_module_bus_show.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
             out << R"(
 module test_module_bus_show (
   input         wire        clk,
@@ -1075,14 +1075,14 @@ module test_module_bus_show (
   end
 endmodule
 )";
-            counterFile.close();
+            testFile.close();
         }
 
         /* First import the module */
         {
             QSocCliWorker socCliWorker;
-            QFileInfo     counterFileInfo(counterFilePathFull);
-            QString       counterFileFullPath = counterFileInfo.absoluteFilePath();
+            QFileInfo     testFileInfo(testFilePath);
+            QString       testFilePath = testFileInfo.absoluteFilePath();
             QFileInfo     projectInfo(projectManager.getProjectPath());
             QString       projectFullPath = projectInfo.absoluteFilePath();
 
@@ -1090,7 +1090,7 @@ endmodule
                 = {"qsoc",
                    "module",
                    "import",
-                   counterFileFullPath,
+                   testFilePath,
                    "--project",
                    projectName,
                    "-d",

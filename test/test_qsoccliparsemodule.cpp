@@ -248,12 +248,12 @@ private slots:
     void testModuleImportNoProject()
     {
         /* Create a counter module file */
-        QString testFileName     = "testModuleImportNoProject_counter.v";
-        QString testFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(testFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
-            out << "module test_counter (\n"
+        QString testFileName = "test_module_import_no_project.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
+            out << "module test_module_import_no_project (\n"
                 << "  input  wire        clk,\n"
                 << "  input  wire        rst_n,\n"
                 << "  input  wire        enable,\n"
@@ -267,12 +267,12 @@ private slots:
                 << "    end\n"
                 << "  end\n"
                 << "endmodule\n";
-            counterFile.close();
+            testFile.close();
         }
 
         messageList.clear();
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "module", "import", testFilePathFull};
+        const QStringList appArguments = {"qsoc", "module", "import", testFilePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
@@ -284,12 +284,12 @@ private slots:
     void testModuleImportValid()
     {
         /* Create a counter module file */
-        QString testFileName     = "testModuleImportValid_counter.v";
-        QString testFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(testFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
-            out << "module test_counter (\n"
+        QString testFileName = "test_module_import_valid.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
+            out << "module test_module_import_valid (\n"
                 << "  input  wire        clk,\n"
                 << "  input  wire        rst_n,\n"
                 << "  input  wire        enable,\n"
@@ -303,31 +303,25 @@ private slots:
                 << "    end\n"
                 << "  end\n"
                 << "endmodule\n";
-            counterFile.close();
+            testFile.close();
         }
 
         /* First verify the test file exists */
-        QVERIFY(QFile::exists(testFilePathFull));
+        QVERIFY(QFile::exists(testFilePath));
 
         /* Clear message list to ensure we only capture messages from this test */
         messageList.clear();
         QSocCliWorker socCliWorker;
 
-        /* Use full paths and ensure project path is correctly passed */
-        QFileInfo projectInfo(projectManager.getProjectPath());
-        QString   projectFullPath = projectInfo.absoluteFilePath();
-        QFileInfo counterFileInfo(testFilePathFull);
-        QString   counterFileFullPath = counterFileInfo.absoluteFilePath();
-
         const QStringList appArguments
             = {"qsoc",
                "module",
                "import",
-               counterFileFullPath, /* Use absolute file path */
+               testFilePath,
                "--project",
                projectName,
                "-d",
-               projectFullPath}; /* Use absolute project path */
+               projectManager.getProjectPath()};
 
         /* Run the import command */
         socCliWorker.setup(appArguments, false);
@@ -340,7 +334,7 @@ private slots:
         moduleManager.load(QRegularExpression(".*"));
 
         /* Verify that the module exists */
-        bool moduleExists = moduleManager.isModuleExist("test_counter");
+        bool moduleExists = moduleManager.isModuleExist("test_module_import_valid");
         QVERIFY(moduleExists);
     }
 
@@ -370,19 +364,19 @@ private slots:
     void testModuleList()
     {
         /* Create adder module file */
-        QString testFileName      = "testModuleList_adder.v";
-        QString adderFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   adderFile(adderFilePathFull);
-        if (adderFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&adderFile);
-            out << "module test_adder (\n"
+        QString testFileName = "test_module_list.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
+            out << "module test_module_list (\n"
                 << "  input  wire [7:0]  a,\n"
                 << "  input  wire [7:0]  b,\n"
                 << "  output wire [7:0]  sum\n"
                 << ");\n"
                 << "  assign sum = a + b;\n"
                 << "endmodule\n";
-            adderFile.close();
+            testFile.close();
         }
 
         /* First import a module to have something to list */
@@ -392,7 +386,7 @@ private slots:
                 = {"qsoc",
                    "module",
                    "import",
-                   adderFilePathFull,
+                   testFilePath,
                    "--project",
                    projectName,
                    "-d",
@@ -404,39 +398,32 @@ private slots:
         /* Now test the list command */
         messageList.clear();
         QSocCliWorker     socCliWorker;
-        const QStringList appArguments = {"qsoc", "module", "list", "--project", projectPath};
+        const QStringList appArguments
+            = {"qsoc",
+               "module",
+               "list",
+               "--project",
+               projectName,
+               "-d",
+               projectManager.getProjectPath()};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
         /* Should list both imported modules */
         QVERIFY(messageList.size() > 0);
-
-        bool hasCounter = false;
-        bool hasAdder   = false;
-
-        for (const QString &msg : messageList) {
-            if (msg.contains("test_counter")) {
-                hasCounter = true;
-            }
-            if (msg.contains("test_adder")) {
-                hasAdder = true;
-            }
-        }
-
-        QVERIFY(hasCounter);
-        QVERIFY(hasAdder);
+        QVERIFY(messageList.filter(QRegularExpression("test_module_list")).count() > 0);
     }
 
     /* Test module show command */
     void testModuleShow()
     {
         /* Create a counter module file */
-        QString testFileName        = "testModuleShow_counter.v";
-        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(counterFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
-            out << "module test_counter (\n"
+        QString testFileName = "test_module_show.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
+            out << "module test_module_show (\n"
                 << "  input  wire        clk,\n"
                 << "  input  wire        rst_n,\n"
                 << "  input  wire        enable,\n"
@@ -450,7 +437,7 @@ private slots:
                 << "    end\n"
                 << "  end\n"
                 << "endmodule\n";
-            counterFile.close();
+            testFile.close();
         }
 
         /* First import the module */
@@ -462,7 +449,7 @@ private slots:
                 = {"qsoc",
                    "module",
                    "import",
-                   counterFilePathFull,
+                   testFilePath,
                    "--project",
                    projectName,
                    "-d",
@@ -472,8 +459,8 @@ private slots:
         }
 
         /* Verify the module exists */
-        moduleManager.load("test_counter");
-        QVERIFY(verifyModuleExists("test_counter"));
+        moduleManager.load("test_module_show");
+        QVERIFY(verifyModuleExists("test_module_show"));
 
         /* Now test the show command */
         messageList.clear();
@@ -482,7 +469,7 @@ private slots:
             = {"qsoc",
                "module",
                "show",
-               "test_counter",
+               "test_module_show",
                "--project",
                projectName,
                "-d",
@@ -494,7 +481,7 @@ private slots:
         QVERIFY(messageList.size() > 0);
 
         /* Check for specific module information in the output */
-        QVERIFY(messageList.filter(QRegularExpression("test_counter")).count() > 0);
+        QVERIFY(messageList.filter(QRegularExpression("test_module_show")).count() > 0);
         QVERIFY(messageList.filter(QRegularExpression("port")).count() > 0);
         QVERIFY(messageList.filter(QRegularExpression("clk")).count() > 0);
         QVERIFY(messageList.filter(QRegularExpression("rst_n")).count() > 0);
@@ -528,16 +515,16 @@ private slots:
         QVERIFY(messageList.filter(QRegularExpression(R"(Error: module not found)")).count() > 0);
     }
 
-    /* Test module delete command */
-    void testModuleDelete()
+    /* Test module remove command */
+    void testSimpleModuleRemove()
     {
         /* Create counter module file */
-        QString testFileName        = "testModuleDelete_counter.v";
-        QString counterFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   counterFile(counterFilePathFull);
-        if (counterFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&counterFile);
-            out << "module test_counter (\n"
+        QString testFileName = "test_module_remove.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
+            out << "module test_module_remove (\n"
                 << "  input  wire        clk,\n"
                 << "  input  wire        rst_n,\n"
                 << "  input  wire        enable,\n"
@@ -551,7 +538,7 @@ private slots:
                 << "    end\n"
                 << "  end\n"
                 << "endmodule\n";
-            counterFile.close();
+            testFile.close();
         }
 
         /* First import the module */
@@ -563,7 +550,7 @@ private slots:
                 = {"qsoc",
                    "module",
                    "import",
-                   counterFilePathFull,
+                   testFilePath,
                    "--project",
                    projectName,
                    "-d",
@@ -573,8 +560,8 @@ private slots:
         }
 
         /* Verify the module exists */
-        moduleManager.load("test_counter");
-        QVERIFY(verifyModuleExists("test_counter"));
+        moduleManager.load("test_module_remove");
+        QVERIFY(verifyModuleExists("test_module_remove"));
 
         /* Run the CLI delete command */
         messageList.clear();
@@ -583,7 +570,7 @@ private slots:
             = {"qsoc",
                "module",
                "remove",
-               "test_counter",
+               "test_module_remove",
                "--project",
                projectName,
                "-d",
@@ -598,26 +585,26 @@ private slots:
         /* Verify the module is actually removed */
         moduleManager.resetModuleData();
         moduleManager.load(QRegularExpression(".*"));
-        QVERIFY(!verifyModuleExists("test_counter"));
+        QVERIFY(!verifyModuleExists("test_module_remove"));
     }
 
-    /* Test simple module remove */
-    void testSimpleModuleRemove()
+    /* Test module remove using moduleManager API */
+    void testSimpleModuleRemoveApi()
     {
         /* Create adder module file */
-        QString testFileName      = "testSimpleModuleRemove_adder.v";
-        QString adderFilePathFull = QDir(projectPath).filePath(testFileName);
-        QFile   adderFile(adderFilePathFull);
-        if (adderFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&adderFile);
-            out << "module test_adder (\n"
+        QString testFileName = "test_module_remove_api.v";
+        QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile   testFile(testFilePath);
+        if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&testFile);
+            out << "module test_module_remove_api (\n"
                 << "  input  wire [7:0]  a,\n"
                 << "  input  wire [7:0]  b,\n"
                 << "  output wire [7:0]  sum\n"
                 << ");\n"
                 << "  assign sum = a + b;\n"
                 << "endmodule\n";
-            adderFile.close();
+            testFile.close();
         }
 
         /* Setup module manager */
@@ -627,14 +614,14 @@ private slots:
         /* First use the CLI to import the module */
         {
             QSocCliWorker socCliWorker;
-            QFileInfo     adderFileInfo(adderFilePathFull);
-            QString       adderFileFullPath = adderFileInfo.absoluteFilePath();
+            QFileInfo     testFileInfo(testFilePath);
+            QString       testFilePath = testFileInfo.absoluteFilePath();
 
             const QStringList appArguments
                 = {"qsoc",
                    "module",
                    "import",
-                   adderFileFullPath,
+                   testFilePath,
                    "--project",
                    projectName,
                    "-d",
@@ -645,17 +632,17 @@ private slots:
 
         /* Verify the module was imported */
         moduleManager.load(QRegularExpression(".*"));
-        bool moduleImported = moduleManager.isModuleExist("test_adder");
+        bool moduleImported = moduleManager.isModuleExist("test_module_remove_api");
         QVERIFY(moduleImported);
 
         /* Now remove the module using the moduleManager directly */
-        moduleManager.removeModule(QRegularExpression("test_adder"));
+        moduleManager.removeModule(QRegularExpression("test_module_remove_api"));
 
         /* Reload modules */
         moduleManager.load(QRegularExpression(".*"));
 
         /* Verify the module no longer exists */
-        bool moduleStillExists = moduleManager.isModuleExist("test_adder");
+        bool moduleStillExists = moduleManager.isModuleExist("test_module_remove_api");
         QVERIFY(!moduleStillExists);
     }
 };
