@@ -317,11 +317,11 @@ private slots:
             = {"qsoc",
                "module",
                "import",
-               testFilePath,
+               testFilePath, /* Use absolute file path */
                "--project",
                projectName,
                "-d",
-               projectManager.getProjectPath()};
+               projectManager.getProjectPath()}; /* Use absolute project path */
 
         /* Run the import command */
         socCliWorker.setup(appArguments, false);
@@ -334,8 +334,8 @@ private slots:
         moduleManager.load(QRegularExpression(".*"));
 
         /* Verify that the module exists */
-        bool moduleExists = moduleManager.isModuleExist("test_module_import_valid");
-        QVERIFY(moduleExists);
+        bool hasModule = moduleManager.isModuleExist("test_module_import_valid");
+        QVERIFY(hasModule);
     }
 
     /* Test module import with non-existent file */
@@ -443,8 +443,6 @@ private slots:
         /* First import the module */
         {
             QSocCliWorker     socCliWorker;
-            QFileInfo         projectInfo(projectManager.getProjectPath());
-            QString           projectFullPath = projectInfo.absoluteFilePath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -453,7 +451,7 @@ private slots:
                    "--project",
                    projectName,
                    "-d",
-                   projectFullPath};
+                   projectManager.getProjectPath()};
             socCliWorker.setup(appArguments, false);
             socCliWorker.run();
         }
@@ -544,8 +542,6 @@ private slots:
         /* First import the module */
         {
             QSocCliWorker     socCliWorker;
-            QFileInfo         projectInfo(projectManager.getProjectPath());
-            QString           projectFullPath = projectInfo.absoluteFilePath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -554,7 +550,7 @@ private slots:
                    "--project",
                    projectName,
                    "-d",
-                   projectFullPath};
+                   projectManager.getProjectPath()};
             socCliWorker.setup(appArguments, false);
             socCliWorker.run();
         }
@@ -580,7 +576,8 @@ private slots:
 
         /* Verify the output indicates success */
         QVERIFY(messageList.size() > 0);
-        QVERIFY(messageList.filter(QRegularExpression(R"(Success: removed module)")).count() > 0);
+        bool hasSuccess = messageListContains("Success: removed module");
+        QVERIFY(hasSuccess);
 
         /* Verify the module is actually removed */
         moduleManager.resetModuleData();
@@ -607,15 +604,9 @@ private slots:
             testFile.close();
         }
 
-        /* Setup module manager */
-        QFileInfo projectInfo(projectManager.getProjectPath());
-        QString   projectFullPath = projectInfo.absoluteFilePath();
-
         /* First use the CLI to import the module */
         {
             QSocCliWorker socCliWorker;
-            QFileInfo     testFileInfo(testFilePath);
-            QString       testFilePath = testFileInfo.absoluteFilePath();
 
             const QStringList appArguments
                 = {"qsoc",
@@ -625,15 +616,15 @@ private slots:
                    "--project",
                    projectName,
                    "-d",
-                   projectFullPath};
+                   projectManager.getProjectPath()};
             socCliWorker.setup(appArguments, false);
             socCliWorker.run();
         }
 
         /* Verify the module was imported */
         moduleManager.load(QRegularExpression(".*"));
-        bool moduleImported = moduleManager.isModuleExist("test_module_remove_api");
-        QVERIFY(moduleImported);
+        bool hasModule = moduleManager.isModuleExist("test_module_remove_api");
+        QVERIFY(hasModule);
 
         /* Now remove the module using the moduleManager directly */
         moduleManager.removeModule(QRegularExpression("test_module_remove_api"));
@@ -642,8 +633,8 @@ private slots:
         moduleManager.load(QRegularExpression(".*"));
 
         /* Verify the module no longer exists */
-        bool moduleStillExists = moduleManager.isModuleExist("test_module_remove_api");
-        QVERIFY(!moduleStillExists);
+        bool hasModuleStill = moduleManager.isModuleExist("test_module_remove_api");
+        QVERIFY(!hasModuleStill);
     }
 };
 

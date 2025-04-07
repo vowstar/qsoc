@@ -658,10 +658,8 @@ endmodule
         /* First import a module for testing */
         {
             QSocCliWorker socCliWorker;
-            QFileInfo     testFileInfo(testFilePath);
-            QString       testFilePath = testFileInfo.absoluteFilePath();
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
+            testFilePath            = QFileInfo(testFilePath).absoluteFilePath();
+            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
 
             const QStringList appArguments
                 = {"qsoc",
@@ -679,8 +677,7 @@ endmodule
         /* Now test module bus add command */
         messageList.clear();
         QSocCliWorker socCliWorker;
-        QFileInfo     projectInfo(projectManager.getProjectPath());
-        QString       projectFullPath = projectInfo.absoluteFilePath();
+        QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
 
         const QStringList appArguments
             = {"qsoc",
@@ -712,8 +709,8 @@ endmodule
         QVERIFY(verifyModuleExists("test_module_bus_add"));
 
         /* Check if the module has the bus assigned */
-        YAML::Node moduleNode     = moduleManager.getModuleYaml(QString("test_module_bus_add"));
-        bool       hasBusAssigned = false;
+        YAML::Node moduleNode = moduleManager.getModuleYaml(QString("test_module_bus_add"));
+        bool       hasBus     = false;
 
         if (moduleNode["bus"].IsDefined() && moduleNode["bus"].IsMap()) {
             for (const auto &bus : moduleNode["bus"]) {
@@ -721,7 +718,7 @@ endmodule
                     if (bus.second["bus"].IsDefined() && !bus.second["bus"].IsNull()) {
                         std::string busType = bus.second["bus"].as<std::string>();
                         if (busType == "apb4") {
-                            hasBusAssigned = true;
+                            hasBus = true;
                             break;
                         }
                     }
@@ -729,11 +726,11 @@ endmodule
             }
         }
 
-        QVERIFY(hasBusAssigned);
+        QVERIFY(hasBus);
 
         /* Check for success message */
-        bool successful = messageListContains("Success: added");
-        QVERIFY(successful);
+        bool hasSuccess = messageListContains("Success: added");
+        QVERIFY(hasSuccess);
 
         /* Verify no error messages in the output */
         bool hasError = messageListContains("Error");
@@ -780,10 +777,8 @@ endmodule
         /* First import the module */
         {
             QSocCliWorker socCliWorker;
-            QFileInfo     testFileInfo(testFilePath);
-            QString       testFilePath = testFileInfo.absoluteFilePath();
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
+            testFilePath            = QFileInfo(testFilePath).absoluteFilePath();
+            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
 
             const QStringList appArguments
                 = {"qsoc",
@@ -801,6 +796,7 @@ endmodule
         /* Then ensure the module has a bus assigned */
         {
             QSocCliWorker     socCliWorker;
+            QString           projectPath = projectManager.getProjectPath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -815,7 +811,7 @@ endmodule
                    "--project",
                    projectName,
                    "-d",
-                   projectManager.getProjectPath(),
+                   projectPath,
                    "apb"};
             socCliWorker.setup(appArguments, false);
             socCliWorker.run();
@@ -823,24 +819,25 @@ endmodule
             /* Verify the bus was added */
             moduleManager.load("test_module_bus_remove");
             YAML::Node moduleNode = moduleManager.getModuleYaml(QString("test_module_bus_remove"));
-            bool       hasBusAssigned = false;
+            bool       hasBus     = false;
 
             if (moduleNode["bus"].IsDefined()) {
                 for (const auto &bus : moduleNode["bus"]) {
                     if (bus.second["bus"].IsDefined() && !bus.second["bus"].IsNull()
                         && QString::fromStdString(bus.second["bus"].as<std::string>()) == "apb4") {
-                        hasBusAssigned = true;
+                        hasBus = true;
                         break;
                     }
                 }
             }
 
-            QVERIFY(hasBusAssigned);
+            QVERIFY(hasBus);
         }
 
         /* Now test module bus remove command */
         messageList.clear();
         QSocCliWorker     socCliWorker;
+        QString           projectPath = projectManager.getProjectPath();
         const QStringList appArguments
             = {"qsoc",
                "module",
@@ -851,7 +848,7 @@ endmodule
                "--project",
                projectName,
                "-d",
-               projectManager.getProjectPath(),
+               projectPath,
                "apb"};
 
         socCliWorker.setup(appArguments, false);
@@ -865,8 +862,8 @@ endmodule
         moduleManager.load("test_module_bus_remove");
 
         /* Check if the module no longer has the bus assigned */
-        YAML::Node moduleNode     = moduleManager.getModuleYaml(QString("test_module_bus_remove"));
-        bool       hasBusAssigned = false;
+        YAML::Node moduleNode = moduleManager.getModuleYaml(QString("test_module_bus_remove"));
+        bool       hasBus     = false;
 
         if (moduleNode["bus"].IsDefined() && moduleNode["bus"].IsMap()) {
             for (const auto &bus : moduleNode["bus"]) {
@@ -874,7 +871,7 @@ endmodule
                     if (bus.second["bus"].IsDefined() && !bus.second["bus"].IsNull()) {
                         std::string busType = bus.second["bus"].as<std::string>();
                         if (busType == "apb4") {
-                            hasBusAssigned = true;
+                            hasBus = true;
                             break;
                         }
                     }
@@ -882,11 +879,11 @@ endmodule
             }
         }
 
-        QVERIFY(!hasBusAssigned);
+        QVERIFY(!hasBus);
 
         /* Check for success message */
-        bool successful = messageListContains("Success: Removed");
-        QVERIFY(successful);
+        bool hasSuccess = messageListContains("Success: Removed");
+        QVERIFY(hasSuccess);
 
         /* Verify no error messages in the output */
         bool hasError = messageListContains("Error");
@@ -942,9 +939,8 @@ endmodule
 
         /* First import a module */
         {
-            QSocCliWorker     socCliWorker;
-            QFileInfo         projectInfo(projectManager.getProjectPath());
-            QString           projectFullPath = projectInfo.absoluteFilePath();
+            QSocCliWorker socCliWorker;
+            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -960,9 +956,8 @@ endmodule
 
         /* Add APB slave interface */
         {
-            QSocCliWorker     socCliWorker;
-            QFileInfo         projectInfo(projectManager.getProjectPath());
-            QString           projectFullPath = projectInfo.absoluteFilePath();
+            QSocCliWorker socCliWorker;
+            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -985,9 +980,8 @@ endmodule
 
         /* Add APB master interface */
         {
-            QSocCliWorker     socCliWorker;
-            QFileInfo         projectInfo(projectManager.getProjectPath());
-            QString           projectFullPath = projectInfo.absoluteFilePath();
+            QSocCliWorker socCliWorker;
+            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -1011,9 +1005,8 @@ endmodule
         /* Now test the module bus list command */
         moduleManager.load("test_module_bus_list");
         messageList.clear();
-        QSocCliWorker     socCliWorker;
-        QFileInfo         projectInfo(projectManager.getProjectPath());
-        QString           projectFullPath = projectInfo.absoluteFilePath();
+        QSocCliWorker socCliWorker;
+        QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
         const QStringList appArguments
             = {"qsoc",
                "module",
@@ -1081,10 +1074,8 @@ endmodule
         /* First import the module */
         {
             QSocCliWorker socCliWorker;
-            QFileInfo     testFileInfo(testFilePath);
-            QString       testFilePath = testFileInfo.absoluteFilePath();
-            QFileInfo     projectInfo(projectManager.getProjectPath());
-            QString       projectFullPath = projectInfo.absoluteFilePath();
+            testFilePath            = QFileInfo(testFilePath).absoluteFilePath();
+            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
 
             const QStringList appArguments
                 = {"qsoc",
@@ -1102,6 +1093,7 @@ endmodule
         /* Add a bus to the module */
         {
             QSocCliWorker     socCliWorker;
+            QString           projectPath = projectManager.getProjectPath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -1116,7 +1108,7 @@ endmodule
                    "--project",
                    projectName,
                    "-d",
-                   projectManager.getProjectPath(),
+                   projectPath,
                    "test_master"};
             socCliWorker.setup(appArguments, false);
             socCliWorker.run();
@@ -1128,6 +1120,7 @@ endmodule
         /* Now test module bus show command */
         messageList.clear();
         QSocCliWorker     socCliWorker;
+        QString           projectPath = projectManager.getProjectPath();
         const QStringList appArguments
             = {"qsoc",
                "module",
@@ -1138,7 +1131,7 @@ endmodule
                "--project",
                projectName,
                "-d",
-               projectManager.getProjectPath(),
+               projectPath,
                "test_master"};
 
         socCliWorker.setup(appArguments, false);
