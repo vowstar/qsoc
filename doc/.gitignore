@@ -1,0 +1,4 @@
+.envrc
+.direnv/
+*.pdf
+**/result
