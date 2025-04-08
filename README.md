@@ -1,5 +1,7 @@
 # QSoC - Quick System on Chip Studio
 
+![QSoC Logo](./doc/en/image/logo.svg)
+
 QSoC is a Quick, Quality, Quintessential development environment for modern
 SoC (System on Chip) development based on the Qt framework.
 
