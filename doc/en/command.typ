@@ -11,7 +11,7 @@ commands and subcommands are available:
 #figure(
   align(center)[#table(
     columns: (0.25fr, 0.25fr, 1fr),
-    align: (auto,auto,auto,),
+    align: (auto,auto,left,),
     table.header([Command], [Subcommand], [Description],),
     table.hline(),
     [project], [create], [Create a new QSoC project],
@@ -44,11 +44,17 @@ The following global options are available for all commands:
 #figure(
   align(center)[#table(
     columns: (0.25fr, 1fr),
-    align: (auto,auto,),
+    align: (auto,left,),
     table.header([Option], [Description],),
     table.hline(),
     [-h, --help], [Display help information for commands and options],
-    [--verbose <level>], [Set verbosity level (0-5): 0=silent, 1=error, 2=warning, 3=info, 4=debug, 5=verbose],
+    [--verbose <level>], [Set verbosity level (0-5): \
+      - 0=Silent - No output \
+      - 1=Error - Only error messages (default) \
+      - 2=Warning - Error and warning messages \
+      - 3=Info - Error, warning, and informational messages \
+      - 4=Debug - All messages including debug information \
+      - 5=Verbose - Maximum detail for all operations],
     [-v, --version], [Display version information],
   )]
   , caption: [GLOBAL OPTIONS]
@@ -66,7 +72,7 @@ The `project create` command creates a new QSoC project.
 #figure(
   align(center)[#table(
     columns: (0.5fr, 1fr),
-    align: (auto,auto,),
+    align: (auto,left,),
     table.header([Option], [Description],),
     table.hline(),
     [-d, --directory <path>], [The path to the project directory],
@@ -91,7 +97,7 @@ The `module import` command imports Verilog modules into module libraries.
 #figure(
   align(center)[#table(
     columns: (0.5fr, 1fr),
-    align: (auto,auto,),
+    align: (auto,left,),
     table.header([Option], [Description],),
     table.hline(),
     [-d, --directory <path>], [The path to the project directory],
@@ -116,7 +122,7 @@ The `bus import` command imports buses into bus libraries.
 #figure(
   align(center)[#table(
     columns: (0.5fr, 1fr),
-    align: (auto,auto,),
+    align: (auto,left,),
     table.header([Option], [Description],),
     table.hline(),
     [-d, --directory <path>], [The path to the project directory],
@@ -140,7 +146,7 @@ The `generate verilog` command generates Verilog code from netlist files.
 #figure(
   align(center)[#table(
     columns: (0.5fr, 1fr),
-    align: (auto,auto,),
+    align: (auto,left,),
     table.header([Option], [Description],),
     table.hline(),
     [-d, --directory <path>], [The path to the project directory],
@@ -158,7 +164,7 @@ The `generate template` command generates files from Jinja2 templates using vari
 #figure(
   align(center)[#table(
     columns: (0.5fr, 1fr),
-    align: (auto,auto,),
+    align: (auto,left,),
     table.header([Option], [Description],),
     table.hline(),
     [-d, --directory <path>], [The path to the project directory],
