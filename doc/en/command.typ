@@ -1,5 +1,5 @@
-= SYSTEM DESCRIPTION
-<system-description>
+= COMMAND-LINE OVERVIEW
+<cli-overview>
 QSoC provides a comprehensive command-line interface for SoC development and management.
 The following sections describe the available commands and options.
 
