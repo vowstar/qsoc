@@ -31,7 +31,7 @@ The following terms are used in system descriptions.
 #figure(
   align(center)[#table(
     columns: (0.25fr, 1fr),
-    align: (auto,auto,),
+    align: (auto,left,),
     table.header([Terminology], [Description],),
     table.hline(),
     [SoC], [System-on-Chip, an integrated circuit that integrates all components of a computer or other electronic system],
@@ -50,7 +50,7 @@ The following terms are used in command descriptions.
 #figure(
   align(center)[#table(
     columns: (0.25fr, 1fr),
-    align: (auto,auto,),
+    align: (auto,left,),
     table.header([Terminology], [Description],),
     table.hline(),
     [Command], [A primary operation in QSoC CLI],
