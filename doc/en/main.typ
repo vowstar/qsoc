@@ -52,5 +52,6 @@
     #include "about.typ"
     #include "overview.typ"
     #include "command.typ"
+    #include "config.typ"
   ],
 )
