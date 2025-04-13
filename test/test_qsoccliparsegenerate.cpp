@@ -786,6 +786,67 @@ instance:
             "complex_tie_test", ".biu_pad_arvalid(/* FIXME: out biu_pad_arvalid missing */)"));
     }
 
+    void testGenerateWithPortWidthTest()
+    {
+        messageList.clear();
+
+        const QString content  = R"(
+---
+version: "1.0"
+module: "port_width_test"
+port:
+  clk:
+    direction: in
+    type: "logic"
+  rst_n:
+    direction: in
+    type: "logic"
+  data_in:
+    direction: in
+    type: "logic [31:0]"
+  addr_in:
+    direction: in
+    type: "logic [15:0]"
+  data_out:
+    direction: out
+    type: "logic [31:0]"
+  ready:
+    direction: out
+    type: "logic"
+net:
+  mixed_width_net:
+    cpu0:
+      port: "data_in"
+instance:
+  cpu0:
+    module: "c906"
+)";
+        QString       filePath = createTempFile("port_width_test.soc_net", content);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify that the Verilog file was generated */
+        QVERIFY(verifyVerilogOutputExistence("port_width_test"));
+
+        /* Verify that important content is present */
+        QVERIFY(verifyVerilogContent("port_width_test", "module port_width_test"));
+
+        /* Verify port declarations with correct width information */
+        QVERIFY(verifyVerilogContent("port_width_test", "input clk"));
+        QVERIFY(verifyVerilogContent("port_width_test", "input rst_n"));
+        QVERIFY(verifyVerilogContent("port_width_test", "input [31:0] data_in"));
+        QVERIFY(verifyVerilogContent("port_width_test", "input [15:0] addr_in"));
+        QVERIFY(verifyVerilogContent("port_width_test", "output [31:0] data_out"));
+        QVERIFY(verifyVerilogContent("port_width_test", "output ready"));
+
+        /* Verify CPU instance */
+        QVERIFY(verifyVerilogContent("port_width_test", "c906 cpu0"));
+    }
+
     void testGenerateWithMultipleFiles()
     {
         messageList.clear();
