@@ -166,6 +166,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 }
             }
 
+            /* Get port type/width information if present */
+            if (portIter->second["type"] && portIter->second["type"].IsScalar()) {
+                type = QString::fromStdString(portIter->second["type"].as<std::string>());
+                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
+                type = type.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+            }
+
             /* Store the connection information if present */
             if (portIter->second["connect"] && portIter->second["connect"].IsScalar()) {
                 QString connectedNet = QString::fromStdString(
