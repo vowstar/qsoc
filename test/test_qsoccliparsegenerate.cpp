@@ -918,6 +918,117 @@ instance:
         QVERIFY(verifyVerilogContent("example2", ".axim_clk_en(1'b0)"));
         QVERIFY(verifyVerilogContent("example2", "endmodule"));
     }
+
+    void testGenerateWithBitsSelection()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with bits selection */
+        const QString content = R"(
+instance:
+  soc_top_cpu:
+    module: c906
+
+  soc_top_mux:
+    module: simple_mux
+
+  soc_top_flag:
+    module: simple_flag
+
+net:
+  soc_top_data:
+    soc_top_cpu:
+      port: pad_biu_rdata
+    soc_top_mux:
+      port: data_out
+
+  soc_top_data_sliced:
+    soc_top_cpu:
+      port: biu_pad_arid
+      bits: "[3:2]"    # Multi-bit selection
+    soc_top_mux:
+      port: data_in
+      bits: "[7:6]"    # Multi-bit selection
+
+  soc_top_data_bit:
+    soc_top_cpu:
+      port: axim_clk_en
+      bits: "[4]"      # Single-bit selection
+    soc_top_flag:
+      port: flag_in
+      bits: "[6]"      # Single-bit selection
+)";
+
+        /* Create a simple_mux module */
+        const QString muxContent = R"(
+simple_mux:
+  port:
+    data_in:
+      type: logic[7:0]
+      direction: in
+    data_out:
+      type: logic[127:0]
+      direction: out
+)";
+
+        /* Create a simple_flag module for single bit testing */
+        const QString flagContent = R"(
+simple_flag:
+  port:
+    flag_in:
+      type: logic
+      direction: in
+    flag_out:
+      type: logic
+      direction: out
+)";
+
+        /* Create the module files */
+        QDir moduleDir(projectManager.getModulePath());
+
+        /* Create simple_mux module file */
+        QString muxPath = moduleDir.filePath("simple_mux.soc_mod");
+        QFile   muxFile(muxPath);
+        if (muxFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&muxFile);
+            stream << muxContent;
+            muxFile.close();
+        }
+
+        /* Create simple_flag module file */
+        QString flagPath = moduleDir.filePath("simple_flag.soc_mod");
+        QFile   flagFile(flagPath);
+        if (flagFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&flagFile);
+            stream << flagContent;
+            flagFile.close();
+        }
+
+        /* Create netlist file */
+        QString filePath = createTempFile("test_bits.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_bits"));
+
+        /* Verify multi-bit selection in Verilog content */
+        QVERIFY(verifyVerilogContent("test_bits", ".biu_pad_arid(soc_top_data_sliced[3:2])"));
+        QVERIFY(verifyVerilogContent("test_bits", ".data_in(soc_top_data_sliced[7:6])"));
+
+        /* Verify single-bit selection in Verilog content */
+        QVERIFY(verifyVerilogContent("test_bits", ".axim_clk_en(soc_top_data_bit[4])"));
+        QVERIFY(verifyVerilogContent("test_bits", ".flag_in(soc_top_data_bit[6])"));
+
+        /* Normal net connection without bits selection */
+        QVERIFY(verifyVerilogContent("test_bits", ".pad_biu_rdata(soc_top_data)"));
+        QVERIFY(verifyVerilogContent("test_bits", ".data_out(soc_top_data)"));
+    }
 };
 
 QStringList Test::messageList;
