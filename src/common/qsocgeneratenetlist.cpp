@@ -444,6 +444,45 @@ bool QSocGenerateManager::processNetlist()
 }
 
 /**
+ * @brief Calculate the width of a bit selection expression
+ * @param bitSelect Bit selection string (e.g. "[3:2]", "[5]")
+ * @return The width of the bit selection (e.g. 2 for "[3:2]", 1 for "[5]")
+ */
+int QSocGenerateManager::calculateBitSelectWidth(const QString &bitSelect)
+{
+    if (bitSelect.isEmpty()) {
+        /* No bit selection */
+        return 0;
+    }
+
+    /* Handle range selection like [3:2] */
+    QRegularExpression      rangeRegex("\\[\\s*(\\d+)\\s*:\\s*(\\d+)\\s*\\]");
+    QRegularExpressionMatch rangeMatch = rangeRegex.match(bitSelect);
+    if (rangeMatch.hasMatch()) {
+        bool msb_ok = false;
+        bool lsb_ok = false;
+        int  msb    = rangeMatch.captured(1).toInt(&msb_ok);
+        int  lsb    = rangeMatch.captured(2).toInt(&lsb_ok);
+
+        if (msb_ok && lsb_ok) {
+            /* e.g., [3:2] has width 2 */
+            return msb - lsb + 1;
+        }
+    }
+
+    /* Handle single bit selection like [5] */
+    QRegularExpression      singleBitRegex("\\[\\s*(\\d+)\\s*\\]");
+    QRegularExpressionMatch singleBitMatch = singleBitRegex.match(bitSelect);
+    if (singleBitMatch.hasMatch()) {
+        /* Single bit has width 1 */
+        return 1;
+    }
+
+    /* Unknown format, default to 0 */
+    return 0;
+}
+
+/**
  * @brief Check port width consistency
  * @param portConnections   List of port connections to check
  * @return  true if consistent, false if mismatch detected
@@ -455,35 +494,89 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
         return true;
     }
 
-    /* Get port widths for all connections */
-    QMap<QPair<QString, QString>, QString> portWidths;
+    /* Get port widths and bit selections for all connections */
+    struct PortWidthInfo
+    {
+        QString originalWidth;  /**< Original port width string (e.g. "[7:0]") */
+        QString bitSelect;      /**< Bit selection if any (e.g. "[3:2]") */
+        int     effectiveWidth; /**< Calculated effective width considering bit selection */
+    };
+    QMap<QPair<QString, QString>, PortWidthInfo> portWidthInfos;
 
     for (const auto &conn : connections) {
-        QString instanceName = conn.instanceName;
-        QString portName     = conn.portName;
+        QString       instanceName = conn.instanceName;
+        QString       portName     = conn.portName;
+        PortWidthInfo widthInfo;
+        widthInfo.originalWidth  = "";
+        widthInfo.bitSelect      = "";
+        widthInfo.effectiveWidth = 0;
 
         if (conn.type == PortType::TopLevel) {
             /* Handle top-level port */
-            if (netlistData["port"] && netlistData["port"][portName.toStdString()]
-                && netlistData["port"][portName.toStdString()]["type"]
-                && netlistData["port"][portName.toStdString()]["type"].IsScalar()) {
+            if (netlistData["port"] && netlistData["port"][portName.toStdString()]) {
                 /* Get port width from netlist data */
-                QString width = QString::fromStdString(
-                    netlistData["port"][portName.toStdString()]["type"].as<std::string>());
-                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                width = width.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
-                portWidths[qMakePair(instanceName, portName)] = width;
-            } else {
-                /* Default width if not specified */
-                portWidths[qMakePair(instanceName, portName)] = "";
+                if (netlistData["port"][portName.toStdString()]["type"]
+                    && netlistData["port"][portName.toStdString()]["type"].IsScalar()) {
+                    QString width = QString::fromStdString(
+                        netlistData["port"][portName.toStdString()]["type"].as<std::string>());
+                    /* Strip out 'logic' keyword for Verilog 2001 compatibility */
+                    width = width.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                    widthInfo.originalWidth = width;
+
+                    /* Calculate width in bits */
+                    QRegularExpression widthRegex("\\[(\\d+)(?::\\d+)?\\]");
+                    auto               match = widthRegex.match(width);
+                    if (match.hasMatch()) {
+                        bool ok  = false;
+                        int  msb = match.captured(1).toInt(&ok);
+                        if (ok) {
+                            /* [7:0] means 8 bits */
+                            widthInfo.effectiveWidth = msb + 1;
+                        }
+                    } else {
+                        /* Default to 1-bit if no width specified */
+                        widthInfo.effectiveWidth = 1;
+                    }
+                }
+
+                /* Check for bit selection in net connections */
+                for (const auto &netIter : netlistData["net"]) {
+                    if (netIter.second.IsMap()) {
+                        for (const auto &instIter : netIter.second) {
+                            if (instIter.second.IsMap() && instIter.second["port"]
+                                && instIter.second["port"].IsScalar()) {
+                                QString connPortName = QString::fromStdString(
+                                    instIter.second["port"].as<std::string>());
+
+                                if (connPortName == portName) {
+                                    /* Found a connection to this port, check for bits attribute */
+                                    if (instIter.second["bits"]
+                                        && instIter.second["bits"].IsScalar()) {
+                                        widthInfo.bitSelect = QString::fromStdString(
+                                            instIter.second["bits"].as<std::string>());
+
+                                        /* Update effective width based on bit selection */
+                                        int selectWidth = calculateBitSelectWidth(
+                                            widthInfo.bitSelect);
+                                        if (selectWidth > 0) {
+                                            widthInfo.effectiveWidth = selectWidth;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } else {
             /* Handle module port */
-            if (netlistData["instance"][instanceName.toStdString()]
-                && netlistData["instance"][instanceName.toStdString()]["module"]
-                && netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
+            if (netlistData["instance"][conn.instanceName.toStdString()]
+                && netlistData["instance"][conn.instanceName.toStdString()]["module"]
+                && netlistData["instance"][conn.instanceName.toStdString()]["module"].IsScalar()) {
                 QString moduleName = QString::fromStdString(
-                    netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
+                    netlistData["instance"][conn.instanceName.toStdString()]["module"]
+                        .as<std::string>());
 
                 /* Get port width from module definition */
                 if (moduleManager && moduleManager->isModuleExist(moduleName)) {
@@ -496,31 +589,76 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                             moduleData["port"][portName.toStdString()]["type"].as<std::string>());
                         /* Strip out 'logic' keyword for Verilog 2001 compatibility */
                         width = width.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
-                        portWidths[qMakePair(instanceName, portName)] = width;
-                    } else {
-                        /* Default width if not specified */
-                        portWidths[qMakePair(instanceName, portName)] = "";
+                        widthInfo.originalWidth = width;
+
+                        /* Calculate width in bits */
+                        QRegularExpression widthRegex("\\[(\\d+)(?::\\d+)?\\]");
+                        auto               match = widthRegex.match(width);
+                        if (match.hasMatch()) {
+                            bool ok  = false;
+                            int  msb = match.captured(1).toInt(&ok);
+                            if (ok) {
+                                /* [7:0] means 8 bits */
+                                widthInfo.effectiveWidth = msb + 1;
+                            }
+                        } else {
+                            /* Default to 1-bit if no width specified */
+                            widthInfo.effectiveWidth = 1;
+                        }
+                    }
+                }
+
+                /* Check if this instance-port has a bit selection in the netlist */
+                for (const auto &netIter : netlistData["net"]) {
+                    if (netIter.second.IsMap() && netIter.second[instanceName.toStdString()]) {
+                        auto instNode = netIter.second[instanceName.toStdString()];
+                        if (instNode.IsMap() && instNode["port"] && instNode["port"].IsScalar()) {
+                            QString connPortName = QString::fromStdString(
+                                instNode["port"].as<std::string>());
+
+                            if (connPortName == portName) {
+                                /* Found a connection to this port, check for bits attribute */
+                                if (instNode["bits"] && instNode["bits"].IsScalar()) {
+                                    widthInfo.bitSelect = QString::fromStdString(
+                                        instNode["bits"].as<std::string>());
+
+                                    /* Update effective width based on bit selection */
+                                    int selectWidth = calculateBitSelectWidth(widthInfo.bitSelect);
+                                    if (selectWidth > 0) {
+                                        widthInfo.effectiveWidth = selectWidth;
+                                    }
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
             }
         }
+
+        portWidthInfos[qMakePair(instanceName, portName)] = widthInfo;
     }
 
-    /* Compare port widths for consistency */
-    QString referenceWidth;
-    bool    firstPort = true;
+    /* Compare effective widths for consistency */
+    int  referenceWidth = -1;
+    bool firstPort      = true;
 
-    for (auto it = portWidths.constBegin(); it != portWidths.constEnd(); ++it) {
-        if (firstPort) {
-            referenceWidth = it.value();
-            firstPort      = false;
-        } else if (!it.value().isEmpty() && !referenceWidth.isEmpty() && it.value() != referenceWidth) {
-            /* Width mismatch detected */
-            return false;
+    for (auto it = portWidthInfos.constBegin(); it != portWidthInfos.constEnd(); ++it) {
+        const PortWidthInfo &info = it.value();
+
+        /* Only consider ports with a valid width */
+        if (info.effectiveWidth > 0) {
+            if (firstPort) {
+                referenceWidth = info.effectiveWidth;
+                firstPort      = false;
+            } else if (info.effectiveWidth != referenceWidth) {
+                /* Width mismatch detected */
+                return false;
+            }
         }
     }
 
-    /* All widths are consistent or some are unspecified */
+    /* All effective widths are consistent or some are unspecified */
     return true;
 }
 

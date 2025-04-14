@@ -138,18 +138,25 @@ public:
     };
 
     /**
-     * @brief Check port width consistency for a list of connections
-     * @param connections List of port connections to check
-     * @return Whether all ports have consistent width
-     */
-    bool checkPortWidthConsistency(const QList<PortConnection> &connections);
-
-    /**
      * @brief Check port direction consistency for a list of connections
      * @param connections List of port connections to check
      * @return PortDirectionStatus Status of the connection (OK, Undriven, or Multidrive)
      */
     PortDirectionStatus checkPortDirectionConsistency(const QList<PortConnection> &connections);
+
+    /**
+     * @brief Calculate the width of a bit selection expression
+     * @param bitSelect Bit selection string (e.g. "[3:2]", "[5]")
+     * @return The width of the bit selection (e.g. 2 for "[3:2]", 1 for "[5]")
+     */
+    int calculateBitSelectWidth(const QString &bitSelect);
+
+    /**
+     * @brief Check port width consistency for a list of connections
+     * @param connections List of port connections to check
+     * @return Whether all ports have consistent width
+     */
+    bool checkPortWidthConsistency(const QList<PortConnection> &connections);
 
     /**
      * @brief Parse a Verilog or C-style numeric literal
