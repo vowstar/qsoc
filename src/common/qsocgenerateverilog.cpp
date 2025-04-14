@@ -254,14 +254,30 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     }
                                 }
 
+                                /* Check if this port has bits selection attribute */
+                                QString bitSelect = "";
+                                if (instancePair.second["bits"]
+                                    && instancePair.second["bits"].IsScalar()) {
+                                    bitSelect = QString::fromStdString(
+                                        instancePair.second["bits"].as<std::string>());
+                                }
+
                                 /* If connected to top-level port, use the port name instead of net name */
                                 if (connectedToTopPort) {
                                     instancePortConnections[instanceName][portName]
-                                        = hasInvert ? QString("~%1").arg(connectedPortName)
-                                                    : connectedPortName;
+                                        = hasInvert
+                                              ? QString("~%1%2")
+                                                    .arg(connectedPortName)
+                                                    .arg(bitSelect.isEmpty() ? "" : bitSelect)
+                                              : QString("%1%2")
+                                                    .arg(connectedPortName)
+                                                    .arg(bitSelect.isEmpty() ? "" : bitSelect);
                                 } else {
                                     instancePortConnections[instanceName][portName]
-                                        = hasInvert ? QString("~%1").arg(netName) : netName;
+                                        = hasInvert ? QString("~%1%2").arg(netName).arg(
+                                                          bitSelect.isEmpty() ? "" : bitSelect)
+                                                    : QString("%1%2").arg(netName).arg(
+                                                          bitSelect.isEmpty() ? "" : bitSelect);
                                 }
                             }
                         }
