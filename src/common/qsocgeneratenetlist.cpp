@@ -466,7 +466,7 @@ int QSocGenerateManager::calculateBitSelectWidth(const QString &bitSelect)
 
         if (msb_ok && lsb_ok) {
             /* e.g., [3:2] has width 2 */
-            return msb - lsb + 1;
+            return qAbs(msb - lsb) + 1;
         }
     }
 
@@ -524,14 +524,24 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                     widthInfo.originalWidth = width;
 
                     /* Calculate width in bits */
-                    QRegularExpression widthRegex("\\[(\\d+)(?::\\d+)?\\]");
+                    QRegularExpression widthRegex("\\[(\\d+)(?::(\\d+))?\\]");
                     auto               match = widthRegex.match(width);
                     if (match.hasMatch()) {
-                        bool ok  = false;
-                        int  msb = match.captured(1).toInt(&ok);
-                        if (ok) {
-                            /* [7:0] means 8 bits */
-                            widthInfo.effectiveWidth = msb + 1;
+                        bool msb_ok = false;
+                        int  msb    = match.captured(1).toInt(&msb_ok);
+
+                        if (msb_ok) {
+                            if (match.capturedLength(2) > 0) {
+                                /* Case with specified LSB, e.g. [7:3] */
+                                bool lsb_ok = false;
+                                int  lsb    = match.captured(2).toInt(&lsb_ok);
+                                if (lsb_ok) {
+                                    widthInfo.effectiveWidth = qAbs(msb - lsb) + 1;
+                                }
+                            } else {
+                                /* Case with only MSB specified, e.g. [7] */
+                                widthInfo.effectiveWidth = msb + 1;
+                            }
                         }
                     } else {
                         /* Default to 1-bit if no width specified */
@@ -592,14 +602,24 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                         widthInfo.originalWidth = width;
 
                         /* Calculate width in bits */
-                        QRegularExpression widthRegex("\\[(\\d+)(?::\\d+)?\\]");
+                        QRegularExpression widthRegex("\\[(\\d+)(?::(\\d+))?\\]");
                         auto               match = widthRegex.match(width);
                         if (match.hasMatch()) {
-                            bool ok  = false;
-                            int  msb = match.captured(1).toInt(&ok);
-                            if (ok) {
-                                /* [7:0] means 8 bits */
-                                widthInfo.effectiveWidth = msb + 1;
+                            bool msb_ok = false;
+                            int  msb    = match.captured(1).toInt(&msb_ok);
+
+                            if (msb_ok) {
+                                if (match.capturedLength(2) > 0) {
+                                    /* Case with specified LSB, e.g. [7:3] */
+                                    bool lsb_ok = false;
+                                    int  lsb    = match.captured(2).toInt(&lsb_ok);
+                                    if (lsb_ok) {
+                                        widthInfo.effectiveWidth = qAbs(msb - lsb) + 1;
+                                    }
+                                } else {
+                                    /* Case with only MSB specified, e.g. [7] */
+                                    widthInfo.effectiveWidth = msb + 1;
+                                }
                             }
                         } else {
                             /* Default to 1-bit if no width specified */

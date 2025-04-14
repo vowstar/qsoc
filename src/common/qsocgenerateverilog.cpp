@@ -749,15 +749,33 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     for (const auto &detail : portDetails) {
                         if (!detail.width.isEmpty()) {
                             /* Attempt to extract width value from format like [31:0] or [7] */
-                            QRegularExpression widthRegex("\\[\\s*(\\d+)\\s*(?::\\s*\\d+)?\\s*\\]");
-                            auto               match = widthRegex.match(detail.width);
+                            QRegularExpression widthRegex(
+                                "\\[\\s*(\\d+)\\s*(?::\\s*(\\d+))?\\s*\\]");
+                            auto match = widthRegex.match(detail.width);
                             if (match.hasMatch()) {
-                                bool ok = false;
-                                /* Extract the highest bit number and add 1 to get the width (e.g., [31:0] means 32 bits) */
-                                int width = match.captured(1).toInt(&ok) + 1;
-                                if (ok && width > maxWidth) {
-                                    maxWidth = width;
-                                    netWidth = detail.width;
+                                bool msb_ok = false;
+                                int  msb    = match.captured(1).toInt(&msb_ok);
+
+                                if (msb_ok) {
+                                    int width;
+                                    if (match.capturedLength(2) > 0) {
+                                        /* Case with specified LSB, e.g. [7:3] */
+                                        bool lsb_ok = false;
+                                        int  lsb    = match.captured(2).toInt(&lsb_ok);
+                                        if (lsb_ok) {
+                                            width = qAbs(msb - lsb) + 1;
+                                        } else {
+                                            width = msb + 1; /* Fallback to default handling */
+                                        }
+                                    } else {
+                                        /* Case with only MSB specified, e.g. [7] */
+                                        width = msb + 1; /* [7] means 8 bits [7:0] */
+                                    }
+
+                                    if (width > maxWidth) {
+                                        maxWidth = width;
+                                        netWidth = detail.width;
+                                    }
                                 }
                             } else if (maxWidth == 0) {
                                 /* If no width number found but we have a type string, use it as fallback */
@@ -996,13 +1014,25 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Extract port width for bit size validation */
                         if (!width.isEmpty()) {
-                            QRegularExpression widthRegex("\\[(\\d+)(?::\\d+)?\\]");
+                            QRegularExpression widthRegex("\\[(\\d+)(?::(\\d+))?\\]");
                             auto               match = widthRegex.match(width);
                             if (match.hasMatch()) {
-                                bool ok  = false;
-                                int  msb = match.captured(1).toInt(&ok);
-                                if (ok) {
-                                    portWidth = msb + 1; /* [7:0] means 8 bits */
+                                bool msb_ok = false;
+                                int  msb    = match.captured(1).toInt(&msb_ok);
+                                if (msb_ok) {
+                                    if (match.capturedLength(2) > 0) {
+                                        /* Case with specified LSB, e.g. [7:3] */
+                                        bool lsb_ok = false;
+                                        int  lsb    = match.captured(2).toInt(&lsb_ok);
+                                        if (lsb_ok) {
+                                            portWidth = qAbs(msb - lsb) + 1;
+                                        } else {
+                                            portWidth = msb + 1; /* Fallback to default handling */
+                                        }
+                                    } else {
+                                        /* Case with only MSB specified, e.g. [7] */
+                                        portWidth = msb + 1; /* [7] means 8 bits [7:0] */
+                                    }
                                 }
                             }
                         }
