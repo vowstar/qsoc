@@ -254,8 +254,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     }
                                 }
 
-                                /* Check if this port has bits selection attribute */
+                                /* Initialize bitSelect as empty string */
                                 QString bitSelect = "";
+
+                                /* Check if this port has bits selection attribute */
                                 if (instancePair.second["bits"]
                                     && instancePair.second["bits"].IsScalar()) {
                                     bitSelect = QString::fromStdString(
@@ -410,10 +412,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 }
                             }
 
+                            /* Initialize bitSelect as empty string */
+                            QString bitSelect = "";
+
                             /* Add to detailed port information with reversed direction */
                             portDetails.append(
                                 PortDetailInfo::createTopLevelPort(
-                                    connectedPortName, portWidth, reversedDirection));
+                                    connectedPortName, portWidth, reversedDirection, bitSelect));
                         }
                         break;
                     }
@@ -440,6 +445,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 /* Get additional details for this port */
                                 QString portWidth     = "";
                                 QString portDirection = "unknown";
+
+                                /* Check if this port has bits selection attribute */
+                                QString bitSelect = "";
+                                if (instancePair.second["bits"]
+                                    && instancePair.second["bits"].IsScalar()) {
+                                    bitSelect = QString::fromStdString(
+                                        instancePair.second["bits"].as<std::string>());
+                                }
 
                                 /* Get instance's module */
                                 if (netlistData["instance"][instanceName.toStdString()]
@@ -501,182 +514,229 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 /* Add to detailed port information */
                                 portDetails.append(
                                     PortDetailInfo::createModulePort(
-                                        instanceName, portName, portWidth, portDirection));
+                                        instanceName, portName, portWidth, portDirection, bitSelect));
                             }
                         }
                     }
                 }
 
                 /* Check port width consistency */
-                if (!checkPortWidthConsistency(portConnections)) {
+                bool hasWidthMismatch = !checkPortWidthConsistency(portConnections);
+                if (hasWidthMismatch) {
                     qWarning() << "Warning: Port width mismatch detected for net" << netName;
-
-                    /* FIXME: Port width mismatch detected for net */
-                    /* Create header for FIXME comment */
-                    if (connectedToTopPort) {
-                        out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
-                            << ") width mismatch - please check connected ports:\n";
-                    } else {
-                        out << "    /* FIXME: Net " << netName
-                            << " width mismatch - please check connected ports:\n";
-                    }
-
-                    /* Add detailed information for each connected port */
-                    for (const auto &detail : portDetails) {
-                        if (detail.type == PortType::TopLevel) {
-                            /* For top-level ports, we need to display the original direction, not the reversed one */
-                            QString displayDirection = detail.direction;
-                            /* input -> output, output -> input, inout -> inout */
-                            if (displayDirection == "input") {
-                                displayDirection = "output";
-                            } else if (displayDirection == "output") {
-                                displayDirection = "input";
-                            }
-
-                            out << "     *   Top-Level Port: " << detail.portName
-                                << ", Direction: " << displayDirection << ", Width: "
-                                << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
-                        } else {
-                            /* Regular instance port */
-                            if (netlistData["instance"][detail.instanceName.toStdString()]
-                                && netlistData["instance"][detail.instanceName.toStdString()]
-                                              ["module"]
-                                && netlistData["instance"][detail.instanceName.toStdString()]
-                                              ["module"]
-                                                  .IsScalar()) {
-                                out << "     *   Module: "
-                                    << netlistData["instance"][detail.instanceName.toStdString()]
-                                                  ["module"]
-                                                      .as<std::string>()
-                                                      .c_str()
-                                    << ", Instance: " << detail.instanceName
-                                    << ", Port: " << detail.portName
-                                    << ", Direction: " << detail.direction << ", Width: "
-                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
-                            } else {
-                                /* Handle case where instance data might be invalid */
-                                out << "     *   Instance: " << detail.instanceName
-                                    << ", Port: " << detail.portName
-                                    << ", Direction: " << detail.direction << ", Width: "
-                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
-                            }
-                        }
-                    }
-
-                    out << "     */\n";
                 }
 
                 /* Check port direction consistency */
-                PortDirectionStatus dirStatus = checkPortDirectionConsistency(portConnections);
+                PortDirectionStatus dirStatus    = checkPortDirectionConsistency(portConnections);
+                bool                isUndriven   = (dirStatus == PortDirectionStatus::Undriven);
+                bool                isMultidrive = (dirStatus == PortDirectionStatus::Multidrive);
 
-                if (dirStatus == PortDirectionStatus::Undriven) {
+                if (isUndriven) {
                     qWarning() << "Warning: Net" << netName
                                << "has only input ports, missing driver";
-                    if (connectedToTopPort) {
-                        out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
-                            << ") is undriven - missing source:\n";
-                    } else {
-                        out << "    /* FIXME: Net " << netName
-                            << " is undriven - missing source:\n";
-                    }
-
-                    /* Add detailed information for each connected port */
-                    for (const auto &detail : portDetails) {
-                        if (detail.type == PortType::TopLevel) {
-                            /* For top-level ports, we need to display the original direction, not the reversed one */
-                            QString displayDirection = detail.direction;
-                            if (displayDirection == "input") {
-                                displayDirection = "output";
-                            } else if (displayDirection == "output") {
-                                displayDirection = "input";
-                            }
-                            /* inout remains inout */
-
-                            out << "     *   Top-Level Port: " << detail.portName
-                                << ", Direction: " << displayDirection << ", Width: "
-                                << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
-                        } else {
-                            /* Regular instance port */
-                            if (netlistData["instance"][detail.instanceName.toStdString()]
-                                && netlistData["instance"][detail.instanceName.toStdString()]
-                                              ["module"]
-                                && netlistData["instance"][detail.instanceName.toStdString()]
-                                              ["module"]
-                                                  .IsScalar()) {
-                                out << "     *   Module: "
-                                    << netlistData["instance"][detail.instanceName.toStdString()]
-                                                  ["module"]
-                                                      .as<std::string>()
-                                                      .c_str()
-                                    << ", Instance: " << detail.instanceName
-                                    << ", Port: " << detail.portName
-                                    << ", Direction: " << detail.direction << ", Width: "
-                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
-                            } else {
-                                /* Handle case where instance data might be invalid */
-                                out << "     *   Instance: " << detail.instanceName
-                                    << ", Port: " << detail.portName
-                                    << ", Direction: " << detail.direction << ", Width: "
-                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
-                            }
-                        }
-                    }
-
-                    out << "     */\n";
-
-                } else if (dirStatus == PortDirectionStatus::Multidrive) {
+                } else if (isMultidrive) {
                     qWarning() << "Warning: Net" << netName << "has multiple output/inout ports";
-                    if (connectedToTopPort) {
-                        out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
-                            << ") has multiple drivers - potential conflict:\n";
-                    } else {
-                        out << "    /* FIXME: Net " << netName
-                            << " has multiple drivers - potential conflict:\n";
-                    }
+                }
 
-                    /* Add detailed information for each connected port */
-                    for (const auto &detail : portDetails) {
-                        if (detail.type == PortType::TopLevel) {
-                            /* For top-level ports, we need to display the original direction, not the reversed one */
-                            QString displayDirection = detail.direction;
-                            if (displayDirection == "input") {
-                                displayDirection = "output";
-                            } else if (displayDirection == "output") {
-                                displayDirection = "input";
-                            }
-                            /* inout remains inout */
-
-                            out << "     *   Top-Level Port: " << detail.portName
-                                << ", Direction: " << displayDirection << ", Width: "
-                                << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                /* Generate combined warning comments for the net */
+                if (hasWidthMismatch || isUndriven || isMultidrive) {
+                    /* Output width mismatch warning if detected */
+                    if (hasWidthMismatch) {
+                        if (connectedToTopPort) {
+                            out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
+                                << ") width mismatch - please check connected ports:\n";
                         } else {
-                            /* Regular instance port */
-                            if (netlistData["instance"][detail.instanceName.toStdString()]
-                                && netlistData["instance"][detail.instanceName.toStdString()]
-                                              ["module"]
-                                && netlistData["instance"][detail.instanceName.toStdString()]
-                                              ["module"]
-                                                  .IsScalar()) {
-                                out << "     *   Module: "
-                                    << netlistData["instance"][detail.instanceName.toStdString()]
-                                                  ["module"]
-                                                      .as<std::string>()
-                                                      .c_str()
-                                    << ", Instance: " << detail.instanceName
-                                    << ", Port: " << detail.portName
-                                    << ", Direction: " << detail.direction << ", Width: "
-                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                            out << "    /* FIXME: Net " << netName
+                                << " width mismatch - please check connected ports:\n";
+                        }
+
+                        /* Add detailed information for each connected port */
+                        for (const auto &detail : portDetails) {
+                            if (detail.type == PortType::TopLevel) {
+                                /* For top-level ports, we need to display the original direction, not the reversed one */
+                                QString displayDirection = detail.direction;
+                                /* input -> output, output -> input, inout -> inout */
+                                if (displayDirection == "input") {
+                                    displayDirection = "output";
+                                } else if (displayDirection == "output") {
+                                    displayDirection = "input";
+                                }
+
+                                out << "     *   Top-Level Port: " << detail.portName
+                                    << ", Direction: " << displayDirection << ", Width: "
+                                    << (detail.width.isEmpty() ? "default" : detail.width)
+                                    << (detail.bitSelect.isEmpty()
+                                            ? ""
+                                            : ", Bit Selection: " + detail.bitSelect)
+                                    << "\n";
                             } else {
-                                /* Handle case where instance data might be invalid */
-                                out << "     *   Instance: " << detail.instanceName
-                                    << ", Port: " << detail.portName
-                                    << ", Direction: " << detail.direction << ", Width: "
-                                    << (detail.width.isEmpty() ? "default" : detail.width) << "\n";
+                                /* Regular instance port */
+                                if (netlistData["instance"][detail.instanceName.toStdString()]
+                                    && netlistData["instance"][detail.instanceName.toStdString()]
+                                                  ["module"]
+                                    && netlistData["instance"][detail.instanceName.toStdString()]
+                                                  ["module"]
+                                                      .IsScalar()) {
+                                    out << "     *   Module: "
+                                        << netlistData["instance"]
+                                                      [detail.instanceName.toStdString()]["module"]
+                                                          .as<std::string>()
+                                                          .c_str()
+                                        << ", Instance: " << detail.instanceName
+                                        << ", Port: " << detail.portName
+                                        << ", Direction: " << detail.direction << ", Width: "
+                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << (detail.bitSelect.isEmpty()
+                                                ? ""
+                                                : ", Bit Selection: " + detail.bitSelect)
+                                        << "\n";
+                                } else {
+                                    /* Handle case where instance data might be invalid */
+                                    out << "     *   Instance: " << detail.instanceName
+                                        << ", Port: " << detail.portName
+                                        << ", Direction: " << detail.direction << ", Width: "
+                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << (detail.bitSelect.isEmpty()
+                                                ? ""
+                                                : ", Bit Selection: " + detail.bitSelect)
+                                        << "\n";
+                                }
                             }
                         }
+                        out << "     */\n";
                     }
 
-                    out << "     */\n";
+                    /* Output undriven warning if detected */
+                    if (isUndriven) {
+                        if (connectedToTopPort) {
+                            out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
+                                << ") is undriven - missing source:\n";
+                        } else {
+                            out << "    /* FIXME: Net " << netName
+                                << " is undriven - missing source:\n";
+                        }
+
+                        /* Add detailed information for each connected port */
+                        for (const auto &detail : portDetails) {
+                            if (detail.type == PortType::TopLevel) {
+                                /* For top-level ports, we need to display the original direction, not the reversed one */
+                                QString displayDirection = detail.direction;
+                                if (displayDirection == "input") {
+                                    displayDirection = "output";
+                                } else if (displayDirection == "output") {
+                                    displayDirection = "input";
+                                }
+                                /* inout remains inout */
+
+                                out << "     *   Top-Level Port: " << detail.portName
+                                    << ", Direction: " << displayDirection << ", Width: "
+                                    << (detail.width.isEmpty() ? "default" : detail.width)
+                                    << (detail.bitSelect.isEmpty()
+                                            ? ""
+                                            : ", Bit Selection: " + detail.bitSelect)
+                                    << "\n";
+                            } else {
+                                /* Regular instance port */
+                                if (netlistData["instance"][detail.instanceName.toStdString()]
+                                    && netlistData["instance"][detail.instanceName.toStdString()]
+                                                  ["module"]
+                                    && netlistData["instance"][detail.instanceName.toStdString()]
+                                                  ["module"]
+                                                      .IsScalar()) {
+                                    out << "     *   Module: "
+                                        << netlistData["instance"]
+                                                      [detail.instanceName.toStdString()]["module"]
+                                                          .as<std::string>()
+                                                          .c_str()
+                                        << ", Instance: " << detail.instanceName
+                                        << ", Port: " << detail.portName
+                                        << ", Direction: " << detail.direction << ", Width: "
+                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << (detail.bitSelect.isEmpty()
+                                                ? ""
+                                                : ", Bit Selection: " + detail.bitSelect)
+                                        << "\n";
+                                } else {
+                                    /* Handle case where instance data might be invalid */
+                                    out << "     *   Instance: " << detail.instanceName
+                                        << ", Port: " << detail.portName
+                                        << ", Direction: " << detail.direction << ", Width: "
+                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << (detail.bitSelect.isEmpty()
+                                                ? ""
+                                                : ", Bit Selection: " + detail.bitSelect)
+                                        << "\n";
+                                }
+                            }
+                        }
+                        out << "     */\n";
+                    }
+
+                    /* Output multidrive warning if detected */
+                    if (isMultidrive) {
+                        if (connectedToTopPort) {
+                            out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
+                                << ") has multiple drivers - potential conflict:\n";
+                        } else {
+                            out << "    /* FIXME: Net " << netName
+                                << " has multiple drivers - potential conflict:\n";
+                        }
+
+                        /* Add detailed information for each connected port */
+                        for (const auto &detail : portDetails) {
+                            if (detail.type == PortType::TopLevel) {
+                                /* For top-level ports, we need to display the original direction, not the reversed one */
+                                QString displayDirection = detail.direction;
+                                if (displayDirection == "input") {
+                                    displayDirection = "output";
+                                } else if (displayDirection == "output") {
+                                    displayDirection = "input";
+                                }
+                                /* inout remains inout */
+
+                                out << "     *   Top-Level Port: " << detail.portName
+                                    << ", Direction: " << displayDirection << ", Width: "
+                                    << (detail.width.isEmpty() ? "default" : detail.width)
+                                    << (detail.bitSelect.isEmpty()
+                                            ? ""
+                                            : ", Bit Selection: " + detail.bitSelect)
+                                    << "\n";
+                            } else {
+                                /* Regular instance port */
+                                if (netlistData["instance"][detail.instanceName.toStdString()]
+                                    && netlistData["instance"][detail.instanceName.toStdString()]
+                                                  ["module"]
+                                    && netlistData["instance"][detail.instanceName.toStdString()]
+                                                  ["module"]
+                                                      .IsScalar()) {
+                                    out << "     *   Module: "
+                                        << netlistData["instance"]
+                                                      [detail.instanceName.toStdString()]["module"]
+                                                          .as<std::string>()
+                                                          .c_str()
+                                        << ", Instance: " << detail.instanceName
+                                        << ", Port: " << detail.portName
+                                        << ", Direction: " << detail.direction << ", Width: "
+                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << (detail.bitSelect.isEmpty()
+                                                ? ""
+                                                : ", Bit Selection: " + detail.bitSelect)
+                                        << "\n";
+                                } else {
+                                    /* Handle case where instance data might be invalid */
+                                    out << "     *   Instance: " << detail.instanceName
+                                        << ", Port: " << detail.portName
+                                        << ", Direction: " << detail.direction << ", Width: "
+                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << (detail.bitSelect.isEmpty()
+                                                ? ""
+                                                : ", Bit Selection: " + detail.bitSelect)
+                                        << "\n";
+                                }
+                            }
+                        }
+                        out << "     */\n";
+                    }
                 }
 
                 /* Only declare wire if not connected to top-level port to avoid redundancy */

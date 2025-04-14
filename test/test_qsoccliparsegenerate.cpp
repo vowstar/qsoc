@@ -1029,6 +1029,111 @@ simple_flag:
         QVERIFY(verifyVerilogContent("test_bits", ".pad_biu_rdata(soc_top_data)"));
         QVERIFY(verifyVerilogContent("test_bits", ".data_out(soc_top_data)"));
     }
+
+    void testGenerateWithBitsSelectionWidthMismatch()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with bits selection causing width mismatch */
+        const QString content = R"(
+instance:
+  soc_top_cpu:
+    module: c906
+
+  soc_top_mux:
+    module: simple_mux
+    
+  wide_driver:
+    module: wide_driver_module
+
+net:
+  # This net has width mismatch with bits selection
+  soc_mismatch:
+    soc_top_cpu:
+      port: pad_biu_rid       # 8-bit port
+      bits: "[1:0]"           # 2-bit selection
+    soc_top_mux:
+      port: data_in           # 8-bit port
+      bits: "[4]"             # 1-bit selection
+    wide_driver:
+      port: data_out          # 32-bit output port (intentional width mismatch)
+)";
+
+        /* Create a simple_mux module */
+        const QString muxContent = R"(
+simple_mux:
+  port:
+    data_in:
+      type: logic[7:0]
+      direction: in
+    data_out:
+      type: logic[127:0]
+      direction: out
+)";
+
+        /* Create a wide driver module with 32-bit output that will create a real width mismatch */
+        const QString wideDriverContent = R"(
+wide_driver_module:
+  port:
+    data_out:
+      type: logic[31:0]
+      direction: output
+    enable:
+      type: logic
+      direction: input
+)";
+
+        /* Create the module files */
+        QDir moduleDir(projectManager.getModulePath());
+
+        /* Create mux module file */
+        QString muxPath = moduleDir.filePath("simple_mux.soc_mod");
+        QFile   muxFile(muxPath);
+        if (muxFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&muxFile);
+            stream << muxContent;
+            muxFile.close();
+        }
+
+        /* Create wide driver module file */
+        QString wideDriverPath = moduleDir.filePath("wide_driver_module.soc_mod");
+        QFile   wideDriverFile(wideDriverPath);
+        if (wideDriverFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&wideDriverFile);
+            stream << wideDriverContent;
+            wideDriverFile.close();
+        }
+
+        /* Create netlist file */
+        QString filePath = createTempFile("test_bits_mismatch.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_bits_mismatch"));
+
+        /* Verify that the bits selections are used in port connections */
+        QVERIFY(verifyVerilogContent("test_bits_mismatch", ".pad_biu_rid(soc_mismatch[1:0])"));
+        QVERIFY(verifyVerilogContent("test_bits_mismatch", ".data_in(soc_mismatch[4])"));
+        QVERIFY(verifyVerilogContent("test_bits_mismatch", ".data_out(soc_mismatch)"));
+
+        /* Verify the warning message contains bits selection information */
+        QVERIFY(verifyVerilogContent("test_bits_mismatch", "Bit Selection: [1:0]"));
+        QVERIFY(verifyVerilogContent("test_bits_mismatch", "Bit Selection: [4]"));
+
+        /* Verify that width mismatch warning exists */
+        QVERIFY(
+            verifyVerilogContent("test_bits_mismatch", "FIXME: Net soc_mismatch width mismatch"));
+
+        /* Verify width information is included in warnings */
+        QVERIFY(verifyVerilogContent("test_bits_mismatch", "Width: [7:0]"));
+        QVERIFY(verifyVerilogContent("test_bits_mismatch", "Width: [31:0]"));
+    }
 };
 
 QStringList Test::messageList;

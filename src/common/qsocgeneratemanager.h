@@ -103,30 +103,37 @@ public:
         QString  portName;
         QString  width;
         QString  direction;
+        QString  bitSelect; /**< Bit selection if specified (e.g. "[7:0]", "[3]") */
 
         PortDetailInfo(
             PortType       t,
             const QString &inst,
             const QString &port,
             const QString &w,
-            const QString &dir)
+            const QString &dir,
+            const QString &bits = "")
             : type(t)
             , instanceName(inst)
             , portName(port)
             , width(w)
             , direction(dir)
+            , bitSelect(bits)
         {}
 
         static PortDetailInfo createModulePort(
-            const QString &inst, const QString &port, const QString &w, const QString &dir)
+            const QString &inst,
+            const QString &port,
+            const QString &w,
+            const QString &dir,
+            const QString &bits = "")
         {
-            return PortDetailInfo(PortType::Module, inst, port, w, dir);
+            return PortDetailInfo(PortType::Module, inst, port, w, dir, bits);
         }
 
         static PortDetailInfo createTopLevelPort(
-            const QString &port, const QString &w, const QString &dir)
+            const QString &port, const QString &w, const QString &dir, const QString &bits = "")
         {
-            return PortDetailInfo(PortType::TopLevel, "", port, w, dir);
+            return PortDetailInfo(PortType::TopLevel, "", port, w, dir, bits);
         }
     };
 
