@@ -45,23 +45,25 @@ QString QStaticMarkdown::renderTable(
 
     /* Add padding function for proper alignment */
     env.add_callback("pad", 3, [](inja::Arguments &args) {
-        std::string text  = args.at(0)->get<std::string>();
-        int         width = args.at(1)->get<int>();
-        std::string align = args.at(2)->get<std::string>();
+        const std::string text  = args.at(0)->get<std::string>();
+        const int         width = args.at(1)->get<int>();
+        const std::string align = args.at(2)->get<std::string>();
 
         /* Calculate padding needed */
-        int padding = std::max(0, width - static_cast<int>(text.length()));
+        const int padding = std::max(0, width - static_cast<int>(text.length()));
 
         if (align == "left") {
             return text + std::string(padding, ' ');
-        } else if (align == "right") {
-            return std::string(padding, ' ') + text;
-        } else {
-            /* Center alignment */
-            int leftPad  = padding / 2;
-            int rightPad = padding - leftPad;
-            return std::string(leftPad, ' ') + text + std::string(rightPad, ' ');
         }
+
+        if (align == "right") {
+            return std::string(padding, ' ') + text;
+        }
+
+        /* Center alignment */
+        const int leftPad  = padding / 2;
+        const int rightPad = padding - leftPad;
+        return std::string(leftPad, ' ') + text + std::string(rightPad, ' ');
     });
 
     /* Create a manual table string instead of using Inja template which has issues with pipe characters */
@@ -69,7 +71,7 @@ QString QStaticMarkdown::renderTable(
 
     /* Header row */
     for (int i = 0; i < headers.size(); ++i) {
-        QString paddedHeader = padText(headers[i], columnWidths[i], alignments[i]);
+        const QString paddedHeader = padText(headers[i], columnWidths[i], alignments[i]);
         table += "|" + paddedHeader;
     }
     table += "|\n";
@@ -78,10 +80,9 @@ QString QStaticMarkdown::renderTable(
     table += createSeparatorLine(columnWidths, alignments) + "\n";
 
     /* Data rows */
-    for (int j = 0; j < rows.size(); ++j) {
-        const QStringList &row = rows[j];
+    for (const auto &row : rows) {
         for (int i = 0; i < row.size() && i < headers.size(); ++i) {
-            QString paddedCell = padText(row[i], columnWidths[i], alignments[i]);
+            const QString paddedCell = padText(row[i], columnWidths[i], alignments[i]);
             table += "|" + paddedCell;
         }
         table += "|\n";
@@ -93,7 +94,7 @@ QString QStaticMarkdown::renderTable(
 QVector<int> QStaticMarkdown::calculateColumnWidths(
     const QStringList &headers, const QVector<QStringList> &rows)
 {
-    int          columnCount = headers.size();
+    const auto   columnCount = static_cast<int>(headers.size());
     QVector<int> widths(columnCount, 0);
 
     /* Check header widths */
@@ -123,8 +124,8 @@ QString QStaticMarkdown::createSeparatorLine(
     QString separator;
 
     for (int i = 0; i < columnWidths.size(); ++i) {
-        Alignment align = i < alignments.size() ? alignments[i] : Alignment::Left;
-        int       width = columnWidths[i];
+        const Alignment align = i < alignments.size() ? alignments[i] : Alignment::Left;
+        const int       width = columnWidths[i];
 
         if (align == Alignment::Left) {
             separator += "|:" + QString(width - 1, '-');
@@ -142,18 +143,20 @@ QString QStaticMarkdown::createSeparatorLine(
 
 QString QStaticMarkdown::padText(const QString &text, int width, QStaticMarkdown::Alignment alignment)
 {
-    int padding = std::max(0, width - static_cast<int>(text.length()));
+    const int padding = std::max(0, width - static_cast<int>(text.length()));
 
     if (alignment == Alignment::Left) {
         /* Left alignment: spaces on the right */
         return text + QString(padding, ' ');
-    } else if (alignment == Alignment::Right) {
+    }
+
+    if (alignment == Alignment::Right) {
         /* Right alignment: spaces on the left */
         return QString(padding, ' ') + text;
-    } else {
-        /* Center alignment: spaces evenly distributed */
-        int leftPad  = padding / 2;
-        int rightPad = padding - leftPad;
-        return QString(leftPad, ' ') + text + QString(rightPad, ' ');
     }
+
+    /* Center alignment: spaces evenly distributed */
+    const int leftPad  = padding / 2;
+    const int rightPad = padding - leftPad;
+    return QString(leftPad, ' ') + text + QString(rightPad, ' ');
 }

@@ -26,7 +26,7 @@ public:
     /**
      * @brief Text alignment options for table cells
      */
-    enum class Alignment {
+    enum class Alignment : std::uint8_t {
         Left,   /**< Left-aligned text */
         Center, /**< Center-aligned text */
         Right   /**< Right-aligned text */
@@ -48,7 +48,7 @@ public:
      * @brief Default destructor for QStaticMarkdown.
      * @details Cleanup and release resources.
      */
-    ~QStaticMarkdown() = default;
+    ~QStaticMarkdown() override = default;
 
 public slots:
     /**
