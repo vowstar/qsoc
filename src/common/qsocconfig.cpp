@@ -53,7 +53,7 @@ void QSocConfig::loadConfig()
     configValues.clear();
 
     /* Check if user config file exists and create template if needed */
-    QString userConfigPath = QDir::home().absoluteFilePath(CONFIG_FILE_USER);
+    const QString userConfigPath = QDir::home().absoluteFilePath(CONFIG_FILE_USER);
     if (!QFile::exists(userConfigPath)) {
         createTemplateConfig(userConfigPath);
     }
@@ -77,16 +77,17 @@ void QSocConfig::loadConfig()
 void QSocConfig::loadFromEnvironment()
 {
     /* Load from environment variables (highest priority) */
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
 
     /* List of supported environment variables */
-    QStringList envVars = {"QSOC_AI_PROVIDER", "QSOC_API_KEY", "QSOC_AI_MODEL", "QSOC_API_URL"};
+    const QStringList envVars
+        = {"QSOC_AI_PROVIDER", "QSOC_API_KEY", "QSOC_AI_MODEL", "QSOC_API_URL"};
 
     /* Load each environment variable if it exists */
     for (const QString &var : envVars) {
         if (env.contains(var)) {
             /* Convert to lowercase key for consistency */
-            QString key = var.mid(5).toLower(); /* Remove "QSOC_" prefix */
+            const QString key = var.mid(5).toLower(); /* Remove "QSOC_" prefix */
             setValue(key, env.value(var));
         }
     }
@@ -105,12 +106,12 @@ void QSocConfig::loadFromYamlFile(const QString &filePath, bool override)
 
         /* If the YAML is valid, process all key-value pairs */
         if (config.IsMap()) {
-            for (const auto &it : config) {
-                QString key = QString::fromStdString(it.first.as<std::string>());
+            for (const auto &item : config) {
+                const QString key = QString::fromStdString(item.first.as<std::string>());
 
                 /* Process scalar (string) values */
-                if (it.second.IsScalar()) {
-                    QString value = QString::fromStdString(it.second.as<std::string>());
+                if (item.second.IsScalar()) {
+                    const QString value = QString::fromStdString(item.second.as<std::string>());
 
                     /* Set value if not already set or if override is true */
                     if (override || !hasKey(key)) {
@@ -118,16 +119,17 @@ void QSocConfig::loadFromYamlFile(const QString &filePath, bool override)
                     }
                 }
                 /* Process nested maps for provider-specific configurations */
-                else if (it.second.IsMap()) {
+                else if (item.second.IsMap()) {
                     /* Process each key-value pair in the nested map */
-                    for (const auto &subIt : it.second) {
+                    for (const auto &subItem : item.second) {
                         try {
-                            QString subKey = QString::fromStdString(subIt.first.as<std::string>());
-                            if (subIt.second.IsScalar()) {
+                            const QString subKey = QString::fromStdString(
+                                subItem.first.as<std::string>());
+                            if (subItem.second.IsScalar()) {
                                 /* Create composite key in format "provider.key" */
-                                QString compositeKey = key + "." + subKey;
-                                QString value        = QString::fromStdString(
-                                    subIt.second.as<std::string>());
+                                const QString compositeKey = key + "." + subKey;
+                                const QString value        = QString::fromStdString(
+                                    subItem.second.as<std::string>());
 
                                 /* Set value if not already set or if override is true */
                                 if (override || !hasKey(compositeKey)) {
@@ -154,13 +156,13 @@ void QSocConfig::loadFromProjectYaml(bool override)
     }
 
     /* Get project path */
-    QString projectPath = projectManager->getProjectPath();
+    const QString projectPath = projectManager->getProjectPath();
     if (projectPath.isEmpty()) {
         return;
     }
 
     /* Load from project-level config */
-    QString projectConfigPath = QDir(projectPath).filePath(CONFIG_FILE_PROJECT);
+    const QString projectConfigPath = QDir(projectPath).filePath(CONFIG_FILE_PROJECT);
     loadFromYamlFile(projectConfigPath, override);
 }
 
@@ -192,8 +194,8 @@ QMap<QString, QString> QSocConfig::getAllValues() const
 bool QSocConfig::createTemplateConfig(const QString &filePath)
 {
     /* Create directory if it doesn't exist */
-    QFileInfo fileInfo(filePath);
-    QDir      directory = fileInfo.dir();
+    const QFileInfo fileInfo(filePath);
+    const QDir      directory = fileInfo.dir();
 
     if (!directory.exists()) {
         if (!directory.mkpath(".")) {
