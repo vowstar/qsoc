@@ -260,7 +260,12 @@ bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)
 
         /* Process the template */
         QFileInfo fileInfo(templateFilePath);
-        QString   outputFileName = fileInfo.baseName();
+        QString   outputFileName = fileInfo.fileName();
+        /* Remove only the template extension (the last extension) */
+        int lastDotIndex = outputFileName.lastIndexOf('.');
+        if (lastDotIndex > 0) {
+            outputFileName = outputFileName.left(lastDotIndex);
+        }
 
         if (!generateManager
                  ->renderTemplate(templateFilePath, csvFiles, yamlFiles, jsonFiles, outputFileName)) {
