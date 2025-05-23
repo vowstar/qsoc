@@ -9,6 +9,7 @@
 
 #include <QApplication>
 
+namespace {
 bool isGui(int &argc, char *argv[])
 {
     for (int i = 1; i < argc; ++i) {
@@ -17,6 +18,7 @@ bool isGui(int &argc, char *argv[])
     }
     return false;
 }
+} /* namespace */
 
 int main(int argc, char *argv[])
 {
