@@ -1,7 +1,6 @@
 ---
 UseColor: true
 HeaderFilterRegex: ''
-AnalyzeTemporaryDtors: false
 WarningsAsErrors: '*'
 Checks: >
   bugprone-*,

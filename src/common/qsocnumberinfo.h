@@ -16,7 +16,7 @@ public:
     /**
      * @brief Numeric base enumeration
      */
-    enum class Base {
+    enum class Base : std::uint8_t {
         Binary      = 2,  /**< Base-2 (binary) number representation */
         Octal       = 8,  /**< Base-8 (octal) number representation */
         Decimal     = 10, /**< Base-10 (decimal) number representation */

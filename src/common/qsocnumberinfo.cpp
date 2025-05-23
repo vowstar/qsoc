@@ -27,17 +27,17 @@ std::string QSocNumberInfo::bigIntegerToStringWithBase(const BigInteger &value, 
 
 BigInteger QSocNumberInfo::stringToBigIntegerWithBase(const std::string &str, int base)
 {
-    BigUnsigned result(0);
-    BigUnsigned baseVal(base);
+    BigUnsigned       result(0);
+    const BigUnsigned baseVal(base);
 
-    for (char c : str) {
+    for (const char character : str) {
         int digit;
-        if (c >= '0' && c <= '9') {
-            digit = c - '0';
-        } else if (c >= 'a' && c <= 'f') {
-            digit = c - 'a' + 10;
-        } else if (c >= 'A' && c <= 'F') {
-            digit = c - 'A' + 10;
+        if (character >= '0' && character <= '9') {
+            digit = character - '0';
+        } else if (character >= 'a' && character <= 'f') {
+            digit = character - 'a' + 10;
+        } else if (character >= 'A' && character <= 'F') {
+            digit = character - 'A' + 10;
         } else {
             /* Skip invalid characters */
             continue;
@@ -51,7 +51,7 @@ BigInteger QSocNumberInfo::stringToBigIntegerWithBase(const std::string &str, in
         result = result * baseVal + BigUnsigned(digit);
     }
 
-    return BigInteger(result);
+    return {result};
 }
 
 QString QSocNumberInfo::format() const
@@ -69,7 +69,7 @@ QString QSocNumberInfo::format() const
     case Base::Decimal:
         return QString("'d%1").arg(QString::fromStdString(bigIntegerToStringWithBase(value, 10)));
     case Base::Hexadecimal: {
-        QString hexStr = QString::fromStdString(bigIntegerToStringWithBase(value, 16));
+        const QString hexStr = QString::fromStdString(bigIntegerToStringWithBase(value, 16));
         /* Always use lowercase for hex values regardless of original casing */
         return QString("'h%1").arg(hexStr.toLower());
     }
@@ -87,9 +87,9 @@ QString QSocNumberInfo::formatVerilog() const
 
     if (width > 0) {
         return QString("%1%2").arg(width).arg(format());
-    } else {
-        return format();
     }
+
+    return format();
 }
 
 QString QSocNumberInfo::formatC() const
@@ -105,7 +105,7 @@ QString QSocNumberInfo::formatC() const
     case Base::Octal:
         return QString("0%1").arg(QString::fromStdString(bigIntegerToStringWithBase(value, 8)));
     case Base::Hexadecimal: {
-        QString hexStr = QString::fromStdString(bigIntegerToStringWithBase(value, 16));
+        const QString hexStr = QString::fromStdString(bigIntegerToStringWithBase(value, 16));
         /* Always use lowercase for hex values regardless of original casing */
         return QString("0x%1").arg(hexStr.toLower());
     }
@@ -125,21 +125,21 @@ QString QSocNumberInfo::formatVerilogProperWidth() const
 
     switch (base) {
     case Base::Binary: {
-        std::string binStr = bigIntegerToStringWithBase(value, 2);
-        result             = QString::fromStdString(binStr).rightJustified(width, '0');
+        const std::string binStr = bigIntegerToStringWithBase(value, 2);
+        result                   = QString::fromStdString(binStr).rightJustified(width, '0');
         return QString("%1'b%2").arg(width).arg(result);
     }
     case Base::Octal: {
         /* Calculate how many octal digits are needed */
-        int         octalDigits = (width + 2) / 3; /* Ceiling division */
-        std::string octStr      = bigIntegerToStringWithBase(value, 8);
-        result                  = QString::fromStdString(octStr).rightJustified(octalDigits, '0');
+        const int         octalDigits = (width + 2) / 3; /* Ceiling division */
+        const std::string octStr      = bigIntegerToStringWithBase(value, 8);
+        result = QString::fromStdString(octStr).rightJustified(octalDigits, '0');
         return QString("%1'o%2").arg(width).arg(result);
     }
     case Base::Hexadecimal: {
         /* Calculate how many hex digits are needed */
-        int         hexDigits = (width + 3) / 4; /* Ceiling division */
-        std::string hexStr    = bigIntegerToStringWithBase(value, 16);
+        const int         hexDigits = (width + 3) / 4; /* Ceiling division */
+        const std::string hexStr    = bigIntegerToStringWithBase(value, 16);
         /* Always use lowercase for hex values */
         result = QString::fromStdString(hexStr).rightJustified(hexDigits, '0').toLower();
         return QString("%1'h%2").arg(width).arg(result);
