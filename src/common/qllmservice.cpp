@@ -15,9 +15,8 @@
 QLLMService::QLLMService(QObject *parent, QSocConfig *config)
     : QObject(parent)
     , config(config)
+    , networkManager(new QNetworkAccessManager(this))
 {
-    /* Initialize network manager */
-    networkManager = new QNetworkAccessManager(this);
     /* Configure network proxy */
     setupNetworkProxy();
 }
@@ -73,7 +72,7 @@ QString QLLMService::getProviderName(Provider provider) const
     case OLLAMA:
         return "ollama";
     default:
-        return QString();
+        return {};
     }
 }
 
@@ -89,16 +88,16 @@ QString QLLMService::getApiKey() const
     return apiKey;
 }
 
-void QLLMService::setApiKey(const QString &newApiKey)
+void QLLMService::setApiKey(const QString &value)
 {
-    this->apiKey = newApiKey;
+    this->apiKey = value;
 
     /* If config is available, save to it */
     if (config) {
         /* Use modern nested format */
-        QString providerName        = getProviderName(provider);
-        QString providerSpecificKey = providerName + ".api_key";
-        config->setValue(providerSpecificKey, newApiKey);
+        const QString providerName        = getProviderName(provider);
+        const QString providerSpecificKey = providerName + ".api_key";
+        config->setValue(/* key = */ providerSpecificKey, /* value = */ value);
     }
 }
 
@@ -124,10 +123,10 @@ LLMResponse QLLMService::sendRequest(
     }
 
     /* Prepare request */
-    QNetworkRequest request = prepareRequest();
+    const QNetworkRequest request = prepareRequest();
 
     /* Build request payload */
-    json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode);
+    const json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode);
 
     /* Send request and wait for response */
     QEventLoop     loop;
@@ -144,11 +143,11 @@ LLMResponse QLLMService::sendRequest(
 }
 
 void QLLMService::sendRequestAsync(
-    const QString                     &prompt,
-    std::function<void(LLMResponse &)> callback,
-    const QString                     &systemPrompt,
-    double                             temperature,
-    bool                               jsonMode)
+    const QString                            &prompt,
+    const std::function<void(LLMResponse &)> &callback,
+    const QString                            &systemPrompt,
+    double                                    temperature,
+    bool                                      jsonMode)
 {
     /* Check if API key is configured */
     if (!isApiKeyConfigured()) {
@@ -161,10 +160,10 @@ void QLLMService::sendRequestAsync(
     }
 
     /* Prepare request */
-    QNetworkRequest request = prepareRequest();
+    const QNetworkRequest request = prepareRequest();
 
     /* Build request payload */
-    json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode);
+    const json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode);
 
     /* Send asynchronous request */
     QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
@@ -188,7 +187,7 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
     }
 
     /* Try to parse JSON from the response */
-    QString content = response.content.trimmed();
+    const QString content = response.content.trimmed();
 
     /* Method 1: If the entire response is a JSON object */
     try {
@@ -202,16 +201,17 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
             }
             return mappings;
         }
-    } catch (const json::parse_error &) {
+    } catch (const json::parse_error &e) {
         /* Continue with other methods if JSON parsing fails */
+        qDebug() << "JSON parse error in extractMappingsFromResponse (Method 1):" << e.what();
     }
 
     /* Method 2: Extract JSON object from text */
-    QRegularExpression      jsonRegex("\\{[^\\{\\}]*\\}");
-    QRegularExpressionMatch match = jsonRegex.match(content);
+    const QRegularExpression      jsonRegex(R"(\{[^\{\}]*\})");
+    const QRegularExpressionMatch match = jsonRegex.match(content);
 
     if (match.hasMatch()) {
-        QString jsonString = match.captured(0);
+        const QString jsonString = match.captured(0);
         try {
             json mappingJson = json::parse(jsonString.toStdString());
             if (mappingJson.is_object()) {
@@ -223,21 +223,22 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
                 }
                 return mappings;
             }
-        } catch (const json::parse_error &) {
+        } catch (const json::parse_error &e) {
             /* Continue with other methods if JSON parsing fails */
+            qDebug() << "JSON parse error in extractMappingsFromResponse (Method 2):" << e.what();
         }
     }
 
     /* Method 3: Parse from text format */
-    QStringList        lines = content.split("\n");
-    QRegularExpression mappingRegex("\"(.*?)\"\\s*:\\s*\"(.*?)\"");
+    const QStringList        lines = content.split("\n");
+    const QRegularExpression mappingRegex("\"(.*?)\"\\s*:\\s*\"(.*?)\"");
 
     for (const QString &line : lines) {
-        QRegularExpressionMatch match = mappingRegex.match(line);
+        const QRegularExpressionMatch match = mappingRegex.match(line);
         if (match.hasMatch()) {
-            QString key   = match.captured(1);
-            QString value = match.captured(2);
-            mappings[key] = value;
+            const QString key   = match.captured(1);
+            const QString value = match.captured(2);
+            mappings[key]       = value;
         }
     }
 
@@ -255,28 +256,40 @@ void QLLMService::loadConfigSettings()
 
     /* 1. Load provider from config */
     if (config->hasKey("ai_provider")) {
-        QString configProvider = config->getValue("ai_provider").toLower();
+        const QString configProvider = config->getValue("ai_provider").toLower();
 
         if (configProvider == "deepseek") {
             provider = DEEPSEEK;
-        } else if (configProvider == "openai") {
+            return;
+        }
+
+        if (configProvider == "openai") {
             provider = OPENAI;
-        } else if (configProvider == "groq") {
+            return;
+        }
+
+        if (configProvider == "groq") {
             provider = GROQ;
-        } else if (configProvider == "claude") {
+            return;
+        }
+
+        if (configProvider == "claude") {
             provider = CLAUDE;
-        } else if (configProvider == "ollama") {
+            return;
+        }
+
+        if (configProvider == "ollama") {
             provider = OLLAMA;
         }
     }
 
     /* Get provider name for further lookups */
-    QString providerName = getProviderName(provider);
+    const QString providerName = getProviderName(provider);
 
     /* 2. Load API key using priority rules */
     /* Priority 1: Global key when ai_provider matches current provider */
     if (config->hasKey("api_key") && config->hasKey("ai_provider")) {
-        QString configProvider = config->getValue("ai_provider").toLower();
+        const QString configProvider = config->getValue("ai_provider").toLower();
         if (configProvider == providerName) {
             apiKey = config->getValue("api_key");
         }
@@ -289,7 +302,7 @@ void QLLMService::loadConfigSettings()
 
     /* Priority 3: Provider-specific key */
     if (apiKey.isEmpty()) {
-        QString providerSpecificKey = providerName + ".api_key";
+        const QString providerSpecificKey = providerName + ".api_key";
         if (config->hasKey(providerSpecificKey)) {
             apiKey = config->getValue(providerSpecificKey);
         }
@@ -301,21 +314,22 @@ void QLLMService::loadConfigSettings()
         && config->hasKey("ai_provider")
         && config->getValue("ai_provider").toLower() == providerName) {
         apiUrl = QUrl(config->getValue("api_url"));
+        return;
     }
+
     /* Priority 2: Global URL regardless of provider */
-    else if (config->hasKey("api_url") && !config->getValue("api_url").isEmpty()) {
+    if (config->hasKey("api_url") && !config->getValue("api_url").isEmpty()) {
         apiUrl = QUrl(config->getValue("api_url"));
+        return;
     }
+
     /* Priority 3: Provider-specific URL */
-    else {
-        QString providerSpecificUrl = providerName + ".api_url";
-        if (config->hasKey(providerSpecificUrl)
-            && !config->getValue(providerSpecificUrl).isEmpty()) {
-            apiUrl = QUrl(config->getValue(providerSpecificUrl));
-        } else {
-            /* Fall back to default URL if none specified */
-            apiUrl = getDefaultApiEndpoint(provider);
-        }
+    const QString providerSpecificUrl = providerName + ".api_url";
+    if (config->hasKey(providerSpecificUrl) && !config->getValue(providerSpecificUrl).isEmpty()) {
+        apiUrl = QUrl(config->getValue(providerSpecificUrl));
+    } else {
+        /* Fall back to default URL if none specified */
+        apiUrl = getDefaultApiEndpoint(provider);
     }
 
     /* 4. Load AI model using priority rules */
@@ -323,20 +337,22 @@ void QLLMService::loadConfigSettings()
     if (config->hasKey("ai_model") && config->hasKey("ai_provider")
         && config->getValue("ai_provider").toLower() == providerName) {
         aiModel = config->getValue("ai_model");
+        return;
     }
+
     /* Priority 2: Global model regardless of provider */
-    else if (config->hasKey("ai_model")) {
+    if (config->hasKey("ai_model")) {
         aiModel = config->getValue("ai_model");
+        return;
     }
+
     /* Priority 3: Provider-specific model */
-    else {
-        QString providerSpecificModel = providerName + ".ai_model";
-        if (config->hasKey(providerSpecificModel)) {
-            aiModel = config->getValue(providerSpecificModel);
-        } else {
-            /* Leave empty, default models will be provided in buildRequestPayload */
-            aiModel = "";
-        }
+    const QString providerSpecificModel = providerName + ".ai_model";
+    if (config->hasKey(providerSpecificModel)) {
+        aiModel = config->getValue(providerSpecificModel);
+    } else {
+        /* Leave empty, default models will be provided in buildRequestPayload */
+        aiModel = "";
     }
 }
 
@@ -345,17 +361,17 @@ QUrl QLLMService::getDefaultApiEndpoint(Provider provider) const
     /* Default endpoints for each provider */
     switch (provider) {
     case DEEPSEEK:
-        return QUrl("https://api.deepseek.com/chat/completions");
+        return {"https://api.deepseek.com/chat/completions"};
     case OPENAI:
-        return QUrl("https://api.openai.com/v1/chat/completions");
+        return {"https://api.openai.com/v1/chat/completions"};
     case GROQ:
-        return QUrl("https://api.groq.com/openai/v1/chat/completions");
+        return {"https://api.groq.com/openai/v1/chat/completions"};
     case CLAUDE:
-        return QUrl("https://api.anthropic.com/v1/messages");
+        return {"https://api.anthropic.com/v1/messages"};
     case OLLAMA:
-        return QUrl("http://localhost:11434/api/generate");
+        return {"http://localhost:11434/api/generate"};
     default:
-        return QUrl();
+        return {};
     }
 }
 
@@ -363,17 +379,25 @@ QLLMService::Provider QLLMService::getCurrentProvider() const
 {
     /* Use provider from config if available */
     if (config && config->hasKey("ai_provider")) {
-        QString configProvider = config->getValue("ai_provider").toLower();
+        const QString configProvider = config->getValue("ai_provider").toLower();
 
         if (configProvider == "deepseek") {
             return DEEPSEEK;
-        } else if (configProvider == "openai") {
+        }
+
+        if (configProvider == "openai") {
             return OPENAI;
-        } else if (configProvider == "groq") {
+        }
+
+        if (configProvider == "groq") {
             return GROQ;
-        } else if (configProvider == "claude") {
+        }
+
+        if (configProvider == "claude") {
             return CLAUDE;
-        } else if (configProvider == "ollama") {
+        }
+
+        if (configProvider == "ollama") {
             return OLLAMA;
         }
     }
@@ -551,7 +575,7 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
     LLMResponse response;
 
     if (reply->error() == QNetworkReply::NoError) {
-        QByteArray responseData = reply->readAll();
+        const QByteArray responseData = reply->readAll();
 
         try {
             json jsonResponse = json::parse(responseData.toStdString());
@@ -592,8 +616,8 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
                     if (firstContent.contains("text")) {
                         response.content = QString::fromStdString(
                             firstContent["text"].get<std::string>());
-                    } else if (
-                        firstContent.contains("type")
+                    }
+                    if (firstContent.contains("type")
                         && firstContent["type"].get<std::string>() == "text") {
                         response.content = QString::fromStdString(
                             firstContent["text"].get<std::string>());
@@ -628,9 +652,9 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
             qWarning() << "Raw response:" << responseData;
         }
     } else {
-        response.success      = false;
-        response.errorMessage = reply->errorString();
-        QByteArray errorData  = reply->readAll();
+        response.success           = false;
+        response.errorMessage      = reply->errorString();
+        const QByteArray errorData = reply->readAll();
         qWarning() << "LLM API request failed:" << reply->errorString();
         qWarning() << "Error response:" << errorData;
     }
@@ -646,7 +670,7 @@ void QLLMService::setupNetworkProxy()
     }
 
     /* Get proxy type, default is "system" */
-    QString proxyType = config->getValue("proxy_type", "system").toLower();
+    const QString proxyType = config->getValue("proxy_type", "system").toLower();
 
     QNetworkProxy proxy;
 

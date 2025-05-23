@@ -36,7 +36,7 @@ class QLLMService : public QObject
     Q_OBJECT
 
 public:
-    enum Provider {
+    enum Provider : std::uint8_t {
         DEEPSEEK, /* Default provider */
         OPENAI,
         GROQ,
@@ -113,9 +113,9 @@ public slots:
 
     /**
      * @brief Manually set an API key
-     * @param apiKey API key to set
+     * @param value API key to set
      */
-    void setApiKey(const QString &apiKey);
+    void setApiKey(const QString &value);
 
     /* API endpoint related methods */
 
@@ -151,9 +151,9 @@ public slots:
      * @param jsonMode Whether to request JSON format output from the LLM
      */
     void sendRequestAsync(
-        const QString                     &prompt,
-        std::function<void(LLMResponse &)> callback,
-        const QString                     &systemPrompt
+        const QString                            &prompt,
+        const std::function<void(LLMResponse &)> &callback,
+        const QString                            &systemPrompt
         = "You are a helpful assistant that provides accurate and informative responses.",
         double temperature = 0.2,
         bool   jsonMode    = false);
