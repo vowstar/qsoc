@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <QTextStream>
 
+#include <charconv>
 #include <fstream>
 #include <inja/inja.hpp>
 #include <nlohmann/json.hpp>
@@ -49,58 +50,81 @@ bool QSocGenerateManager::renderTemplate(
                 return false;
             }
 
-            QTextStream in(&file);
-            QString     firstLine = in.readLine();
+            QTextStream   inputStream(&file);
+            const QString firstLine = inputStream.readLine();
             file.close();
 
             /* Determine delimiter based on count of commas vs semicolons */
             QChar delimiter = firstLine.count(',') >= firstLine.count(';') ? ',' : ';';
 
             /* Parse CSV with the detected delimiter */
-            rapidcsv::SeparatorParams separatorParams(static_cast<char>(delimiter.unicode()));
-            rapidcsv::Document
+            const rapidcsv::SeparatorParams separatorParams(static_cast<char>(delimiter.unicode()));
+            const rapidcsv::Document
                 doc(csvFilePath.toStdString(), rapidcsv::LabelParams(0, -1), separatorParams);
 
-            QFileInfo fileInfo(csvFilePath);
-            QString   baseName = fileInfo.baseName();
+            const QFileInfo fileInfo(csvFilePath);
+            const QString   baseName = fileInfo.baseName();
 
             /* Create array for this CSV file */
             json csvArray = json::array();
 
             /* Get column names */
-            std::vector<std::string> columnNames = doc.GetColumnNames();
+            const std::vector<std::string> columnNames = doc.GetColumnNames();
 
             /* Process rows */
-            size_t rowCount = doc.GetRowCount();
+            const size_t rowCount = doc.GetRowCount();
             for (size_t i = 0; i < rowCount; i++) {
                 json row = json::object();
                 for (const auto &colName : columnNames) {
                     try {
-                        /* Try to get as string first (default) */
-                        std::string cellValue = doc.GetCell<std::string>(colName, i);
+                        /* Retrieve the cell as a raw string */
+                        const auto cellValue = doc.GetCell<std::string>(colName, i);
 
-                        /* Try to parse as number if possible */
-                        try {
-                            /* Check if it's an integer */
-                            size_t pos      = 0;
-                            int    intValue = std::stoi(cellValue, &pos);
-                            if (pos == cellValue.length()) {
-                                row[colName] = intValue;
-                                continue;
-                            }
+                        /* Trim leading and trailing whitespace characters */
+                        auto trimWhitespace = [](std::string_view input) {
+                            auto isSpaceChar = [](unsigned char character) {
+                                return std::isspace(character);
+                            };
+                            std::string_view working = input;
+                            while (!working.empty()
+                                   && isSpaceChar(static_cast<unsigned char>(working.front())))
+                                working.remove_prefix(1);
+                            while (!working.empty()
+                                   && isSpaceChar(static_cast<unsigned char>(working.back())))
+                                working.remove_suffix(1);
+                            return working;
+                        };
 
-                            /* Check if it's a float */
-                            pos               = 0;
-                            double floatValue = std::stod(cellValue, &pos);
-                            if (pos == cellValue.length()) {
-                                row[colName] = floatValue;
-                                continue;
-                            }
-                        } catch (...) {
-                            /* Not a number, keep as string */
+                        const std::string_view trimmedView = trimWhitespace(cellValue);
+
+                        /* Try to parse an integer */
+                        int intValue{};
+                        auto [intParseEnd, intParseErr] = std::from_chars(
+                            trimmedView.data(), trimmedView.data() + trimmedView.size(), intValue);
+
+                        if (intParseErr == std::errc{}
+                            && intParseEnd == trimmedView.data() + trimmedView.size()) {
+                            row[colName] = intValue;
+                            continue;
                         }
 
-                        /* Store as string if not a number */
+                        /* Try to parse a floating-point value (accept both '.' and ',' as decimal separators) */
+                        std::string floatBuffer(trimmedView);
+                        std::replace(floatBuffer.begin(), floatBuffer.end(), ',', '.');
+
+                        double doubleValue{};
+                        auto [doubleParseEnd, doubleParseErr] = std::from_chars(
+                            floatBuffer.data(),
+                            floatBuffer.data() + floatBuffer.size(),
+                            doubleValue);
+
+                        if (doubleParseErr == std::errc{}
+                            && doubleParseEnd == floatBuffer.data() + floatBuffer.size()) {
+                            row[colName] = doubleValue;
+                            continue;
+                        }
+
+                        /* Parsing failed: keep the original text */
                         row[colName] = cellValue;
                     } catch (const std::exception &e) {
                         qWarning() << QCoreApplication::translate(
@@ -143,47 +167,47 @@ bool QSocGenerateManager::renderTemplate(
         }
 
         try {
-            YAML::Node yamlNode = YAML::LoadFile(yamlFilePath.toStdString());
+            const YAML::Node yamlNode = YAML::LoadFile(yamlFilePath.toStdString());
 
             /* Convert YAML to JSON */
             json                                            yamlJson;
             std::function<void(const YAML::Node &, json &)> convertYamlToJson;
 
-            convertYamlToJson = [&convertYamlToJson](const YAML::Node &node, json &j) {
+            convertYamlToJson = [&convertYamlToJson](const YAML::Node &node, json &jsonObj) {
                 switch (node.Type()) {
                 case YAML::NodeType::Null:
-                    j = nullptr;
+                    jsonObj = nullptr;
                     break;
                 case YAML::NodeType::Scalar:
                     /* Try to parse as various types */
                     try {
-                        j = node.as<int>();
+                        jsonObj = node.as<int>();
                     } catch (...) {
                         try {
-                            j = node.as<double>();
+                            jsonObj = node.as<double>();
                         } catch (...) {
                             try {
-                                j = node.as<bool>();
+                                jsonObj = node.as<bool>();
                             } catch (...) {
-                                j = node.as<std::string>();
+                                jsonObj = node.as<std::string>();
                             }
                         }
                     }
                     break;
                 case YAML::NodeType::Sequence:
-                    j = json::array();
-                    for (size_t i = 0; i < node.size(); i++) {
-                        json element;
-                        convertYamlToJson(node[i], element);
-                        j.push_back(element);
+                    jsonObj = json::array();
+                    for (const auto &element : node) {
+                        json elementJson;
+                        convertYamlToJson(element, elementJson);
+                        jsonObj.push_back(elementJson);
                     }
                     break;
                 case YAML::NodeType::Map:
-                    j = json::object();
-                    for (const auto &it : node) {
+                    jsonObj = json::object();
+                    for (const auto &nodeIter : node) {
                         json value;
-                        convertYamlToJson(it.second, value);
-                        j[it.first.as<std::string>()] = value;
+                        convertYamlToJson(nodeIter.second, value);
+                        jsonObj[nodeIter.first.as<std::string>()] = value;
                     }
                     break;
                 default:
@@ -241,12 +265,12 @@ bool QSocGenerateManager::renderTemplate(
                 return false;
             }
 
-            QByteArray jsonData = jsonFile.readAll();
+            const QByteArray jsonData = jsonFile.readAll();
             jsonFile.close();
 
             /* Parse JSON */
-            QJsonParseError parseError;
-            QJsonDocument   jsonDoc = QJsonDocument::fromJson(jsonData, &parseError);
+            QJsonParseError     parseError;
+            const QJsonDocument jsonDoc = QJsonDocument::fromJson(jsonData, &parseError);
             if (parseError.error != QJsonParseError::NoError) {
                 qCritical() << QCoreApplication::translate(
                                    "generate", "Error: Failed to parse JSON file \"%1\": %2")
@@ -256,7 +280,7 @@ bool QSocGenerateManager::renderTemplate(
             }
 
             /* Convert to nlohmann::json */
-            json jsonObj = json::parse(jsonDoc.toJson().toStdString());
+            const json jsonObj = json::parse(jsonDoc.toJson().toStdString());
 
             /* Merge with existing data (deep merge) */
             std::function<void(json &, const json &)> mergeJson;
@@ -298,19 +322,20 @@ bool QSocGenerateManager::renderTemplate(
             return false;
         }
 
-        QByteArray templateData = templateFile.readAll();
+        const QByteArray templateData = templateFile.readAll();
         templateFile.close();
 
         /* Setup inja environment */
         inja::Environment env;
 
         /* Render template */
-        std::string templateStr = templateData.toStdString();
-        std::string result      = env.render(templateStr, dataObject);
+        const std::string templateStr = templateData.toStdString();
+        const std::string result      = env.render(templateStr, dataObject);
 
         /* Create output file */
-        QString outputPath = projectManager->getOutputPath() + QDir::separator() + outputFileName;
-        QFile   outputFile(outputPath);
+        const QString outputPath = projectManager->getOutputPath() + QDir::separator()
+                                   + outputFileName;
+        QFile outputFile(outputPath);
         if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             qCritical() << QCoreApplication::translate(
                                "generate", "Error: Could not create output file \"%1\"")
