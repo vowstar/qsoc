@@ -91,7 +91,7 @@ bool QSocGenerateManager::processNetlist()
                     qWarning() << "Warning: Bus type name is not a scalar, skipping";
                     continue;
                 }
-                const std::string busTypeName = busTypePair.first.as<std::string>();
+                const auto busTypeName = busTypePair.first.as<std::string>();
                 qInfo() << "Processing bus:" << busTypeName.c_str();
 
                 /* Get bus connections (should be a map) */
@@ -123,7 +123,7 @@ bool QSocGenerateManager::processNetlist()
                             qWarning() << "Warning: Instance name is not a scalar, skipping";
                             continue;
                         }
-                        const std::string instanceName = connectionPair.first.as<std::string>();
+                        const auto instanceName = connectionPair.first.as<std::string>();
 
                         if (!connectionPair.second.IsMap() || !connectionPair.second["port"]
                             || !connectionPair.second["port"].IsScalar()) {
@@ -131,7 +131,7 @@ bool QSocGenerateManager::processNetlist()
                                        << instanceName.c_str();
                             continue;
                         }
-                        const std::string portName = connectionPair.second["port"].as<std::string>();
+                        const auto portName = connectionPair.second["port"].as<std::string>();
 
                         qInfo() << "Validating connection:" << instanceName.c_str() << "."
                                 << portName.c_str();
@@ -151,7 +151,7 @@ bool QSocGenerateManager::processNetlist()
                             continue;
                         }
 
-                        const std::string moduleName
+                        const auto moduleName
                             = netlistData["instance"][instanceName]["module"].as<std::string>();
 
                         /* Check if module exists */
@@ -177,19 +177,12 @@ bool QSocGenerateManager::processNetlist()
                             continue;
                         }
 
-                        /* Try exact port name */
+                        /* Check if port exists in bus section - try multiple name variations */
                         bool portFound = false;
-                        if (moduleData["bus"][portName]) {
-                            portFound = true;
-                        }
-                        /* Try with pad_ prefix if not found */
-                        else if (
-                            portName.compare(0, 4, "pad_") == 0
-                            && moduleData["bus"][portName.substr(4)]) {
-                            portFound = true;
-                        }
-                        /* Try adding pad_ prefix */
-                        else if (moduleData["bus"]["pad_" + portName]) {
+                        if (moduleData["bus"][portName]
+                            || (portName.starts_with("pad_")
+                                && moduleData["bus"][portName.substr(4)])
+                            || moduleData["bus"]["pad_" + portName]) {
                             portFound = true;
                         }
 
@@ -207,8 +200,7 @@ bool QSocGenerateManager::processNetlist()
                             && moduleData["bus"][portName]["bus"].IsScalar()) {
                             currentBusType = moduleData["bus"][portName]["bus"].as<std::string>();
                         } else if (
-                            portName.compare(0, 4, "pad_") == 0
-                            && moduleData["bus"][portName.substr(4)]
+                            portName.starts_with("pad_") && moduleData["bus"][portName.substr(4)]
                             && moduleData["bus"][portName.substr(4)]["bus"]
                             && moduleData["bus"][portName.substr(4)]["bus"].IsScalar()) {
                             currentBusType
@@ -294,8 +286,10 @@ bool QSocGenerateManager::processNetlist()
                         continue;
                     }
 
-                    const std::string signalName = portPair.first.as<std::string>();
-                    const std::string netName    = busTypeName + "_" + signalName;
+                    const auto  signalName = portPair.first.as<std::string>();
+                    std::string netName    = busTypeName;
+                    netName += "_";
+                    netName += signalName;
 
                     qInfo() << "Creating net for bus signal:" << signalName.c_str();
 
@@ -339,7 +333,7 @@ bool QSocGenerateManager::processNetlist()
                             }
                             /* Try with pad_ stripped port name */
                             else if (
-                                conn.portName.compare(0, 4, "pad_") == 0
+                                conn.portName.starts_with("pad_")
                                 && moduleData["bus"][conn.portName.substr(4)]
                                 && moduleData["bus"][conn.portName.substr(4)]["mapping"]
                                 && moduleData["bus"][conn.portName.substr(4)]["mapping"].IsMap()
@@ -429,7 +423,7 @@ bool QSocGenerateManager::processNetlist()
         netlistData.remove("bus");
 
         qInfo() << "Netlist processed successfully";
-        std::cout << "Expanded Netlist:\n" << netlistData << std::endl;
+        std::cout << "Expanded Netlist:\n" << netlistData << '\n';
         return true;
     } catch (const YAML::Exception &e) {
         qCritical() << "YAML exception in processNetlist:" << e.what();
@@ -456,13 +450,13 @@ int QSocGenerateManager::calculateBitSelectWidth(const QString &bitSelect)
     }
 
     /* Handle range selection like [3:2] */
-    QRegularExpression      rangeRegex("\\[\\s*(\\d+)\\s*:\\s*(\\d+)\\s*\\]");
-    QRegularExpressionMatch rangeMatch = rangeRegex.match(bitSelect);
+    const QRegularExpression      rangeRegex(R"(\[\s*(\d+)\s*:\s*(\d+)\s*\])");
+    const QRegularExpressionMatch rangeMatch = rangeRegex.match(bitSelect);
     if (rangeMatch.hasMatch()) {
-        bool msb_ok = false;
-        bool lsb_ok = false;
-        int  msb    = rangeMatch.captured(1).toInt(&msb_ok);
-        int  lsb    = rangeMatch.captured(2).toInt(&lsb_ok);
+        bool      msb_ok = false;
+        bool      lsb_ok = false;
+        const int msb    = rangeMatch.captured(1).toInt(&msb_ok);
+        const int lsb    = rangeMatch.captured(2).toInt(&lsb_ok);
 
         if (msb_ok && lsb_ok) {
             /* e.g., [3:2] has width 2 */
@@ -471,8 +465,8 @@ int QSocGenerateManager::calculateBitSelectWidth(const QString &bitSelect)
     }
 
     /* Handle single bit selection like [5] */
-    QRegularExpression      singleBitRegex("\\[\\s*(\\d+)\\s*\\]");
-    QRegularExpressionMatch singleBitMatch = singleBitRegex.match(bitSelect);
+    const QRegularExpression      singleBitRegex(R"(\[\s*(\d+)\s*\])");
+    const QRegularExpressionMatch singleBitMatch = singleBitRegex.match(bitSelect);
     if (singleBitMatch.hasMatch()) {
         /* Single bit has width 1 */
         return 1;
@@ -504,8 +498,8 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
     QMap<QPair<QString, QString>, PortWidthInfo> portWidthInfos;
 
     for (const auto &conn : connections) {
-        QString       instanceName = conn.instanceName;
-        QString       portName     = conn.portName;
+        const QString instanceName = conn.instanceName;
+        const QString portName     = conn.portName;
         PortWidthInfo widthInfo;
         widthInfo.originalWidth  = "";
         widthInfo.bitSelect      = "";
@@ -520,21 +514,21 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                     QString width = QString::fromStdString(
                         netlistData["port"][portName.toStdString()]["type"].as<std::string>());
                     /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                    width = width.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                    width = width.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
                     widthInfo.originalWidth = width;
 
                     /* Calculate width in bits */
-                    QRegularExpression widthRegex("\\[(\\d+)(?::(\\d+))?\\]");
-                    auto               match = widthRegex.match(width);
+                    const QRegularExpression widthRegex(R"(\[(\d+)(?::(\d+))?\])");
+                    auto                     match = widthRegex.match(width);
                     if (match.hasMatch()) {
-                        bool msb_ok = false;
-                        int  msb    = match.captured(1).toInt(&msb_ok);
+                        bool      msb_ok = false;
+                        const int msb    = match.captured(1).toInt(&msb_ok);
 
                         if (msb_ok) {
                             if (match.capturedLength(2) > 0) {
                                 /* Case with specified LSB, e.g. [7:3] */
-                                bool lsb_ok = false;
-                                int  lsb    = match.captured(2).toInt(&lsb_ok);
+                                bool      lsb_ok = false;
+                                const int lsb    = match.captured(2).toInt(&lsb_ok);
                                 if (lsb_ok) {
                                     widthInfo.effectiveWidth = qAbs(msb - lsb) + 1;
                                 }
@@ -555,7 +549,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                         for (const auto &instIter : netIter.second) {
                             if (instIter.second.IsMap() && instIter.second["port"]
                                 && instIter.second["port"].IsScalar()) {
-                                QString connPortName = QString::fromStdString(
+                                const QString connPortName = QString::fromStdString(
                                     instIter.second["port"].as<std::string>());
 
                                 if (connPortName == portName) {
@@ -566,7 +560,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                                             instIter.second["bits"].as<std::string>());
 
                                         /* Update effective width based on bit selection */
-                                        int selectWidth = calculateBitSelectWidth(
+                                        const int selectWidth = calculateBitSelectWidth(
                                             widthInfo.bitSelect);
                                         if (selectWidth > 0) {
                                             widthInfo.effectiveWidth = selectWidth;
@@ -584,7 +578,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
             if (netlistData["instance"][conn.instanceName.toStdString()]
                 && netlistData["instance"][conn.instanceName.toStdString()]["module"]
                 && netlistData["instance"][conn.instanceName.toStdString()]["module"].IsScalar()) {
-                QString moduleName = QString::fromStdString(
+                const QString moduleName = QString::fromStdString(
                     netlistData["instance"][conn.instanceName.toStdString()]["module"]
                         .as<std::string>());
 
@@ -598,21 +592,21 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                         QString width = QString::fromStdString(
                             moduleData["port"][portName.toStdString()]["type"].as<std::string>());
                         /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                        width = width.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                        width = width.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
                         widthInfo.originalWidth = width;
 
                         /* Calculate width in bits */
-                        QRegularExpression widthRegex("\\[(\\d+)(?::(\\d+))?\\]");
-                        auto               match = widthRegex.match(width);
+                        const QRegularExpression widthRegex(R"(\[(\d+)(?::(\d+))?\])");
+                        auto                     match = widthRegex.match(width);
                         if (match.hasMatch()) {
-                            bool msb_ok = false;
-                            int  msb    = match.captured(1).toInt(&msb_ok);
+                            bool      msb_ok = false;
+                            const int msb    = match.captured(1).toInt(&msb_ok);
 
                             if (msb_ok) {
                                 if (match.capturedLength(2) > 0) {
                                     /* Case with specified LSB, e.g. [7:3] */
-                                    bool lsb_ok = false;
-                                    int  lsb    = match.captured(2).toInt(&lsb_ok);
+                                    bool      lsb_ok = false;
+                                    const int lsb    = match.captured(2).toInt(&lsb_ok);
                                     if (lsb_ok) {
                                         widthInfo.effectiveWidth = qAbs(msb - lsb) + 1;
                                     }
@@ -633,7 +627,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                     if (netIter.second.IsMap() && netIter.second[instanceName.toStdString()]) {
                         auto instNode = netIter.second[instanceName.toStdString()];
                         if (instNode.IsMap() && instNode["port"] && instNode["port"].IsScalar()) {
-                            QString connPortName = QString::fromStdString(
+                            const QString connPortName = QString::fromStdString(
                                 instNode["port"].as<std::string>());
 
                             if (connPortName == portName) {
@@ -643,7 +637,8 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                                         instNode["bits"].as<std::string>());
 
                                     /* Update effective width based on bit selection */
-                                    int selectWidth = calculateBitSelectWidth(widthInfo.bitSelect);
+                                    const int selectWidth = calculateBitSelectWidth(
+                                        widthInfo.bitSelect);
                                     if (selectWidth > 0) {
                                         widthInfo.effectiveWidth = selectWidth;
                                     }
@@ -705,10 +700,11 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
             if (netlistData["port"] && netlistData["port"][conn.portName.toStdString()]
                 && netlistData["port"][conn.portName.toStdString()]["direction"]
                 && netlistData["port"][conn.portName.toStdString()]["direction"].IsScalar()) {
-                QString dirStr = QString::fromStdString(
-                                     netlistData["port"][conn.portName.toStdString()]["direction"]
-                                         .as<std::string>())
-                                     .toLower();
+                const QString dirStr
+                    = QString::fromStdString(
+                          netlistData["port"][conn.portName.toStdString()]["direction"]
+                              .as<std::string>())
+                          .toLower();
 
                 /* Reverse direction for internal net perspective */
                 if (dirStr == "out" || dirStr == "output") {
@@ -724,7 +720,7 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
             if (netlistData["instance"][conn.instanceName.toStdString()]
                 && netlistData["instance"][conn.instanceName.toStdString()]["module"]
                 && netlistData["instance"][conn.instanceName.toStdString()]["module"].IsScalar()) {
-                QString moduleName = QString::fromStdString(
+                const QString moduleName = QString::fromStdString(
                     netlistData["instance"][conn.instanceName.toStdString()]["module"]
                         .as<std::string>());
 
@@ -769,11 +765,11 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
     if (outputCount == 0 && inoutCount == 0) {
         /* No output/inout, only inputs or unknowns - net is undriven */
         return PortDirectionStatus::Undriven;
-    } else if (outputCount + inoutCount > 1) {
+    }
+    if (outputCount + inoutCount > 1) {
         /* Multiple output or inout ports - potential conflict */
         return PortDirectionStatus::Multidrive;
-    } else {
-        /* Normal case: one driver, multiple inputs */
-        return PortDirectionStatus::Valid;
     }
+    /* Normal case: one driver, multiple inputs */
+    return PortDirectionStatus::Valid;
 }
