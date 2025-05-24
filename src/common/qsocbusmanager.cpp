@@ -70,7 +70,6 @@ bool QSocBusManager::importFromFileList(
         = {"name", "mode", "direction", "width", "qualifier", "description"};
 
     /* Initialize result CSV data */
-    QStringList        resultHeaders = standardColumns;
     QList<QStringList> resultData;
 
     /* Process each CSV file */
@@ -80,22 +79,22 @@ bool QSocBusManager::importFromFileList(
             continue;
         }
 
-        QTextStream in(&file);
-        QString     firstLine = in.readLine();
+        QTextStream   inputStream(&file);
+        const QString firstLine = inputStream.readLine();
         file.close();
 
         /* Auto-detect delimiter */
         QChar delimiter = firstLine.count(',') >= firstLine.count(';') ? ',' : ';';
 
         /* Configure rapidcsv */
-        rapidcsv::SeparatorParams params(static_cast<char>(delimiter.unicode()));
+        const rapidcsv::SeparatorParams params(static_cast<char>(delimiter.unicode()));
 
         /* Parse CSV file using rapidcsv */
-        rapidcsv::Document doc(filePath.toStdString(), rapidcsv::LabelParams(0, -1), params);
+        const rapidcsv::Document doc(filePath.toStdString(), rapidcsv::LabelParams(0, -1), params);
 
         /* Get column names from first row */
-        std::vector<std::string> fileColumnsStd = doc.GetColumnNames();
-        QStringList              fileColumns;
+        const std::vector<std::string> fileColumnsStd = doc.GetColumnNames();
+        QStringList                    fileColumns;
         for (const auto &col : fileColumnsStd) {
             fileColumns.append(QString::fromStdString(col));
         }
@@ -108,7 +107,7 @@ bool QSocBusManager::importFromFileList(
 
         /* First pass - find all potential matches and their lengths */
         for (int i = 0; i < fileColumns.size(); i++) {
-            QString fileCol = fileColumns[i].trimmed().toLower();
+            const QString fileCol = fileColumns[i].trimmed().toLower();
 
             /* Check against each standard column */
             for (const QString &stdCol : standardColumns) {
@@ -116,7 +115,7 @@ bool QSocBusManager::importFromFileList(
                     if (!columnLengths.contains(stdCol)) {
                         columnLengths[stdCol] = QMap<int, int>();
                     }
-                    columnLengths[stdCol][i] = fileColumns[i].trimmed().length();
+                    columnLengths[stdCol][i] = static_cast<int>(fileColumns[i].trimmed().length());
                 }
             }
         }
@@ -137,7 +136,7 @@ bool QSocBusManager::importFromFileList(
                 }
 
                 /* Map the shortest column */
-                columnMapping[shortestIndex] = standardColumns.indexOf(stdCol);
+                columnMapping[shortestIndex] = static_cast<int>(standardColumns.indexOf(stdCol));
             }
         }
 
@@ -146,11 +145,11 @@ bool QSocBusManager::importFromFileList(
             QStringList mappedRow(standardColumns.size());
 
             for (auto it = columnMapping.begin(); it != columnMapping.end(); ++it) {
-                int fileColIdx = it.key();
-                int stdColIdx  = it.value();
+                const int fileColIdx = it.key();
+                const int stdColIdx  = it.value();
 
-                std::string cellValue = doc.GetCell<std::string>(fileColIdx, rowIdx);
-                mappedRow[stdColIdx]  = QString::fromStdString(cellValue);
+                const auto cellValue = doc.GetCell<std::string>(fileColIdx, rowIdx);
+                mappedRow[stdColIdx] = QString::fromStdString(cellValue);
             }
 
             resultData.append(mappedRow);
@@ -163,11 +162,11 @@ bool QSocBusManager::importFromFileList(
     for (const QStringList &row : resultData) {
         /* Ensure we have all required fields */
         if (row.size() >= 6) {
-            QString signalName = row[0].trimmed();
-            QString mode       = row[1].trimmed();
-            QString direction  = row[2].trimmed();
-            QString width      = row[3].trimmed();
-            QString qualifier  = row[4].trimmed();
+            const QString signalName = row[0].trimmed();
+            const QString mode       = row[1].trimmed();
+            const QString direction  = row[2].trimmed();
+            const QString width      = row[3].trimmed();
+            const QString qualifier  = row[4].trimmed();
 
             if (!signalName.isEmpty() && !mode.isEmpty()) {
                 /* Create nested structure: busName -> port -> signalName -> mode -> properties */
@@ -752,7 +751,7 @@ bool QSocBusManager::isBusExist(const QRegularExpression &busNameRegex)
 QString QSocBusManager::getBusLibrary(const QString &busName)
 {
     if (!isBusExist(busName)) {
-        return QString();
+        return {};
     }
     return QString::fromStdString(busData[busName.toStdString()]["library"].as<std::string>());
 }
