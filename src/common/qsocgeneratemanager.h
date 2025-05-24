@@ -16,6 +16,9 @@
 #include <QString>
 #include <QStringList>
 
+#include <cstdint>
+#include <utility>
+
 #include <yaml-cpp/yaml.h>
 
 /**
@@ -51,7 +54,7 @@ public:
     /**
      * @brief Enum for port direction check results
      */
-    enum class PortDirectionStatus {
+    enum class PortDirectionStatus : std::uint8_t {
         Valid,     /**< Consistent port directions */
         Undriven,  /**< Net has only input ports */
         Multidrive /**< Net has multiple output/inout ports */
@@ -61,7 +64,7 @@ public:
     /**
      * @brief Enum to distinguish between module ports and top-level ports
      */
-    enum class PortType {
+    enum class PortType : std::uint8_t {
         Module,  /**< Instance/module port */
         TopLevel /**< Top-level port */
     };
@@ -76,20 +79,20 @@ public:
         QString  instanceName; /**< For Module type only, empty for TopLevel */
         QString  portName;
 
-        PortConnection(PortType t, const QString &inst, const QString &port)
-            : type(t)
-            , instanceName(inst)
-            , portName(port)
+        PortConnection(PortType portType, QString instanceName, QString portName)
+            : type(portType)
+            , instanceName(std::move(instanceName))
+            , portName(std::move(portName))
         {}
 
-        static PortConnection createModulePort(const QString &inst, const QString &port)
+        static PortConnection createModulePort(const QString &instanceName, const QString &portName)
         {
-            return PortConnection(PortType::Module, inst, port);
+            return {PortType::Module, instanceName, portName};
         }
 
-        static PortConnection createTopLevelPort(const QString &port)
+        static PortConnection createTopLevelPort(const QString &portName)
         {
-            return PortConnection(PortType::TopLevel, "", port);
+            return {PortType::TopLevel, "", portName};
         }
     };
 
@@ -106,34 +109,37 @@ public:
         QString  bitSelect; /**< Bit selection if specified (e.g. "[7:0]", "[3]") */
 
         PortDetailInfo(
-            PortType       t,
-            const QString &inst,
-            const QString &port,
-            const QString &w,
-            const QString &dir,
-            const QString &bits = "")
-            : type(t)
-            , instanceName(inst)
-            , portName(port)
-            , width(w)
-            , direction(dir)
-            , bitSelect(bits)
+            PortType portType,
+            QString  instanceName,
+            QString  portName,
+            QString  widthSpec,
+            QString  direction,
+            QString  bitSelection = "")
+            : type(portType)
+            , instanceName(std::move(instanceName))
+            , portName(std::move(portName))
+            , width(std::move(widthSpec))
+            , direction(std::move(direction))
+            , bitSelect(std::move(bitSelection))
         {}
 
         static PortDetailInfo createModulePort(
-            const QString &inst,
-            const QString &port,
-            const QString &w,
-            const QString &dir,
-            const QString &bits = "")
+            const QString &instanceName,
+            const QString &portName,
+            const QString &widthSpec,
+            const QString &direction,
+            const QString &bitSelection = "")
         {
-            return PortDetailInfo(PortType::Module, inst, port, w, dir, bits);
+            return {PortType::Module, instanceName, portName, widthSpec, direction, bitSelection};
         }
 
         static PortDetailInfo createTopLevelPort(
-            const QString &port, const QString &w, const QString &dir, const QString &bits = "")
+            const QString &portName,
+            const QString &widthSpec,
+            const QString &direction,
+            const QString &bitSelection = "")
         {
-            return PortDetailInfo(PortType::TopLevel, "", port, w, dir, bits);
+            return {PortType::TopLevel, "", portName, widthSpec, direction, bitSelection};
         }
     };
 

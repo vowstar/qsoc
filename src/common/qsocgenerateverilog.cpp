@@ -103,7 +103,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             if (paramIter->second["type"] && paramIter->second["type"].IsScalar()) {
                 paramType = QString::fromStdString(paramIter->second["type"].as<std::string>());
                 /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                paramType = paramType.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                paramType = paramType.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
 
                 /* Add a space if type isn't empty after processing */
                 if (!paramType.isEmpty() && !paramType.endsWith(" ")) {
@@ -152,9 +152,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             QString type      = ""; /* Empty type by default for Verilog 2001 */
 
             if (portIter->second["direction"] && portIter->second["direction"].IsScalar()) {
-                QString dirStr = QString::fromStdString(
-                                     portIter->second["direction"].as<std::string>())
-                                     .toLower();
+                const QString dirStr = QString::fromStdString(
+                                           portIter->second["direction"].as<std::string>())
+                                           .toLower();
 
                 /* Handle both full and abbreviated forms */
                 if (dirStr == "out" || dirStr == "output") {
@@ -170,12 +170,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             if (portIter->second["type"] && portIter->second["type"].IsScalar()) {
                 type = QString::fromStdString(portIter->second["type"].as<std::string>());
                 /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                type = type.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                type = type.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
             }
 
             /* Store the connection information if present */
             if (portIter->second["connect"] && portIter->second["connect"].IsScalar()) {
-                QString connectedNet = QString::fromStdString(
+                const QString connectedNet = QString::fromStdString(
                     portIter->second["connect"].as<std::string>());
                 portToNetConnections[portName] = connectedNet;
             }
@@ -254,10 +254,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     }
                                 }
 
-                                /* Initialize bitSelect as empty string */
-                                QString bitSelect = "";
-
                                 /* Check if this port has bits selection attribute */
+                                QString bitSelect = "";
                                 if (instancePair.second["bits"]
                                     && instancePair.second["bits"].IsScalar()) {
                                     bitSelect = QString::fromStdString(
@@ -351,11 +349,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             && netlistData["port"][connectedPortName.toStdString()]["direction"]
                             && netlistData["port"][connectedPortName.toStdString()]["direction"]
                                    .IsScalar()) {
-                            QString dirStr = QString::fromStdString(
-                                                 netlistData["port"][connectedPortName.toStdString()]
-                                                            ["direction"]
-                                                                .as<std::string>())
-                                                 .toLower();
+                            const QString dirStr
+                                = QString::fromStdString(
+                                      netlistData["port"][connectedPortName.toStdString()]
+                                                 ["direction"]
+                                                     .as<std::string>())
+                                      .toLower();
 
                             /* Store original direction for later use */
                             if (dirStr == "out" || dirStr == "output") {
@@ -383,17 +382,20 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 PortConnection::createTopLevelPort(connectedPortName));
 
                             /* Get port width */
-                            QString portWidth = "";
+                            QString portWidthSpec = "";
+                            QString portDirection = "unknown";
+
+                            /* Get port direction */
                             if (netlistData["port"]
                                 && netlistData["port"][connectedPortName.toStdString()]) {
                                 auto portNode = netlistData["port"][connectedPortName.toStdString()];
 
                                 /* Get port direction */
-                                QString portDirection = "unknown";
                                 if (portNode["direction"] && portNode["direction"].IsScalar()) {
-                                    QString dirStr = QString::fromStdString(
-                                                         portNode["direction"].as<std::string>())
-                                                         .toLower();
+                                    const QString dirStr
+                                        = QString::fromStdString(
+                                              portNode["direction"].as<std::string>())
+                                              .toLower();
 
                                     /* Handle both full and abbreviated forms */
                                     if (dirStr == "out" || dirStr == "output") {
@@ -407,18 +409,21 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                                 /* Get port width/type */
                                 if (portNode["type"] && portNode["type"].IsScalar()) {
-                                    portWidth = QString::fromStdString(
+                                    portWidthSpec = QString::fromStdString(
                                         portNode["type"].as<std::string>());
                                 }
                             }
 
-                            /* Initialize bitSelect as empty string */
-                            QString bitSelect = "";
+                            /* Initialize bitSelection as empty string */
+                            const QString bitSelection = "";
 
                             /* Add to detailed port information with reversed direction */
                             portDetails.append(
                                 PortDetailInfo::createTopLevelPort(
-                                    connectedPortName, portWidth, reversedDirection, bitSelect));
+                                    connectedPortName,
+                                    portWidthSpec,
+                                    reversedDirection,
+                                    bitSelection));
                         }
                         break;
                     }
@@ -429,13 +434,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 if (netNode.IsMap()) {
                     for (const auto &instancePair : netNode) {
                         if (instancePair.first.IsScalar()) {
-                            QString instanceName = QString::fromStdString(
+                            const QString instanceName = QString::fromStdString(
                                 instancePair.first.as<std::string>());
 
                             /* Verify this is a valid instance with a port */
                             if (instancePair.second.IsMap() && instancePair.second["port"]
                                 && instancePair.second["port"].IsScalar()) {
-                                QString portName = QString::fromStdString(
+                                const QString portName = QString::fromStdString(
                                     instancePair.second["port"].as<std::string>());
 
                                 /* Create a module port connection */
@@ -443,14 +448,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     PortConnection::createModulePort(instanceName, portName));
 
                                 /* Get additional details for this port */
-                                QString portWidth     = "";
+                                QString portWidthSpec = "";
                                 QString portDirection = "unknown";
 
                                 /* Check if this port has bits selection attribute */
-                                QString bitSelect = "";
+                                QString bitSelection = "";
                                 if (instancePair.second["bits"]
                                     && instancePair.second["bits"].IsScalar()) {
-                                    bitSelect = QString::fromStdString(
+                                    bitSelection = QString::fromStdString(
                                         instancePair.second["bits"].as<std::string>());
                                 }
 
@@ -459,7 +464,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     && netlistData["instance"][instanceName.toStdString()]["module"]
                                     && netlistData["instance"][instanceName.toStdString()]["module"]
                                            .IsScalar()) {
-                                    QString moduleName = QString::fromStdString(
+                                    const QString moduleName = QString::fromStdString(
                                         netlistData["instance"][instanceName.toStdString()]
                                                    ["module"]
                                                        .as<std::string>());
@@ -476,13 +481,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                 && moduleData["port"][portName.toStdString()]
                                                              ["type"]
                                                                  .IsScalar()) {
-                                                portWidth = QString::fromStdString(
+                                                portWidthSpec = QString::fromStdString(
                                                     moduleData["port"][portName.toStdString()]
                                                               ["type"]
                                                                   .as<std::string>());
                                                 /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                                                portWidth = portWidth.replace(
-                                                    QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                                                portWidthSpec = portWidthSpec.replace(
+                                                    QRegularExpression(R"(\blogic(\s+|\b))"), "");
                                             }
 
                                             /* Get port direction */
@@ -514,22 +519,26 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 /* Add to detailed port information */
                                 portDetails.append(
                                     PortDetailInfo::createModulePort(
-                                        instanceName, portName, portWidth, portDirection, bitSelect));
+                                        instanceName,
+                                        portName,
+                                        portWidthSpec,
+                                        portDirection,
+                                        bitSelection));
                             }
                         }
                     }
                 }
 
                 /* Check port width consistency */
-                bool hasWidthMismatch = !checkPortWidthConsistency(portConnections);
+                const bool hasWidthMismatch = !checkPortWidthConsistency(portConnections);
                 if (hasWidthMismatch) {
                     qWarning() << "Warning: Port width mismatch detected for net" << netName;
                 }
 
                 /* Check port direction consistency */
-                PortDirectionStatus dirStatus    = checkPortDirectionConsistency(portConnections);
-                bool                isUndriven   = (dirStatus == PortDirectionStatus::Undriven);
-                bool                isMultidrive = (dirStatus == PortDirectionStatus::Multidrive);
+                const PortDirectionStatus dirStatus = checkPortDirectionConsistency(portConnections);
+                const bool isUndriven   = (dirStatus == PortDirectionStatus::Undriven);
+                const bool isMultidrive = (dirStatus == PortDirectionStatus::Multidrive);
 
                 if (isUndriven) {
                     qWarning() << "Warning: Net" << netName
@@ -749,19 +758,19 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     for (const auto &detail : portDetails) {
                         if (!detail.width.isEmpty()) {
                             /* Attempt to extract width value from format like [31:0] or [7] */
-                            QRegularExpression widthRegex(
-                                "\\[\\s*(\\d+)\\s*(?::\\s*(\\d+))?\\s*\\]");
-                            auto match = widthRegex.match(detail.width);
+                            const QRegularExpression widthRegex(
+                                R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+                            const QRegularExpressionMatch match = widthRegex.match(detail.width);
                             if (match.hasMatch()) {
-                                bool msb_ok = false;
-                                int  msb    = match.captured(1).toInt(&msb_ok);
+                                bool      msb_ok = false;
+                                const int msb    = match.captured(1).toInt(&msb_ok);
 
                                 if (msb_ok) {
                                     int width;
                                     if (match.capturedLength(2) > 0) {
                                         /* Case with specified LSB, e.g. [7:3] */
-                                        bool lsb_ok = false;
-                                        int  lsb    = match.captured(2).toInt(&lsb_ok);
+                                        bool      lsb_ok = false;
+                                        const int lsb    = match.captured(2).toInt(&lsb_ok);
                                         if (lsb_ok) {
                                             width = qAbs(msb - lsb) + 1;
                                         } else {
@@ -812,9 +821,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Get port direction */
                         if (portNode["direction"] && portNode["direction"].IsScalar()) {
-                            QString dirStr = QString::fromStdString(
-                                                 portNode["direction"].as<std::string>())
-                                                 .toLower();
+                            const QString dirStr = QString::fromStdString(
+                                                       portNode["direction"].as<std::string>())
+                                                       .toLower();
 
                             /* Handle both full and abbreviated forms */
                             if (dirStr == "out" || dirStr == "output") {
@@ -841,8 +850,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     }
 
                     /* Check width compatibility */
-                    bool widthMismatch = !portWidth.isEmpty() && !netWidth.isEmpty()
-                                         && portWidth != netWidth;
+                    const bool widthMismatch = !portWidth.isEmpty() && !netWidth.isEmpty()
+                                               && portWidth != netWidth;
 
                     /* Add width mismatch FIXME comment if needed */
                     if (widthMismatch) {
@@ -964,11 +973,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         continue;
                     }
 
-                    QString portName = QString::fromStdString(portIter->first.as<std::string>());
+                    const QString portName = QString::fromStdString(
+                        portIter->first.as<std::string>());
 
                     /* Check if this port has a connection */
                     if (portMap.contains(portName)) {
-                        QString wireConnection = portMap[portName];
+                        const QString wireConnection = portMap[portName];
                         portConnections.append(
                             QString("        .%1(%2)").arg(portName).arg(wireConnection));
                     } else {
@@ -989,41 +999,35 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 portIter->second["type"].as<std::string>());
 
                             /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                            type = type.replace(QRegularExpression("\\blogic(\\s+|\\b)"), "");
+                            type = type.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
 
                             /* Extract width information if it exists in format [x:y] or [x] */
-                            QRegularExpression widthRegex(
-                                "\\[\\s*(\\d+)\\s*(?::\\s*(\\d+))?\\s*\\]");
-                            auto match = widthRegex.match(type);
+                            const QRegularExpression widthRegex(
+                                R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+                            const QRegularExpressionMatch match = widthRegex.match(type);
                             if (match.hasMatch()) {
-                                if (match.captured(2).isEmpty()) {
-                                    /* Format [x] */
-                                    width = match.captured(0);
-                                } else {
-                                    /* Format [x:y] */
-                                    width = match.captured(0);
-                                }
+                                /* Both [x] and [x:y] formats use the full match */
+                                width = match.captured(0);
                             }
                         }
 
                         /* Check for tie attribute in instance's port */
-                        bool    hasTie    = false;
-                        bool    hasInvert = false;
+                        bool    hasTie = false;
                         QString tieValue;
                         int     portWidth = 1; /* Default width if not specified */
 
                         /* Extract port width for bit size validation */
                         if (!width.isEmpty()) {
-                            QRegularExpression widthRegex("\\[(\\d+)(?::(\\d+))?\\]");
-                            auto               match = widthRegex.match(width);
+                            const QRegularExpression widthRegex(R"(\[(\d+)(?::(\d+))?\])");
+                            auto                     match = widthRegex.match(width);
                             if (match.hasMatch()) {
-                                bool msb_ok = false;
-                                int  msb    = match.captured(1).toInt(&msb_ok);
+                                bool      msb_ok = false;
+                                const int msb    = match.captured(1).toInt(&msb_ok);
                                 if (msb_ok) {
                                     if (match.capturedLength(2) > 0) {
                                         /* Case with specified LSB, e.g. [7:3] */
-                                        bool lsb_ok = false;
-                                        int  lsb    = match.captured(2).toInt(&lsb_ok);
+                                        bool      lsb_ok = false;
+                                        const int lsb    = match.captured(2).toInt(&lsb_ok);
                                         if (lsb_ok) {
                                             portWidth = qAbs(msb - lsb) + 1;
                                         } else {
@@ -1049,7 +1053,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     && netIter->second[instanceName.toStdString()]["port"]
                                     && netIter->second[instanceName.toStdString()]["port"]
                                            .IsScalar()) {
-                                    QString connectedPort = QString::fromStdString(
+                                    const QString connectedPort = QString::fromStdString(
                                         netIter->second[instanceName.toStdString()]["port"]
                                             .as<std::string>());
 
@@ -1074,11 +1078,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                                 /* Check for tie attribute */
                                 if (portNode["tie"] && portNode["tie"].IsScalar()) {
-                                    QString tieStr = QString::fromStdString(
+                                    const QString tieStr = QString::fromStdString(
                                         portNode["tie"].as<std::string>());
 
                                     /* Parse the tie value using our number parser */
-                                    QSocNumberInfo numInfo = parseNumber(tieStr);
+                                    const QSocNumberInfo numInfo = parseNumber(tieStr);
 
                                     /* Only apply tie to input ports */
                                     if (direction.toLower() == "input"
@@ -1116,7 +1120,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                             if (adjustedInfo.value.getSign()
                                                 == BigInteger::negative) {
                                                 /* For negative numbers, apply mask to magnitude and maintain sign */
-                                                BigUnsigned result
+                                                const BigUnsigned result
                                                     = adjustedInfo.value.getMagnitude() & mask;
                                                 adjustedInfo.value
                                                     = BigInteger(result, BigInteger::negative);
@@ -1203,11 +1207,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
             /* Fall back to existing connections if module definition not available */
             if (instancePortConnections.contains(instanceName)) {
-                QMap<QString, QString>        &portMap = instancePortConnections[instanceName];
-                QMapIterator<QString, QString> it(portMap);
-                while (it.hasNext()) {
-                    it.next();
-                    portConnections.append(QString("        .%1(%2)").arg(it.key()).arg(it.value()));
+                const QMap<QString, QString>  &portMap = instancePortConnections[instanceName];
+                QMapIterator<QString, QString> portIter(portMap);
+                while (portIter.hasNext()) {
+                    portIter.next();
+                    portConnections.append(
+                        QString("        .%1(%2)").arg(portIter.key()).arg(portIter.value()));
                 }
             }
         }
@@ -1283,10 +1288,9 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
     if (formatter.exitCode() == 0) {
         qInfo() << "Successfully formatted Verilog file";
         return true;
-    } else {
-        qWarning() << "Error formatting Verilog file:" << formatter.errorString();
-        return false;
     }
+    qWarning() << "Error formatting Verilog file:" << formatter.errorString();
+    return false;
 }
 
 QSocNumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
@@ -1309,14 +1313,14 @@ QSocNumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
     }
 
     /* Check for Verilog-style format with vector range: [31:0] */
-    QRegularExpression      vectorWidthRegex(R"(\[(\d+)\s*:\s*(\d+)\])");
-    QRegularExpressionMatch vectorWidthMatch = vectorWidthRegex.match(cleanStr);
+    const QRegularExpression      vectorWidthRegex(R"(\[(\d+)\s*:\s*(\d+)\])");
+    const QRegularExpressionMatch vectorWidthMatch = vectorWidthRegex.match(cleanStr);
 
     if (vectorWidthMatch.hasMatch()) {
-        bool msb_ok = false;
-        bool lsb_ok = false;
-        int  msb    = vectorWidthMatch.captured(1).toInt(&msb_ok);
-        int  lsb    = vectorWidthMatch.captured(2).toInt(&lsb_ok);
+        bool      msb_ok = false;
+        bool      lsb_ok = false;
+        const int msb    = vectorWidthMatch.captured(1).toInt(&msb_ok);
+        const int lsb    = vectorWidthMatch.captured(2).toInt(&lsb_ok);
 
         if (msb_ok && lsb_ok) {
             result.width            = msb - lsb + 1;
@@ -1328,21 +1332,21 @@ QSocNumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
     }
 
     /* Check for Verilog-style format: <width>'<base><value> */
-    QRegularExpression      verilogNumberRegex(R"((\d+)'([bdohxBDOHX])([0-9a-fA-F]+))");
-    QRegularExpressionMatch verilogMatch = verilogNumberRegex.match(cleanStr);
+    const QRegularExpression      verilogNumberRegex(R"((\d+)'([bdohxBDOHX])([0-9a-fA-F]+))");
+    const QRegularExpressionMatch verilogMatch = verilogNumberRegex.match(cleanStr);
 
     if (verilogMatch.hasMatch()) {
         /* Extract width, base, and value from the Verilog format */
-        bool widthOk = false;
-        int  width   = verilogMatch.captured(1).toInt(&widthOk);
+        bool      widthOk = false;
+        const int width   = verilogMatch.captured(1).toInt(&widthOk);
 
         if (widthOk && !result.hasExplicitWidth) {
             result.width            = width;
             result.hasExplicitWidth = true;
         }
 
-        QChar   baseChar = verilogMatch.captured(2).at(0).toLower();
-        QString valueStr = verilogMatch.captured(3);
+        const QChar   baseChar = verilogMatch.captured(2).at(0).toLower();
+        const QString valueStr = verilogMatch.captured(3);
 
         /* Determine the base from the base character */
         switch (baseChar.toLatin1()) {
@@ -1394,12 +1398,12 @@ QSocNumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
         }
     } else {
         /* Handle standalone Verilog-style base prefixes (without width): 'b, 'h, 'o, 'd */
-        QRegularExpression      verilogBaseRegex(R"('([bdohxBDOHX])([0-9a-fA-F]+))");
-        QRegularExpressionMatch verilogBaseMatch = verilogBaseRegex.match(cleanStr);
+        const QRegularExpression      verilogBaseRegex(R"('([bdohxBDOHX])([0-9a-fA-F]+))");
+        const QRegularExpressionMatch verilogBaseMatch = verilogBaseRegex.match(cleanStr);
 
         if (verilogBaseMatch.hasMatch()) {
-            QChar   baseChar = verilogBaseMatch.captured(1).at(0).toLower();
-            QString valueStr = verilogBaseMatch.captured(2);
+            const QChar   baseChar = verilogBaseMatch.captured(1).at(0).toLower();
+            const QString valueStr = verilogBaseMatch.captured(2);
 
             /* Determine the base from the base character */
             switch (baseChar.toLatin1()) {
@@ -1507,17 +1511,17 @@ QSocNumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
             /* For error values, set a reasonable width based on the original string */
             if (result.originalString.toLower().contains('h')) {
                 /* Hex values: each digit is 4 bits */
-                int digits = result.originalString.length();
+                const int digits = static_cast<int>(result.originalString.length());
                 /* Rough estimate, removing prefix parts */
                 result.width = (digits - 3) * 4; /* Assuming format like "N'h..." */
             } else if (result.originalString.toLower().contains('b')) {
                 /* Binary values: each digit is 1 bit */
-                int digits = result.originalString.length();
+                const int digits = static_cast<int>(result.originalString.length());
                 /* Rough estimate, removing prefix parts */
                 result.width = digits - 3; /* Assuming format like "N'b..." */
             } else if (result.originalString.toLower().contains('o')) {
                 /* Octal values: each digit is 3 bits */
-                int digits = result.originalString.length();
+                const int digits = static_cast<int>(result.originalString.length());
                 /* Rough estimate, removing prefix parts */
                 result.width = (digits - 3) * 3; /* Assuming format like "N'o..." */
             } else {
