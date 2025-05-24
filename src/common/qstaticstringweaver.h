@@ -44,21 +44,21 @@ public slots:
      * @brief Calculate Levenshtein distance between two strings.
      * @details The Levenshtein distance is a string metric for measuring the
      *          difference between two sequences.
-     * @param s1 The first string.
-     * @param s2 The second string.
+     * @param string1 The first string.
+     * @param string2 The second string.
      * @return The Levenshtein distance.
      */
-    static int levenshteinDistance(const QString &s1, const QString &s2);
+    static qsizetype levenshteinDistance(const QString &string1, const QString &string2);
 
     /**
      * @brief Calculate normalized similarity between two strings.
      * @details This function returns a value between 0-1, where 1 means
      *          identical strings.
-     * @param s1 The first string.
-     * @param s2 The second string.
+     * @param string1 The first string.
+     * @param string2 The second string.
      * @return The normalized similarity value (0-1).
      */
-    static double similarity(const QString &s1, const QString &s2);
+    static double similarity(const QString &string1, const QString &string2);
 
     /**
      * @brief Extract candidate common substrings for clustering.
@@ -89,23 +89,23 @@ public slots:
      * @brief Find best matching group for a string.
      * @details For a given string, use candidate markers to find the best
      *          matching group.
-     * @param str The string to find a group for.
+     * @param string The string to find a group for.
      * @param candidateMarkersSorted The sorted list of candidate markers.
      * @return The best matching group marker.
      */
-    static QString findBestGroup(const QString &str, const QList<QString> &candidateMarkersSorted);
+    static QString findBestGroup(const QString &string, const QList<QString> &candidateMarkersSorted);
 
     /**
      * @brief Find best matching string in a group.
      * @details Calculate similarity with each string in the group, return the
      *          highest match.
-     * @param targetStr The target string to match.
+     * @param targetString The target string to match.
      * @param groupStrings The group of strings to match against.
      * @param threshold The similarity threshold.
      * @return The best matching string.
      */
     static QString findBestMatchingString(
-        const QString &targetStr, const QVector<QString> &groupStrings, double threshold = 0.0);
+        const QString &targetString, const QVector<QString> &groupStrings, double threshold = 0.0);
 
     /**
      * @brief Hungarian algorithm for solving the assignment problem.
@@ -119,41 +119,42 @@ public slots:
      * @brief Remove a substring from a string.
      * @details If the string contains the given substring (case-insensitive),
      *          the first occurrence of that substring is removed.
-     * @param s The input string.
-     * @param substr The substring to remove.
+     * @param string The input string.
+     * @param substring The substring to remove.
      * @return The string with the substring removed, or the original string if not found.
      */
-    static QString removeSubstring(const QString &s, const QString &substr);
+    static QString removeSubstring(const QString &string, const QString &substring);
 
     /**
      * @brief Remove a common prefix from a string.
      * @details If the string starts with the given common prefix (case-insensitive),
      *          the prefix is removed.
-     * @param s The input string.
+     * @param string The input string.
      * @param common The common prefix to remove.
      * @return The string with the common prefix removed, or the original string if not starting with the prefix.
      */
-    static QString removeCommonPrefix(const QString &s, const QString &common);
+    static QString removeCommonPrefix(const QString &string, const QString &common);
 
     /**
      * @brief Find and remove a common substring from anywhere in the string.
      * @details Uses optimal alignment to find and remove the best matching instance
      *          of a common substring from anywhere in the string.
-     * @param s The input string.
+     * @param string The input string.
      * @param common The common substring to find and remove.
      * @return The string with the best matching instance of common string removed.
      */
-    static QString removeCommonString(const QString &s, const QString &common);
+    static QString removeCommonString(const QString &string, const QString &common);
 
     /**
      * @brief Calculate similarity after removing a common substring from both strings.
      * @details Removes the common substring from both strings and calculates similarity.
-     * @param s1 The first string.
-     * @param s2 The second string.
+     * @param string1 The first string.
+     * @param string2 The second string.
      * @param common The common substring to remove.
      * @return The similarity after removing the common substring.
      */
-    static double trimmedSimilarity(const QString &s1, const QString &s2, const QString &common);
+    static double trimmedSimilarity(
+        const QString &string1, const QString &string2, const QString &common);
 
     /**
      * @brief Find optimal matching between two groups of strings.

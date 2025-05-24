@@ -6,54 +6,56 @@
 #include <algorithm>
 #include <limits>
 
-int QStaticStringWeaver::levenshteinDistance(const QString &s1, const QString &s2)
+qsizetype QStaticStringWeaver::levenshteinDistance(const QString &string1, const QString &string2)
 {
-    int n = s1.size(), m = s2.size();
-    if (n == 0)
-        return m;
-    if (m == 0)
-        return n;
+    const qsizetype string1Length = string1.size();
+    const qsizetype string2Length = string2.size();
+    if (string1Length == 0)
+        return string2Length;
+    if (string2Length == 0)
+        return string1Length;
 
-    QVector<QVector<int>> dp(n + 1, QVector<int>(m + 1, 0));
-    for (int i = 0; i <= n; ++i)
-        dp[i][0] = i;
-    for (int j = 0; j <= m; ++j)
-        dp[0][j] = j;
+    QVector<QVector<qsizetype>>
+        distanceMatrix(string1Length + 1, QVector<qsizetype>(string2Length + 1, 0));
+    for (qsizetype i = 0; i <= string1Length; ++i)
+        distanceMatrix[i][0] = i;
+    for (qsizetype j = 0; j <= string2Length; ++j)
+        distanceMatrix[0][j] = j;
 
-    for (int i = 1; i <= n; ++i) {
-        for (int j = 1; j <= m; ++j) {
-            int cost = (s1[i - 1] == s2[j - 1]) ? 0 : 1;
-            dp[i][j] = std::min(
-                {dp[i - 1][j] + 1,          /* Delete */
-                 dp[i][j - 1] + 1,          /* Insert */
-                 dp[i - 1][j - 1] + cost}); /* Replace */
+    for (qsizetype i = 1; i <= string1Length; ++i) {
+        for (qsizetype j = 1; j <= string2Length; ++j) {
+            const qsizetype editCost = (string1[i - 1] == string2[j - 1]) ? 0 : 1;
+            distanceMatrix[i][j]     = std::min(
+                {distanceMatrix[i - 1][j] + 1,              /* Delete */
+                     distanceMatrix[i][j - 1] + 1,              /* Insert */
+                     distanceMatrix[i - 1][j - 1] + editCost}); /* Replace */
         }
     }
-    return dp[n][m];
+    return distanceMatrix[string1Length][string2Length];
 }
 
-double QStaticStringWeaver::similarity(const QString &s1, const QString &s2)
+double QStaticStringWeaver::similarity(const QString &string1, const QString &string2)
 {
-    int dist   = levenshteinDistance(s1, s2);
-    int maxLen = qMax(s1.size(), s2.size());
-    if (maxLen == 0)
+    const qsizetype distance  = levenshteinDistance(string1, string2);
+    const qsizetype maxLength = qMax(string1.size(), string2.size());
+    if (maxLength == 0)
         return 1.0;
-    return 1.0 - static_cast<double>(dist) / maxLen;
+    return 1.0 - (static_cast<double>(distance) / static_cast<double>(maxLength));
 }
 
 QMap<QString, int> QStaticStringWeaver::extractCandidateSubstrings(
     const QVector<QString> &strings, int minLen, int freqThreshold)
 {
     QMap<QString, int> substringFreq;
-    for (const QString &s : strings) {
-        QSet<QString> seen; /* Ensure each substring counts only once per string */
-        int           len = s.size();
-        for (int subLen = minLen; subLen <= len; ++subLen) {
-            for (int i = 0; i <= len - subLen; ++i) {
-                QString sub = s.mid(i, subLen);
-                if (!seen.contains(sub)) {
-                    substringFreq[sub]++;
-                    seen.insert(sub);
+    for (const QString &string : strings) {
+        QSet<QString>   seen; /* Ensure each substring counts only once per string */
+        const qsizetype stringLength = string.size();
+        for (int subLen = minLen; subLen <= stringLength; ++subLen) {
+            for (qsizetype i = 0; i <= stringLength - subLen; ++i) {
+                const QString substring = string.mid(i, subLen);
+                if (!seen.contains(substring)) {
+                    substringFreq[substring]++;
+                    seen.insert(substring);
                 }
             }
         }
@@ -73,49 +75,50 @@ QMap<QString, QVector<QString>> QStaticStringWeaver::clusterStrings(
 {
     /* Sort candidate substrings by descending length - longer ones are more specific */
     QList<QString> candidateMarkers = candidateSubstrings.keys();
-    std::sort(candidateMarkers.begin(), candidateMarkers.end(), [](const QString &a, const QString &b) {
-        return a.size() > b.size();
-    });
+    std::sort(
+        candidateMarkers.begin(),
+        candidateMarkers.end(),
+        [](const QString &first, const QString &second) { return first.size() > second.size(); });
 
     QMap<QString, QVector<QString>> groups;
     /* For each string, find the first matching candidate marker */
-    for (const QString &s : stringList) {
+    for (const QString &string : stringList) {
         bool assigned = false;
         for (const QString &marker : candidateMarkers) {
             /* Check if the string starts with the marker */
-            if (s.startsWith(marker)) {
-                groups[marker].append(s);
+            if (string.startsWith(marker)) {
+                groups[marker].append(string);
                 assigned = true;
                 break; /* Each string is assigned to only one group */
             }
         }
         if (!assigned) {
-            groups["<unknown>"].append(s);
+            groups["<unknown>"].append(string);
         }
     }
     return groups;
 }
 
 QString QStaticStringWeaver::findBestGroup(
-    const QString &str, const QList<QString> &candidateMarkersSorted)
+    const QString &string, const QList<QString> &candidateMarkersSorted)
 {
     for (const QString &marker : candidateMarkersSorted) {
-        if (str.contains(marker))
+        if (string.contains(marker))
             return marker;
     }
     return "<unknown>";
 }
 
 QString QStaticStringWeaver::findBestMatchingString(
-    const QString &targetStr, const QVector<QString> &groupStrings, double threshold)
+    const QString &targetString, const QVector<QString> &groupStrings, double threshold)
 {
-    double  bestSim = threshold;
+    double  bestSimilarity = threshold;
     QString bestMatch;
-    for (const QString &s : groupStrings) {
-        double sim = similarity(s, targetStr);
-        if (sim > bestSim) {
-            bestSim   = sim;
-            bestMatch = s;
+    for (const QString &string : groupStrings) {
+        const double currentSimilarity = similarity(string, targetString);
+        if (currentSimilarity > bestSimilarity) {
+            bestSimilarity = currentSimilarity;
+            bestMatch      = string;
         }
     }
     return bestMatch;
@@ -123,108 +126,114 @@ QString QStaticStringWeaver::findBestMatchingString(
 
 QVector<int> QStaticStringWeaver::hungarianAlgorithm(const QVector<QVector<double>> &costMatrix)
 {
-    int             N   = costMatrix.size();
-    const double    INF = std::numeric_limits<double>::infinity();
-    QVector<double> u(N + 1, 0), v(N + 1, 0);
-    QVector<int>    p(N + 1, 0), way(N + 1, 0);
+    const qsizetype matrixSize = costMatrix.size();
+    const double    INF        = std::numeric_limits<double>::infinity();
+    QVector<double> rowPotential(matrixSize + 1, 0);
+    QVector<double> colPotential(matrixSize + 1, 0);
+    QVector<int>    rowAssignment(matrixSize + 1, 0);
+    QVector<int>    colAssignment(matrixSize + 1, 0);
 
-    for (int i = 1; i <= N; i++) {
-        p[0] = i;
-        QVector<double> minv(N + 1, INF);
-        QVector<bool>   used(N + 1, false);
-        int             j0 = 0;
-        do {
-            used[j0]     = true;
-            int    i0    = p[j0];
-            double delta = INF;
-            int    j1    = 0;
-            for (int j = 1; j <= N; j++) {
+    for (qsizetype i = 1; i <= matrixSize; i++) {
+        rowAssignment[0] = static_cast<int>(i);
+        QVector<double> minValues(matrixSize + 1, INF);
+        QVector<bool>   used(matrixSize + 1, false);
+        qsizetype       currentCol = 0;
+        while (true) {
+            used[currentCol]           = true;
+            const qsizetype currentRow = rowAssignment[currentCol];
+            double          delta      = INF;
+            qsizetype       nextCol    = 0;
+            for (qsizetype j = 1; j <= matrixSize; j++) {
                 if (!used[j]) {
-                    double cur = costMatrix[i0 - 1][j - 1] - u[i0] - v[j];
-                    if (cur < minv[j]) {
-                        minv[j] = cur;
-                        way[j]  = j0;
+                    const double currentCost = costMatrix[currentRow - 1][j - 1]
+                                               - rowPotential[currentRow] - colPotential[j];
+                    if (currentCost < minValues[j]) {
+                        minValues[j]     = currentCost;
+                        colAssignment[j] = static_cast<int>(currentCol);
                     }
-                    if (minv[j] < delta) {
-                        delta = minv[j];
-                        j1    = j;
+                    if (minValues[j] < delta) {
+                        delta   = minValues[j];
+                        nextCol = j;
                     }
                 }
             }
-            for (int j = 0; j <= N; j++) {
+            for (qsizetype j = 0; j <= matrixSize; j++) {
                 if (used[j]) {
-                    u[p[j]] += delta;
-                    v[j] -= delta;
+                    rowPotential[rowAssignment[j]] += delta;
+                    colPotential[j] -= delta;
                 } else {
-                    minv[j] -= delta;
+                    minValues[j] -= delta;
                 }
             }
-            j0 = j1;
-        } while (p[j0] != 0);
-        do {
-            int j1 = way[j0];
-            p[j0]  = p[j1];
-            j0     = j1;
-        } while (j0);
+            currentCol = nextCol;
+            if (rowAssignment[currentCol] == 0)
+                break;
+        }
+        while (true) {
+            const qsizetype nextCol   = colAssignment[currentCol];
+            rowAssignment[currentCol] = rowAssignment[nextCol];
+            currentCol                = nextCol;
+            if (currentCol == 0)
+                break;
+        }
     }
 
-    QVector<int> result(N, -1);
-    for (int j = 1; j <= N; j++) {
-        if (p[j] > 0 && p[j] <= N)
-            result[p[j] - 1] = j - 1;
+    QVector<int> result(matrixSize, -1);
+    for (qsizetype j = 1; j <= matrixSize; j++) {
+        if (rowAssignment[j] > 0 && rowAssignment[j] <= matrixSize)
+            result[rowAssignment[j] - 1] = static_cast<int>(j - 1);
     }
     return result;
 }
 
-QString QStaticStringWeaver::removeSubstring(const QString &s, const QString &substr)
+QString QStaticStringWeaver::removeSubstring(const QString &string, const QString &substring)
 {
-    if (substr.isEmpty())
-        return s;
+    if (substring.isEmpty())
+        return string;
 
-    int index = s.indexOf(substr, 0, Qt::CaseInsensitive);
+    const qsizetype index = string.indexOf(substring, 0, Qt::CaseInsensitive);
     if (index >= 0) {
-        QString result = s;
-        result.remove(index, substr.length());
+        QString result = string;
+        result.remove(index, substring.length());
         return result;
     }
-    return s;
+    return string;
 }
 
-QString QStaticStringWeaver::removeCommonPrefix(const QString &s, const QString &common)
+QString QStaticStringWeaver::removeCommonPrefix(const QString &string, const QString &common)
 {
-    if (s.startsWith(common, Qt::CaseInsensitive))
-        return s.mid(common.length());
-    return s;
+    if (string.startsWith(common, Qt::CaseInsensitive))
+        return string.mid(common.length());
+    return string;
 }
 
-QString QStaticStringWeaver::removeCommonString(const QString &s, const QString &common)
+QString QStaticStringWeaver::removeCommonString(const QString &string, const QString &common)
 {
-    if (common.isEmpty() || s.isEmpty())
-        return s;
+    if (common.isEmpty() || string.isEmpty())
+        return string;
 
     /* Case insensitive search */
-    QString sLower      = s.toLower();
-    QString commonLower = common.toLower();
+    const QString stringLower = string.toLower();
+    const QString commonLower = common.toLower();
 
     /* Extract parts from the common string */
     QStringList parts;
 
     /* First try to split by underscore */
-    QStringList underscoreParts = commonLower.split("_");
+    const QStringList underscoreParts = commonLower.split("_");
     if (underscoreParts.size() > 1) {
         parts = underscoreParts;
     } else {
         /* If no underscores, try to split camelCase */
-        QString original = commonLower;
         QString currentPart;
 
-        for (int i = 0; i < original.length(); i++) {
-            QChar c = original[i];
-            if (i > 0 && c.isUpper()) {
+        for (qsizetype i = 0; i < commonLower.length(); i++) {
+            const QChar character = commonLower[i];
+            if (i > 0 && character.isUpper()) {
                 parts.append(currentPart);
-                currentPart = c.toLower();
+                currentPart = character.toLower();
             } else {
-                currentPart += c;
+                currentPart += character;
             }
         }
         if (!currentPart.isEmpty()) {
@@ -250,7 +259,7 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
         QStringList reversed = parts;
         std::reverse(reversed.begin(), reversed.end());
         QString reversedStr;
-        for (int i = 0; i < reversed.size(); i++) {
+        for (qsizetype i = 0; i < reversed.size(); i++) {
             reversedStr += reversed[i];
             if (i < reversed.size() - 1)
                 reversedStr += "_";
@@ -262,7 +271,7 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
     if (parts.size() > 1) {
         /* Generate standard camelCase */
         QString camelCase = parts[0];
-        for (int i = 1; i < parts.size(); i++) {
+        for (qsizetype i = 1; i < parts.size(); i++) {
             if (!parts[i].isEmpty()) {
                 camelCase += parts[i][0].toUpper();
                 if (parts[i].length() > 1) {
@@ -290,7 +299,7 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
             std::reverse(reversed.begin(), reversed.end());
 
             QString reversedCamel = reversed[0];
-            for (int i = 1; i < reversed.size(); i++) {
+            for (qsizetype i = 1; i < reversed.size(); i++) {
                 if (!reversed[i].isEmpty()) {
                     reversedCamel += reversed[i][0].toUpper();
                     if (reversed[i].length() > 1) {
@@ -338,22 +347,23 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
     }
 
     /* Find best match among exact variations */
-    int bestPos   = -1;
-    int bestLen   = 0;
-    int bestScore = std::numeric_limits<int>::max();
+    qsizetype bestPos   = -1;
+    qsizetype bestLen   = 0;
+    int       bestScore = std::numeric_limits<int>::max();
 
     for (const QString &variation : commonVariations) {
-        int pos = 0;
-        while ((pos = sLower.indexOf(variation, pos)) != -1) {
+        qsizetype pos = 0;
+        while ((pos = stringLower.indexOf(variation, pos)) != -1) {
             /* Calculate position score, preferring matches at boundaries */
-            int prefixLen = qMin(pos, 5);
-            int suffixLen = qMin(s.length() - (pos + variation.length()), 5);
+            const qsizetype prefixLen = qMin(pos, 5);
+            const qsizetype suffixLen = qMin(string.length() - (pos + variation.length()), 5);
 
             int contextScore = 0;
-            contextScore += pos;                      /* Prefer matches closer to start */
+            contextScore += static_cast<int>(pos);    /* Prefer matches closer to start */
             contextScore -= (prefixLen == 0) ? 5 : 0; /* Prefer matches at boundaries */
             contextScore -= (suffixLen == 0) ? 5 : 0;
-            contextScore += prefixLen + suffixLen; /* Prefer less surrounding context */
+            contextScore += static_cast<int>(
+                prefixLen + suffixLen); /* Prefer less surrounding context */
 
             if (contextScore < bestScore) {
                 bestScore = contextScore;
@@ -367,30 +377,30 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
 
     /* If exact match found, remove it */
     if (bestPos != -1) {
-        return s.left(bestPos) + s.mid(bestPos + bestLen);
+        return string.left(bestPos) + string.mid(bestPos + bestLen);
     }
 
     /* Try partial fuzzy matching by finding regions that might contain similar part patterns */
-    if (s.length() > 5 && !parts.empty()) {
+    if (string.length() > 5 && !parts.empty()) {
         /* Sliding window approach to find regions with part matches */
-        double bestPartScore = 0.0;
-        int    matchStart    = -1;
-        int    matchEnd      = -1;
+        double    bestPartScore = 0.0;
+        qsizetype matchStart    = -1;
+        qsizetype matchEnd      = -1;
 
-        for (int i = 0; i < s.length(); i++) {
-            for (int len = 3; len <= qMin(s.length() - i, common.length() * 2); len++) {
-                QString window = s.mid(i, len).toLower();
+        for (qsizetype i = 0; i < string.length(); i++) {
+            for (qsizetype len = 3; len <= qMin(string.length() - i, common.length() * 2); len++) {
+                const QString window = string.mid(i, len).toLower();
 
                 /* For each variation of parts, check how many parts are in this window */
                 for (const QStringList &partVariation : partVariations) {
-                    double matchedPartsCount = 0;
-                    int    lastMatchPos      = -1;
+                    double    matchedPartsCount = 0;
+                    qsizetype lastMatchPos      = -1;
 
                     /* Count matched parts in this window */
                     for (const QString &part : partVariation) {
                         /* Only consider significant parts */
                         if (part.length() >= 2) {
-                            int partPos = window.indexOf(part, qMax(0, lastMatchPos));
+                            const qsizetype partPos = window.indexOf(part, qMax(0, lastMatchPos));
                             if (partPos != -1) {
                                 matchedPartsCount += 1.0;
                                 lastMatchPos = partPos + part.length();
@@ -398,12 +408,14 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
                                 /* Try fuzzy part match if exact match fails */
                                 /* Threshold for fuzzy matching */
                                 double bestPartSim = 0.5;
-                                for (int wpos = 0; wpos < window.length() - 1; wpos++) {
-                                    int maxPartLen = qMin(part.length() + 2, window.length() - wpos);
-                                    for (int plen = qMax(2, part.length() - 1); plen <= maxPartLen;
+                                for (qsizetype wpos = 0; wpos < window.length() - 1; wpos++) {
+                                    const qsizetype maxPartLen
+                                        = qMin(part.length() + 2, window.length() - wpos);
+                                    for (qsizetype plen = qMax(2, part.length() - 1);
+                                         plen <= maxPartLen;
                                          plen++) {
-                                        QString subPart = window.mid(wpos, plen);
-                                        double  sim     = similarity(subPart, part);
+                                        const QString subPart = window.mid(wpos, plen);
+                                        const double  sim     = similarity(subPart, part);
                                         if (sim > bestPartSim) {
                                             bestPartSim  = sim;
                                             lastMatchPos = wpos + plen;
@@ -419,14 +431,16 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
                     }
 
                     /* Calculate score ratio based on matched parts and total parts */
-                    double matchRatio = matchedPartsCount / partVariation.size();
+                    const double matchRatio = matchedPartsCount
+                                              / static_cast<double>(partVariation.size());
 
                     /* Adjust score based on length of window relative to common string length */
-                    double lengthRatio = 1.0
-                                         - qAbs(window.length() - common.length())
-                                               / qMax(window.length(), common.length());
+                    const double lengthRatio
+                        = 1.0
+                          - (static_cast<double>(qAbs(window.length() - common.length()))
+                             / static_cast<double>(qMax(window.length(), common.length())));
 
-                    double overallScore = matchRatio * 0.7 + lengthRatio * 0.3;
+                    const double overallScore = (matchRatio * 0.7) + (lengthRatio * 0.3);
 
                     /* If this is better than our previous best match */
                     if (overallScore > bestPartScore && overallScore > 0.5) {
@@ -440,19 +454,19 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
 
         /* If we found a good part-based match */
         if (matchStart != -1 && matchEnd != -1) {
-            return s.left(matchStart) + s.mid(matchEnd);
+            return string.left(matchStart) + string.mid(matchEnd);
         }
     }
 
     /* Basic fallback: try fuzzy matching with original common */
-    double maxSim   = 0.75; /* Higher similarity threshold */
-    int    matchPos = -1;
-    int    matchLen = 0;
+    double    maxSim   = 0.75; /* Higher similarity threshold */
+    qsizetype matchPos = -1;
+    qsizetype matchLen = 0;
 
-    for (int i = 0; i < s.length() - 2; i++) {
-        for (int len = 3; len <= qMin(common.length() + 5, s.length() - i); len++) {
-            QString substring = s.mid(i, len);
-            double  sim       = similarity(substring.toLower(), commonLower);
+    for (qsizetype i = 0; i < string.length() - 2; i++) {
+        for (qsizetype len = 3; len <= qMin(common.length() + 5, string.length() - i); len++) {
+            const QString substring = string.mid(i, len);
+            const double  sim       = similarity(substring.toLower(), commonLower);
 
             if (sim > maxSim) {
                 maxSim   = sim;
@@ -463,35 +477,35 @@ QString QStaticStringWeaver::removeCommonString(const QString &s, const QString 
     }
 
     if (matchPos != -1) {
-        return s.left(matchPos) + s.mid(matchPos + matchLen);
+        return string.left(matchPos) + string.mid(matchPos + matchLen);
     }
 
-    return s; /* No match found, return original */
+    return string; /* No match found, return original */
 }
 
 double QStaticStringWeaver::trimmedSimilarity(
-    const QString &s1, const QString &s2, const QString &common)
+    const QString &string1, const QString &string2, const QString &common)
 {
     /* Extract parts from the common string */
     auto extractParts = [](const QString &str) -> QStringList {
-        QString     strLower = str.toLower();
-        QStringList parts;
+        const QString strLower = str.toLower();
+        QStringList   parts;
 
         /* First try to split by underscore */
-        QStringList underscoreParts = strLower.split("_");
+        const QStringList underscoreParts = strLower.split("_");
         if (underscoreParts.size() > 1) {
             parts = underscoreParts;
         } else {
             /* If no underscores, try to split camelCase */
             QString currentPart;
 
-            for (int i = 0; i < strLower.length(); i++) {
-                QChar c = strLower[i];
-                if (i > 0 && c.isUpper()) {
+            for (qsizetype i = 0; i < strLower.length(); i++) {
+                const QChar character = strLower[i];
+                if (i > 0 && character.isUpper()) {
                     parts.append(currentPart);
-                    currentPart = c.toLower();
+                    currentPart = character.toLower();
                 } else {
-                    currentPart += c;
+                    currentPart += character;
                 }
             }
             if (!currentPart.isEmpty()) {
@@ -508,23 +522,23 @@ double QStaticStringWeaver::trimmedSimilarity(
         return parts;
     };
 
-    /* Try to identify parts in s1 and s2 that match parts in common */
-    QStringList commonParts = extractParts(common);
+    /* Try to identify parts in string1 and string2 that match parts in common */
+    const QStringList commonParts = extractParts(common);
 
     /* For complex, multi-part hints */
     if (commonParts.size() > 2) {
         /* Basic removal using the existing function */
-        QString t1       = removeCommonString(s1, common);
-        QString t2       = removeCommonString(s2, common);
-        double  basicSim = similarity(t1, t2);
+        const QString trimmed1 = removeCommonString(string1, common);
+        const QString trimmed2 = removeCommonString(string2, common);
+        const double  basicSim = similarity(trimmed1, trimmed2);
 
         /* Part-based processing for complex cases */
-        QString s1Lower = s1.toLower();
-        QString s2Lower = s2.toLower();
+        const QString string1Lower = string1.toLower();
+        const QString string2Lower = string2.toLower();
 
         /* Create masks of where parts appear in both strings */
-        QString s1Mask = s1;
-        QString s2Mask = s2;
+        QString string1Mask = string1;
+        QString string2Mask = string2;
 
         /* Mark positions where common parts appear with placeholder characters */
         for (const QString &part : commonParts) {
@@ -532,62 +546,62 @@ double QStaticStringWeaver::trimmedSimilarity(
             if (part.length() < 2)
                 continue;
 
-            /* Find in s1 */
-            int pos = 0;
-            while ((pos = s1Lower.indexOf(part, pos)) != -1) {
-                for (int i = 0; i < part.length(); i++) {
+            /* Find in string1 */
+            qsizetype pos = 0;
+            while ((pos = string1Lower.indexOf(part, pos)) != -1) {
+                for (qsizetype i = 0; i < part.length(); i++) {
                     /* Mark as matched */
-                    s1Mask[pos + i] = '*';
+                    string1Mask[pos + i] = '*';
                 }
                 pos += part.length();
             }
 
-            /* Find in s2 */
+            /* Find in string2 */
             pos = 0;
-            while ((pos = s2Lower.indexOf(part, pos)) != -1) {
-                for (int i = 0; i < part.length(); i++) {
+            while ((pos = string2Lower.indexOf(part, pos)) != -1) {
+                for (qsizetype i = 0; i < part.length(); i++) {
                     /* Mark as matched */
-                    s2Mask[pos + i] = '*';
+                    string2Mask[pos + i] = '*';
                 }
                 pos += part.length();
             }
         }
 
         /* Extract unmatched parts */
-        QString s1Remnant;
-        QString s2Remnant;
+        QString string1Remnant;
+        QString string2Remnant;
 
-        for (int i = 0; i < s1Mask.length(); i++) {
-            if (s1Mask[i] != '*') {
-                s1Remnant += s1[i];
+        for (qsizetype i = 0; i < string1Mask.length(); i++) {
+            if (string1Mask[i] != '*') {
+                string1Remnant += string1[i];
             }
         }
 
-        for (int i = 0; i < s2Mask.length(); i++) {
-            if (s2Mask[i] != '*') {
-                s2Remnant += s2[i];
+        for (qsizetype i = 0; i < string2Mask.length(); i++) {
+            if (string2Mask[i] != '*') {
+                string2Remnant += string2[i];
             }
         }
 
         /* Calculate similarity between remnants */
-        double partBasedSim = similarity(s1Remnant, s2Remnant);
+        const double partBasedSim = similarity(string1Remnant, string2Remnant);
 
         /* Return the better of the two approaches */
         return qMax(basicSim, partBasedSim);
-    } else {
-        /* For simpler cases, use the original method */
-        QString t1 = removeCommonString(s1, common);
-        QString t2 = removeCommonString(s2, common);
-        return similarity(t1, t2);
     }
+
+    /* For simpler cases, use the original method */
+    const QString trimmed1 = removeCommonString(string1, common);
+    const QString trimmed2 = removeCommonString(string2, common);
+    return similarity(trimmed1, trimmed2);
 }
 
 QMap<QString, QString> QStaticStringWeaver::findOptimalMatching(
     const QVector<QString> &groupA, const QVector<QString> &groupB, const QString &commonSubstr)
 {
-    int nB = groupB.size();
-    int nA = groupA.size();
-    int N  = qMax(nB, nA);
+    const qsizetype groupBSize = groupB.size();
+    const qsizetype groupASize = groupA.size();
+    const qsizetype matrixSize = qMax(groupBSize, groupASize);
 
     /* Generate multiple variants of the common substring for matching */
     QVector<QString> commonVariants;
@@ -595,24 +609,24 @@ QMap<QString, QString> QStaticStringWeaver::findOptimalMatching(
     if (!commonSubstr.isEmpty()) {
         /* Function to extract parts from a string */
         auto extractParts = [](const QString &str) -> QStringList {
-            QString     strLower = str.toLower();
-            QStringList parts;
+            const QString strLower = str.toLower();
+            QStringList   parts;
 
             /* First try to split by underscore */
-            QStringList underscoreParts = strLower.split("_");
+            const QStringList underscoreParts = strLower.split("_");
             if (underscoreParts.size() > 1) {
                 parts = underscoreParts;
             } else {
                 /* If no underscores, try to split camelCase */
                 QString currentPart;
 
-                for (int i = 0; i < strLower.length(); i++) {
-                    QChar c = strLower[i];
-                    if (i > 0 && c.isUpper()) {
+                for (qsizetype i = 0; i < strLower.length(); i++) {
+                    const QChar character = strLower[i];
+                    if (i > 0 && character.isUpper()) {
                         parts.append(currentPart);
-                        currentPart = c.toLower();
+                        currentPart = character.toLower();
                     } else {
-                        currentPart += c;
+                        currentPart += character;
                     }
                 }
                 if (!currentPart.isEmpty()) {
@@ -629,7 +643,7 @@ QMap<QString, QString> QStaticStringWeaver::findOptimalMatching(
             return parts;
         };
 
-        QStringList commonParts = extractParts(commonSubstr);
+        const QStringList commonParts = extractParts(commonSubstr);
 
         /* Add original common substring */
         commonVariants.append(commonSubstr);
@@ -638,7 +652,7 @@ QMap<QString, QString> QStaticStringWeaver::findOptimalMatching(
         if (commonParts.size() > 1) {
             /* Underscore variant */
             QString underscoreVariant;
-            for (int i = 0; i < commonParts.size(); i++) {
+            for (qsizetype i = 0; i < commonParts.size(); i++) {
                 underscoreVariant += commonParts[i];
                 if (i < commonParts.size() - 1) {
                     underscoreVariant += "_";
@@ -648,7 +662,7 @@ QMap<QString, QString> QStaticStringWeaver::findOptimalMatching(
 
             /* CamelCase variant */
             QString camelCase = commonParts[0];
-            for (int i = 1; i < commonParts.size(); i++) {
+            for (qsizetype i = 1; i < commonParts.size(); i++) {
                 if (!commonParts[i].isEmpty()) {
                     camelCase += commonParts[i][0].toUpper();
                     if (commonParts[i].length() > 1) {
@@ -677,26 +691,27 @@ QMap<QString, QString> QStaticStringWeaver::findOptimalMatching(
 
     /* Calculate maximum length of B strings */
     qsizetype maxBLength = 0;
-    for (int i = 0; i < nB; i++) {
+    for (qsizetype i = 0; i < groupBSize; i++) {
         maxBLength = qMax(maxBLength, groupB[i].size());
     }
 
     /* Construct a cost matrix, initialize all costs to 1.0 (max cost) */
-    QVector<QVector<double>> costMatrix(N, QVector<double>(N, 1.0));
+    QVector<QVector<double>> costMatrix(matrixSize, QVector<double>(matrixSize, 1.0));
 
     /* Fill actual costs for existing B-A pairs with length-based weighting:
        Try all common variants and use the best similarity for each pair */
-    for (int i = 0; i < nB; i++) {
+    for (qsizetype i = 0; i < groupBSize; i++) {
         /* Calculate weight factor based on B string length */
-        double weight = static_cast<double>(maxBLength) / groupB[i].size();
+        const double weight = static_cast<double>(maxBLength)
+                              / static_cast<double>(groupB[i].size());
 
-        for (int j = 0; j < nA; j++) {
+        for (qsizetype j = 0; j < groupASize; j++) {
             double bestSim = 0.0;
 
             /* Try each common variant */
             for (const QString &commonVariant : commonVariants) {
-                double sim = trimmedSimilarity(groupB[i], groupA[j], commonVariant);
-                bestSim    = qMax(bestSim, sim);
+                const double sim = trimmedSimilarity(groupB[i], groupA[j], commonVariant);
+                bestSim          = qMax(bestSim, sim);
             }
 
             costMatrix[i][j] = (1.0 - bestSim) * weight;
@@ -704,14 +719,14 @@ QMap<QString, QString> QStaticStringWeaver::findOptimalMatching(
     }
 
     /* Use Hungarian algorithm to solve assignment (assign one A to each B) */
-    QVector<int> assignment = hungarianAlgorithm(costMatrix);
+    const QVector<int> assignment = hungarianAlgorithm(costMatrix);
 
     /* Create a map of the results */
     QMap<QString, QString> matching;
-    for (int i = 0; i < nB; i++) {
-        int j = assignment[i];
-        if (j < nA) {
-            matching[groupB[i]] = groupA[j];
+    for (qsizetype i = 0; i < groupBSize; i++) {
+        const int assignedIndex = assignment[i];
+        if (assignedIndex < groupASize) {
+            matching[groupB[i]] = groupA[assignedIndex];
         }
     }
 
@@ -723,24 +738,24 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
 {
     /* Function to extract parts from string (either by underscore or camelCase) */
     auto extractParts = [](const QString &str) -> QStringList {
-        QString     strLower = str.toLower();
-        QStringList parts;
+        const QString strLower = str.toLower();
+        QStringList   parts;
 
         /* First try to split by underscore */
-        QStringList underscoreParts = strLower.split("_");
+        const QStringList underscoreParts = strLower.split("_");
         if (underscoreParts.size() > 1) {
             parts = underscoreParts;
         } else {
             /* If no underscores, try to split camelCase */
             QString currentPart;
 
-            for (int i = 0; i < strLower.length(); i++) {
-                QChar c = strLower[i];
-                if (i > 0 && c.isUpper()) {
+            for (qsizetype i = 0; i < strLower.length(); i++) {
+                const QChar character = strLower[i];
+                if (i > 0 && character.isUpper()) {
                     parts.append(currentPart);
-                    currentPart = c.toLower();
+                    currentPart = character.toLower();
                 } else {
-                    currentPart += c;
+                    currentPart += character;
                 }
             }
             if (!currentPart.isEmpty()) {
@@ -758,13 +773,14 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
     };
 
     /* Calculate similarity between two strings with part awareness */
-    auto partAwareSimilarity = [&extractParts](const QString &s1, const QString &s2) -> double {
+    auto partAwareSimilarity =
+        [&extractParts](const QString &string1, const QString &string2) -> double {
         /* Get direct similarity */
-        double directSim = similarity(s1.toLower(), s2.toLower());
+        const double directSim = similarity(string1.toLower(), string2.toLower());
 
         /* Get parts from each string */
-        QStringList parts1 = extractParts(s1);
-        QStringList parts2 = extractParts(s2);
+        const QStringList parts1 = extractParts(string1);
+        const QStringList parts2 = extractParts(string2);
 
         /* If either has single part, return direct similarity */
         if (parts1.size() <= 1 || parts2.size() <= 1) {
@@ -775,12 +791,12 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
         int    matchedParts = 0;
         double totalPartSim = 0.0;
 
-        /* Check how many parts from s1 are in s2 */
-        for (const QString &p1 : parts1) {
+        /* Check how many parts from string1 are in string2 */
+        for (const QString &part1 : parts1) {
             double bestPartSim = 0.0;
-            for (const QString &p2 : parts2) {
-                double partSim = similarity(p1, p2);
-                bestPartSim    = qMax(bestPartSim, partSim);
+            for (const QString &part2 : parts2) {
+                const double partSim = similarity(part1, part2);
+                bestPartSim          = qMax(bestPartSim, partSim);
             }
             /* Threshold for considering a part matched */
             if (bestPartSim > 0.7) {
@@ -790,11 +806,14 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
         }
 
         /* Calculate parts similarity score */
-        double partMatchRatio = static_cast<double>(matchedParts) / parts1.size();
-        double avgPartSim     = matchedParts > 0 ? totalPartSim / matchedParts : 0.0;
+        const double partMatchRatio = static_cast<double>(matchedParts)
+                                      / static_cast<double>(parts1.size());
+        const double avgPartSim = matchedParts > 0
+                                      ? totalPartSim / static_cast<double>(matchedParts)
+                                      : 0.0;
 
         /* Get the more meaningful of direct similarity vs. part-based similarity */
-        double partBasedScore = partMatchRatio * 0.7 + avgPartSim * 0.3;
+        const double partBasedScore = (partMatchRatio * 0.7) + (avgPartSim * 0.3);
 
         /* Return higher of direct vs part-based similarity */
         return qMax(directSim, partBasedScore);
@@ -804,7 +823,7 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
     QVector<QString> hintVariants;
 
     /* Extract parts from hint string */
-    QStringList hintParts = extractParts(hintString);
+    const QStringList hintParts = extractParts(hintString);
 
     /* Add the original hint string */
     hintVariants.append(hintString);
@@ -813,7 +832,7 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
     if (hintParts.size() > 1) {
         /* Generate underscore-separated variant */
         QString underscoreVariant;
-        for (int i = 0; i < hintParts.size(); i++) {
+        for (qsizetype i = 0; i < hintParts.size(); i++) {
             underscoreVariant += hintParts[i];
             if (i < hintParts.size() - 1) {
                 underscoreVariant += "_";
@@ -823,7 +842,7 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
 
         /* Generate camelCase variant */
         QString camelCaseVariant = hintParts[0];
-        for (int i = 1; i < hintParts.size(); i++) {
+        for (qsizetype i = 1; i < hintParts.size(); i++) {
             if (!hintParts[i].isEmpty()) {
                 camelCaseVariant += hintParts[i][0].toUpper();
                 if (hintParts[i].length() > 1) {
@@ -847,14 +866,14 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
     }
 
     /* Find best matching group markers for each hint variant */
-    QString bestGroupMarker;
-    double  bestSimilarity = 0.0;
-    int     bestLength     = 0;
+    QString   bestGroupMarker;
+    double    bestSimilarity = 0.0;
+    qsizetype bestLength     = 0;
 
     for (const QString &hintVariant : hintVariants) {
         for (const QString &marker : candidateMarkers) {
-            double currentSimilarity = partAwareSimilarity(marker, hintVariant);
-            int    currentLength     = marker.length();
+            const double    currentSimilarity = partAwareSimilarity(marker, hintVariant);
+            const qsizetype currentLength     = marker.length();
             if (currentSimilarity > bestSimilarity
                 || (currentSimilarity == bestSimilarity && currentLength > bestLength)) {
                 bestSimilarity  = currentSimilarity;
@@ -869,8 +888,8 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
         bestSimilarity = 0.0;
         bestLength     = 0;
         for (const QString &marker : candidateMarkers) {
-            double currentSimilarity = similarity(marker.toLower(), hintString.toLower());
-            int    currentLength     = marker.length();
+            const double    currentSimilarity = similarity(marker.toLower(), hintString.toLower());
+            const qsizetype currentLength     = marker.length();
             if (currentSimilarity > bestSimilarity
                 || (currentSimilarity == bestSimilarity && currentLength > bestLength)) {
                 bestSimilarity  = currentSimilarity;
@@ -886,7 +905,7 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
 QString QStaticStringWeaver::stripCommonLeadingWhitespace(const QString &text)
 {
     /* Split the text into lines */
-    QStringList lines = text.split('\n');
+    const QStringList lines = text.split('\n');
 
     /* Find non-empty lines to compute common whitespace
      * Empty lines (including those with only spaces) are not considered for common indentation, but will be preserved in the result */
@@ -902,20 +921,18 @@ QString QStaticStringWeaver::stripCommonLeadingWhitespace(const QString &text)
     }
 
     /* Find the minimum indentation level */
-    int minIndent = INT_MAX;
+    qsizetype minIndent = std::numeric_limits<qsizetype>::max();
     for (const QString &line : nonEmptyLines) {
-        int leadingSpaces = 0;
+        qsizetype leadingSpaces = 0;
         while (leadingSpaces < line.length()
                && (line[leadingSpaces] == ' ' || line[leadingSpaces] == '\t')) {
             leadingSpaces++;
         }
-        if (leadingSpaces < minIndent) {
-            minIndent = leadingSpaces;
-        }
+        minIndent = std::min(leadingSpaces, minIndent);
     }
 
     /* If there's no common indentation, return the original text */
-    if (minIndent == INT_MAX || minIndent == 0) {
+    if (minIndent == std::numeric_limits<qsizetype>::max() || minIndent == 0) {
         return text;
     }
 
@@ -923,11 +940,8 @@ QString QStaticStringWeaver::stripCommonLeadingWhitespace(const QString &text)
      * Preserve the positions of all original empty lines, only remove the common indentation from non-empty lines */
     QStringList resultLines;
     for (const QString &line : lines) {
-        if (line.trimmed().isEmpty()) {
+        if (line.trimmed().isEmpty() || line.length() <= minIndent) {
             /* Preserve empty lines as empty strings to ensure line breaks when joining */
-            resultLines.append("");
-        } else if (line.length() <= minIndent) {
-            /* In case the line length is less than or equal to the minimum indentation, treat it as an empty line */
             resultLines.append("");
         } else {
             /* Remove the common indentation prefix */
@@ -936,7 +950,5 @@ QString QStaticStringWeaver::stripCommonLeadingWhitespace(const QString &text)
     }
 
     /* Join the lines, preserving all empty lines */
-    QString result = resultLines.join('\n');
-
-    return result;
+    return resultLines.join('\n');
 }
