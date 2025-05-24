@@ -17,9 +17,9 @@ QSocModuleManager::QSocModuleManager(
     , projectManager(projectManager)
     , busManager(busManager)
     , llmService(llmService)
+    , slangDriver(new QSlangDriver(this, projectManager))
 {
     /* All private members set by constructor */
-    slangDriver = new QSlangDriver(this, projectManager);
 }
 
 QSocModuleManager::~QSocModuleManager() = default;
@@ -666,7 +666,7 @@ bool QSocModuleManager::isModuleExist(const QRegularExpression &moduleNameRegex)
 QString QSocModuleManager::getModuleLibrary(const QString &moduleName)
 {
     if (!isModuleExist(moduleName)) {
-        return QString();
+        return {};
     }
     return QString::fromStdString(moduleData[moduleName.toStdString()]["library"].as<std::string>());
 }
