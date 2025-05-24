@@ -151,6 +151,8 @@ void QStaticLog::restoreMessageHandler()
 
 void QStaticLog::messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
 {
+    /* Unused parameters */
+    Q_UNUSED(context);
     /* Select output stream based on message type */
     switch (type) {
     case QtInfoMsg:
