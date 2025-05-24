@@ -50,7 +50,7 @@ bool QSocModuleManager::addModuleBus(
     if (moduleYaml["port"]) {
         for (YAML::const_iterator it = moduleYaml["port"].begin(); it != moduleYaml["port"].end();
              ++it) {
-            const std::string portNameStd = it->first.as<std::string>();
+            const auto portNameStd = it->first.as<std::string>();
             groupModule.append(QString::fromStdString(portNameStd));
         }
     }
@@ -60,7 +60,7 @@ bool QSocModuleManager::addModuleBus(
     if (busYaml["port"]) {
         /* Signals are under the "port" node */
         for (YAML::const_iterator it = busYaml["port"].begin(); it != busYaml["port"].end(); ++it) {
-            const std::string busSignalStd = it->first.as<std::string>();
+            const auto busSignalStd = it->first.as<std::string>();
             groupBus.append(QString::fromStdString(busSignalStd));
         }
     } else {
@@ -75,10 +75,10 @@ bool QSocModuleManager::addModuleBus(
 
     /* Use QStaticStringWeaver to match bus signals to module ports */
     /* Step 1: Extract candidate substrings for clustering */
-    int minSubstringLength = 3; /* Min length for common substrings */
-    int freqThreshold      = 2; /* Must appear in at least 2 strings */
+    const int minSubstringLength = 3; /* Min length for common substrings */
+    const int freqThreshold      = 2; /* Must appear in at least 2 strings */
 
-    QMap<QString, int> candidateSubstrings = QStaticStringWeaver::extractCandidateSubstrings(
+    const QMap<QString, int> candidateSubstrings = QStaticStringWeaver::extractCandidateSubstrings(
         groupModule, minSubstringLength, freqThreshold);
 
     /* Step 2: Cluster module ports based on common substrings */
@@ -87,15 +87,16 @@ bool QSocModuleManager::addModuleBus(
 
     /* Step 3: Find best matching group for the bus interface hint */
     QList<QString> candidateMarkers = candidateSubstrings.keys();
-    std::sort(candidateMarkers.begin(), candidateMarkers.end(), [](const QString &a, const QString &b) {
-        return a.size() > b.size();
-    });
+    std::sort(
+        candidateMarkers.begin(),
+        candidateMarkers.end(),
+        [](const QString &first, const QString &second) { return first.size() > second.size(); });
 
     /* Find best matching group markers for the bus interface hint */
     QVector<QString> bestHintGroupMarkers;
 
     /* Try to find markers using the original bus interface without hardcoding prefixes */
-    QString bestMarker
+    const QString bestMarker
         = QStaticStringWeaver::findBestGroupMarkerForHint(busInterface, candidateMarkers);
     if (!bestMarker.isEmpty()) {
         bestHintGroupMarkers.append(bestMarker);
@@ -109,8 +110,8 @@ bool QSocModuleManager::addModuleBus(
     /* Collect all module ports from groups whose keys match any of the best hint group markers */
     QVector<QString> filteredModulePorts;
     for (auto it = groups.begin(); it != groups.end(); ++it) {
-        QString groupKey = it.key();
-        bool    matches  = false;
+        const QString &groupKey = it.key();
+        bool           matches  = false;
 
         for (const QString &marker : bestHintGroupMarkers) {
             if (groupKey.contains(marker, Qt::CaseInsensitive)) {
@@ -203,10 +204,10 @@ bool QSocModuleManager::addModuleBusWithLLM(
     if (moduleYaml["port"]) {
         for (YAML::const_iterator it = moduleYaml["port"].begin(); it != moduleYaml["port"].end();
              ++it) {
-            const std::string portNameStd = it->first.as<std::string>();
-            const QString     portName    = QString::fromStdString(portNameStd);
-            QString           typeInfo;
-            QString           direction = "";
+            const auto    portNameStd = it->first.as<std::string>();
+            const QString portName    = QString::fromStdString(portNameStd);
+            QString       typeInfo;
+            QString       direction = "";
 
             if (it->second["type"]) {
                 typeInfo = QString::fromStdString(it->second["type"].as<std::string>());
@@ -224,7 +225,7 @@ bool QSocModuleManager::addModuleBusWithLLM(
     QVector<QString> groupBus;
     if (busYaml["port"]) {
         for (YAML::const_iterator it = busYaml["port"].begin(); it != busYaml["port"].end(); ++it) {
-            const std::string portNameStd = it->first.as<std::string>();
+            const auto portNameStd = it->first.as<std::string>();
             groupBus.append(QString::fromStdString(portNameStd));
         }
     } else {
@@ -238,7 +239,7 @@ bool QSocModuleManager::addModuleBusWithLLM(
 
     /* Build prompt */
     /* clang-format off */
-    QString prompt = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
+    const QString prompt = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
         I need to match bus signals to module ports based on naming conventions and semantics.
 
         Module name: %1
@@ -262,7 +263,7 @@ bool QSocModuleManager::addModuleBusWithLLM(
     /* clang-format on */
 
     /* Send request to LLM service */
-    LLMResponse response = llmService->sendRequest(
+    const LLMResponse response = llmService->sendRequest(
         prompt,
         /* Default system prompt */
         "You are a helpful assistant that specializes in hardware "
@@ -341,8 +342,8 @@ bool QSocModuleManager::removeModuleBus(
 
     /* Iterate through bus interfaces and collect ones matching the regex */
     for (YAML::const_iterator it = moduleYaml["bus"].begin(); it != moduleYaml["bus"].end(); ++it) {
-        const std::string busInterfaceNameStd = it->first.as<std::string>();
-        const QString     busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
+        const auto    busInterfaceNameStd = it->first.as<std::string>();
+        const QString busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
 
         if (QStaticRegex::isNameExactMatch(busInterfaceName, busInterfaceRegex)) {
             qDebug() << "Found matching bus interface to remove:" << busInterfaceName;
@@ -403,15 +404,15 @@ QStringList QSocModuleManager::listModuleBus(
 
     /* Iterate through bus interfaces and collect interface names that match the regex */
     for (YAML::const_iterator it = moduleYaml["bus"].begin(); it != moduleYaml["bus"].end(); ++it) {
-        const std::string busInterfaceNameStd = it->first.as<std::string>();
-        const QString     busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
+        const auto    busInterfaceNameStd = it->first.as<std::string>();
+        const QString busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
 
         /* Check if the interface name matches the regex */
         if (QStaticRegex::isNameExactMatch(busInterfaceName, busInterfaceRegex)) {
             /* Get the bus name associated with this interface */
             if (it->second["bus"]) {
-                const std::string busNameStd = it->second["bus"].as<std::string>();
-                const QString     busName    = QString::fromStdString(busNameStd);
+                const auto    busNameStd = it->second["bus"].as<std::string>();
+                const QString busName    = QString::fromStdString(busNameStd);
 
                 /* Get the mode if available */
                 QString mode = "unknown";
@@ -468,8 +469,8 @@ YAML::Node QSocModuleManager::showModuleBus(
 
     /* Iterate through bus interfaces and collect ones matching the regex */
     for (YAML::const_iterator it = moduleYaml["bus"].begin(); it != moduleYaml["bus"].end(); ++it) {
-        const std::string busInterfaceNameStd = it->first.as<std::string>();
-        const QString     busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
+        const auto    busInterfaceNameStd = it->first.as<std::string>();
+        const QString busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
 
         if (QStaticRegex::isNameExactMatch(busInterfaceName, busInterfaceRegex)) {
             qDebug() << "Found matching bus interface:" << busInterfaceName;
@@ -498,7 +499,7 @@ QString QSocModuleManager::formatModuleBusJsonToMarkdownTable(const QString &jso
         }
 
         /* Define table headers */
-        QStringList headers
+        const QStringList headers
             = {"Group Name",
                "Type",
                "Data Width",
@@ -512,8 +513,14 @@ QString QSocModuleManager::formatModuleBusJsonToMarkdownTable(const QString &jso
         QVector<QStringList> rows;
         for (const auto &group : groups) {
             /* Extract values with fallbacks, handling both string and number types */
-            QString name, type, wData, wAddr, wID, wLen;
-            bool    enWrite = false, enRead = false;
+            QString name;
+            QString type;
+            QString wData;
+            QString wAddr;
+            QString wID;
+            QString wLen;
+            bool    enWrite = false;
+            bool    enRead  = false;
 
             /* Handle name (should be string) */
             if (group.contains("name")) {
@@ -647,10 +654,10 @@ bool QSocModuleManager::explainModuleBusWithLLM(
     if (moduleYaml["port"]) {
         for (YAML::const_iterator it = moduleYaml["port"].begin(); it != moduleYaml["port"].end();
              ++it) {
-            const std::string portNameStd = it->first.as<std::string>();
-            const QString     portName    = QString::fromStdString(portNameStd);
-            QString           typeInfo;
-            QString           direction = "";
+            const auto    portNameStd = it->first.as<std::string>();
+            const QString portName    = QString::fromStdString(portNameStd);
+            QString       typeInfo;
+            QString       direction = "";
 
             if (it->second["type"]) {
                 typeInfo = QString::fromStdString(it->second["type"].as<std::string>());
@@ -670,8 +677,8 @@ bool QSocModuleManager::explainModuleBusWithLLM(
 
     if (busYaml["port"]) {
         for (YAML::const_iterator it = busYaml["port"].begin(); it != busYaml["port"].end(); ++it) {
-            const std::string portNameStd = it->first.as<std::string>();
-            QString           portName    = QString::fromStdString(portNameStd);
+            const auto    portNameStd = it->first.as<std::string>();
+            const QString portName    = QString::fromStdString(portNameStd);
 
             /* Check for master interface */
             if (it->second["master"] && it->second["master"].IsMap()) {
@@ -720,7 +727,7 @@ bool QSocModuleManager::explainModuleBusWithLLM(
 
     /* Prepare prompt for LLM */
     /* clang-format off */
-    QString prompt = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
+    const QString prompt = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
         Analyze the following module ports and bus signals to identify potential bus interface matches.
 
         Bus type: %1
@@ -770,7 +777,7 @@ bool QSocModuleManager::explainModuleBusWithLLM(
     /* clang-format on */
 
     /* Send request to LLM service */
-    LLMResponse response = llmService->sendRequest(
+    const LLMResponse response = llmService->sendRequest(
         prompt,
         /* Default system prompt */
         "You are a helpful assistant that specializes in hardware "
