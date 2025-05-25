@@ -131,12 +131,10 @@ bool QSlangDriver::parseArgs(const QString &args)
         serializer.serialize(compilation->getRoot());
 
         /* Define a SAX callback to limit parsing depth */
-        json::parser_callback_t callback =
-            [](int depth, json::parse_event_t event, json &parsed) -> bool {
+        const json::parser_callback_t callback =
+            [](int depth, json::parse_event_t /*event*/, json & /*parsed*/) -> bool {
             /* Skip parsing when depth exceeds 4 levels */
-            if (depth > 6)
-                return false;
-            return true;
+            return depth <= 6;
         };
 
         /* Parse JSON with depth limitation using callback */
@@ -309,7 +307,7 @@ QString QSlangDriver::contentValidFile(const QString &content, const QDir &baseD
             /* Preserve absolute paths and non-path content as is */
             absolutePath = line;
         }
-        QFileInfo fileInfo(absolutePath);
+        const QFileInfo fileInfo(absolutePath);
         /* Check if path exists and is a regular file (including valid symlinks to files) */
         if (fileInfo.exists() && fileInfo.isFile()) {
             result.append(absolutePath);

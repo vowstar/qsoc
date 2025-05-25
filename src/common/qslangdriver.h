@@ -4,11 +4,6 @@
 #ifndef QSLANGDRIVER_H
 #define QSLANGDRIVER_H
 
-/* Disable fmt consteval parsing for GCC15 compatibility */
-#ifndef FMT_USE_CONSTEXPR_PARSE
-#define FMT_USE_CONSTEXPR_PARSE 0
-#endif
-
 #include "common/qsocprojectmanager.h"
 
 #include <memory>
