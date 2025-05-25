@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
@@ -66,6 +66,9 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         "${CMAKE_CURRENT_LIST_DIR}"
         "${CMAKE_CURRENT_LIST_DIR}/../src"
         "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
+    target_include_directories(${TARGET_NAME} SYSTEM PRIVATE
         "${SQLITE3_INCLUDE_DIRS}"
         "${SVLANG_INCLUDE_DIRS}"
         "${JSON_INCLUDE_DIRS}"

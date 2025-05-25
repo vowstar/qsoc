@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 
 # Add CMAKE_MODULE_PATH to find custom modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -242,6 +242,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     "${SQLITE3_INCLUDE_DIRS}"
     "${SVLANG_INCLUDE_DIRS}"
     "${JSON_INCLUDE_DIRS}"
