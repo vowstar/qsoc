@@ -13,6 +13,12 @@
 
 QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)
+    , projectManager(new QSocProjectManager(this))
+    , socConfig(new QSocConfig(this, projectManager))
+    , llmService(new QLLMService(this, socConfig))
+    , busManager(new QSocBusManager(this, projectManager))
+    , moduleManager(new QSocModuleManager(this, projectManager, busManager, llmService))
+    , generateManager(new QSocGenerateManager(this, projectManager, moduleManager, busManager))
 {
     /* Set up application name and version */
     QCoreApplication::setApplicationName("qsoc");
@@ -21,13 +27,6 @@ QSocCliWorker::QSocCliWorker(QObject *parent)
     parser.setApplicationDescription(
         QCoreApplication::translate("main", "Generate SoC components via the command line."));
     parser.setOptionsAfterPositionalArgumentsMode(QCommandLineParser::ParseAsOptions);
-    /* Initialize QObject hierarchy with parent-child relationships for automatic memory management */
-    projectManager  = new QSocProjectManager(this);
-    socConfig       = new QSocConfig(this, projectManager);
-    llmService      = new QLLMService(this, socConfig);
-    busManager      = new QSocBusManager(this, projectManager);
-    moduleManager   = new QSocModuleManager(this, projectManager, busManager, llmService);
-    generateManager = new QSocGenerateManager(this, projectManager, moduleManager, busManager);
 }
 
 QSocCliWorker::~QSocCliWorker() = default;

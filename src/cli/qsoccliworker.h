@@ -77,8 +77,8 @@ private:
     QSocProjectManager  *projectManager  = nullptr;
     QSocConfig          *socConfig       = nullptr;
     QLLMService         *llmService      = nullptr;
-    QSocModuleManager   *moduleManager   = nullptr;
     QSocBusManager      *busManager      = nullptr;
+    QSocModuleManager   *moduleManager   = nullptr;
     QSocGenerateManager *generateManager = nullptr;
 
     /**
