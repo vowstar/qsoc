@@ -348,8 +348,7 @@ private slots:
     void initTestCase()
     {
         TestApp::instance();
-
-        // Re-enable message handler for collecting CLI output
+        /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
 
         /* Set project name */
@@ -381,7 +380,7 @@ private slots:
     void testBusImport()
     {
         /* Create the APB bus CSV file for this test */
-        QString apbFilePath = createApbBusCsv("test_import_apb.csv");
+        const QString apbFilePath = createApbBusCsv("test_import_apb.csv");
 
         messageList.clear();
         QSocCliWorker     socCliWorker;
@@ -419,7 +418,7 @@ private slots:
     void testBusList()
     {
         /* Create an APB bus for this test */
-        QString apbFilePath = createApbBusCsv("test_list_apb.csv");
+        const QString apbFilePath = createApbBusCsv("test_list_apb.csv");
 
         /* Import the bus first */
         QSocCliWorker     importWorker;
@@ -460,7 +459,7 @@ private slots:
     void testBusShow()
     {
         /* Create an APB bus for this test */
-        QString apbFilePath = createApbBusCsv("test_show_apb.csv");
+        const QString apbFilePath = createApbBusCsv("test_show_apb.csv");
 
         /* Import the bus first */
         QSocCliWorker     importWorker;
@@ -511,8 +510,8 @@ private slots:
     void testBusImportMultiple()
     {
         /* Create an APB bus and AXI bus for this test */
-        QString apbFilePath = createApbBusCsv("test_multi_apb.csv");
-        QString axiFilePath = createAxiBusCsv("test_multi_axi.csv");
+        const QString apbFilePath = createApbBusCsv("test_multi_apb.csv");
+        const QString axiFilePath = createAxiBusCsv("test_multi_axi.csv");
 
         /* Import the APB bus first */
         QSocCliWorker     importApbWorker;
@@ -580,12 +579,12 @@ private slots:
     void testBusRemove()
     {
         /* Create an APB bus and AXI bus for this test */
-        QString apbFilePath = createApbBusCsv("test_remove_apb.csv");
-        QString axiFilePath = createAxiBusCsv("test_remove_axi.csv");
+        const QString apbFilePath = createApbBusCsv("test_remove_apb.csv");
+        const QString axiFilePath = createAxiBusCsv("test_remove_axi.csv");
 
         /* Import both buses */
-        QSocCliWorker importWorker;
-        QStringList   importApbArgs
+        QSocCliWorker     importWorker;
+        const QStringList importApbArgs
             = {"qsoc",
                "bus",
                "import",
@@ -601,7 +600,7 @@ private slots:
         importWorker.setup(importApbArgs, false);
         importWorker.run();
 
-        QStringList importAxiArgs
+        const QStringList importAxiArgs
             = {"qsoc",
                "bus",
                "import",
@@ -670,7 +669,7 @@ private slots:
     void testBusWithInvalidOption()
     {
         /* Create a bus file for this test */
-        QString apbFilePath = createApbBusCsv("test_invalid_option.csv");
+        const QString apbFilePath = createApbBusCsv("test_invalid_option.csv");
 
         messageList.clear();
         QSocCliWorker     socCliWorker;
@@ -711,11 +710,10 @@ private slots:
     void testBusWithRelativePaths()
     {
         /* Create temporary directory for test */
-        QDir tempDir;
-        tempDir.mkpath("./bus_temp_dir");
+        QDir().mkpath("./bus_temp_dir");
 
         /* Create an APB bus file in the temporary directory */
-        QString apbContent
+        const QString apbContent
             = R"(Name;Mode;Presence;Direction;Initiative;Kind;Width;Bus width;Default value;Driver;Qualifier;Port match;System group;Protocol type;Payload name;Payload type;Payload extension;Description;
 pclk;slave;;in;;;1;;;;;false;;;;;;;Clock
 presetn;slave;;in;;;1;;;;;false;;;;;;;Reset (active low)
@@ -781,7 +779,7 @@ pslverr;slave;;out;;;1;;;;;false;;;;;;;Slave error)";
     void testBusImportWithMasterSlaveMode()
     {
         /* Create a full APB bus CSV file (with both master and slave modes) for this test */
-        QString apbFilePath = createFullApbBusCsv("test_full_apb.csv");
+        const QString apbFilePath = createFullApbBusCsv("test_full_apb.csv");
 
         messageList.clear();
         QSocCliWorker     socCliWorker;
@@ -819,17 +817,17 @@ pslverr;slave;;out;;;1;;;;;false;;;;;;;Slave error)";
 
         /* Safely check YAML node values instead of directly accessing with potentially unsafe operators */
         YAML::Node busNode      = busManager.getBusYaml("full_apb");
-        bool       hasPaddrNode = busNode["port"] && busNode["port"]["paddr"];
+        const bool hasPaddrNode = busNode["port"] && busNode["port"]["paddr"];
 
         // Use try-catch to prevent uncaught exceptions
         try {
             if (hasPaddrNode && busNode["port"]["paddr"]["mode"]) {
-                std::string mode = busNode["port"]["paddr"]["mode"].as<std::string>();
+                const auto mode = busNode["port"]["paddr"]["mode"].as<std::string>();
                 QVERIFY(mode == "master" || mode == "slave");
             }
 
             if (hasPaddrNode && busNode["port"]["paddr"]["qualifier"]) {
-                std::string qualifier = busNode["port"]["paddr"]["qualifier"].as<std::string>();
+                const auto qualifier = busNode["port"]["paddr"]["qualifier"].as<std::string>();
                 QVERIFY(qualifier == "address");
             }
         } catch (const std::exception &e) {
@@ -851,7 +849,7 @@ pslverr;slave;;out;;;1;;;;;false;;;;;;;Slave error)";
     void testBusImportWithFullAxi()
     {
         /* Create a full AXI bus CSV file with both master and slave modes for this test */
-        QString axiFilePath = createFullAxiBusCsv("test_full_axi.csv");
+        const QString axiFilePath = createFullAxiBusCsv("test_full_axi.csv");
 
         messageList.clear();
         QSocCliWorker     socCliWorker;

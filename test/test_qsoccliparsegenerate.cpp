@@ -109,9 +109,9 @@ c906:
 )";
 
         /* Create the module file */
-        QDir    moduleDir(projectManager.getModulePath());
-        QString modulePath = moduleDir.filePath("c906.soc_mod");
-        QFile   moduleFile(modulePath);
+        const QDir    moduleDir(projectManager.getModulePath());
+        const QString modulePath = moduleDir.filePath("c906.soc_mod");
+        QFile         moduleFile(modulePath);
         if (moduleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream stream(&moduleFile);
             stream << c906Content;
@@ -126,10 +126,10 @@ c906:
         for (const QString &msg : messageList) {
             if (msg.contains("Successfully generated Verilog code:")
                 && msg.contains(baseFileName + ".v")) {
-                QRegularExpression      re("Successfully generated Verilog code: (.+\\.v)");
-                QRegularExpressionMatch match = re.match(msg);
+                const QRegularExpression regex("Successfully generated Verilog code: (.+\\.v)");
+                const QRegularExpressionMatch match = regex.match(msg);
                 if (match.hasMatch()) {
-                    QString filePath = match.captured(1);
+                    const QString filePath = match.captured(1);
                     if (QFile::exists(filePath)) {
                         return true;
                     }
@@ -138,13 +138,9 @@ c906:
         }
 
         /* Check the project output directory */
-        QString projectOutputPath = projectManager.getOutputPath();
-        QString projectFilePath   = QDir(projectOutputPath).filePath(baseFileName + ".v");
-        if (QFile::exists(projectFilePath)) {
-            return true;
-        }
-
-        return false;
+        const QString projectOutputPath = projectManager.getOutputPath();
+        const QString projectFilePath   = QDir(projectOutputPath).filePath(baseFileName + ".v");
+        return QFile::exists(projectFilePath);
     }
 
     /* Get Verilog content and check if it contains specific text */
@@ -164,8 +160,8 @@ c906:
             }
             if (msg.contains("Successfully generated Verilog code:")
                 && msg.contains(baseFileName + ".v")) {
-                QRegularExpression      re("Successfully generated Verilog code: (.+\\.v)");
-                QRegularExpressionMatch match = re.match(msg);
+                const QRegularExpression regex("Successfully generated Verilog code: (.+\\.v)");
+                const QRegularExpressionMatch match = regex.match(msg);
                 if (match.hasMatch()) {
                     filePath = match.captured(1);
                     if (!filePath.isNull() && QFile::exists(filePath)) {
@@ -184,7 +180,7 @@ c906:
 
         /* If not found from logs, check the project output directory */
         if (verilogContent.isEmpty()) {
-            QString projectOutputPath = projectManager.getOutputPath();
+            const QString projectOutputPath = projectManager.getOutputPath();
             if (!projectOutputPath.isNull()) {
                 filePath = QDir(projectOutputPath).filePath(baseFileName + ".v");
                 if (!filePath.isNull() && QFile::exists(filePath)) {
@@ -218,8 +214,8 @@ c906:
         };
 
         /* Normalize whitespace in both strings before comparing */
-        QString normalizedContent = normalizeWhitespace(verilogContent);
-        QString normalizedVerify  = normalizeWhitespace(contentToVerify);
+        const QString normalizedContent = normalizeWhitespace(verilogContent);
+        const QString normalizedVerify  = normalizeWhitespace(contentToVerify);
 
         /* Check if the normalized content contains the normalized text we're looking for */
         return normalizedContent.contains(normalizedVerify);
@@ -229,6 +225,7 @@ private slots:
     void initTestCase()
     {
         TestApp::instance();
+        /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
         /* Set project name */
         projectName = QFileInfo(__FILE__).baseName() + "_data";
@@ -351,7 +348,7 @@ instance:
   cpu2:
     module: "c906"
 )";
-        QString       filePath = createTempFile("max_width_test.soc_net", content);
+        const QString filePath = createTempFile("max_width_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
@@ -391,7 +388,7 @@ instance:
       pad_biu_bid:
         tie: 64'hFFFFFFFFFFFFFFFF
 )";
-        QString       filePath = createTempFile("tie_overflow_test.soc_net", content);
+        const QString filePath = createTempFile("tie_overflow_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
@@ -472,7 +469,7 @@ instance:
       tdt_dm_pad_wdata:
         tie: 64'hDEADBEEF
 )";
-        QString       filePath = createTempFile("tie_format_test.soc_net", content);
+        const QString filePath = createTempFile("tie_format_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
@@ -555,7 +552,7 @@ net:
     cpu1:
       port: biu_pad_arvalid
 )";
-        QString       filePath = createTempFile("invert_test.soc_net", content);
+        const QString filePath = createTempFile("invert_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
@@ -612,7 +609,7 @@ instance:
       pad_biu_bid:
         tie: 300
 )";
-        QString       filePath = createTempFile("tie_width_test.soc_net", content);
+        const QString filePath = createTempFile("tie_width_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
@@ -681,7 +678,7 @@ instance:
       tdt_dm_pad_wdata:
         tie: 32'hdeadbeef
 )";
-        QString       filePath = createTempFile("tie_format_input_test.soc_net", content);
+        const QString filePath = createTempFile("tie_format_input_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
@@ -746,7 +743,7 @@ instance:
       biu_pad_arvalid:
         invert: true
 )";
-        QString       filePath = createTempFile("complex_tie_test.soc_net", content);
+        const QString filePath = createTempFile("complex_tie_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
@@ -821,7 +818,7 @@ instance:
   cpu0:
     module: "c906"
 )";
-        QString       filePath = createTempFile("port_width_test.soc_net", content);
+        const QString filePath = createTempFile("port_width_test.soc_net", content);
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
@@ -884,8 +881,8 @@ instance:
       axim_clk_en:
         tie: 1'b0
 )";
-        QString       filePath1 = createTempFile("example1.soc_net", content1);
-        QString       filePath2 = createTempFile("example2.soc_net", content2);
+        const QString filePath1 = createTempFile("example1.soc_net", content1);
+        const QString filePath2 = createTempFile("example2.soc_net", content2);
 
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
@@ -984,11 +981,11 @@ simple_flag:
 )";
 
         /* Create the module files */
-        QDir moduleDir(projectManager.getModulePath());
+        const QDir moduleDir(projectManager.getModulePath());
 
         /* Create simple_mux module file */
-        QString muxPath = moduleDir.filePath("simple_mux.soc_mod");
-        QFile   muxFile(muxPath);
+        const QString muxPath = moduleDir.filePath("simple_mux.soc_mod");
+        QFile         muxFile(muxPath);
         if (muxFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream stream(&muxFile);
             stream << muxContent;
@@ -996,8 +993,8 @@ simple_flag:
         }
 
         /* Create simple_flag module file */
-        QString flagPath = moduleDir.filePath("simple_flag.soc_mod");
-        QFile   flagFile(flagPath);
+        const QString flagPath = moduleDir.filePath("simple_flag.soc_mod");
+        QFile         flagFile(flagPath);
         if (flagFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream stream(&flagFile);
             stream << flagContent;
@@ -1005,7 +1002,7 @@ simple_flag:
         }
 
         /* Create netlist file */
-        QString filePath = createTempFile("test_bits.soc_net", content);
+        const QString filePath = createTempFile("test_bits.soc_net", content);
 
         /* Run the command to generate Verilog */
         QSocCliWorker     socCliWorker;
@@ -1042,7 +1039,7 @@ instance:
 
   soc_top_mux:
     module: simple_mux
-    
+
   wide_driver:
     module: wide_driver_module
 
@@ -1084,11 +1081,11 @@ wide_driver_module:
 )";
 
         /* Create the module files */
-        QDir moduleDir(projectManager.getModulePath());
+        const QDir moduleDir(projectManager.getModulePath());
 
         /* Create mux module file */
-        QString muxPath = moduleDir.filePath("simple_mux.soc_mod");
-        QFile   muxFile(muxPath);
+        const QString muxPath = moduleDir.filePath("simple_mux.soc_mod");
+        QFile         muxFile(muxPath);
         if (muxFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream stream(&muxFile);
             stream << muxContent;
@@ -1096,8 +1093,8 @@ wide_driver_module:
         }
 
         /* Create wide driver module file */
-        QString wideDriverPath = moduleDir.filePath("wide_driver_module.soc_mod");
-        QFile   wideDriverFile(wideDriverPath);
+        const QString wideDriverPath = moduleDir.filePath("wide_driver_module.soc_mod");
+        QFile         wideDriverFile(wideDriverPath);
         if (wideDriverFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream stream(&wideDriverFile);
             stream << wideDriverContent;
@@ -1105,7 +1102,7 @@ wide_driver_module:
         }
 
         /* Create netlist file */
-        QString filePath = createTempFile("test_bits_mismatch.soc_net", content);
+        const QString filePath = createTempFile("test_bits_mismatch.soc_net", content);
 
         /* Run the command to generate Verilog */
         QSocCliWorker     socCliWorker;

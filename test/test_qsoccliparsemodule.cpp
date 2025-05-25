@@ -109,7 +109,7 @@ private:
                 continue;
             }
 
-            QString currentPortName = QString::fromStdString(port.first.Scalar());
+            const QString currentPortName = QString::fromStdString(port.first.Scalar());
             if (currentPortName != portName)
                 continue;
 
@@ -135,10 +135,10 @@ private:
 
             /* Check width - may be in width or parsed from type */
             if (portNode["width"].IsDefined() && !portNode["width"].IsNull()) {
-                int portWidth = portNode["width"].as<int>();
-                widthMatch    = (portWidth == width);
+                const int portWidth = portNode["width"].as<int>();
+                widthMatch          = (portWidth == width);
             } else if (portNode["type"].IsDefined() && !portNode["type"].IsNull()) {
-                QString typeStr = QString::fromStdString(portNode["type"].as<std::string>());
+                const QString typeStr = QString::fromStdString(portNode["type"].as<std::string>());
 
                 /* For unit width logic or wire types */
                 if ((typeStr == "logic" || typeStr == "wire") && width == 1) {
@@ -146,12 +146,12 @@ private:
                 }
                 /* For array types like reg[7:0] or logic[3:0] */
                 else if (typeStr.contains('[') && typeStr.contains(']')) {
-                    QString widthStr = typeStr.section('[', 1).section(']', 0, 0);
+                    const QString widthStr = typeStr.section('[', 1).section(']', 0, 0);
                     if (widthStr.contains(':')) {
-                        int high      = widthStr.section(':', 0, 0).toInt();
-                        int low       = widthStr.section(':', 1, 1).toInt();
-                        int portWidth = high - low + 1;
-                        widthMatch    = (portWidth == width);
+                        const int high      = widthStr.section(':', 0, 0).toInt();
+                        const int low       = widthStr.section(':', 1, 1).toInt();
+                        const int portWidth = high - low + 1;
+                        widthMatch          = (portWidth == width);
                     }
                 }
             } else {
@@ -171,6 +171,7 @@ private slots:
     void initTestCase()
     {
         TestApp::instance();
+        /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
 
         /* Set project name */
@@ -184,13 +185,13 @@ private slots:
         projectManager.load(projectName);
 
         /* Ensure project directory and subdirectories exist with proper permissions */
-        QDir projectDir(projectManager.getCurrentPath());
+        const QDir projectDir(projectManager.getCurrentPath());
         if (!projectDir.exists()) {
             QDir().mkpath(projectDir.path());
         }
 
         /* Ensure module directory exists */
-        QString moduleDir = QDir(projectDir).filePath("module");
+        const QString moduleDir = QDir(projectDir).filePath("module");
         if (!QDir(moduleDir).exists()) {
             QDir().mkpath(moduleDir);
         }
@@ -228,7 +229,7 @@ private slots:
         socCliWorker.run();
 
         /* Check if help was displayed without errors */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
     }
 
     /* Test if module import command exists */
@@ -241,16 +242,16 @@ private slots:
         socCliWorker.run();
 
         /* Check if help was displayed without errors */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
     }
 
     /* Test module import without specifying a project */
     void testModuleImportNoProject()
     {
         /* Create a counter module file */
-        QString testFileName = "test_module_import_no_project.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_import_no_project.v";
+        const QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << "module test_module_import_no_project (\n"
@@ -277,16 +278,16 @@ private slots:
         socCliWorker.run();
 
         /* Should complete without raising test failure */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
     }
 
     /* Test module import with valid project and file */
     void testModuleImportValid()
     {
         /* Create a counter module file */
-        QString testFileName = "test_module_import_valid.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_import_valid.v";
+        const QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << "module test_module_import_valid (\n"
@@ -328,13 +329,13 @@ private slots:
         socCliWorker.run();
 
         /* Verify we got some output */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
 
         /* Reload the module manager to ensure it has the most recent data */
         moduleManager.load(QRegularExpression(".*"));
 
         /* Verify that the module exists */
-        bool hasModule = moduleManager.isModuleExist("test_module_import_valid");
+        const bool hasModule = moduleManager.isModuleExist("test_module_import_valid");
         QVERIFY(hasModule);
     }
 
@@ -356,7 +357,7 @@ private slots:
         socCliWorker.run();
 
         /* Should display an error message */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
         QVERIFY(messageListContains("error"));
     }
 
@@ -364,9 +365,9 @@ private slots:
     void testModuleList()
     {
         /* Create adder module file */
-        QString testFileName = "test_module_list.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_list.v";
+        const QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << "module test_module_list (\n"
@@ -410,7 +411,7 @@ private slots:
         socCliWorker.run();
 
         /* Should list both imported modules */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
         QVERIFY(messageList.filter(QRegularExpression("test_module_list")).count() > 0);
     }
 
@@ -418,9 +419,9 @@ private slots:
     void testModuleShow()
     {
         /* Create a counter module file */
-        QString testFileName = "test_module_show.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_show.v";
+        const QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << "module test_module_show (\n"
@@ -476,7 +477,7 @@ private slots:
         socCliWorker.run();
 
         /* Check we got output */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
 
         /* Check for specific module information in the output */
         QVERIFY(messageList.filter(QRegularExpression("test_module_show")).count() > 0);
@@ -509,7 +510,7 @@ private slots:
         socCliWorker.run();
 
         /* Check we got output and it contains an error */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
         QVERIFY(messageList.filter(QRegularExpression(R"(Error: module not found)")).count() > 0);
     }
 
@@ -517,9 +518,9 @@ private slots:
     void testSimpleModuleRemove()
     {
         /* Create counter module file */
-        QString testFileName = "test_module_remove.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_remove.v";
+        const QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << "module test_module_remove (\n"
@@ -575,8 +576,8 @@ private slots:
         socCliWorker.run();
 
         /* Verify the output indicates success */
-        QVERIFY(messageList.size() > 0);
-        bool hasSuccess = messageListContains("Success: removed module");
+        QVERIFY(!messageList.empty());
+        const bool hasSuccess = messageListContains("Success: removed module");
         QVERIFY(hasSuccess);
 
         /* Verify the module is actually removed */
@@ -589,9 +590,9 @@ private slots:
     void testSimpleModuleRemoveApi()
     {
         /* Create adder module file */
-        QString testFileName = "test_module_remove_api.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_remove_api.v";
+        const QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << "module test_module_remove_api (\n"
@@ -623,7 +624,7 @@ private slots:
 
         /* Verify the module was imported */
         moduleManager.load(QRegularExpression(".*"));
-        bool hasModule = moduleManager.isModuleExist("test_module_remove_api");
+        const bool hasModule = moduleManager.isModuleExist("test_module_remove_api");
         QVERIFY(hasModule);
 
         /* Now remove the module using the moduleManager directly */
@@ -633,7 +634,7 @@ private slots:
         moduleManager.load(QRegularExpression(".*"));
 
         /* Verify the module no longer exists */
-        bool hasModuleStill = moduleManager.isModuleExist("test_module_remove_api");
+        const bool hasModuleStill = moduleManager.isModuleExist("test_module_remove_api");
         QVERIFY(!hasModuleStill);
     }
 };

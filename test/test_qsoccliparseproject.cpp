@@ -43,13 +43,14 @@ private slots:
     void initTestCase()
     {
         TestApp::instance();
+        /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
     }
 
     void cleanupTestCase()
     {
         /* Cleanup any leftover test files */
-        QStringList filesToRemove
+        const QStringList filesToRemove
             = {"test_project.soc_pro",
                "custom_dir_project.soc_pro",
                "update_test_project.soc_pro",
@@ -63,16 +64,16 @@ private slots:
         }
 
         /* Also check for files in the build directory */
-        QString buildTestDir = QDir::currentPath() + "/build/test";
+        const QString buildTestDir = QDir::currentPath() + "/build/test";
         for (const QString &file : filesToRemove) {
-            QString buildFilePath = buildTestDir + "/" + file;
+            const QString buildFilePath = buildTestDir + "/" + file;
             if (QFile::exists(buildFilePath)) {
                 QFile::remove(buildFilePath);
             }
         }
 
         /* Clean up temporary directories */
-        QStringList dirsToRemove
+        const QStringList dirsToRemove
             = {"./temp_test_dir",
                QDir::currentPath() + "/abs_temp_dir",
                QDir::currentPath() + "/abs_temp_dir/bus",
@@ -108,7 +109,7 @@ private slots:
 
         /* Read the file content */
         projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
-        QString content = projectFile.readAll();
+        const QString content = projectFile.readAll();
         projectFile.close();
 
         /* Check for required strings */
@@ -155,7 +156,10 @@ private slots:
         socCliWorker.run();
 
         /* Check for required strings in the output */
-        bool hasBus = false, hasModule = false, hasSchematic = false, hasOutput = false;
+        bool hasBus       = false;
+        bool hasModule    = false;
+        bool hasSchematic = false;
+        bool hasOutput    = false;
         for (const QString &msg : messageList) {
             if (msg.contains("bus"))
                 hasBus = true;
@@ -193,7 +197,7 @@ private slots:
 
         /* Read the file content */
         projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
-        QString content = projectFile.readAll();
+        const QString content = projectFile.readAll();
         projectFile.close();
 
         /* Check for updated schematic path */
@@ -214,7 +218,7 @@ private slots:
         socCliWorker.run();
 
         /* Check if the project file was deleted */
-        QFile projectFile("test_project.soc_pro");
+        const QFile projectFile("test_project.soc_pro");
         QVERIFY(!projectFile.exists());
     }
 
@@ -245,7 +249,7 @@ private slots:
 
         /* Read the file content */
         projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
-        QString content = projectFile.readAll();
+        const QString content = projectFile.readAll();
         projectFile.close();
 
         /* Check for custom directory paths */
@@ -295,7 +299,7 @@ private slots:
 
         /* Read the file content */
         projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
-        QString content = projectFile.readAll();
+        const QString content = projectFile.readAll();
         projectFile.close();
 
         /* Check for updated paths */
@@ -379,7 +383,7 @@ private slots:
         QSocCliWorker socCliWorker;
 
         /* Create arguments with verbosity level 3 (info) */
-        QStringList appArguments = {"qsoc", "--verbose=3", "project", "list"};
+        const QStringList appArguments = {"qsoc", "--verbose=3", "project", "list"};
 
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
@@ -415,17 +419,17 @@ private slots:
         /* Check if the file was created despite error (for debugging) */
         qDebug() << "Checking if file exists:"
                  << QDir::currentPath() + "/test_invalid_option.soc_pro";
-        QFile projectFile("test_invalid_option.soc_pro");
+        const QFile projectFile("test_invalid_option.soc_pro");
         if (projectFile.exists()) {
             qDebug() << "File exists in current directory";
         } else {
             qDebug() << "File does not exist in current directory";
         }
 
-        QString buildDir = QDir::currentPath() + "/build/test";
+        const QString buildDir = QDir::currentPath() + "/build/test";
         qDebug() << "Checking if file exists in build dir:"
                  << buildDir + "/test_invalid_option.soc_pro";
-        QFile buildProjectFile(buildDir + "/test_invalid_option.soc_pro");
+        const QFile buildProjectFile(buildDir + "/test_invalid_option.soc_pro");
         if (buildProjectFile.exists()) {
             qDebug() << "File exists in build directory";
             /* File will be deleted in cleanupTestCase */
@@ -460,8 +464,7 @@ private slots:
     void testProjectWithRelativePaths()
     {
         /* Create temporary directory for test */
-        QDir tempDir;
-        tempDir.mkpath("./temp_test_dir");
+        QDir().mkpath("./temp_test_dir");
 
         messageList.clear();
         QSocCliWorker     socCliWorker;
@@ -483,19 +486,18 @@ private slots:
 
         /* Clean up */
         projectFile.remove();
-        tempDir.rmdir("./temp_test_dir");
+        QDir().rmdir("./temp_test_dir");
     }
 
     void testProjectWithAbsolutePaths()
     {
         /* Get absolute path for temp directory */
-        QString tempPath = QDir::currentPath() + "/abs_temp_dir";
+        const QString tempPath = QDir::currentPath() + "/abs_temp_dir";
 
         /* Create temporary directory for test */
-        QDir tempDir;
-        tempDir.mkpath(tempPath);
-        tempDir.mkpath(tempPath + "/bus");
-        tempDir.mkpath(tempPath + "/modules");
+        QDir().mkpath(tempPath);
+        QDir().mkpath(tempPath + "/bus");
+        QDir().mkpath(tempPath + "/modules");
 
         messageList.clear();
         QSocCliWorker     socCliWorker;
@@ -521,7 +523,7 @@ private slots:
 
         /* Read the file content */
         projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
-        QString content = projectFile.readAll();
+        const QString content = projectFile.readAll();
         projectFile.close();
 
         /* Instead of checking for exact paths which may be normalized,
@@ -531,9 +533,9 @@ private slots:
 
         /* Clean up */
         projectFile.remove();
-        tempDir.rmdir(tempPath + "/bus");
-        tempDir.rmdir(tempPath + "/modules");
-        tempDir.rmdir(tempPath);
+        QDir().rmdir(tempPath + "/bus");
+        QDir().rmdir(tempPath + "/modules");
+        QDir().rmdir(tempPath);
     }
 };
 

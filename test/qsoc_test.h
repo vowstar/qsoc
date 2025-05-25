@@ -18,10 +18,10 @@
     int main(int argc, char *argv[]) \
     { \
         /* Create application instance */ \
-        QCoreApplication app(argc, argv); \
+        const QCoreApplication app(argc, argv); \
         /* Run tests */ \
-        TestClass tc; \
-        int       result = QTest::qExec(&tc, argc, argv); \
+        TestClass testCase; \
+        const int result = QTest::qExec(&testCase, argc, argv); \
         /* Output test completion information */ \
         fprintf(stderr, "Tests completed with result: %d\n", result); \
         /* Exit immediately without waiting for event loop cleanup */ \

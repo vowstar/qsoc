@@ -74,7 +74,7 @@ QString Test::createTemporaryVerilogFile(const QString &content)
         return file.fileName();
     }
 
-    return QString();
+    return {};
 }
 
 QString Test::createTemporaryFileList(const QStringList &filePaths)
@@ -90,13 +90,13 @@ QString Test::createTemporaryFileList(const QStringList &filePaths)
         return file.fileName();
     }
 
-    return QString();
+    return {};
 }
 
 void Test::parseArgs_validArgs()
 {
     /* Create a simple Verilog file */
-    QString verilogContent = R"(
+    const QString verilogContent = R"(
         module test_module(
             input wire clk,
             input wire rst_n,
@@ -112,15 +112,15 @@ void Test::parseArgs_validArgs()
         endmodule
     )";
 
-    QString verilogFile = createTemporaryVerilogFile(verilogContent);
+    const QString verilogFile = createTemporaryVerilogFile(verilogContent);
     QVERIFY(!verilogFile.isEmpty());
 
     /* Create the slang arguments */
-    QString args = QString("slang --single-unit %1").arg(verilogFile);
+    const QString args = QString("slang --single-unit %1").arg(verilogFile);
 
     /* Test parsing */
     QSlangDriver driver;
-    bool         result = driver.parseArgs(args);
+    const bool   result = driver.parseArgs(args);
 
     /* Verify parse succeeded */
     QVERIFY(result);
@@ -133,7 +133,7 @@ void Test::parseArgs_invalidArgs()
 {
     /* Test with invalid arguments */
     QSlangDriver driver;
-    bool         result = driver.parseArgs("slang --invalid-option");
+    const bool   result = driver.parseArgs("slang --invalid-option");
 
     /* Parse should fail with invalid options */
     QVERIFY(!result);
@@ -157,25 +157,26 @@ void Test::parseFileList_validFiles()
         endmodule
     )";
 
-    QString verilogFile1 = createTemporaryVerilogFile(verilogContent);
-    QString verilogFile2 = createTemporaryVerilogFile(verilogContent.replace("counter", "counter2"));
+    const QString verilogFile1 = createTemporaryVerilogFile(verilogContent);
+    const QString verilogFile2 = createTemporaryVerilogFile(
+        verilogContent.replace("counter", "counter2"));
 
     QVERIFY(!verilogFile1.isEmpty());
     QVERIFY(!verilogFile2.isEmpty());
 
     /* Create file list */
-    QString fileList = createTemporaryFileList({verilogFile1, verilogFile2});
+    const QString fileList = createTemporaryFileList({verilogFile1, verilogFile2});
     QVERIFY(!fileList.isEmpty());
 
     /* Test parsing file list */
     QSlangDriver driver;
-    bool         result = driver.parseFileList(fileList, {});
+    const bool   result = driver.parseFileList(fileList, {});
 
     /* Verify parse succeeded */
     QVERIFY(result);
 
     /* Verify module list contains both modules */
-    QStringList modules = driver.getModuleList();
+    const QStringList modules = driver.getModuleList();
     QCOMPARE(modules.size(), 2);
     QVERIFY(modules.contains("counter") || modules.contains("counter2"));
 }
@@ -183,13 +184,13 @@ void Test::parseFileList_validFiles()
 void Test::parseFileList_invalidFiles()
 {
     /* Create file list with non-existent files */
-    QString fileList = createTemporaryFileList(
+    const QString fileList = createTemporaryFileList(
         {tempDir.path() + "/nonexistent1.v", tempDir.path() + "/nonexistent2.v"});
     QVERIFY(!fileList.isEmpty());
 
     /* Test parsing file list with non-existent files */
     QSlangDriver driver;
-    bool         result = driver.parseFileList(fileList, {});
+    const bool   result = driver.parseFileList(fileList, {});
 
     /* Parse should fail with non-existent files */
     QVERIFY(!result);
@@ -198,12 +199,12 @@ void Test::parseFileList_invalidFiles()
 void Test::parseFileList_emptyList()
 {
     /* Create empty file list */
-    QString fileList = createTemporaryFileList({});
+    const QString fileList = createTemporaryFileList({});
     QVERIFY(!fileList.isEmpty());
 
     /* Test parsing empty file list */
     QSlangDriver driver;
-    bool         result = driver.parseFileList(fileList, {});
+    const bool   result = driver.parseFileList(fileList, {});
 
     /* Parse should fail with empty list */
     QVERIFY(!result);
@@ -214,10 +215,11 @@ void Test::contentCleanComment_singleLine()
     QSlangDriver driver;
 
     /* Test content with some simple single-line comments */
-    QString input = "line1 // This is a comment\nline2\n// This is a full-line comment\nline3";
+    const QString input
+        = "line1 // This is a comment\nline2\n// This is a full-line comment\nline3";
 
     /* Clean up comments */
-    QString result = driver.contentCleanComment(input);
+    const QString result = driver.contentCleanComment(input);
 
     /* Verify comments have been removed */
     QVERIFY(!result.contains("//"));
@@ -232,10 +234,10 @@ void Test::contentCleanComment_multiLine()
     QSlangDriver driver;
 
     /* Test with a simpler multi-line comment example */
-    QString input = "line1\n/* Simple multi-line comment */\nline3";
+    const QString input = "line1\n/* Simple multi-line comment */\nline3";
 
     /* Clean up comments */
-    QString result = driver.contentCleanComment(input);
+    const QString result = driver.contentCleanComment(input);
 
     /* Output actual result for inspection */
     qDebug() << "Original input:" << input;
@@ -251,11 +253,12 @@ void Test::contentCleanComment_mixed()
     QSlangDriver driver;
 
     /* Test content with mixed comment types */
-    QString input = "line1 /* Multi-line */ // Single line\nline2 // Single /* with multi-line "
-                    "syntax\nline3 /* Multi // with single line syntax */\nline4";
+    const QString input
+        = "line1 /* Multi-line */ // Single line\nline2 // Single /* with multi-line "
+          "syntax\nline3 /* Multi // with single line syntax */\nline4";
 
     /* Clean up comments */
-    QString result = driver.contentCleanComment(input);
+    const QString result = driver.contentCleanComment(input);
 
     /* Verify comment content has been removed */
     QVERIFY(!result.contains("Single line"));
@@ -276,14 +279,14 @@ void Test::contentValidFile_relativeAndAbsolute()
     file1.close();
 
     QSlangDriver driver;
-    QDir         baseDir(tempDir.path());
+    const QDir   baseDir(tempDir.path());
 
     /* Test with relative and absolute paths */
-    QString relativePath = QFileInfo(file1.fileName()).fileName();
-    QString absolutePath = file1.fileName();
+    const QString relativePath = QFileInfo(file1.fileName()).fileName();
+    const QString absolutePath = file1.fileName();
 
-    QString input  = relativePath + "\n" + absolutePath;
-    QString result = driver.contentValidFile(input, baseDir);
+    const QString input  = relativePath + "\n" + absolutePath;
+    const QString result = driver.contentValidFile(input, baseDir);
 
     /* Both paths should be validated to the same absolute path */
     QStringList resultLines = result.split("\n");
@@ -295,11 +298,12 @@ void Test::contentValidFile_relativeAndAbsolute()
 void Test::contentValidFile_nonExistentFiles()
 {
     QSlangDriver driver;
-    QDir         baseDir(tempDir.path());
+    const QDir   baseDir(tempDir.path());
 
-    QString input = tempDir.path() + "/nonexistent1.txt\n" + tempDir.path() + "/nonexistent2.txt";
+    const QString input = tempDir.path() + "/nonexistent1.txt\n" + tempDir.path()
+                          + "/nonexistent2.txt";
 
-    QString result = driver.contentValidFile(input, baseDir);
+    const QString result = driver.contentValidFile(input, baseDir);
 
     /* Result should be empty as files don't exist */
     QVERIFY(result.isEmpty());
@@ -308,7 +312,7 @@ void Test::contentValidFile_nonExistentFiles()
 void Test::getAst_afterSuccessfulParse()
 {
     /* Create a simple Verilog file */
-    QString verilogContent = R"(
+    const QString verilogContent = R"(
         module simple_module(
             input wire in1,
             output wire out1
@@ -317,13 +321,13 @@ void Test::getAst_afterSuccessfulParse()
         endmodule
     )";
 
-    QString verilogFile = createTemporaryVerilogFile(verilogContent);
+    const QString verilogFile = createTemporaryVerilogFile(verilogContent);
     QVERIFY(!verilogFile.isEmpty());
 
     /* Parse the file */
-    QSlangDriver driver;
-    QString      args   = QString("slang --single-unit %1").arg(verilogFile);
-    bool         result = driver.parseArgs(args);
+    QSlangDriver  driver;
+    const QString args   = QString("slang --single-unit %1").arg(verilogFile);
+    const bool    result = driver.parseArgs(args);
     QVERIFY(result);
 
     /* Check AST contains expected elements */
@@ -340,30 +344,30 @@ void Test::getAst_afterSuccessfulParse()
 void Test::getModuleList_afterParse()
 {
     /* Create Verilog files with multiple modules */
-    QString verilogContent1 = R"(
+    const QString verilogContent1 = R"(
         module module1(input a, output b);
             assign b = a;
         endmodule
     )";
 
-    QString verilogContent2 = R"(
+    const QString verilogContent2 = R"(
         module module2(input c, output d);
             assign d = c;
         endmodule
     )";
 
-    QString verilogFile1 = createTemporaryVerilogFile(verilogContent1);
-    QString verilogFile2 = createTemporaryVerilogFile(verilogContent2);
+    const QString verilogFile1 = createTemporaryVerilogFile(verilogContent1);
+    const QString verilogFile2 = createTemporaryVerilogFile(verilogContent2);
     QVERIFY(!verilogFile1.isEmpty());
     QVERIFY(!verilogFile2.isEmpty());
 
     /* Create file list and parse */
     QSlangDriver driver;
-    bool         result = driver.parseFileList("", {verilogFile1, verilogFile2});
+    const bool   result = driver.parseFileList("", {verilogFile1, verilogFile2});
     QVERIFY(result);
 
     /* Check module list contains the expected modules */
-    QStringList modules = driver.getModuleList();
+    const QStringList modules = driver.getModuleList();
     QVERIFY(modules.contains("module1"));
     QVERIFY(modules.contains("module2"));
     QCOMPARE(modules.size(), 2);
@@ -372,7 +376,7 @@ void Test::getModuleList_afterParse()
 void Test::getModuleAst_validModule()
 {
     /* Create a Verilog file with a module */
-    QString verilogContent = R"(
+    const QString verilogContent = R"(
         module test_module(
             input wire a,
             output wire b
@@ -381,13 +385,13 @@ void Test::getModuleAst_validModule()
         endmodule
     )";
 
-    QString verilogFile = createTemporaryVerilogFile(verilogContent);
+    const QString verilogFile = createTemporaryVerilogFile(verilogContent);
     QVERIFY(!verilogFile.isEmpty());
 
     /* Parse the file */
-    QSlangDriver driver;
-    QString      args   = QString("slang --single-unit %1").arg(verilogFile);
-    bool         result = driver.parseArgs(args);
+    QSlangDriver  driver;
+    const QString args   = QString("slang --single-unit %1").arg(verilogFile);
+    const bool    result = driver.parseArgs(args);
     QVERIFY(result);
 
     /* Check module AST */
@@ -400,7 +404,7 @@ void Test::getModuleAst_validModule()
 void Test::getModuleAst_invalidModule()
 {
     /* Create a Verilog file with a module */
-    QString verilogContent = R"(
+    const QString verilogContent = R"(
         module actual_module(
             input wire a,
             output wire b
@@ -409,13 +413,13 @@ void Test::getModuleAst_invalidModule()
         endmodule
     )";
 
-    QString verilogFile = createTemporaryVerilogFile(verilogContent);
+    const QString verilogFile = createTemporaryVerilogFile(verilogContent);
     QVERIFY(!verilogFile.isEmpty());
 
     /* Parse the file */
-    QSlangDriver driver;
-    QString      args   = QString("slang --single-unit %1").arg(verilogFile);
-    bool         result = driver.parseArgs(args);
+    QSlangDriver  driver;
+    const QString args   = QString("slang --single-unit %1").arg(verilogFile);
+    const bool    result = driver.parseArgs(args);
     QVERIFY(result);
 
     /* Try to get AST for a non-existent module */

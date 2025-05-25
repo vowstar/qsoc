@@ -107,7 +107,7 @@ private:
                 continue;
             }
 
-            QString currentPortName = QString::fromStdString(port.first.Scalar());
+            const QString currentPortName = QString::fromStdString(port.first.Scalar());
             if (currentPortName != portName)
                 continue;
 
@@ -133,10 +133,10 @@ private:
 
             /* Check width - may be in width or parsed from type */
             if (portNode["width"].IsDefined() && !portNode["width"].IsNull()) {
-                int portWidth = portNode["width"].as<int>();
-                widthMatch    = (portWidth == width);
+                const int portWidth = portNode["width"].as<int>();
+                widthMatch          = (portWidth == width);
             } else if (portNode["type"].IsDefined() && !portNode["type"].IsNull()) {
-                QString typeStr = QString::fromStdString(portNode["type"].as<std::string>());
+                const QString typeStr = QString::fromStdString(portNode["type"].as<std::string>());
 
                 /* For unit width logic or wire types */
                 if ((typeStr == "logic" || typeStr == "wire") && width == 1) {
@@ -144,12 +144,12 @@ private:
                 }
                 /* For array types like reg[7:0] or logic[3:0] */
                 else if (typeStr.contains('[') && typeStr.contains(']')) {
-                    QString widthStr = typeStr.section('[', 1).section(']', 0, 0);
+                    const QString widthStr = typeStr.section('[', 1).section(']', 0, 0);
                     if (widthStr.contains(':')) {
-                        int high      = widthStr.section(':', 0, 0).toInt();
-                        int low       = widthStr.section(':', 1, 1).toInt();
-                        int portWidth = high - low + 1;
-                        widthMatch    = (portWidth == width);
+                        const int high      = widthStr.section(':', 0, 0).toInt();
+                        const int low       = widthStr.section(':', 1, 1).toInt();
+                        const int portWidth = high - low + 1;
+                        widthMatch          = (portWidth == width);
                     }
                 }
             } else {
@@ -169,6 +169,7 @@ private slots:
     void initTestCase()
     {
         TestApp::instance();
+        /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
 
         /* Set project name */
@@ -182,26 +183,26 @@ private slots:
         projectManager.load(projectName);
 
         /* Ensure project directory and subdirectories exist with proper permissions */
-        QDir projectDir(projectManager.getCurrentPath());
+        const QDir projectDir(projectManager.getCurrentPath());
         if (!projectDir.exists()) {
             QDir().mkpath(projectDir.path());
         }
 
         /* Ensure module directory exists */
-        QString moduleDir = QDir(projectDir).filePath("module");
+        const QString moduleDir = QDir(projectDir).filePath("module");
         if (!QDir(moduleDir).exists()) {
             QDir().mkpath(moduleDir);
         }
 
         /* Create bus directory */
-        QString busDir = QDir(projectDir).filePath("bus");
+        const QString busDir = QDir(projectDir).filePath("bus");
         if (!QDir(busDir).exists()) {
             QDir().mkpath(busDir);
         }
 
         /* Create APB bus definition */
-        QString apbBusPath = QDir(busDir).filePath("amba.soc_bus");
-        QFile   apbBusFile(apbBusPath);
+        const QString apbBusPath = QDir(busDir).filePath("amba.soc_bus");
+        QFile         apbBusFile(apbBusPath);
         if (apbBusFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&apbBusFile);
             out << R"(
@@ -622,9 +623,9 @@ axi4:
     void testModuleBusAdd()
     {
         /* Create counter module file */
-        QString testFileName = "test_module_bus_add.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_bus_add.v";
+        QString       testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << R"(
@@ -658,8 +659,9 @@ endmodule
         /* First import a module for testing */
         {
             QSocCliWorker socCliWorker;
-            testFilePath            = QFileInfo(testFilePath).absoluteFilePath();
-            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
+            testFilePath = QFileInfo(testFilePath).absoluteFilePath();
+            const QString projectFullPath
+                = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
 
             const QStringList appArguments
                 = {"qsoc",
@@ -677,7 +679,8 @@ endmodule
         /* Now test module bus add command */
         messageList.clear();
         QSocCliWorker socCliWorker;
-        QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
+        const QString projectFullPath
+            = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
 
         const QStringList appArguments
             = {"qsoc",
@@ -700,7 +703,7 @@ endmodule
         socCliWorker.run();
 
         /* Verify the command produced output */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
 
         /* Reload modules to verify changes */
         moduleManager.load("test_module_bus_add");
@@ -716,7 +719,7 @@ endmodule
             for (const auto &bus : moduleNode["bus"]) {
                 if (bus.first.IsDefined() && bus.second.IsDefined() && bus.second.IsMap()) {
                     if (bus.second["bus"].IsDefined() && !bus.second["bus"].IsNull()) {
-                        std::string busType = bus.second["bus"].as<std::string>();
+                        const auto busType = bus.second["bus"].as<std::string>();
                         if (busType == "apb4") {
                             hasBus = true;
                             break;
@@ -729,11 +732,11 @@ endmodule
         QVERIFY(hasBus);
 
         /* Check for success message */
-        bool hasSuccess = messageListContains("Success: added");
+        const bool hasSuccess = messageListContains("Success: added");
         QVERIFY(hasSuccess);
 
         /* Verify no error messages in the output */
-        bool hasError = messageListContains("Error");
+        const bool hasError = messageListContains("Error");
         QVERIFY(!hasError);
     }
 
@@ -741,9 +744,9 @@ endmodule
     void testModuleBusRemove()
     {
         /* Create counter module file */
-        QString testFileName = "test_module_bus_remove.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_bus_remove.v";
+        QString       testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << R"(
@@ -777,8 +780,9 @@ endmodule
         /* First import the module */
         {
             QSocCliWorker socCliWorker;
-            testFilePath            = QFileInfo(testFilePath).absoluteFilePath();
-            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
+            testFilePath = QFileInfo(testFilePath).absoluteFilePath();
+            const QString projectFullPath
+                = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
 
             const QStringList appArguments
                 = {"qsoc",
@@ -796,7 +800,7 @@ endmodule
         /* Then ensure the module has a bus assigned */
         {
             QSocCliWorker     socCliWorker;
-            QString           projectPath = projectManager.getProjectPath();
+            const QString     projectPath = projectManager.getProjectPath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -837,7 +841,7 @@ endmodule
         /* Now test module bus remove command */
         messageList.clear();
         QSocCliWorker     socCliWorker;
-        QString           projectPath = projectManager.getProjectPath();
+        const QString     projectPath = projectManager.getProjectPath();
         const QStringList appArguments
             = {"qsoc",
                "module",
@@ -855,7 +859,7 @@ endmodule
         socCliWorker.run();
 
         /* Verify the command produced output */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
 
         /* Reload modules to verify changes */
         moduleManager.resetModuleData();
@@ -869,7 +873,7 @@ endmodule
             for (const auto &bus : moduleNode["bus"]) {
                 if (bus.first.IsDefined() && bus.second.IsDefined() && bus.second.IsMap()) {
                     if (bus.second["bus"].IsDefined() && !bus.second["bus"].IsNull()) {
-                        std::string busType = bus.second["bus"].as<std::string>();
+                        const auto busType = bus.second["bus"].as<std::string>();
                         if (busType == "apb4") {
                             hasBus = true;
                             break;
@@ -882,11 +886,11 @@ endmodule
         QVERIFY(!hasBus);
 
         /* Check for success message */
-        bool hasSuccess = messageListContains("Success: Removed");
+        const bool hasSuccess = messageListContains("Success: Removed");
         QVERIFY(hasSuccess);
 
         /* Verify no error messages in the output */
-        bool hasError = messageListContains("Error");
+        const bool hasError = messageListContains("Error");
 
         QVERIFY(!hasError);
     }
@@ -895,9 +899,9 @@ endmodule
     void testModuleBusList()
     {
         /* Create counter module file */
-        QString testFileName = "test_module_bus_list.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_bus_list.v";
+        const QString testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << R"(
@@ -940,7 +944,8 @@ endmodule
         /* First import a module */
         {
             QSocCliWorker socCliWorker;
-            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
+            const QString projectFullPath
+                = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -957,7 +962,8 @@ endmodule
         /* Add APB slave interface */
         {
             QSocCliWorker socCliWorker;
-            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
+            const QString projectFullPath
+                = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -981,7 +987,8 @@ endmodule
         /* Add APB master interface */
         {
             QSocCliWorker socCliWorker;
-            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
+            const QString projectFullPath
+                = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -1006,7 +1013,8 @@ endmodule
         moduleManager.load("test_module_bus_list");
         messageList.clear();
         QSocCliWorker socCliWorker;
-        QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
+        const QString projectFullPath
+            = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
         const QStringList appArguments
             = {"qsoc",
                "module",
@@ -1023,7 +1031,7 @@ endmodule
         socCliWorker.run();
 
         /* Verify the command produced output */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
 
         /* Check if the bus is listed in the output */
         QVERIFY(messageListContains("apb_slave [apb4, slave]"));
@@ -1035,9 +1043,9 @@ endmodule
     void testModuleBusShow()
     {
         /* Create counter module file */
-        QString testFileName = "test_module_bus_show.v";
-        QString testFilePath = QDir(projectPath).filePath(testFileName);
-        QFile   testFile(testFilePath);
+        const QString testFileName = "test_module_bus_show.v";
+        QString       testFilePath = QDir(projectPath).filePath(testFileName);
+        QFile         testFile(testFilePath);
         if (testFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&testFile);
             out << R"(
@@ -1074,8 +1082,9 @@ endmodule
         /* First import the module */
         {
             QSocCliWorker socCliWorker;
-            testFilePath            = QFileInfo(testFilePath).absoluteFilePath();
-            QString projectFullPath = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
+            testFilePath = QFileInfo(testFilePath).absoluteFilePath();
+            const QString projectFullPath
+                = QFileInfo(projectManager.getProjectPath()).absoluteFilePath();
 
             const QStringList appArguments
                 = {"qsoc",
@@ -1093,7 +1102,7 @@ endmodule
         /* Add a bus to the module */
         {
             QSocCliWorker     socCliWorker;
-            QString           projectPath = projectManager.getProjectPath();
+            const QString     projectPath = projectManager.getProjectPath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -1120,7 +1129,7 @@ endmodule
         /* Now test module bus show command */
         messageList.clear();
         QSocCliWorker     socCliWorker;
-        QString           projectPath = projectManager.getProjectPath();
+        const QString     projectPath = projectManager.getProjectPath();
         const QStringList appArguments
             = {"qsoc",
                "module",
@@ -1138,7 +1147,7 @@ endmodule
         socCliWorker.run();
 
         /* Verify command produces output */
-        QVERIFY(messageList.size() > 0);
+        QVERIFY(!messageList.empty());
         QVERIFY(messageListContains("bus:"));
         QVERIFY(messageListContains("test_master:"));
         QVERIFY(messageListContains("bus: apb4"));

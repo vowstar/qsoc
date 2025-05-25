@@ -54,10 +54,10 @@ private:
         for (const QString &msg : messageList) {
             if (msg.contains("Successfully generated file from template:")
                 && msg.contains(baseFileName)) {
-                QRegularExpression      re("Successfully generated file from template: (.+)");
-                QRegularExpressionMatch match = re.match(msg);
+                const QRegularExpression regex("Successfully generated file from template: (.+)");
+                const QRegularExpressionMatch match = regex.match(msg);
                 if (match.hasMatch()) {
-                    QString filePath = match.captured(1);
+                    const QString filePath = match.captured(1);
                     if (QFile::exists(filePath)) {
                         return true;
                     }
@@ -66,13 +66,9 @@ private:
         }
 
         /* Check the project output directory */
-        QString projectOutputPath = projectManager.getOutputPath();
-        QString projectFilePath   = QDir(projectOutputPath).filePath(baseFileName);
-        if (QFile::exists(projectFilePath)) {
-            return true;
-        }
-
-        return false;
+        const QString projectOutputPath = projectManager.getOutputPath();
+        const QString projectFilePath   = QDir(projectOutputPath).filePath(baseFileName);
+        return QFile::exists(projectFilePath);
     }
 
     /* Get rendered template content and check if it contains specific text */
@@ -92,8 +88,8 @@ private:
             }
             if (msg.contains("Successfully generated file from template:")
                 && msg.contains(baseFileName)) {
-                QRegularExpression      re("Successfully generated file from template: (.+)");
-                QRegularExpressionMatch match = re.match(msg);
+                const QRegularExpression regex("Successfully generated file from template: (.+)");
+                const QRegularExpressionMatch match = regex.match(msg);
                 if (match.hasMatch()) {
                     filePath = match.captured(1);
                     if (!filePath.isNull() && QFile::exists(filePath)) {
@@ -112,7 +108,7 @@ private:
 
         /* If not found from logs, check the project output directory */
         if (templateContent.isEmpty()) {
-            QString projectOutputPath = projectManager.getOutputPath();
+            const QString projectOutputPath = projectManager.getOutputPath();
             if (!projectOutputPath.isNull()) {
                 filePath = QDir(projectOutputPath).filePath(baseFileName);
                 if (!filePath.isNull() && QFile::exists(filePath)) {
@@ -195,8 +191,7 @@ private slots:
         socCliWorker.run();
 
         QVERIFY(
-            messageList.filter(QRegularExpression("Error:.*Template file does not exist")).size()
-            > 0);
+            !messageList.filter(QRegularExpression("Error:.*Template file does not exist")).empty());
     }
 
     void testGenerateTemplateWithInvalidTemplate()
@@ -204,9 +199,9 @@ private slots:
         messageList.clear();
 
         /* Create invalid template file */
-        QDir    projectDir(projectManager.getCurrentPath());
-        QString invalidTemplatePath = projectDir.filePath("invalid_syntax_template.j2");
-        QFile   invalidFile(invalidTemplatePath);
+        const QDir    projectDir(projectManager.getCurrentPath());
+        const QString invalidTemplatePath = projectDir.filePath("invalid_syntax_template.j2");
+        QFile         invalidFile(invalidTemplatePath);
         QVERIFY(invalidFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream invalidStream(&invalidFile);
         invalidStream << "{{ invalid syntax }";
@@ -224,7 +219,7 @@ private slots:
         socCliWorker.run();
 
         QVERIFY(
-            messageList.filter(QRegularExpression("Error:.*failed to render template")).size() > 0);
+            !messageList.filter(QRegularExpression("Error:.*failed to render template")).empty());
 
         /* Clean up test file */
         QFile::remove(invalidTemplatePath);
@@ -233,14 +228,14 @@ private slots:
     void testGenerateTemplateWithCsvData()
     {
         messageList.clear();
-        QDir projectDir(projectManager.getCurrentPath());
+        const QDir projectDir(projectManager.getCurrentPath());
 
         /* Create CSV data file */
         const QString csvContent  = R"(name,value,type
 input1,10,input
 output1,20,output
 param1,string value,param)";
-        QString       csvFilePath = projectDir.filePath("csv_only_data.csv");
+        const QString csvFilePath = projectDir.filePath("csv_only_data.csv");
         QFile         csvFile(csvFilePath);
         QVERIFY(csvFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream csvStream(&csvFile);
@@ -253,7 +248,7 @@ param1,string value,param)";
 // - {{ item.name }}: {{ item.value }} ({{ item.type }})
 {% endfor %}
 )";
-        QString       templateFilePath = projectDir.filePath("csv_test_template.j2");
+        const QString templateFilePath = projectDir.filePath("csv_test_template.j2");
         QFile         templateFile(templateFilePath);
         QVERIFY(templateFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream templateStream(&templateFile);
@@ -274,7 +269,7 @@ param1,string value,param)";
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        std::cout << messageList.join("\n").toStdString() << std::endl;
+        std::cout << messageList.join("\n").toStdString() << '\n';
 
         /* Verify results */
         QVERIFY(verifyTemplateOutputExistence("csv_test_template"));
@@ -286,7 +281,7 @@ param1,string value,param)";
     void testGenerateTemplateWithYamlData()
     {
         messageList.clear();
-        QDir projectDir(projectManager.getCurrentPath());
+        const QDir projectDir(projectManager.getCurrentPath());
 
         /* Create YAML data file */
         const QString yamlContent  = R"(settings:
@@ -295,7 +290,7 @@ param1,string value,param)";
 options:
   debug: true
   optimization: high)";
-        QString       yamlFilePath = projectDir.filePath("yaml_only_config.yaml");
+        const QString yamlFilePath = projectDir.filePath("yaml_only_config.yaml");
         QFile         yamlFile(yamlFilePath);
         QVERIFY(yamlFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream yamlStream(&yamlFile);
@@ -308,7 +303,7 @@ options:
 // Version: {{ settings.version }}
 // Debug: {{ options.debug }}
 // Optimization: {{ options.optimization }})";
-        QString       templateFilePath = projectDir.filePath("yaml_test_template.j2");
+        const QString templateFilePath = projectDir.filePath("yaml_test_template.j2");
         QFile         templateFile(templateFilePath);
         QVERIFY(templateFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream templateStream(&templateFile);
@@ -340,7 +335,7 @@ options:
     void testGenerateTemplateWithJsonData()
     {
         messageList.clear();
-        QDir projectDir(projectManager.getCurrentPath());
+        const QDir projectDir(projectManager.getCurrentPath());
 
         /* Create JSON data file */
         const QString jsonContent  = R"({
@@ -354,7 +349,7 @@ options:
     }
   }
 })";
-        QString       jsonFilePath = projectDir.filePath("json_only_metadata.json");
+        const QString jsonFilePath = projectDir.filePath("json_only_metadata.json");
         QFile         jsonFile(jsonFilePath);
         QVERIFY(jsonFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream jsonStream(&jsonFile);
@@ -366,7 +361,7 @@ options:
 // Author: {{ metadata.author }}
 // Date: {{ metadata.date }}
 // Feature1: {{ settings.advanced.feature1 }})";
-        QString       templateFilePath = projectDir.filePath("json_test_template.j2");
+        const QString templateFilePath = projectDir.filePath("json_test_template.j2");
         QFile         templateFile(templateFilePath);
         QVERIFY(templateFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream templateStream(&templateFile);
@@ -397,13 +392,13 @@ options:
     void testGenerateTemplateWithMultipleDataSources()
     {
         messageList.clear();
-        QDir projectDir(projectManager.getCurrentPath());
+        const QDir projectDir(projectManager.getCurrentPath());
 
         /* Create CSV data file */
         const QString csvContent  = R"(name,value,type
 input1,10,input
 output1,20,output)";
-        QString       csvFilePath = projectDir.filePath("multi_data_entries.csv");
+        const QString csvFilePath = projectDir.filePath("multi_data_entries.csv");
         QFile         csvFile(csvFilePath);
         QVERIFY(csvFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream csvStream(&csvFile);
@@ -414,7 +409,7 @@ output1,20,output)";
         const QString yamlContent  = R"(settings:
   project: multi_test_project
   version: 2.0.0)";
-        QString       yamlFilePath = projectDir.filePath("multi_data_config.yaml");
+        const QString yamlFilePath = projectDir.filePath("multi_data_config.yaml");
         QFile         yamlFile(yamlFilePath);
         QVERIFY(yamlFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream yamlStream(&yamlFile);
@@ -428,7 +423,7 @@ output1,20,output)";
     "department": "Testing"
   }
 })";
-        QString       jsonFilePath = projectDir.filePath("multi_data_info.json");
+        const QString jsonFilePath = projectDir.filePath("multi_data_info.json");
         QFile         jsonFile(jsonFilePath);
         QVERIFY(jsonFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream jsonStream(&jsonFile);
@@ -447,7 +442,7 @@ output1,20,output)";
 // - {{ item.name }}: {{ item.value }} ({{ item.type }})
 {% endfor %}
 )";
-        QString       templateFilePath = projectDir.filePath("multi_data_template.j2");
+        const QString templateFilePath = projectDir.filePath("multi_data_template.j2");
         QFile         templateFile(templateFilePath);
         QVERIFY(templateFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream templateStream(&templateFile);
@@ -491,14 +486,14 @@ output1,20,output)";
     void testGenerateTemplateWithMultipleTemplateFiles()
     {
         messageList.clear();
-        QDir projectDir(projectManager.getCurrentPath());
+        const QDir projectDir(projectManager.getCurrentPath());
 
         /* Create YAML data file with config */
         const QString yamlContent  = R"(module:
   name: cpu_wrapper
   manufacturer: ACME
   id: 12345)";
-        QString       yamlFilePath = projectDir.filePath("module_config.yaml");
+        const QString yamlFilePath = projectDir.filePath("module_config.yaml");
         QFile         yamlFile(yamlFilePath);
         QVERIFY(yamlFile.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream yamlStream(&yamlFile);
@@ -515,7 +510,7 @@ module {{ module.name }} (
   input  wire rst_n,
   output wire ready
 );)";
-        QString       template1Path    = projectDir.filePath("module_header.j2");
+        const QString template1Path    = projectDir.filePath("module_header.j2");
         QFile         template1File(template1Path);
         QVERIFY(template1File.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream template1Stream(&template1File);
@@ -538,7 +533,7 @@ module {{ module.name }} (
   assign ready = ready_reg;
   
 endmodule // {{ module.name }})";
-        QString       template2Path    = projectDir.filePath("module_implementation.j2");
+        const QString template2Path    = projectDir.filePath("module_implementation.j2");
         QFile         template2File(template2Path);
         QVERIFY(template2File.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream template2Stream(&template2File);
