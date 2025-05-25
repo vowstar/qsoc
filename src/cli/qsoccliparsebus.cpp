@@ -272,7 +272,7 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
 
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
+    QStringList       busNameList  = !cmdArguments.empty() ? cmdArguments : QStringList() << ".*";
     /* Removing duplicates */
     busNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
@@ -381,7 +381,7 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
 
     const QStringList cmdArguments = parser.positionalArguments();
     const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList busNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
+    QStringList       busNameList  = !cmdArguments.empty() ? cmdArguments : QStringList() << ".*";
     /* Removing duplicates */
     busNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */

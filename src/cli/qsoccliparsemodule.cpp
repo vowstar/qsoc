@@ -278,9 +278,9 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList moduleNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
+    const QStringList cmdArguments   = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
+    QStringList       moduleNameList = !cmdArguments.empty() ? cmdArguments : QStringList() << ".*";
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
@@ -384,9 +384,9 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList moduleNameList = cmdArguments.length() > 0 ? cmdArguments : QStringList() << ".*";
+    const QStringList cmdArguments   = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
+    QStringList       moduleNameList = !cmdArguments.empty() ? cmdArguments : QStringList() << ".*";
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */

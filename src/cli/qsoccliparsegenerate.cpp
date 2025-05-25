@@ -145,8 +145,8 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         }
 
         /* Generate Verilog code */
-        QFileInfo fileInfo(netlistFilePath);
-        QString   outputFileName = fileInfo.baseName();
+        const QFileInfo fileInfo(netlistFilePath);
+        const QString   outputFileName = fileInfo.baseName();
         if (!generateManager->generateVerilog(outputFileName)) {
             return showError(
                 1,
@@ -259,10 +259,10 @@ bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)
         }
 
         /* Process the template */
-        QFileInfo fileInfo(templateFilePath);
-        QString   outputFileName = fileInfo.fileName();
+        const QFileInfo fileInfo(templateFilePath);
+        QString         outputFileName = fileInfo.fileName();
         /* Remove only the template extension (the last extension) */
-        int lastDotIndex = outputFileName.lastIndexOf('.');
+        const int lastDotIndex = static_cast<int>(outputFileName.lastIndexOf('.'));
         if (lastDotIndex > 0) {
             outputFileName = outputFileName.left(lastDotIndex);
         }
