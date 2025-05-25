@@ -1,9 +1,11 @@
 ---
-UseColor: true
 HeaderFilterRegex: ''
+UseColor: true
 WarningsAsErrors: '*'
 Checks: >
   bugprone-*,
+  clang-analyzer-*,
+  clang-diagnostic-*,
   cppcoreguidelines-*,
   misc-*,
   modernize-*,
@@ -31,11 +33,14 @@ Checks: >
   -misc-no-recursion,
   -misc-non-private-member-variables-in-classes,
   -modernize-avoid-c-arrays,
+  -modernize-raw-string-literal,
   -modernize-use-equals-default,
   -modernize-use-nodiscard,
+  -modernize-use-ranges,
   -modernize-use-trailing-return-type,
   -readability-braces-around-statements,
   -readability-convert-member-functions-to-static,
+  -readability-function-cognitive-complexity,
   -readability-implicit-bool-conversion,
   -readability-magic-numbers,
   -readability-named-parameter,
