@@ -8,11 +8,9 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
+    , projectManager(new QSocProjectManager(this))
 {
     ui->setupUi(this);
-
-    /* Initialize QObject hierarchy with parent-child relationships for automatic memory management */
-    projectManager = new QSocProjectManager(this);
 
     /* Configure UI elements */
     ui->toolButtonBusEditor->setDefaultAction(ui->actionBusEditor);

@@ -19,7 +19,7 @@
 void MainWindow::closeProject(bool silent)
 {
     /* Get the tree view model */
-    QStandardItemModel *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
+    auto *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
 
     /* Check if model exists */
     if (model) {
@@ -46,15 +46,15 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
 {
     /* Create/update tree view model */
     if (!ui->treeViewProjectFile->model()) {
-        QStandardItemModel *model = new QStandardItemModel(this);
+        auto *model = new QStandardItemModel(this);
         model->setHorizontalHeaderLabels(QStringList() << "Project Files");
         ui->treeViewProjectFile->setModel(model);
     }
 
     /* Add project to tree view */
-    QStandardItemModel *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
+    auto *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
     if (model) {
-        QStandardItem *projectItem = new QStandardItem(QString("%1.soc_pro").arg(projectName));
+        auto *projectItem = new QStandardItem(QString("%1.soc_pro").arg(projectName));
 
         /* Set icon using theme system */
         projectItem->setIcon(QIcon::fromTheme("applications-soc"));
@@ -62,22 +62,22 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         projectItem->setData(projectManager->getProjectPath(), Qt::UserRole);
 
         /* Add project directories as child nodes */
-        QStandardItem *busDirItem = new QStandardItem(tr("Bus"));
+        auto *busDirItem = new QStandardItem(tr("Bus"));
         busDirItem->setIcon(QIcon::fromTheme("document-open"));
         busDirItem->setData(projectManager->getBusPath(), Qt::UserRole);
         projectItem->appendRow(busDirItem);
 
-        QStandardItem *moduleDirItem = new QStandardItem(tr("Module"));
+        auto *moduleDirItem = new QStandardItem(tr("Module"));
         moduleDirItem->setIcon(QIcon::fromTheme("document-open"));
         moduleDirItem->setData(projectManager->getModulePath(), Qt::UserRole);
         projectItem->appendRow(moduleDirItem);
 
-        QStandardItem *schematicDirItem = new QStandardItem(tr("Schematic"));
+        auto *schematicDirItem = new QStandardItem(tr("Schematic"));
         schematicDirItem->setIcon(QIcon::fromTheme("document-open"));
         schematicDirItem->setData(projectManager->getSchematicPath(), Qt::UserRole);
         projectItem->appendRow(schematicDirItem);
 
-        QStandardItem *outputDirItem = new QStandardItem(tr("Output"));
+        auto *outputDirItem = new QStandardItem(tr("Output"));
         outputDirItem->setIcon(QIcon::fromTheme("document-open"));
         outputDirItem->setData(projectManager->getOutputPath(), Qt::UserRole);
         projectItem->appendRow(outputDirItem);
@@ -87,8 +87,8 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         QStringList busFilters;
         busFilters << "*.soc_bus";
         busDir.setNameFilters(busFilters);
-        foreach (QString busFileName, busDir.entryList(QDir::Files)) {
-            QStandardItem *busFileItem = new QStandardItem(busFileName);
+        foreach (const QString busFileName, busDir.entryList(QDir::Files)) {
+            auto *busFileItem = new QStandardItem(busFileName);
             busFileItem->setIcon(QIcon::fromTheme("applications-bus"));
             busFileItem->setData(busDir.filePath(busFileName), Qt::UserRole);
             busDirItem->appendRow(busFileItem);
@@ -103,8 +103,8 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         QStringList moduleFilters;
         moduleFilters << "*.soc_mod";
         moduleDir.setNameFilters(moduleFilters);
-        foreach (QString moduleFileName, moduleDir.entryList(QDir::Files)) {
-            QStandardItem *moduleFileItem = new QStandardItem(moduleFileName);
+        foreach (const QString moduleFileName, moduleDir.entryList(QDir::Files)) {
+            auto *moduleFileItem = new QStandardItem(moduleFileName);
             moduleFileItem->setIcon(QIcon::fromTheme("applications-module"));
             moduleFileItem->setData(moduleDir.filePath(moduleFileName), Qt::UserRole);
             moduleDirItem->appendRow(moduleFileItem);
@@ -119,8 +119,8 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         QStringList schematicFilters;
         schematicFilters << "*.soc_sch";
         schematicDir.setNameFilters(schematicFilters);
-        foreach (QString schematicFileName, schematicDir.entryList(QDir::Files)) {
-            QStandardItem *schematicFileItem = new QStandardItem(schematicFileName);
+        foreach (const QString schematicFileName, schematicDir.entryList(QDir::Files)) {
+            auto *schematicFileItem = new QStandardItem(schematicFileName);
             schematicFileItem->setIcon(QIcon::fromTheme("applications-schematic"));
             schematicFileItem->setData(schematicDir.filePath(schematicFileName), Qt::UserRole);
             schematicDirItem->appendRow(schematicFileItem);
@@ -135,8 +135,8 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
 
         /* Add .soc_net files */
         outputDir.setNameFilters(QStringList() << "*.soc_net");
-        foreach (QString outputFileName, outputDir.entryList(QDir::Files)) {
-            QStandardItem *outputFileItem = new QStandardItem(outputFileName);
+        foreach (const QString outputFileName, outputDir.entryList(QDir::Files)) {
+            auto *outputFileItem = new QStandardItem(outputFileName);
             outputFileItem->setIcon(QIcon::fromTheme("applications-net"));
             outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
             outputDirItem->appendRow(outputFileItem);
@@ -144,8 +144,8 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
 
         /* Add .v (Verilog) files */
         outputDir.setNameFilters(QStringList() << "*.v");
-        foreach (QString outputFileName, outputDir.entryList(QDir::Files)) {
-            QStandardItem *outputFileItem = new QStandardItem(outputFileName);
+        foreach (const QString outputFileName, outputDir.entryList(QDir::Files)) {
+            auto *outputFileItem = new QStandardItem(outputFileName);
             outputFileItem->setIcon(QIcon::fromTheme("document-open"));
             outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
             outputDirItem->appendRow(outputFileItem);
@@ -153,8 +153,8 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
 
         /* Add .csv files */
         outputDir.setNameFilters(QStringList() << "*.csv");
-        foreach (QString outputFileName, outputDir.entryList(QDir::Files)) {
-            QStandardItem *outputFileItem = new QStandardItem(outputFileName);
+        foreach (const QString outputFileName, outputDir.entryList(QDir::Files)) {
+            auto *outputFileItem = new QStandardItem(outputFileName);
             outputFileItem->setIcon(QIcon::fromTheme("document-open"));
             outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
             outputDirItem->appendRow(outputFileItem);
@@ -176,7 +176,7 @@ void MainWindow::on_actionNewProject_triggered()
     closeProject(true);
 
     /* Show save dialog to get project name and path */
-    QString filePath = QFileDialog::getSaveFileName(
+    const QString filePath = QFileDialog::getSaveFileName(
         this,
         tr("Create New Project"),
         lastProjectDir,
@@ -188,9 +188,9 @@ void MainWindow::on_actionNewProject_triggered()
     }
 
     /* Extract project name and directory path */
-    QFileInfo fileInfo(filePath);
-    QString   projectName = fileInfo.baseName();
-    QString   projectDir  = QDir(fileInfo.absolutePath()).filePath(projectName);
+    const QFileInfo fileInfo(filePath);
+    const QString   projectName = fileInfo.baseName();
+    const QString   projectDir  = QDir(fileInfo.absolutePath()).filePath(projectName);
 
     /* Configure project manager */
     projectManager->setProjectName(projectName);
@@ -224,7 +224,7 @@ void MainWindow::on_actionOpenProject_triggered()
     closeProject(true);
 
     /* Show open dialog to get project file */
-    QString filePath = QFileDialog::getOpenFileName(
+    const QString filePath = QFileDialog::getOpenFileName(
         this, tr("Open Project"), lastProjectDir, tr("QSoC Project (*.soc_pro);;All Files (*)"));
 
     /* Check if user canceled the dialog */
@@ -233,9 +233,9 @@ void MainWindow::on_actionOpenProject_triggered()
     }
 
     /* Extract project name from file path */
-    QFileInfo fileInfo(filePath);
-    QString   projectName = fileInfo.baseName();
-    QString   projectDir  = fileInfo.absolutePath();
+    const QFileInfo fileInfo(filePath);
+    const QString   projectName = fileInfo.baseName();
+    const QString   projectDir  = fileInfo.absolutePath();
 
     /* Configure and load project */
     projectManager->setProjectPath(projectDir);
@@ -272,10 +272,10 @@ void MainWindow::on_actionOpenProjectInFileExplorer_triggered()
         return;
     }
 
-    QString projectPath = projectManager->getProjectPath();
+    const QString projectPath = projectManager->getProjectPath();
 
     /* Ensure the directory exists */
-    QDir dir(projectPath);
+    const QDir dir(projectPath);
     if (!dir.exists()) {
         QMessageBox::warning(
             this,
@@ -295,7 +295,7 @@ void MainWindow::on_actionOpenProjectInFileExplorer_triggered()
     success = QProcess::startDetached("open", QStringList() << projectPath);
 #else
     /* Linux and other Unix-like systems */
-    QStringList fileManagers = {
+    const QStringList fileManagers = {
         "xdg-open", /**< Should be available on most Linux distributions */
         "nautilus", /**< GNOME */
         "dolphin",  /**< KDE */
@@ -330,10 +330,10 @@ void MainWindow::on_actionRefresh_triggered()
     }
 
     /* Get current project name */
-    QString projectName = projectManager->getProjectName();
+    const QString projectName = projectManager->getProjectName();
 
     /* Clear existing tree view */
-    QStandardItemModel *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
+    auto *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
     if (model) {
         model->clear();
         model->setHorizontalHeaderLabels(QStringList() << "Project Files");
