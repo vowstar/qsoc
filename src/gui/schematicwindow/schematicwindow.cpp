@@ -84,8 +84,8 @@ void SchematicWindow::initializeModuleLibrary()
         &ModuleLibrary::ModuleWidget::setPixmapScale);
 
     /* Add the module library widget to the dock widget */
-    QWidget     *dockContents = ui->dockWidgetModuleList->widget();
-    QGridLayout *layout       = new QGridLayout(dockContents);
+    QWidget *dockContents = ui->dockWidgetModuleList->widget();
+    auto    *layout       = new QGridLayout(dockContents);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(moduleLibraryWidget);
     dockContents->setLayout(layout);
@@ -98,16 +98,16 @@ void SchematicWindow::addModuleToSchematic(const QSchematic::Items::Item *item)
     }
 
     /* Create a deep copy of the item */
-    std::shared_ptr<QSchematic::Items::Item> itemCopy = item->deepCopy();
+    const std::shared_ptr<QSchematic::Items::Item> itemCopy = item->deepCopy();
     if (!itemCopy) {
         return;
     }
 
     /* Set item position to view center */
-    QPointF viewCenter = ui->schematicView->mapToScene(
+    const QPointF viewCenter = ui->schematicView->mapToScene(
         ui->schematicView->viewport()->rect().center());
     itemCopy->setPos(viewCenter);
 
     /* Add to scene */
-    scene.undoStack()->push(new QSchematic::Commands::ItemAdd(&scene, std::move(itemCopy)));
+    scene.undoStack()->push(new QSchematic::Commands::ItemAdd(&scene, itemCopy));
 }

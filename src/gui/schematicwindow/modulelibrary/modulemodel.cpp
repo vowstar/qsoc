@@ -43,13 +43,14 @@ ModuleModuleTreeItem *ModuleModuleTreeItem::child(int row) const
 
 int ModuleModuleTreeItem::childCount() const
 {
-    return children_.size();
+    return static_cast<int>(children_.size());
 }
 
 int ModuleModuleTreeItem::row() const
 {
     if (parent_)
-        return parent_->children_.indexOf(const_cast<ModuleModuleTreeItem *>(this));
+        return static_cast<int>(
+            parent_->children_.indexOf(const_cast<ModuleModuleTreeItem *>(this)));
     return 0;
 }
 
@@ -95,7 +96,7 @@ const QSchematic::Items::Item *ModuleModel::itemFromIndex(const QModelIndex &ind
     if (!index.isValid())
         return nullptr;
 
-    ModuleModuleTreeItem *item = static_cast<ModuleModuleTreeItem *>(index.internalPointer());
+    auto *item = static_cast<ModuleModuleTreeItem *>(index.internalPointer());
     if (!item)
         return nullptr;
 
@@ -109,7 +110,7 @@ const QSchematic::Items::Item *ModuleModel::itemFromIndex(const QModelIndex &ind
 QModelIndex ModuleModel::index(int row, int column, const QModelIndex &parent) const
 {
     if (!hasIndex(row, column, parent))
-        return QModelIndex();
+        return {};
 
     ModuleModuleTreeItem *parentItem;
 
@@ -122,19 +123,19 @@ QModelIndex ModuleModel::index(int row, int column, const QModelIndex &parent) c
     if (childItem)
         return createIndex(row, column, childItem);
 
-    return QModelIndex();
+    return {};
 }
 
 QModelIndex ModuleModel::parent(const QModelIndex &child) const
 {
     if (!child.isValid())
-        return QModelIndex();
+        return {};
 
-    ModuleModuleTreeItem *childItem  = static_cast<ModuleModuleTreeItem *>(child.internalPointer());
+    auto                 *childItem  = static_cast<ModuleModuleTreeItem *>(child.internalPointer());
     ModuleModuleTreeItem *parentItem = childItem->parent();
 
     if (parentItem == rootItem_)
-        return QModelIndex();
+        return {};
 
     return createIndex(parentItem->row(), 0, parentItem);
 }
@@ -163,48 +164,51 @@ int ModuleModel::columnCount(const QModelIndex &parent) const
 QVariant ModuleModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid())
-        return QVariant();
+        return {};
 
-    ModuleModuleTreeItem *item = static_cast<ModuleModuleTreeItem *>(index.internalPointer());
-    const ModuleInfo     *info = item->data();
+    auto             *item = static_cast<ModuleModuleTreeItem *>(index.internalPointer());
+    const ModuleInfo *info = item->data();
 
     switch (item->type()) {
     case Root:
-        return QVariant();
+        return {};
 
     case CategoryLogic:
         if (role == Qt::DisplayRole)
             return tr("Logic Gates");
-        else if (role == Qt::DecorationRole)
+        if (role == Qt::DecorationRole)
             return QIcon::fromTheme("folder");
         break;
 
     case CategoryMemory:
         if (role == Qt::DisplayRole)
             return tr("Memory");
-        else if (role == Qt::DecorationRole)
+        if (role == Qt::DecorationRole)
             return QIcon::fromTheme("folder");
         break;
 
     case CategoryIO:
         if (role == Qt::DisplayRole)
             return tr("I/O Ports");
-        else if (role == Qt::DecorationRole)
+        if (role == Qt::DecorationRole)
             return QIcon::fromTheme("folder");
         break;
 
     case Module:
         if (!info)
-            return QVariant();
+            return {};
 
         if (role == Qt::DisplayRole)
             return info->name;
-        else if (role == Qt::DecorationRole)
+        if (role == Qt::DecorationRole)
             return info->icon.isNull() ? QIcon::fromTheme("application-x-object") : info->icon;
+        break;
+
+    default:
         break;
     }
 
-    return QVariant();
+    return {};
 }
 
 Qt::ItemFlags ModuleModel::flags(const QModelIndex &index) const
@@ -212,7 +216,7 @@ Qt::ItemFlags ModuleModel::flags(const QModelIndex &index) const
     if (!index.isValid())
         return Qt::NoItemFlags;
 
-    ModuleModuleTreeItem *item = static_cast<ModuleModuleTreeItem *>(index.internalPointer());
+    auto *item = static_cast<ModuleModuleTreeItem *>(index.internalPointer());
 
     // Only modules can be dragged
     if (item->type() == Module)
@@ -238,7 +242,7 @@ QMimeData *ModuleModel::mimeData(const QModelIndexList &indexes) const
         return nullptr;
 
     // Create a shared pointer to a copy of the item
-    std::shared_ptr<QSchematic::Items::Item> itemCopy = item->deepCopy();
+    const std::shared_ptr<QSchematic::Items::Item> itemCopy = item->deepCopy();
     if (!itemCopy)
         return nullptr;
 
@@ -321,8 +325,8 @@ void ModuleModel::addTreeItem(
     const QSchematic::Items::Item *item,
     ModuleModuleTreeItem          *parent)
 {
-    ModuleInfo *itemInfo = new ModuleInfo(name, icon, item);
-    auto       *newItem  = new ModuleModuleTreeItem(Module, itemInfo, parent);
+    auto *itemInfo = new ModuleInfo(name, icon, item);
+    auto *newItem  = new ModuleModuleTreeItem(Module, itemInfo, parent);
 
     beginInsertRows(createIndex(parent->row(), 0, parent), parent->childCount(), parent->childCount());
     parent->appendChild(newItem);

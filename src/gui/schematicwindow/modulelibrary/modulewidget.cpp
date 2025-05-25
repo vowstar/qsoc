@@ -12,17 +12,15 @@ using namespace ModuleLibrary;
 
 ModuleWidget::ModuleWidget(QWidget *parent)
     : QWidget(parent)
+    , model_(new ModuleModel(this))
+    , view_(new ModuleView(this))
 {
-    /* Create model */
-    model_ = new ModuleModel(this);
-
-    /* Create view */
-    view_ = new ModuleView(this);
+    /* Set up view with model */
     view_->setModel(model_);
     connect(view_, &ModuleView::clicked, this, &ModuleWidget::itemClickedSlot);
 
     /* Main layout */
-    QVBoxLayout *layout = new QVBoxLayout(this);
+    auto *layout = new QVBoxLayout(this);
     layout->addWidget(view_);
     layout->setContentsMargins(0, 0, 0, 0);
     setLayout(layout);

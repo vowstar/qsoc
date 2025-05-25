@@ -31,7 +31,7 @@ void ModuleView::setPixmapScale(qreal scale)
 
 void ModuleView::startDrag(Qt::DropActions supportedActions)
 {
-    QModelIndexList indexes = selectedIndexes();
+    const QModelIndexList indexes = selectedIndexes();
     if (indexes.count() != 1) {
         return;
     }
@@ -43,14 +43,14 @@ void ModuleView::startDrag(Qt::DropActions supportedActions)
     }
 
     /* Retrieve the ItemMimeData to get the pixmap */
-    QSchematic::Items::MimeData *mimeData = qobject_cast<QSchematic::Items::MimeData *>(data);
+    auto *mimeData = qobject_cast<QSchematic::Items::MimeData *>(data);
     if (!mimeData) {
         delete data;
         return;
     }
 
     /* Create the drag object */
-    QDrag  *drag = new QDrag(this);
+    auto   *drag = new QDrag(this);
     QPointF hotSpot;
     drag->setMimeData(data);
     drag->setPixmap(mimeData->item()->toPixmap(hotSpot, scale_));
