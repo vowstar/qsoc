@@ -328,6 +328,9 @@ bool QSocGenerateManager::renderTemplate(
         /* Setup inja environment */
         inja::Environment env;
 
+        /* Disable line statements */
+        env.set_line_statement("");
+
         /* Render template */
         const std::string templateStr = templateData.toStdString();
         const std::string result      = env.render(templateStr, dataObject);

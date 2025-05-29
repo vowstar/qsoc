@@ -43,6 +43,9 @@ QString QStaticMarkdown::renderTable(
     /* Create Inja template environment */
     inja::Environment env;
 
+    /* Disable line statements */
+    env.set_line_statement("");
+
     /* Add padding function for proper alignment */
     env.add_callback("pad", 3, [](inja::Arguments &args) {
         const std::string text  = args.at(0)->get<std::string>();

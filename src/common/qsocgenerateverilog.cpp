@@ -418,12 +418,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             const QString bitSelection = "";
 
                             /* Add to detailed port information with reversed direction */
-                            portDetails.append(
-                                PortDetailInfo::createTopLevelPort(
-                                    connectedPortName,
-                                    portWidthSpec,
-                                    reversedDirection,
-                                    bitSelection));
+                            portDetails.append(PortDetailInfo::createTopLevelPort(
+                                connectedPortName, portWidthSpec, reversedDirection, bitSelection));
                         }
                         break;
                     }
@@ -517,13 +513,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 }
 
                                 /* Add to detailed port information */
-                                portDetails.append(
-                                    PortDetailInfo::createModulePort(
-                                        instanceName,
-                                        portName,
-                                        portWidthSpec,
-                                        portDirection,
-                                        bitSelection));
+                                portDetails.append(PortDetailInfo::createModulePort(
+                                    instanceName,
+                                    portName,
+                                    portWidthSpec,
+                                    portDirection,
+                                    bitSelection));
                             }
                         }
                     }
@@ -1166,9 +1161,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     portNode["invert"] && portNode["invert"].IsScalar()
                                     && (direction.toLower() == "input"
                                         || direction.toLower() == "in")) {
-                                    tieValue = QString(
-                                                   "/* FIXME: 'invert' attribute on %1 port %2 "
-                                                   "without 'tie' attribute */")
+                                    tieValue = QString("/* FIXME: 'invert' attribute on %1 port %2 "
+                                                       "without 'tie' attribute */")
                                                    .arg(direction.toLower())
                                                    .arg(portName);
                                 }
