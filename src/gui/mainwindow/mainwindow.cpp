@@ -19,10 +19,11 @@ MainWindow::MainWindow(QWidget *parent)
 
     /* Configure project tree view */
     ui->treeViewProjectFile->setHeaderHidden(true);
-    ui->treeViewProjectFile->setStyleSheet("QTreeView::item {"
-                                           "    height: 25px;" /* Fixed item height */
-                                           "    padding: 2px;" /* Visual padding */
-                                           "}");
+    ui->treeViewProjectFile->setStyleSheet(
+        "QTreeView::item {"
+        "    height: 25px;" /* Fixed item height */
+        "    padding: 2px;" /* Visual padding */
+        "}");
     ui->treeViewProjectFile->setIconSize(QSize(24, 24));
 }
 
