@@ -179,6 +179,17 @@ public:
      */
     QSocNumberInfo parseNumber(const QString &numStr);
 
+    /**
+     * @brief Clean type strings for wire declarations
+     * @details Removes type keywords (logic, reg, wire, etc.) from type strings,
+     *          keeping only width information like [7:0]. Uses a general regex
+     *          pattern to match any keyword followed by optional whitespace and
+     *          then either '[' or end of string.
+     * @param typeStr Input type string (e.g. "reg [7:0]", "logic", "wire [3:0]")
+     * @return Cleaned string with only width information (e.g. "[7:0]", "", "[3:0]")
+     */
+    static QString cleanTypeForWireDeclaration(const QString &typeStr);
+
 public slots:
     /**
      * @brief Set the project manager.

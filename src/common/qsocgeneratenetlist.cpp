@@ -513,8 +513,8 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                     && netlistData["port"][portName.toStdString()]["type"].IsScalar()) {
                     QString width = QString::fromStdString(
                         netlistData["port"][portName.toStdString()]["type"].as<std::string>());
-                    /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                    width = width.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
+                    /* Clean type for Verilog 2001 compatibility */
+                    width = QSocGenerateManager::cleanTypeForWireDeclaration(width);
                     widthInfo.originalWidth = width;
 
                     /* Calculate width in bits */
@@ -591,8 +591,8 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                         && moduleData["port"][portName.toStdString()]["type"].IsScalar()) {
                         QString width = QString::fromStdString(
                             moduleData["port"][portName.toStdString()]["type"].as<std::string>());
-                        /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                        width = width.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
+                        /* Clean type for Verilog 2001 compatibility */
+                        width = QSocGenerateManager::cleanTypeForWireDeclaration(width);
                         widthInfo.originalWidth = width;
 
                         /* Calculate width in bits */

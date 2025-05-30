@@ -102,8 +102,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
             if (paramIter->second["type"] && paramIter->second["type"].IsScalar()) {
                 paramType = QString::fromStdString(paramIter->second["type"].as<std::string>());
-                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                paramType = paramType.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
+                /* Clean type for Verilog 2001 compatibility */
+                paramType = QSocGenerateManager::cleanTypeForWireDeclaration(paramType);
 
                 /* Add a space if type isn't empty after processing */
                 if (!paramType.isEmpty() && !paramType.endsWith(" ")) {
@@ -169,8 +169,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             /* Get port type/width information if present */
             if (portIter->second["type"] && portIter->second["type"].IsScalar()) {
                 type = QString::fromStdString(portIter->second["type"].as<std::string>());
-                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                type = type.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
+                /* Clean type for Verilog 2001 compatibility */
+                type = QSocGenerateManager::cleanTypeForWireDeclaration(type);
             }
 
             /* Store the connection information if present */
@@ -485,9 +485,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                     moduleData["port"][portName.toStdString()]
                                                               ["type"]
                                                                   .as<std::string>());
-                                                /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                                                portWidthSpec = portWidthSpec.replace(
-                                                    QRegularExpression(R"(\blogic(\s+|\b))"), "");
+                                                /* Clean type for Verilog 2001 compatibility */
+                                                portWidthSpec
+                                                    = QSocGenerateManager::cleanTypeForWireDeclaration(
+                                                        portWidthSpec);
                                             }
 
                                             /* Get port direction */
@@ -804,7 +805,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                     /* Add wire declaration for this net with width information if available */
                     if (!netWidth.isEmpty()) {
-                        out << "    wire " << netWidth << " " << netName << ";\n";
+                        /* Clean the type string to remove unwanted keywords like 'reg', 'logic', etc. */
+                        const QString cleanedWidth
+                            = QSocGenerateManager::cleanTypeForWireDeclaration(netWidth);
+                        if (!cleanedWidth.isEmpty()) {
+                            out << "    wire " << cleanedWidth << " " << netName << ";\n";
+                        } else {
+                            out << "    wire " << netName << ";\n";
+                        }
                     } else {
                         out << "    wire " << netName << ";\n";
                     }
@@ -998,8 +1006,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             QString type = QString::fromStdString(
                                 portIter->second["type"].as<std::string>());
 
-                            /* Strip out 'logic' keyword for Verilog 2001 compatibility */
-                            type = type.replace(QRegularExpression(R"(\blogic(\s+|\b))"), "");
+                            /* Clean type for Verilog 2001 compatibility */
+                            type = QSocGenerateManager::cleanTypeForWireDeclaration(type);
 
                             /* Extract width information if it exists in format [x:y] or [x] */
                             const QRegularExpression widthRegex(
