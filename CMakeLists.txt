@@ -23,6 +23,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Export compile commands for tools like cppcheck and clangd
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Project settings
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/common/config.h" CONFIG_H_CONTENT)
 string(REGEX MATCH "#define QSOC_VERSION \"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _ ${CONFIG_H_CONTENT})
@@ -387,6 +390,25 @@ if (ENABLE_CLANG_TIDY)
         "---\n"
         "Checks: '-*,llvm-twine-local'\n"
         "...\n")
+endif()
+
+# Cppcheck (faster alternative to clang-tidy)
+find_program(CPPCHECK_COMMAND NAMES cppcheck)
+if(CPPCHECK_COMMAND)
+    message(STATUS "Found cppcheck: ${CPPCHECK_COMMAND}")
+    add_custom_target(
+        cppcheck
+        COMMAND ${CPPCHECK_COMMAND}
+            --enable=all
+            --inconclusive
+            --quiet
+            --suppressions-list=${CMAKE_CURRENT_SOURCE_DIR}/.cppcheck-suppressions
+            --project=${CMAKE_BINARY_DIR}/compile_commands.json
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Running cppcheck static analysis"
+    )
+else()
+    message(STATUS "cppcheck not found, install it for faster static analysis")
 endif()
 
 # Doxygen

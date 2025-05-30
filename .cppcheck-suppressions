@@ -1,0 +1,51 @@
+# Cppcheck suppressions file
+# Suppress warnings for system includes and Qt-generated files
+
+# System includes
+missingIncludeSystem
+
+# Qt MOC, UIC, RCC generated files - suppress all errors in these files
+*:*_moc.cpp
+*:moc_*.cpp
+*:*_ui.h
+*:ui_*.h
+*:qrc_*.cpp
+
+# Build directories - suppress all errors in build directories
+*:build/*
+*:*/build/*
+*:*_build/*
+
+# Qt autogen directories
+*:*_autogen/*
+*:*/autogen/*
+
+# External libraries
+*:external/*
+*:*/external/*
+
+# Common false positives
+unusedFunction
+unmatchedSuppression
+preprocessorErrorDirective
+
+# Qt-specific macro errors
+unknownMacro
+checkersReport
+
+# Qt-specific suppressions
+noExplicitConstructor
+
+# Additional suppressions for common false positives
+constParameterPointer
+constVariablePointer
+normalCheckLevelMaxBranches
+unreadVariable
+unusedStructMember
+useStlAlgorithm
+variableScope
+
+# Performance-related suppressions that are often false positives
+passedByValue
+redundantAssignment
+redundantInitialization
