@@ -1,0 +1,39 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature] "
+labels: ["enhancement"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got an idea? We'd love to hear it!
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What would you like to see?
+      description: Describe the feature you'd like.
+      placeholder: I would like...
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Why do you need this?
+      description: What problem would this solve?
+      placeholder: This would help me...
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example usage (optional)
+      description: How would you use this feature?
+      placeholder: |
+        ```bash
+        qsoc some-new-command --option
+        ```

@@ -1,0 +1,34 @@
+name: Documentation Issue
+description: Documentation needs improvement
+title: "[Docs] "
+labels: ["documentation"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us improve the docs!
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What's the issue?
+      description: What documentation needs to be improved?
+      placeholder: The documentation for X is unclear because...
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Where?
+      description: Which file or section?
+      placeholder: e.g., README.md, CLI help for 'qsoc module'
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: How can we improve it?
+      description: Any suggestions for improvement?
+      placeholder: It would be clearer if...

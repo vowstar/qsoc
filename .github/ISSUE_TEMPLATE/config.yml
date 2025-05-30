@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Discussions
+    url: https://github.com/vowstar/qsoc/discussions
+    about: Ask questions or discuss ideas
+  - name: Security Issues
+    url: https://github.com/vowstar/qsoc/security/advisories/new
+    about: Report security vulnerabilities privately

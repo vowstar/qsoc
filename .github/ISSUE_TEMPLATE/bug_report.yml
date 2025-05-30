@@ -1,0 +1,48 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug] "
+labels: ["bug"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug!
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of what went wrong.
+      placeholder: Describe the bug...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Run command...
+        2. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Your system info (optional but helpful).
+      placeholder: |
+        OS: Ubuntu 22.04
+        Qt: 6.6.2
+        qsoc version: latest main
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional info
+      description: Anything else that might help (logs, files, etc.)
+      placeholder: Any additional context...
