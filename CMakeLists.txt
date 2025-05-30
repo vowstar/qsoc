@@ -88,7 +88,7 @@ if (JSON_FOUND)
 else()
     add_subdirectory(external/json)
     set(JSON_INCLUDE_DIRS
-        "${CMAKE_CURRENT_SOURCE_DIR}/external/json/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/json/single_include"
     )
     set(JSON_LIBRARIES nlohmann_json::nlohmann_json)
     message(STATUS "Use local nlohmann_json library: ${JSON_LIBRARIES} ${JSON_INCLUDE_DIRS}")
@@ -191,6 +191,64 @@ else()
     message(STATUS "Use local bigint library: ${BIGINT_LIBRARIES} ${BIGINT_INCLUDE_DIRS}")
 endif()
 
+# ANTLR4
+pkg_check_modules(ANTLR4 IMPORTED_TARGET antlr4-runtime>=4.13.0)
+if (ANTLR4_FOUND)
+    message(STATUS "Use system antlr4-runtime library: ${ANTLR4_LIBRARIES} ${ANTLR4_VERSION}")
+else()
+    # Configure ANTLR4 C++ runtime build options
+    set(ANTLR4_BUILD_CPP_TESTS OFF CACHE BOOL "disable antlr4 cpp tests")
+    set(ANTLR4_INSTALL OFF CACHE BOOL "disable antlr4 install")
+    set(WITH_DEMO OFF CACHE BOOL "disable antlr4 demo")
+    set(WITH_LIBCXX OFF CACHE BOOL "disable antlr4 libcxx")
+    set(ANTLR_BUILD_CPP_TESTS OFF CACHE BOOL "disable antlr4 build cpp tests")
+    add_subdirectory(external/antlr4/runtime/Cpp)
+    set(ANTLR4_INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/antlr4/runtime/Cpp/runtime/src"
+    )
+    set(ANTLR4_LIBRARIES antlr4_static)
+    message(STATUS "Use local antlr4-runtime library: ${ANTLR4_LIBRARIES} ${ANTLR4_INCLUDE_DIRS}")
+endif()
+
+# SYSTEMRDL
+pkg_check_modules(SYSTEMRDL IMPORTED_TARGET systemrdl>=0.1.0)
+if (SYSTEMRDL_FOUND)
+    message(STATUS "Use system systemrdl library: ${SYSTEMRDL_LIBRARIES} ${SYSTEMRDL_VERSION}")
+else()
+    # Configure SystemRDL to use local dependencies and disable unnecessary components
+    set(USE_SYSTEM_NLOHMANN_JSON ON CACHE BOOL "enable systemrdl to use local json as system")
+    set(USE_SYSTEM_INJA ON CACHE BOOL "enable systemrdl to use local inja as system")
+    set(USE_SYSTEM_ANTLR4 ON CACHE BOOL "enable systemrdl to use local antlr4 as system")
+    set(SYSTEMRDL_BUILD_TOOLS OFF CACHE BOOL "disable systemrdl tools")
+    set(SYSTEMRDL_BUILD_TESTS OFF CACHE BOOL "disable systemrdl tests")
+    set(SYSTEMRDL_BUILD_SHARED OFF CACHE BOOL "disable systemrdl shared library")
+    set(SYSTEMRDL_BUILD_STATIC ON CACHE BOOL "enable systemrdl static library")
+    # Set up variables for SystemRDL to treat our local libraries as "system" libraries
+    set(NLOHMANN_JSON_INCLUDE_DIR "${JSON_INCLUDE_DIRS}" CACHE PATH "systemrdl nlohmann_json include dir")
+    set(NLOHMANN_JSON_INCLUDE_DIRS "${JSON_INCLUDE_DIRS}" CACHE PATH "systemrdl nlohmann_json include dirs")
+    set(NLOHMANN_JSON_FOUND TRUE CACHE BOOL "systemrdl nlohmann_json found")
+    set(INJA_INCLUDE_DIR "${INJA_INCLUDE_DIRS}" CACHE PATH "systemrdl inja include dir")
+    set(INJA_INCLUDE_DIRS "${INJA_INCLUDE_DIRS}" CACHE PATH "systemrdl inja include dirs")
+    set(INJA_FOUND TRUE CACHE BOOL "systemrdl inja found")
+    # Set ANTLR4 variables to bypass pkg-config and manual search
+    set(ANTLR4_INCLUDE_DIR "${ANTLR4_INCLUDE_DIRS}" CACHE PATH "systemrdl antlr4 include dir")
+    set(ANTLR4_INCLUDE_DIRS "${ANTLR4_INCLUDE_DIRS}" CACHE PATH "systemrdl antlr4 include dirs")
+    set(ANTLR4_LIBRARY "${ANTLR4_LIBRARIES}" CACHE STRING "systemrdl antlr4 library")
+    set(ANTLR4_LIBRARIES "${ANTLR4_LIBRARIES}" CACHE STRING "systemrdl antlr4 libraries")
+    set(ANTLR4_FOUND TRUE CACHE BOOL "systemrdl antlr4 found")
+    # Also set the variables that pkg_check_modules would set
+    set(ANTLR4_CFLAGS "" CACHE STRING "systemrdl antlr4 cflags")
+    set(ANTLR4_CFLAGS_OTHER "" CACHE STRING "systemrdl antlr4 cflags other")
+    set(ANTLR4_LDFLAGS "" CACHE STRING "systemrdl antlr4 ldflags")
+    set(ANTLR4_LDFLAGS_OTHER "" CACHE STRING "systemrdl antlr4 ldflags other")
+    add_subdirectory(external/systemrdl)
+    set(SYSTEMRDL_INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/systemrdl"
+    )
+    set(SYSTEMRDL_LIBRARIES SystemRDL::systemrdl_static)
+    message(STATUS "Use local systemrdl library: ${SYSTEMRDL_LIBRARIES} ${SYSTEMRDL_INCLUDE_DIRS}")
+endif()
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "resource/*.qrc")
@@ -254,6 +312,8 @@ target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     "${GPDS_INCLUDE_DIRS}"
     "${QSCHEMATIC_INCLUDE_DIRS}"
     "${BIGINT_INCLUDE_DIRS}"
+    "${ANTLR4_INCLUDE_DIRS}"
+    "${SYSTEMRDL_INCLUDE_DIRS}"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -274,6 +334,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${GPDS_LIBRARIES}
     ${QSCHEMATIC_LIBRARIES}
     ${BIGINT_LIBRARIES}
+    ${ANTLR4_LIBRARIES}
+    ${SYSTEMRDL_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

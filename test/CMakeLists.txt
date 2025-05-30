@@ -78,6 +78,8 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         "${GPDS_INCLUDE_DIRS}"
         "${QSCHEMATIC_INCLUDE_DIRS}"
         "${BIGINT_INCLUDE_DIRS}"
+        "${ANTLR4_INCLUDE_DIRS}"
+        "${SYSTEMRDL_INCLUDE_DIRS}"
     )
 
     target_link_libraries(${TARGET_NAME} PRIVATE
@@ -99,6 +101,8 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${GPDS_LIBRARIES}
         ${QSCHEMATIC_LIBRARIES}
         ${BIGINT_LIBRARIES}
+        ${ANTLR4_LIBRARIES}
+        ${SYSTEMRDL_LIBRARIES}
     )
 endfunction()
 
