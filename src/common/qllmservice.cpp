@@ -260,25 +260,13 @@ void QLLMService::loadConfigSettings()
 
         if (configProvider == "deepseek") {
             provider = DEEPSEEK;
-            return;
-        }
-
-        if (configProvider == "openai") {
+        } else if (configProvider == "openai") {
             provider = OPENAI;
-            return;
-        }
-
-        if (configProvider == "groq") {
+        } else if (configProvider == "groq") {
             provider = GROQ;
-            return;
-        }
-
-        if (configProvider == "claude") {
+        } else if (configProvider == "claude") {
             provider = CLAUDE;
-            return;
-        }
-
-        if (configProvider == "ollama") {
+        } else if (configProvider == "ollama") {
             provider = OLLAMA;
         }
     }
@@ -314,22 +302,21 @@ void QLLMService::loadConfigSettings()
         && config->hasKey("ai_provider")
         && config->getValue("ai_provider").toLower() == providerName) {
         apiUrl = QUrl(config->getValue("api_url"));
-        return;
     }
-
     /* Priority 2: Global URL regardless of provider */
-    if (config->hasKey("api_url") && !config->getValue("api_url").isEmpty()) {
+    else if (config->hasKey("api_url") && !config->getValue("api_url").isEmpty()) {
         apiUrl = QUrl(config->getValue("api_url"));
-        return;
     }
-
     /* Priority 3: Provider-specific URL */
-    const QString providerSpecificUrl = providerName + ".api_url";
-    if (config->hasKey(providerSpecificUrl) && !config->getValue(providerSpecificUrl).isEmpty()) {
-        apiUrl = QUrl(config->getValue(providerSpecificUrl));
-    } else {
-        /* Fall back to default URL if none specified */
-        apiUrl = getDefaultApiEndpoint(provider);
+    else {
+        const QString providerSpecificUrl = providerName + ".api_url";
+        if (config->hasKey(providerSpecificUrl)
+            && !config->getValue(providerSpecificUrl).isEmpty()) {
+            apiUrl = QUrl(config->getValue(providerSpecificUrl));
+        } else {
+            /* Fall back to default URL if none specified */
+            apiUrl = getDefaultApiEndpoint(provider);
+        }
     }
 
     /* 4. Load AI model using priority rules */
@@ -337,22 +324,20 @@ void QLLMService::loadConfigSettings()
     if (config->hasKey("ai_model") && config->hasKey("ai_provider")
         && config->getValue("ai_provider").toLower() == providerName) {
         aiModel = config->getValue("ai_model");
-        return;
     }
-
     /* Priority 2: Global model regardless of provider */
-    if (config->hasKey("ai_model")) {
+    else if (config->hasKey("ai_model")) {
         aiModel = config->getValue("ai_model");
-        return;
     }
-
     /* Priority 3: Provider-specific model */
-    const QString providerSpecificModel = providerName + ".ai_model";
-    if (config->hasKey(providerSpecificModel)) {
-        aiModel = config->getValue(providerSpecificModel);
-    } else {
-        /* Leave empty, default models will be provided in buildRequestPayload */
-        aiModel = "";
+    else {
+        const QString providerSpecificModel = providerName + ".ai_model";
+        if (config->hasKey(providerSpecificModel)) {
+            aiModel = config->getValue(providerSpecificModel);
+        } else {
+            /* Leave empty, default models will be provided in buildRequestPayload */
+            aiModel = "";
+        }
     }
 }
 
