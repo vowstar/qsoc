@@ -2,13 +2,20 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoccliworker.h"
-
-#include "common/qslangdriver.h"
-#include "common/qsocbusmanager.h"
+#include "common/qsocconfig.h"
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
+#include "common/qsocyamlutils.h"
 #include "common/qstaticlog.h"
+
+#include <fstream>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QGuiApplication>
+#include <QTextStream>
 
 bool QSocCliWorker::parseGenerate(const QStringList &appArguments)
 {
@@ -56,6 +63,9 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
          QCoreApplication::translate("main", "The path to the project directory."),
          "project directory"},
         {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"m", "merge"},
+         QCoreApplication::translate(
+             "main", "Merge multiple netlist files in order before processing.")},
     });
 
     parser.addPositionalArgument(
@@ -118,7 +128,110 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
             1, QCoreApplication::translate("main", "Error: could not load buses"));
     }
 
-    /* Generate Verilog code for each netlist file  */
+    /* Check if merge mode is enabled */
+    const bool mergeMode = parser.isSet("merge");
+
+    if (mergeMode && filePathList.size() > 1) {
+        /* Merge mode: combine multiple netlist files */
+        return processMergedNetlists(filePathList);
+    } else {
+        /* Normal mode: process each netlist file separately */
+        return processIndividualNetlists(filePathList);
+    }
+}
+
+bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
+{
+    /* Validate all files exist first */
+    for (const QString &netlistFilePath : filePathList) {
+        if (!QFile::exists(netlistFilePath)) {
+            return showError(
+                1,
+                QCoreApplication::translate("main", "Error: Netlist file does not exist: \"%1\"")
+                    .arg(netlistFilePath));
+        }
+    }
+
+    /* Load and merge all netlist files */
+    YAML::Node mergedNetlist;
+    QString    outputFileName;
+
+    for (int i = 0; i < filePathList.size(); ++i) {
+        const QString &netlistFilePath = filePathList.at(i);
+
+        /* Load the current netlist file */
+        std::ifstream fileStream(netlistFilePath.toStdString());
+        if (!fileStream.is_open()) {
+            return showError(
+                1,
+                QCoreApplication::translate("main", "Error: Unable to open netlist file: \"%1\"")
+                    .arg(netlistFilePath));
+        }
+
+        try {
+            YAML::Node currentNetlist = YAML::Load(fileStream);
+            fileStream.close();
+
+            if (i == 0) {
+                /* For the first file, use it as the base */
+                mergedNetlist = currentNetlist;
+
+                /* Use the first file's basename for output */
+                const QFileInfo fileInfo(netlistFilePath);
+                outputFileName = fileInfo.baseName();
+            } else {
+                /* For subsequent files, merge them using the QSocYamlUtils mergeNodes function */
+                mergedNetlist = QSocYamlUtils::mergeNodes(mergedNetlist, currentNetlist);
+
+                /* Keep using the first file's basename for output filename */
+                /* No need to append additional names for merged content */
+            }
+
+            showInfo(
+                0,
+                QCoreApplication::translate("main", "Loaded netlist file: %1").arg(netlistFilePath));
+
+        } catch (const YAML::Exception &e) {
+            return showError(
+                1,
+                QCoreApplication::translate("main", "Error parsing YAML file: %1: %2")
+                    .arg(netlistFilePath, e.what()));
+        }
+    }
+
+    /* Set the merged netlist data in the generate manager */
+    if (!generateManager->setNetlistData(mergedNetlist)) {
+        return showError(
+            1, QCoreApplication::translate("main", "Error: failed to set merged netlist data"));
+    }
+
+    /* Process the merged netlist */
+    if (!generateManager->processNetlist()) {
+        return showError(
+            1, QCoreApplication::translate("main", "Error: failed to process merged netlist"));
+    }
+
+    /* Generate Verilog code for the merged netlist */
+    if (!generateManager->generateVerilog(outputFileName)) {
+        return showError(
+            1,
+            QCoreApplication::translate(
+                "main", "Error: failed to generate Verilog code for merged netlist: %1")
+                .arg(outputFileName));
+    }
+
+    showInfo(
+        0,
+        QCoreApplication::translate(
+            "main", "Successfully generated Verilog code for merged netlist: %1")
+            .arg(QDir(projectManager->getOutputPath()).filePath(outputFileName + ".v")));
+
+    return true;
+}
+
+bool QSocCliWorker::processIndividualNetlists(const QStringList &filePathList)
+{
+    /* Generate Verilog code for each netlist file individually */
     for (const QString &netlistFilePath : filePathList) {
         /* Check if the netlist file exists before trying to load it */
         if (!QFile::exists(netlistFilePath)) {

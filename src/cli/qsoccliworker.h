@@ -321,6 +321,26 @@ private:
     bool parseGenerateVerilog(const QStringList &appArguments);
 
     /**
+     * @brief Process multiple netlist files by merging them.
+     * @details This function will load multiple netlist files, merge them in order,
+     *          and then process the merged result to generate a single Verilog file.
+     * @param filePathList List of netlist file paths to merge.
+     * @retval true Process successfully.
+     * @retval false Process failed.
+     */
+    bool processMergedNetlists(const QStringList &filePathList);
+
+    /**
+     * @brief Process netlist files individually.
+     * @details This function will process each netlist file separately,
+     *          generating one Verilog file per netlist file.
+     * @param filePathList List of netlist file paths to process.
+     * @retval true Process successfully.
+     * @retval false Process failed.
+     */
+    bool processIndividualNetlists(const QStringList &filePathList);
+
+    /**
      * @brief Parse the generate template command line arguments.
      * @details This function will parse the generate template command line arguments
      *          to render Jinja2 templates with CSV, YAML, and JSON data files.
