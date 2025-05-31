@@ -817,11 +817,22 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
         /* No output/inout, only inputs or unknowns - net is undriven */
         return PortDirectionStatus::Undriven;
     }
-    if (outputCount + inoutCount > 1) {
-        /* Multiple output or inout ports - potential conflict */
+
+    /* Check for true conflicts:
+     * - Multiple outputs (always a conflict)
+     * - Output + inout (potential conflict)
+     * Pure inout connections are normal (e.g., top-level inout to IO cell PAD)
+     */
+    if (outputCount > 1 || (outputCount > 0 && inoutCount > 0)) {
+        /* Multiple output ports or output + inout - potential conflict */
         return PortDirectionStatus::Multidrive;
     }
-    /* Normal case: one driver, multiple inputs */
+
+    /* Normal cases:
+     * - One output + multiple inputs
+     * - Pure inout connections (bidirectional buses, IO connections)
+     * - One inout + multiple inputs
+     */
     return PortDirectionStatus::Valid;
 }
 
@@ -983,8 +994,7 @@ bool QSocGenerateManager::processUplinkConnection(
 {
     try {
         qInfo() << "Processing uplink connection:" << instanceName.c_str() << "."
-                << portName.c_str() << "-> net:" << netName.c_str()
-                << ", top-level port:" << netName.c_str();
+                << portName.c_str() << "-> top-level port:" << netName.c_str();
 
         /* Get port information from module */
         if (!moduleData["port"] || !moduleData["port"].IsMap()) {
@@ -1091,30 +1101,31 @@ bool QSocGenerateManager::processUplinkConnection(
             YAML::Node topLevelPortNode   = YAML::Node(YAML::NodeType::Map);
             topLevelPortNode["direction"] = topLevelDirection;
             topLevelPortNode["type"]      = modulePortType;
+            topLevelPortNode["connect"]   = netName; /* Add connect attribute to link port to net */
 
             netlistData["port"][netName] = topLevelPortNode;
 
             qInfo() << "Created new top-level port:" << netName.c_str()
                     << ", direction:" << topLevelDirection.c_str()
-                    << ", type:" << modulePortType.c_str();
+                    << ", type:" << modulePortType.c_str()
+                    << ", connected to net:" << netName.c_str();
         }
 
-        /* Create or get the net */
+        /* For uplink, directly connect module port to top-level port - NO intermediate net */
+        /* Find or create the net for this top-level port */
         if (!netlistData["net"][netName]) {
             netlistData["net"][netName] = YAML::Node(YAML::NodeType::Map);
         }
 
-        /* Add module instance connection to the net */
+        /* Connect module instance port directly to the top-level port via the net */
         YAML::Node portConnectionNode             = YAML::Node(YAML::NodeType::Map);
         portConnectionNode["port"]                = portName;
         netlistData["net"][netName][instanceName] = portConnectionNode;
 
-        /* Add top-level port connection to the net */
-        YAML::Node topLevelConnectionNode        = YAML::Node(YAML::NodeType::Map);
-        topLevelConnectionNode["port"]           = netName;
-        netlistData["net"][netName]["top_level"] = topLevelConnectionNode;
+        /* The top-level port is implicitly connected to the net with the same name */
+        /* We don't add an explicit "top_level" connection since the net name matches the port name */
 
-        qInfo() << "Successfully created uplink connection for net:" << netName.c_str();
+        qInfo() << "Successfully created uplink connection for port:" << netName.c_str();
         return true;
     } catch (const YAML::Exception &e) {
         qCritical() << "YAML exception in processUplinkConnection:" << e.what();

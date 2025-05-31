@@ -868,11 +868,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             << ", net width: " << netWidth << " */\n";
                     }
 
-                    /* Add direction warning if needed */
-                    if (portDirection == "inout") {
-                        out << "    /* FIXME: Port " << connectedPortName
-                            << " is inout - verify bidirectional behavior */\n";
-                    }
+                    /* Note: Removed inout bidirectional behavior warning - this is normal for uplink connections */
                 }
             }
             out << "\n";
