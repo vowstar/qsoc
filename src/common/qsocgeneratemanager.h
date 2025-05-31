@@ -307,6 +307,51 @@ public slots:
     bool formatVerilogFile(const QString &filePath);
 
 private:
+    /**
+     * @brief Process link and uplink connections in the netlist
+     * @return true if successful, false on error
+     */
+    bool processLinkConnections();
+
+    /**
+     * @brief Process a single link connection
+     * @param instanceName The instance name
+     * @param portName The port name
+     * @param netName The net name to create/connect to
+     * @param moduleName The module name
+     * @param moduleData The module YAML data
+     * @return true if successful, false on error
+     */
+    bool processLinkConnection(
+        const std::string &instanceName,
+        const std::string &portName,
+        const std::string &netName,
+        const std::string &moduleName,
+        const YAML::Node  &moduleData);
+
+    /**
+     * @brief Process a single uplink connection
+     * @param instanceName The instance name
+     * @param portName The port name
+     * @param netName The net name to create/connect to
+     * @param moduleName The module name
+     * @param moduleData The module YAML data
+     * @return true if successful, false on error
+     */
+    bool processUplinkConnection(
+        const std::string &instanceName,
+        const std::string &portName,
+        const std::string &netName,
+        const std::string &moduleName,
+        const YAML::Node  &moduleData);
+
+    /**
+     * @brief Calculate the width of a port from its type string
+     * @param portType The port type string (e.g., "wire [7:0]", "reg [15:0]", "wire")
+     * @return The width in bits, or -1 if cannot be determined
+     */
+    int calculatePortWidth(const std::string &portType);
+
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;
     /** Module manager. */

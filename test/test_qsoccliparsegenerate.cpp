@@ -1131,6 +1131,363 @@ wide_driver_module:
         QVERIFY(verifyVerilogContent("test_bits_mismatch", "Width: [7:0]"));
         QVERIFY(verifyVerilogContent("test_bits_mismatch", "Width: [31:0]"));
     }
+
+    void testGenerateWithLinkUplinkConnections()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with link and uplink connections */
+        const QString content = R"(
+instance:
+  u_io_cell0_PRCUT_H:
+    module: PRCUT_H
+    port:
+  u_io_cell1_PVDD2POCM_H:
+    module: PVDD2POCM_H
+    port:
+      RTE:
+        link: io_ring_rte
+  u_io_cell2_PDDWUWSWCDG_H:
+    module: PDDWUWSWCDG_H
+    port:
+      C:
+        link: sys_rst_n
+      DS0:
+        tie: 1'b1
+      DS1:
+        tie: 1'b1
+      I:
+        tie: 1'b0
+      IE:
+        tie: 1'b1
+      OEN:
+        tie: 1'b1
+      PAD:
+        uplink: rst_n
+      PE:
+        tie: 1'b0
+      PS:
+        tie: 1'b1
+      ST:
+        tie: 1'b0
+      RTE:
+        link: io_ring_rte
+  u_io_cell3_PDDWUWSWCDG_H:
+    module: PDDWUWSWCDG_H
+    port:
+      C:
+        link: spi_sclk
+      I:
+        tie: 1'b0
+      IE:
+        tie: 1'b1
+      OEN:
+        tie: 1'b1
+      PAD:
+        uplink: sclk
+      PE:
+        tie: 1'b0
+      PS:
+        tie: 1'b0
+      RTE:
+        link: io_ring_rte
+  u_cpu:
+    module: c906
+    port:
+      axim_clk_en:
+        tie: 1'b1
+      pad_cpu_rst_b:
+        link: sys_rst_n
+)";
+
+        /* Create PRCUT_H module */
+        const QString prcutContent = R"(
+PRCUT_H:
+  port:
+    # No ports for this module
+)";
+
+        /* Create PVDD2POCM_H module */
+        const QString pvddContent = R"(
+PVDD2POCM_H:
+  port:
+    RTE:
+      type: logic
+      direction: input
+)";
+
+        /* Create PDDWUWSWCDG_H module */
+        const QString pddwContent = R"(
+PDDWUWSWCDG_H:
+  port:
+    C:
+      type: logic
+      direction: output
+    DS0:
+      type: logic
+      direction: input
+    DS1:
+      type: logic
+      direction: input
+    I:
+      type: logic
+      direction: input
+    IE:
+      type: logic
+      direction: input
+    OEN:
+      type: logic
+      direction: input
+    PAD:
+      type: logic
+      direction: inout
+    PE:
+      type: logic
+      direction: input
+    PS:
+      type: logic
+      direction: input
+    ST:
+      type: logic
+      direction: input
+    RTE:
+      type: logic
+      direction: input
+)";
+
+        /* Create the module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create PRCUT_H module file */
+        const QString prcutPath = moduleDir.filePath("PRCUT_H.soc_mod");
+        QFile         prcutFile(prcutPath);
+        if (prcutFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&prcutFile);
+            stream << prcutContent;
+            prcutFile.close();
+        }
+
+        /* Create PVDD2POCM_H module file */
+        const QString pvddPath = moduleDir.filePath("PVDD2POCM_H.soc_mod");
+        QFile         pvddFile(pvddPath);
+        if (pvddFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&pvddFile);
+            stream << pvddContent;
+            pvddFile.close();
+        }
+
+        /* Create PDDWUWSWCDG_H module file */
+        const QString pddwPath = moduleDir.filePath("PDDWUWSWCDG_H.soc_mod");
+        QFile         pddwFile(pddwPath);
+        if (pddwFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&pddwFile);
+            stream << pddwContent;
+            pddwFile.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_link_uplink.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_link_uplink"));
+
+        /* Verify basic module structure */
+        QVERIFY(verifyVerilogContent("test_link_uplink", "module test_link_uplink"));
+
+        /* Verify uplink created top-level ports */
+        QVERIFY(verifyVerilogContent("test_link_uplink", "inout rst_n"));
+        QVERIFY(verifyVerilogContent("test_link_uplink", "inout sclk"));
+
+        /* Verify link connections - io_ring_rte should connect multiple instances */
+        QVERIFY(verifyVerilogContent("test_link_uplink", ".RTE(io_ring_rte)"));
+
+        /* Verify uplink connections - PAD ports should connect to top-level ports */
+        QVERIFY(verifyVerilogContent("test_link_uplink", ".PAD(rst_n)"));
+        QVERIFY(verifyVerilogContent("test_link_uplink", ".PAD(sclk)"));
+
+        /* Verify link connections - internal signal connections */
+        QVERIFY(verifyVerilogContent("test_link_uplink", ".pad_cpu_rst_b(sys_rst_n)"));
+        QVERIFY(verifyVerilogContent("test_link_uplink", ".C(sys_rst_n)"));
+        QVERIFY(verifyVerilogContent("test_link_uplink", ".C(spi_sclk)"));
+
+        /* Verify wire declarations for link created nets */
+        QVERIFY(verifyVerilogContent("test_link_uplink", "wire io_ring_rte"));
+        QVERIFY(verifyVerilogContent("test_link_uplink", "wire sys_rst_n"));
+        QVERIFY(verifyVerilogContent("test_link_uplink", "wire spi_sclk"));
+
+        /* Verify tie connections still work */
+        QVERIFY(verifyVerilogContent("test_link_uplink", ".DS0(1'b1)"));
+        QVERIFY(verifyVerilogContent("test_link_uplink", ".axim_clk_en(1'b1)"));
+    }
+
+    void testGenerateWithUplinkConflictDetection()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with uplink conflicts (same port name, different types) */
+        const QString content = R"(
+instance:
+  u_io_cell1:
+    module: IO_CELL_8BIT
+    port:
+      PAD:
+        uplink: test_port
+  u_io_cell2:
+    module: IO_CELL_16BIT
+    port:
+      PAD:
+        uplink: test_port  # Same port name but different width - should cause conflict
+)";
+
+        /* Create IO_CELL_8BIT module */
+        const QString io8bitContent = R"(
+IO_CELL_8BIT:
+  port:
+    PAD:
+      type: logic[7:0]
+      direction: inout
+)";
+
+        /* Create IO_CELL_16BIT module */
+        const QString io16bitContent = R"(
+IO_CELL_16BIT:
+  port:
+    PAD:
+      type: logic[15:0]
+      direction: inout
+)";
+
+        /* Create the module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create IO_CELL_8BIT module file */
+        const QString io8bitPath = moduleDir.filePath("IO_CELL_8BIT.soc_mod");
+        QFile         io8bitFile(io8bitPath);
+        if (io8bitFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&io8bitFile);
+            stream << io8bitContent;
+            io8bitFile.close();
+        }
+
+        /* Create IO_CELL_16BIT module file */
+        const QString io16bitPath = moduleDir.filePath("IO_CELL_16BIT.soc_mod");
+        QFile         io16bitFile(io16bitPath);
+        if (io16bitFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&io16bitFile);
+            stream << io16bitContent;
+            io16bitFile.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_uplink_conflict.soc_net", content);
+
+        /* Run the command to generate Verilog - this should detect width mismatch */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Check if the process failed due to width mismatch error */
+        bool foundWidthMismatchError = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("Type/width mismatch for uplink port test_port")) {
+                foundWidthMismatchError = true;
+                break;
+            }
+        }
+
+        /* Verify that width mismatch was detected */
+        QVERIFY(foundWidthMismatchError);
+    }
+
+    void testGenerateWithUplinkCompatiblePorts()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with compatible uplink ports (same width) */
+        const QString content = R"(
+instance:
+  u_io_cell1:
+    module: IO_CELL_COMPATIBLE1
+    port:
+      PAD:
+        uplink: shared_port
+  u_io_cell2:
+    module: IO_CELL_COMPATIBLE2
+    port:
+      PAD:
+        uplink: shared_port  # Same port name and compatible type
+)";
+
+        /* Create compatible IO cell modules */
+        const QString ioCompatible1Content = R"(
+IO_CELL_COMPATIBLE1:
+  port:
+    PAD:
+      type: logic[7:0]
+      direction: inout
+)";
+
+        const QString ioCompatible2Content = R"(
+IO_CELL_COMPATIBLE2:
+  port:
+    PAD:
+      type: logic[7:0]  # Same width as first one
+      direction: inout
+)";
+
+        /* Create the module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create compatible module files */
+        const QString ioComp1Path = moduleDir.filePath("IO_CELL_COMPATIBLE1.soc_mod");
+        QFile         ioComp1File(ioComp1Path);
+        if (ioComp1File.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&ioComp1File);
+            stream << ioCompatible1Content;
+            ioComp1File.close();
+        }
+
+        const QString ioComp2Path = moduleDir.filePath("IO_CELL_COMPATIBLE2.soc_mod");
+        QFile         ioComp2File(ioComp2Path);
+        if (ioComp2File.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&ioComp2File);
+            stream << ioCompatible2Content;
+            ioComp2File.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_uplink_compatible.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_uplink_compatible"));
+
+        /* Verify the shared port was created */
+        QVERIFY(verifyVerilogContent("test_uplink_compatible", "inout [7:0] shared_port"));
+
+        /* Verify both instances connect to the shared port */
+        QVERIFY(verifyVerilogContent("test_uplink_compatible", ".PAD(shared_port)"));
+
+        /* Verify module structure */
+        QVERIFY(verifyVerilogContent("test_uplink_compatible", "module test_uplink_compatible"));
+        QVERIFY(verifyVerilogContent("test_uplink_compatible", "IO_CELL_COMPATIBLE1 u_io_cell1"));
+        QVERIFY(verifyVerilogContent("test_uplink_compatible", "IO_CELL_COMPATIBLE2 u_io_cell2"));
+    }
 };
 
 QStringList Test::messageList;
