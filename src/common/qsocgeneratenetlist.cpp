@@ -63,6 +63,39 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
     }
 }
 
+bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
+{
+    try {
+        /* Validate basic netlist structure */
+        if (!netlistData["instance"]) {
+            qCritical() << "Error: Invalid netlist format, missing 'instance' section";
+            return false;
+        }
+
+        if (!netlistData["instance"].IsMap() || netlistData["instance"].size() == 0) {
+            qCritical()
+                << "Error: Invalid netlist format, 'instance' section is empty or not a map";
+            return false;
+        }
+
+        /* Validate net and bus sections if they exist */
+        if ((netlistData["net"] && !netlistData["net"].IsMap())
+            || (netlistData["bus"] && !netlistData["bus"].IsMap())) {
+            qCritical() << "Error: Invalid netlist format, invalid 'net' or 'bus' section";
+            return false;
+        }
+
+        /* Set the netlist data */
+        this->netlistData = netlistData;
+
+        qInfo() << "Successfully set netlist data";
+        return true;
+    } catch (const YAML::Exception &e) {
+        qCritical() << "Error validating YAML data:" << e.what();
+        return false;
+    }
+}
+
 bool QSocGenerateManager::processNetlist()
 {
     try {

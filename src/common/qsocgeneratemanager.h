@@ -261,6 +261,16 @@ public slots:
     bool loadNetlist(const QString &netlistFilePath);
 
     /**
+     * @brief Set netlist data directly.
+     * @details Sets the netlist data directly from a YAML node, useful for
+     *          processing merged netlists.
+     * @param netlistData YAML node containing the netlist data.
+     * @retval true Netlist data set successfully.
+     * @retval false Failed to set netlist data.
+     */
+    bool setNetlistData(const YAML::Node &netlistData);
+
+    /**
      * @brief Process and expand the netlist.
      * @details Processes the loaded netlist, expanding buses into individual signals.
      * @retval true Netlist processed successfully.
