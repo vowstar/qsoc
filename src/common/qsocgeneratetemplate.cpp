@@ -341,11 +341,11 @@ bool QSocGenerateManager::renderTemplate(
             }
 
             try {
-                // Extract required arguments
+                /* Extract required arguments */
                 const std::string inputStr = args.at(0)->get<std::string>();
                 const std::string pattern  = args.at(1)->get<std::string>();
 
-                // Extract optional arguments
+                /* Extract optional arguments */
                 bool multiline  = false;
                 bool ignorecase = false;
 
@@ -369,7 +369,7 @@ bool QSocGenerateManager::renderTemplate(
                     }
                 }
 
-                // Create QRegularExpression with appropriate options
+                /* Create QRegularExpression with appropriate options */
                 QRegularExpression::PatternOptions options = QRegularExpression::NoPatternOption;
                 if (ignorecase) {
                     options |= QRegularExpression::CaseInsensitiveOption;
@@ -391,14 +391,14 @@ bool QSocGenerateManager::renderTemplate(
                 const QString  inputQStr   = QString::fromStdString(inputStr);
                 nlohmann::json resultArray = nlohmann::json::array();
 
-                // Find all matches
+                /* Find all matches */
                 QRegularExpressionMatchIterator iterator = regex.globalMatch(inputQStr);
 
                 while (iterator.hasNext()) {
                     QRegularExpressionMatch match = iterator.next();
 
-                    // Simple logic: if there are capture groups, return the first capture group
-                    // Otherwise return the complete match
+                    /* Simple logic: if there are capture groups, return the first capture group
+                       Otherwise return the complete match */
                     QString capturedText;
                     if (match.lastCapturedIndex() > 0) {
                         capturedText = match.captured(1);
@@ -430,12 +430,12 @@ bool QSocGenerateManager::renderTemplate(
             }
 
             try {
-                // Extract required arguments
+                /* Extract required arguments */
                 const std::string inputStr    = args.at(0)->get<std::string>();
                 const std::string pattern     = args.at(1)->get<std::string>();
                 const std::string replacement = args.at(2)->get<std::string>();
 
-                // Extract optional ignorecase argument
+                /* Extract optional ignorecase argument */
                 bool ignorecase = false;
 
                 if (args.size() > 3) {
@@ -448,7 +448,7 @@ bool QSocGenerateManager::renderTemplate(
                     }
                 }
 
-                // Create QRegularExpression with appropriate options
+                /* Create QRegularExpression with appropriate options */
                 QRegularExpression::PatternOptions options = QRegularExpression::NoPatternOption;
                 if (ignorecase) {
                     options |= QRegularExpression::CaseInsensitiveOption;
@@ -467,7 +467,7 @@ bool QSocGenerateManager::renderTemplate(
                 QString       inputQStr       = QString::fromStdString(inputStr);
                 const QString replacementQStr = QString::fromStdString(replacement);
 
-                // Perform replacement - Qt uses \\1, \\2 for backreferences
+                /* Perform replacement - Qt uses \\1, \\2 for backreferences */
                 QString result = inputQStr.replace(regex, replacementQStr);
 
                 return nlohmann::json(result.toStdString());
@@ -498,6 +498,31 @@ bool QSocGenerateManager::renderTemplate(
         QTextStream stream(&outputFile);
         stream << QString::fromStdString(result);
         outputFile.close();
+
+        /* Generate corresponding JSON data file for debugging/third-party tools */
+        QFileInfo     outputFileInfo(outputFileName);
+        const QString jsonFileName = outputFileInfo.baseName() + ".json";
+        const QString jsonPath = projectManager->getOutputPath() + QDir::separator() + jsonFileName;
+        QFile         jsonFile(jsonPath);
+        if (!jsonFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            qWarning() << QCoreApplication::translate(
+                              "generate", "Warning: Could not create JSON data file \"%1\"")
+                              .arg(jsonPath);
+        } else {
+            try {
+                /* Serialize dataObject to formatted JSON */
+                const std::string formattedJson = dataObject.dump(4); /* 4 spaces indentation */
+
+                QTextStream stream(&jsonFile);
+                stream.setEncoding(QStringConverter::Utf8);
+                stream << QString::fromStdString(formattedJson);
+                jsonFile.close();
+            } catch (const std::exception &e) {
+                qWarning() << QCoreApplication::translate(
+                                  "generate", "Warning: Failed to create JSON data file: %1")
+                                  .arg(e.what());
+            }
+        }
 
         return true;
 
