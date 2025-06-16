@@ -331,6 +331,155 @@ bool QSocGenerateManager::renderTemplate(
         /* Disable line statements */
         env.set_line_statement("");
 
+        /* Add regex_search filter */
+        env.add_callback("regex_search", [](inja::Arguments &args) -> nlohmann::json {
+            if (args.size() < 2) {
+                qWarning() << QCoreApplication::translate(
+                    "generate",
+                    "Warning: regex_search requires at least 2 arguments (input, pattern)");
+                return nlohmann::json::array();
+            }
+
+            try {
+                // Extract required arguments
+                const std::string inputStr = args.at(0)->get<std::string>();
+                const std::string pattern  = args.at(1)->get<std::string>();
+
+                // Extract optional arguments
+                bool multiline  = false;
+                bool ignorecase = false;
+
+                if (args.size() > 2) {
+                    const auto &multilineArg = *args.at(2);
+                    if (multilineArg.is_boolean()) {
+                        multiline = multilineArg.get<bool>();
+                    } else if (multilineArg.is_string()) {
+                        const std::string multilineStr = multilineArg.get<std::string>();
+                        multiline = (multilineStr == "true" || multilineStr == "True");
+                    }
+                }
+
+                if (args.size() > 3) {
+                    const auto &ignorecaseArg = *args.at(3);
+                    if (ignorecaseArg.is_boolean()) {
+                        ignorecase = ignorecaseArg.get<bool>();
+                    } else if (ignorecaseArg.is_string()) {
+                        const std::string ignorecaseStr = ignorecaseArg.get<std::string>();
+                        ignorecase = (ignorecaseStr == "true" || ignorecaseStr == "True");
+                    }
+                }
+
+                // Create QRegularExpression with appropriate options
+                QRegularExpression::PatternOptions options = QRegularExpression::NoPatternOption;
+                if (ignorecase) {
+                    options |= QRegularExpression::CaseInsensitiveOption;
+                }
+                if (multiline) {
+                    options |= QRegularExpression::MultilineOption;
+                }
+
+                const QRegularExpression regex(QString::fromStdString(pattern), options);
+
+                if (!regex.isValid()) {
+                    qWarning() << QCoreApplication::translate(
+                                      "generate",
+                                      "Warning: Invalid regex pattern in regex_search: \"%1\"")
+                                      .arg(QString::fromStdString(pattern));
+                    return nlohmann::json::array();
+                }
+
+                const QString  inputQStr   = QString::fromStdString(inputStr);
+                nlohmann::json resultArray = nlohmann::json::array();
+
+                // Find all matches
+                QRegularExpressionMatchIterator iterator = regex.globalMatch(inputQStr);
+
+                while (iterator.hasNext()) {
+                    QRegularExpressionMatch match = iterator.next();
+
+                    // Simple logic: if there are capture groups, return the first capture group
+                    // Otherwise return the complete match
+                    QString capturedText;
+                    if (match.lastCapturedIndex() > 0) {
+                        capturedText = match.captured(1);
+                    } else {
+                        capturedText = match.captured(0);
+                    }
+
+                    resultArray.push_back(capturedText.toStdString());
+                }
+
+                return resultArray;
+
+            } catch (const std::exception &e) {
+                qWarning() << QCoreApplication::translate(
+                                  "generate", "Warning: Error in regex_search: %1")
+                                  .arg(e.what());
+                return nlohmann::json::array();
+            }
+        });
+
+        /* Add regex_replace filter */
+        env.add_callback("regex_replace", [](inja::Arguments &args) -> nlohmann::json {
+            if (args.size() < 3) {
+                qWarning() << QCoreApplication::translate(
+                    "generate",
+                    "Warning: regex_replace requires at least 3 arguments (input, pattern, "
+                    "replacement)");
+                return nlohmann::json("");
+            }
+
+            try {
+                // Extract required arguments
+                const std::string inputStr    = args.at(0)->get<std::string>();
+                const std::string pattern     = args.at(1)->get<std::string>();
+                const std::string replacement = args.at(2)->get<std::string>();
+
+                // Extract optional ignorecase argument
+                bool ignorecase = false;
+
+                if (args.size() > 3) {
+                    const auto &ignorecaseArg = *args.at(3);
+                    if (ignorecaseArg.is_boolean()) {
+                        ignorecase = ignorecaseArg.get<bool>();
+                    } else if (ignorecaseArg.is_string()) {
+                        const std::string ignorecaseStr = ignorecaseArg.get<std::string>();
+                        ignorecase = (ignorecaseStr == "true" || ignorecaseStr == "True");
+                    }
+                }
+
+                // Create QRegularExpression with appropriate options
+                QRegularExpression::PatternOptions options = QRegularExpression::NoPatternOption;
+                if (ignorecase) {
+                    options |= QRegularExpression::CaseInsensitiveOption;
+                }
+
+                const QRegularExpression regex(QString::fromStdString(pattern), options);
+
+                if (!regex.isValid()) {
+                    qWarning() << QCoreApplication::translate(
+                                      "generate",
+                                      "Warning: Invalid regex pattern in regex_replace: \"%1\"")
+                                      .arg(QString::fromStdString(pattern));
+                    return nlohmann::json(inputStr);
+                }
+
+                QString       inputQStr       = QString::fromStdString(inputStr);
+                const QString replacementQStr = QString::fromStdString(replacement);
+
+                // Perform replacement - Qt uses \\1, \\2 for backreferences
+                QString result = inputQStr.replace(regex, replacementQStr);
+
+                return nlohmann::json(result.toStdString());
+
+            } catch (const std::exception &e) {
+                qWarning() << QCoreApplication::translate(
+                                  "generate", "Warning: Error in regex_replace: %1")
+                                  .arg(e.what());
+                return nlohmann::json("");
+            }
+        });
+
         /* Render template */
         const std::string templateStr = templateData.toStdString();
         const std::string result      = env.render(templateStr, dataObject);
