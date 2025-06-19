@@ -31,6 +31,7 @@ commands and subcommands are available:
     [schematic], [], [Process schematic designs (not implemented yet)],
     [generate], [verilog], [Generate Verilog code from netlist files],
     [], [template], [Generate files from Jinja2 templates using various data sources],
+    [], [stub], [Generate Verilog and Liberty stub files for selected modules],
     [gui], [], [Start the software in GUI mode],
   )]
   , caption: [COMMAND LINE INTERFACE]
@@ -175,6 +176,26 @@ The `generate template` command generates files from Jinja2 templates using vari
     [templates], [The Jinja2 template files to be processed],
   )]
   , caption: [TEMPLATE GENERATION OPTIONS]
+  , kind: table
+  )
+
+=== Stub Generation Options
+<stub-generation>
+The `generate stub` command generates Verilog and Liberty stub files for selected modules.
+
+#figure(
+  align(center)[#table(
+    columns: (0.5fr, 1fr),
+    align: (auto,left,),
+    table.header([Option], [Description],),
+    table.hline(),
+    [-d, --directory <path>], [The path to the project directory],
+    [-p, --project <name>], [The project name],
+    [-l, --library <regex>], [The library base name or regex pattern to filter libraries],
+    [-m, --module <regex>], [The module name or regex pattern to filter modules],
+    [stubname], [The base name for the generated stub files (generates stubname.v and stubname.lib)],
+  )]
+  , caption: [STUB GENERATION OPTIONS]
   , kind: table
   )
 
