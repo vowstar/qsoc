@@ -1031,12 +1031,12 @@ bool QSocGenerateManager::processUplinkConnection(
             modulePortType = modulePortNode["type"].as<std::string>();
         }
 
-        /* Calculate top-level port direction (opposite of module port, except for inout) */
+        /* Calculate top-level port direction (same as module port) */
         std::string topLevelDirection;
         if (modulePortDirection == "input" || modulePortDirection == "in") {
-            topLevelDirection = "output";
-        } else if (modulePortDirection == "output" || modulePortDirection == "out") {
             topLevelDirection = "input";
+        } else if (modulePortDirection == "output" || modulePortDirection == "out") {
+            topLevelDirection = "output";
         } else if (modulePortDirection == "inout") {
             topLevelDirection = "inout";
         } else {
