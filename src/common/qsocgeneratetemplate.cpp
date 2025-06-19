@@ -395,7 +395,7 @@ bool QSocGenerateManager::renderTemplate(
                 QRegularExpressionMatchIterator iterator = regex.globalMatch(inputQStr);
 
                 while (iterator.hasNext()) {
-                    QRegularExpressionMatch match = iterator.next();
+                    const QRegularExpressionMatch match = iterator.next();
 
                     /* Simple logic: if there are capture groups, return the first capture group
                        Otherwise return the complete match */
@@ -426,7 +426,7 @@ bool QSocGenerateManager::renderTemplate(
                     "generate",
                     "Warning: regex_replace requires at least 3 arguments (input, pattern, "
                     "replacement)");
-                return nlohmann::json("");
+                return nlohmann::json{""};
             }
 
             try {
@@ -461,22 +461,22 @@ bool QSocGenerateManager::renderTemplate(
                                       "generate",
                                       "Warning: Invalid regex pattern in regex_replace: \"%1\"")
                                       .arg(QString::fromStdString(pattern));
-                    return nlohmann::json(inputStr);
+                    return nlohmann::json{inputStr};
                 }
 
                 QString       inputQStr       = QString::fromStdString(inputStr);
                 const QString replacementQStr = QString::fromStdString(replacement);
 
                 /* Perform replacement - Qt uses \\1, \\2 for backreferences */
-                QString result = inputQStr.replace(regex, replacementQStr);
+                const QString result = inputQStr.replace(regex, replacementQStr);
 
-                return nlohmann::json(result.toStdString());
+                return nlohmann::json{result.toStdString()};
 
             } catch (const std::exception &e) {
                 qWarning() << QCoreApplication::translate(
                                   "generate", "Warning: Error in regex_replace: %1")
                                   .arg(e.what());
-                return nlohmann::json("");
+                return nlohmann::json{""};
             }
         });
 
@@ -500,8 +500,8 @@ bool QSocGenerateManager::renderTemplate(
         outputFile.close();
 
         /* Generate corresponding JSON data file for debugging/third-party tools */
-        QFileInfo     outputFileInfo(outputFileName);
-        const QString jsonFileName = outputFileInfo.baseName() + ".json";
+        const QFileInfo outputFileInfo(outputFileName);
+        const QString   jsonFileName = outputFileInfo.baseName() + ".json";
         const QString jsonPath = projectManager->getOutputPath() + QDir::separator() + jsonFileName;
         QFile         jsonFile(jsonPath);
         if (!jsonFile.open(QIODevice::WriteOnly | QIODevice::Text)) {

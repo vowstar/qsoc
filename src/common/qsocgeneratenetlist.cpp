@@ -860,7 +860,7 @@ bool QSocGenerateManager::processLinkConnections()
             if (!instancePair.first.IsScalar()) {
                 continue;
             }
-            const std::string instanceName = instancePair.first.as<std::string>();
+            const auto        instanceName = instancePair.first.as<std::string>();
             const YAML::Node &instanceNode = instancePair.second;
 
             if (!instanceNode.IsMap() || !instanceNode["port"] || !instanceNode["port"].IsMap()) {
@@ -871,7 +871,7 @@ bool QSocGenerateManager::processLinkConnections()
             if (!instanceNode["module"] || !instanceNode["module"].IsScalar()) {
                 continue;
             }
-            const std::string moduleName = instanceNode["module"].as<std::string>();
+            const auto moduleName = instanceNode["module"].as<std::string>();
 
             /* Check if module exists */
             if (!moduleManager
@@ -894,12 +894,12 @@ bool QSocGenerateManager::processLinkConnections()
                 if (!portPair.first.IsScalar() || !portPair.second.IsMap()) {
                     continue;
                 }
-                const std::string portName = portPair.first.as<std::string>();
+                const auto        portName = portPair.first.as<std::string>();
                 const YAML::Node &portNode = portPair.second;
 
                 /* Check for link attribute */
                 if (portNode["link"] && portNode["link"].IsScalar()) {
-                    const std::string netName = portNode["link"].as<std::string>();
+                    const auto netName = portNode["link"].as<std::string>();
 
                     if (!processLinkConnection(
                             instanceName, portName, netName, moduleName, moduleData)) {
@@ -909,7 +909,7 @@ bool QSocGenerateManager::processLinkConnections()
 
                 /* Check for uplink attribute */
                 if (portNode["uplink"] && portNode["uplink"].IsScalar()) {
-                    const std::string netName = portNode["uplink"].as<std::string>();
+                    const auto netName = portNode["uplink"].as<std::string>();
 
                     if (!processUplinkConnection(
                             instanceName, portName, netName, moduleName, moduleData)) {
@@ -946,8 +946,8 @@ bool QSocGenerateManager::processLinkConnection(
     const std::string &instanceName,
     const std::string &portName,
     const std::string &netName,
-    const std::string &moduleName,
-    const YAML::Node  &moduleData)
+    const std::string & /*moduleName*/,
+    const YAML::Node & /*moduleData*/)
 {
     try {
         qInfo() << "Processing link connection:" << instanceName.c_str() << "." << portName.c_str()
@@ -1016,7 +1016,7 @@ bool QSocGenerateManager::processUplinkConnection(
                        << moduleName.c_str();
             return false;
         }
-        std::string modulePortDirection = modulePortNode["direction"].as<std::string>();
+        auto modulePortDirection = modulePortNode["direction"].as<std::string>();
 
         /* Convert to lowercase for consistency */
         std::transform(
@@ -1061,13 +1061,9 @@ bool QSocGenerateManager::processUplinkConnection(
                     ::tolower);
             }
 
-            bool directionCompatible = false;
-            if (topLevelDirection == "inout" || existingDirection == "inout") {
-                /* inout is compatible with any direction */
-                directionCompatible = true;
-            } else if (topLevelDirection == existingDirection) {
-                directionCompatible = true;
-            }
+            const bool directionCompatible
+                = (topLevelDirection == "inout" || existingDirection == "inout"
+                   || topLevelDirection == existingDirection);
 
             if (!directionCompatible) {
                 qCritical() << "Error: Direction mismatch for uplink port" << netName.c_str()
@@ -1084,8 +1080,8 @@ bool QSocGenerateManager::processUplinkConnection(
 
             if (!existingType.empty() && existingType != modulePortType) {
                 /* Calculate widths for comparison */
-                int moduleWidth   = calculatePortWidth(modulePortType);
-                int existingWidth = calculatePortWidth(existingType);
+                const int moduleWidth   = calculatePortWidth(modulePortType);
+                const int existingWidth = calculatePortWidth(existingType);
 
                 if (moduleWidth > 0 && existingWidth > 0 && moduleWidth != existingWidth) {
                     qCritical() << "Error: Type/width mismatch for uplink port" << netName.c_str()
@@ -1143,7 +1139,7 @@ bool QSocGenerateManager::processUplinkConnection(
  */
 int QSocGenerateManager::calculatePortWidth(const std::string &portType)
 {
-    QString type = QString::fromStdString(portType);
+    const QString type = QString::fromStdString(portType);
 
     /* Handle range specification like [7:0] or [15:8] */
     const QRegularExpression      rangeRegex(R"(\[(\d+):(\d+)\])");

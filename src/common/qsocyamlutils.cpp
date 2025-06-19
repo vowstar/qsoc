@@ -70,18 +70,18 @@ YAML::Node QSocYamlUtils::loadAndMergeFiles(
         /* Check if file exists */
         if (!QFile::exists(filePath)) {
             qCritical() << "Error: YAML file does not exist:" << filePath;
-            return YAML::Node(); /* Return null node on error */
+            return {}; /* Return null node on error */
         }
 
         /* Load the file */
         std::ifstream fileStream(filePath.toStdString());
         if (!fileStream.is_open()) {
             qCritical() << "Error: Unable to open YAML file:" << filePath;
-            return YAML::Node(); /* Return null node on error */
+            return {}; /* Return null node on error */
         }
 
         try {
-            YAML::Node currentNode = YAML::Load(fileStream);
+            const YAML::Node currentNode = YAML::Load(fileStream);
             fileStream.close();
 
             if (isFirstFile) {
@@ -97,7 +97,7 @@ YAML::Node QSocYamlUtils::loadAndMergeFiles(
 
         } catch (const YAML::Exception &e) {
             qCritical() << "Error parsing YAML file:" << filePath << ":" << e.what();
-            return YAML::Node(); /* Return null node on error */
+            return {}; /* Return null node on error */
         }
     }
 
@@ -171,7 +171,7 @@ QString QSocYamlUtils::yamlNodeToString(const YAML::Node &yamlNode, int indentSi
         return QString::fromStdString(emitter.c_str());
     } catch (const YAML::Exception &e) {
         qWarning() << "Error converting YAML node to string:" << e.what();
-        return QString("Error: Failed to convert YAML node to string");
+        return {"Error: Failed to convert YAML node to string"};
     }
 }
 
@@ -181,12 +181,12 @@ YAML::Node QSocYamlUtils::cloneNode(const YAML::Node &original)
         /* Convert to string and parse back to create a deep copy */
         YAML::Emitter emitter;
         emitter << original;
-        std::string yamlString = emitter.c_str();
+        const std::string yamlString = emitter.c_str();
 
         return YAML::Load(yamlString);
     } catch (const YAML::Exception &e) {
         qWarning() << "Error cloning YAML node:" << e.what();
-        return YAML::Node(); /* Return null node on error */
+        return {}; /* Return null node on error */
     }
 }
 
@@ -197,11 +197,11 @@ bool QSocYamlUtils::hasKeyPath(const YAML::Node &yamlNode, const QString &keyPat
     }
 
     try {
-        QStringList keys        = keyPath.split('.', Qt::SkipEmptyParts);
-        YAML::Node  currentNode = yamlNode;
+        const QStringList keys        = keyPath.split('.', Qt::SkipEmptyParts);
+        YAML::Node        currentNode = yamlNode;
 
         for (const QString &key : keys) {
-            std::string stdKey = key.toStdString();
+            const std::string stdKey = key.toStdString();
 
             if (!currentNode.IsMap() || !currentNode[stdKey]) {
                 return false;
@@ -225,11 +225,11 @@ QString QSocYamlUtils::getValueByKeyPath(
     }
 
     try {
-        QStringList keys        = keyPath.split('.', Qt::SkipEmptyParts);
-        YAML::Node  currentNode = yamlNode;
+        const QStringList keys        = keyPath.split('.', Qt::SkipEmptyParts);
+        YAML::Node        currentNode = yamlNode;
 
         for (const QString &key : keys) {
-            std::string stdKey = key.toStdString();
+            const std::string stdKey = key.toStdString();
 
             if (!currentNode.IsMap() || !currentNode[stdKey]) {
                 return defaultValue;
@@ -240,10 +240,10 @@ QString QSocYamlUtils::getValueByKeyPath(
 
         if (currentNode.IsScalar()) {
             return QString::fromStdString(currentNode.as<std::string>());
-        } else {
-            /* For non-scalar values, convert to string representation */
-            return yamlNodeToString(currentNode);
         }
+
+        /* For non-scalar values, convert to string representation */
+        return yamlNodeToString(currentNode);
 
     } catch (const YAML::Exception &e) {
         qWarning() << "Error getting value by key path:" << keyPath << ":" << e.what();
@@ -274,7 +274,7 @@ bool QSocYamlUtils::setValueByKeyPath(
 
         /* Navigate to the parent of the target key, creating intermediate nodes as needed */
         for (int i = 0; i < keys.size() - 1; ++i) {
-            std::string stdKey = keys[i].toStdString();
+            const std::string stdKey = keys[i].toStdString();
 
             if (!currentNode[stdKey] || !currentNode[stdKey].IsMap()) {
                 currentNode[stdKey] = YAML::Node(YAML::NodeType::Map);
@@ -284,8 +284,8 @@ bool QSocYamlUtils::setValueByKeyPath(
         }
 
         /* Set the final value */
-        std::string finalKey  = keys.last().toStdString();
-        currentNode[finalKey] = value.toStdString();
+        const std::string finalKey = keys.last().toStdString();
+        currentNode[finalKey]      = value.toStdString();
 
         return true;
 

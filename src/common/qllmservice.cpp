@@ -297,18 +297,11 @@ void QLLMService::loadConfigSettings()
     }
 
     /* 3. Load API URL using priority rules */
-    /* Priority 1: Global URL when ai_provider matches current provider */
-    if (config->hasKey("api_url") && !config->getValue("api_url").isEmpty()
-        && config->hasKey("ai_provider")
-        && config->getValue("ai_provider").toLower() == providerName) {
+    if (config->hasKey("api_url") && !config->getValue("api_url").isEmpty()) {
+        /* Global URL */
         apiUrl = QUrl(config->getValue("api_url"));
-    }
-    /* Priority 2: Global URL regardless of provider */
-    else if (config->hasKey("api_url") && !config->getValue("api_url").isEmpty()) {
-        apiUrl = QUrl(config->getValue("api_url"));
-    }
-    /* Priority 3: Provider-specific URL */
-    else {
+    } else {
+        /* Provider-specific URL */
         const QString providerSpecificUrl = providerName + ".api_url";
         if (config->hasKey(providerSpecificUrl)
             && !config->getValue(providerSpecificUrl).isEmpty()) {
@@ -320,17 +313,9 @@ void QLLMService::loadConfigSettings()
     }
 
     /* 4. Load AI model using priority rules */
-    /* Priority 1: Global model when ai_provider matches current provider */
-    if (config->hasKey("ai_model") && config->hasKey("ai_provider")
-        && config->getValue("ai_provider").toLower() == providerName) {
+    if (config->hasKey("ai_model")) {
         aiModel = config->getValue("ai_model");
-    }
-    /* Priority 2: Global model regardless of provider */
-    else if (config->hasKey("ai_model")) {
-        aiModel = config->getValue("ai_model");
-    }
-    /* Priority 3: Provider-specific model */
-    else {
+    } else {
         const QString providerSpecificModel = providerName + ".ai_model";
         if (config->hasKey(providerSpecificModel)) {
             aiModel = config->getValue(providerSpecificModel);
