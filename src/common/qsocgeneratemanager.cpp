@@ -76,20 +76,20 @@ QLLMService *QSocGenerateManager::getLLMService()
 QString QSocGenerateManager::cleanTypeForWireDeclaration(const QString &typeStr)
 {
     if (typeStr.isEmpty()) {
-        return QString();
+        return {};
     }
 
     QString cleaned = typeStr;
 
     /* Remove leading whitespace + keyword + keyword trailing whitespace */
-    static const QRegularExpression re(R"(\s*[A-Za-z_]+\s*(?=\[|\s*$))");
+    static const QRegularExpression regularExpression(R"(\s*[A-Za-z_]+\s*(?=\[|\s*$))");
     /* Explanation:
      *   \s*           optional leading whitespace
      *   [A-Za-z_]+    keyword (only letters and underscores)
      *   \s*           whitespace after keyword
      *   (?=\[|\s*$)   only match when followed by '[' or whitespace until end of line
      */
-    cleaned.replace(re, "");
+    cleaned.replace(regularExpression, "");
 
     /* Clean up any remaining whitespace */
     cleaned = cleaned.trimmed();

@@ -316,6 +316,43 @@ public slots:
      */
     bool formatVerilogFile(const QString &filePath);
 
+    /**
+     * @brief Generate stub files for selected modules.
+     * @details This function generates both Verilog (.v) and Liberty (.lib) stub files
+     *          for modules matching the specified library and module regex patterns.
+     * @param stubName Base name for the output stub files.
+     * @param libraryRegex Regular expression to filter libraries.
+     * @param moduleRegex Regular expression to filter modules within libraries.
+     * @retval true Stub files generated successfully.
+     * @retval false Failed to generate stub files.
+     */
+    bool generateStub(
+        const QString            &stubName,
+        const QRegularExpression &libraryRegex,
+        const QRegularExpression &moduleRegex);
+
+    /**
+     * @brief Generate Verilog stub file for selected modules.
+     * @details This function generates a Verilog stub file containing all specified modules
+     *          with their port declarations but without implementation details.
+     * @param stubName Base name for the output Verilog file.
+     * @param moduleNames List of module names to include in the stub.
+     * @retval true Verilog stub file generated successfully.
+     * @retval false Failed to generate Verilog stub file.
+     */
+    bool generateVerilogStub(const QString &stubName, const QStringList &moduleNames);
+
+    /**
+     * @brief Generate Liberty timing library stub file for selected modules.
+     * @details This function generates a Liberty (.lib) timing library stub file
+     *          containing timing information for the specified modules.
+     * @param stubName Base name for the output Liberty file.
+     * @param moduleNames List of module names to include in the stub.
+     * @retval true Liberty stub file generated successfully.
+     * @retval false Failed to generate Liberty stub file.
+     */
+    bool generateLibStub(const QString &stubName, const QStringList &moduleNames);
+
 private:
     /**
      * @brief Process link and uplink connections in the netlist

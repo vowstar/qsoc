@@ -351,6 +351,16 @@ private:
     bool parseGenerateTemplate(const QStringList &appArguments);
 
     /**
+     * @brief Parse the generate stub command line arguments.
+     * @details This function will parse the generate stub command line arguments
+     *          to generate Verilog and Lib stub files for selected modules.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseGenerateStub(const QStringList &appArguments);
+
+    /**
      * @brief Show application name and version and emit exit with exitCode.
      * @details This function will show application name and version and emit
      *          exit with exitCode.

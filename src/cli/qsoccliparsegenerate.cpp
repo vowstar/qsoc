@@ -26,7 +26,8 @@ bool QSocCliWorker::parseGenerate(const QStringList &appArguments)
         QCoreApplication::translate(
             "main",
             "verilog    Generate Verilog code from netlist file.\n"
-            "template   Generate files from Jinja2 templates."),
+            "template   Generate files from Jinja2 templates.\n"
+            "stub       Generate stub files for modules."),
         "generate <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
@@ -44,6 +45,11 @@ bool QSocCliWorker::parseGenerate(const QStringList &appArguments)
     } else if (command == "template") {
         nextArguments.removeOne(command);
         if (!parseGenerateTemplate(nextArguments)) {
+            return false;
+        }
+    } else if (command == "stub") {
+        nextArguments.removeOne(command);
+        if (!parseGenerateStub(nextArguments)) {
             return false;
         }
     } else {
@@ -134,10 +140,9 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
     if (mergeMode && filePathList.size() > 1) {
         /* Merge mode: combine multiple netlist files */
         return processMergedNetlists(filePathList);
-    } else {
-        /* Normal mode: process each netlist file separately */
-        return processIndividualNetlists(filePathList);
     }
+    /* Normal mode: process each netlist file separately */
+    return processIndividualNetlists(filePathList);
 }
 
 bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
@@ -169,7 +174,7 @@ bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
         }
 
         try {
-            YAML::Node currentNetlist = YAML::Load(fileStream);
+            const YAML::Node currentNetlist = YAML::Load(fileStream);
             fileStream.close();
 
             if (i == 0) {
@@ -393,6 +398,100 @@ bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)
             QCoreApplication::translate("main", "Successfully generated file from template: %1")
                 .arg(QDir(projectManager->getOutputPath()).filePath(outputFileName)));
     }
+
+    return true;
+}
+
+bool QSocCliWorker::parseGenerateStub(const QStringList &appArguments)
+{
+    /* Clear upstream positional arguments and setup subcommand */
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"l", "library"},
+         QCoreApplication::translate("main", "The library base name or regex."),
+         "library base name or regex"},
+        {{"m", "module"},
+         QCoreApplication::translate("main", "The module name or regex."),
+         "module name or regex"},
+    });
+
+    parser.addPositionalArgument(
+        "stubname", QCoreApplication::translate("main", "The stub name to generate."), "<stubname>");
+
+    parser.parse(appArguments);
+
+    if (parser.isSet("help")) {
+        return showHelp(0);
+    }
+
+    const QStringList cmdArguments = parser.positionalArguments();
+    if (cmdArguments.isEmpty()) {
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing stub name."));
+    }
+
+    const QString &stubName = cmdArguments.first();
+
+    /* Setup project manager and project path  */
+    if (parser.isSet("directory")) {
+        const QString dirPath = parser.value("directory");
+        projectManager->setProjectPath(dirPath);
+    }
+
+    if (parser.isSet("project")) {
+        projectManager->load(parser.value("project"));
+    } else {
+        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
+        if (projectNameList.length() > 1) {
+            return showErrorWithHelp(
+                1,
+                QCoreApplication::translate(
+                    "main",
+                    "Error: multiple projects found, please specify the project name.\n"
+                    "Available projects are:\n%1\n")
+                    .arg(projectNameList.join("\n")));
+        }
+        projectManager->loadFirst();
+    }
+
+    /* Check if output path is valid */
+    if (!projectManager->isValidOutputPath()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid output directory: %1")
+                .arg(projectManager->getOutputPath()));
+    }
+
+    /* Load modules */
+    QRegularExpression libraryRegex(".*");
+    if (parser.isSet("library")) {
+        libraryRegex = QRegularExpression(parser.value("library"));
+    }
+
+    if (!moduleManager->load(libraryRegex)) {
+        return showErrorWithHelp(
+            1, QCoreApplication::translate("main", "Error: could not load library"));
+    }
+
+    QRegularExpression moduleRegex(".*");
+    if (parser.isSet("module")) {
+        moduleRegex = QRegularExpression(parser.value("module"));
+    }
+
+    /* Generate stub files */
+    if (!generateManager->generateStub(stubName, libraryRegex, moduleRegex)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: failed to generate stub files for: %1")
+                .arg(stubName));
+    }
+
+    showInfo(
+        0,
+        QCoreApplication::translate("main", "Successfully generated stub files: %1").arg(stubName));
 
     return true;
 }
