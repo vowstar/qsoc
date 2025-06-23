@@ -220,68 +220,77 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             try {
-                /* Build connections using port names where appropriate */
+                /* Build connections using List format only */
                 const YAML::Node &netNode = netIter->second;
-                if (netNode.IsMap()) {
-                    for (const auto &instancePair : netNode) {
-                        if (instancePair.first.IsScalar()) {
-                            const QString instanceName = QString::fromStdString(
-                                instancePair.first.as<std::string>());
-                            if (!instancePortConnections.contains(instanceName)) {
-                                instancePortConnections[instanceName] = QMap<QString, QString>();
-                            }
+                if (netNode.IsSequence()) {
+                    /* Process List format connections */
+                    for (const auto &connectionNode : netNode) {
+                        if (!connectionNode.IsMap()) {
+                            qWarning() << "Warning: Invalid connection node in net" << netName;
+                            continue;
+                        }
 
-                            if (instancePair.second.IsMap()
-                                && instancePair.second["port"].IsScalar()) {
-                                const QString portName = QString::fromStdString(
-                                    instancePair.second["port"].as<std::string>());
+                        /* Get instance name */
+                        if (!connectionNode["instance"] || !connectionNode["instance"].IsScalar()) {
+                            qWarning()
+                                << "Warning: No instance name in connection for net" << netName;
+                            continue;
+                        }
+                        const QString instanceName = QString::fromStdString(
+                            connectionNode["instance"].as<std::string>());
 
-                                /* Check if this port has invert attribute */
-                                bool hasInvert = false;
-                                if (netlistData["instance"]
-                                    && netlistData["instance"][instanceName.toStdString()]
-                                    && netlistData["instance"][instanceName.toStdString()]["port"]
-                                    && netlistData["instance"][instanceName.toStdString()]["port"]
-                                                  [portName.toStdString()]) {
-                                    auto portNode
-                                        = netlistData["instance"][instanceName.toStdString()]
-                                                     ["port"][portName.toStdString()];
-                                    if (portNode["invert"] && portNode["invert"].IsScalar()) {
-                                        /* Use direct YAML boolean parsing */
-                                        if (portNode["invert"].as<bool>()) {
-                                            hasInvert = true;
-                                        }
-                                    }
-                                }
+                        /* Get port name */
+                        if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
+                            qWarning() << "Warning: No port name in connection for net" << netName;
+                            continue;
+                        }
+                        const QString portName = QString::fromStdString(
+                            connectionNode["port"].as<std::string>());
 
-                                /* Check if this port has bits selection attribute */
-                                QString bitSelect = "";
-                                if (instancePair.second["bits"]
-                                    && instancePair.second["bits"].IsScalar()) {
-                                    bitSelect = QString::fromStdString(
-                                        instancePair.second["bits"].as<std::string>());
-                                }
-
-                                /* If connected to top-level port, use the port name instead of net name */
-                                if (connectedToTopPort) {
-                                    instancePortConnections[instanceName][portName]
-                                        = hasInvert
-                                              ? QString("~%1%2")
-                                                    .arg(connectedPortName)
-                                                    .arg(bitSelect.isEmpty() ? "" : bitSelect)
-                                              : QString("%1%2")
-                                                    .arg(connectedPortName)
-                                                    .arg(bitSelect.isEmpty() ? "" : bitSelect);
-                                } else {
-                                    instancePortConnections[instanceName][portName]
-                                        = hasInvert ? QString("~%1%2").arg(netName).arg(
-                                                          bitSelect.isEmpty() ? "" : bitSelect)
-                                                    : QString("%1%2").arg(netName).arg(
-                                                          bitSelect.isEmpty() ? "" : bitSelect);
+                        /* Check if this port has invert attribute */
+                        bool hasInvert = false;
+                        if (netlistData["instance"]
+                            && netlistData["instance"][instanceName.toStdString()]
+                            && netlistData["instance"][instanceName.toStdString()]["port"]
+                            && netlistData["instance"][instanceName.toStdString()]["port"]
+                                          [portName.toStdString()]) {
+                            auto portNode = netlistData["instance"][instanceName.toStdString()]
+                                                       ["port"][portName.toStdString()];
+                            if (portNode["invert"] && portNode["invert"].IsScalar()) {
+                                /* Use direct YAML boolean parsing */
+                                if (portNode["invert"].as<bool>()) {
+                                    hasInvert = true;
                                 }
                             }
                         }
+
+                        /* Check if this port has bits selection attribute */
+                        QString bitSelect = "";
+                        if (connectionNode["bits"] && connectionNode["bits"].IsScalar()) {
+                            bitSelect = QString::fromStdString(
+                                connectionNode["bits"].as<std::string>());
+                        }
+
+                        /* If connected to top-level port, use the port name instead of net name */
+                        if (connectedToTopPort) {
+                            instancePortConnections[instanceName][portName]
+                                = hasInvert ? QString("~%1%2")
+                                                  .arg(connectedPortName)
+                                                  .arg(bitSelect.isEmpty() ? "" : bitSelect)
+                                            : QString("%1%2")
+                                                  .arg(connectedPortName)
+                                                  .arg(bitSelect.isEmpty() ? "" : bitSelect);
+                        } else {
+                            instancePortConnections[instanceName][portName]
+                                = hasInvert ? QString("~%1%2").arg(netName).arg(
+                                                  bitSelect.isEmpty() ? "" : bitSelect)
+                                            : QString("%1%2").arg(netName).arg(
+                                                  bitSelect.isEmpty() ? "" : bitSelect);
+                        }
                     }
+                } else {
+                    qWarning() << "Warning: Net" << netName
+                               << "is not in List format, skipping connections";
                 }
             } catch (const std::exception &e) {
                 qWarning() << "Error processing net:" << e.what();
@@ -313,9 +322,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     continue;
                 }
 
-                /* Net connections should be a map of instance-port pairs */
-                if (!netIter->second.IsMap()) {
-                    qWarning() << "Warning: Net" << netName << "is not a map, skipping";
+                /* Net connections should be a sequence (list) of instance-port pairs */
+                if (!netIter->second.IsSequence()) {
+                    qWarning() << "Warning: Net" << netName << "is not a sequence, skipping";
                     continue;
                 }
 
@@ -431,102 +440,95 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                 /* Build port connections from netlistData */
                 const YAML::Node &netNode = netlistData["net"][netName.toStdString()];
-                if (netNode.IsMap()) {
-                    for (const auto &instancePair : netNode) {
-                        if (instancePair.first.IsScalar()) {
-                            const QString instanceName = QString::fromStdString(
-                                instancePair.first.as<std::string>());
+                if (netNode.IsSequence()) {
+                    for (const auto &connectionNode : netNode) {
+                        if (!connectionNode.IsMap()) {
+                            qWarning() << "Warning: Invalid connection node in net" << netName;
+                            continue;
+                        }
 
-                            /* Verify this is a valid instance with a port */
-                            if (instancePair.second.IsMap() && instancePair.second["port"]
-                                && instancePair.second["port"].IsScalar()) {
-                                const QString portName = QString::fromStdString(
-                                    instancePair.second["port"].as<std::string>());
+                        /* Get instance name */
+                        if (!connectionNode["instance"] || !connectionNode["instance"].IsScalar()) {
+                            qWarning()
+                                << "Warning: No instance name in connection for net" << netName;
+                            continue;
+                        }
+                        const QString instanceName = QString::fromStdString(
+                            connectionNode["instance"].as<std::string>());
 
-                                /* Create a module port connection */
-                                portConnections.append(
-                                    PortConnection::createModulePort(instanceName, portName));
+                        /* Get port name */
+                        if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
+                            qWarning() << "Warning: No port name in connection for net" << netName;
+                            continue;
+                        }
+                        const QString portName = QString::fromStdString(
+                            connectionNode["port"].as<std::string>());
 
-                                /* Get additional details for this port */
-                                QString portWidthSpec = "";
-                                QString portDirection = "unknown";
+                        /* Create a module port connection */
+                        portConnections.append(
+                            PortConnection::createModulePort(instanceName, portName));
 
-                                /* Check if this port has bits selection attribute */
-                                QString bitSelection = "";
-                                if (instancePair.second["bits"]
-                                    && instancePair.second["bits"].IsScalar()) {
-                                    bitSelection = QString::fromStdString(
-                                        instancePair.second["bits"].as<std::string>());
-                                }
+                        /* Get additional details for this port */
+                        QString portWidthSpec = "";
+                        QString portDirection = "unknown";
 
-                                /* Get instance's module */
-                                if (netlistData["instance"][instanceName.toStdString()]
-                                    && netlistData["instance"][instanceName.toStdString()]["module"]
-                                    && netlistData["instance"][instanceName.toStdString()]["module"]
-                                           .IsScalar()) {
-                                    const QString moduleName = QString::fromStdString(
-                                        netlistData["instance"][instanceName.toStdString()]
-                                                   ["module"]
-                                                       .as<std::string>());
+                        /* Check if this port has bits selection attribute */
+                        QString bitSelection = "";
+                        if (connectionNode["bits"] && connectionNode["bits"].IsScalar()) {
+                            bitSelection = QString::fromStdString(
+                                connectionNode["bits"].as<std::string>());
+                        }
 
-                                    /* Get module definition */
-                                    if (moduleManager && moduleManager->isModuleExist(moduleName)) {
-                                        YAML::Node moduleData = moduleManager->getModuleYaml(
-                                            moduleName);
+                        /* Get instance's module */
+                        if (netlistData["instance"][instanceName.toStdString()]
+                            && netlistData["instance"][instanceName.toStdString()]["module"]
+                            && netlistData["instance"][instanceName.toStdString()]["module"]
+                                   .IsScalar()) {
+                            const QString moduleName = QString::fromStdString(
+                                netlistData["instance"][instanceName.toStdString()]["module"]
+                                    .as<std::string>());
 
-                                        if (moduleData["port"] && moduleData["port"].IsMap()
-                                            && moduleData["port"][portName.toStdString()]) {
-                                            /* Get port width */
-                                            if (moduleData["port"][portName.toStdString()]["type"]
-                                                && moduleData["port"][portName.toStdString()]
-                                                             ["type"]
-                                                                 .IsScalar()) {
-                                                portWidthSpec = QString::fromStdString(
-                                                    moduleData["port"][portName.toStdString()]
-                                                              ["type"]
-                                                                  .as<std::string>());
-                                                /* Clean type for Verilog 2001 compatibility */
-                                                portWidthSpec
-                                                    = QSocGenerateManager::cleanTypeForWireDeclaration(
-                                                        portWidthSpec);
-                                            }
+                            /* Get module definition */
+                            if (moduleManager && moduleManager->isModuleExist(moduleName)) {
+                                YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
 
-                                            /* Get port direction */
-                                            if (moduleData["port"][portName.toStdString()]
-                                                          ["direction"]
-                                                && moduleData["port"][portName.toStdString()]
-                                                             ["direction"]
-                                                                 .IsScalar()) {
-                                                portDirection = QString::fromStdString(
-                                                    moduleData["port"][portName.toStdString()]
-                                                              ["direction"]
-                                                                  .as<std::string>());
-                                                /* Handle both full and abbreviated forms */
-                                                if (portDirection == "out"
-                                                    || portDirection == "output") {
-                                                    portDirection = "output";
-                                                } else if (
-                                                    portDirection == "in"
-                                                    || portDirection == "input") {
-                                                    portDirection = "input";
-                                                } else if (portDirection == "inout") {
-                                                    portDirection = "inout";
-                                                }
-                                            }
+                                if (moduleData["port"] && moduleData["port"].IsMap()
+                                    && moduleData["port"][portName.toStdString()]) {
+                                    /* Get port width */
+                                    if (moduleData["port"][portName.toStdString()]["type"]
+                                        && moduleData["port"][portName.toStdString()]["type"]
+                                               .IsScalar()) {
+                                        const QString originalType = QString::fromStdString(
+                                            moduleData["port"][portName.toStdString()]["type"]
+                                                .as<std::string>());
+                                        /* Keep original type for width calculation, but clean for display */
+                                        portWidthSpec = originalType;
+                                    }
+
+                                    /* Get port direction */
+                                    if (moduleData["port"][portName.toStdString()]["direction"]
+                                        && moduleData["port"][portName.toStdString()]["direction"]
+                                               .IsScalar()) {
+                                        portDirection = QString::fromStdString(
+                                            moduleData["port"][portName.toStdString()]["direction"]
+                                                .as<std::string>());
+                                        /* Handle both full and abbreviated forms */
+                                        if (portDirection == "out" || portDirection == "output") {
+                                            portDirection = "output";
+                                        } else if (portDirection == "in" || portDirection == "input") {
+                                            portDirection = "input";
+                                        } else if (portDirection == "inout") {
+                                            portDirection = "inout";
                                         }
                                     }
                                 }
-
-                                /* Add to detailed port information */
-                                portDetails.append(
-                                    PortDetailInfo::createModulePort(
-                                        instanceName,
-                                        portName,
-                                        portWidthSpec,
-                                        portDirection,
-                                        bitSelection));
                             }
                         }
+
+                        /* Add to detailed port information */
+                        portDetails.append(
+                            PortDetailInfo::createModulePort(
+                                instanceName, portName, portWidthSpec, portDirection, bitSelection));
                     }
                 }
 
@@ -562,6 +564,17 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Add detailed information for each connected port */
                         for (const auto &detail : portDetails) {
+                            /* Clean width information for display */
+                            QString displayWidth
+                                = detail.width.isEmpty()
+                                      ? "default"
+                                      : QSocGenerateManager::cleanTypeForWireDeclaration(
+                                            detail.width);
+                            if (displayWidth.isEmpty() && !detail.width.isEmpty()) {
+                                displayWidth
+                                    = "default"; /* fallback for single-bit types like "logic" */
+                            }
+
                             if (detail.type == PortType::TopLevel) {
                                 /* For top-level ports, we need to display the original direction, not the reversed one */
                                 QString displayDirection = detail.direction;
@@ -573,8 +586,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 }
 
                                 out << "     *   Top-Level Port: " << detail.portName
-                                    << ", Direction: " << displayDirection << ", Width: "
-                                    << (detail.width.isEmpty() ? "default" : detail.width)
+                                    << ", Direction: " << displayDirection
+                                    << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
                                             ? ""
                                             : ", Bit Selection: " + detail.bitSelect)
@@ -594,8 +607,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                           .c_str()
                                         << ", Instance: " << detail.instanceName
                                         << ", Port: " << detail.portName
-                                        << ", Direction: " << detail.direction << ", Width: "
-                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << ", Direction: " << detail.direction
+                                        << ", Width: " << displayWidth
                                         << (detail.bitSelect.isEmpty()
                                                 ? ""
                                                 : ", Bit Selection: " + detail.bitSelect)
@@ -604,8 +617,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     /* Handle case where instance data might be invalid */
                                     out << "     *   Instance: " << detail.instanceName
                                         << ", Port: " << detail.portName
-                                        << ", Direction: " << detail.direction << ", Width: "
-                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << ", Direction: " << detail.direction
+                                        << ", Width: " << displayWidth
                                         << (detail.bitSelect.isEmpty()
                                                 ? ""
                                                 : ", Bit Selection: " + detail.bitSelect)
@@ -628,6 +641,17 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Add detailed information for each connected port */
                         for (const auto &detail : portDetails) {
+                            /* Clean width information for display */
+                            QString displayWidth
+                                = detail.width.isEmpty()
+                                      ? "default"
+                                      : QSocGenerateManager::cleanTypeForWireDeclaration(
+                                            detail.width);
+                            if (displayWidth.isEmpty() && !detail.width.isEmpty()) {
+                                displayWidth
+                                    = "default"; /* fallback for single-bit types like "logic" */
+                            }
+
                             if (detail.type == PortType::TopLevel) {
                                 /* For top-level ports, we need to display the original direction, not the reversed one */
                                 QString displayDirection = detail.direction;
@@ -639,8 +663,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 /* inout remains inout */
 
                                 out << "     *   Top-Level Port: " << detail.portName
-                                    << ", Direction: " << displayDirection << ", Width: "
-                                    << (detail.width.isEmpty() ? "default" : detail.width)
+                                    << ", Direction: " << displayDirection
+                                    << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
                                             ? ""
                                             : ", Bit Selection: " + detail.bitSelect)
@@ -660,8 +684,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                           .c_str()
                                         << ", Instance: " << detail.instanceName
                                         << ", Port: " << detail.portName
-                                        << ", Direction: " << detail.direction << ", Width: "
-                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << ", Direction: " << detail.direction
+                                        << ", Width: " << displayWidth
                                         << (detail.bitSelect.isEmpty()
                                                 ? ""
                                                 : ", Bit Selection: " + detail.bitSelect)
@@ -670,8 +694,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     /* Handle case where instance data might be invalid */
                                     out << "     *   Instance: " << detail.instanceName
                                         << ", Port: " << detail.portName
-                                        << ", Direction: " << detail.direction << ", Width: "
-                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << ", Direction: " << detail.direction
+                                        << ", Width: " << displayWidth
                                         << (detail.bitSelect.isEmpty()
                                                 ? ""
                                                 : ", Bit Selection: " + detail.bitSelect)
@@ -694,6 +718,17 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Add detailed information for each connected port */
                         for (const auto &detail : portDetails) {
+                            /* Clean width information for display */
+                            QString displayWidth
+                                = detail.width.isEmpty()
+                                      ? "default"
+                                      : QSocGenerateManager::cleanTypeForWireDeclaration(
+                                            detail.width);
+                            if (displayWidth.isEmpty() && !detail.width.isEmpty()) {
+                                displayWidth
+                                    = "default"; /* fallback for single-bit types like "logic" */
+                            }
+
                             if (detail.type == PortType::TopLevel) {
                                 /* For top-level ports, we need to display the original direction, not the reversed one */
                                 QString displayDirection = detail.direction;
@@ -705,8 +740,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 /* inout remains inout */
 
                                 out << "     *   Top-Level Port: " << detail.portName
-                                    << ", Direction: " << displayDirection << ", Width: "
-                                    << (detail.width.isEmpty() ? "default" : detail.width)
+                                    << ", Direction: " << displayDirection
+                                    << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
                                             ? ""
                                             : ", Bit Selection: " + detail.bitSelect)
@@ -726,8 +761,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                           .c_str()
                                         << ", Instance: " << detail.instanceName
                                         << ", Port: " << detail.portName
-                                        << ", Direction: " << detail.direction << ", Width: "
-                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << ", Direction: " << detail.direction
+                                        << ", Width: " << displayWidth
                                         << (detail.bitSelect.isEmpty()
                                                 ? ""
                                                 : ", Bit Selection: " + detail.bitSelect)
@@ -736,8 +771,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     /* Handle case where instance data might be invalid */
                                     out << "     *   Instance: " << detail.instanceName
                                         << ", Port: " << detail.portName
-                                        << ", Direction: " << detail.direction << ", Width: "
-                                        << (detail.width.isEmpty() ? "default" : detail.width)
+                                        << ", Direction: " << detail.direction
+                                        << ", Width: " << displayWidth
                                         << (detail.bitSelect.isEmpty()
                                                 ? ""
                                                 : ", Bit Selection: " + detail.bitSelect)
@@ -755,43 +790,73 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     QString netWidth = "";
                     int     maxWidth = 0;
 
-                    /* Find the port with the maximum width */
+                    /* Find the maximum bit index needed for this net based on port widths */
+                    int maxBitIndex = -1;
+
                     for (const auto &detail : portDetails) {
+                        int requiredMaxBit = -1;
+
+                        /* Always check the port's original width first */
                         if (!detail.width.isEmpty()) {
-                            /* Attempt to extract width value from format like [31:0] or [7] */
-                            const QRegularExpression widthRegex(
-                                R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
-                            const QRegularExpressionMatch match = widthRegex.match(detail.width);
-                            if (match.hasMatch()) {
-                                bool      msb_ok = false;
-                                const int msb    = match.captured(1).toInt(&msb_ok);
+                            /* Check if it's a single bit type (logic, wire) */
+                            if (detail.width == "logic" || detail.width == "wire") {
+                                /* Single bit port - wire should be single bit regardless of bit selection */
+                                requiredMaxBit = 0;
+                            } else {
+                                /* Attempt to extract width value from format like [31:0] or [7] */
+                                const QRegularExpression widthRegex(
+                                    R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+                                const QRegularExpressionMatch match = widthRegex.match(detail.width);
+                                if (match.hasMatch()) {
+                                    bool      msb_ok = false;
+                                    const int msb    = match.captured(1).toInt(&msb_ok);
 
-                                if (msb_ok) {
-                                    int width;
-                                    if (match.capturedLength(2) > 0) {
-                                        /* Case with specified LSB, e.g. [7:3] */
-                                        bool      lsb_ok = false;
-                                        const int lsb    = match.captured(2).toInt(&lsb_ok);
-                                        if (lsb_ok) {
-                                            width = qAbs(msb - lsb) + 1;
-                                        } else {
-                                            width = msb + 1; /* Fallback to default handling */
-                                        }
-                                    } else {
-                                        /* Case with only MSB specified, e.g. [7] */
-                                        width = msb + 1; /* [7] means 8 bits [7:0] */
-                                    }
-
-                                    if (width > maxWidth) {
-                                        maxWidth = width;
-                                        netWidth = detail.width;
+                                    if (msb_ok) {
+                                        requiredMaxBit = msb;
                                     }
                                 }
-                            } else if (maxWidth == 0) {
-                                /* If no width number found but we have a type string, use it as fallback */
-                                netWidth = detail.width;
                             }
                         }
+
+                        /* If no port width found, fall back to bit selection */
+                        /* Note: This fallback should only be used when port width is unknown */
+                        if (requiredMaxBit == -1 && !detail.bitSelect.isEmpty()) {
+                            /* Parse bit selection like [7:4], [3:0], or [5] */
+                            const QRegularExpression bitSelectRegex(
+                                R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+                            const QRegularExpressionMatch bitMatch = bitSelectRegex.match(
+                                detail.bitSelect);
+                            if (bitMatch.hasMatch()) {
+                                bool      msb_ok = false;
+                                const int msb    = bitMatch.captured(1).toInt(&msb_ok);
+                                if (msb_ok) {
+                                    if (bitMatch.capturedLength(2) > 0) {
+                                        /* Range selection like [7:4] - we need up to MSB */
+                                        requiredMaxBit = msb;
+                                    } else {
+                                        /* Single bit selection like [5] - we need up to that bit */
+                                        requiredMaxBit = msb;
+                                    }
+                                }
+                            }
+                        }
+
+                        /* Update the maximum bit index needed */
+                        if (requiredMaxBit > maxBitIndex) {
+                            maxBitIndex = requiredMaxBit;
+                        }
+                    }
+
+                    /* Generate the net width specification */
+                    if (maxBitIndex >= 0) {
+                        if (maxBitIndex == 0) {
+                            /* Single bit, no range needed */
+                            netWidth = "";
+                        } else {
+                            /* Multi-bit, generate [msb:0] format */
+                            netWidth = QString("[%1:0]").arg(maxBitIndex);
+                        }
+                        maxWidth = maxBitIndex + 1;
                     }
 
                     /* If no width found from ports, try from net type as fallback */
@@ -1051,19 +1116,23 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             for (auto netIter = netlistData["net"].begin();
                                  netIter != netlistData["net"].end() && !isConnectedToNet;
                                  ++netIter) {
-                                if (netIter->second.IsMap()
-                                    && netIter->second[instanceName.toStdString()]
-                                    && netIter->second[instanceName.toStdString()].IsMap()
-                                    && netIter->second[instanceName.toStdString()]["port"]
-                                    && netIter->second[instanceName.toStdString()]["port"]
-                                           .IsScalar()) {
-                                    const QString connectedPort = QString::fromStdString(
-                                        netIter->second[instanceName.toStdString()]["port"]
-                                            .as<std::string>());
+                                if (netIter->second.IsSequence()) {
+                                    for (const auto &connectionNode : netIter->second) {
+                                        if (connectionNode.IsMap() && connectionNode["instance"]
+                                            && connectionNode["instance"].IsScalar()
+                                            && connectionNode["port"]
+                                            && connectionNode["port"].IsScalar()) {
+                                            const QString connectedInstance = QString::fromStdString(
+                                                connectionNode["instance"].as<std::string>());
+                                            const QString connectedPort = QString::fromStdString(
+                                                connectionNode["port"].as<std::string>());
 
-                                    if (connectedPort == portName) {
-                                        isConnectedToNet = true;
-                                        break;
+                                            if (connectedInstance == instanceName
+                                                && connectedPort == portName) {
+                                                isConnectedToNet = true;
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1184,6 +1253,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             && (direction.toLower() == "input" || direction.toLower() == "in")) {
                             portConnections.append(
                                 QString("        .%1(%2)").arg(portName).arg(tieValue));
+                        } else if (
+                            isConnectedToNet && instancePortConnections.contains(instanceName)
+                            && instancePortConnections[instanceName].contains(portName)) {
+                            /* Use connection from instancePortConnections if port is connected to a net */
+                            const QString connectionValue
+                                = instancePortConnections[instanceName][portName];
+                            portConnections.append(
+                                QString("        .%1(%2)").arg(portName).arg(connectionValue));
                         } else {
                             /* Format FIXME message with width if available */
                             if (width.isEmpty()) {

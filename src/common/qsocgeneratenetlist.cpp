@@ -126,10 +126,10 @@ bool QSocGenerateManager::processNetlist()
                     const auto busTypeName = busTypePair.first.as<std::string>();
                     qInfo() << "Processing bus:" << busTypeName.c_str();
 
-                    /* Get bus connections (should be a map) */
-                    if (!busTypePair.second.IsMap()) {
-                        qWarning()
-                            << "Warning: Bus" << busTypeName.c_str() << "is not a map, skipping";
+                    /* Get bus connections (should be a sequence/list) */
+                    if (!busTypePair.second.IsSequence()) {
+                        qWarning() << "Warning: Bus" << busTypeName.c_str()
+                                   << "is not a sequence, skipping";
                         continue;
                     }
                     const YAML::Node &busConnections = busTypePair.second;
@@ -150,21 +150,21 @@ bool QSocGenerateManager::processNetlist()
                     std::string busType;
 
                     /* Step 1: Validate all connections first */
-                    for (const auto &connectionPair : busConnections) {
+                    for (const auto &connectionNode : busConnections) {
                         try {
-                            if (!connectionPair.first.IsScalar()) {
-                                qWarning() << "Warning: Instance name is not a scalar, skipping";
+                            if (!connectionNode.IsMap() || !connectionNode["instance"]
+                                || !connectionNode["instance"].IsScalar()) {
+                                qWarning() << "Warning: Invalid instance specification, skipping";
                                 continue;
                             }
-                            const auto instanceName = connectionPair.first.as<std::string>();
+                            const auto instanceName = connectionNode["instance"].as<std::string>();
 
-                            if (!connectionPair.second.IsMap() || !connectionPair.second["port"]
-                                || !connectionPair.second["port"].IsScalar()) {
+                            if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
                                 qWarning() << "Warning: Invalid port specification for instance"
                                            << instanceName.c_str();
                                 continue;
                             }
-                            const auto portName = connectionPair.second["port"].as<std::string>();
+                            const auto portName = connectionNode["port"].as<std::string>();
 
                             qInfo() << "Validating connection:" << instanceName.c_str() << "."
                                     << portName.c_str();
@@ -332,8 +332,8 @@ bool QSocGenerateManager::processNetlist()
 
                         qInfo() << "Creating net for bus signal:" << signalName.c_str();
 
-                        /* Create a net for this signal as a map (not sequence) */
-                        netlistData["net"][netName] = YAML::Node(YAML::NodeType::Map);
+                        /* Create a net for this signal using List format for consistency */
+                        netlistData["net"][netName] = YAML::Node(YAML::NodeType::Sequence);
 
                         /* Add each connection to this net */
                         for (const Connection &conn : validConnections) {
@@ -408,11 +408,12 @@ bool QSocGenerateManager::processNetlist()
                                 }
 
                                 /* Create the connection node with proper structure */
-                                YAML::Node portNode = YAML::Node(YAML::NodeType::Map);
-                                portNode["port"]    = mappedPortName;
+                                YAML::Node connectionNode  = YAML::Node(YAML::NodeType::Map);
+                                connectionNode["instance"] = conn.instanceName;
+                                connectionNode["port"]     = mappedPortName;
 
-                                /* Add instance->port mapping to the net */
-                                netlistData["net"][netName][conn.instanceName] = portNode;
+                                /* Add connection to the net using List format */
+                                netlistData["net"][netName].push_back(connectionNode);
 
                                 /* Debug the structure we just created */
                                 qDebug() << "Added connection to net:" << netName.c_str()
@@ -436,18 +437,17 @@ bool QSocGenerateManager::processNetlist()
                         /* Add debug output to verify structure */
                         else {
                             qDebug() << "Created net:" << netName.c_str() << "with structure:";
-                            for (auto connIter = netlistData["net"][netName].begin();
-                                 connIter != netlistData["net"][netName].end();
-                                 ++connIter) {
-                                if (connIter->first.IsScalar()) {
-                                    qDebug()
-                                        << "  Instance:"
-                                        << QString::fromStdString(connIter->first.as<std::string>());
-                                    if (connIter->second.IsMap() && connIter->second["port"]
-                                        && connIter->second["port"].IsScalar()) {
+                            for (const auto &connectionNode : netlistData["net"][netName]) {
+                                if (connectionNode.IsMap() && connectionNode["instance"]
+                                    && connectionNode["instance"].IsScalar()) {
+                                    qDebug() << "  Instance:"
+                                             << QString::fromStdString(
+                                                    connectionNode["instance"].as<std::string>());
+                                    if (connectionNode["port"]
+                                        && connectionNode["port"].IsScalar()) {
                                         qDebug() << "    Port:"
                                                  << QString::fromStdString(
-                                                        connIter->second["port"].as<std::string>());
+                                                        connectionNode["port"].as<std::string>());
                                     }
                                 }
                             }
@@ -596,19 +596,19 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
 
                 /* Check for bit selection in net connections */
                 for (const auto &netIter : netlistData["net"]) {
-                    if (netIter.second.IsMap()) {
-                        for (const auto &instIter : netIter.second) {
-                            if (instIter.second.IsMap() && instIter.second["port"]
-                                && instIter.second["port"].IsScalar()) {
+                    if (netIter.second.IsSequence()) {
+                        for (const auto &connectionNode : netIter.second) {
+                            if (connectionNode.IsMap() && connectionNode["port"]
+                                && connectionNode["port"].IsScalar()) {
                                 const QString connPortName = QString::fromStdString(
-                                    instIter.second["port"].as<std::string>());
+                                    connectionNode["port"].as<std::string>());
 
                                 if (connPortName == portName) {
                                     /* Found a connection to this port, check for bits attribute */
-                                    if (instIter.second["bits"]
-                                        && instIter.second["bits"].IsScalar()) {
+                                    if (connectionNode["bits"]
+                                        && connectionNode["bits"].IsScalar()) {
                                         widthInfo.bitSelect = QString::fromStdString(
-                                            instIter.second["bits"].as<std::string>());
+                                            connectionNode["bits"].as<std::string>());
 
                                         /* Update effective width based on bit selection */
                                         const int selectWidth = calculateBitSelectWidth(
@@ -675,26 +675,32 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
 
                 /* Check if this instance-port has a bit selection in the netlist */
                 for (const auto &netIter : netlistData["net"]) {
-                    if (netIter.second.IsMap() && netIter.second[instanceName.toStdString()]) {
-                        auto instNode = netIter.second[instanceName.toStdString()];
-                        if (instNode.IsMap() && instNode["port"] && instNode["port"].IsScalar()) {
-                            const QString connPortName = QString::fromStdString(
-                                instNode["port"].as<std::string>());
+                    if (netIter.second.IsSequence()) {
+                        for (const auto &connectionNode : netIter.second) {
+                            if (connectionNode.IsMap() && connectionNode["instance"]
+                                && connectionNode["instance"].IsScalar() && connectionNode["port"]
+                                && connectionNode["port"].IsScalar()) {
+                                const QString connInstanceName = QString::fromStdString(
+                                    connectionNode["instance"].as<std::string>());
+                                const QString connPortName = QString::fromStdString(
+                                    connectionNode["port"].as<std::string>());
 
-                            if (connPortName == portName) {
-                                /* Found a connection to this port, check for bits attribute */
-                                if (instNode["bits"] && instNode["bits"].IsScalar()) {
-                                    widthInfo.bitSelect = QString::fromStdString(
-                                        instNode["bits"].as<std::string>());
+                                if (connInstanceName == instanceName && connPortName == portName) {
+                                    /* Found a connection to this port, check for bits attribute */
+                                    if (connectionNode["bits"]
+                                        && connectionNode["bits"].IsScalar()) {
+                                        widthInfo.bitSelect = QString::fromStdString(
+                                            connectionNode["bits"].as<std::string>());
 
-                                    /* Update effective width based on bit selection */
-                                    const int selectWidth = calculateBitSelectWidth(
-                                        widthInfo.bitSelect);
-                                    if (selectWidth > 0) {
-                                        widthInfo.effectiveWidth = selectWidth;
+                                        /* Update effective width based on bit selection */
+                                        const int selectWidth = calculateBitSelectWidth(
+                                            widthInfo.bitSelect);
+                                        if (selectWidth > 0) {
+                                            widthInfo.effectiveWidth = selectWidth;
+                                        }
                                     }
+                                    break;
                                 }
-                                break;
                             }
                         }
                     }
@@ -959,22 +965,72 @@ bool QSocGenerateManager::processLinkConnection(
         qInfo() << "Parsed link - net:" << cleanNetName.c_str()
                 << (bitSelection.empty() ? "" : (", bits:" + bitSelection).c_str());
 
-        /* Create or get the net using the clean net name */
+        /* Step 1: Check if net exists, create if not */
         if (!netlistData["net"][cleanNetName]) {
-            netlistData["net"][cleanNetName] = YAML::Node(YAML::NodeType::Map);
+            netlistData["net"][cleanNetName] = YAML::Node(YAML::NodeType::Sequence);
+            qInfo() << "Created new net:" << cleanNetName.c_str();
         }
 
-        /* Create port connection node */
-        YAML::Node portConnectionNode = YAML::Node(YAML::NodeType::Map);
-        portConnectionNode["port"]    = portName;
+        /* Step 2: Check if net is empty or has existing connections */
+        YAML::Node netNode = netlistData["net"][cleanNetName];
 
-        /* Add bit selection if present */
-        if (!bitSelection.empty()) {
-            portConnectionNode["bits"] = bitSelection;
+        /* Step 3: Check for duplicate connections */
+        bool isDuplicate = false;
+
+        /* Check existing connections in List format */
+        if (netNode.size() > 0 && netNode.IsSequence()) {
+            for (const auto &connection : netNode) {
+                if (connection.IsMap() && connection["instance"]
+                    && connection["instance"].IsScalar() && connection["port"]
+                    && connection["port"].IsScalar()) {
+                    const std::string existingInstance = connection["instance"].as<std::string>();
+                    const std::string existingPort     = connection["port"].as<std::string>();
+
+                    if (existingInstance == instanceName && existingPort == portName) {
+                        /* Same instance and port - check bit selection */
+                        std::string existingBits = "";
+                        if (connection["bits"] && connection["bits"].IsScalar()) {
+                            existingBits = connection["bits"].as<std::string>();
+                        }
+
+                        if (existingBits == bitSelection) {
+                            /* Exact duplicate - ignore */
+                            isDuplicate = true;
+                            qInfo()
+                                << "Ignoring duplicate connection:" << instanceName.c_str() << "."
+                                << portName.c_str() << " to net:" << cleanNetName.c_str();
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
-        /* Add the connection to the net */
-        netlistData["net"][cleanNetName][instanceName] = portConnectionNode;
+        /* Step 4: Add connection only if not duplicate */
+        if (!isDuplicate) {
+            /* Always use List format for consistency */
+            YAML::Node connectionNode  = YAML::Node(YAML::NodeType::Map);
+            connectionNode["instance"] = instanceName;
+            connectionNode["port"]     = portName;
+
+            /* Add bit selection if present */
+            if (!bitSelection.empty()) {
+                connectionNode["bits"] = bitSelection;
+            }
+
+            /* Ensure the net node is a sequence (list) */
+            if (!netlistData["net"][cleanNetName]
+                || !netlistData["net"][cleanNetName].IsSequence()) {
+                netlistData["net"][cleanNetName] = YAML::Node(YAML::NodeType::Sequence);
+            }
+
+            /* Add to the net's connection list */
+            netlistData["net"][cleanNetName].push_back(connectionNode);
+
+            qInfo() << "Added connection:" << instanceName.c_str() << "." << portName.c_str()
+                    << " to net:" << cleanNetName.c_str()
+                    << (bitSelection.empty() ? "" : (" with bits:" + bitSelection).c_str());
+        }
 
         qInfo() << "Successfully created link connection for net:" << cleanNetName.c_str();
         return true;
@@ -1120,14 +1176,15 @@ bool QSocGenerateManager::processUplinkConnection(
 
         /* For uplink, directly connect module port to top-level port - NO intermediate net */
         /* Find or create the net for this top-level port */
-        if (!netlistData["net"][netName]) {
-            netlistData["net"][netName] = YAML::Node(YAML::NodeType::Map);
+        if (!netlistData["net"][netName] || !netlistData["net"][netName].IsSequence()) {
+            netlistData["net"][netName] = YAML::Node(YAML::NodeType::Sequence);
         }
 
         /* Connect module instance port directly to the top-level port via the net */
-        YAML::Node portConnectionNode             = YAML::Node(YAML::NodeType::Map);
-        portConnectionNode["port"]                = portName;
-        netlistData["net"][netName][instanceName] = portConnectionNode;
+        YAML::Node connectionNode  = YAML::Node(YAML::NodeType::Map);
+        connectionNode["instance"] = instanceName;
+        connectionNode["port"]     = portName;
+        netlistData["net"][netName].push_back(connectionNode);
 
         /* The top-level port is implicitly connected to the net with the same name */
         /* We don't add an explicit "top_level" connection since the net name matches the port name */

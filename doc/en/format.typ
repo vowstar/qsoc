@@ -137,34 +137,51 @@ Port attributes within an instance can include:
 
 === NET SECTION
 <soc-net-net>
-The `net` section defines explicit connections between instance ports:
+The `net` section defines explicit connections between instance ports using a standardized list format:
+
+==== List Format
+<soc-net-list-format>
+The list format is the standard approach for all net connections:
 
 ```yaml
-# Net connections
+# Net connections (List Format)
 net:
   sys_clk:               # System clock distribution
-    cpu0:
+    - instance: cpu0
       port: clk
-    ram0:
+    - instance: ram0
       port: clk
-    uart0:
+    - instance: uart0
       port: clk
   sys_rst_n:             # System reset (active low)
-    cpu0:
+    - instance: cpu0
       port: rst_n
-    ram0:
+    - instance: ram0
       port: rst_n
-    uart0:
+    - instance: uart0
       port: rst_n
-  data_bus:              # Data communication bus
-    cpu0:
+  spi_sclk:              # SPI clock distribution
+    - instance: u_spi_periph
+      port: sclk
+    - instance: u_spi_periph    # Same instance, different port
+      port: clk
+    - instance: u_spi_reg_0
+      port: clk
+    - instance: u_pwrclk_bridge
+      port: ao_sclk
+  data_bus:              # Data bus with bit selection
+    - instance: cpu0
       port: data_out
       bits: "[7:0]"      # Connect only lower 8 bits
-    ram0:
+    - instance: ram0
       port: data_in      # Full width connection
 ```
 
-Net connection properties include:
+The list format allows the same instance to appear multiple times with different ports, which is useful for complex SoC designs where a single module may have multiple ports connected to the same net.
+
+==== Connection Properties
+<soc-net-connection-properties>
+Each connection in the list format supports the following properties:
 
 #figure(
   align(center)[#table(
@@ -172,7 +189,8 @@ Net connection properties include:
       align: (auto, left),
       table.header([Property], [Description]),
       table.hline(),
-      [port], [Port name to connect],
+      [instance], [Instance name to connect (required)],
+      [port], [Port name to connect (required)],
       [bits], [Optional bit selection (e.g., "[7:0]" or "[5]")],
     )],
   caption: [NET CONNECTION PROPERTIES],
@@ -181,15 +199,22 @@ Net connection properties include:
 
 === BUS SECTION
 <soc-net-bus>
-The `bus` section defines bus interface connections that will be automatically expanded into individual net connections:
+The `bus` section defines bus interface connections that will be automatically expanded into individual net connections. Bus connections use the list format:
 
 ```yaml
 bus:
   cpu_ram_bus:           # AXI bus connection between CPU and RAM
-    cpu0:
+    - instance: cpu0
       port: axi_master   # CPU acts as AXI master
-    ram0:
+    - instance: ram0
       port: axi_slave    # RAM acts as AXI slave
+  spi_bus:               # SPI bus with multiple slaves
+    - instance: spi_master
+      port: spi_master_if
+    - instance: spi_slave0
+      port: spi_slave_if
+    - instance: spi_slave1
+      port: spi_slave_if
 ```
 
 During netlist processing, bus connections are expanded based on bus interface definitions in the module files, generating individual nets for each bus signal.
@@ -202,7 +227,8 @@ Bus connection properties include:
       align: (auto, left),
       table.header([Property], [Description]),
       table.hline(),
-      [port], [Bus interface port name defined in the module],
+      [instance], [Instance name to connect (required)],
+      [port], [Bus interface port name defined in the module (required)],
     )],
   caption: [BUS CONNECTION PROPERTIES],
   kind: table,
@@ -235,9 +261,9 @@ This is equivalent to defining the net explicitly:
 ```yaml
 net:
   internal_signal:       # Explicit net definition (same result as link)
-    module_a:
+    - instance: module_a
       port: output_port  # Source of the signal
-    module_b:
+    - instance: module_b
       port: input_port   # Destination of the signal
 ```
 
@@ -269,14 +295,14 @@ This creates nets with the specified names and adds bit selection attributes to 
 ```yaml
 net:
   amp_bus:               # Net created from link name without bit selection
-    amp_east:
+    - instance: amp_east
       port: VOUT_DATA
       bits: "[7:4]"      # Bit selection added automatically
-    amp_west:
+    - instance: amp_west
       port: VOUT_DATA
       bits: "[3:0]"      # Bit selection added automatically
   control_net:           # Net created from link name without bit selection
-    mixer_core:
+    - instance: mixer_core
       port: CTRL_FLAG
       bits: "[5]"        # Single bit selection
 ```
@@ -405,35 +431,35 @@ instance:
       clk_out:
         link: int_clk      # Connects to same net as io_cell0.C
 
-# Net connections
+# Net connections (using list format for flexibility)
 net:
   sys_clk:               # System clock distribution
-    cpu0:
+    - instance: cpu0
       port: clk
-    ram0:
+    - instance: ram0
       port: clk
-    uart0:
+    - instance: uart0
       port: clk
   sys_rst_n:             # System reset (active low)
-    cpu0:
+    - instance: cpu0
       port: rst_n
-    ram0:
+    - instance: ram0
       port: rst_n
-    uart0:
+    - instance: uart0
       port: rst_n
   data_bus:              # Data communication bus
-    cpu0:
+    - instance: cpu0
       port: data_out
       bits: "[7:0]"      # Connect only lower 8 bits
-    ram0:
+    - instance: ram0
       port: data_in      # Full width connection
 
 # Bus interface connections
 bus:
   cpu_ram_bus:           # AXI bus connection between CPU and RAM
-    cpu0:
+    - instance: cpu0
       port: axi_master   # CPU acts as AXI master
-    ram0:
+    - instance: ram0
       port: axi_slave    # RAM acts as AXI slave
 ```
 

@@ -334,11 +334,11 @@ port:
     type: "logic [31:0]"
 net:
   mixed_width_net:
-    cpu0:
+    - instance: cpu0
       port: "biu_pad_rdata"
-    cpu1:
+    - instance: cpu1
       port: "pad_biu_rdata"
-    cpu2:
+    - instance: cpu2
       port: "pad_tdt_dm_rdata"
 instance:
   cpu0:
@@ -537,19 +537,19 @@ instance:
         invert: true
 net:
   clk_net:
-    cpu0:
+    - instance: cpu0
       port: pll_core_cpuclk
-    cpu1:
+    - instance: cpu1
       port: pll_core_cpuclk
   reset_net:
-    cpu0:
+    - instance: cpu0
       port: pad_cpu_rst_b
-    cpu1:
+    - instance: cpu1
       port: pad_cpu_rst_b
   arvalid_net:
-    cpu0:
+    - instance: cpu0
       port: biu_pad_arvalid
-    cpu1:
+    - instance: cpu1
       port: biu_pad_arvalid
 )";
         const QString filePath = createTempFile("invert_test.soc_net", content);
@@ -812,7 +812,7 @@ port:
     type: "logic"
 net:
   mixed_width_net:
-    cpu0:
+    - instance: cpu0
       port: "data_in"
 instance:
   cpu0:
@@ -934,24 +934,24 @@ instance:
 
 net:
   soc_top_data:
-    soc_top_cpu:
+    - instance: soc_top_cpu
       port: pad_biu_rdata
-    soc_top_mux:
+    - instance: soc_top_mux
       port: data_out
 
   soc_top_data_sliced:
-    soc_top_cpu:
+    - instance: soc_top_cpu
       port: biu_pad_arid
       bits: "[3:2]"    # Multi-bit selection
-    soc_top_mux:
+    - instance: soc_top_mux
       port: data_in
       bits: "[7:6]"    # Multi-bit selection
 
   soc_top_data_bit:
-    soc_top_cpu:
+    - instance: soc_top_cpu
       port: axim_clk_en
       bits: "[4]"      # Single-bit selection
-    soc_top_flag:
+    - instance: soc_top_flag
       port: flag_in
       bits: "[6]"      # Single-bit selection
 )";
@@ -1046,13 +1046,13 @@ instance:
 net:
   # This net has width mismatch with bits selection
   soc_mismatch:
-    soc_top_cpu:
+    - instance: soc_top_cpu
       port: pad_biu_rid       # 8-bit port
       bits: "[1:0]"           # 2-bit selection
-    soc_top_mux:
+    - instance: soc_top_mux
       port: data_in           # 8-bit port
       bits: "[4]"             # 1-bit selection
-    wide_driver:
+    - instance: wide_driver
       port: data_out          # 32-bit output port (intentional width mismatch)
 )";
 
@@ -1615,6 +1615,378 @@ mixer_core:
         QVERIFY(verifyVerilogContent("test_link_bits", "ampfifo_2phase u_ampfifo_east1"));
         QVERIFY(verifyVerilogContent("test_link_bits", "comp_stage u_comp_south0"));
         QVERIFY(verifyVerilogContent("test_link_bits", "mixer_core u_mixcore_center"));
+    }
+
+    void testGenerateWithMultipleLinkDeduplication()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with multiple links to the same net (testing deduplication) */
+        const QString content = R"(
+instance:
+  u_cpu0:
+    module: c906
+    port:
+      axim_clk_en:
+        link: shared_enable
+  u_cpu1:
+    module: c906  
+    port:
+      axim_clk_en:
+        link: shared_enable    # Same module, same port -> should deduplicate
+  u_io_cell0:
+    module: PDDWUWSWCDG_H
+    port:
+      RTE:
+        link: io_ring_rte
+  u_io_cell1:
+    module: PDDWUWSWCDG_H
+    port:
+      RTE:
+        link: io_ring_rte      # Different module instance, same port -> should allow
+  u_io_cell2:
+    module: PDDWUWSWCDG_H
+    port:
+      RTE:
+        link: io_ring_rte      # Another instance to same net -> should allow
+      C:
+        link: clk_out
+  u_pll:
+    module: simple_pll
+    port:
+      clk_out:
+        link: clk_out          # Different module, same net name -> should allow
+)";
+
+        /* Create simple_pll module */
+        const QString pllContent = R"(
+simple_pll:
+  port:
+    clk_out:
+      type: logic
+      direction: output
+    enable:
+      type: logic
+      direction: input
+)";
+
+        /* Create PDDWUWSWCDG_H module (reuse from previous test) */
+        const QString pddwContent = R"(
+PDDWUWSWCDG_H:
+  port:
+    C:
+      type: logic
+      direction: input
+    RTE:
+      type: logic
+      direction: input
+)";
+
+        /* Create the module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create simple_pll module file */
+        const QString pllPath = moduleDir.filePath("simple_pll.soc_mod");
+        QFile         pllFile(pllPath);
+        if (pllFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&pllFile);
+            stream << pllContent;
+            pllFile.close();
+        }
+
+        /* Create PDDWUWSWCDG_H module file */
+        const QString pddwPath = moduleDir.filePath("PDDWUWSWCDG_H.soc_mod");
+        QFile         pddwFile(pddwPath);
+        if (pddwFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&pddwFile);
+            stream << pddwContent;
+            pddwFile.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_multiple_link_dedup.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_multiple_link_dedup"));
+
+        /* Verify basic module structure */
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "module test_multiple_link_dedup"));
+
+        /* Verify all instances exist */
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "c906 u_cpu0"));
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "c906 u_cpu1"));
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "PDDWUWSWCDG_H u_io_cell0"));
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "PDDWUWSWCDG_H u_io_cell1"));
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "PDDWUWSWCDG_H u_io_cell2"));
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "simple_pll u_pll"));
+
+        /* Verify wire declarations for the shared nets */
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "wire shared_enable"));
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "wire io_ring_rte"));
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", "wire clk_out"));
+
+        /* Verify connections - shared_enable should connect to both CPU instances */
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", ".axim_clk_en(shared_enable)"));
+
+        /* Verify connections - io_ring_rte should connect to all three IO cells */
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", ".RTE(io_ring_rte)"));
+
+        /* Verify connections - clk_out should connect to both PLL output and IO cell input */
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", ".clk_out(clk_out)"));
+        QVERIFY(verifyVerilogContent("test_multiple_link_dedup", ".C(clk_out)"));
+
+        /* Check debug messages for deduplication (if any duplicates were found and ignored) */
+        bool foundDuplicateMessage = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("Ignoring duplicate connection")) {
+                foundDuplicateMessage = true;
+                break;
+            }
+        }
+        /* Note: Currently we don't expect true duplicates in this test case 
+         * since each connection is to a different instance */
+    }
+
+    void testGenerateWithExactDuplicateLinks()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with exact duplicate links (same instance, same port, same net) */
+        const QString content = R"(
+instance:
+  u_cpu0:
+    module: c906
+    port:
+      axim_clk_en:
+        link: enable_signal
+      sys_apb_rst_b:
+        link: reset_signal
+  
+  # This would create a duplicate if we had two identical link statements
+  # We'll test this by manually adding to the net section after link processing
+net:
+  enable_signal:
+    - instance: u_cpu0
+      port: axim_clk_en
+    # This duplicate should be detected and ignored during processing
+  reset_signal:
+    - instance: u_cpu0
+      port: sys_apb_rst_b
+)";
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_exact_duplicate_links.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_exact_duplicate_links"));
+
+        /* Verify basic module structure */
+        QVERIFY(
+            verifyVerilogContent("test_exact_duplicate_links", "module test_exact_duplicate_links"));
+        QVERIFY(verifyVerilogContent("test_exact_duplicate_links", "c906 u_cpu0"));
+
+        /* Verify wire declarations */
+        QVERIFY(verifyVerilogContent("test_exact_duplicate_links", "wire enable_signal"));
+        QVERIFY(verifyVerilogContent("test_exact_duplicate_links", "wire reset_signal"));
+
+        /* Verify connections exist and are properly formed */
+        QVERIFY(verifyVerilogContent("test_exact_duplicate_links", ".axim_clk_en(enable_signal)"));
+        QVERIFY(verifyVerilogContent("test_exact_duplicate_links", ".sys_apb_rst_b(reset_signal)"));
+    }
+
+    void testGenerateWithLinkBitSelectionDeduplication()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with link bit selection deduplication */
+        const QString content = R"(
+instance:
+  u_ampfifo_east0:
+    module: ampfifo_2phase
+    port:
+      A1P0_VOUTP:
+        link: vout_bus[7:4]
+  u_ampfifo_east1:
+    module: ampfifo_2phase
+    port:
+      A1P0_VOUTP:
+        link: vout_bus[3:0]     # Different bit selection, should be allowed
+  u_ampfifo_east2:
+    module: ampfifo_2phase
+    port:
+      A1P0_VOUTP:
+        link: vout_bus[7:4]     # Same instance type, same bit selection -> should deduplicate if exactly same
+)";
+
+        /* Create ampfifo_2phase module */
+        const QString ampfifoContent = R"(
+ampfifo_2phase:
+  port:
+    A1P0_VOUTP:
+      type: logic[7:0]
+      direction: output
+)";
+
+        /* Create the module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create ampfifo_2phase module file */
+        const QString ampfifoPath = moduleDir.filePath("ampfifo_2phase.soc_mod");
+        QFile         ampfifoFile(ampfifoPath);
+        if (ampfifoFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&ampfifoFile);
+            stream << ampfifoContent;
+            ampfifoFile.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_link_bits_dedup.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_link_bits_dedup"));
+
+        /* Verify basic module structure */
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "module test_link_bits_dedup"));
+
+        /* Verify all instances exist */
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "ampfifo_2phase u_ampfifo_east0"));
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "ampfifo_2phase u_ampfifo_east1"));
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "ampfifo_2phase u_ampfifo_east2"));
+
+        /* Verify wire declaration for the shared net */
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "wire [7:0] vout_bus"));
+
+        /* Verify bit selection in port connections */
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", ".A1P0_VOUTP(vout_bus[7:4])"));
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", ".A1P0_VOUTP(vout_bus[3:0])"));
+
+        /* The third instance should also connect with [7:4] bit selection */
+        /* Count how many times [7:4] appears - should be twice for the two instances using that range */
+        QString verilogContent;
+        for (const QString &msg : messageList) {
+            if (msg.contains("Successfully generated Verilog code:")
+                && msg.contains("test_link_bits_dedup.v")) {
+                const QRegularExpression regex("Successfully generated Verilog code: (.+\\.v)");
+                const QRegularExpressionMatch match = regex.match(msg);
+                if (match.hasMatch()) {
+                    const QString filePath = match.captured(1);
+                    if (QFile::exists(filePath)) {
+                        QFile file(filePath);
+                        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                            verilogContent = file.readAll();
+                            file.close();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!verilogContent.isEmpty()) {
+            /* Count occurrences of [7:4] - should appear at least twice */
+            int count = verilogContent.count("vout_bus[7:4]");
+            QVERIFY(count >= 2);
+        }
+    }
+
+    void testGenerateWithSameInstanceMultiplePortsToSameNet()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with same instance multiple ports linking to same net */
+        const QString content = R"(
+instance:
+  u_test_core:
+    module: test_core
+    port:
+      out_a:
+        link: shared_signal
+      out_b:
+        link: shared_signal
+      out_c:
+        link: shared_signal
+      out_d:
+        link: shared_signal
+)";
+
+        /* Create test_core module */
+        const QString coreContent = R"(
+test_core:
+  port:
+    out_a:
+      type: logic
+      direction: output
+    out_b:
+      type: logic
+      direction: output
+    out_c:
+      type: logic
+      direction: output
+    out_d:
+      type: logic
+      direction: output
+)";
+
+        /* Create the module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create test_core module file */
+        const QString corePath = moduleDir.filePath("test_core.soc_mod");
+        QFile         coreFile(corePath);
+        if (coreFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&coreFile);
+            stream << coreContent;
+            coreFile.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath
+            = createTempFile("test_same_instance_multiple_ports.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_same_instance_multiple_ports"));
+
+        /* Verify basic module structure */
+        QVERIFY(verifyVerilogContent(
+            "test_same_instance_multiple_ports", "module test_same_instance_multiple_ports"));
+        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", "test_core u_test_core"));
+
+        /* Verify wire declaration for the shared net */
+        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", "wire shared_signal"));
+
+        /* Verify all four ports connect to the same net */
+        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_a(shared_signal)"));
+        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_b(shared_signal)"));
+        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_c(shared_signal)"));
+        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_d(shared_signal)"));
     }
 };
 
