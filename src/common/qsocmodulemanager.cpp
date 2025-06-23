@@ -155,7 +155,9 @@ bool QSocModuleManager::importFromFileList(
     const QString            &libraryName,
     const QRegularExpression &moduleNameRegex,
     const QString            &fileListPath,
-    const QStringList        &filePathList)
+    const QStringList        &filePathList,
+    const QStringList        &macroDefines,
+    const QStringList        &macroUndefines)
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
@@ -168,7 +170,7 @@ bool QSocModuleManager::importFromFileList(
         return false;
     }
 
-    if (slangDriver->parseFileList(fileListPath, filePathList)) {
+    if (slangDriver->parseFileList(fileListPath, filePathList, macroDefines, macroUndefines)) {
         /* Parse success */
         QStringList moduleList = slangDriver->getModuleList();
         if (moduleList.isEmpty()) {

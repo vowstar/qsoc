@@ -85,6 +85,12 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
              "The path where the file list is located, including a list of "
              "verilog files in order."),
          "filelist"},
+        {{"D", "define"},
+         QCoreApplication::translate("main", "Define macro as KEY or KEY=VALUE."),
+         "macro definition"},
+        {{"U", "undefine"},
+         QCoreApplication::translate("main", "Undefine macro KEY at the start of all source files."),
+         "macro name"},
     });
     parser.addPositionalArgument(
         "files",
@@ -92,10 +98,12 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
         "[<verilog files>]");
 
     parser.parse(appArguments);
-    const QStringList  cmdArguments = parser.positionalArguments();
-    const QString     &libraryName  = parser.isSet("library") ? parser.value("library") : "";
-    const QString     &moduleName   = parser.isSet("module") ? parser.value("module") : ".*";
-    const QStringList &filePathList = cmdArguments;
+    const QStringList  cmdArguments   = parser.positionalArguments();
+    const QString     &libraryName    = parser.isSet("library") ? parser.value("library") : "";
+    const QString     &moduleName     = parser.isSet("module") ? parser.value("module") : ".*";
+    const QStringList &filePathList   = cmdArguments;
+    const QStringList &macroDefines   = parser.values("define");
+    const QStringList &macroUndefines = parser.values("undefine");
     if (filePathList.isEmpty() && !parser.isSet("filelist")) {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: missing verilog files."));
@@ -136,7 +144,39 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
             1,
             QCoreApplication::translate("main", "Error: invalid regular expression of module name."));
     }
-    if (!moduleManager->importFromFileList(libraryName, moduleNameRegex, filelistPath, filePathList)) {
+    /* Validate macro definitions */
+    for (const QString &macro : macroDefines) {
+        if (macro.trimmed().isEmpty()) {
+            return showErrorWithHelp(
+                1, QCoreApplication::translate("main", "Error: empty macro definition."));
+        }
+        /* Check for invalid characters in macro name */
+        QString macroName = macro.contains('=') ? macro.split('=').first() : macro;
+        if (macroName.trimmed().isEmpty()
+            || !macroName.contains(QRegularExpression("^[A-Za-z_][A-Za-z0-9_]*$"))) {
+            return showErrorWithHelp(
+                1,
+                QCoreApplication::translate(
+                    "main", "Error: invalid macro name: %1. Must start with letter or underscore.")
+                    .arg(macroName));
+        }
+    }
+    /* Validate macro undefines */
+    for (const QString &macro : macroUndefines) {
+        if (macro.trimmed().isEmpty()) {
+            return showErrorWithHelp(
+                1, QCoreApplication::translate("main", "Error: empty macro name for undefine."));
+        }
+        if (!macro.contains(QRegularExpression("^[A-Za-z_][A-Za-z0-9_]*$"))) {
+            return showErrorWithHelp(
+                1,
+                QCoreApplication::translate(
+                    "main", "Error: invalid macro name: %1. Must start with letter or underscore.")
+                    .arg(macro));
+        }
+    }
+    if (!moduleManager->importFromFileList(
+            libraryName, moduleNameRegex, filelistPath, filePathList, macroDefines, macroUndefines)) {
         return showErrorWithHelp(1, QCoreApplication::translate("main", "Error: import failed."));
     }
 

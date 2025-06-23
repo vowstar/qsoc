@@ -123,6 +123,8 @@ public slots:
      * @param moduleNameRegex Regular expression to match the module name.
      * @param fileListPath The path of the verilog file list.
      * @param filePathList The list of verilog files.
+     * @param macroDefines The list of macro definitions in KEY=VALUE format.
+     * @param macroUndefines The list of macro names to undefine.
      * @retval true Import successfully.
      * @retval false Import failed.
      */
@@ -130,7 +132,9 @@ public slots:
         const QString            &libraryName,
         const QRegularExpression &moduleNameRegex,
         const QString            &fileListPath,
-        const QStringList        &filePathList);
+        const QStringList        &filePathList,
+        const QStringList        &macroDefines   = QStringList(),
+        const QStringList        &macroUndefines = QStringList());
 
     /**
      * @brief Get the Module Yaml object.

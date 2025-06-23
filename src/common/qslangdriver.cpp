@@ -150,7 +150,11 @@ bool QSlangDriver::parseArgs(const QString &args)
     return result;
 }
 
-bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList &filePathList)
+bool QSlangDriver::parseFileList(
+    const QString     &fileListPath,
+    const QStringList &filePathList,
+    const QStringList &macroDefines,
+    const QStringList &macroUndefines)
 {
     bool    result  = false;
     QString content = "";
@@ -206,7 +210,7 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
             tempFile.flush();
             tempFile.close();
             /* clang-format off */
-            const QString args = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
+            QString baseArgs = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
                 slang
                 --ignore-unknown-modules
                 --single-unit
@@ -225,8 +229,18 @@ bool QSlangDriver::parseFileList(const QString &fileListPath, const QStringList 
                 --ignore-directive nosuppress_faults
                 --ignore-directive delay_mode_distributed
                 --ignore-directive delay_mode_unit
-                -f "%1"
-            )").arg(tempFile.fileName());
+            )");
+            /* Add macro definitions */
+            for (const QString &macro : macroDefines) {
+                baseArgs += QString(" -D\"%1\"").arg(macro);
+            }
+            /* Add macro undefines */
+            for (const QString &macro : macroUndefines) {
+                baseArgs += QString(" -U\"%1\"").arg(macro);
+            }
+            /* Add file list */
+            baseArgs += QString(" -f \"%1\"").arg(tempFile.fileName());
+            const QString args = baseArgs;
             /* clang-format on */
 
             QStaticLog::logV(Q_FUNC_INFO, "TemporaryFile name:" + tempFile.fileName());

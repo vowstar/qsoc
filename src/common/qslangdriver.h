@@ -71,10 +71,16 @@ public slots:
      * @details This function will parse file list.
      * @param fileListPath file list path.
      * @param filePathList file path list.
+     * @param macroDefines macro definitions in KEY or KEY=VALUE format.
+     * @param macroUndefines macro names to undefine.
      * @retval true Parse successfully.
      * @retval false Parse failed.
      */
-    bool parseFileList(const QString &fileListPath, const QStringList &filePathList);
+    bool parseFileList(
+        const QString     &fileListPath,
+        const QStringList &filePathList,
+        const QStringList &macroDefines   = QStringList(),
+        const QStringList &macroUndefines = QStringList());
 
     /**
      * @brief Get Abstract Syntax Tree.
