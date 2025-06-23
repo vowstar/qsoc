@@ -393,6 +393,13 @@ private:
         const YAML::Node  &moduleData);
 
     /**
+     * @brief Parse link value to extract net name and bit selection
+     * @param linkValue The link value (e.g., "bus_data[7:0]", "clk_signal[3]", "simple_net")
+     * @return A pair containing the net name and bit selection (empty if no selection)
+     */
+    std::pair<std::string, std::string> parseLinkValue(const std::string &linkValue);
+
+    /**
      * @brief Calculate the width of a port from its type string
      * @param portType The port type string (e.g., "wire [7:0]", "reg [15:0]", "wire")
      * @return The width in bits, or -1 if cannot be determined

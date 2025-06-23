@@ -241,6 +241,50 @@ net:
       port: input_port   # Destination of the signal
 ```
 
+===== Link with Bit Selection
+<soc-net-link-bits>
+The `link` attribute also supports bit selection syntax, allowing you to connect specific bits of a port to a net:
+
+```yaml
+instance:
+  amp_east:
+    module: amplifier_stage
+    port:
+      VOUT_DATA:
+        link: amp_bus[7:4]     # Connect to bits [7:4] of amp_bus net
+  amp_west:
+    module: amplifier_stage
+    port:
+      VOUT_DATA:
+        link: amp_bus[3:0]     # Connect to bits [3:0] of amp_bus net
+  mixer_core:
+    module: mixer_unit
+    port:
+      CTRL_FLAG:
+        link: control_net[5]   # Connect to bit [5] of control_net
+```
+
+This creates nets with the specified names and adds bit selection attributes to the connections:
+
+```yaml
+net:
+  amp_bus:               # Net created from link name without bit selection
+    amp_east:
+      port: VOUT_DATA
+      bits: "[7:4]"      # Bit selection added automatically
+    amp_west:
+      port: VOUT_DATA
+      bits: "[3:0]"      # Bit selection added automatically
+  control_net:           # Net created from link name without bit selection
+    mixer_core:
+      port: CTRL_FLAG
+      bits: "[5]"        # Single bit selection
+```
+
+Supported bit selection formats:
+- Range selection: `signal_name[high:low]` (e.g., `data_bus[15:8]`)
+- Single bit selection: `signal_name[bit]` (e.g., `control_flag[3]`)
+
 ==== Uplink Attribute
 <soc-net-uplink>
 The `uplink` attribute creates both an internal net and a top-level port with the same name, then connects the instance port to both:

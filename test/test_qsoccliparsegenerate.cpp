@@ -1488,6 +1488,134 @@ IO_CELL_COMPATIBLE2:
         QVERIFY(verifyVerilogContent("test_uplink_compatible", "IO_CELL_COMPATIBLE1 u_io_cell1"));
         QVERIFY(verifyVerilogContent("test_uplink_compatible", "IO_CELL_COMPATIBLE2 u_io_cell2"));
     }
+
+    void testGenerateWithLinkBitSelection()
+    {
+        messageList.clear();
+
+        /* Create a netlist file with link bit selection */
+        const QString content = R"(
+instance:
+  u_ampfifo_east0:
+    module: ampfifo_2phase
+    port:
+      A1P0_VOUTP:
+        link: vout_amp_e0[3:0]
+  u_ampfifo_east1:
+    module: ampfifo_2phase
+    port:
+      A1P0_VOUTP:
+        link: vout_amp_e1[7]
+  u_comp_south0:
+    module: comp_stage
+    port:
+      A1P0_IREF:
+        link: iref_signal[15:8]
+      A1P0_VIN:
+        link: vin_comp_s0[2]
+  u_mixcore_center:
+    module: mixer_core
+    port:
+      A1P0_DATA:
+        link: data_path_c0[31:16]
+)";
+
+        /* Create ampfifo_2phase module */
+        const QString ampfifoContent = R"(
+ampfifo_2phase:
+  port:
+    A1P0_VOUTP:
+      type: logic[7:0]
+      direction: output
+)";
+
+        /* Create comp_stage module */
+        const QString compContent = R"(
+comp_stage:
+  port:
+    A1P0_IREF:
+      type: logic[15:0]
+      direction: input
+    A1P0_VIN:
+      type: logic
+      direction: input
+)";
+
+        /* Create mixer_core module */
+        const QString mixerContent = R"(
+mixer_core:
+  port:
+    A1P0_DATA:
+      type: logic[31:0]
+      direction: output
+)";
+
+        /* Create the module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create ampfifo_2phase module file */
+        const QString ampfifoPath = moduleDir.filePath("ampfifo_2phase.soc_mod");
+        QFile         ampfifoFile(ampfifoPath);
+        if (ampfifoFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&ampfifoFile);
+            stream << ampfifoContent;
+            ampfifoFile.close();
+        }
+
+        /* Create comp_stage module file */
+        const QString compPath = moduleDir.filePath("comp_stage.soc_mod");
+        QFile         compFile(compPath);
+        if (compFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&compFile);
+            stream << compContent;
+            compFile.close();
+        }
+
+        /* Create mixer_core module file */
+        const QString mixerPath = moduleDir.filePath("mixer_core.soc_mod");
+        QFile         mixerFile(mixerPath);
+        if (mixerFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&mixerFile);
+            stream << mixerContent;
+            mixerFile.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_link_bits.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_link_bits"));
+
+        /* Verify basic module structure */
+        QVERIFY(verifyVerilogContent("test_link_bits", "module test_link_bits"));
+
+        /* Verify wire declarations for nets created from link names */
+        QVERIFY(verifyVerilogContent("test_link_bits", "wire [7:0] vout_amp_e0"));
+        QVERIFY(verifyVerilogContent("test_link_bits", "wire [7:0] vout_amp_e1"));
+        QVERIFY(verifyVerilogContent("test_link_bits", "wire [15:0] iref_signal"));
+        QVERIFY(verifyVerilogContent("test_link_bits", "wire [31:0] data_path_c0"));
+        QVERIFY(verifyVerilogContent("test_link_bits", "wire vin_comp_s0"));
+
+        /* Verify bit selection in port connections */
+        QVERIFY(verifyVerilogContent("test_link_bits", ".A1P0_VOUTP(vout_amp_e0[3:0])"));
+        QVERIFY(verifyVerilogContent("test_link_bits", ".A1P0_VOUTP(vout_amp_e1[7])"));
+        QVERIFY(verifyVerilogContent("test_link_bits", ".A1P0_IREF(iref_signal[15:8])"));
+        QVERIFY(verifyVerilogContent("test_link_bits", ".A1P0_VIN(vin_comp_s0[2])"));
+        QVERIFY(verifyVerilogContent("test_link_bits", ".A1P0_DATA(data_path_c0[31:16])"));
+
+        /* Verify module instances */
+        QVERIFY(verifyVerilogContent("test_link_bits", "ampfifo_2phase u_ampfifo_east0"));
+        QVERIFY(verifyVerilogContent("test_link_bits", "ampfifo_2phase u_ampfifo_east1"));
+        QVERIFY(verifyVerilogContent("test_link_bits", "comp_stage u_comp_south0"));
+        QVERIFY(verifyVerilogContent("test_link_bits", "mixer_core u_mixcore_center"));
+    }
 };
 
 QStringList Test::messageList;

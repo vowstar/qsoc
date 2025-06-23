@@ -951,21 +951,32 @@ bool QSocGenerateManager::processLinkConnection(
 {
     try {
         qInfo() << "Processing link connection:" << instanceName.c_str() << "." << portName.c_str()
-                << "-> net:" << netName.c_str();
+                << "-> link:" << netName.c_str();
 
-        /* Create or get the net */
-        if (!netlistData["net"][netName]) {
-            netlistData["net"][netName] = YAML::Node(YAML::NodeType::Map);
+        /* Parse the link value to extract net name and bit selection */
+        const auto [cleanNetName, bitSelection] = parseLinkValue(netName);
+
+        qInfo() << "Parsed link - net:" << cleanNetName.c_str()
+                << (bitSelection.empty() ? "" : (", bits:" + bitSelection).c_str());
+
+        /* Create or get the net using the clean net name */
+        if (!netlistData["net"][cleanNetName]) {
+            netlistData["net"][cleanNetName] = YAML::Node(YAML::NodeType::Map);
         }
 
         /* Create port connection node */
         YAML::Node portConnectionNode = YAML::Node(YAML::NodeType::Map);
         portConnectionNode["port"]    = portName;
 
-        /* Add the connection to the net */
-        netlistData["net"][netName][instanceName] = portConnectionNode;
+        /* Add bit selection if present */
+        if (!bitSelection.empty()) {
+            portConnectionNode["bits"] = bitSelection;
+        }
 
-        qInfo() << "Successfully created link connection for net:" << netName.c_str();
+        /* Add the connection to the net */
+        netlistData["net"][cleanNetName][instanceName] = portConnectionNode;
+
+        qInfo() << "Successfully created link connection for net:" << cleanNetName.c_str();
         return true;
     } catch (const YAML::Exception &e) {
         qCritical() << "YAML exception in processLinkConnection:" << e.what();
@@ -1130,6 +1141,30 @@ bool QSocGenerateManager::processUplinkConnection(
         qCritical() << "Standard exception in processUplinkConnection:" << e.what();
         return false;
     }
+}
+
+/**
+ * @brief Parse link value to extract net name and bit selection
+ * @param linkValue The link value (e.g., "bus_data[7:0]", "clk_signal[3]", "simple_net")
+ * @return A pair containing the net name and bit selection (empty if no selection)
+ */
+std::pair<std::string, std::string> QSocGenerateManager::parseLinkValue(const std::string &linkValue)
+{
+    const QString linkStr = QString::fromStdString(linkValue);
+
+    /* Regex to match net_name[bit_selection] format */
+    const QRegularExpression      linkRegex(R"(^([^[]+)\s*(\[[^\]]+\])?\s*$)");
+    const QRegularExpressionMatch match = linkRegex.match(linkStr);
+
+    if (match.hasMatch()) {
+        const QString netName      = match.captured(1).trimmed();
+        const QString bitSelection = match.captured(2).trimmed();
+
+        return std::make_pair(netName.toStdString(), bitSelection.toStdString());
+    }
+
+    /* If regex doesn't match, treat entire string as net name */
+    return std::make_pair(linkValue, std::string());
 }
 
 /**
