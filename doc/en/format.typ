@@ -236,10 +236,30 @@ Bus connection properties include:
 
 === LINK AND UPLINK ATTRIBUTES
 <soc-net-link-uplink>
-The `link` and `uplink` attributes provide convenient shortcuts for creating connections without explicitly defining nets in the `net` section.
+The `link` and `uplink` attributes provide convenient shortcuts for creating connections without explicitly defining nets in the `net` section. These attributes serve different purposes and have distinct design philosophies.
+
+==== Overview
+<soc-net-link-uplink-overview>
+QSoC provides two primary connection attributes:
+
+#figure(
+  align(center)[#table(
+      columns: (0.2fr, 0.4fr, 0.4fr),
+      align: (auto, left, left),
+      table.header([Attribute], [Purpose], [Use Cases]),
+      table.hline(),
+      [`link`], [Internal signal routing with flexible bit selection], [Module-to-module connections, bus segmentation, signal distribution]),
+      [`uplink`], [Direct I/O port mapping], [Chip pins, power/ground, clock/reset signals]),
+    )],
+  caption: [LINK VS UPLINK COMPARISON],
+  kind: table,
+)
 
 ==== Link Attribute
 <soc-net-link>
+
+===== Basic Usage
+<soc-net-link-basic>
 The `link` attribute creates an internal net with the specified name and connects the port to it:
 
 ```yaml
@@ -267,9 +287,9 @@ net:
       port: input_port   # Destination of the signal
 ```
 
-===== Link with Bit Selection
+===== Bit Selection Support
 <soc-net-link-bits>
-The `link` attribute also supports bit selection syntax, allowing you to connect specific bits of a port to a net:
+The `link` attribute supports bit selection syntax for flexible signal routing:
 
 ```yaml
 instance:
@@ -290,30 +310,16 @@ instance:
         link: control_net[5]   # Connect to bit [5] of control_net
 ```
 
-This creates nets with the specified names and adds bit selection attributes to the connections:
-
-```yaml
-net:
-  amp_bus:               # Net created from link name without bit selection
-    - instance: amp_east
-      port: VOUT_DATA
-      bits: "[7:4]"      # Bit selection added automatically
-    - instance: amp_west
-      port: VOUT_DATA
-      bits: "[3:0]"      # Bit selection added automatically
-  control_net:           # Net created from link name without bit selection
-    - instance: mixer_core
-      port: CTRL_FLAG
-      bits: "[5]"        # Single bit selection
-```
-
-Supported bit selection formats:
+Supported formats:
 - Range selection: `signal_name[high:low]` (e.g., `data_bus[15:8]`)
 - Single bit selection: `signal_name[bit]` (e.g., `control_flag[3]`)
 
 ==== Uplink Attribute
 <soc-net-uplink>
-The `uplink` attribute creates both an internal net and a top-level port with the same name, then connects the instance port to both:
+
+===== Basic Usage
+<soc-net-uplink-basic>
+The `uplink` attribute creates both an internal net and a top-level port with the same name:
 
 ```yaml
 instance:
@@ -325,15 +331,90 @@ instance:
 ```
 
 This automatically creates:
-1. A top-level port named `spi_clk` with direction inferred from the module port (reversed for internal logic)
+1. A top-level port named `spi_clk` with direction inferred from the module port
 2. An internal net named `spi_clk`
 3. A connection between the instance port and the net
 
-The generated top-level port will have:
-- Direction opposite to the module port (input→output, output→input, inout→inout)
-- Same data type as the module port
+===== Design Philosophy
+<soc-net-uplink-philosophy>
+The `uplink` attribute is designed with a specific philosophy:
 
-==== Conflict Resolution
+*Direct I/O Mapping*: Uplink provides a one-to-one mapping between internal module ports and chip-level I/O pins. This design ensures:
+- *Simplicity*: No complex routing or bit manipulation
+- *Clarity*: Clear correspondence between internal signals and external pins
+- *Reliability*: Minimal opportunity for connection errors
+
+*Typical Applications*:
+- I/O pad connections (`PAD` ports to chip pins)
+- Power and ground distribution (`VDD`/`VSS` to power pins)
+- Global signals (clocks, resets) to chip-level ports
+- Test and debug interfaces
+
+===== Limitations and Rationale
+<soc-net-uplink-limitations>
+
+*Bit Selection Not Supported*
+
+The `uplink` attribute *intentionally does not support bit selection* for several important reasons:
+
+*1. Design Philosophy Conflict*
+```yaml
+# This creates semantic ambiguity - what should be created?
+instance:
+  io_pad:
+    port:
+      PAD:
+        uplink: data_bus[7:0]  # ✗ NOT SUPPORTED
+```
+- Should this create an 8-bit top-level port named `data_bus`?
+- Or a full-width port with only bits [7:0] connected?
+- The ambiguity violates uplink's principle of clear, direct mapping.
+
+*2. Technical Complexity*
+Supporting bit selection in uplink would require:
+- Complex port width inference algorithms
+- Handling of conflicting bit range specifications
+- Ambiguous semantics for top-level port generation
+- Additional error checking and validation logic
+
+*3. Alternative Solutions Available*
+For complex I/O scenarios requiring bit selection, use the `link` + explicit port definition approach:
+
+```yaml
+# ✓ CORRECT - Use link for bit selection
+instance:
+  io_pad_low:
+    module: io_cell
+    port:
+      PAD:
+        link: internal_data[7:0]
+  io_pad_high:
+    module: io_cell
+    port:
+      PAD:
+        link: internal_data[15:8]
+
+# Explicit top-level port definitions
+port:
+  data_out_low:
+    direction: output
+    type: logic[7:0]
+    connect: internal_data[7:0]
+  data_out_high:
+    direction: output
+    type: logic[7:0]
+    connect: internal_data[15:8]
+```
+
+*4. Architectural Consistency*
+The QSoC connection system maintains clear separation of concerns:
+- *`link`*: Handles complex internal routing and bit manipulation
+- *`uplink`*: Handles simple I/O port mapping
+- *`bus`*: Handles protocol-level connections
+
+Adding bit selection to uplink would blur these boundaries and reduce system clarity.
+
+===== Conflict Resolution
 <soc-net-uplink-conflicts>
 When using `uplink`, QSoC automatically handles conflicts:
 
@@ -341,20 +422,58 @@ When using `uplink`, QSoC automatically handles conflicts:
 - If the existing port is incompatible, an error is reported
 - Multiple `uplink` attributes with the same name are allowed as long as all connected ports are compatible
 
-==== Usage Guidelines
+==== Comparison and Usage Guidelines
 <soc-net-link-uplink-guidelines>
-Use `link` when you want to:
-- Create simple internal connections between modules
-- Avoid cluttering the `net` section with simple point-to-point connections
 
-Use `uplink` when you want to:
-- Connect internal modules directly to top-level ports (common for I/O pads)
-- Automatically generate top-level ports without manually defining them
-- Create chip-level pin assignments for SoC designs
+===== When to Use Link
+Use `link` when you need:
+- *Internal signal routing* between modules
+- *Bit selection* or signal manipulation
+- *Complex connections* with width adaptation
+- *Bus segmentation* across multiple modules
+
+===== When to Use Uplink
+Use `uplink` when you need:
+- *Direct I/O port mapping* (chip pins)
+- *Simple, one-to-one connections* to top-level
+- *Automatic port generation* without manual definition
+- *Clear correspondence* between internal and external signals
+
+===== Best Practices
+*For Simple I/O*:
+```yaml
+# ✓ Good - Direct I/O mapping
+instance:
+  reset_pad:
+    module: io_cell
+    port:
+      PAD:
+        uplink: chip_reset_n
+```
+
+*For Complex I/O*:
+```yaml
+# ✓ Good - Use link + explicit ports for complex scenarios
+instance:
+  data_pads:
+    module: io_array
+    port:
+      DATA_OUT:
+        link: internal_data[31:0]
+
+port:
+  chip_data:
+    direction: output
+    type: logic[31:0]
+    connect: internal_data
+```
 
 === BIT SELECTION
 <soc-net-bit-selection>
-Bit selection allows connecting specific bits of a port to a net. Two formats are supported:
+Bit selection allows connecting specific bits of a port to a net, enabling flexible signal routing and bus segmentation. This feature is supported by the `link` attribute and explicit `net` definitions.
+
+==== Syntax and Formats
+<soc-net-bit-selection-syntax>
 
 #figure(
   align(center)[#table(
@@ -369,7 +488,138 @@ Bit selection allows connecting specific bits of a port to a net. Two formats ar
   kind: table,
 )
 
-The width of a bit selection is calculated as `|high - low| + 1` for range selections, or 1 for single bit selections.
+==== Implementation Details
+<soc-net-bit-selection-details>
+The system follows these principles when processing bit selection:
+
+1. *Wire Width Determination*: Generated wires use the *full width of the source port*, not the bit selection width
+2. *Connection Generation*: Bit selection is applied at the *port connection level* in generated Verilog
+3. *Width Safety*: Automatic validation ensures bit selections don't exceed port width
+
+Example processing:
+```yaml
+# Input netlist
+instance:
+  processor:
+    module: cpu_core
+    port:
+      DATA_OUT:
+        link: data_bus[7:4]  # Connect to bits [7:4] of data_bus
+```
+
+```verilog
+// Generated Verilog
+wire [31:0] data_bus;  // Uses full port width (DATA_OUT is 32-bit)
+cpu_core processor (
+    .DATA_OUT(data_bus[7:4])  // Bit selection in connection
+);
+```
+
+==== Use Cases
+<soc-net-bit-selection-use-cases>
+
+===== Data Bus Segmentation
+Divide wide data buses among multiple modules:
+```yaml
+instance:
+  proc_high:
+    module: processor
+    port:
+      DATA_OUT:
+        link: system_bus[31:16]  # Upper 16 bits
+  proc_low:
+    module: processor
+    port:
+      DATA_OUT:
+        link: system_bus[15:0]   # Lower 16 bits
+```
+
+===== Control Signal Mapping
+Map individual control signals to specific bits:
+```yaml
+instance:
+  ctrl_unit:
+    module: controller
+    port:
+      ENABLE:
+        link: control_reg[0]     # Enable bit
+      RESET:
+        link: control_reg[1]     # Reset bit
+      MODE_SELECT:
+        link: control_reg[7:4]   # Mode selection bits
+```
+
+===== Mixed Width Connections
+Connect different width ports to the same net:
+```yaml
+instance:
+  wide_driver:
+    module: wide_output    # 32-bit output
+    port:
+      DATA:
+        link: shared_signal
+  narrow_receiver:
+    module: narrow_input   # 8-bit input
+    port:
+      DATA:
+        link: shared_signal[7:0]  # Only use lower 8 bits
+```
+
+==== Limitations
+<soc-net-bit-selection-limitations>
+
+===== Attribute Support
+- *`link`*: ✓ Full bit selection support
+- *`uplink`*: ✗ No bit selection support (see uplink limitations for rationale)
+- *`net`*: ✓ Full bit selection support via `bits` attribute
+
+===== Width Validation
+The system performs automatic validation:
+- Bit selections exceeding port width generate warnings
+- Undriven nets (no source connections) are flagged
+- Width mismatches between connected ports are reported
+
+==== Best Practices
+<soc-net-bit-selection-best-practices>
+
+1. *Clear Naming*: Use descriptive names for bit-selected signals
+```yaml
+# ✓ Good
+link: addr_bus_high[31:16]
+link: ctrl_flags[7:4]
+
+# ✗ Avoid
+link: bus[31:16]
+link: sig[7:4]
+```
+
+2. *Logical Grouping*: Group related bits together
+```yaml
+# ✓ Good - logical bit grouping
+instance:
+  alu:
+    port:
+      FLAGS:
+        link: cpu_status[3:0]    # ALU flags: [3:0]
+  fpu:
+    port:
+      FLAGS:
+        link: cpu_status[7:4]    # FPU flags: [7:4]
+```
+
+3. *Avoid Overlapping Assignments*: Prevent multiple drivers
+```yaml
+# ✗ Avoid - overlapping bit assignments
+instance:
+  module_a:
+    port:
+      OUT:
+        link: shared_bus[7:4]
+  module_b:
+    port:
+      OUT:
+        link: shared_bus[6:3]    # Overlaps with [7:4]!
+```
 
 === AUTOMATIC WIDTH CHECKING
 <soc-net-width-checking>
