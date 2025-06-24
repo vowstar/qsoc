@@ -106,11 +106,43 @@ The `module import` command imports Verilog modules into module libraries.
     [-l, --library <name>], [The library base name],
     [-m, --module <regex>], [The module name or regex],
     [-f, --filelist <path>], [The path where the file list is located, including a list of verilog files in order],
+    [-D, --define <macro>], [Define macro as KEY or KEY=VALUE. Can be used multiple times to define multiple macros],
+    [-U, --undefine <macro>], [Undefine macro KEY at the start of all source files. Can be used multiple times],
     [files], [The verilog files to be processed],
   )]
   , caption: [MODULE IMPORT OPTIONS]
   , kind: table
   )
+
+=== Macro Definition Support
+<module-macro-definitions>
+The `module import` command supports Verilog preprocessor macro definitions and undefinitions:
+
+*Define Macros (-D, --define)*:
+- Define macros that will be available during Verilog parsing
+- Supports both simple macros: `-D DEBUG` (defines DEBUG as empty)
+- Supports value macros: `-D WIDTH=32` (defines WIDTH as 32)
+- Can be used multiple times: `-D DEBUG -D WIDTH=32 -D MODE=FAST`
+
+*Undefine Macros (-U, --undefine)*:
+- Remove macro definitions at the start of all source files
+- Useful for clearing previously defined macros
+- Can be used multiple times: `-U OLD_MACRO -U DEPRECATED_FLAG`
+
+*Usage Examples*:
+```bash
+# Define simple macros
+qsoc module import -D SYNTHESIS -D FPGA_TARGET file.v
+
+# Define macros with values
+qsoc module import -D DATA_WIDTH=64 -D ADDR_WIDTH=32 cpu.v
+
+# Combine define and undefine
+qsoc module import -D NEW_FEATURE -U OLD_FEATURE module.v
+
+# Use with other options
+qsoc module import -p myproject -l stdlib -D DEBUG=1 -f filelist.txt
+```
 
 == BUS COMMAND OPTIONS
 <bus-options>
