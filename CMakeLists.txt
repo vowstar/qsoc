@@ -65,7 +65,7 @@ endif()
 
 # SQLite3
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3>=3.30.0)
+pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3>=3.26.0)
 if(SQLITE3_FOUND)
     message(STATUS "Use system SQLite3 library: ${SQLITE3_LIBRARIES} ${SQLITE3_VERSION}")
 endif()
