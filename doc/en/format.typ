@@ -21,6 +21,7 @@ A SOC_NET file consists of several key sections:
       [net], [Defines explicit connections between instance ports],
       [bus], [Defines bus interface connections (automatically expanded into nets)],
       [comb], [Defines combinational logic blocks for behavioral descriptions],
+      [seq], [Defines sequential logic blocks for register-based descriptions],
     )],
   caption: [SOC_NET FILE SECTIONS],
   kind: table,
@@ -427,6 +428,256 @@ This ordering ensures that:
 - All signals are properly declared before use
 - Structural connections are visible before behavioral logic
 - Combinational logic appears as "glue logic" connecting modules
+
+=== SEQ SECTION
+<soc-net-seq>
+The `seq` section defines sequential logic blocks that generate pure sequential Verilog code. This section allows you to describe register-based logic using a high-level YAML DSL that is then translated to appropriate Verilog `always` blocks with proper clock and reset handling.
+
+==== Overview
+<soc-net-seq-overview>
+The `seq` section is a sequence of sequential logic items, each describing one register. The system supports various types of sequential logic with comprehensive control over clocking, reset, enable, and next-state logic.
+
+#figure(
+  align(center)[#table(
+      columns: (0.3fr, 0.7fr),
+      align: (auto, left),
+      table.header([Feature], [Description]),
+      table.hline(),
+      [`reg`], [Register name (required)],
+      [`clk`], [Clock signal (required)],
+      [`edge`], [Clock edge type: "pos" (default) or "neg"],
+      [`rst`], [Reset signal (optional)],
+      [`rst_val`], [Reset value (required when rst is present)],
+      [`enable`], [Enable signal (optional)],
+      [`next`], [Simple next-state expression],
+      [`if`], [Conditional next-state logic],
+      [`default`], [Default value for conditional logic],
+    )],
+  caption: [SEQUENTIAL LOGIC FEATURES],
+  kind: table,
+)
+
+==== Basic Structure
+<soc-net-seq-structure>
+Each sequential logic item must have `reg` and `clk` fields, and exactly one logic specification field (`next` or `if`):
+
+```yaml
+seq:
+  - reg: register_name
+    clk: clock_signal
+    edge: pos              # Optional: "pos" (default) or "neg"
+    rst: reset_signal      # Optional reset
+    rst_val: reset_value   # Required when rst is present
+    enable: enable_signal  # Optional enable
+    next: "expression"     # Simple assignment
+  - reg: another_register
+    clk: clock_signal
+    if:                    # Conditional logic
+      - cond: "condition1"
+        then: "value1"
+      - cond: "condition2"
+        then: "value2"
+    default: "default_value"
+```
+
+==== Simple Assignment
+<soc-net-seq-simple>
+Simple register assignments use the `next` field:
+
+```yaml
+seq:
+  - reg: data_reg
+    clk: clk
+    rst: rst_n
+    rst_val: "8'h00"
+    next: data_in
+```
+
+Generates:
+```verilog
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        data_reg <= 8'h00;
+    end else begin
+        data_reg <= data_in;
+    end
+end
+```
+
+==== Clock Edge Control
+<soc-net-seq-edge>
+Control the clock edge using the `edge` field:
+
+```yaml
+seq:
+  - reg: neg_edge_reg
+    clk: clk
+    edge: neg
+    next: data_in
+```
+
+Generates:
+```verilog
+always @(negedge clk) begin
+    neg_edge_reg <= data_in;
+end
+```
+
+==== Reset Logic
+<soc-net-seq-reset>
+Add asynchronous reset using `rst` and `rst_val` fields:
+
+```yaml
+seq:
+  - reg: counter
+    clk: clk
+    rst: rst_n
+    rst_val: "16'h0000"
+    next: "counter + 1"
+```
+
+Generates:
+```verilog
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        counter <= 16'h0000;
+    end else begin
+        counter <= counter + 1;
+    end
+end
+```
+
+==== Enable Logic
+<soc-net-seq-enable>
+Add enable control using the `enable` field:
+
+```yaml
+seq:
+  - reg: enabled_counter
+    clk: clk
+    rst: rst_n
+    rst_val: "8'h00"
+    enable: count_en
+    next: "enabled_counter + 1"
+```
+
+Generates:
+```verilog
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        enabled_counter <= 8'h00;
+    end else begin
+        if (count_en) begin
+            enabled_counter <= enabled_counter + 1;
+        end
+    end
+end
+```
+
+==== Conditional Logic
+<soc-net-seq-conditional>
+Use conditional logic with the `if` field for complex state machines:
+
+```yaml
+seq:
+  - reg: state_reg
+    clk: clk
+    rst: rst_n
+    rst_val: "2'b00"
+    if:
+      - cond: "start_signal"
+        then: "2'b01"
+      - cond: "state_reg == 2'b01 && done_signal"
+        then: "2'b10"
+      - cond: "state_reg == 2'b10"
+        then: "2'b00"
+    default: "state_reg"
+```
+
+Generates:
+```verilog
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        state_reg <= 2'b00;
+    end else begin
+        state_reg <= state_reg;
+        if (start_signal)
+            state_reg <= 2'b01;
+        else if (state_reg == 2'b01 && done_signal)
+            state_reg <= 2'b10;
+        else if (state_reg == 2'b10)
+            state_reg <= 2'b00;
+    end
+end
+```
+
+===== Conditional Logic Properties
+<soc-net-seq-conditional-properties>
+
+#figure(
+  align(center)[#table(
+      columns: (0.2fr, 1fr),
+      align: (auto, left),
+      table.header([Field], [Description]),
+      table.hline(),
+      [`cond`], [Condition expression (required, scalar)],
+      [`then`], [Value when condition is true (required, scalar)],
+    )],
+  caption: [CONDITIONAL SEQUENTIAL LOGIC FIELDS],
+  kind: table,
+)
+
+The `default` field is strongly recommended to ensure predictable behavior when no conditions are met.
+
+==== Validation Rules
+<soc-net-seq-validation>
+The system performs comprehensive validation of sequential logic:
+
+===== Required Fields
+- Each item must have a `reg` field specifying the register name
+- Each item must have a `clk` field specifying the clock signal
+- Each item must have exactly one logic specification (`next` OR `if`, not both)
+
+===== Optional Fields Validation
+- `edge`: Must be "pos" or "neg" if present
+- `rst`: Must be a scalar if present
+- `rst_val`: Required when `rst` is present, must be scalar
+- `enable`: Must be a scalar if present
+
+===== Logic Type Validation
+- `next`: Must be a scalar expression
+- `if`: Must be a sequence of condition-value pairs
+- Each `if` condition must have both `cond` and `then` fields as scalars
+
+===== Best Practices
+- Always provide reset logic for registers in real designs
+- Use meaningful register and signal names
+- Provide `default` values for conditional logic to avoid latches
+- Group related sequential logic together
+- Use enable signals for conditional register updates
+
+==== Code Generation
+<soc-net-seq-generation>
+Sequential logic is generated after combinational logic in the Verilog output, providing clear separation between combinational and sequential code.
+
+===== Generated Code Structure
+1. Wire declarations (from nets)
+2. Module instantiations (from instances)
+3. Combinational logic (from comb section)
+4. Sequential logic (from seq section)
+
+This ordering ensures that:
+- All signals are properly declared before use
+- Structural connections are visible before behavioral logic
+- Combinational logic appears before sequential logic
+- Sequential logic represents the state-holding elements
+
+===== Always Block Generation
+The system generates optimized `always` blocks based on the specified features:
+- Clock edge: `@(posedge clk)` or `@(negedge clk)`
+- With reset: `@(posedge clk or negedge rst)`
+- Reset logic: Asynchronous reset with `if (!rst)` structure
+- Enable logic: Conditional assignment within the main logic
 
 === BUS SECTION
 <soc-net-bus>
