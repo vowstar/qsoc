@@ -629,6 +629,79 @@ end
 
 The `default` field is strongly recommended to ensure predictable behavior when no conditions are met.
 
+==== Nested Conditional Logic
+<soc-net-seq-nested>
+The sequential logic supports nested structures by allowing `then` fields to contain nested `case` statements, enabling complex state machines and control logic:
+
+```yaml
+seq:
+  - reg: state_machine
+    clk: clk
+    rst: rst_n
+    rst_val: "8'h00"
+    if:
+      - cond: "ctrl == 2'b00"
+        then: "8'h01"
+      - cond: "ctrl == 2'b01"
+        then:
+          case: sub_ctrl
+          cases:
+            "2'b00": "8'h10"
+            "2'b01": "8'h20"
+            "2'b10": "8'h30"
+          default: "8'h0F"
+      - cond: "ctrl == 2'b10"
+        then: "data_in"
+    default: "state_machine"
+```
+
+Generates:
+```verilog
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        state_machine <= 8'h00;
+    end else begin
+        state_machine <= state_machine;
+        if (ctrl == 2'b00) begin
+            state_machine <= 8'h01;
+        end else if (ctrl == 2'b01) begin
+            case (sub_ctrl)
+                2'b00: state_machine <= 8'h10;
+                2'b01: state_machine <= 8'h20;
+                2'b10: state_machine <= 8'h30;
+                default: state_machine <= 8'h0F;
+            endcase
+        end else if (ctrl == 2'b10) begin
+            state_machine <= data_in;
+        end
+    end
+end
+```
+
+===== Nested Structure Properties
+<soc-net-seq-nested-properties>
+
+#figure(
+  align(center)[#table(
+      columns: (0.2fr, 1fr),
+      align: (auto, left),
+      table.header([Field], [Description]),
+      table.hline(),
+      [`then`], [Can be scalar expression OR nested case structure],
+      [`case`], [Expression to switch on (required in nested structure)],
+      [`cases`], [Map of case values to result expressions (required)],
+      [`default`], [Default case value (recommended in nested structure)],
+    )],
+  caption: [NESTED SEQUENTIAL LOGIC FIELDS],
+  kind: table,
+)
+
+Nested case structures within if conditions allow for:
+- Complex state machine implementations
+- Multi-level control logic
+- Hierarchical decision trees
+- Optimized Verilog case statement generation
+
 ==== Validation Rules
 <soc-net-seq-validation>
 The system performs comprehensive validation of sequential logic:
@@ -647,7 +720,16 @@ The system performs comprehensive validation of sequential logic:
 ===== Logic Type Validation
 - `next`: Must be a scalar expression
 - `if`: Must be a sequence of condition-value pairs
-- Each `if` condition must have both `cond` and `then` fields as scalars
+- Each `if` condition must have both `cond` and `then` fields
+- `cond`: Must be a scalar expression
+- `then`: Can be either a scalar expression OR a nested case structure
+
+===== Nested Structure Validation
+- When `then` is a nested structure, it must contain `case` and `cases` fields
+- `case`: Must be a scalar expression for the case switch
+- `cases`: Must be a map of case values to result expressions
+- All case values and result expressions must be scalars
+- `default` in nested structures is recommended but optional
 
 ===== Best Practices
 - Always provide reset logic for registers in real designs
