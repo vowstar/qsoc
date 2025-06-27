@@ -20,6 +20,7 @@ A SOC_NET file consists of several key sections:
       [instance], [Defines module instances and their parameters],
       [net], [Defines explicit connections between instance ports],
       [bus], [Defines bus interface connections (automatically expanded into nets)],
+      [comb], [Defines combinational logic blocks for behavioral descriptions],
     )],
   caption: [SOC_NET FILE SECTIONS],
   kind: table,
@@ -196,6 +197,236 @@ Each connection in the list format supports the following properties:
   caption: [NET CONNECTION PROPERTIES],
   kind: table,
 )
+
+=== COMB SECTION
+<soc-net-comb>
+The `comb` section defines combinational logic blocks that generate pure combinational Verilog code. This section allows you to describe combinational logic using a high-level YAML DSL that is then translated to appropriate Verilog constructs.
+
+==== Overview
+<soc-net-comb-overview>
+The `comb` section is a sequence of combinational logic items, each describing one output assignment. The system supports three main types of combinational logic:
+
+#figure(
+  align(center)[#table(
+      columns: (0.2fr, 0.4fr, 0.4fr),
+      align: (auto, left, left),
+      table.header([Type], [Description], [Verilog Output]),
+      table.hline(),
+      [`expr`], [Simple assignment with expression], [`assign` statement],
+      [`if`], [Conditional logic with if-else chain], [`always @(*)` block with if-else],
+      [`case`], [Case statement logic], [`always @(*)` block with case statement],
+    )],
+  caption: [COMBINATIONAL LOGIC TYPES],
+  kind: table,
+)
+
+==== Basic Structure
+<soc-net-comb-structure>
+Each combinational logic item must have an `out` field specifying the output signal name, and exactly one logic specification field (`expr`, `if`, or `case`):
+
+```yaml
+comb:
+  - out: output_signal_name
+    expr: "logic_expression"    # Simple assignment
+  - out: another_signal
+    if:                         # Conditional logic
+      - cond: "condition1"
+        then: "value1"
+      - cond: "condition2"
+        then: "value2"
+    default: "default_value"
+  - out: case_output
+    case: switch_expression     # Case statement
+    cases:
+      "value1": "result1"
+      "value2": "result2"
+    default: "default_result"
+```
+
+==== Simple Assignment (expr)
+<soc-net-comb-expr>
+Simple assignments generate `assign` statements in Verilog:
+
+```yaml
+comb:
+  - out: y
+    expr: "a & b"
+```
+
+Generates:
+```verilog
+assign y = a & b;
+```
+
+The expression can be any valid Verilog expression using input signals, constants, and operators.
+
+==== Conditional Logic (if)
+<soc-net-comb-if>
+Conditional logic generates `always @(*)` blocks with if-else chains:
+
+```yaml
+comb:
+  - out: result
+    if:
+      - cond: "sel == 2'b00"
+        then: "a"
+      - cond: "sel == 2'b01"
+        then: "b"
+    default: "32'b0"
+```
+
+Generates:
+```verilog
+always @(*) begin
+    result = 32'b0;
+    if (sel == 2'b00)
+        result = a;
+    else if (sel == 2'b01)
+        result = b;
+end
+```
+
+===== Conditional Logic Properties
+<soc-net-comb-if-properties>
+
+#figure(
+  align(center)[#table(
+      columns: (0.2fr, 1fr),
+      align: (auto, left),
+      table.header([Field], [Description]),
+      table.hline(),
+      [`cond`], [Condition expression (required, scalar)],
+      [`then`], [Value when condition is true (required, scalar or nested structure)],
+    )],
+  caption: [CONDITIONAL LOGIC FIELDS],
+  kind: table,
+)
+
+The `default` field is strongly recommended to avoid accidental latch inference.
+
+==== Case Statement Logic (case)
+<soc-net-comb-case>
+Case statements generate `always @(*)` blocks with case statements:
+
+```yaml
+comb:
+  - out: alu_op
+    case: funct
+    cases:
+      "6'b100000": "4'b0001"
+      "6'b100010": "4'b0010"
+      "6'b100100": "4'b0011"
+    default: "4'b0000"
+```
+
+Generates:
+```verilog
+always @(*) begin
+    alu_op = 4'b0000;
+    case (funct)
+        6'b100000: alu_op = 4'b0001;
+        6'b100010: alu_op = 4'b0010;
+        6'b100100: alu_op = 4'b0011;
+        default:   alu_op = 4'b0000;
+    endcase
+end
+```
+
+===== Case Statement Properties
+<soc-net-comb-case-properties>
+
+#figure(
+  align(center)[#table(
+      columns: (0.2fr, 1fr),
+      align: (auto, left),
+      table.header([Field], [Description]),
+      table.hline(),
+      [`case`], [Expression to switch on (required, scalar)],
+      [`cases`], [Map of match values to result expressions (required, map)],
+      [`default`], [Default value to avoid latches (recommended, scalar)],
+    )],
+  caption: [CASE STATEMENT FIELDS],
+  kind: table,
+)
+
+==== Nested Structures
+<soc-net-comb-nested>
+The `comb` section supports nested if + case structures for complex logic:
+
+```yaml
+comb:
+  - out: alu_op
+    if:
+      - cond: "opcode == 6'b000000"
+        then:
+          case: funct
+          cases:
+            "6'b100000": "4'b0001"
+            "6'b100010": "4'b0010"
+          default: "4'b1111"
+      - cond: "opcode == 6'b001000"
+        then: "4'b0101"
+    default: "4'b0000"
+```
+
+Generates:
+```verilog
+always @(*) begin
+    alu_op = 4'b0000;
+    if (opcode == 6'b000000) begin
+        case (funct)
+            6'b100000: alu_op = 4'b0001;
+            6'b100010: alu_op = 4'b0010;
+            default:   alu_op = 4'b1111;
+        endcase
+    end
+    else if (opcode == 6'b001000) begin
+        alu_op = 4'b0101;
+    end
+end
+```
+
+In nested structures, the `then` field can contain either:
+- A scalar value (simple assignment)
+- A nested case structure with `case`, `cases`, and optional `default` fields
+
+==== Validation Rules
+<soc-net-comb-validation>
+The system performs comprehensive validation of combinational logic:
+
+===== Required Fields
+- Each item must have an `out` field specifying the output signal
+- Each item must have exactly one logic specification (`expr`, `if`, or `case`)
+
+===== Logic Type Validation
+- `expr`: Must be a scalar expression
+- `if`: Must be a sequence of condition-value pairs
+- `case`: Must have both `case` (scalar) and `cases` (map) fields
+
+===== Nested Structure Validation
+- Nested structures are only supported in `if` logic within `then` fields
+- Nested structures must be valid case statements
+- All case entries must have scalar keys and values
+
+===== Best Practices
+- Always provide `default` values for `if` and `case` logic to avoid latches
+- Use descriptive signal names for clarity
+- Keep expressions simple and readable
+- Group related logic together
+
+==== Code Generation
+<soc-net-comb-generation>
+Combinational logic is generated after module instantiations in the Verilog output, providing clear separation between structural and behavioral code.
+
+===== Generated Code Structure
+1. Wire declarations (from nets)
+2. Module instantiations (from instances)
+3. Combinational logic (from comb section)
+
+This ordering ensures that:
+- All signals are properly declared before use
+- Structural connections are visible before behavioral logic
+- Combinational logic appears as "glue logic" connecting modules
 
 === BUS SECTION
 <soc-net-bus>
@@ -711,6 +942,35 @@ bus:
       port: axi_master   # CPU acts as AXI master
     - instance: ram0
       port: axi_slave    # RAM acts as AXI slave
+
+# Combinational logic
+comb:
+  # Simple AND gate
+  - out: enable_signal
+    expr: "cpu_ready & ram_ready"
+
+  # Address decoder using case statement
+  - out: chip_select
+    case: addr_high
+    cases:
+      "4'h0": "cs_ram"
+      "4'h1": "cs_uart"
+      "4'h2": "cs_gpio"
+    default: "1'b0"
+
+  # Complex ALU operation with nested logic
+  - out: alu_result
+    if:
+      - cond: "alu_op == 2'b00"
+        then:
+          case: funct_code
+          cases:
+            "3'b000": "operand_a + operand_b"
+            "3'b001": "operand_a - operand_b"
+          default: "32'b0"
+      - cond: "alu_op == 2'b01"
+        then: "operand_a & operand_b"
+    default: "32'hDEADBEEF"
 ```
 
 This example defines a simple SoC with a CPU, RAM, and UART controller, connected via individual nets and an AXI bus interface. It also demonstrates the use of `link` and `uplink` attributes for simplified I/O pad connections and internal signal routing. The `uplink` attributes automatically create top-level ports (spi_clk, spi_mosi) while `link` attributes create internal nets for clock distribution and internal connections.
@@ -723,9 +983,17 @@ When QSoC processes a SOC_NET file, it follows this sequence:
 2. Validate port connections against module definitions
 3. Process `link` and `uplink` attributes to generate nets and top-level ports
 4. Expand bus connections into individual nets based on bus interface definitions
-5. Calculate effective widths for all connections, considering bit selections
-6. Check for width mismatches and generate appropriate warnings
-7. Generate Verilog output based on the processed netlist
+5. Process and validate combinational logic (`comb`) section
+6. Calculate effective widths for all connections, considering bit selections
+7. Check for width mismatches and generate appropriate warnings
+8. Generate Verilog output based on the processed netlist
+
+The Verilog generation follows this structure:
+1. Module declaration with ports and parameters
+2. Wire declarations (from processed nets)
+3. Module instantiations (from instance section)
+4. Combinational logic blocks (from comb section)
+5. Module termination
 
 === NOTE ON VERILOG PORT WIDTHS
 <soc-net-verilog-widths>
