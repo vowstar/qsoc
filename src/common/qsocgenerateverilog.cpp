@@ -1889,6 +1889,65 @@ QString QSocGenerateManager::generateNestedCombValue(
 }
 
 /**
+ * @brief Generate nested sequential logic value (for if/case nesting)
+ * @param valueNode The YAML node containing the value (scalar or nested structure)
+ * @param regName The register name
+ * @param indentLevel The indentation level for proper formatting
+ * @return Generated Verilog code string
+ */
+QString QSocGenerateManager::generateNestedSeqValue(
+    const YAML::Node &valueNode, const QString &regName, int indentLevel)
+{
+    QString result;
+    QString indent = QString("    ").repeated(indentLevel); /* 4 spaces per indent level */
+
+    if (valueNode.IsScalar()) {
+        /* Simple scalar value */
+        const QString value = QString::fromStdString(valueNode.as<std::string>());
+        result += QString("%1%2 <= %3;\n").arg(indent).arg(regName).arg(value);
+    } else if (valueNode.IsMap() && valueNode["case"]) {
+        /* Nested case statement */
+        const QString caseExpression = QString::fromStdString(valueNode["case"].as<std::string>());
+        result += QString("%1case (%2)\n").arg(indent).arg(caseExpression);
+
+        /* Generate case entries */
+        if (valueNode["cases"] && valueNode["cases"].IsMap()) {
+            for (const auto &caseEntry : valueNode["cases"]) {
+                if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
+                    continue; /* Skip invalid entries */
+                }
+
+                const QString caseValue = QString::fromStdString(caseEntry.first.as<std::string>());
+                const QString resultValue = QString::fromStdString(
+                    caseEntry.second.as<std::string>());
+                result += QString("%1    %2: %3 <= %4;\n")
+                              .arg(indent)
+                              .arg(caseValue)
+                              .arg(regName)
+                              .arg(resultValue);
+            }
+        }
+
+        /* Add default case if specified */
+        if (valueNode["default"] && valueNode["default"].IsScalar()) {
+            const QString defaultValue = QString::fromStdString(
+                valueNode["default"].as<std::string>());
+            result
+                += QString("%1    default: %2 <= %3;\n").arg(indent).arg(regName).arg(defaultValue);
+        }
+
+        result += QString("%1endcase\n").arg(indent);
+    } else {
+        /* Unsupported nested structure - fallback to comment */
+        result += QString("%1/* FIXME: Unsupported nested structure for %2 */\n")
+                      .arg(indent)
+                      .arg(regName);
+    }
+
+    return result;
+}
+
+/**
  * @brief Generate sequential logic content for a register
  * @param seqItem The YAML node containing the sequential logic specification
  * @param regName The register name
@@ -1927,21 +1986,33 @@ void QSocGenerateManager::generateSeqLogicContent(
         bool firstIf = true;
         for (const auto &ifCondition : seqItem["if"]) {
             if (!ifCondition.IsMap() || !ifCondition["cond"] || !ifCondition["then"]
-                || !ifCondition["cond"].IsScalar() || !ifCondition["then"].IsScalar()) {
+                || !ifCondition["cond"].IsScalar()) {
                 continue; /* Skip invalid conditions */
             }
 
             const QString condition = QString::fromStdString(ifCondition["cond"].as<std::string>());
-            const QString thenValue = QString::fromStdString(ifCondition["then"].as<std::string>());
 
             if (firstIf) {
-                out << indent << "if (" << condition << ")\n";
+                out << indent << "if (" << condition << ") begin\n";
                 firstIf = false;
             } else {
-                out << indent << "else if (" << condition << ")\n";
+                out << indent << "else if (" << condition << ") begin\n";
             }
 
-            out << indent << "    " << regName << " <= " << thenValue << ";\n";
+            /* Handle both scalar and nested 'then' values */
+            if (ifCondition["then"].IsScalar()) {
+                /* Simple scalar assignment */
+                const QString thenValue = QString::fromStdString(
+                    ifCondition["then"].as<std::string>());
+                out << indent << "    " << regName << " <= " << thenValue << ";\n";
+            } else if (ifCondition["then"].IsMap()) {
+                /* Nested structure - use helper function */
+                QString nestedCode
+                    = generateNestedSeqValue(ifCondition["then"], regName, indentLevel + 1);
+                out << nestedCode;
+            }
+
+            out << indent << "end\n";
         }
     }
 

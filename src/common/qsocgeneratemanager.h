@@ -429,6 +429,16 @@ private:
     bool processSeqLogic();
 
     /**
+     * @brief Generate nested sequential logic value (for if/case nesting)
+     * @param valueNode The YAML node containing the value (scalar or nested structure)
+     * @param regName The register name
+     * @param indentLevel The indentation level for proper formatting
+     * @return Generated Verilog code string
+     */
+    QString generateNestedSeqValue(
+        const YAML::Node &valueNode, const QString &regName, int indentLevel);
+
+    /**
      * @brief Generate sequential logic content for a register
      * @param seqItem The YAML node containing the sequential logic specification
      * @param regName The register name
