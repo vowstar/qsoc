@@ -12,18 +12,49 @@
 
 YAML::Node QSocYamlUtils::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
 {
-    if (!fromYaml.IsMap()) {
-        /* If fromYaml is not a map, merge result is fromYaml, unless fromYaml is null */
-        return fromYaml.IsNull() ? toYaml : fromYaml;
-    }
-    if (!toYaml.IsMap()) {
-        /* If toYaml is not a map, merge result is fromYaml */
-        return fromYaml;
-    }
-    if (!fromYaml.size()) {
-        /* If toYaml is a map, and fromYaml is an empty map, return toYaml */
+    /* Handle null cases */
+    if (fromYaml.IsNull() || !fromYaml.IsDefined()) {
         return toYaml;
     }
+    if (toYaml.IsNull() || !toYaml.IsDefined()) {
+        return fromYaml;
+    }
+
+    /* Handle sequence merging - concatenate sequences instead of replacing */
+    if (toYaml.IsSequence() && fromYaml.IsSequence()) {
+        YAML::Node resultSequence = YAML::Node(YAML::NodeType::Sequence);
+
+        /* Add all elements from toYaml first */
+        for (const auto &item : toYaml) {
+            resultSequence.push_back(item);
+        }
+
+        /* Add all elements from fromYaml */
+        for (const auto &item : fromYaml) {
+            resultSequence.push_back(item);
+        }
+
+        return resultSequence;
+    }
+
+    /* If one is sequence and other is not, replace with fromYaml */
+    if (toYaml.IsSequence() || fromYaml.IsSequence()) {
+        return fromYaml;
+    }
+
+    /* Handle scalar and other non-map types - fromYaml takes precedence */
+    if (!fromYaml.IsMap()) {
+        return fromYaml;
+    }
+    if (!toYaml.IsMap()) {
+        return fromYaml;
+    }
+
+    /* Handle empty map cases */
+    if (!fromYaml.size()) {
+        return toYaml;
+    }
+
     /* Create a new map 'resultYaml' with the same mappings as toYaml, merged with fromYaml */
     YAML::Node resultYaml = YAML::Node(YAML::NodeType::Map);
     for (auto iter : toYaml) {
