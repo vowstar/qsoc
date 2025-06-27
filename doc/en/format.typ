@@ -350,24 +350,27 @@ end
   kind: table,
 )
 
-==== Nested Structures
+==== Nested Conditional Logic
 <soc-net-comb-nested>
-The `comb` section supports nested if + case structures for complex logic:
+The combinational logic supports nested structures by allowing `then` fields to contain nested `case` statements, enabling complex ALU decoders, control units, and multiplexed logic:
 
 ```yaml
 comb:
   - out: alu_op
     if:
-      - cond: "opcode == 6'b000000"
+      - cond: "opcode == 6'b000000"      # R-type instructions
         then:
-          case: funct
+          case: funct                    # Nested case based on function field
           cases:
-            "6'b100000": "4'b0001"
-            "6'b100010": "4'b0010"
-          default: "4'b1111"
-      - cond: "opcode == 6'b001000"
-        then: "4'b0101"
-    default: "4'b0000"
+            "6'b100000": "4'b0001"       # ADD operation
+            "6'b100010": "4'b0010"       # SUB operation
+            "6'b100100": "4'b0011"       # AND operation
+          default: "4'b1111"             # Undefined function
+      - cond: "opcode == 6'b001000"      # I-type instruction
+        then: "4'b0101"                  # Immediate operation
+      - cond: "opcode == 6'b000010"      # J-type instruction
+        then: "4'b0110"                  # Jump operation
+    default: "4'b0000"                   # NOP or unknown instruction
 ```
 
 Generates:
@@ -378,42 +381,98 @@ always @(*) begin
         case (funct)
             6'b100000: alu_op = 4'b0001;
             6'b100010: alu_op = 4'b0010;
+            6'b100100: alu_op = 4'b0011;
             default:   alu_op = 4'b1111;
         endcase
-    end
-    else if (opcode == 6'b001000) begin
+    end else if (opcode == 6'b001000) begin
         alu_op = 4'b0101;
+    end else if (opcode == 6'b000010) begin
+        alu_op = 4'b0110;
     end
 end
 ```
 
+===== Nested Structure Syntax
+<soc-net-comb-nested-syntax>
 In nested structures, the `then` field can contain either:
-- A scalar value (simple assignment)
-- A nested case structure with `case`, `cases`, and optional `default` fields
+- A scalar value (simple assignment): `then: "value"`
+- A nested case structure with required `case` and `cases` fields:
+  ```yaml
+  then:
+    case: expression_to_switch_on
+    cases:
+      "match_value1": "result_value1"
+      "match_value2": "result_value2"
+    default: "default_value"      # Optional but recommended
+  ```
+
+===== Complex Nested Example
+<soc-net-comb-nested-complex>
+More complex nested structures for sophisticated control logic:
+
+```yaml
+comb:
+  - out: control_signals
+    if:
+      - cond: "instruction_type == 3'b000"
+        then:
+          case: "alu_funct[2:0]"
+          cases:
+            "3'b000": "8'b00010001"     # ADD control
+            "3'b001": "8'b00010010"     # SUB control
+            "3'b010": "8'b00100001"     # AND control
+            "3'b011": "8'b00100010"     # OR control
+          default: "8'b00000000"
+      - cond: "instruction_type == 3'b001"
+        then:
+          case: "mem_op[1:0]"
+          cases:
+            "2'b00": "8'b01000100"      # LOAD control
+            "2'b01": "8'b10000100"      # STORE control
+          default: "8'b00000000"
+      - cond: "instruction_type == 3'b010"
+        then: "8'b00001000"             # BRANCH control
+    default: "8'b00000000"              # NOP control
+```
+
+This generates a comprehensive control unit with nested decoding for different instruction types and their specific operations.
 
 ==== Validation Rules
 <soc-net-comb-validation>
-The system performs comprehensive validation of combinational logic:
+The system performs comprehensive validation of combinational logic to ensure correct synthesis:
 
 ===== Required Fields
 - Each item must have an `out` field specifying the output signal
 - Each item must have exactly one logic specification (`expr`, `if`, or `case`)
+- For `case` logic: both `case` (scalar) and `cases` (map) fields are required
 
 ===== Logic Type Validation
-- `expr`: Must be a scalar expression
-- `if`: Must be a sequence of condition-value pairs
-- `case`: Must have both `case` (scalar) and `cases` (map) fields
+- `expr`: Must be a scalar expression string
+- `if`: Must be a sequence of condition-value pairs with `cond` and `then` fields
+- `case`: The `case` field must be scalar, `cases` must be a map of scalar key-value pairs
 
 ===== Nested Structure Validation
 - Nested structures are only supported in `if` logic within `then` fields
-- Nested structures must be valid case statements
-- All case entries must have scalar keys and values
+- Nested `then` field must contain a valid case structure with `case` and `cases` fields
+- Nested case expressions (`case` field) must be scalar
+- All case match values (keys in `cases`) must be scalar strings
+- All case result values (values in `cases`) must be scalar strings
+- Nested structures cannot contain further nesting (only one level deep)
+
+===== Signal and Expression Validation
+- Output signals specified in `out` fields must be valid Verilog identifiers
+- All expressions in `expr`, `cond`, `then`, and case values must be valid Verilog expressions
+- Signal names used in expressions should match port or net declarations
+- Bit selection syntax in expressions must be properly formatted
 
 ===== Best Practices
-- Always provide `default` values for `if` and `case` logic to avoid latches
-- Use descriptive signal names for clarity
-- Keep expressions simple and readable
-- Group related logic together
+- Always provide `default` values for `if` and `case` logic to avoid latch inference
+- Use descriptive signal names that reflect their purpose (e.g., `alu_control`, `mux_select`)
+- Keep expressions simple and readable to aid debugging and maintenance
+- Group logically related combinational blocks together in the YAML
+- Comment complex expressions using YAML comments for clarity
+- Use consistent coding style for similar logic patterns
+- Prefer case statements over long if-else chains when switching on discrete values
 
 ==== Code Generation
 <soc-net-comb-generation>
