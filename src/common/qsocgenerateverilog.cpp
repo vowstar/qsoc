@@ -25,8 +25,15 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         return false;
     }
 
-    if (!netlistData["instance"].IsMap() || netlistData["instance"].size() == 0) {
-        qCritical() << "Error: Invalid netlist data, 'instance' section is empty or not a map";
+    if (!netlistData["instance"].IsMap()) {
+        qCritical() << "Error: Invalid netlist data, 'instance' section is not a map";
+        return false;
+    }
+
+    // Allow empty instance section if comb section exists
+    if (netlistData["instance"].size() == 0 && !netlistData["comb"]) {
+        qCritical() << "Error: Invalid netlist data, 'instance' section is empty and no 'comb' "
+                       "section found";
         return false;
     }
 
@@ -1308,6 +1315,110 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         out << "    );\n";
     }
 
+    /* Generate combinational logic after module instantiations */
+    if (netlistData["comb"] && netlistData["comb"].IsSequence() && netlistData["comb"].size() > 0) {
+        out << "\n    /* Combinational logic */\n";
+
+        for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
+            const YAML::Node &combItem = netlistData["comb"][i];
+
+            if (!combItem.IsMap() || !combItem["out"] || !combItem["out"].IsScalar()) {
+                continue; /* Skip invalid items */
+            }
+
+            const QString outputSignal = QString::fromStdString(combItem["out"].as<std::string>());
+
+            if (combItem["expr"] && combItem["expr"].IsScalar()) {
+                /* Generate assign statement */
+                const QString expression = QString::fromStdString(
+                    combItem["expr"].as<std::string>());
+                out << "    assign " << outputSignal << " = " << expression << ";\n";
+            } else if (combItem["if"] && combItem["if"].IsSequence()) {
+                /* Generate always block with if-else logic */
+                out << "    always @(*) begin\n";
+
+                /* Set default value if specified */
+                if (combItem["default"] && combItem["default"].IsScalar()) {
+                    const QString defaultValue = QString::fromStdString(
+                        combItem["default"].as<std::string>());
+                    out << "        " << outputSignal << " = " << defaultValue << ";\n";
+                }
+
+                /* Generate if-else chain */
+                bool firstIf = true;
+                for (const auto &ifCondition : combItem["if"]) {
+                    if (!ifCondition.IsMap() || !ifCondition["cond"] || !ifCondition["then"]) {
+                        continue; /* Skip invalid conditions */
+                    }
+
+                    const QString condition = QString::fromStdString(
+                        ifCondition["cond"].as<std::string>());
+
+                    if (firstIf) {
+                        out << "        if (" << condition << ") begin\n";
+                        firstIf = false;
+                    } else {
+                        out << "        else if (" << condition << ") begin\n";
+                    }
+
+                    /* Generate nested value (could be simple or nested case) */
+                    QString nestedCode
+                        = generateNestedCombValue(ifCondition["then"], outputSignal, 3);
+                    out << nestedCode;
+                    out << "        end\n";
+                }
+
+                out << "    end\n";
+            } else if (
+                combItem["case"] && combItem["case"].IsScalar() && combItem["cases"]
+                && combItem["cases"].IsMap()) {
+                /* Generate always block with case statement */
+                out << "    always @(*) begin\n";
+
+                /* Set default value if specified */
+                if (combItem["default"] && combItem["default"].IsScalar()) {
+                    const QString defaultValue = QString::fromStdString(
+                        combItem["default"].as<std::string>());
+                    out << "        " << outputSignal << " = " << defaultValue << ";\n";
+                }
+
+                const QString caseExpression = QString::fromStdString(
+                    combItem["case"].as<std::string>());
+                out << "        case (" << caseExpression << ")\n";
+
+                /* Generate case entries */
+                for (const auto &caseEntry : combItem["cases"]) {
+                    if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
+                        continue; /* Skip invalid entries */
+                    }
+
+                    const QString caseValue = QString::fromStdString(
+                        caseEntry.first.as<std::string>());
+                    const QString resultValue = QString::fromStdString(
+                        caseEntry.second.as<std::string>());
+                    out << "            " << caseValue << ": " << outputSignal << " = "
+                        << resultValue << ";\n";
+                }
+
+                /* Add default case if specified */
+                if (combItem["default"] && combItem["default"].IsScalar()) {
+                    const QString defaultValue = QString::fromStdString(
+                        combItem["default"].as<std::string>());
+                    out << "            default: " << outputSignal << " = " << defaultValue
+                        << ";\n";
+                }
+
+                out << "        endcase\n";
+                out << "    end\n";
+            }
+
+            /* Add blank line between different combinational logic blocks */
+            if (i < netlistData["comb"].size() - 1) {
+                out << "\n";
+            }
+        }
+    }
+
     /* Close module */
     out << "\nendmodule\n";
 
@@ -1648,6 +1759,67 @@ QSocNumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
              << "Base:" << static_cast<int>(result.base) << "Width:" << result.width
              << (result.hasExplicitWidth ? "(explicit)" : "(calculated)")
              << (result.errorDetected ? " (error detected)" : "");
+
+    return result;
+}
+
+/**
+ * @brief Generate nested combinational logic value (for if/case nesting)
+ * @param valueNode The YAML node containing the value (scalar or nested structure)
+ * @param outputSignal The output signal name
+ * @param indentLevel The indentation level for proper formatting
+ * @return Generated Verilog code string
+ */
+QString QSocGenerateManager::generateNestedCombValue(
+    const YAML::Node &valueNode, const QString &outputSignal, int indentLevel)
+{
+    QString result;
+    QString indent = QString("    ").repeated(indentLevel); /* 4 spaces per indent level */
+
+    if (valueNode.IsScalar()) {
+        /* Simple scalar value */
+        const QString value = QString::fromStdString(valueNode.as<std::string>());
+        result += QString("%1%2 = %3;\n").arg(indent).arg(outputSignal).arg(value);
+    } else if (valueNode.IsMap() && valueNode["case"]) {
+        /* Nested case statement */
+        const QString caseExpression = QString::fromStdString(valueNode["case"].as<std::string>());
+        result += QString("%1case (%2)\n").arg(indent).arg(caseExpression);
+
+        /* Generate case entries */
+        if (valueNode["cases"] && valueNode["cases"].IsMap()) {
+            for (const auto &caseEntry : valueNode["cases"]) {
+                if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
+                    continue; /* Skip invalid entries */
+                }
+
+                const QString caseValue = QString::fromStdString(caseEntry.first.as<std::string>());
+                const QString resultValue = QString::fromStdString(
+                    caseEntry.second.as<std::string>());
+                result += QString("%1    %2: %3 = %4;\n")
+                              .arg(indent)
+                              .arg(caseValue)
+                              .arg(outputSignal)
+                              .arg(resultValue);
+            }
+        }
+
+        /* Add default case if specified */
+        if (valueNode["default"] && valueNode["default"].IsScalar()) {
+            const QString defaultValue = QString::fromStdString(
+                valueNode["default"].as<std::string>());
+            result += QString("%1    default: %2 = %3;\n")
+                          .arg(indent)
+                          .arg(outputSignal)
+                          .arg(defaultValue);
+        }
+
+        result += QString("%1endcase\n").arg(indent);
+    } else {
+        /* Unsupported nested structure - fallback to comment */
+        result += QString("%1/* FIXME: Unsupported nested structure for %2 */\n")
+                      .arg(indent)
+                      .arg(outputSignal);
+    }
 
     return result;
 }

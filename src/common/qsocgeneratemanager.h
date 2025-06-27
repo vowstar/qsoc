@@ -406,6 +406,22 @@ private:
      */
     int calculatePortWidth(const std::string &portType);
 
+    /**
+     * @brief Process combinational logic section in the netlist
+     * @return true if successful, false on error
+     */
+    bool processCombLogic();
+
+    /**
+     * @brief Generate nested combinational logic value (for if/case nesting)
+     * @param valueNode The YAML node containing the value (scalar or nested structure)
+     * @param outputSignal The output signal name
+     * @param indentLevel The indentation level for proper formatting
+     * @return Generated Verilog code string
+     */
+    QString generateNestedCombValue(
+        const YAML::Node &valueNode, const QString &outputSignal, int indentLevel);
+
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;
     /** Module manager. */

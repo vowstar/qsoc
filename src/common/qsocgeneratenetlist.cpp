@@ -42,9 +42,15 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
             return false;
         }
 
-        if (!netlistData["instance"].IsMap() || netlistData["instance"].size() == 0) {
-            qCritical()
-                << "Error: Invalid netlist format, 'instance' section is empty or not a map";
+        if (!netlistData["instance"].IsMap()) {
+            qCritical() << "Error: Invalid netlist format, 'instance' section is not a map";
+            return false;
+        }
+
+        // Allow empty instance section if comb section exists
+        if (netlistData["instance"].size() == 0 && !netlistData["comb"]) {
+            qCritical() << "Error: Invalid netlist format, 'instance' section is empty and no "
+                           "'comb' section found";
             return false;
         }
 
@@ -72,9 +78,15 @@ bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
             return false;
         }
 
-        if (!netlistData["instance"].IsMap() || netlistData["instance"].size() == 0) {
-            qCritical()
-                << "Error: Invalid netlist format, 'instance' section is empty or not a map";
+        if (!netlistData["instance"].IsMap()) {
+            qCritical() << "Error: Invalid netlist format, 'instance' section is not a map";
+            return false;
+        }
+
+        // Allow empty instance section if comb section exists
+        if (netlistData["instance"].size() == 0 && !netlistData["comb"]) {
+            qCritical() << "Error: Invalid netlist format, 'instance' section is empty and no "
+                           "'comb' section found";
             return false;
         }
 
@@ -470,6 +482,12 @@ bool QSocGenerateManager::processNetlist()
         /* Process link and uplink connections */
         if (!processLinkConnections()) {
             qCritical() << "Error: Failed to process link and uplink connections";
+            return false;
+        }
+
+        /* Process combinational logic section */
+        if (!processCombLogic()) {
+            qCritical() << "Error: Failed to process combinational logic";
             return false;
         }
 
@@ -1260,4 +1278,210 @@ int QSocGenerateManager::calculatePortWidth(const std::string &portType)
 
     /* Default single bit */
     return 1;
+}
+
+/**
+ * @brief Process combinational logic section in the netlist
+ * @return true if successful, false on error
+ */
+bool QSocGenerateManager::processCombLogic()
+{
+    try {
+        /* Check if comb section exists */
+        if (!netlistData["comb"]) {
+            qInfo() << "No combinational logic section found, skipping";
+            return true;
+        }
+
+        if (!netlistData["comb"].IsSequence()) {
+            qCritical() << "Error: 'comb' section must be a sequence/list";
+            return false;
+        }
+
+        qInfo() << "Processing combinational logic section...";
+
+        /* Iterate through each combinational logic item */
+        for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
+            const YAML::Node &combItem = netlistData["comb"][i];
+
+            if (!combItem.IsMap()) {
+                qWarning() << "Warning: Combinational logic item" << i << "is not a map, skipping";
+                continue;
+            }
+
+            /* Validate that 'out' field exists */
+            if (!combItem["out"] || !combItem["out"].IsScalar()) {
+                qWarning() << "Warning: Combinational logic item" << i
+                           << "missing required 'out' field, skipping";
+                continue;
+            }
+
+            const QString outputSignal = QString::fromStdString(combItem["out"].as<std::string>());
+
+            /* Check for conflicts between different logic types */
+            int logicTypeCount = 0;
+            if (combItem["expr"])
+                logicTypeCount++;
+            if (combItem["if"])
+                logicTypeCount++;
+            if (combItem["case"])
+                logicTypeCount++;
+
+            if (logicTypeCount == 0) {
+                qWarning() << "Warning: Combinational logic item" << i << "for output"
+                           << outputSignal
+                           << "has no logic specification (expr, if, or case), skipping";
+                continue;
+            }
+
+            if (logicTypeCount > 1) {
+                qWarning() << "Warning: Combinational logic item" << i << "for output"
+                           << outputSignal
+                           << "has multiple logic types specified, using first found";
+            }
+
+            /* Validate logic types */
+            if (combItem["expr"]) {
+                /* Simple assignment - validate expr field */
+                if (!combItem["expr"].IsScalar()) {
+                    qWarning() << "Warning: 'expr' field for output" << outputSignal
+                               << "is not a scalar, skipping";
+                    continue;
+                }
+            } else if (combItem["if"]) {
+                /* Conditional logic - validate if field */
+                if (!combItem["if"].IsSequence()) {
+                    qWarning() << "Warning: 'if' field for output" << outputSignal
+                               << "is not a sequence, skipping";
+                    continue;
+                }
+
+                /* Validate each if condition */
+                bool validIfBlock = true;
+                for (const auto &ifCondition : combItem["if"]) {
+                    if (!ifCondition.IsMap() || !ifCondition["cond"] || !ifCondition["then"]) {
+                        qWarning() << "Warning: Invalid if condition for output" << outputSignal
+                                   << ", each condition must have 'cond' and 'then' fields";
+                        validIfBlock = false;
+                        break;
+                    }
+
+                    if (!ifCondition["cond"].IsScalar()) {
+                        qWarning()
+                            << "Warning: 'cond' field must be a scalar for output" << outputSignal;
+                        validIfBlock = false;
+                        break;
+                    }
+
+                    /* 'then' can be either scalar (simple value) or map (nested structure) */
+                    if (!ifCondition["then"].IsScalar() && !ifCondition["then"].IsMap()) {
+                        qWarning() << "Warning: 'then' field must be scalar or map for output"
+                                   << outputSignal;
+                        validIfBlock = false;
+                        break;
+                    }
+
+                    /* If 'then' is a map, validate nested case structure */
+                    if (ifCondition["then"].IsMap()) {
+                        const YAML::Node &thenNode = ifCondition["then"];
+
+                        /* Check if it's a nested case structure */
+                        if (thenNode["case"]) {
+                            if (!thenNode["case"].IsScalar()) {
+                                qWarning()
+                                    << "Warning: Nested 'case' field must be scalar for output"
+                                    << outputSignal;
+                                validIfBlock = false;
+                                break;
+                            }
+
+                            if (!thenNode["cases"] || !thenNode["cases"].IsMap()) {
+                                qWarning() << "Warning: Nested 'cases' field missing or not a map "
+                                              "for output"
+                                           << outputSignal;
+                                validIfBlock = false;
+                                break;
+                            }
+
+                            /* Validate nested case entries */
+                            for (const auto &caseEntry : thenNode["cases"]) {
+                                if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
+                                    qWarning() << "Warning: Nested case entries must have scalar "
+                                                  "keys and values for output"
+                                               << outputSignal;
+                                    validIfBlock = false;
+                                    break;
+                                }
+                            }
+                        } else {
+                            qWarning() << "Warning: Nested structure in 'then' field not supported "
+                                          "for output"
+                                       << outputSignal;
+                            validIfBlock = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (!validIfBlock) {
+                    continue;
+                }
+
+                /* Check for default value */
+                if (!combItem["default"]) {
+                    qWarning() << "Warning: Missing 'default' field for conditional logic output"
+                               << outputSignal << ", may cause latches";
+                }
+            } else if (combItem["case"]) {
+                /* Case statement - validate case and cases fields */
+                if (!combItem["case"].IsScalar()) {
+                    qWarning() << "Warning: 'case' field for output" << outputSignal
+                               << "is not a scalar, skipping";
+                    continue;
+                }
+
+                if (!combItem["cases"] || !combItem["cases"].IsMap()) {
+                    qWarning() << "Warning: 'cases' field for output" << outputSignal
+                               << "is missing or not a map, skipping";
+                    continue;
+                }
+
+                /* Validate case entries */
+                bool validCaseBlock = true;
+                for (const auto &caseEntry : combItem["cases"]) {
+                    if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
+                        qWarning()
+                            << "Warning: Case entries must have scalar keys and values for output"
+                            << outputSignal;
+                        validCaseBlock = false;
+                        break;
+                    }
+                }
+
+                if (!validCaseBlock) {
+                    continue;
+                }
+
+                /* Check for default value */
+                if (!combItem["default"]) {
+                    qWarning() << "Warning: Missing 'default' field for case statement output"
+                               << outputSignal << ", may cause latches";
+                }
+            }
+
+            qInfo() << "Validated combinational logic item" << i << "for output" << outputSignal;
+        }
+
+        qInfo() << "Successfully processed combinational logic section";
+        return true;
+    } catch (const YAML::Exception &e) {
+        qCritical() << "YAML exception in processCombLogic:" << e.what();
+        return false;
+    } catch (const std::exception &e) {
+        qCritical() << "Standard exception in processCombLogic:" << e.what();
+        return false;
+    } catch (...) {
+        qCritical() << "Unknown exception in processCombLogic";
+        return false;
+    }
 }
