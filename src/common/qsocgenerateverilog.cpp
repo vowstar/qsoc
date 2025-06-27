@@ -30,10 +30,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         return false;
     }
 
-    // Allow empty instance section if comb section exists
-    if (netlistData["instance"].size() == 0 && !netlistData["comb"]) {
+    // Allow empty instance section if comb or seq section exists
+    if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]) {
         qCritical() << "Error: Invalid netlist data, 'instance' section is empty and no 'comb' "
-                       "section found";
+                       "or 'seq' section found";
         return false;
     }
 
@@ -1419,6 +1419,70 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         }
     }
 
+    /* Generate sequential logic after combinational logic */
+    if (netlistData["seq"] && netlistData["seq"].IsSequence() && netlistData["seq"].size() > 0) {
+        out << "\n    /* Sequential logic */\n";
+
+        for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
+            const YAML::Node &seqItem = netlistData["seq"][i];
+
+            if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["clk"] || !seqItem["reg"].IsScalar()
+                || !seqItem["clk"].IsScalar()) {
+                continue; /* Skip invalid items */
+            }
+
+            const QString regName   = QString::fromStdString(seqItem["reg"].as<std::string>());
+            const QString clkSignal = QString::fromStdString(seqItem["clk"].as<std::string>());
+
+            /* Get edge type (default to posedge) */
+            QString edgeType = "posedge";
+            if (seqItem["edge"] && seqItem["edge"].IsScalar()) {
+                const QString edge = QString::fromStdString(seqItem["edge"].as<std::string>());
+                if (edge == "neg") {
+                    edgeType = "negedge";
+                }
+            }
+
+            /* Generate always block */
+            out << "    always @(" << edgeType << " " << clkSignal;
+
+            /* Add reset signal to sensitivity list if present */
+            if (seqItem["rst"] && seqItem["rst"].IsScalar()) {
+                const QString rstSignal = QString::fromStdString(seqItem["rst"].as<std::string>());
+                /* Assume asynchronous reset for now */
+                out << " or negedge " << rstSignal;
+            }
+
+            out << ") begin\n";
+
+            /* Handle reset logic if present */
+            if (seqItem["rst"] && seqItem["rst_val"] && seqItem["rst_val"].IsScalar()) {
+                const QString rstSignal = QString::fromStdString(seqItem["rst"].as<std::string>());
+                const QString rstValue  = QString::fromStdString(
+                    seqItem["rst_val"].as<std::string>());
+
+                out << "        if (!" << rstSignal << ") begin\n";
+                out << "            " << regName << " <= " << rstValue << ";\n";
+                out << "        end else begin\n";
+
+                /* Generate main logic with additional indentation */
+                generateSeqLogicContent(seqItem, regName, out, 3);
+
+                out << "        end\n";
+            } else {
+                /* Generate main logic without reset */
+                generateSeqLogicContent(seqItem, regName, out, 2);
+            }
+
+            out << "    end\n";
+
+            /* Add blank line between different sequential logic blocks */
+            if (i < netlistData["seq"].size() - 1) {
+                out << "\n";
+            }
+        }
+    }
+
     /* Close module */
     out << "\nendmodule\n";
 
@@ -1822,4 +1886,69 @@ QString QSocGenerateManager::generateNestedCombValue(
     }
 
     return result;
+}
+
+/**
+ * @brief Generate sequential logic content for a register
+ * @param seqItem The YAML node containing the sequential logic specification
+ * @param regName The register name
+ * @param out Output text stream
+ * @param indentLevel The indentation level for proper formatting
+ */
+void QSocGenerateManager::generateSeqLogicContent(
+    const YAML::Node &seqItem, const QString &regName, QTextStream &out, int indentLevel)
+{
+    QString indent = QString("    ").repeated(indentLevel); /* 4 spaces per indent level */
+
+    /* Check for enable signal */
+    if (seqItem["enable"] && seqItem["enable"].IsScalar()) {
+        const QString enableSignal = QString::fromStdString(seqItem["enable"].as<std::string>());
+        out << indent << "if (" << enableSignal << ") begin\n";
+        /* Increase indentation for enabled logic */
+        indent += "    ";
+    }
+
+    /* Generate logic based on type */
+    if (seqItem["next"] && seqItem["next"].IsScalar()) {
+        /* Simple next-state assignment */
+        const QString nextValue = QString::fromStdString(seqItem["next"].as<std::string>());
+        out << indent << regName << " <= " << nextValue << ";\n";
+    } else if (seqItem["if"] && seqItem["if"].IsSequence()) {
+        /* Conditional logic using if-else chain */
+
+        /* Set default value if specified */
+        if (seqItem["default"] && seqItem["default"].IsScalar()) {
+            const QString defaultValue = QString::fromStdString(
+                seqItem["default"].as<std::string>());
+            out << indent << regName << " <= " << defaultValue << ";\n";
+        }
+
+        /* Generate if-else chain */
+        bool firstIf = true;
+        for (const auto &ifCondition : seqItem["if"]) {
+            if (!ifCondition.IsMap() || !ifCondition["cond"] || !ifCondition["then"]
+                || !ifCondition["cond"].IsScalar() || !ifCondition["then"].IsScalar()) {
+                continue; /* Skip invalid conditions */
+            }
+
+            const QString condition = QString::fromStdString(ifCondition["cond"].as<std::string>());
+            const QString thenValue = QString::fromStdString(ifCondition["then"].as<std::string>());
+
+            if (firstIf) {
+                out << indent << "if (" << condition << ")\n";
+                firstIf = false;
+            } else {
+                out << indent << "else if (" << condition << ")\n";
+            }
+
+            out << indent << "    " << regName << " <= " << thenValue << ";\n";
+        }
+    }
+
+    /* Close enable block if present */
+    if (seqItem["enable"] && seqItem["enable"].IsScalar()) {
+        /* Remove the extra indentation */
+        indent = QString("    ").repeated(indentLevel);
+        out << indent << "end\n";
+    }
 }

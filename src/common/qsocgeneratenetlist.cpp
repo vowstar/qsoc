@@ -47,10 +47,10 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
             return false;
         }
 
-        // Allow empty instance section if comb section exists
-        if (netlistData["instance"].size() == 0 && !netlistData["comb"]) {
+        // Allow empty instance section if comb or seq section exists
+        if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]) {
             qCritical() << "Error: Invalid netlist format, 'instance' section is empty and no "
-                           "'comb' section found";
+                           "'comb' or 'seq' section found";
             return false;
         }
 
@@ -83,10 +83,10 @@ bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
             return false;
         }
 
-        // Allow empty instance section if comb section exists
-        if (netlistData["instance"].size() == 0 && !netlistData["comb"]) {
+        // Allow empty instance section if comb or seq section exists
+        if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]) {
             qCritical() << "Error: Invalid netlist format, 'instance' section is empty and no "
-                           "'comb' section found";
+                           "'comb' or 'seq' section found";
             return false;
         }
 
@@ -488,6 +488,12 @@ bool QSocGenerateManager::processNetlist()
         /* Process combinational logic section */
         if (!processCombLogic()) {
             qCritical() << "Error: Failed to process combinational logic";
+            return false;
+        }
+
+        /* Process sequential logic section */
+        if (!processSeqLogic()) {
+            qCritical() << "Error: Failed to process sequential logic";
             return false;
         }
 
@@ -1482,6 +1488,163 @@ bool QSocGenerateManager::processCombLogic()
         return false;
     } catch (...) {
         qCritical() << "Unknown exception in processCombLogic";
+        return false;
+    }
+}
+
+bool QSocGenerateManager::processSeqLogic()
+{
+    try {
+        if (!netlistData["seq"]) {
+            qInfo() << "No sequential logic section found, skipping";
+            return true;
+        }
+
+        if (!netlistData["seq"].IsSequence()) {
+            qCritical() << "Error: 'seq' section must be a sequence";
+            return false;
+        }
+
+        qInfo() << "Processing sequential logic section...";
+
+        for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
+            const YAML::Node &seqItem = netlistData["seq"][i];
+
+            /* Validate that each item is a map */
+            if (!seqItem.IsMap()) {
+                qWarning() << "Warning: Sequential logic item" << i << "is not a map, skipping";
+                continue;
+            }
+
+            /* Validate required fields */
+            if (!seqItem["reg"]) {
+                qWarning() << "Warning: Sequential logic item" << i
+                           << "has no 'reg' field, skipping";
+                continue;
+            }
+
+            if (!seqItem["clk"]) {
+                qWarning() << "Warning: Sequential logic item" << i
+                           << "has no 'clk' field, skipping";
+                continue;
+            }
+
+            /* Check that reg and clk are scalar values */
+            if (!seqItem["reg"].IsScalar()) {
+                qWarning() << "Warning: 'reg' field must be a scalar for item" << i;
+                continue;
+            }
+
+            if (!seqItem["clk"].IsScalar()) {
+                qWarning() << "Warning: 'clk' field must be a scalar for item" << i;
+                continue;
+            }
+
+            const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
+
+            /* Validate edge type (if present) */
+            if (seqItem["edge"]) {
+                if (!seqItem["edge"].IsScalar()) {
+                    qWarning() << "Warning: 'edge' field must be a scalar for register" << regName;
+                    continue;
+                }
+                const QString edge = QString::fromStdString(seqItem["edge"].as<std::string>());
+                if (edge != "pos" && edge != "neg") {
+                    qWarning() << "Warning: 'edge' field must be 'pos' or 'neg' for register"
+                               << regName << ", got:" << edge;
+                    continue;
+                }
+            }
+
+            /* Validate reset fields (if present) */
+            if (seqItem["rst"]) {
+                if (!seqItem["rst"].IsScalar()) {
+                    qWarning() << "Warning: 'rst' field must be a scalar for register" << regName;
+                    continue;
+                }
+
+                /* Reset value is required when reset is present */
+                if (!seqItem["rst_val"]) {
+                    qWarning()
+                        << "Warning: 'rst_val' is required when 'rst' is present for register"
+                        << regName;
+                    continue;
+                }
+
+                if (!seqItem["rst_val"].IsScalar()) {
+                    qWarning() << "Warning: 'rst_val' field must be a scalar for register"
+                               << regName;
+                    continue;
+                }
+            }
+
+            /* Validate enable field (if present) */
+            if (seqItem["enable"] && !seqItem["enable"].IsScalar()) {
+                qWarning() << "Warning: 'enable' field must be a scalar for register" << regName;
+                continue;
+            }
+
+            /* Validate logic specification: must have either 'next' or 'if' */
+            bool hasNext = seqItem["next"] && seqItem["next"].IsScalar();
+            bool hasIf   = seqItem["if"] && seqItem["if"].IsSequence();
+
+            if (!hasNext && !hasIf) {
+                qWarning() << "Warning: Register" << regName
+                           << "has no logic specification ('next' or 'if'), skipping";
+                continue;
+            }
+
+            if (hasNext && hasIf) {
+                qWarning() << "Warning: Register" << regName
+                           << "has both 'next' and 'if' specifications, skipping";
+                continue;
+            }
+
+            /* Validate 'if' logic structure */
+            if (hasIf) {
+                bool validIfBlock = true;
+                for (const auto &ifEntry : seqItem["if"]) {
+                    if (!ifEntry.IsMap() || !ifEntry["cond"] || !ifEntry["then"]) {
+                        qWarning() << "Warning: 'if' entries must have 'cond' and 'then' fields "
+                                      "for register"
+                                   << regName;
+                        validIfBlock = false;
+                        break;
+                    }
+
+                    if (!ifEntry["cond"].IsScalar() || !ifEntry["then"].IsScalar()) {
+                        qWarning()
+                            << "Warning: 'cond' and 'then' fields must be scalars for register"
+                            << regName;
+                        validIfBlock = false;
+                        break;
+                    }
+                }
+
+                if (!validIfBlock) {
+                    continue;
+                }
+
+                /* Check for default value */
+                if (!seqItem["default"]) {
+                    qWarning() << "Warning: Missing 'default' field for 'if' logic register"
+                               << regName << ", may cause latches";
+                }
+            }
+
+            qInfo() << "Validated sequential logic item" << i << "for register" << regName;
+        }
+
+        qInfo() << "Successfully processed sequential logic section";
+        return true;
+    } catch (const YAML::Exception &e) {
+        qCritical() << "YAML exception in processSeqLogic:" << e.what();
+        return false;
+    } catch (const std::exception &e) {
+        qCritical() << "Standard exception in processSeqLogic:" << e.what();
+        return false;
+    } catch (...) {
+        qCritical() << "Unknown exception in processSeqLogic";
         return false;
     }
 }

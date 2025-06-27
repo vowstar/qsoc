@@ -422,6 +422,22 @@ private:
     QString generateNestedCombValue(
         const YAML::Node &valueNode, const QString &outputSignal, int indentLevel);
 
+    /**
+     * @brief Process sequential logic section in the netlist
+     * @return true if successful, false on error
+     */
+    bool processSeqLogic();
+
+    /**
+     * @brief Generate sequential logic content for a register
+     * @param seqItem The YAML node containing the sequential logic specification
+     * @param regName The register name
+     * @param out Output text stream
+     * @param indentLevel The indentation level for proper formatting
+     */
+    void generateSeqLogicContent(
+        const YAML::Node &seqItem, const QString &regName, QTextStream &out, int indentLevel);
+
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;
     /** Module manager. */
