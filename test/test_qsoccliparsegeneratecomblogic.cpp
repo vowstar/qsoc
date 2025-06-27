@@ -8,6 +8,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QTemporaryFile>
 #include <QTextStream>
@@ -63,6 +64,36 @@ private:
         if (!moduleDir.exists()) {
             moduleDir.mkpath(".");
         }
+    }
+
+    /* Helper function to verify Verilog content with normalized whitespace */
+    bool verifyVerilogContentNormalized(const QString &verilogContent, const QString &contentToVerify)
+    {
+        if (verilogContent.isEmpty() || contentToVerify.isEmpty()) {
+            return false;
+        }
+
+        /* Helper function to normalize whitespace */
+        auto normalizeWhitespace = [](const QString &input) -> QString {
+            QString result = input;
+            /* Replace all whitespace (including tabs and newlines) with a single space */
+            result.replace(QRegularExpression("\\s+"), " ");
+            /* Remove whitespace before any symbol/operator/punctuation */
+            result.replace(
+                QRegularExpression("\\s+([\\[\\]\\(\\)\\{\\}<>\"'`+\\-*/%&|^~!#$,.:;=@_])"), "\\1");
+            /* Remove whitespace after any symbol/operator/punctuation */
+            result.replace(
+                QRegularExpression("([\\[\\]\\(\\)\\{\\}<>\"'`+\\-*/%&|^~!#$,.:;=@_])\\s+"), "\\1");
+
+            return result;
+        };
+
+        /* Normalize whitespace in both strings before comparing */
+        const QString normalizedContent = normalizeWhitespace(verilogContent);
+        const QString normalizedVerify  = normalizeWhitespace(contentToVerify);
+
+        /* Check if the normalized content contains the normalized text we're looking for */
+        return normalizedContent.contains(normalizedVerify);
     }
 
 private slots:
@@ -265,9 +296,9 @@ comb:
         QVERIFY(verilogContent.contains("always @(*) begin"));
         QVERIFY(verilogContent.contains("alu_op = 4'b0000;"));
         QVERIFY(verilogContent.contains("case (funct)"));
-        QVERIFY(verilogContent.contains("6'b100000: alu_op = 4'b0001;"));
-        QVERIFY(verilogContent.contains("6'b100010: alu_op = 4'b0010;"));
-        QVERIFY(verilogContent.contains("6'b100100: alu_op = 4'b0011;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100000: alu_op = 4'b0001;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100010: alu_op = 4'b0010;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100100: alu_op = 4'b0011;"));
         QVERIFY(verilogContent.contains("default:") && verilogContent.contains("alu_op = 4'b0000;"));
         QVERIFY(verilogContent.contains("endcase"));
         QVERIFY(verilogContent.contains("end"));
@@ -437,8 +468,8 @@ comb:
         QVERIFY(verilogContent.contains("alu_op = 4'b0000;")); /* Default value */
         QVERIFY(verilogContent.contains("if (opcode == 6'b000000) begin"));
         QVERIFY(verilogContent.contains("case (funct)"));
-        QVERIFY(verilogContent.contains("6'b100000: alu_op = 4'b0001;"));
-        QVERIFY(verilogContent.contains("6'b100010: alu_op = 4'b0010;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100000: alu_op = 4'b0001;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100010: alu_op = 4'b0010;"));
         QVERIFY(verilogContent.contains("default:") && verilogContent.contains("alu_op = 4'b1111;"));
         QVERIFY(verilogContent.contains("endcase"));
         QVERIFY(verilogContent.contains("end")); /* end of if */
