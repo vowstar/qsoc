@@ -8,6 +8,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QTemporaryFile>
 #include <QTextStream>
@@ -63,6 +64,36 @@ private:
         if (!moduleDir.exists()) {
             moduleDir.mkpath(".");
         }
+    }
+
+    /* Helper function to verify Verilog content with normalized whitespace */
+    bool verifyVerilogContentNormalized(const QString &verilogContent, const QString &contentToVerify)
+    {
+        if (verilogContent.isEmpty() || contentToVerify.isEmpty()) {
+            return false;
+        }
+
+        /* Helper function to normalize whitespace */
+        auto normalizeWhitespace = [](const QString &input) -> QString {
+            QString result = input;
+            /* Replace all whitespace (including tabs and newlines) with a single space */
+            result.replace(QRegularExpression("\\s+"), " ");
+            /* Remove whitespace before any symbol/operator/punctuation */
+            result.replace(
+                QRegularExpression("\\s+([\\[\\]\\(\\)\\{\\}<>\"'`+\\-*/%&|^~!#$,.:;=@_])"), "\\1");
+            /* Remove whitespace after any symbol/operator/punctuation */
+            result.replace(
+                QRegularExpression("([\\[\\]\\(\\)\\{\\}<>\"'`+\\-*/%&|^~!#$,.:;=@_])\\s+"), "\\1");
+
+            return result;
+        };
+
+        /* Normalize whitespace in both strings before comparing */
+        const QString normalizedContent = normalizeWhitespace(verilogContent);
+        const QString normalizedVerify  = normalizeWhitespace(contentToVerify);
+
+        /* Check if the normalized content contains the normalized text we're looking for */
+        return normalizedContent.contains(normalizedVerify);
     }
 
 private slots:
@@ -467,6 +498,110 @@ seq:
         /* Check if warning message was generated */
         QString allMessages = messageList.join(" ");
         QVERIFY(allMessages.contains("has no 'clk' field"));
+    }
+
+    void testSequentialWithNestedCase()
+    {
+        QString netlistContent = R"(
+# Test netlist with nested case statements in sequential logic
+port:
+  clk:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  ctrl:
+    direction: input
+    type: logic[1:0]
+  sub_ctrl:
+    direction: input
+    type: logic[1:0]
+  data_in:
+    direction: input
+    type: logic[7:0]
+  state_machine:
+    direction: output
+    type: logic[7:0]
+
+instance: {}
+
+net: {}
+
+seq:
+  - reg: state_machine
+    clk: clk
+    rst: rst_n
+    rst_val: "8'h00"
+    if:
+      - cond: "ctrl == 2'b00"
+        then: "8'h01"
+      - cond: "ctrl == 2'b01"
+        then:
+          case: sub_ctrl
+          cases:
+            "2'b00": "8'h10"
+            "2'b01": "8'h20"
+            "2'b10": "8'h30"
+          default: "8'h0F"
+      - cond: "ctrl == 2'b10"
+        then: "data_in"
+    default: "state_machine"
+)";
+
+        QString netlistPath = createTempFile("test_seq_nested.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_seq_nested.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify nested sequential logic is generated */
+        QVERIFY(verilogContent.contains("always @(posedge clk or negedge rst_n) begin"));
+        QVERIFY(verilogContent.contains("if (!rst_n) begin"));
+        QVERIFY(verilogContent.contains("state_machine <= 8'h00;"));
+        QVERIFY(verilogContent.contains("end else begin"));
+
+        /* Verify default assignment */
+        QVERIFY(verilogContent.contains("state_machine <= state_machine;"));
+
+        /* Verify if-else structure with begin/end blocks */
+        QVERIFY(verilogContent.contains("if (ctrl == 2'b00) begin"));
+        QVERIFY(verilogContent.contains("state_machine <= 8'h01;"));
+        QVERIFY(verilogContent.contains("else if (ctrl == 2'b01) begin"));
+
+        /* Verify nested case statement using normalized whitespace */
+        QVERIFY(verilogContent.contains("case (sub_ctrl)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "2'b00: state_machine <= 8'h10;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "2'b01: state_machine <= 8'h20;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "2'b10: state_machine <= 8'h30;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "default: state_machine <= 8'h0F;"));
+        QVERIFY(verilogContent.contains("endcase"));
+
+        /* Verify final if condition */
+        QVERIFY(verilogContent.contains("else if (ctrl == 2'b10) begin"));
+        QVERIFY(verilogContent.contains("state_machine <= data_in;"));
+
+        /* Verify proper end statements */
+        int beginCount = verilogContent.count(" begin");
+        int endCount   = verilogContent.count("end");
+        QVERIFY(beginCount > 0 && endCount >= beginCount); /* Allow for endcase and end statements */
     }
 };
 
