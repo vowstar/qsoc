@@ -448,6 +448,34 @@ private:
     void generateSeqLogicContent(
         const YAML::Node &seqItem, const QString &regName, QTextStream &out, int indentLevel);
 
+    /**
+     * @brief Generate FSM Verilog code for a single FSM
+     * @param fsmItem The YAML node containing the FSM specification
+     * @param out Output text stream
+     */
+    void generateFSMVerilog(const YAML::Node &fsmItem, QTextStream &out);
+
+    /**
+     * @brief Generate Table-mode FSM Verilog code
+     * @param fsmItem The YAML node containing the FSM specification
+     * @param out Output text stream
+     */
+    void generateTableFSM(const YAML::Node &fsmItem, QTextStream &out);
+
+    /**
+     * @brief Generate Microcode-mode FSM Verilog code
+     * @param fsmItem The YAML node containing the FSM specification
+     * @param out Output text stream
+     */
+    void generateMicrocodeFSM(const YAML::Node &fsmItem, QTextStream &out);
+
+    /**
+     * @brief Format a condition string for proper Verilog syntax
+     * @param condition The condition string to format
+     * @return Formatted condition string
+     */
+    QString formatConditionForVerilog(const QString &condition);
+
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;
     /** Module manager. */

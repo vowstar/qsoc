@@ -30,10 +30,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         return false;
     }
 
-    // Allow empty instance section if comb or seq section exists
-    if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]) {
-        qCritical() << "Error: Invalid netlist data, 'instance' section is empty and no 'comb' "
-                       "or 'seq' section found";
+    // Allow empty instance section if comb, seq, or fsm section exists
+    if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]
+        && !netlistData["fsm"]) {
+        qCritical() << "Error: Invalid netlist data, 'instance' section is empty and no 'comb', "
+                       "'seq', or 'fsm' section found";
         return false;
     }
 
@@ -1483,6 +1484,30 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         }
     }
 
+    /* Generate FSM logic after sequential logic */
+    if (netlistData["fsm"] && netlistData["fsm"].IsSequence() && netlistData["fsm"].size() > 0) {
+        out << "\n    /* Finite State Machine logic */\n";
+
+        for (size_t i = 0; i < netlistData["fsm"].size(); ++i) {
+            const YAML::Node &fsmItem = netlistData["fsm"][i];
+
+            if (!fsmItem.IsMap() || !fsmItem["name"] || !fsmItem["name"].IsScalar()
+                || !fsmItem["clk"] || !fsmItem["clk"].IsScalar() || !fsmItem["rst"]
+                || !fsmItem["rst"].IsScalar() || !fsmItem["rst_state"]
+                || !fsmItem["rst_state"].IsScalar()) {
+                qWarning() << "Warning: FSM" << i << "has invalid format, skipping";
+                continue; /* Skip invalid FSM items */
+            }
+
+            generateFSMVerilog(fsmItem, out);
+
+            /* Add blank line between different FSM blocks */
+            if (i < netlistData["fsm"].size() - 1) {
+                out << "\n";
+            }
+        }
+    }
+
     /* Close module */
     out << "\nendmodule\n";
 
@@ -2022,4 +2047,577 @@ void QSocGenerateManager::generateSeqLogicContent(
         indent = QString("    ").repeated(indentLevel);
         out << indent << "end\n";
     }
+}
+
+/**
+ * @brief Generate FSM Verilog code for a single FSM
+ * @param fsmItem The YAML node containing the FSM specification
+ * @param out Output text stream
+ */
+void QSocGenerateManager::generateFSMVerilog(const YAML::Node &fsmItem, QTextStream &out)
+{
+    const QString fsmName   = QString::fromStdString(fsmItem["name"].as<std::string>());
+    const QString clkSignal = QString::fromStdString(fsmItem["clk"].as<std::string>());
+    const QString rstSignal = QString::fromStdString(fsmItem["rst"].as<std::string>());
+    const QString rstState  = QString::fromStdString(fsmItem["rst_state"].as<std::string>());
+
+    /* Get encoding type (default to binary) */
+    QString encoding = "bin";
+    if (fsmItem["encoding"] && fsmItem["encoding"].IsScalar()) {
+        encoding = QString::fromStdString(fsmItem["encoding"].as<std::string>());
+    }
+
+    /* Check if this is microcode mode */
+    bool isMicrocodeMode = fsmItem["fields"] && fsmItem["fields"].IsMap();
+
+    if (isMicrocodeMode) {
+        generateMicrocodeFSM(fsmItem, out);
+    } else {
+        generateTableFSM(fsmItem, out);
+    }
+}
+
+/**
+ * @brief Generate Table-mode FSM Verilog code
+ * @param fsmItem The YAML node containing the FSM specification
+ * @param out Output text stream
+ */
+QString QSocGenerateManager::formatConditionForVerilog(const QString &condition)
+{
+    QString formatted = condition;
+
+    /* Replace simple numeric values with proper Verilog format */
+    QRegularExpression              simpleNumRegex("\\b(\\d+)\\b");
+    QRegularExpressionMatchIterator it = simpleNumRegex.globalMatch(formatted);
+    QStringList                     matches;
+    while (it.hasNext()) {
+        QRegularExpressionMatch match = it.next();
+        matches.append(match.captured(1));
+    }
+
+    /* Replace from right to left to preserve positions */
+    for (int i = matches.size() - 1; i >= 0; i--) {
+        QString num = matches[i];
+        QString replacement;
+        if (num == "0") {
+            replacement = "1'b0";
+        } else if (num == "1") {
+            replacement = "1'b1";
+        } else {
+            /* For multi-bit numbers, try to determine width from context */
+            int value = num.toInt();
+            int width = 1;
+            while ((1 << width) <= value) {
+                width++;
+            }
+            replacement = QString("%1'd%2").arg(width).arg(num);
+        }
+        formatted.replace(QRegularExpression("\\b" + num + "\\b"), replacement);
+    }
+
+    return formatted;
+}
+
+void QSocGenerateManager::generateTableFSM(const YAML::Node &fsmItem, QTextStream &out)
+{
+    const QString fsmName      = QString::fromStdString(fsmItem["name"].as<std::string>());
+    const QString fsmNameUpper = fsmName.toUpper();
+    const QString fsmNameLower = fsmName.toLower();
+    const QString clkSignal    = QString::fromStdString(fsmItem["clk"].as<std::string>());
+    const QString rstSignal    = QString::fromStdString(fsmItem["rst"].as<std::string>());
+    const QString rstState     = QString::fromStdString(fsmItem["rst_state"].as<std::string>());
+
+    /* Get encoding type (default to binary) */
+    QString encoding = "bin";
+    if (fsmItem["encoding"] && fsmItem["encoding"].IsScalar()) {
+        encoding = QString::fromStdString(fsmItem["encoding"].as<std::string>());
+    }
+
+    /* Collect all states from trans section */
+    QStringList allStates;
+    if (fsmItem["trans"] && fsmItem["trans"].IsMap()) {
+        for (const auto &transEntry : fsmItem["trans"]) {
+            if (transEntry.first.IsScalar()) {
+                const QString stateName = QString::fromStdString(transEntry.first.as<std::string>());
+                if (!allStates.contains(stateName)) {
+                    allStates.append(stateName);
+                }
+            }
+        }
+    }
+
+    /* Also collect states from moore section */
+    if (fsmItem["moore"] && fsmItem["moore"].IsMap()) {
+        for (const auto &mooreEntry : fsmItem["moore"]) {
+            if (mooreEntry.first.IsScalar()) {
+                const QString stateName = QString::fromStdString(mooreEntry.first.as<std::string>());
+                if (!allStates.contains(stateName)) {
+                    allStates.append(stateName);
+                }
+            }
+        }
+    }
+
+    /* Generate state typedef */
+    out << "\n    /* " << fsmName << " : Table FSM generated by YAML-DSL */\n";
+
+    /* Calculate state width */
+    int stateWidth = 1;
+    int numStates  = allStates.size();
+    if (encoding == "onehot") {
+        stateWidth = numStates;
+    } else {
+        while ((1 << stateWidth) < numStates) {
+            stateWidth++;
+        }
+    }
+
+    /* Skip typedef enum for Verilog 2005 compatibility - will use localparam instead */
+
+    /* Generate state registers */
+    out << "    /* " << fsmName << " state registers */\n";
+    out << "    reg [" << (stateWidth - 1) << ":0] " << fsmNameLower << "_cur_state, "
+        << fsmNameLower << "_nxt_state;\n\n";
+
+    /* Generate state parameter definitions for Verilog 2005 compatibility */
+    for (int i = 0; i < allStates.size(); ++i) {
+        QString stateValue;
+        if (encoding == "onehot") {
+            stateValue = QString("%1'd%2").arg(stateWidth).arg(1 << i);
+        } else if (encoding == "gray") {
+            int grayValue = i ^ (i >> 1);
+            stateValue    = QString("%1'd%2").arg(stateWidth).arg(grayValue);
+        } else {
+            stateValue = QString("%1'd%2").arg(stateWidth).arg(i);
+        }
+        out << "    localparam " << fsmNameUpper << "_" << allStates[i] << " = " << stateValue
+            << ";\n";
+    }
+    out << "\n";
+
+    /* Generate next state logic */
+    out << "    /* " << fsmName << " next-state logic */\n";
+    out << "    always @(*) begin\n";
+    out << "        " << fsmNameLower << "_nxt_state = " << fsmNameLower << "_cur_state;\n";
+    out << "        case (" << fsmNameLower << "_cur_state)\n";
+
+    /* Generate transitions */
+    if (fsmItem["trans"] && fsmItem["trans"].IsMap()) {
+        for (const auto &transEntry : fsmItem["trans"]) {
+            if (!transEntry.first.IsScalar() || !transEntry.second.IsSequence()) {
+                continue;
+            }
+
+            const QString stateName = QString::fromStdString(transEntry.first.as<std::string>());
+            out << "            " << fsmNameUpper << "_" << stateName << ":";
+
+            /* Check if multiple transitions exist for this state */
+            bool hasMultipleTransitions = transEntry.second.size() > 1;
+            if (hasMultipleTransitions) {
+                out << "\n                begin\n";
+            }
+
+            /* Process each transition condition */
+            for (const auto &transition : transEntry.second) {
+                if (!transition.IsMap() || !transition["cond"] || !transition["next"]) {
+                    continue;
+                }
+
+                const QString condition = QString::fromStdString(
+                    transition["cond"].as<std::string>());
+                const QString nextState = QString::fromStdString(
+                    transition["next"].as<std::string>());
+
+                QString indent = hasMultipleTransitions ? "                    "
+                                                        : "\n                ";
+                if (condition == "1") {
+                    out << indent << "if (1'b1) " << fsmNameLower << "_nxt_state = " << fsmNameUpper
+                        << "_" << nextState << ";\n";
+                } else {
+                    QString formattedCondition = formatConditionForVerilog(condition);
+                    out << indent << "if (" << formattedCondition << ") " << fsmNameLower
+                        << "_nxt_state = " << fsmNameUpper << "_" << nextState << ";\n";
+                }
+            }
+
+            if (hasMultipleTransitions) {
+                out << "                end\n";
+            }
+        }
+    }
+
+    out << "            default: " << fsmNameLower << "_nxt_state = " << fsmNameLower
+        << "_cur_state;\n";
+    out << "        endcase\n";
+    out << "    end\n\n";
+
+    /* Generate state register */
+    out << "    /* " << fsmName << " state register w/ async reset */\n";
+    out << "    always @(posedge " << clkSignal << " or negedge " << rstSignal << ")\n";
+    out << "        if (!" << rstSignal << ") " << fsmNameLower << "_cur_state <= " << fsmNameUpper
+        << "_" << rstState << ";\n";
+    out << "        else        " << fsmNameLower << "_cur_state <= " << fsmNameLower
+        << "_nxt_state;\n\n";
+
+    /* Generate Moore outputs */
+    if (fsmItem["moore"] && fsmItem["moore"].IsMap()) {
+        out << "    /* " << fsmName << " Moore outputs */\n";
+
+        /* Collect all unique output signals */
+        QSet<QString> allOutputs;
+        for (const auto &mooreEntry : fsmItem["moore"]) {
+            if (mooreEntry.second.IsMap()) {
+                for (const auto &output : mooreEntry.second) {
+                    if (output.first.IsScalar()) {
+                        allOutputs.insert(QString::fromStdString(output.first.as<std::string>()));
+                    }
+                }
+            }
+        }
+
+        /* Generate internal reg signals for Moore outputs (Verilog 2005 compatibility) */
+        for (const QString &output : allOutputs) {
+            out << "    reg " << fsmNameLower << "_" << output << "_reg;\n";
+        }
+        out << "\n";
+
+        /* Generate assigns from internal regs to output ports */
+        for (const QString &output : allOutputs) {
+            out << "    assign " << output << " = " << fsmNameLower << "_" << output << "_reg;\n";
+        }
+        out << "\n";
+
+        /* Generate always block with default values */
+        out << "    always @(*) begin\n";
+        for (const QString &output : allOutputs) {
+            out << "        " << fsmNameLower << "_" << output << "_reg = 1'b0;\n";
+        }
+
+        out << "        case (" << fsmNameLower << "_cur_state)\n";
+        for (const auto &mooreEntry : fsmItem["moore"]) {
+            if (!mooreEntry.first.IsScalar() || !mooreEntry.second.IsMap()) {
+                continue;
+            }
+
+            const QString stateName = QString::fromStdString(mooreEntry.first.as<std::string>());
+            out << "            " << fsmNameUpper << "_" << stateName << ":\n";
+            out << "                begin\n";
+
+            for (const auto &output : mooreEntry.second) {
+                if (output.first.IsScalar() && output.second.IsScalar()) {
+                    const QString outputName = QString::fromStdString(
+                        output.first.as<std::string>());
+                    const QString outputValue = QString::fromStdString(
+                        output.second.as<std::string>());
+                    QString formattedValue = formatConditionForVerilog(outputValue);
+                    out << "                    " << fsmNameLower << "_" << outputName
+                        << "_reg = " << formattedValue << ";\n";
+                }
+            }
+
+            out << "                end\n";
+        }
+        out << "            default: begin\n";
+        for (const QString &output : allOutputs) {
+            out << "                " << fsmNameLower << "_" << output << "_reg = 1'b0;\n";
+        }
+        out << "            end\n";
+        out << "        endcase\n";
+        out << "    end\n\n";
+    }
+
+    /* Generate Mealy outputs */
+    if (fsmItem["mealy"] && fsmItem["mealy"].IsSequence()) {
+        out << "    /* " << fsmName << " Mealy outputs */\n";
+        for (const auto &mealyEntry : fsmItem["mealy"]) {
+            if (!mealyEntry.IsMap() || !mealyEntry["cond"] || !mealyEntry["sig"]
+                || !mealyEntry["val"]) {
+                continue;
+            }
+
+            const QString condition = QString::fromStdString(mealyEntry["cond"].as<std::string>());
+            const QString signal    = QString::fromStdString(mealyEntry["sig"].as<std::string>());
+            const QString value     = QString::fromStdString(mealyEntry["val"].as<std::string>());
+
+            /* Replace cur_state with prefixed version in condition */
+            QString processedCondition = condition;
+            /* Only replace bare 'cur_state' if it doesn't already have the FSM prefix */
+            QString prefixedPattern = fsmNameLower + "_cur_state";
+            if (!processedCondition.contains(prefixedPattern)) {
+                processedCondition.replace("cur_state", prefixedPattern);
+            }
+
+            /* Format the condition for proper Verilog syntax */
+            QString formattedCondition = formatConditionForVerilog(processedCondition);
+            QString formattedValue     = formatConditionForVerilog(value);
+
+            out << "    assign " << signal << " = (" << formattedCondition << ") ? "
+                << formattedValue << " : 1'b0;\n";
+        }
+        out << "\n";
+    }
+}
+
+/**
+ * @brief Generate Microcode-mode FSM Verilog code
+ * @param fsmItem The YAML node containing the FSM specification
+ * @param out Output text stream
+ */
+void QSocGenerateManager::generateMicrocodeFSM(const YAML::Node &fsmItem, QTextStream &out)
+{
+    const QString fsmName      = QString::fromStdString(fsmItem["name"].as<std::string>());
+    const QString fsmNameUpper = fsmName.toUpper();
+    const QString fsmNameLower = fsmName.toLower();
+    const QString clkSignal    = QString::fromStdString(fsmItem["clk"].as<std::string>());
+    const QString rstSignal    = QString::fromStdString(fsmItem["rst"].as<std::string>());
+    const QString rstState     = QString::fromStdString(fsmItem["rst_state"].as<std::string>());
+
+    /* Get ROM mode (default to parameter) */
+    QString romMode = "parameter";
+    if (fsmItem["rom_mode"] && fsmItem["rom_mode"].IsScalar()) {
+        romMode = QString::fromStdString(fsmItem["rom_mode"].as<std::string>());
+    }
+
+    /* Parse fields */
+    QMap<QString, QPair<int, int>> fields;
+    int                            maxBit = -1;
+
+    if (fsmItem["fields"] && fsmItem["fields"].IsMap()) {
+        for (const auto &fieldEntry : fsmItem["fields"]) {
+            if (!fieldEntry.first.IsScalar() || !fieldEntry.second.IsSequence()
+                || fieldEntry.second.size() != 2) {
+                continue;
+            }
+
+            const QString fieldName = QString::fromStdString(fieldEntry.first.as<std::string>());
+            const int     loBit     = fieldEntry.second[0].as<int>();
+            const int     hiBit     = fieldEntry.second[1].as<int>();
+            fields[fieldName]       = qMakePair(loBit, hiBit);
+
+            if (hiBit > maxBit)
+                maxBit = hiBit;
+        }
+    }
+
+    /* Calculate inferred data width from fields */
+    const int inferredDataWidth = maxBit + 1;
+
+    /* Allow user to specify data width, but use inferred if user's is smaller */
+    int userDataWidth = inferredDataWidth;
+    if (fsmItem["data_width"] && fsmItem["data_width"].IsScalar()) {
+        int userSpecified = fsmItem["data_width"].as<int>();
+        userDataWidth     = qMax(userSpecified, inferredDataWidth);
+    }
+
+    const int dataWidth = userDataWidth;
+
+    out << "\n    /* " << fsmName << " : microcode FSM with ";
+    if (romMode == "port") {
+        out << "programmable ROM */\n";
+    } else {
+        out << "constant ROM */\n";
+    }
+
+    /* Calculate address width based on actual usage */
+    int inferredRomDepth = 32; /* Default for port mode */
+    if (romMode == "port" && fsmItem["rom_depth"] && fsmItem["rom_depth"].IsScalar()) {
+        inferredRomDepth = fsmItem["rom_depth"].as<int>();
+    } else if (fsmItem["rom"] && fsmItem["rom"].IsMap()) {
+        /* For parameter mode, calculate depth based on max address and next field values */
+        int maxAddress = 0;
+        for (const auto &romEntry : fsmItem["rom"]) {
+            if (romEntry.first.IsScalar()) {
+                int address = romEntry.first.as<int>();
+                if (address > maxAddress) {
+                    maxAddress = address;
+                }
+                /* Also check next field values if they exist */
+                if (romEntry.second.IsMap() && fields.contains("next")) {
+                    if (romEntry.second["next"]) {
+                        int nextValue = romEntry.second["next"].as<int>();
+                        if (nextValue > maxAddress) {
+                            maxAddress = nextValue;
+                        }
+                    }
+                }
+            }
+        }
+        inferredRomDepth = maxAddress + 1; /* Exact depth needed */
+    }
+
+    /* Allow user to specify ROM depth, but use inferred if user's is smaller */
+    int userRomDepth = inferredRomDepth;
+    if (fsmItem["rom_depth"] && fsmItem["rom_depth"].IsScalar()) {
+        int userSpecified = fsmItem["rom_depth"].as<int>();
+        userRomDepth      = qMax(userSpecified, inferredRomDepth);
+    }
+
+    const int romDepth = userRomDepth;
+
+    /* Calculate address width from ROM depth */
+    int inferredAddressWidth = 1;
+    while ((1 << inferredAddressWidth) < romDepth) {
+        inferredAddressWidth++;
+    }
+
+    /* Allow user to specify address width, but use inferred if user's is smaller */
+    int userAddressWidth = inferredAddressWidth;
+    if (fsmItem["addr_width"] && fsmItem["addr_width"].IsScalar()) {
+        int userSpecified = fsmItem["addr_width"].as<int>();
+        userAddressWidth  = qMax(userSpecified, inferredAddressWidth);
+    }
+
+    const int addressWidth = userAddressWidth;
+
+    /* Check if user wants parameters instead of localparams for external configuration */
+    bool useParameters = false;
+    if (fsmItem["use_parameters"] && fsmItem["use_parameters"].IsScalar()) {
+        useParameters = fsmItem["use_parameters"].as<bool>();
+    }
+
+    QString paramType = useParameters ? "parameter" : "localparam";
+    out << "    " << paramType << " " << fsmNameUpper << "_AW = " << addressWidth << ";\n";
+    out << "    " << paramType << " " << fsmNameUpper << "_DW = " << (dataWidth - 1) << ";\n\n";
+
+    /* Generate program counter */
+    out << "    /* " << fsmName << " program counter */\n";
+    out << "    reg [" << fsmNameUpper << "_AW-1:0] " << fsmNameLower << "_pc, " << fsmNameLower
+        << "_nxt_pc;\n\n";
+
+    /* Generate ROM array */
+    out << "    /* " << fsmName << " ROM array */\n";
+    out << "    reg [" << fsmNameUpper << "_DW:0] " << fsmNameLower << "_rom [0:(1<<"
+        << fsmNameUpper << "_AW)-1];\n\n";
+
+    if (romMode == "parameter") {
+        /* Generate ROM initialization for parameter mode */
+        if (fsmItem["rom_init_file"] && fsmItem["rom_init_file"].IsScalar()) {
+            /* Use $readmemh for file initialization */
+            const QString initFile = QString::fromStdString(
+                fsmItem["rom_init_file"].as<std::string>());
+            out << "    /* " << fsmName << " ROM initialization from file */\n";
+            out << "    initial begin\n";
+            out << "        $readmemh(\"" << initFile << "\", " << fsmNameLower << "_rom);\n";
+            out << "    end\n\n";
+        } else if (fsmItem["rom"] && fsmItem["rom"].IsMap()) {
+            /* Generate reset-time ROM initialization */
+            out << "    /* " << fsmName << " reset-time ROM initialization */\n";
+            out << "    always @(posedge " << clkSignal << " or negedge " << rstSignal
+                << ") begin\n";
+            out << "        if (!" << rstSignal << ") begin\n";
+
+            for (const auto &romEntry : fsmItem["rom"]) {
+                if (!romEntry.first.IsScalar() || !romEntry.second.IsMap()) {
+                    continue;
+                }
+
+                const int address = romEntry.first.as<int>();
+
+                /* Build the ROM word from fields - sort by high bit position for correct ordering */
+                QMap<int, QString> romPartsMap; /* key = high bit position, value = field part */
+                for (auto it = fields.begin(); it != fields.end(); ++it) {
+                    const QString         &fieldName = it.key();
+                    const QPair<int, int> &bitRange  = it.value();
+
+                    QString fieldPart;
+                    if (romEntry.second[fieldName.toStdString()]) {
+                        const QString fieldValue = QString::fromStdString(
+                            romEntry.second[fieldName.toStdString()].as<std::string>());
+                        const int fieldWidth = bitRange.second - bitRange.first + 1;
+                        /* Handle hexadecimal values properly */
+                        if (fieldValue.startsWith("0x") || fieldValue.startsWith("0X")) {
+                            QString hexValue = fieldValue.mid(2); /* Remove 0x prefix */
+                            fieldPart        = QString("%1'h%2").arg(fieldWidth).arg(hexValue);
+                        } else {
+                            fieldPart = QString("%1'd%2").arg(fieldWidth).arg(fieldValue);
+                        }
+                    } else {
+                        const int fieldWidth = bitRange.second - bitRange.first + 1;
+                        fieldPart            = QString("%1'd0").arg(fieldWidth);
+                    }
+                    romPartsMap[bitRange.second] = fieldPart;
+                }
+
+                /* Convert map to list in descending bit order */
+                QStringList romParts;
+                for (auto it = romPartsMap.end(); it != romPartsMap.begin();) {
+                    --it;
+                    romParts.append(it.value());
+                }
+
+                out << "            " << fsmNameLower << "_rom[" << address << "] <= {"
+                    << romParts.join(", ") << "};\n";
+            }
+
+            out << "        end\n";
+            out << "    end\n\n";
+        }
+    } else {
+        /* Generate write port for programmable ROM */
+        out << "    /* " << fsmName << " write port */\n";
+        out << "    always @(posedge " << clkSignal << ")\n";
+        out << "        if (" << fsmNameLower << "_rom_we) " << fsmNameLower << "_rom["
+            << fsmNameLower << "_rom_addr] <= " << fsmNameLower << "_rom_wdata[" << fsmNameUpper
+            << "_DW:0];\n\n";
+    }
+
+    /* Generate branch decode logic */
+    if (fields.contains("branch") && fields.contains("next")) {
+        out << "    /* " << fsmName << " branch decode */\n";
+        out << "    always @(*) begin\n";
+        out << "        " << fsmNameLower << "_nxt_pc = " << fsmNameLower << "_pc + 1'b1;\n";
+
+        const QPair<int, int> &branchRange = fields["branch"];
+        const QPair<int, int> &nextRange   = fields["next"];
+
+        out << "        case (" << fsmNameLower << "_rom[" << fsmNameLower << "_pc]["
+            << branchRange.second << ":" << branchRange.first << "])\n";
+        out << "            2'd0: " << fsmNameLower << "_nxt_pc = " << fsmNameLower
+            << "_pc + 1'b1;\n";
+        out << "            2'd1: if (cond)  " << fsmNameLower << "_nxt_pc = " << fsmNameLower
+            << "_rom[" << fsmNameLower << "_pc][" << nextRange.second << ":" << nextRange.first
+            << "][" << fsmNameUpper << "_AW-1:0];\n";
+        out << "            2'd2: if (!cond) " << fsmNameLower << "_nxt_pc = " << fsmNameLower
+            << "_rom[" << fsmNameLower << "_pc][" << nextRange.second << ":" << nextRange.first
+            << "][" << fsmNameUpper << "_AW-1:0];\n";
+        out << "            2'd3: " << fsmNameLower << "_nxt_pc = " << fsmNameLower << "_rom["
+            << fsmNameLower << "_pc][" << nextRange.second << ":" << nextRange.first << "]["
+            << fsmNameUpper << "_AW-1:0];\n";
+        out << "            default: " << fsmNameLower << "_nxt_pc = " << fsmNameLower
+            << "_pc + 1'b1;\n";
+        out << "        endcase\n";
+        out << "    end\n\n";
+    }
+
+    /* Generate PC register */
+    out << "    /* " << fsmName << " pc register */\n";
+    out << "    always @(posedge " << clkSignal << " or negedge " << rstSignal << ")\n";
+    out << "        if (!" << rstSignal << ") " << fsmNameLower << "_pc <= " << addressWidth << "'d"
+        << rstState << ";\n";
+    out << "        else        " << fsmNameLower << "_pc <= " << fsmNameLower << "_nxt_pc;\n\n";
+
+    /* Generate control outputs */
+    out << "    /* " << fsmName << " control outputs */\n";
+    for (auto it = fields.begin(); it != fields.end(); ++it) {
+        const QString         &fieldName = it.key();
+        const QPair<int, int> &bitRange  = it.value();
+
+        if (fieldName != "branch" && fieldName != "next") {
+            /* Map field names to actual output port names */
+            QString outputPortName = fieldName;
+            if (fieldName == "ctrl") {
+                outputPortName = "ctrl_bus"; /* Map ctrl field to ctrl_bus port */
+            }
+
+            if (bitRange.first == bitRange.second) {
+                out << "    assign " << outputPortName << " = " << fsmNameLower << "_rom["
+                    << fsmNameLower << "_pc][" << bitRange.first << "];\n";
+            } else {
+                out << "    assign " << outputPortName << " = " << fsmNameLower << "_rom["
+                    << fsmNameLower << "_pc][" << bitRange.second << ":" << bitRange.first
+                    << "];\n";
+            }
+        }
+    }
+    out << "\n";
 }

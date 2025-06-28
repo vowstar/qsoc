@@ -47,10 +47,11 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
             return false;
         }
 
-        // Allow empty instance section if comb or seq section exists
-        if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]) {
+        // Allow empty instance section if comb, seq, or fsm section exists
+        if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]
+            && !netlistData["fsm"]) {
             qCritical() << "Error: Invalid netlist format, 'instance' section is empty and no "
-                           "'comb' or 'seq' section found";
+                           "'comb', 'seq', or 'fsm' section found";
             return false;
         }
 
@@ -83,10 +84,11 @@ bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
             return false;
         }
 
-        // Allow empty instance section if comb or seq section exists
-        if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]) {
+        // Allow empty instance section if comb, seq, or fsm section exists
+        if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]
+            && !netlistData["fsm"]) {
             qCritical() << "Error: Invalid netlist format, 'instance' section is empty and no "
-                           "'comb' or 'seq' section found";
+                           "'comb', 'seq', or 'fsm' section found";
             return false;
         }
 
