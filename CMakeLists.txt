@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.10)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # Options
-option(ENABLE_CLANG_TIDY   "Enable static analysis with clang-tidy"        ON)
+option(ENABLE_CLANG_TIDY   "Enable static analysis with clang-tidy"       OFF)
 option(ENABLE_UNIT_TEST    "Enable unit test"                              ON)
 option(ENABLE_DOXYGEN      "Enable documentation generation with Doxygen" OFF)
 option(ENABLE_SPDX_HEADERS "Enable adding SPDX headers to source files"   OFF)
