@@ -207,20 +207,24 @@ comb:
         qDebug() << "Generated Verilog content:" << verilogContent;
 
         /* Verify all comb logic from both files is present */
-        QVERIFY(verilogContent.contains("assign y1 = a & b;"));    /* From first file */
-        QVERIFY(verilogContent.contains("assign y2 = a | b;"));    /* From first file */
-        QVERIFY(verilogContent.contains("assign y3 = c ^ d;"));    /* From second file */
-        QVERIFY(verilogContent.contains("assign y4 = ~(c & d);")); /* From second file */
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "assign y1 = a & b;")); /* From first file */
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "assign y2 = a | b;")); /* From first file */
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "assign y3 = c ^ d;")); /* From second file */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "assign y4 = ~(c & d);")); /* From second file */
 
         /* Verify all ports from both files are present */
-        QVERIFY(verilogContent.contains("input  a"));
-        QVERIFY(verilogContent.contains("input  b"));
-        QVERIFY(verilogContent.contains("input  c"));
-        QVERIFY(verilogContent.contains("input  d"));
-        QVERIFY(verilogContent.contains("output y1"));
-        QVERIFY(verilogContent.contains("output y2"));
-        QVERIFY(verilogContent.contains("output y3"));
-        QVERIFY(verilogContent.contains("output y4"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input a"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input b"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input c"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input d"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output y1"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output y2"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output y3"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output y4"));
     }
 
     void testMergeSeqSections()
@@ -325,15 +329,15 @@ seq:
         QVERIFY(alwaysBlockCount == 3);
 
         /* Verify register assignments from first file */
-        QVERIFY(verilogContent.contains("reg1 <= 8'h00;"));
-        QVERIFY(verilogContent.contains("reg1 <= data_in1;"));
-        QVERIFY(verilogContent.contains("reg2 <= 8'hFF;"));
-        QVERIFY(verilogContent.contains("reg2 <= data_in2;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1 <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1 <= data_in1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2 <= 8'hFF;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2 <= data_in2;"));
 
         /* Verify register assignment from second file */
-        QVERIFY(verilogContent.contains("reg3 <= 16'h0000;"));
-        QVERIFY(verilogContent.contains("reg3 <= data_in3;"));
-        QVERIFY(verilogContent.contains("if (enable) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg3 <= 16'h0000;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg3 <= data_in3;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (enable) begin"));
 
         /* Verify all ports from both files are present using normalized whitespace */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input clk"));
@@ -452,28 +456,30 @@ seq:
         qDebug() << "Generated mixed logic Verilog content:" << verilogContent;
 
         /* Verify combinational logic from both files */
-        QVERIFY(verilogContent.contains("always @(*) begin"));       /* Conditional logic */
-        QVERIFY(verilogContent.contains("assign and_out = a & c;")); /* Simple assign */
-        QVERIFY(verilogContent.contains("if (sel)"));
-        QVERIFY(verilogContent.contains("mux_out = a;"));
-        QVERIFY(verilogContent.contains("mux_out = b;"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "always @(*) begin")); /* Conditional logic */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "assign and_out = a & c;")); /* Simple assign */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (sel)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out = a;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out = b;"));
 
         /* Verify sequential logic from both files */
         int alwaysSeqCount = verilogContent.count("always @(posedge clk");
         QVERIFY(alwaysSeqCount == 2);
-        QVERIFY(verilogContent.contains("reg_out <= 8'h00;"));
-        QVERIFY(verilogContent.contains("reg_out <= mux_out;"));
-        QVERIFY(verilogContent.contains("shift_reg <= 8'hAA;"));
-        QVERIFY(verilogContent.contains("shift_reg <= shift_reg << 1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg_out <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg_out <= mux_out;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "shift_reg <= 8'hAA;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "shift_reg <= shift_reg << 1;"));
 
         /* Verify all ports are present */
-        QVERIFY(verilogContent.contains("input  [7:0] a"));
-        QVERIFY(verilogContent.contains("input  [7:0] b"));
-        QVERIFY(verilogContent.contains("input  [7:0] c"));
-        QVERIFY(verilogContent.contains("output [7:0] mux_out"));
-        QVERIFY(verilogContent.contains("output [7:0] and_out"));
-        QVERIFY(verilogContent.contains("output [7:0] reg_out"));
-        QVERIFY(verilogContent.contains("output [7:0] shift_reg"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  [7:0] a"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  [7:0] b"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  [7:0] c"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] mux_out"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] and_out"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] reg_out"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] shift_reg"));
     }
 
     void testMergeThreeFiles()
@@ -549,9 +555,9 @@ comb:
         verilogFile.close();
 
         /* Verify all assignments are present in order */
-        QVERIFY(verilogContent.contains("assign out1 = in1;"));
-        QVERIFY(verilogContent.contains("assign out2 = in2;"));
-        QVERIFY(verilogContent.contains("assign out3 = in3;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign out1 = in1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign out2 = in2;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign out3 = in3;"));
 
         /* Verify order is preserved - out1 should come before out2, out2 before out3 */
         int pos1 = verilogContent.indexOf("assign out1 = in1;");
@@ -626,10 +632,10 @@ comb: []
         verilogFile.close();
 
         /* Verify both instances are present */
-        QVERIFY(verilogContent.contains("inst1"));
-        QVERIFY(verilogContent.contains("inst2"));
-        QVERIFY(verilogContent.contains("dummy_module"));
-        QVERIFY(verilogContent.contains("another_module"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "inst1"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "inst2"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "dummy_module"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "another_module"));
 
         /* Verify all ports are present using normalized whitespace */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input clk"));

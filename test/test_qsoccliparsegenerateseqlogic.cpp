@@ -177,13 +177,14 @@ seq:
         verilogFile.close();
 
         /* Verify sequential logic is generated */
-        QVERIFY(verilogContent.contains("/* Sequential logic */"));
-        QVERIFY(verilogContent.contains("always @(posedge clk or negedge rst_n) begin"));
-        QVERIFY(verilogContent.contains("if (!rst_n) begin"));
-        QVERIFY(verilogContent.contains("data_reg <= 8'h00;"));
-        QVERIFY(verilogContent.contains("end else begin"));
-        QVERIFY(verilogContent.contains("data_reg <= data_in;"));
-        QVERIFY(verilogContent.contains("end"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* Sequential logic */"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk or negedge rst_n) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!rst_n) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "data_reg <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "end else begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "data_reg <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "end"));
     }
 
     void testSequentialWithEnable()
@@ -244,13 +245,14 @@ seq:
         verilogFile.close();
 
         /* Verify sequential logic with enable is generated */
-        QVERIFY(verilogContent.contains("always @(posedge clk or negedge rst_n) begin"));
-        QVERIFY(verilogContent.contains("if (!rst_n) begin"));
-        QVERIFY(verilogContent.contains("counter <= 16'h0000;"));
-        QVERIFY(verilogContent.contains("end else begin"));
-        QVERIFY(verilogContent.contains("if (enable) begin"));
-        QVERIFY(verilogContent.contains("counter <= counter + 1;"));
-        QVERIFY(verilogContent.contains("end"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk or negedge rst_n) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!rst_n) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "counter <= 16'h0000;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "end else begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (enable) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "counter <= counter + 1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "end"));
     }
 
     void testSequentialWithConditional()
@@ -318,17 +320,18 @@ seq:
         verilogFile.close();
 
         /* Verify conditional sequential logic is generated */
-        QVERIFY(verilogContent.contains("always @(posedge clk or negedge rst_n) begin"));
-        QVERIFY(verilogContent.contains("if (!rst_n) begin"));
-        QVERIFY(verilogContent.contains("state_reg <= 8'h00;"));
-        QVERIFY(verilogContent.contains("end else begin"));
-        QVERIFY(verilogContent.contains("state_reg <= state_reg;"));
-        QVERIFY(verilogContent.contains("if (mode == 2'b00)"));
-        QVERIFY(verilogContent.contains("state_reg <= 8'h01;"));
-        QVERIFY(verilogContent.contains("else if (mode == 2'b01)"));
-        QVERIFY(verilogContent.contains("state_reg <= data_in;"));
-        QVERIFY(verilogContent.contains("else if (mode == 2'b10)"));
-        QVERIFY(verilogContent.contains("state_reg <= state_reg + 1;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk or negedge rst_n) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!rst_n) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "end else begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= state_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (mode == 2'b00)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= 8'h01;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (mode == 2'b01)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (mode == 2'b10)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= state_reg + 1;"));
     }
 
     void testSequentialNegativeEdge()
@@ -381,8 +384,8 @@ seq:
         verilogFile.close();
 
         /* Verify negative edge sequential logic is generated */
-        QVERIFY(verilogContent.contains("always @(negedge clk) begin"));
-        QVERIFY(verilogContent.contains("q <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "always @(negedge clk) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "q <= data_in;"));
     }
 
     void testMultipleSequential()
@@ -453,11 +456,11 @@ seq:
         /* Verify multiple sequential logic blocks are generated */
         int alwaysBlockCount = verilogContent.count("always @(posedge clk or negedge rst_n) begin");
         QVERIFY(alwaysBlockCount == 2);
-        QVERIFY(verilogContent.contains("reg1 <= 8'h00;"));
-        QVERIFY(verilogContent.contains("reg1 <= data_in;"));
-        QVERIFY(verilogContent.contains("reg2 <= 8'hFF;"));
-        QVERIFY(verilogContent.contains("if (enable) begin"));
-        QVERIFY(verilogContent.contains("reg2 <= reg1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1 <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1 <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2 <= 8'hFF;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (enable) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2 <= reg1;"));
     }
 
     void testInvalidSequential()
@@ -573,30 +576,31 @@ seq:
         verilogFile.close();
 
         /* Verify nested sequential logic is generated */
-        QVERIFY(verilogContent.contains("always @(posedge clk or negedge rst_n) begin"));
-        QVERIFY(verilogContent.contains("if (!rst_n) begin"));
-        QVERIFY(verilogContent.contains("state_machine <= 8'h00;"));
-        QVERIFY(verilogContent.contains("end else begin"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk or negedge rst_n) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!rst_n) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "end else begin"));
 
         /* Verify default assignment */
-        QVERIFY(verilogContent.contains("state_machine <= state_machine;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine <= state_machine;"));
 
         /* Verify if-else structure with begin/end blocks */
-        QVERIFY(verilogContent.contains("if (ctrl == 2'b00) begin"));
-        QVERIFY(verilogContent.contains("state_machine <= 8'h01;"));
-        QVERIFY(verilogContent.contains("else if (ctrl == 2'b01) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (ctrl == 2'b00) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine <= 8'h01;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (ctrl == 2'b01) begin"));
 
         /* Verify nested case statement using normalized whitespace */
-        QVERIFY(verilogContent.contains("case (sub_ctrl)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "case (sub_ctrl)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "2'b00: state_machine <= 8'h10;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "2'b01: state_machine <= 8'h20;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "2'b10: state_machine <= 8'h30;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "default: state_machine <= 8'h0F;"));
-        QVERIFY(verilogContent.contains("endcase"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "endcase"));
 
         /* Verify final if condition */
-        QVERIFY(verilogContent.contains("else if (ctrl == 2'b10) begin"));
-        QVERIFY(verilogContent.contains("state_machine <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (ctrl == 2'b10) begin"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine <= data_in;"));
 
         /* Verify proper end statements */
         int beginCount = verilogContent.count(" begin");
