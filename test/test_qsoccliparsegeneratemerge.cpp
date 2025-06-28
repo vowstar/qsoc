@@ -328,16 +328,21 @@ seq:
         int alwaysBlockCount = verilogContent.count("always @(posedge clk");
         QVERIFY(alwaysBlockCount == 3);
 
-        /* Verify register assignments from first file */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1 <= 8'h00;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1 <= data_in1;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2 <= 8'hFF;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2 <= data_in2;"));
+        /* Verify register assignments from first file with internal reg pattern */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1_reg <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1_reg <= data_in1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2_reg <= 8'hFF;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2_reg <= data_in2;"));
 
-        /* Verify register assignment from second file */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg3 <= 16'h0000;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg3 <= data_in3;"));
+        /* Verify register assignment from second file with internal reg pattern */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg3_reg <= 16'h0000;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg3_reg <= data_in3;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (enable) begin"));
+
+        /* Verify assign statements for internal regs */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reg1 = reg1_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reg2 = reg2_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reg3 = reg3_reg;"));
 
         /* Verify all ports from both files are present using normalized whitespace */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input clk"));
@@ -461,16 +466,19 @@ seq:
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "assign and_out = a & c;")); /* Simple assign */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (sel)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out = a;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out = b;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out_reg = a;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out_reg = b;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign mux_out = mux_out_reg;"));
 
-        /* Verify sequential logic from both files */
+        /* Verify sequential logic from both files with internal reg pattern */
         int alwaysSeqCount = verilogContent.count("always @(posedge clk");
         QVERIFY(alwaysSeqCount == 2);
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg_out <= 8'h00;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg_out <= mux_out;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "shift_reg <= 8'hAA;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "shift_reg <= shift_reg << 1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg_out_reg <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg_out_reg <= mux_out;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "shift_reg_reg <= 8'hAA;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "shift_reg_reg <= shift_reg << 1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reg_out = reg_out_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign shift_reg = shift_reg_reg;"));
 
         /* Verify all ports are present */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  [7:0] a"));

@@ -233,14 +233,15 @@ comb:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify always block is generated */
+        /* Verify always block is generated with internal reg pattern */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "always @(*) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "result = 32'b0;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "result_reg = 32'b0;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (sel == 2'b00)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "result = a;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "result_reg = a;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (sel == 2'b01)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "result = b;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "result_reg = b;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "end"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign result = result_reg;"));
     }
 
     void testCaseComb()
@@ -292,16 +293,17 @@ comb:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify case statement is generated */
+        /* Verify case statement is generated with internal reg pattern */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "always @(*) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "alu_op = 4'b0000;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "alu_op_reg = 4'b0000;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "case (funct)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100000: alu_op = 4'b0001;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100010: alu_op = 4'b0010;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100100: alu_op = 4'b0011;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "default: alu_op = 4'b0000;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100000: alu_op_reg = 4'b0001;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100010: alu_op_reg = 4'b0010;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100100: alu_op_reg = 4'b0011;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "default: alu_op_reg = 4'b0000;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "endcase"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "end"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign alu_op = alu_op_reg;"));
     }
 
     void testMultipleComb()
@@ -365,9 +367,10 @@ comb:
         /* Verify both combinational logic blocks are generated */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign and_out = a & b;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "always @(*) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out = b;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out_reg = b;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (sel)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out = a;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "mux_out_reg = a;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign mux_out = mux_out_reg;"));
     }
 
     void testInvalidComb()
@@ -463,20 +466,21 @@ comb:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify nested structure is generated correctly */
+        /* Verify nested structure is generated correctly with internal reg pattern */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "always @(*) begin"));
         QVERIFY(
-            verifyVerilogContentNormalized(verilogContent, "alu_op = 4'b0000;")); /* Default value */
+            verifyVerilogContentNormalized(verilogContent, "alu_op_reg = 4'b0000;")); /* Default value */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (opcode == 6'b000000) begin"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "case (funct)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100000: alu_op = 4'b0001;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100010: alu_op = 4'b0010;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "default: alu_op = 4'b1111;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100000: alu_op_reg = 4'b0001;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "6'b100010: alu_op_reg = 4'b0010;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "default: alu_op_reg = 4'b1111;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "endcase"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "end")); /* end of if */
         QVERIFY(
             verifyVerilogContentNormalized(verilogContent, "else if (opcode == 6'b001000) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "alu_op = 4'b0101;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "alu_op_reg = 4'b0101;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign alu_op = alu_op_reg;"));
     }
 };
 

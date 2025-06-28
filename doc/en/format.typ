@@ -279,12 +279,19 @@ comb:
 
 Generates:
 ```verilog
+/* Internal reg declarations for combinational logic */
+reg [31:0] result_reg;
+
+/* Assign internal regs to outputs */
+assign result = result_reg;
+
+/* Combinational logic */
 always @(*) begin
-    result = 32'b0;
+    result_reg = 32'b0;
     if (sel == 2'b00)
-        result = a;
+        result_reg = a;
     else if (sel == 2'b01)
-        result = b;
+        result_reg = b;
 end
 ```
 
@@ -323,13 +330,20 @@ comb:
 
 Generates:
 ```verilog
+/* Internal reg declarations for combinational logic */
+reg [3:0] alu_op_reg;
+
+/* Assign internal regs to outputs */
+assign alu_op = alu_op_reg;
+
+/* Combinational logic */
 always @(*) begin
-    alu_op = 4'b0000;
+    alu_op_reg = 4'b0000;
     case (funct)
-        6'b100000: alu_op = 4'b0001;
-        6'b100010: alu_op = 4'b0010;
-        6'b100100: alu_op = 4'b0011;
-        default:   alu_op = 4'b0000;
+        6'b100000: alu_op_reg = 4'b0001;
+        6'b100010: alu_op_reg = 4'b0010;
+        6'b100100: alu_op_reg = 4'b0011;
+        default:   alu_op_reg = 4'b0000;
     endcase
 end
 ```
@@ -546,7 +560,7 @@ Simple register assignments use the `next` field:
 
 ```yaml
 seq:
-  - reg: data_reg
+  - reg: data
     clk: clk
     rst: rst_n
     rst_val: "8'h00"
@@ -555,6 +569,13 @@ seq:
 
 Generates:
 ```verilog
+/* Internal reg declarations for sequential logic */
+reg [7:0] data_reg;
+
+/* Assign internal regs to outputs */
+assign data = data_reg;
+
+/* Sequential logic */
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         data_reg <= 8'h00;
@@ -570,7 +591,7 @@ Control the clock edge using the `edge` field:
 
 ```yaml
 seq:
-  - reg: neg_edge_reg
+  - reg: neg_edge
     clk: clk
     edge: neg
     next: data_in
@@ -578,6 +599,13 @@ seq:
 
 Generates:
 ```verilog
+/* Internal reg declarations for sequential logic */
+reg neg_edge_reg;
+
+/* Assign internal regs to outputs */
+assign neg_edge = neg_edge_reg;
+
+/* Sequential logic */
 always @(negedge clk) begin
     neg_edge_reg <= data_in;
 end
@@ -598,11 +626,18 @@ seq:
 
 Generates:
 ```verilog
+/* Internal reg declarations for sequential logic */
+reg [15:0] counter_reg;
+
+/* Assign internal regs to outputs */
+assign counter = counter_reg;
+
+/* Sequential logic */
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        counter <= 16'h0000;
+        counter_reg <= 16'h0000;
     end else begin
-        counter <= counter + 1;
+        counter_reg <= counter + 1;
     end
 end
 ```
@@ -623,12 +658,19 @@ seq:
 
 Generates:
 ```verilog
+/* Internal reg declarations for sequential logic */
+reg [7:0] enabled_counter_reg;
+
+/* Assign internal regs to outputs */
+assign enabled_counter = enabled_counter_reg;
+
+/* Sequential logic */
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        enabled_counter <= 8'h00;
+        enabled_counter_reg <= 8'h00;
     end else begin
         if (count_en) begin
-            enabled_counter <= enabled_counter + 1;
+            enabled_counter_reg <= enabled_counter + 1;
         end
     end
 end
@@ -640,32 +682,39 @@ Use conditional logic with the `if` field for complex state machines:
 
 ```yaml
 seq:
-  - reg: state_reg
+  - reg: state
     clk: clk
     rst: rst_n
     rst_val: "2'b00"
     if:
       - cond: "start_signal"
         then: "2'b01"
-      - cond: "state_reg == 2'b01 && done_signal"
+      - cond: "state == 2'b01 && done_signal"
         then: "2'b10"
-      - cond: "state_reg == 2'b10"
+      - cond: "state == 2'b10"
         then: "2'b00"
-    default: "state_reg"
+    default: "state"
 ```
 
 Generates:
 ```verilog
+/* Internal reg declarations for sequential logic */
+reg [1:0] state_reg;
+
+/* Assign internal regs to outputs */
+assign state = state_reg;
+
+/* Sequential logic */
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         state_reg <= 2'b00;
     end else begin
-        state_reg <= state_reg;
+        state_reg <= state;
         if (start_signal)
             state_reg <= 2'b01;
-        else if (state_reg == 2'b01 && done_signal)
+        else if (state == 2'b01 && done_signal)
             state_reg <= 2'b10;
-        else if (state_reg == 2'b10)
+        else if (state == 2'b10)
             state_reg <= 2'b00;
     end
 end
@@ -717,22 +766,29 @@ seq:
 
 Generates:
 ```verilog
+/* Internal reg declarations for sequential logic */
+reg [7:0] state_machine_reg;
+
+/* Assign internal regs to outputs */
+assign state_machine = state_machine_reg;
+
+/* Sequential logic */
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        state_machine <= 8'h00;
+        state_machine_reg <= 8'h00;
     end else begin
-        state_machine <= state_machine;
+        state_machine_reg <= state_machine;
         if (ctrl == 2'b00) begin
-            state_machine <= 8'h01;
+            state_machine_reg <= 8'h01;
         end else if (ctrl == 2'b01) begin
             case (sub_ctrl)
-                2'b00: state_machine <= 8'h10;
-                2'b01: state_machine <= 8'h20;
-                2'b10: state_machine <= 8'h30;
-                default: state_machine <= 8'h0F;
+                2'b00: state_machine_reg <= 8'h10;
+                2'b01: state_machine_reg <= 8'h20;
+                2'b10: state_machine_reg <= 8'h30;
+                default: state_machine_reg <= 8'h0F;
             endcase
         end else if (ctrl == 2'b10) begin
-            state_machine <= data_in;
+            state_machine_reg <= data_in;
         end
     end
 end
@@ -822,6 +878,354 @@ The system generates optimized `always` blocks based on the specified features:
 - With reset: `@(posedge clk or negedge rst)`
 - Reset logic: Asynchronous reset with `if (!rst)` structure
 - Enable logic: Conditional assignment within the main logic
+
+==== Generated Verilog Examples
+<soc-net-generated-examples>
+The following examples demonstrate the actual Verilog code generated by the QSoC system. These examples showcase the internal register pattern used for Verilog 2005 compliance, where all output signals are implemented using internal registers with `_reg` suffix followed by continuous assign statements.
+
+===== FSM with Multiple Encoding Types
+Here's an example showing two FSMs with different state encodings operating together:
+
+```yaml
+fsm:
+  - name: test_onehot
+    clk: clk
+    rst: rst_n
+    rst_state: S0
+    encoding: onehot
+    trans:
+      S0: [{cond: trigger, next: S1}]
+      S1: [{cond: trigger, next: S2}]
+      S2: [{cond: trigger, next: S0}]
+    moore:
+      S1: {onehot_output: 1}
+  - name: test_gray
+    clk: clk
+    rst: rst_n
+    rst_state: A
+    encoding: gray
+    trans:
+      A: [{cond: trigger, next: B}]
+      B: [{cond: trigger, next: C}]
+      C: [{cond: trigger, next: A}]
+    moore:
+      B: {gray_output: 1}
+```
+
+Generated Verilog:
+```verilog
+module test_fsm_encodings (
+    input  clk,
+    input  rst_n,
+    input  trigger,
+    output onehot_output,
+    output gray_output
+);
+
+    /* Wire declarations */
+    /* Module instantiations */
+
+    /* Finite State Machine logic */
+
+    /* test_onehot : Table FSM generated by YAML-DSL */
+    /* test_onehot state registers */
+    reg [2:0] test_onehot_cur_state, test_onehot_nxt_state;
+
+    localparam TEST_ONEHOT_S0 = 3'd1;
+    localparam TEST_ONEHOT_S1 = 3'd2;
+    localparam TEST_ONEHOT_S2 = 3'd4;
+
+    /* test_onehot next-state logic */
+    always @(*) begin
+        test_onehot_nxt_state = test_onehot_cur_state;
+        case (test_onehot_cur_state)
+            TEST_ONEHOT_S0: if (trigger) test_onehot_nxt_state = TEST_ONEHOT_S1;
+            TEST_ONEHOT_S1: if (trigger) test_onehot_nxt_state = TEST_ONEHOT_S2;
+            TEST_ONEHOT_S2: if (trigger) test_onehot_nxt_state = TEST_ONEHOT_S0;
+            default: test_onehot_nxt_state = test_onehot_cur_state;
+        endcase
+    end
+
+    /* test_onehot state register w/ async reset */
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) test_onehot_cur_state <= TEST_ONEHOT_S0;
+        else test_onehot_cur_state <= test_onehot_nxt_state;
+
+    /* test_onehot Moore outputs */
+    reg test_onehot_onehot_output_reg;
+
+    assign onehot_output = test_onehot_onehot_output_reg;
+
+    always @(*) begin
+        test_onehot_onehot_output_reg = 1'b0;
+        case (test_onehot_cur_state)
+            TEST_ONEHOT_S1: begin
+                test_onehot_onehot_output_reg = 1'b1;
+            end
+            default: begin
+                test_onehot_onehot_output_reg = 1'b0;
+            end
+        endcase
+    end
+
+    /* test_gray : Table FSM generated by YAML-DSL */
+    /* test_gray state registers */
+    reg [1:0] test_gray_cur_state, test_gray_nxt_state;
+
+    localparam TEST_GRAY_A = 2'd0;
+    localparam TEST_GRAY_B = 2'd1;
+    localparam TEST_GRAY_C = 2'd3;
+
+    /* test_gray next-state logic */
+    always @(*) begin
+        test_gray_nxt_state = test_gray_cur_state;
+        case (test_gray_cur_state)
+            TEST_GRAY_A: if (trigger) test_gray_nxt_state = TEST_GRAY_B;
+            TEST_GRAY_B: if (trigger) test_gray_nxt_state = TEST_GRAY_C;
+            TEST_GRAY_C: if (trigger) test_gray_nxt_state = TEST_GRAY_A;
+            default: test_gray_nxt_state = test_gray_cur_state;
+        endcase
+    end
+
+    /* test_gray state register w/ async reset */
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) test_gray_cur_state <= TEST_GRAY_A;
+        else test_gray_cur_state <= test_gray_nxt_state;
+
+    /* test_gray Moore outputs */
+    reg test_gray_gray_output_reg;
+
+    assign gray_output = test_gray_gray_output_reg;
+
+    always @(*) begin
+        test_gray_gray_output_reg = 1'b0;
+        case (test_gray_cur_state)
+            TEST_GRAY_B: begin
+                test_gray_gray_output_reg = 1'b1;
+            end
+            default: begin
+                test_gray_gray_output_reg = 1'b0;
+            end
+        endcase
+    end
+
+endmodule
+```
+
+===== Microcode FSM with ROM-based Control
+Example of a microcode FSM using constant ROM initialization:
+
+```yaml
+fsm:
+  - name: mseq_fixed
+    clk: clk
+    rst: rst_n
+    rst_state: 0
+    rom_mode: parameter
+    fields:
+      ctrl: [0, 7]
+      branch: [8, 9]
+      next: [10, 14]
+    rom:
+      0: {ctrl: "8'h55", branch: next, next: 1}
+      1: {ctrl: "8'h3C", branch: branch_if, next: 4}
+      2: {ctrl: "8'h18", branch: next, next: 3}
+      3: {ctrl: "8'h80", branch: jump, next: 0}
+      4: {ctrl: "8'hA0", branch: branch_if_not, next: 3}
+```
+
+Generated Verilog:
+```verilog
+module test_microcode_fixed_fsm (
+    input        clk,
+    input        rst_n,
+    input        cond,
+    output [7:0] ctrl_bus
+);
+
+    /* Wire declarations */
+    /* Module instantiations */
+
+    /* Finite State Machine logic */
+
+    /* mseq_fixed : microcode FSM with constant ROM */
+    localparam MSEQ_FIXED_AW = 3;
+    localparam MSEQ_FIXED_DW = 14;
+
+    /* mseq_fixed program counter */
+    reg [MSEQ_FIXED_AW-1:0] mseq_fixed_pc, mseq_fixed_nxt_pc;
+
+    /* mseq_fixed ROM array */
+    reg [MSEQ_FIXED_DW:0] mseq_fixed_rom[0:(1<<MSEQ_FIXED_AW)-1];
+
+    /* mseq_fixed reset-time ROM initialization */
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            mseq_fixed_rom[0] <= {5'd1, 2'd0, 8'h55};
+            mseq_fixed_rom[1] <= {5'd4, 2'd1, 8'h3C};
+            mseq_fixed_rom[2] <= {5'd3, 2'd0, 8'h18};
+            mseq_fixed_rom[3] <= {5'd0, 2'd3, 8'h80};
+            mseq_fixed_rom[4] <= {5'd3, 2'd2, 8'hA0};
+        end
+    end
+
+    /* mseq_fixed branch decode */
+    always @(*) begin
+        mseq_fixed_nxt_pc = mseq_fixed_pc + 1'b1;
+        case (mseq_fixed_rom[mseq_fixed_pc][9:8])
+            2'd0: mseq_fixed_nxt_pc = mseq_fixed_pc + 1'b1;
+            2'd1: if (cond) mseq_fixed_nxt_pc = mseq_fixed_rom[mseq_fixed_pc][14:10][MSEQ_FIXED_AW-1:0];
+            2'd2: if (!cond) mseq_fixed_nxt_pc = mseq_fixed_rom[mseq_fixed_pc][14:10][MSEQ_FIXED_AW-1:0];
+            2'd3: mseq_fixed_nxt_pc = mseq_fixed_rom[mseq_fixed_pc][14:10][MSEQ_FIXED_AW-1:0];
+            default: mseq_fixed_nxt_pc = mseq_fixed_pc + 1'b1;
+        endcase
+    end
+
+    /* mseq_fixed pc register */
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) mseq_fixed_pc <= 3'd0;
+        else mseq_fixed_pc <= mseq_fixed_nxt_pc;
+
+    /* mseq_fixed control outputs */
+    assign ctrl_bus = mseq_fixed_rom[mseq_fixed_pc][7:0];
+
+endmodule
+```
+
+===== Mixed Combinational and Sequential Logic
+Example showing comprehensive mixed logic with internal register pattern:
+
+```yaml
+port:
+  clk:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  sel:
+    direction: input
+    type: logic
+  a:
+    direction: input
+    type: logic[7:0]
+  b:
+    direction: input
+    type: logic[7:0]
+  c:
+    direction: input
+    type: logic[7:0]
+  mux_out:
+    direction: output
+    type: logic[7:0]
+  and_out:
+    direction: output
+    type: logic[7:0]
+  reg_out:
+    direction: output
+    type: logic[7:0]
+  shift_reg:
+    direction: output
+    type: logic[7:0]
+
+comb:
+  - out: mux_out
+    if:
+      - cond: "sel"
+        then: "a"
+    default: "b"
+  - out: and_out
+    expr: "a & c"
+
+seq:
+  - reg: reg_out
+    clk: clk
+    rst: rst_n
+    rst_val: "8'h00"
+    next: mux_out
+  - reg: shift_reg
+    clk: clk
+    rst: rst_n
+    rst_val: "8'hAA"
+    next: "shift_reg << 1"
+```
+
+Generated Verilog:
+```verilog
+module test_mixed_merge1 (
+    input        clk,
+    input        rst_n,
+    input        sel,
+    input  [7:0] a,
+    input  [7:0] b,
+    input  [7:0] c,
+    output [7:0] mux_out,
+    output [7:0] and_out,
+    output [7:0] reg_out,
+    output [7:0] shift_reg
+);
+
+    /* Wire declarations */
+    /* Module instantiations */
+
+    /* Internal reg declarations for combinational logic */
+    reg [7:0] mux_out_reg;
+
+    /* Assign internal regs to outputs */
+    assign mux_out = mux_out_reg;
+
+    /* Combinational logic */
+    always @(*) begin
+        mux_out_reg = b;
+        if (sel) begin
+            mux_out_reg = a;
+        end
+    end
+
+    assign and_out = a & c;
+
+    /* Internal reg declarations for sequential logic */
+    reg [7:0] reg_out_reg;
+    reg [7:0] shift_reg_reg;
+
+    /* Assign internal regs to outputs */
+    assign reg_out   = reg_out_reg;
+    assign shift_reg = shift_reg_reg;
+
+    /* Sequential logic */
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            reg_out_reg <= 8'h00;
+        end else begin
+            reg_out_reg <= mux_out;
+        end
+    end
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            shift_reg_reg <= 8'hAA;
+        end else begin
+            shift_reg_reg <= shift_reg << 1;
+        end
+    end
+
+endmodule
+```
+
+===== Key Features Demonstrated
+The generated examples showcase several important features:
+
+1. *Verilog 2005 Compliance*: All output signals use internal register pattern with `_reg` suffix and continuous assign statements to ensure compatibility.
+
+2. *FSM Naming Conventions*: FSM-generated signals use lowercase FSM names with underscores (e.g., `test_onehot_cur_state`), while state constants use uppercase (e.g., `TEST_ONEHOT_S0`).
+
+3. *Internal Register Pattern*: Both combinational and sequential logic outputs use internal registers followed by assign statements for proper wire/reg type separation.
+
+4. *Bit Width Inference*: The system automatically infers correct bit widths from port declarations and applies them to internal registers.
+
+5. *ROM Initialization*: Microcode FSMs properly initialize ROM contents with correct bit width padding (e.g., `{5'd1, 2'd0, 8'h55}` for 15-bit ROM words).
+
+6. *Expression Handling*: Sequential logic expressions correctly reference output ports (e.g., `shift_reg << 1` refers to the output port, not the internal register).
 
 === FSM SECTION
 <soc-net-fsm>

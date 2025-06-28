@@ -176,15 +176,16 @@ seq:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify sequential logic is generated */
+        /* Verify sequential logic is generated with internal reg pattern */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* Sequential logic */"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "always @(posedge clk or negedge rst_n) begin"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!rst_n) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "data_reg <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "data_reg_reg <= 8'h00;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "end else begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "data_reg <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "data_reg_reg <= data_in;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "end"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign data_reg = data_reg_reg;"));
     }
 
     void testSequentialWithEnable()
@@ -244,15 +245,16 @@ seq:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify sequential logic with enable is generated */
+        /* Verify sequential logic with enable is generated with internal reg pattern */
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "always @(posedge clk or negedge rst_n) begin"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!rst_n) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "counter <= 16'h0000;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "counter_reg <= 16'h0000;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "end else begin"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (enable) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "counter <= counter + 1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "counter_reg <= counter + 1;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "end"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign counter = counter_reg;"));
     }
 
     void testSequentialWithConditional()
@@ -319,19 +321,20 @@ seq:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify conditional sequential logic is generated */
+        /* Verify conditional sequential logic is generated with internal reg pattern */
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "always @(posedge clk or negedge rst_n) begin"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!rst_n) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg_reg <= 8'h00;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "end else begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= state_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg_reg <= state_reg;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (mode == 2'b00)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= 8'h01;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg_reg <= 8'h01;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (mode == 2'b01)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg_reg <= data_in;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (mode == 2'b10)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg <= state_reg + 1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_reg_reg <= state_reg + 1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign state_reg = state_reg_reg;"));
     }
 
     void testSequentialNegativeEdge()
@@ -383,9 +386,10 @@ seq:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify negative edge sequential logic is generated */
+        /* Verify negative edge sequential logic is generated with internal reg pattern */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "always @(negedge clk) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "q <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "q_reg <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign q = q_reg;"));
     }
 
     void testMultipleSequential()
@@ -453,14 +457,16 @@ seq:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify multiple sequential logic blocks are generated */
+        /* Verify multiple sequential logic blocks are generated with internal reg pattern */
         int alwaysBlockCount = verilogContent.count("always @(posedge clk or negedge rst_n) begin");
         QVERIFY(alwaysBlockCount == 2);
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1 <= 8'h00;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1 <= data_in;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2 <= 8'hFF;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1_reg <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg1_reg <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2_reg <= 8'hFF;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (enable) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2 <= reg1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg2_reg <= reg1;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reg1 = reg1_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reg2 = reg2_reg;"));
     }
 
     void testInvalidSequential()
@@ -575,32 +581,39 @@ seq:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify nested sequential logic is generated */
+        /* Verify nested sequential logic is generated with internal reg pattern */
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "always @(posedge clk or negedge rst_n) begin"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!rst_n) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine <= 8'h00;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine_reg <= 8'h00;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "end else begin"));
 
         /* Verify default assignment */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine <= state_machine;"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "state_machine_reg <= state_machine;"));
 
         /* Verify if-else structure with begin/end blocks */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (ctrl == 2'b00) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine <= 8'h01;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine_reg <= 8'h01;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (ctrl == 2'b01) begin"));
 
         /* Verify nested case statement using normalized whitespace */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "case (sub_ctrl)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "2'b00: state_machine <= 8'h10;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "2'b01: state_machine <= 8'h20;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "2'b10: state_machine <= 8'h30;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "default: state_machine <= 8'h0F;"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "2'b00: state_machine_reg <= 8'h10;"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "2'b01: state_machine_reg <= 8'h20;"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "2'b10: state_machine_reg <= 8'h30;"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "default: state_machine_reg <= 8'h0F;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "endcase"));
 
         /* Verify final if condition */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (ctrl == 2'b10) begin"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "state_machine_reg <= data_in;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "assign state_machine = state_machine_reg;"));
 
         /* Verify proper end statements */
         int beginCount = verilogContent.count(" begin");

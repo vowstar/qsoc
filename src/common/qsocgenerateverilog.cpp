@@ -1318,6 +1318,61 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     /* Generate combinational logic after module instantiations */
     if (netlistData["comb"] && netlistData["comb"].IsSequence() && netlistData["comb"].size() > 0) {
+        /* First pass: collect all outputs that need internal reg declarations */
+        QSet<QString> alwaysBlockOutputs;
+        for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
+            const YAML::Node &combItem = netlistData["comb"][i];
+            if (!combItem.IsMap() || !combItem["out"] || !combItem["out"].IsScalar()) {
+                continue;
+            }
+            const QString outputSignal = QString::fromStdString(combItem["out"].as<std::string>());
+
+            /* Check if this output needs an always block */
+            if ((combItem["if"] && combItem["if"].IsSequence())
+                || (combItem["case"] && combItem["case"].IsScalar() && combItem["cases"]
+                    && combItem["cases"].IsMap())) {
+                alwaysBlockOutputs.insert(outputSignal);
+            }
+        }
+
+        /* Generate internal reg declarations for always block outputs */
+        if (!alwaysBlockOutputs.isEmpty()) {
+            out << "\n    /* Internal reg declarations for combinational logic */\n";
+            for (const QString &outputSignal : alwaysBlockOutputs) {
+                /* Find the port width for this output signal */
+                QString regWidth = "";
+                if (netlistData["port"] && netlistData["port"].IsMap()) {
+                    for (const auto &portEntry : netlistData["port"]) {
+                        if (portEntry.first.IsScalar()
+                            && QString::fromStdString(portEntry.first.as<std::string>())
+                                   == outputSignal) {
+                            if (portEntry.second.IsMap() && portEntry.second["type"]
+                                && portEntry.second["type"].IsScalar()) {
+                                QString portType = QString::fromStdString(
+                                    portEntry.second["type"].as<std::string>());
+                                if (portType != "logic" && portType != "wire") {
+                                    /* Extract width from type like "logic[7:0]" */
+                                    QRegularExpression widthRegex(R"(\[\s*(\d+)\s*:\s*(\d+)\s*\])");
+                                    QRegularExpressionMatch match = widthRegex.match(portType);
+                                    if (match.hasMatch()) {
+                                        int msb  = match.captured(1).toInt();
+                                        int lsb  = match.captured(2).toInt();
+                                        regWidth = QString("[%1:%2] ").arg(msb).arg(lsb);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                out << "    reg " << regWidth << outputSignal << "_reg;\n";
+            }
+            out << "\n    /* Assign internal regs to outputs */\n";
+            for (const QString &outputSignal : alwaysBlockOutputs) {
+                out << "    assign " << outputSignal << " = " << outputSignal << "_reg;\n";
+            }
+        }
+
         out << "\n    /* Combinational logic */\n";
 
         for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
@@ -1336,13 +1391,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 out << "    assign " << outputSignal << " = " << expression << ";\n";
             } else if (combItem["if"] && combItem["if"].IsSequence()) {
                 /* Generate always block with if-else logic */
+                const QString regSignal = outputSignal + "_reg";
                 out << "    always @(*) begin\n";
 
                 /* Set default value if specified */
                 if (combItem["default"] && combItem["default"].IsScalar()) {
                     const QString defaultValue = QString::fromStdString(
                         combItem["default"].as<std::string>());
-                    out << "        " << outputSignal << " = " << defaultValue << ";\n";
+                    out << "        " << regSignal << " = " << defaultValue << ";\n";
                 }
 
                 /* Generate if-else chain */
@@ -1363,8 +1419,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     }
 
                     /* Generate nested value (could be simple or nested case) */
-                    QString nestedCode
-                        = generateNestedCombValue(ifCondition["then"], outputSignal, 3);
+                    QString nestedCode = generateNestedCombValue(ifCondition["then"], regSignal, 3);
                     out << nestedCode;
                     out << "        end\n";
                 }
@@ -1374,13 +1429,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 combItem["case"] && combItem["case"].IsScalar() && combItem["cases"]
                 && combItem["cases"].IsMap()) {
                 /* Generate always block with case statement */
+                const QString regSignal = outputSignal + "_reg";
                 out << "    always @(*) begin\n";
 
                 /* Set default value if specified */
                 if (combItem["default"] && combItem["default"].IsScalar()) {
                     const QString defaultValue = QString::fromStdString(
                         combItem["default"].as<std::string>());
-                    out << "        " << outputSignal << " = " << defaultValue << ";\n";
+                    out << "        " << regSignal << " = " << defaultValue << ";\n";
                 }
 
                 const QString caseExpression = QString::fromStdString(
@@ -1397,16 +1453,15 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         caseEntry.first.as<std::string>());
                     const QString resultValue = QString::fromStdString(
                         caseEntry.second.as<std::string>());
-                    out << "            " << caseValue << ": " << outputSignal << " = "
-                        << resultValue << ";\n";
+                    out << "            " << caseValue << ": " << regSignal << " = " << resultValue
+                        << ";\n";
                 }
 
                 /* Add default case if specified */
                 if (combItem["default"] && combItem["default"].IsScalar()) {
                     const QString defaultValue = QString::fromStdString(
                         combItem["default"].as<std::string>());
-                    out << "            default: " << outputSignal << " = " << defaultValue
-                        << ";\n";
+                    out << "            default: " << regSignal << " = " << defaultValue << ";\n";
                 }
 
                 out << "        endcase\n";
@@ -1422,6 +1477,55 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     /* Generate sequential logic after combinational logic */
     if (netlistData["seq"] && netlistData["seq"].IsSequence() && netlistData["seq"].size() > 0) {
+        /* First pass: collect all outputs that need internal reg declarations */
+        QSet<QString> seqRegOutputs;
+        for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
+            const YAML::Node &seqItem = netlistData["seq"][i];
+            if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["reg"].IsScalar()) {
+                continue;
+            }
+            const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
+            seqRegOutputs.insert(regName);
+        }
+
+        /* Generate internal reg declarations for sequential outputs */
+        if (!seqRegOutputs.isEmpty()) {
+            out << "\n    /* Internal reg declarations for sequential logic */\n";
+            for (const QString &regName : seqRegOutputs) {
+                /* Find the port width for this output signal */
+                QString regWidth = "";
+                if (netlistData["port"] && netlistData["port"].IsMap()) {
+                    for (const auto &portEntry : netlistData["port"]) {
+                        if (portEntry.first.IsScalar()
+                            && QString::fromStdString(portEntry.first.as<std::string>())
+                                   == regName) {
+                            if (portEntry.second.IsMap() && portEntry.second["type"]
+                                && portEntry.second["type"].IsScalar()) {
+                                QString portType = QString::fromStdString(
+                                    portEntry.second["type"].as<std::string>());
+                                if (portType != "logic" && portType != "wire") {
+                                    /* Extract width from type like "logic[7:0]" */
+                                    QRegularExpression widthRegex(R"(\[\s*(\d+)\s*:\s*(\d+)\s*\])");
+                                    QRegularExpressionMatch match = widthRegex.match(portType);
+                                    if (match.hasMatch()) {
+                                        int msb  = match.captured(1).toInt();
+                                        int lsb  = match.captured(2).toInt();
+                                        regWidth = QString("[%1:%2] ").arg(msb).arg(lsb);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                out << "    reg " << regWidth << regName << "_reg;\n";
+            }
+            out << "\n    /* Assign internal regs to outputs */\n";
+            for (const QString &regName : seqRegOutputs) {
+                out << "    assign " << regName << " = " << regName << "_reg;\n";
+            }
+        }
+
         out << "\n    /* Sequential logic */\n";
 
         for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
@@ -1433,6 +1537,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             const QString regName   = QString::fromStdString(seqItem["reg"].as<std::string>());
+            const QString regSignal = regName + "_reg";
             const QString clkSignal = QString::fromStdString(seqItem["clk"].as<std::string>());
 
             /* Get edge type (default to posedge) */
@@ -1463,16 +1568,16 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     seqItem["rst_val"].as<std::string>());
 
                 out << "        if (!" << rstSignal << ") begin\n";
-                out << "            " << regName << " <= " << rstValue << ";\n";
+                out << "            " << regSignal << " <= " << rstValue << ";\n";
                 out << "        end else begin\n";
 
                 /* Generate main logic with additional indentation */
-                generateSeqLogicContent(seqItem, regName, out, 3);
+                generateSeqLogicContent(seqItem, regSignal, out, 3);
 
                 out << "        end\n";
             } else {
                 /* Generate main logic without reset */
-                generateSeqLogicContent(seqItem, regName, out, 2);
+                generateSeqLogicContent(seqItem, regSignal, out, 2);
             }
 
             out << "    end\n";
@@ -2543,6 +2648,20 @@ void QSocGenerateManager::generateMicrocodeFSM(const YAML::Node &fsmItem, QTextS
                 for (auto it = romPartsMap.end(); it != romPartsMap.begin();) {
                     --it;
                     romParts.append(it.value());
+                }
+
+                /* Calculate total bits used by all defined fields */
+                int totalFieldBits = 0;
+                for (auto fieldIt = fields.begin(); fieldIt != fields.end(); ++fieldIt) {
+                    const QPair<int, int> &bitRange   = fieldIt.value();
+                    int                    fieldWidth = bitRange.second - bitRange.first + 1;
+                    totalFieldBits += fieldWidth;
+                }
+
+                /* Add padding if dataWidth is larger than total field bits */
+                if (totalFieldBits < dataWidth) {
+                    int paddingBits = dataWidth - totalFieldBits;
+                    romParts.prepend(QString("%1'd0").arg(paddingBits));
                 }
 
                 out << "            " << fsmNameLower << "_rom[" << address << "] <= {"

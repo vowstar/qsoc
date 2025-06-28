@@ -556,7 +556,10 @@ port:
   trigger:
     direction: input
     type: logic
-  output_signal:
+  onehot_output:
+    direction: output
+    type: logic
+  gray_output:
     direction: output
     type: logic
 
@@ -575,7 +578,7 @@ fsm:
       S1: [{cond: trigger, next: S2}]
       S2: [{cond: trigger, next: S0}]
     moore:
-      S1: {output_signal: 1}
+      S1: {onehot_output: 1}
   - name: test_gray
     clk: clk
     rst: rst_n
@@ -586,7 +589,7 @@ fsm:
       B: [{cond: trigger, next: C}]
       C: [{cond: trigger, next: A}]
     moore:
-      B: {output_signal: 1}
+      B: {gray_output: 1}
 )";
 
         QString netlistPath = createTempFile("test_fsm_encodings.soc_net", netlistContent);
