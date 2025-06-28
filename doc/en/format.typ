@@ -22,6 +22,7 @@ A SOC_NET file consists of several key sections:
       [bus], [Defines bus interface connections (automatically expanded into nets)],
       [comb], [Defines combinational logic blocks for behavioral descriptions],
       [seq], [Defines sequential logic blocks for register-based descriptions],
+      [fsm], [Defines finite state machine blocks for complex control logic],
     )],
   caption: [SOC_NET FILE SECTIONS],
   kind: table,
@@ -806,12 +807,14 @@ Sequential logic is generated after combinational logic in the Verilog output, p
 2. Module instantiations (from instances)
 3. Combinational logic (from comb section)
 4. Sequential logic (from seq section)
+5. Finite state machine logic (from fsm section)
 
 This ordering ensures that:
 - All signals are properly declared before use
 - Structural connections are visible before behavioral logic
 - Combinational logic appears before sequential logic
 - Sequential logic represents the state-holding elements
+- FSM logic provides structured control flow with clear state management
 
 ===== Always Block Generation
 The system generates optimized `always` blocks based on the specified features:
@@ -819,6 +822,225 @@ The system generates optimized `always` blocks based on the specified features:
 - With reset: `@(posedge clk or negedge rst)`
 - Reset logic: Asynchronous reset with `if (!rst)` structure
 - Enable logic: Conditional assignment within the main logic
+
+=== FSM SECTION
+<soc-net-fsm>
+The `fsm` section defines finite state machine blocks that generate structured Verilog FSM code. This section supports both Table-mode FSMs with Moore/Mealy outputs and Microcode-mode FSMs with ROM-based control, providing powerful tools for implementing complex control logic.
+
+==== FSM Overview
+<soc-net-fsm-overview>
+The `fsm` section is a sequence of FSM items, each describing one finite state machine. The system supports two main FSM architectures:
+
+#figure(
+  align(center)[#table(
+      columns: (0.3fr, 1fr),
+      align: (auto, left),
+      table.header([FSM Type], [Description]),
+      table.hline(),
+      [Table-mode], [State transition tables with Moore/Mealy outputs],
+      [Microcode-mode], [ROM-based sequencer with branch decoding],
+    )],
+  caption: [FSM ARCHITECTURES],
+  kind: table,
+)
+
+Both architectures support multiple state encodings (binary, onehot, gray) and generate proper three-stage FSM structure:
+1. Next-state combinational logic
+2. State register with async reset
+3. Output combinational logic (Moore/Mealy/Control signals)
+
+==== FSM Structure
+<soc-net-fsm-structure>
+Each FSM item must have `name`, `clk`, `rst`, and `rst_state` fields, plus architecture-specific fields:
+
+```yaml
+fsm:
+  - name: controller        # FSM instance name (used for signal prefixes)
+    clk: clk               # Clock signal
+    rst: rst_n             # Reset signal
+    rst_state: IDLE        # Reset state name
+    encoding: binary       # State encoding: binary/onehot/gray (optional)
+    # Table-mode specific fields:
+    trans: { ... }         # State transition table
+    moore: { ... }         # Moore output assignments (optional)
+    mealy: [ ... ]         # Mealy output assignments (optional)
+    # Microcode-mode specific fields:
+    fields: { ... }        # ROM bit field definitions
+    rom_mode: parameter    # ROM type: parameter/port
+    rom: { ... }           # ROM initialization (for parameter mode)
+    rom_depth: 32          # ROM depth (for port mode)
+```
+
+==== Table-mode FSMs
+<soc-net-fsm-table>
+Table-mode FSMs use explicit state transition tables and are ideal for traditional state machines with clear state flow:
+
+===== Simple Moore FSM
+```yaml
+fsm:
+  - name: cpu_ctrl
+    clk: clk
+    rst: rst_n
+    rst_state: IDLE
+    trans:
+      IDLE: [{cond: start, next: LOAD}]
+      LOAD: [{cond: done_load, next: RUN}]
+      RUN: [{cond: done, next: IDLE}]
+    moore:
+      IDLE: {busy: 0}
+      LOAD: {busy: 1}
+      RUN: {busy: 1}
+```
+
+===== Moore and Mealy FSM
+```yaml
+fsm:
+  - name: spi_rx
+    clk: clk
+    rst: rst_n
+    rst_state: IDLE
+    trans:
+      IDLE:
+        - {cond: "cs_n==0", next: SHIFT}
+      SHIFT:
+        - {cond: "bit_cnt==7", next: DONE}
+        - {cond: "1", next: SHIFT}
+      DONE:
+        - {cond: "cs_n==1", next: IDLE}
+    moore:
+      SHIFT: {shift_en: 1}
+    mealy:
+      - {cond: "spi_rx_cur_state==SPI_RX_DONE && cs_n==1",
+         sig: byte_ready, val: 1}
+```
+
+===== State Encodings
+```yaml
+fsm:
+  - name: test_onehot
+    encoding: onehot       # One-hot encoding
+    # ... other fields
+  - name: test_gray
+    encoding: gray         # Gray code encoding
+    # ... other fields
+```
+
+==== Microcode-mode FSMs
+<soc-net-fsm-microcode>
+Microcode-mode FSMs use ROM-based sequencers with branch decoding, ideal for complex control units and microprocessors:
+
+===== Fixed ROM (Parameter mode)
+```yaml
+fsm:
+  - name: mseq_fixed
+    clk: clk
+    rst: rst_n
+    rst_state: 0           # Numeric state for microcode
+    fields:
+      ctrl: [0, 7]         # Control field bits [7:0]
+      branch: [8, 9]       # Branch field bits [9:8]
+      next: [10, 14]       # Next address field bits [14:10]
+    rom_mode: parameter    # ROM implemented as parameters
+    rom:
+      0: {ctrl: 0x55, branch: 0, next: 1}
+      1: {ctrl: 0x3C, branch: 1, next: 4}
+      2: {ctrl: 0x18, branch: 0, next: 3}
+```
+
+===== Programmable ROM (Port mode)
+```yaml
+fsm:
+  - name: mseq_prog
+    clk: clk
+    rst: rst_n
+    rst_state: 0
+    rom_mode: port         # ROM with write port
+    rom_depth: 32          # 32-word ROM
+    fields:
+      ctrl: [0, 7]
+      branch: [8, 9]
+      next: [10, 14]
+    # ROM programmed via external ports:
+    # mseq_prog_rom_we, mseq_prog_rom_addr, mseq_prog_rom_wdata
+```
+
+==== FSM Properties
+<soc-net-fsm-properties>
+
+===== Required Fields
+- `name`: FSM instance name (string) - used for signal prefixes
+- `clk`: Clock signal name (string)
+- `rst`: Reset signal name (string)
+- `rst_state`: Reset state name (string/number)
+
+===== Optional Fields
+- `encoding`: State encoding type (`binary`/`onehot`/`gray`, default: `binary`)
+
+===== Table-mode Fields
+- `trans`: State transition table (map of state -> list of transitions)
+  - Each transition: `{cond: "condition", next: "next_state"}`
+- `moore`: Moore output assignments (map of state -> output assignments)
+- `mealy`: Mealy output assignments (list of conditional assignments)
+  - Each assignment: `{cond: "condition", sig: "signal", val: "value"}`
+
+===== Microcode-mode Fields
+- `fields`: ROM bit field definitions (map of field -> `[low_bit, high_bit]`)
+- `rom_mode`: ROM implementation (`parameter`/`port`)
+- `rom`: ROM initialization data (for parameter mode)
+- `rom_depth`: ROM depth in words (for port mode)
+
+==== FSM Validation
+<soc-net-fsm-validation>
+The system performs comprehensive validation of FSM specifications:
+
+===== Common Validation
+- FSM name must be unique within the design
+- Clock and reset signals must be declared in ports
+- Reset state must exist in the state space
+
+===== Table-mode Validation
+- All states referenced in transitions must be defined
+- Transition conditions must be valid Verilog expressions
+- Moore/Mealy output signals must be declared in ports
+- No duplicate state names within an FSM
+
+===== Microcode-mode Validation
+- ROM fields must not overlap in bit ranges
+- ROM addresses must be within the specified depth
+- Field values must fit within their bit ranges
+- Branch decoding must reference valid condition signals
+
+==== Best Practices
+<soc-net-fsm-practices>
+===== Naming Conventions
+- Use descriptive FSM names: `cpu_ctrl`, `spi_master`, `dma_engine`
+- Use meaningful state names: `IDLE`, `FETCH`, `DECODE`, `EXECUTE`
+- Group related FSMs with consistent prefixes
+
+===== Design Guidelines
+- Use Table-mode for clear state-based control
+- Use Microcode-mode for complex instruction sequences
+- Choose appropriate encoding: binary (compact), onehot (fast), gray (low power)
+- Keep state count reasonable (< 16 states for table-mode)
+- Use meaningful condition expressions
+
+==== Code Generation
+<soc-net-fsm-generation>
+FSM logic is generated after sequential logic in the Verilog output, providing structured control flow implementation.
+
+===== Generated Code Structure
+1. State type definitions (for table-mode)
+2. State registers and next-state signals
+3. ROM arrays and initialization (for microcode-mode)
+4. Next-state combinational logic
+5. State register with async reset
+6. Output combinational logic (Moore/Mealy/Control)
+
+===== Naming Conventions
+All generated signals use the FSM name as prefix:
+- `{fsm_name}_cur_state`, `{fsm_name}_nxt_state` (table-mode)
+- `{fsm_name}_pc`, `{fsm_name}_nxt_pc` (microcode-mode)
+- `{fsm_name}_rom` (microcode-mode)
 
 === BUS SECTION
 <soc-net-bus>
@@ -1376,16 +1598,20 @@ When QSoC processes a SOC_NET file, it follows this sequence:
 3. Process `link` and `uplink` attributes to generate nets and top-level ports
 4. Expand bus connections into individual nets based on bus interface definitions
 5. Process and validate combinational logic (`comb`) section
-6. Calculate effective widths for all connections, considering bit selections
-7. Check for width mismatches and generate appropriate warnings
-8. Generate Verilog output based on the processed netlist
+6. Process and validate sequential logic (`seq`) section
+7. Process and validate finite state machine (`fsm`) section
+8. Calculate effective widths for all connections, considering bit selections
+9. Check for width mismatches and generate appropriate warnings
+10. Generate Verilog output based on the processed netlist
 
 The Verilog generation follows this structure:
 1. Module declaration with ports and parameters
 2. Wire declarations (from processed nets)
 3. Module instantiations (from instance section)
 4. Combinational logic blocks (from comb section)
-5. Module termination
+5. Sequential logic blocks (from seq section)
+6. Finite state machine blocks (from fsm section)
+7. Module termination
 
 === NOTE ON VERILOG PORT WIDTHS
 <soc-net-verilog-widths>
