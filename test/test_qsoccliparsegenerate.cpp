@@ -2279,6 +2279,139 @@ instance: {}
         QVERIFY(!verifyVerilogContent("test_comb_bit_select", "FIXME: Net enable"));
     }
 
+    void testMultiDriverNonOverlappingBitSelections()
+    {
+        messageList.clear();
+
+        /* Create a netlist with multiple drivers on non-overlapping bits */
+        const QString content = R"(
+port:
+  ctrl_data_i:
+    type: logic[63:0]
+    direction: in
+
+net:
+  ctrl_data_i:
+    - instance: timing_ctrl
+      port: tdo
+      bits: "[0]"
+    - instance: power_ctrl_0
+      port: tdo
+      bits: "[8]"
+    - instance: power_ctrl_1
+      port: tdo
+      bits: "[9]"
+    - instance: power_ctrl_2
+      port: tdo
+      bits: "[10]"
+    - instance: power_ctrl_3
+      port: tdo
+      bits: "[11]"
+    - instance: power_ctrl_4
+      port: tdo
+      bits: "[12]"
+    - instance: power_ctrl_5
+      port: tdo
+      bits: "[13]"
+    - instance: power_ctrl_6
+      port: tdo
+      bits: "[14]"
+    - instance: power_ctrl_7
+      port: tdo
+      bits: "[15]"
+
+instance:
+  timing_ctrl:
+    module: timing_control
+  power_ctrl_0:
+    module: power_control
+  power_ctrl_1:
+    module: power_control
+  power_ctrl_2:
+    module: power_control
+  power_ctrl_3:
+    module: power_control
+  power_ctrl_4:
+    module: power_control
+  power_ctrl_5:
+    module: power_control
+  power_ctrl_6:
+    module: power_control
+  power_ctrl_7:
+    module: power_control
+
+# Add comb/seq/fsm outputs for remaining bits
+comb:
+  - out: ctrl_data_i
+    bits: "[7:1]"
+    expr: "7'b0000000"
+  - out: ctrl_data_i
+    bits: "[63:16]"
+    expr: "48'h000000000000"
+)";
+
+        /* Create timing_control module */
+        const QString timingModuleContent = R"(
+timing_control:
+  port:
+    tdo:
+      type: logic
+      direction: out
+)";
+
+        /* Create power_control module */
+        const QString powerModuleContent = R"(
+power_control:
+  port:
+    tdo:
+      type: logic
+      direction: out
+)";
+
+        /* Create the module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create timing_control file */
+        const QString timingModulePath = moduleDir.filePath("timing_control.soc_mod");
+        QFile         timingModuleFile(timingModulePath);
+        if (timingModuleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&timingModuleFile);
+            stream << timingModuleContent;
+            timingModuleFile.close();
+        }
+
+        /* Create power_control file */
+        const QString powerModulePath = moduleDir.filePath("power_control.soc_mod");
+        QFile         powerModuleFile(powerModulePath);
+        if (powerModuleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&powerModuleFile);
+            stream << powerModuleContent;
+            powerModuleFile.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_non_overlapping_bits.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_non_overlapping_bits"));
+
+        /* This test should NOT generate multi-driver warnings since bits don't overlap */
+        QVERIFY(!verifyVerilogContent(
+            "test_non_overlapping_bits", "FIXME: Net ctrl_data_i has multiple drivers"));
+
+        /* Verify the generated Verilog has proper connections */
+        QVERIFY(verifyVerilogContent("test_non_overlapping_bits", "timing_ctrl"));
+        QVERIFY(verifyVerilogContent("test_non_overlapping_bits", "power_ctrl_0"));
+        QVERIFY(verifyVerilogContent("test_non_overlapping_bits", "ctrl_data_i"));
+    }
+
     void testMultiDriverWithCombSeqFsmOutput()
     {
         messageList.clear();

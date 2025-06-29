@@ -567,7 +567,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         portConnections.append(PortConnection::createCombSeqFsmPort(fullSignalName));
 
                         portDetails.append(
-                            PortDetailInfo::createTopLevelPort(
+                            PortDetailInfo::createCombSeqFsmPort(
                                 outputBaseName,
                                 combOutput.width,
                                 "output", // comb/seq/fsm outputs are always output drivers
@@ -581,8 +581,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     qWarning() << "Warning: Port width mismatch detected for net" << netName;
                 }
 
-                /* Check port direction consistency */
-                const PortDirectionStatus dirStatus = checkPortDirectionConsistency(portConnections);
+                /* Check port direction consistency with bit-level overlap detection */
+                const PortDirectionStatus dirStatus = checkPortDirectionConsistencyWithBitOverlap(
+                    portDetails);
                 const bool isUndriven   = (dirStatus == PortDirectionStatus::Undriven);
                 const bool isMultidrive = (dirStatus == PortDirectionStatus::Multidrive);
 
@@ -628,20 +629,17 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     displayDirection = "input";
                                 }
 
-                                QString sourceType = "Top-Level Port";
-
-                                // Check if this is a comb/seq/fsm output
-                                QList<PortDetailInfo> combSeqFsmOutputs = collectCombSeqFsmOutputs();
-                                for (const PortDetailInfo &combOutput : combSeqFsmOutputs) {
-                                    if (combOutput.portName == detail.portName
-                                        && combOutput.bitSelect == detail.bitSelect) {
-                                        sourceType = "Comb/Seq/FSM Output";
-                                        break;
-                                    }
-                                }
-
-                                out << "     *   " << sourceType << ": " << detail.portName
+                                out << "     *   Top-Level Port: " << detail.portName
                                     << ", Direction: " << displayDirection
+                                    << ", Width: " << displayWidth
+                                    << (detail.bitSelect.isEmpty()
+                                            ? ""
+                                            : ", Bit Selection: " + detail.bitSelect)
+                                    << "\n";
+                            } else if (detail.type == PortType::CombSeqFsm) {
+                                /* Comb/Seq/FSM output */
+                                out << "     *   Comb/Seq/FSM Output: " << detail.portName
+                                    << ", Direction: " << detail.direction
                                     << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
                                             ? ""
@@ -719,14 +717,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                                 QString sourceType = "Top-Level Port";
 
-                                // Check if this is a comb/seq/fsm output
-                                QList<PortDetailInfo> combSeqFsmOutputs = collectCombSeqFsmOutputs();
-                                for (const PortDetailInfo &combOutput : combSeqFsmOutputs) {
-                                    if (combOutput.portName == detail.portName
-                                        && combOutput.bitSelect == detail.bitSelect) {
-                                        sourceType = "Comb/Seq/FSM Output";
-                                        break;
-                                    }
+                                // Check if this is a comb/seq/fsm output based on port type
+                                if (detail.type == PortType::CombSeqFsm) {
+                                    sourceType = "Comb/Seq/FSM Output";
                                 }
 
                                 out << "     *   " << sourceType << ": " << detail.portName
@@ -806,20 +799,17 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 }
                                 /* inout remains inout */
 
-                                QString sourceType = "Top-Level Port";
-
-                                // Check if this is a comb/seq/fsm output
-                                QList<PortDetailInfo> combSeqFsmOutputs = collectCombSeqFsmOutputs();
-                                for (const PortDetailInfo &combOutput : combSeqFsmOutputs) {
-                                    if (combOutput.portName == detail.portName
-                                        && combOutput.bitSelect == detail.bitSelect) {
-                                        sourceType = "Comb/Seq/FSM Output";
-                                        break;
-                                    }
-                                }
-
-                                out << "     *   " << sourceType << ": " << detail.portName
+                                out << "     *   Top-Level Port: " << detail.portName
                                     << ", Direction: " << displayDirection
+                                    << ", Width: " << displayWidth
+                                    << (detail.bitSelect.isEmpty()
+                                            ? ""
+                                            : ", Bit Selection: " + detail.bitSelect)
+                                    << "\n";
+                            } else if (detail.type == PortType::CombSeqFsm) {
+                                /* Comb/Seq/FSM output */
+                                out << "     *   Comb/Seq/FSM Output: " << detail.portName
+                                    << ", Direction: " << detail.direction
                                     << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
                                             ? ""
@@ -1473,7 +1463,16 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 /* Generate assign statement */
                 const QString expression = QString::fromStdString(
                     combItem["expr"].as<std::string>());
-                out << "    assign " << outputSignal << " = " << expression << ";\n";
+
+                /* Check if bits attribute exists for bit selection */
+                QString fullOutputSignal = outputSignal;
+                if (combItem["bits"] && combItem["bits"].IsScalar()) {
+                    const QString bitSelection = QString::fromStdString(
+                        combItem["bits"].as<std::string>());
+                    fullOutputSignal = outputSignal + bitSelection;
+                }
+
+                out << "    assign " << fullOutputSignal << " = " << expression << ";\n";
             } else if (combItem["if"] && combItem["if"].IsSequence()) {
                 /* Generate always block with if-else logic */
                 const QString regSignal = outputSignal + "_reg";

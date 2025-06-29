@@ -980,6 +980,100 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
     return PortDirectionStatus::Valid;
 }
 
+QSocGenerateManager::PortDirectionStatus
+QSocGenerateManager::checkPortDirectionConsistencyWithBitOverlap(
+    const QList<PortDetailInfo> &portDetails)
+{
+    if (portDetails.isEmpty()) {
+        return PortDirectionStatus::Valid;
+    }
+
+    /* Separate ports by direction */
+    QList<PortDetailInfo> outputPorts;
+    QList<PortDetailInfo> inputPorts;
+    QList<PortDetailInfo> inoutPorts;
+
+    for (const auto &port : portDetails) {
+        QString direction = port.direction.toLower();
+
+        /* Handle direction reversal for top-level ports */
+        if (port.type == PortType::TopLevel) {
+            if (direction == "out" || direction == "output") {
+                direction = "input"; /* Top-level output is an input for internal nets */
+            } else if (direction == "in" || direction == "input") {
+                direction = "output"; /* Top-level input is an output for internal nets */
+            }
+        } else if (port.type == PortType::CombSeqFsm) {
+            /* Comb/seq/fsm outputs are always output drivers */
+            direction = "output";
+        }
+
+        if (direction == "output") {
+            outputPorts.append(port);
+        } else if (direction == "input") {
+            inputPorts.append(port);
+        } else if (direction == "inout") {
+            inoutPorts.append(port);
+        }
+    }
+
+    /* Check for undriven nets */
+    if (outputPorts.isEmpty() && inoutPorts.isEmpty()) {
+        return PortDirectionStatus::Undriven;
+    }
+
+    /* Check for bit-level conflicts among output ports */
+    if (outputPorts.size() > 1) {
+        /* Check if any output ports have overlapping bit selections */
+        for (int i = 0; i < outputPorts.size(); ++i) {
+            for (int j = i + 1; j < outputPorts.size(); ++j) {
+                const QString &bitSelect1 = outputPorts[i].bitSelect;
+                const QString &bitSelect2 = outputPorts[j].bitSelect;
+
+                /* If both ports have bit selections, check for overlap */
+                if (!bitSelect1.isEmpty() && !bitSelect2.isEmpty()) {
+                    if (doBitRangesOverlap(bitSelect1, bitSelect2)) {
+                        return PortDirectionStatus::Multidrive;
+                    }
+                } else if (bitSelect1.isEmpty() && bitSelect2.isEmpty()) {
+                    /* Both ports drive the entire net - definite conflict */
+                    return PortDirectionStatus::Multidrive;
+                } else {
+                    /* One port has bit selection, other drives entire net - conflict */
+                    return PortDirectionStatus::Multidrive;
+                }
+            }
+        }
+    }
+
+    /* Check for conflicts between output and inout ports */
+    if (!outputPorts.isEmpty() && !inoutPorts.isEmpty()) {
+        /* Check if any output ports overlap with inout ports */
+        for (const auto &outputPort : outputPorts) {
+            for (const auto &inoutPort : inoutPorts) {
+                const QString &outputBitSelect = outputPort.bitSelect;
+                const QString &inoutBitSelect  = inoutPort.bitSelect;
+
+                /* If both have bit selections, check for overlap */
+                if (!outputBitSelect.isEmpty() && !inoutBitSelect.isEmpty()) {
+                    if (doBitRangesOverlap(outputBitSelect, inoutBitSelect)) {
+                        return PortDirectionStatus::Multidrive;
+                    }
+                } else if (outputBitSelect.isEmpty() && inoutBitSelect.isEmpty()) {
+                    /* Both affect the entire net - conflict */
+                    return PortDirectionStatus::Multidrive;
+                } else {
+                    /* One has bit selection, other affects entire net - conflict */
+                    return PortDirectionStatus::Multidrive;
+                }
+            }
+        }
+    }
+
+    /* No conflicts found */
+    return PortDirectionStatus::Valid;
+}
+
 /**
  * @brief Process link and uplink connections in the netlist
  * @return true if successful, false on error
@@ -1794,6 +1888,13 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                     QString baseName  = parsed.first;
                     QString bitSelect = parsed.second;
 
+                    // Check if bits attribute exists and override bitSelect if present
+                    if (combItem["bits"] && combItem["bits"].IsScalar()) {
+                        bitSelect = QString::fromStdString(combItem["bits"].as<std::string>());
+                        qDebug() << "Using bits attribute for comb output:" << baseName
+                                 << "bits:" << bitSelect;
+                    }
+
                     // Find port width for this output
                     QString width = "";
                     if (netlistData["port"] && netlistData["port"].IsMap()) {
@@ -1813,7 +1914,7 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                     }
 
                     outputs.append(
-                        PortDetailInfo::createTopLevelPort(baseName, width, "output", bitSelect));
+                        PortDetailInfo::createCombSeqFsmPort(baseName, width, "output", bitSelect));
                 }
             }
         }
@@ -1829,6 +1930,13 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                     QString baseName  = parsed.first;
                     QString bitSelect = parsed.second;
 
+                    // Check if bits attribute exists and override bitSelect if present
+                    if (seqItem["bits"] && seqItem["bits"].IsScalar()) {
+                        bitSelect = QString::fromStdString(seqItem["bits"].as<std::string>());
+                        qDebug() << "Using bits attribute for seq output:" << baseName
+                                 << "bits:" << bitSelect;
+                    }
+
                     // Find port width for this output
                     QString width = "";
                     if (netlistData["port"] && netlistData["port"].IsMap()) {
@@ -1848,7 +1956,7 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                     }
 
                     outputs.append(
-                        PortDetailInfo::createTopLevelPort(baseName, width, "output", bitSelect));
+                        PortDetailInfo::createCombSeqFsmPort(baseName, width, "output", bitSelect));
                 }
             }
         }
@@ -1917,8 +2025,10 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
 
 bool QSocGenerateManager::doBitRangesOverlap(const QString &range1, const QString &range2)
 {
+    // If either range is empty, it means the port uses the entire signal
+    // An empty range overlaps with any other range (empty or specific)
     if (range1.isEmpty() || range2.isEmpty()) {
-        return false;
+        return true;
     }
 
     const QRegularExpression bitSelectRegex(R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
@@ -1973,8 +2083,15 @@ bool QSocGenerateManager::doBitRangesOverlap(const QString &range1, const QStrin
         qSwap(msb2, lsb2);
     }
 
-    // Check for overlap: ranges [a:b] and [c:d] overlap if max(a,c) >= min(b,d)
-    return qMax(msb1, msb2) >= qMin(lsb1, lsb2);
+    // Check for overlap: ranges [a:b] and [c:d] overlap if they have any common bits
+    // Two ranges DON'T overlap if one range ends before the other starts
+    int min1 = qMin(msb1, lsb1);
+    int max1 = qMax(msb1, lsb1);
+    int min2 = qMin(msb2, lsb2);
+    int max2 = qMax(msb2, lsb2);
+
+    // No overlap if range1 ends before range2 starts, or range2 ends before range1 starts
+    return !(max1 < min2 || max2 < min1);
 }
 
 bool QSocGenerateManager::doBitRangesProvideFullCoverage(const QStringList &ranges, int signalWidth)
