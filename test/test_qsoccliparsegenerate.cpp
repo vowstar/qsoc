@@ -1988,6 +1988,194 @@ test_core:
         QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_c(shared_signal)"));
         QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_d(shared_signal)"));
     }
+
+    void testCombSeqFsmOutputDriveAnalysis()
+    {
+        messageList.clear();
+
+        /* Create a netlist with comb/seq/fsm outputs that should drive nets */
+        const QString content = R"(
+port:
+  clk:
+    type: logic
+    direction: in
+  rst_n:
+    type: logic
+    direction: in
+  data_out:
+    type: logic[7:0]
+    direction: out
+  status_out:
+    type: logic
+    direction: out
+  counter_out:
+    type: logic[3:0]
+    direction: out
+
+# Test comb output driving
+comb:
+  - out: data_out[7:4]
+    expr: "4'b1010"
+  - out: status_out
+    expr: "1'b1"
+
+# Test seq output driving
+seq:
+  - reg: counter_out
+    clk: clk
+    next: "counter_out + 1"
+
+# Empty instance section (required)
+instance: {}
+)";
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_comb_seq_fsm_drive.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_comb_seq_fsm_drive"));
+
+        /* Verify basic module structure */
+        QVERIFY(verifyVerilogContent("test_comb_seq_fsm_drive", "module test_comb_seq_fsm_drive"));
+
+        /* Verify comb/seq logic is generated */
+        QVERIFY(verifyVerilogContent("test_comb_seq_fsm_drive", "assign data_out"));
+        QVERIFY(verifyVerilogContent("test_comb_seq_fsm_drive", "assign status_out"));
+        QVERIFY(verifyVerilogContent("test_comb_seq_fsm_drive", "assign counter_out"));
+
+        /* Verify that no undriven FIXME warnings are generated for driven outputs */
+        QVERIFY(!verifyVerilogContent("test_comb_seq_fsm_drive", "FIXME: Net data_out"));
+        QVERIFY(!verifyVerilogContent("test_comb_seq_fsm_drive", "FIXME: Net status_out"));
+        QVERIFY(!verifyVerilogContent("test_comb_seq_fsm_drive", "FIXME: Net counter_out"));
+    }
+
+    void testCombSeqFsmOutputWithBitSelectDriveAnalysis()
+    {
+        messageList.clear();
+
+        /* Create a netlist with comb outputs that have bit selection */
+        const QString content = R"(
+port:
+  data_bus:
+    type: logic[15:0]
+    direction: out
+  enable:
+    type: logic
+    direction: out
+
+# Test comb output with bit selection
+comb:
+  - out: data_bus[7:0]
+    expr: "8'hAA"
+  - out: data_bus[15:8]
+    expr: "8'h55"
+  - out: enable
+    expr: "1'b1"
+
+# Empty instance section (required)
+instance: {}
+)";
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_comb_bit_select.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_comb_bit_select"));
+
+        /* Verify basic module structure */
+        QVERIFY(verifyVerilogContent("test_comb_bit_select", "module test_comb_bit_select"));
+
+        /* Verify that no width mismatch warnings are generated when bit selection is used */
+        QVERIFY(!verifyVerilogContent("test_comb_bit_select", "FIXME: Net data_bus width mismatch"));
+        QVERIFY(!verifyVerilogContent("test_comb_bit_select", "FIXME: Port data_bus"));
+
+        /* Verify that no undriven warnings are generated for properly driven outputs */
+        QVERIFY(!verifyVerilogContent("test_comb_bit_select", "FIXME: Net data_bus"));
+        QVERIFY(!verifyVerilogContent("test_comb_bit_select", "FIXME: Net enable"));
+    }
+
+    void testMultiDriverWithCombSeqFsmOutput()
+    {
+        messageList.clear();
+
+        /* Create a netlist with multiple drivers including comb output */
+        const QString content = R"(
+port:
+  data_out:
+    type: logic[7:0]
+    direction: out
+
+net:
+  data_out:
+    - instance: test_driver
+      port: data_out
+
+instance:
+  test_driver:
+    module: test_module
+
+# Add a comb output that will create a multi-driver situation
+comb:
+  - out: data_out
+    expr: "8'hFF"
+)";
+
+        /* Create test_module */
+        const QString moduleContent = R"(
+test_module:
+  port:
+    data_out:
+      type: logic[7:0]
+      direction: out
+)";
+
+        /* Create the module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create test_module file */
+        const QString modulePath = moduleDir.filePath("test_module.soc_mod");
+        QFile         moduleFile(modulePath);
+        if (moduleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&moduleFile);
+            stream << moduleContent;
+            moduleFile.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_multi_driver.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_multi_driver"));
+
+        /* Verify that multi-driver warning is generated */
+        QVERIFY(
+            verifyVerilogContent("test_multi_driver", "FIXME: Net data_out has multiple drivers"));
+
+        /* Verify that both sources are identified in the warning */
+        QVERIFY(verifyVerilogContent("test_multi_driver", "Comb/Seq/FSM Output: data_out"));
+        QVERIFY(verifyVerilogContent("test_multi_driver", "Module: test_module"));
+    }
 };
 
 QStringList Test::messageList;

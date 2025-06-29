@@ -18,22 +18,21 @@
 
 bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 {
-    /* Check if netlistData is valid */
-    if (!netlistData["instance"]) {
-        qCritical() << "Error: Invalid netlist data, missing 'instance' section, make sure "
-                       "loadNetlist() and processNetlist() have been called";
-        return false;
-    }
+    /* Check if netlistData is valid (instance section is now optional) */
 
-    if (!netlistData["instance"].IsMap()) {
+    // Check if instance section exists and is valid when present
+    if (netlistData["instance"] && !netlistData["instance"].IsMap()) {
         qCritical() << "Error: Invalid netlist data, 'instance' section is not a map";
         return false;
     }
 
-    // Allow empty instance section if comb, seq, or fsm section exists
-    if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]
-        && !netlistData["fsm"]) {
-        qCritical() << "Error: Invalid netlist data, 'instance' section is empty and no 'comb', "
+    // Allow empty or missing instance section if comb, seq, or fsm section exists
+    bool hasInstances = netlistData["instance"] && netlistData["instance"].IsMap()
+                        && netlistData["instance"].size() > 0;
+    bool hasCombSeqFsm = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"];
+
+    if (!hasInstances && !hasCombSeqFsm) {
+        qCritical() << "Error: Invalid netlist data, no 'instance' section and no 'comb', "
                        "'seq', or 'fsm' section found";
         return false;
     }
@@ -264,7 +263,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                           [portName.toStdString()]) {
                             auto portNode = netlistData["instance"][instanceName.toStdString()]
                                                        ["port"][portName.toStdString()];
-                            if (portNode["invert"] && portNode["invert"].IsScalar()) {
+                            if (portNode.IsMap() && portNode["invert"]
+                                && portNode["invert"].IsScalar()) {
                                 /* Use direct YAML boolean parsing */
                                 if (portNode["invert"].as<bool>()) {
                                     hasInvert = true;
@@ -540,6 +540,36 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     }
                 }
 
+                /* Add comb/seq/fsm outputs as additional drivers for this net */
+                QList<PortDetailInfo> combSeqFsmOutputs = collectCombSeqFsmOutputs();
+                for (const PortDetailInfo &combOutput : combSeqFsmOutputs) {
+                    // Check if this comb/seq/fsm output drives the current net
+                    QString outputBaseName  = combOutput.portName;
+                    QString outputBitSelect = combOutput.bitSelect;
+
+                    // If output has bit selection, it affects only part of the signal
+                    // If no bit selection, it affects the full signal
+                    bool drivesThisNet = false;
+
+                    if (outputBaseName == netName) {
+                        drivesThisNet = true;
+                    } else if (connectedToTopPort && outputBaseName == connectedPortName) {
+                        drivesThisNet = true;
+                    }
+
+                    if (drivesThisNet) {
+                        // Add this comb/seq/fsm output as a driver
+                        portConnections.append(PortConnection::createCombSeqFsmPort(outputBaseName));
+
+                        portDetails.append(
+                            PortDetailInfo::createTopLevelPort(
+                                outputBaseName,
+                                combOutput.width,
+                                "output", // comb/seq/fsm outputs are always output drivers
+                                outputBitSelect));
+                    }
+                }
+
                 /* Check port width consistency */
                 const bool hasWidthMismatch = !checkPortWidthConsistency(portConnections);
                 if (hasWidthMismatch) {
@@ -593,7 +623,19 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     displayDirection = "input";
                                 }
 
-                                out << "     *   Top-Level Port: " << detail.portName
+                                QString sourceType = "Top-Level Port";
+
+                                // Check if this is a comb/seq/fsm output
+                                QList<PortDetailInfo> combSeqFsmOutputs = collectCombSeqFsmOutputs();
+                                for (const PortDetailInfo &combOutput : combSeqFsmOutputs) {
+                                    if (combOutput.portName == detail.portName
+                                        && combOutput.bitSelect == detail.bitSelect) {
+                                        sourceType = "Comb/Seq/FSM Output";
+                                        break;
+                                    }
+                                }
+
+                                out << "     *   " << sourceType << ": " << detail.portName
                                     << ", Direction: " << displayDirection
                                     << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
@@ -670,7 +712,19 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 }
                                 /* inout remains inout */
 
-                                out << "     *   Top-Level Port: " << detail.portName
+                                QString sourceType = "Top-Level Port";
+
+                                // Check if this is a comb/seq/fsm output
+                                QList<PortDetailInfo> combSeqFsmOutputs = collectCombSeqFsmOutputs();
+                                for (const PortDetailInfo &combOutput : combSeqFsmOutputs) {
+                                    if (combOutput.portName == detail.portName
+                                        && combOutput.bitSelect == detail.bitSelect) {
+                                        sourceType = "Comb/Seq/FSM Output";
+                                        break;
+                                    }
+                                }
+
+                                out << "     *   " << sourceType << ": " << detail.portName
                                     << ", Direction: " << displayDirection
                                     << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
@@ -747,7 +801,19 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 }
                                 /* inout remains inout */
 
-                                out << "     *   Top-Level Port: " << detail.portName
+                                QString sourceType = "Top-Level Port";
+
+                                // Check if this is a comb/seq/fsm output
+                                QList<PortDetailInfo> combSeqFsmOutputs = collectCombSeqFsmOutputs();
+                                for (const PortDetailInfo &combOutput : combSeqFsmOutputs) {
+                                    if (combOutput.portName == detail.portName
+                                        && combOutput.bitSelect == detail.bitSelect) {
+                                        sourceType = "Comb/Seq/FSM Output";
+                                        break;
+                                    }
+                                }
+
+                                out << "     *   " << sourceType << ": " << detail.portName
                                     << ", Direction: " << displayDirection
                                     << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
@@ -955,365 +1021,379 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     out << "    /* Module instantiations */\n";
 
     /* Generate instance declarations after wire declarations */
-    for (auto instanceIter = netlistData["instance"].begin();
-         instanceIter != netlistData["instance"].end();
-         ++instanceIter) {
-        /* Check if the instance name is a scalar */
-        if (!instanceIter->first.IsScalar()) {
-            qWarning() << "Warning: Invalid instance name, skipping";
-            continue;
-        }
-
-        const QString instanceName = QString::fromStdString(instanceIter->first.as<std::string>());
-
-        /* Check if the instance data is valid */
-        if (!instanceIter->second || !instanceIter->second.IsMap()) {
-            qWarning() << "Warning: Invalid instance data for" << instanceName
-                       << "(not a map), skipping";
-            continue;
-        }
-
-        const YAML::Node &instanceData = instanceIter->second;
-
-        if (!instanceData["module"] || !instanceData["module"].IsScalar()) {
-            qWarning() << "Warning: Invalid module name for instance" << instanceName;
-            continue;
-        }
-
-        const QString moduleName = QString::fromStdString(instanceData["module"].as<std::string>());
-
-        /* Generate instance declaration with parameters if any */
-        out << "    " << moduleName << " ";
-
-        /* Add parameters if they exist */
-        if (instanceData["parameter"]) {
-            if (!instanceData["parameter"].IsMap()) {
-                qWarning() << "Warning: 'parameter' section for instance" << instanceName
-                           << "is not a map, ignoring";
-            } else if (instanceData["parameter"].size() == 0) {
-                qWarning() << "Warning: 'parameter' section for instance" << instanceName
-                           << "is empty, ignoring";
-            } else {
-                out << "#(\n";
-
-                QStringList paramList;
-                for (auto paramIter = instanceData["parameter"].begin();
-                     paramIter != instanceData["parameter"].end();
-                     ++paramIter) {
-                    if (!paramIter->first.IsScalar()) {
-                        qWarning() << "Warning: Invalid parameter name in instance" << instanceName;
-                        continue;
-                    }
-
-                    if (!paramIter->second.IsScalar()) {
-                        qWarning()
-                            << "Warning: Parameter"
-                            << QString::fromStdString(paramIter->first.as<std::string>())
-                            << "in instance" << instanceName << "has a non-scalar value, skipping";
-                        continue;
-                    }
-
-                    const QString paramName = QString::fromStdString(
-                        paramIter->first.as<std::string>());
-                    const QString paramValue = QString::fromStdString(
-                        paramIter->second.as<std::string>());
-
-                    paramList.append(QString("        .%1(%2)").arg(paramName).arg(paramValue));
-                }
-
-                out << paramList.join(",\n") << "\n    ) ";
+    if (netlistData["instance"] && netlistData["instance"].IsMap()) {
+        for (auto instanceIter = netlistData["instance"].begin();
+             instanceIter != netlistData["instance"].end();
+             ++instanceIter) {
+            /* Check if the instance name is a scalar */
+            if (!instanceIter->first.IsScalar()) {
+                qWarning() << "Warning: Invalid instance name, skipping";
+                continue;
             }
-        }
 
-        out << instanceName << " (\n";
+            const QString instanceName = QString::fromStdString(
+                instanceIter->first.as<std::string>());
 
-        /* Get the port connections for this instance */
-        QStringList portConnections;
+            /* Check if the instance data is valid */
+            if (!instanceIter->second || !instanceIter->second.IsMap()) {
+                qWarning() << "Warning: Invalid instance data for" << instanceName
+                           << "(not a map), skipping";
+                continue;
+            }
 
-        /* Get module definition to ensure all ports are listed */
-        if (moduleManager && moduleManager->isModuleExist(moduleName)) {
-            YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+            const YAML::Node &instanceData = instanceIter->second;
 
-            if (moduleData["port"] && moduleData["port"].IsMap()) {
-                /* Get the existing connections map for this instance */
-                QMap<QString, QString> portMap;
-                if (instancePortConnections.contains(instanceName)) {
-                    portMap = instancePortConnections[instanceName];
-                }
+            if (!instanceData["module"] || !instanceData["module"].IsScalar()) {
+                qWarning() << "Warning: Invalid module name for instance" << instanceName;
+                continue;
+            }
 
-                /* Iterate through all ports in the module definition */
-                for (auto portIter = moduleData["port"].begin();
-                     portIter != moduleData["port"].end();
-                     ++portIter) {
-                    if (!portIter->first.IsScalar()) {
-                        qWarning() << "Warning: Invalid port name in module" << moduleName;
-                        continue;
+            const QString moduleName = QString::fromStdString(
+                instanceData["module"].as<std::string>());
+
+            /* Generate instance declaration with parameters if any */
+            out << "    " << moduleName << " ";
+
+            /* Add parameters if they exist */
+            if (instanceData["parameter"]) {
+                if (!instanceData["parameter"].IsMap()) {
+                    qWarning() << "Warning: 'parameter' section for instance" << instanceName
+                               << "is not a map, ignoring";
+                } else if (instanceData["parameter"].size() == 0) {
+                    qWarning() << "Warning: 'parameter' section for instance" << instanceName
+                               << "is empty, ignoring";
+                } else {
+                    out << "#(\n";
+
+                    QStringList paramList;
+                    for (auto paramIter = instanceData["parameter"].begin();
+                         paramIter != instanceData["parameter"].end();
+                         ++paramIter) {
+                        if (!paramIter->first.IsScalar()) {
+                            qWarning()
+                                << "Warning: Invalid parameter name in instance" << instanceName;
+                            continue;
+                        }
+
+                        if (!paramIter->second.IsScalar()) {
+                            qWarning() << "Warning: Parameter"
+                                       << QString::fromStdString(paramIter->first.as<std::string>())
+                                       << "in instance" << instanceName
+                                       << "has a non-scalar value, skipping";
+                            continue;
+                        }
+
+                        const QString paramName = QString::fromStdString(
+                            paramIter->first.as<std::string>());
+                        const QString paramValue = QString::fromStdString(
+                            paramIter->second.as<std::string>());
+
+                        paramList.append(QString("        .%1(%2)").arg(paramName).arg(paramValue));
                     }
 
-                    const QString portName = QString::fromStdString(
-                        portIter->first.as<std::string>());
+                    out << paramList.join(",\n") << "\n    ) ";
+                }
+            }
 
-                    /* Check if this port has a connection */
-                    if (portMap.contains(portName)) {
-                        const QString wireConnection = portMap[portName];
-                        portConnections.append(
-                            QString("        .%1(%2)").arg(portName).arg(wireConnection));
-                    } else {
-                        /* Port exists in module but has no connection */
-                        QString direction = "signal";
-                        QString width     = "";
+            out << instanceName << " (\n";
 
-                        if (portIter->second && portIter->second["direction"]
-                            && portIter->second["direction"].IsScalar()) {
-                            direction = QString::fromStdString(
-                                portIter->second["direction"].as<std::string>());
+            /* Get the port connections for this instance */
+            QStringList portConnections;
+
+            /* Get module definition to ensure all ports are listed */
+            if (moduleManager && moduleManager->isModuleExist(moduleName)) {
+                YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+
+                if (moduleData["port"] && moduleData["port"].IsMap()) {
+                    /* Get the existing connections map for this instance */
+                    QMap<QString, QString> portMap;
+                    if (instancePortConnections.contains(instanceName)) {
+                        portMap = instancePortConnections[instanceName];
+                    }
+
+                    /* Iterate through all ports in the module definition */
+                    for (auto portIter = moduleData["port"].begin();
+                         portIter != moduleData["port"].end();
+                         ++portIter) {
+                        if (!portIter->first.IsScalar()) {
+                            qWarning() << "Warning: Invalid port name in module" << moduleName;
+                            continue;
                         }
 
-                        /* Get port width/type */
-                        if (portIter->second && portIter->second["type"]
-                            && portIter->second["type"].IsScalar()) {
-                            QString type = QString::fromStdString(
-                                portIter->second["type"].as<std::string>());
+                        const QString portName = QString::fromStdString(
+                            portIter->first.as<std::string>());
 
-                            /* Clean type for Verilog 2001 compatibility */
-                            type = QSocGenerateManager::cleanTypeForWireDeclaration(type);
+                        /* Check if this port has a connection */
+                        if (portMap.contains(portName)) {
+                            const QString wireConnection = portMap[portName];
+                            portConnections.append(
+                                QString("        .%1(%2)").arg(portName).arg(wireConnection));
+                        } else {
+                            /* Port exists in module but has no connection */
+                            QString direction = "signal";
+                            QString width     = "";
 
-                            /* Extract width information if it exists in format [x:y] or [x] */
-                            const QRegularExpression widthRegex(
-                                R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
-                            const QRegularExpressionMatch match = widthRegex.match(type);
-                            if (match.hasMatch()) {
-                                /* Both [x] and [x:y] formats use the full match */
-                                width = match.captured(0);
+                            if (portIter->second && portIter->second["direction"]
+                                && portIter->second["direction"].IsScalar()) {
+                                direction = QString::fromStdString(
+                                    portIter->second["direction"].as<std::string>());
                             }
-                        }
 
-                        /* Check for tie attribute in instance's port */
-                        bool    hasTie = false;
-                        QString tieValue;
-                        int     portWidth = 1; /* Default width if not specified */
+                            /* Get port width/type */
+                            if (portIter->second && portIter->second["type"]
+                                && portIter->second["type"].IsScalar()) {
+                                QString type = QString::fromStdString(
+                                    portIter->second["type"].as<std::string>());
 
-                        /* Extract port width for bit size validation */
-                        if (!width.isEmpty()) {
-                            const QRegularExpression widthRegex(R"(\[(\d+)(?::(\d+))?\])");
-                            auto                     match = widthRegex.match(width);
-                            if (match.hasMatch()) {
-                                bool      msb_ok = false;
-                                const int msb    = match.captured(1).toInt(&msb_ok);
-                                if (msb_ok) {
-                                    if (match.capturedLength(2) > 0) {
-                                        /* Case with specified LSB, e.g. [7:3] */
-                                        bool      lsb_ok = false;
-                                        const int lsb    = match.captured(2).toInt(&lsb_ok);
-                                        if (lsb_ok) {
-                                            portWidth = qAbs(msb - lsb) + 1;
+                                /* Clean type for Verilog 2001 compatibility */
+                                type = QSocGenerateManager::cleanTypeForWireDeclaration(type);
+
+                                /* Extract width information if it exists in format [x:y] or [x] */
+                                const QRegularExpression widthRegex(
+                                    R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+                                const QRegularExpressionMatch match = widthRegex.match(type);
+                                if (match.hasMatch()) {
+                                    /* Both [x] and [x:y] formats use the full match */
+                                    width = match.captured(0);
+                                }
+                            }
+
+                            /* Check for tie attribute in instance's port */
+                            bool    hasTie = false;
+                            QString tieValue;
+                            int     portWidth = 1; /* Default width if not specified */
+
+                            /* Extract port width for bit size validation */
+                            if (!width.isEmpty()) {
+                                const QRegularExpression widthRegex(R"(\[(\d+)(?::(\d+))?\])");
+                                auto                     match = widthRegex.match(width);
+                                if (match.hasMatch()) {
+                                    bool      msb_ok = false;
+                                    const int msb    = match.captured(1).toInt(&msb_ok);
+                                    if (msb_ok) {
+                                        if (match.capturedLength(2) > 0) {
+                                            /* Case with specified LSB, e.g. [7:3] */
+                                            bool      lsb_ok = false;
+                                            const int lsb    = match.captured(2).toInt(&lsb_ok);
+                                            if (lsb_ok) {
+                                                portWidth = qAbs(msb - lsb) + 1;
+                                            } else {
+                                                portWidth = msb
+                                                            + 1; /* Fallback to default handling */
+                                            }
                                         } else {
-                                            portWidth = msb + 1; /* Fallback to default handling */
+                                            /* Case with only MSB specified, e.g. [7] */
+                                            portWidth = msb + 1; /* [7] means 8 bits [7:0] */
                                         }
-                                    } else {
-                                        /* Case with only MSB specified, e.g. [7] */
-                                        portWidth = msb + 1; /* [7] means 8 bits [7:0] */
                                     }
                                 }
                             }
-                        }
 
-                        /* Check if this port is already connected to any net in the design */
-                        bool isConnectedToNet = false;
-                        if (netlistData["net"] && netlistData["net"].IsMap()) {
-                            for (auto netIter = netlistData["net"].begin();
-                                 netIter != netlistData["net"].end() && !isConnectedToNet;
-                                 ++netIter) {
-                                if (netIter->second.IsSequence()) {
-                                    for (const auto &connectionNode : netIter->second) {
-                                        if (connectionNode.IsMap() && connectionNode["instance"]
-                                            && connectionNode["instance"].IsScalar()
-                                            && connectionNode["port"]
-                                            && connectionNode["port"].IsScalar()) {
-                                            const QString connectedInstance = QString::fromStdString(
-                                                connectionNode["instance"].as<std::string>());
-                                            const QString connectedPort = QString::fromStdString(
-                                                connectionNode["port"].as<std::string>());
+                            /* Check if this port is already connected to any net in the design */
+                            bool isConnectedToNet = false;
+                            if (netlistData["net"] && netlistData["net"].IsMap()) {
+                                for (auto netIter = netlistData["net"].begin();
+                                     netIter != netlistData["net"].end() && !isConnectedToNet;
+                                     ++netIter) {
+                                    if (netIter->second.IsSequence()) {
+                                        for (const auto &connectionNode : netIter->second) {
+                                            if (connectionNode.IsMap() && connectionNode["instance"]
+                                                && connectionNode["instance"].IsScalar()
+                                                && connectionNode["port"]
+                                                && connectionNode["port"].IsScalar()) {
+                                                const QString connectedInstance
+                                                    = QString::fromStdString(
+                                                        connectionNode["instance"].as<std::string>());
+                                                const QString connectedPort = QString::fromStdString(
+                                                    connectionNode["port"].as<std::string>());
 
-                                            if (connectedInstance == instanceName
-                                                && connectedPort == portName) {
-                                                isConnectedToNet = true;
-                                                break;
+                                                if (connectedInstance == instanceName
+                                                    && connectedPort == portName) {
+                                                    isConnectedToNet = true;
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        /* Only proceed with tie if port is not connected to a net */
-                        if (!isConnectedToNet) {
-                            /* Check if instance has tie attribute for this port */
-                            if (netlistData["instance"]
-                                && netlistData["instance"][instanceName.toStdString()]
-                                && netlistData["instance"][instanceName.toStdString()]["port"]
-                                && netlistData["instance"][instanceName.toStdString()]["port"]
-                                              [portName.toStdString()]) {
-                                auto portNode = netlistData["instance"][instanceName.toStdString()]
-                                                           ["port"][portName.toStdString()];
+                            /* Only proceed with tie if port is not connected to a net */
+                            if (!isConnectedToNet) {
+                                /* Check if instance has tie attribute for this port */
+                                if (netlistData["instance"]
+                                    && netlistData["instance"][instanceName.toStdString()]
+                                    && netlistData["instance"][instanceName.toStdString()]["port"]
+                                    && netlistData["instance"][instanceName.toStdString()]["port"]
+                                                  [portName.toStdString()]) {
+                                    auto portNode
+                                        = netlistData["instance"][instanceName.toStdString()]
+                                                     ["port"][portName.toStdString()];
 
-                                /* Check for tie attribute */
-                                if (portNode["tie"] && portNode["tie"].IsScalar()) {
-                                    const QString tieStr = QString::fromStdString(
-                                        portNode["tie"].as<std::string>());
+                                    /* Check for tie attribute (only if portNode is a map) */
+                                    if (portNode.IsMap() && portNode["tie"]
+                                        && portNode["tie"].IsScalar()) {
+                                        const QString tieStr = QString::fromStdString(
+                                            portNode["tie"].as<std::string>());
 
-                                    /* Parse the tie value using our number parser */
-                                    const QSocNumberInfo numInfo = parseNumber(tieStr);
+                                        /* Parse the tie value using our number parser */
+                                        const QSocNumberInfo numInfo = parseNumber(tieStr);
 
-                                    /* Only apply tie to input ports */
-                                    if (direction.toLower() == "input"
-                                        || direction.toLower() == "in") {
-                                        hasTie = true;
+                                        /* Only apply tie to input ports */
+                                        if (direction.toLower() == "input"
+                                            || direction.toLower() == "in") {
+                                            hasTie = true;
 
-                                        /* Format the tie value */
-                                        /* Create a copy of numInfo with adjusted width */
-                                        QSocNumberInfo adjustedInfo = numInfo;
+                                            /* Format the tie value */
+                                            /* Create a copy of numInfo with adjusted width */
+                                            QSocNumberInfo adjustedInfo = numInfo;
 
-                                        /* Special handling for overflow detection */
-                                        if (numInfo.errorDetected) {
-                                            /* For overflow values, keep the original string representation */
-                                            if (numInfo.width > portWidth) {
-                                                tieValue = QString(
-                                                               "%1 /* FIXME: Value width %2 bits "
-                                                               "exceeds port width %3 bits */")
-                                                               .arg(numInfo.originalString)
-                                                               .arg(numInfo.width)
-                                                               .arg(portWidth);
+                                            /* Special handling for overflow detection */
+                                            if (numInfo.errorDetected) {
+                                                /* For overflow values, keep the original string representation */
+                                                if (numInfo.width > portWidth) {
+                                                    tieValue
+                                                        = QString(
+                                                              "%1 /* FIXME: Value width %2 bits "
+                                                              "exceeds port width %3 bits */")
+                                                              .arg(numInfo.originalString)
+                                                              .arg(numInfo.width)
+                                                              .arg(portWidth);
+                                                } else {
+                                                    tieValue = numInfo.originalString;
+                                                }
                                             } else {
-                                                tieValue = numInfo.originalString;
+                                                /* Normal handling for regular values */
+                                                adjustedInfo.width            = portWidth;
+                                                adjustedInfo.hasExplicitWidth = true;
+
+                                                /* Create a mask for the width */
+                                                BigUnsigned mask = BigUnsigned(0);
+                                                for (int i = 0; i < portWidth; i++) {
+                                                    mask = (mask << 1) + BigUnsigned(1);
+                                                }
+                                                /* Apply mask to truncate the value */
+                                                if (adjustedInfo.value.getSign()
+                                                    == BigInteger::negative) {
+                                                    /* For negative numbers, apply mask to magnitude and maintain sign */
+                                                    const BigUnsigned result
+                                                        = adjustedInfo.value.getMagnitude() & mask;
+                                                    adjustedInfo.value
+                                                        = BigInteger(result, BigInteger::negative);
+                                                } else {
+                                                    /* For non-negative numbers, just apply the mask */
+                                                    adjustedInfo.value = BigInteger(
+                                                        adjustedInfo.value.getMagnitude() & mask);
+                                                }
+
+                                                if (numInfo.width > portWidth) {
+                                                    /* Value is wider than port - show FIXME comment but use proper width */
+                                                    tieValue
+                                                        = QString(
+                                                              "%1 /* FIXME: Value %2 wider than "
+                                                              "port width %3 bits */")
+                                                              .arg(adjustedInfo.formatVerilog())
+                                                              .arg(numInfo.formatVerilog())
+                                                              .arg(portWidth);
+                                                } else {
+                                                    /* Use adjusted formatting with correct width, preserving original base */
+                                                    tieValue = adjustedInfo.formatVerilog();
+                                                }
+                                            }
+
+                                            /* Check for invert attribute */
+                                            if (portNode.IsMap() && portNode["invert"]
+                                                && portNode["invert"].IsScalar()) {
+                                                /* Use direct YAML boolean parsing instead of string conversion */
+                                                if (portNode["invert"].as<bool>()) {
+                                                    /* If we need to invert, apply logical NOT (~) to the value */
+                                                    tieValue = QString("~(%1)").arg(tieValue);
+                                                }
                                             }
                                         } else {
-                                            /* Normal handling for regular values */
-                                            adjustedInfo.width            = portWidth;
-                                            adjustedInfo.hasExplicitWidth = true;
-
-                                            /* Create a mask for the width */
-                                            BigUnsigned mask = BigUnsigned(0);
-                                            for (int i = 0; i < portWidth; i++) {
-                                                mask = (mask << 1) + BigUnsigned(1);
-                                            }
-                                            /* Apply mask to truncate the value */
-                                            if (adjustedInfo.value.getSign()
-                                                == BigInteger::negative) {
-                                                /* For negative numbers, apply mask to magnitude and maintain sign */
-                                                const BigUnsigned result
-                                                    = adjustedInfo.value.getMagnitude() & mask;
-                                                adjustedInfo.value
-                                                    = BigInteger(result, BigInteger::negative);
-                                            } else {
-                                                /* For non-negative numbers, just apply the mask */
-                                                adjustedInfo.value = BigInteger(
-                                                    adjustedInfo.value.getMagnitude() & mask);
-                                            }
-
-                                            if (numInfo.width > portWidth) {
-                                                /* Value is wider than port - show FIXME comment but use proper width */
-                                                tieValue = QString(
-                                                               "%1 /* FIXME: Value %2 wider than "
-                                                               "port width %3 bits */")
-                                                               .arg(adjustedInfo.formatVerilog())
-                                                               .arg(numInfo.formatVerilog())
-                                                               .arg(portWidth);
-                                            } else {
-                                                /* Use adjusted formatting with correct width, preserving original base */
-                                                tieValue = adjustedInfo.formatVerilog();
-                                            }
+                                            /* Add warning for non-input ports with tie */
+                                            tieValue
+                                                = QString(
+                                                      "/* FIXME: 'tie' attribute for %1 port %2 "
+                                                      "ignored */")
+                                                      .arg(direction.toLower())
+                                                      .arg(portName);
                                         }
-
-                                        /* Check for invert attribute */
-                                        if (portNode["invert"] && portNode["invert"].IsScalar()) {
-                                            /* Use direct YAML boolean parsing instead of string conversion */
-                                            if (portNode["invert"].as<bool>()) {
-                                                /* If we need to invert, apply logical NOT (~) to the value */
-                                                tieValue = QString("~(%1)").arg(tieValue);
-                                            }
-                                        }
-                                    } else {
-                                        /* Add warning for non-input ports with tie */
+                                    }
+                                    /* If no tie but has invert attribute on an input port, warn about missing tie */
+                                    else if (
+                                        portNode.IsMap() && portNode["invert"]
+                                        && portNode["invert"].IsScalar()
+                                        && (direction.toLower() == "input"
+                                            || direction.toLower() == "in")) {
                                         tieValue = QString(
-                                                       "/* FIXME: 'tie' attribute for %1 port %2 "
-                                                       "ignored */")
+                                                       "/* FIXME: 'invert' attribute on %1 port %2 "
+                                                       "without 'tie' attribute */")
                                                        .arg(direction.toLower())
                                                        .arg(portName);
                                     }
                                 }
-                                /* If no tie but has invert attribute on an input port, warn about missing tie */
-                                else if (
-                                    portNode["invert"] && portNode["invert"].IsScalar()
-                                    && (direction.toLower() == "input"
-                                        || direction.toLower() == "in")) {
-                                    tieValue = QString(
-                                                   "/* FIXME: 'invert' attribute on %1 port %2 "
-                                                   "without 'tie' attribute */")
-                                                   .arg(direction.toLower())
-                                                   .arg(portName);
+                            }
+
+                            /* Format port connection based on connection status and tie attribute */
+                            if (hasTie
+                                && (direction.toLower() == "input" || direction.toLower() == "in")) {
+                                portConnections.append(
+                                    QString("        .%1(%2)").arg(portName).arg(tieValue));
+                            } else if (
+                                isConnectedToNet && instancePortConnections.contains(instanceName)
+                                && instancePortConnections[instanceName].contains(portName)) {
+                                /* Use connection from instancePortConnections if port is connected to a net */
+                                const QString connectionValue
+                                    = instancePortConnections[instanceName][portName];
+                                portConnections.append(
+                                    QString("        .%1(%2)").arg(portName).arg(connectionValue));
+                            } else {
+                                /* Format FIXME message with width if available */
+                                if (width.isEmpty()) {
+                                    portConnections.append(
+                                        QString("        .%1(/* FIXME: %2 %3 missing */)")
+                                            .arg(portName)
+                                            .arg(direction)
+                                            .arg(portName));
+                                } else {
+                                    portConnections.append(
+                                        QString("        .%1(/* FIXME: %2 %3 %4 missing */)")
+                                            .arg(portName)
+                                            .arg(direction)
+                                            .arg(width)
+                                            .arg(portName));
                                 }
                             }
                         }
-
-                        /* Format port connection based on connection status and tie attribute */
-                        if (hasTie
-                            && (direction.toLower() == "input" || direction.toLower() == "in")) {
-                            portConnections.append(
-                                QString("        .%1(%2)").arg(portName).arg(tieValue));
-                        } else if (
-                            isConnectedToNet && instancePortConnections.contains(instanceName)
-                            && instancePortConnections[instanceName].contains(portName)) {
-                            /* Use connection from instancePortConnections if port is connected to a net */
-                            const QString connectionValue
-                                = instancePortConnections[instanceName][portName];
-                            portConnections.append(
-                                QString("        .%1(%2)").arg(portName).arg(connectionValue));
-                        } else {
-                            /* Format FIXME message with width if available */
-                            if (width.isEmpty()) {
-                                portConnections.append(
-                                    QString("        .%1(/* FIXME: %2 %3 missing */)")
-                                        .arg(portName)
-                                        .arg(direction)
-                                        .arg(portName));
-                            } else {
-                                portConnections.append(
-                                    QString("        .%1(/* FIXME: %2 %3 %4 missing */)")
-                                        .arg(portName)
-                                        .arg(direction)
-                                        .arg(width)
-                                        .arg(portName));
-                            }
-                        }
                     }
+                } else {
+                    qWarning() << "Warning: Module" << moduleName << "has no valid port section";
                 }
             } else {
-                qWarning() << "Warning: Module" << moduleName << "has no valid port section";
-            }
-        } else {
-            qWarning() << "Warning: Failed to get module definition for" << moduleName;
+                qWarning() << "Warning: Failed to get module definition for" << moduleName;
 
-            /* Fall back to existing connections if module definition not available */
-            if (instancePortConnections.contains(instanceName)) {
-                const QMap<QString, QString>  &portMap = instancePortConnections[instanceName];
-                QMapIterator<QString, QString> portIter(portMap);
-                while (portIter.hasNext()) {
-                    portIter.next();
-                    portConnections.append(
-                        QString("        .%1(%2)").arg(portIter.key()).arg(portIter.value()));
+                /* Fall back to existing connections if module definition not available */
+                if (instancePortConnections.contains(instanceName)) {
+                    const QMap<QString, QString>  &portMap = instancePortConnections[instanceName];
+                    QMapIterator<QString, QString> portIter(portMap);
+                    while (portIter.hasNext()) {
+                        portIter.next();
+                        portConnections.append(
+                            QString("        .%1(%2)").arg(portIter.key()).arg(portIter.value()));
+                    }
                 }
             }
-        }
 
-        if (portConnections.isEmpty()) {
-            /* No port connections found for this instance */
-            out << "        /* No port connections found for this instance */\n";
-        } else {
-            out << portConnections.join(",\n") << "\n";
-        }
+            if (portConnections.isEmpty()) {
+                /* No port connections found for this instance */
+                out << "        /* No port connections found for this instance */\n";
+            } else {
+                out << portConnections.join(",\n") << "\n";
+            }
 
-        out << "    );\n";
+            out << "    );\n";
+        }
     }
 
     /* Generate combinational logic after module instantiations */

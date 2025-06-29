@@ -37,21 +37,20 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
         netlistData = YAML::Load(fileStream);
 
         /* Validate basic netlist structure */
-        if (!netlistData["instance"]) {
-            qCritical() << "Error: Invalid netlist format, missing 'instance' section";
-            return false;
-        }
-
-        if (!netlistData["instance"].IsMap()) {
+        // Check if instance section exists and is valid when present
+        if (netlistData["instance"] && !netlistData["instance"].IsMap()) {
             qCritical() << "Error: Invalid netlist format, 'instance' section is not a map";
             return false;
         }
 
-        // Allow empty instance section if comb, seq, or fsm section exists
-        if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]
-            && !netlistData["fsm"]) {
-            qCritical() << "Error: Invalid netlist format, 'instance' section is empty and no "
-                           "'comb', 'seq', or 'fsm' section found";
+        // Allow empty or missing instance section if comb, seq, or fsm section exists
+        bool hasInstances = netlistData["instance"] && netlistData["instance"].IsMap()
+                            && netlistData["instance"].size() > 0;
+        bool hasCombSeqFsm = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"];
+
+        if (!hasInstances && !hasCombSeqFsm) {
+            qCritical() << "Error: Invalid netlist format, no 'instance' section and no 'comb', "
+                           "'seq', or 'fsm' section found";
             return false;
         }
 
@@ -740,7 +739,18 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
     /* Compare effective widths for consistency */
     int  referenceWidth = -1;
     bool firstPort      = true;
+    bool hasBitSelect   = false;
 
+    /* Check if any port has bit selection */
+    for (auto it = portWidthInfos.constBegin(); it != portWidthInfos.constEnd(); ++it) {
+        const PortWidthInfo &info = it.value();
+        if (!info.bitSelect.isEmpty()) {
+            hasBitSelect = true;
+            break;
+        }
+    }
+
+    /* Compare effective widths for consistency - bit selections don't automatically mean it's OK */
     for (auto it = portWidthInfos.constBegin(); it != portWidthInfos.constEnd(); ++it) {
         const PortWidthInfo &info = it.value();
 
@@ -777,7 +787,10 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
     for (const auto &conn : connections) {
         QString direction = "unknown";
 
-        if (conn.type == PortType::TopLevel) {
+        if (conn.type == PortType::CombSeqFsm) {
+            /* Comb/seq/fsm outputs are always output drivers */
+            direction = "output";
+        } else if (conn.type == PortType::TopLevel) {
             /* For top-level ports, we need to reverse the direction for internal net perspective
              * e.g., a top-level output is actually an input from the internal net's perspective */
             if (netlistData["port"] && netlistData["port"][conn.portName.toStdString()]
@@ -1649,4 +1662,283 @@ bool QSocGenerateManager::processSeqLogic()
         qCritical() << "Unknown exception in processSeqLogic";
         return false;
     }
+}
+
+QPair<QString, QString> QSocGenerateManager::parseSignalBitSelect(const QString &signalName)
+{
+    const QRegularExpression      bitSelectRegex(R"(^([^[]+)(\[\s*\d+\s*(?::\s*\d+)?\s*\])?\s*$)");
+    const QRegularExpressionMatch match = bitSelectRegex.match(signalName);
+
+    if (match.hasMatch()) {
+        QString baseName  = match.captured(1).trimmed();
+        QString bitSelect = match.captured(2);
+        return qMakePair(baseName, bitSelect);
+    }
+
+    return qMakePair(signalName, QString());
+}
+
+QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFsmOutputs()
+{
+    QList<PortDetailInfo> outputs;
+
+    try {
+        // Collect comb outputs
+        if (netlistData["comb"] && netlistData["comb"].IsSequence()) {
+            for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
+                const YAML::Node &combItem = netlistData["comb"][i];
+                if (combItem.IsMap() && combItem["out"] && combItem["out"].IsScalar()) {
+                    const QString outputSignal = QString::fromStdString(
+                        combItem["out"].as<std::string>());
+
+                    auto    parsed    = parseSignalBitSelect(outputSignal);
+                    QString baseName  = parsed.first;
+                    QString bitSelect = parsed.second;
+
+                    // Find port width for this output
+                    QString width = "";
+                    if (netlistData["port"] && netlistData["port"].IsMap()) {
+                        for (const auto &portEntry : netlistData["port"]) {
+                            if (portEntry.first.IsScalar()
+                                && QString::fromStdString(portEntry.first.as<std::string>())
+                                       == baseName) {
+                                if (portEntry.second.IsMap() && portEntry.second["type"]
+                                    && portEntry.second["type"].IsScalar()) {
+                                    QString portType = QString::fromStdString(
+                                        portEntry.second["type"].as<std::string>());
+                                    width = cleanTypeForWireDeclaration(portType);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    outputs.append(
+                        PortDetailInfo::createTopLevelPort(baseName, width, "output", bitSelect));
+                }
+            }
+        }
+
+        // Collect seq outputs
+        if (netlistData["seq"] && netlistData["seq"].IsSequence()) {
+            for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
+                const YAML::Node &seqItem = netlistData["seq"][i];
+                if (seqItem.IsMap() && seqItem["reg"] && seqItem["reg"].IsScalar()) {
+                    const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
+
+                    auto    parsed    = parseSignalBitSelect(regName);
+                    QString baseName  = parsed.first;
+                    QString bitSelect = parsed.second;
+
+                    // Find port width for this output
+                    QString width = "";
+                    if (netlistData["port"] && netlistData["port"].IsMap()) {
+                        for (const auto &portEntry : netlistData["port"]) {
+                            if (portEntry.first.IsScalar()
+                                && QString::fromStdString(portEntry.first.as<std::string>())
+                                       == baseName) {
+                                if (portEntry.second.IsMap() && portEntry.second["type"]
+                                    && portEntry.second["type"].IsScalar()) {
+                                    QString portType = QString::fromStdString(
+                                        portEntry.second["type"].as<std::string>());
+                                    width = cleanTypeForWireDeclaration(portType);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    outputs.append(
+                        PortDetailInfo::createTopLevelPort(baseName, width, "output", bitSelect));
+                }
+            }
+        }
+
+        // Collect FSM outputs
+        if (netlistData["fsm"] && netlistData["fsm"].IsSequence()) {
+            for (size_t i = 0; i < netlistData["fsm"].size(); ++i) {
+                const YAML::Node &fsmItem = netlistData["fsm"][i];
+                if (fsmItem.IsMap() && fsmItem["moore"] && fsmItem["moore"].IsMap()) {
+                    QSet<QString> fsmOutputs;
+
+                    // Collect all Moore outputs
+                    for (const auto &mooreEntry : fsmItem["moore"]) {
+                        if (mooreEntry.second.IsMap()) {
+                            for (const auto &output : mooreEntry.second) {
+                                if (output.first.IsScalar()) {
+                                    const QString outputName = QString::fromStdString(
+                                        output.first.as<std::string>());
+                                    fsmOutputs.insert(outputName);
+                                }
+                            }
+                        }
+                    }
+
+                    // Add each unique FSM output
+                    for (const QString &outputSignal : fsmOutputs) {
+                        auto    parsed    = parseSignalBitSelect(outputSignal);
+                        QString baseName  = parsed.first;
+                        QString bitSelect = parsed.second;
+
+                        // Find port width for this output
+                        QString width = "";
+                        if (netlistData["port"] && netlistData["port"].IsMap()) {
+                            for (const auto &portEntry : netlistData["port"]) {
+                                if (portEntry.first.IsScalar()
+                                    && QString::fromStdString(portEntry.first.as<std::string>())
+                                           == baseName) {
+                                    if (portEntry.second.IsMap() && portEntry.second["type"]
+                                        && portEntry.second["type"].IsScalar()) {
+                                        QString portType = QString::fromStdString(
+                                            portEntry.second["type"].as<std::string>());
+                                        width = cleanTypeForWireDeclaration(portType);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        outputs.append(
+                            PortDetailInfo::createTopLevelPort(baseName, width, "output", bitSelect));
+                    }
+                }
+            }
+        }
+
+    } catch (const YAML::Exception &e) {
+        qWarning() << "YAML exception in collectCombSeqFsmOutputs:" << e.what();
+    } catch (const std::exception &e) {
+        qWarning() << "Standard exception in collectCombSeqFsmOutputs:" << e.what();
+    } catch (...) {
+        qWarning() << "Unknown exception in collectCombSeqFsmOutputs";
+    }
+
+    return outputs;
+}
+
+bool QSocGenerateManager::doBitRangesOverlap(const QString &range1, const QString &range2)
+{
+    if (range1.isEmpty() || range2.isEmpty()) {
+        return false;
+    }
+
+    const QRegularExpression bitSelectRegex(R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+
+    // Parse range1
+    const QRegularExpressionMatch match1 = bitSelectRegex.match(range1);
+    if (!match1.hasMatch()) {
+        return false;
+    }
+
+    bool ok1;
+    int  msb1 = match1.captured(1).toInt(&ok1);
+    if (!ok1) {
+        return false;
+    }
+
+    int lsb1 = msb1; // Default to single bit
+    if (match1.capturedLength(2) > 0) {
+        lsb1 = match1.captured(2).toInt(&ok1);
+        if (!ok1) {
+            return false;
+        }
+    }
+
+    // Ensure msb >= lsb for range1
+    if (msb1 < lsb1) {
+        qSwap(msb1, lsb1);
+    }
+
+    // Parse range2
+    const QRegularExpressionMatch match2 = bitSelectRegex.match(range2);
+    if (!match2.hasMatch()) {
+        return false;
+    }
+
+    bool ok2;
+    int  msb2 = match2.captured(1).toInt(&ok2);
+    if (!ok2) {
+        return false;
+    }
+
+    int lsb2 = msb2; // Default to single bit
+    if (match2.capturedLength(2) > 0) {
+        lsb2 = match2.captured(2).toInt(&ok2);
+        if (!ok2) {
+            return false;
+        }
+    }
+
+    // Ensure msb >= lsb for range2
+    if (msb2 < lsb2) {
+        qSwap(msb2, lsb2);
+    }
+
+    // Check for overlap: ranges [a:b] and [c:d] overlap if max(a,c) >= min(b,d)
+    return qMax(msb1, msb2) >= qMin(lsb1, lsb2);
+}
+
+bool QSocGenerateManager::doBitRangesProvideFullCoverage(const QStringList &ranges, int signalWidth)
+{
+    if (ranges.isEmpty()) {
+        return false;
+    }
+
+    // Convert signal width to bit range (e.g., 8 -> [7:0])
+    int expectedMsb = (signalWidth <= 1) ? 0 : signalWidth - 1;
+    int expectedLsb = 0;
+
+    QVector<bool> coverage(expectedMsb - expectedLsb + 1, false);
+
+    const QRegularExpression bitSelectRegex(R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+
+    for (const QString &range : ranges) {
+        if (range.isEmpty()) {
+            // Empty range covers full signal if signal is single bit
+            if (signalWidth <= 1) {
+                coverage[0] = true;
+            }
+            continue;
+        }
+
+        const QRegularExpressionMatch match = bitSelectRegex.match(range);
+        if (!match.hasMatch()) {
+            continue;
+        }
+
+        bool ok;
+        int  msb = match.captured(1).toInt(&ok);
+        if (!ok) {
+            continue;
+        }
+
+        int lsb = msb; // Default to single bit
+        if (match.capturedLength(2) > 0) {
+            lsb = match.captured(2).toInt(&ok);
+            if (!ok) {
+                continue;
+            }
+        }
+
+        // Ensure msb >= lsb
+        if (msb < lsb) {
+            qSwap(msb, lsb);
+        }
+
+        // Mark coverage for this range
+        for (int bit = lsb; bit <= msb; ++bit) {
+            if (bit >= expectedLsb && bit <= expectedMsb) {
+                coverage[bit - expectedLsb] = true;
+            }
+        }
+    }
+
+    // Check if all bits are covered
+    for (bool covered : coverage) {
+        if (!covered) {
+            return false;
+        }
+    }
+
+    return true;
 }

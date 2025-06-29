@@ -62,11 +62,12 @@ public:
     Q_ENUM(PortDirectionStatus)
 
     /**
-     * @brief Enum to distinguish between module ports and top-level ports
+     * @brief Enum to distinguish between module ports, top-level ports, and comb/seq/fsm outputs
      */
     enum class PortType : std::uint8_t {
-        Module,  /**< Instance/module port */
-        TopLevel /**< Top-level port */
+        Module,    /**< Instance/module port */
+        TopLevel,  /**< Top-level port */
+        CombSeqFsm /**< Comb/seq/fsm output */
     };
     Q_ENUM(PortType)
 
@@ -93,6 +94,11 @@ public:
         static PortConnection createTopLevelPort(const QString &portName)
         {
             return {PortType::TopLevel, "", portName};
+        }
+
+        static PortConnection createCombSeqFsmPort(const QString &portName)
+        {
+            return {PortType::CombSeqFsm, "", portName};
         }
     };
 
@@ -189,6 +195,37 @@ public:
      * @return Cleaned string with only width information (e.g. "[7:0]", "", "[3:0]")
      */
     static QString cleanTypeForWireDeclaration(const QString &typeStr);
+
+    /**
+     * @brief Parse signal name and extract bit selection information
+     * @param signalName Signal name which may contain bit selection (e.g. "out[7:0]", "data[3]")
+     * @return Pair of (base_signal_name, bit_selection_string)
+     */
+    static QPair<QString, QString> parseSignalBitSelect(const QString &signalName);
+
+    /**
+     * @brief Collect output signals from comb/seq/fsm sections
+     * @details Analyzes netlist data and collects all output signals from combinational,
+     *          sequential, and FSM logic blocks, including their bit selection information
+     * @return List of PortDetailInfo for all comb/seq/fsm outputs
+     */
+    QList<PortDetailInfo> collectCombSeqFsmOutputs();
+
+    /**
+     * @brief Check if two bit ranges overlap
+     * @param range1 First bit range in format "[msb:lsb]" or "[bit]"
+     * @param range2 Second bit range in format "[msb:lsb]" or "[bit]"
+     * @return True if the ranges overlap, false otherwise
+     */
+    static bool doBitRangesOverlap(const QString &range1, const QString &range2);
+
+    /**
+     * @brief Check if bit ranges provide full coverage for a signal width
+     * @param ranges List of bit range strings
+     * @param signalWidth Expected signal width (0 means single bit)
+     * @return True if ranges fully cover the signal without gaps
+     */
+    static bool doBitRangesProvideFullCoverage(const QStringList &ranges, int signalWidth);
 
 public slots:
     /**
