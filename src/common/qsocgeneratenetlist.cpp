@@ -890,8 +890,9 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
             /* Comb/seq/fsm outputs are always output drivers */
             direction = "output";
         } else if (conn.type == PortType::TopLevel) {
-            /* For top-level ports, we need to reverse the direction for internal net perspective
-             * e.g., a top-level output is actually an input from the internal net's perspective */
+            /* For top-level ports, direction should match the top-level specification
+             * e.g., a top-level output should be driven by internal logic (output from internal perspective)
+             * e.g., a top-level input should drive internal logic (input from internal perspective) */
             if (netlistData["port"] && netlistData["port"][conn.portName.toStdString()]
                 && netlistData["port"][conn.portName.toStdString()]["direction"]
                 && netlistData["port"][conn.portName.toStdString()]["direction"].IsScalar()) {
@@ -901,11 +902,11 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
                               .as<std::string>())
                           .toLower();
 
-                /* Reverse direction for internal net perspective */
+                /* Keep direction as specified for top-level ports */
                 if (dirStr == "out" || dirStr == "output") {
-                    direction = "input"; /* Top-level output is an input for internal nets */
+                    direction = "output"; /* Top-level output should be driven by internal logic */
                 } else if (dirStr == "in" || dirStr == "input") {
-                    direction = "output"; /* Top-level input is an output for internal nets */
+                    direction = "input"; /* Top-level input should drive internal logic */
                 } else if (dirStr == "inout") {
                     direction = "inout";
                 }
