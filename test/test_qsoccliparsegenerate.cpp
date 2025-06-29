@@ -1132,6 +1132,177 @@ wide_driver_module:
         QVERIFY(verifyVerilogContent("test_bits_mismatch", "Width: [31:0]"));
     }
 
+    void testGenerateWithBitsSelectionFullCoverage()
+    {
+        messageList.clear();
+
+        /* Create a netlist file where bit selections provide complete coverage - no mismatch should occur */
+        const QString content = R"(
+instance:
+  u_ctrl_unit:
+    module: ctrl_unit
+
+  u_analog_block_0:
+    module: analog_block
+  u_analog_block_1:
+    module: analog_block
+  u_analog_block_2:
+    module: analog_block
+  u_analog_block_3:
+    module: analog_block
+  u_analog_block_4:
+    module: analog_block
+  u_analog_block_5:
+    module: analog_block
+  u_analog_block_6:
+    module: analog_block
+  u_analog_block_7:
+    module: analog_block
+
+  u_phase_block:
+    module: phase_block
+
+port:
+  ctrl_data_i:
+    type: logic[63:0]
+    direction: input
+
+net:
+  # This net should NOT have width mismatch - bit selections provide complete coverage
+  ctrl_data_i:
+    - port: ctrl_data_i              # 64-bit input port [63:0]
+    - instance: u_ctrl_unit
+      port: data_in                  # 64-bit input port [63:0]
+    - instance: u_phase_block
+      port: data_out                 # Single bit output
+      bits: "[0]"                    # Drives bit 0
+    - instance: u_analog_block_0
+      port: data_out                 # Single bit output
+      bits: "[8]"                    # Drives bit 8
+    - instance: u_analog_block_1
+      port: data_out                 # Single bit output
+      bits: "[9]"                    # Drives bit 9
+    - instance: u_analog_block_2
+      port: data_out                 # Single bit output
+      bits: "[10]"                   # Drives bit 10
+    - instance: u_analog_block_3
+      port: data_out                 # Single bit output
+      bits: "[11]"                   # Drives bit 11
+    - instance: u_analog_block_4
+      port: data_out                 # Single bit output
+      bits: "[12]"                   # Drives bit 12
+    - instance: u_analog_block_5
+      port: data_out                 # Single bit output
+      bits: "[13]"                   # Drives bit 13
+    - instance: u_analog_block_6
+      port: data_out                 # Single bit output
+      bits: "[14]"                   # Drives bit 14
+    - instance: u_analog_block_7
+      port: data_out                 # Single bit output
+      bits: "[15]"                   # Drives bit 15
+
+comb:
+  - out: ctrl_data_i[7:1]           # Drives bits 7:1 (7 bits)
+    expr: "7'b1010101"
+  - out: ctrl_data_i[63:16]         # Drives bits 63:16 (48 bits)
+    expr: "48'hDEADBEEFDEADBEEF"
+
+# Total coverage: 1+1+1+1+1+1+1+1+1+7+48 = 64 bits = [63:0] ✓
+)";
+
+        /* Create the required module files */
+        const QDir moduleDir(projectManager.getModulePath());
+
+        /* Create ctrl_unit module */
+        const QString ctrlUnitContent = R"(
+ctrl_unit:
+  port:
+    data_in:
+      type: logic[63:0]
+      direction: input
+    ctrl_out:
+      type: logic[7:0]
+      direction: output
+)";
+
+        /* Create analog_block module */
+        const QString analogBlockContent = R"(
+analog_block:
+  port:
+    data_out:
+      type: logic
+      direction: output
+    enable:
+      type: logic
+      direction: input
+)";
+
+        /* Create phase_block module */
+        const QString phaseBlockContent = R"(
+phase_block:
+  port:
+    data_out:
+      type: logic
+      direction: output
+    clk:
+      type: logic
+      direction: input
+)";
+
+        /* Write module files */
+        const QString ctrlUnitPath = moduleDir.filePath("ctrl_unit.soc_mod");
+        QFile         ctrlUnitFile(ctrlUnitPath);
+        if (ctrlUnitFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&ctrlUnitFile);
+            stream << ctrlUnitContent;
+            ctrlUnitFile.close();
+        }
+
+        const QString analogBlockPath = moduleDir.filePath("analog_block.soc_mod");
+        QFile         analogBlockFile(analogBlockPath);
+        if (analogBlockFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&analogBlockFile);
+            stream << analogBlockContent;
+            analogBlockFile.close();
+        }
+
+        const QString phaseBlockPath = moduleDir.filePath("phase_block.soc_mod");
+        QFile         phaseBlockFile(phaseBlockPath);
+        if (phaseBlockFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&phaseBlockFile);
+            stream << phaseBlockContent;
+            phaseBlockFile.close();
+        }
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_full_coverage.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_full_coverage"));
+
+        /* Verify that bit selections are correctly applied */
+        QVERIFY(verifyVerilogContent("test_full_coverage", ".data_out(ctrl_data_i[0])"));
+        QVERIFY(verifyVerilogContent("test_full_coverage", ".data_out(ctrl_data_i[8])"));
+        QVERIFY(verifyVerilogContent("test_full_coverage", ".data_out(ctrl_data_i[15])"));
+
+        /* Verify that comb outputs are correctly applied */
+        QVERIFY(verifyVerilogContent("test_full_coverage", "assign ctrl_data_i[7:1] ="));
+        QVERIFY(verifyVerilogContent("test_full_coverage", "assign ctrl_data_i[63:16] ="));
+
+        /* MOST IMPORTANT: Verify that NO width mismatch warning is generated */
+        /* This is the key test - the bit selections should provide complete coverage */
+        QVERIFY(
+            !verifyVerilogContent("test_full_coverage", "FIXME: Net ctrl_data_i width mismatch"));
+        QVERIFY(!verifyVerilogContent("test_full_coverage", "FIXME: Port ctrl_data_i"));
+    }
+
     void testGenerateWithLinkUplinkConnections()
     {
         messageList.clear();
@@ -1630,7 +1801,7 @@ instance:
       axim_clk_en:
         link: shared_enable
   u_cpu1:
-    module: c906  
+    module: c906
     port:
       axim_clk_en:
         link: shared_enable    # Same module, same port -> should deduplicate
@@ -1750,7 +1921,7 @@ PDDWUWSWCDG_H:
                 break;
             }
         }
-        /* Note: Currently we don't expect true duplicates in this test case 
+        /* Note: Currently we don't expect true duplicates in this test case
          * since each connection is to a different instance */
     }
 
@@ -1768,7 +1939,7 @@ instance:
         link: enable_signal
       sys_apb_rst_b:
         link: reset_signal
-  
+
   # This would create a duplicate if we had two identical link statements
   # We'll test this by manually adding to the net section after link processing
 net:

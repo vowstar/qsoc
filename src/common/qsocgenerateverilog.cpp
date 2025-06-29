@@ -559,7 +559,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                     if (drivesThisNet) {
                         // Add this comb/seq/fsm output as a driver
-                        portConnections.append(PortConnection::createCombSeqFsmPort(outputBaseName));
+                        // Include bit selection in the port name if it exists
+                        QString fullSignalName = outputBaseName;
+                        if (!outputBitSelect.isEmpty()) {
+                            fullSignalName = outputBaseName + outputBitSelect;
+                        }
+                        portConnections.append(PortConnection::createCombSeqFsmPort(fullSignalName));
 
                         portDetails.append(
                             PortDetailInfo::createTopLevelPort(

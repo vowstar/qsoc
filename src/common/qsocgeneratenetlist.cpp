@@ -569,6 +569,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
     {
         QString originalWidth;  /**< Original port width string (e.g. "[7:0]") */
         QString bitSelect;      /**< Bit selection if any (e.g. "[3:2]") */
+        QString direction;      /**< Port direction (input/output/inout) */
         int     effectiveWidth; /**< Calculated effective width considering bit selection */
     };
     QMap<QPair<QString, QString>, PortWidthInfo> portWidthInfos;
@@ -579,6 +580,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
         PortWidthInfo widthInfo;
         widthInfo.originalWidth  = "";
         widthInfo.bitSelect      = "";
+        widthInfo.direction      = "";
         widthInfo.effectiveWidth = 0;
 
         if (conn.type == PortType::TopLevel) {
@@ -619,6 +621,13 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                     }
                 }
 
+                /* Get port direction from netlist data */
+                if (netlistData["port"][portName.toStdString()]["direction"]
+                    && netlistData["port"][portName.toStdString()]["direction"].IsScalar()) {
+                    widthInfo.direction = QString::fromStdString(
+                        netlistData["port"][portName.toStdString()]["direction"].as<std::string>());
+                }
+
                 /* Check for bit selection in net connections */
                 for (const auto &netIter : netlistData["net"]) {
                     if (netIter.second.IsSequence()) {
@@ -645,6 +654,55 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                                     break;
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        } else if (conn.type == PortType::CombSeqFsm) {
+            /* Handle comb/seq/fsm output */
+            /* For comb/seq/fsm outputs, the portName contains the signal with bit selection */
+            auto    parsed    = parseSignalBitSelect(portName);
+            QString baseName  = parsed.first;
+            QString bitSelect = parsed.second;
+
+            widthInfo.bitSelect = bitSelect;
+            widthInfo.direction = "output"; /* Comb/seq/fsm are always output drivers */
+
+            /* Find the port width from the top-level port definition */
+            if (netlistData["port"] && netlistData["port"][baseName.toStdString()]) {
+                if (netlistData["port"][baseName.toStdString()]["type"]
+                    && netlistData["port"][baseName.toStdString()]["type"].IsScalar()) {
+                    QString width = QString::fromStdString(
+                        netlistData["port"][baseName.toStdString()]["type"].as<std::string>());
+                    width                   = cleanTypeForWireDeclaration(width);
+                    widthInfo.originalWidth = width;
+
+                    /* Calculate effective width based on bit selection */
+                    if (!bitSelect.isEmpty()) {
+                        const int selectWidth = calculateBitSelectWidth(bitSelect);
+                        if (selectWidth > 0) {
+                            widthInfo.effectiveWidth = selectWidth;
+                        }
+                    } else {
+                        /* Calculate full width if no bit selection */
+                        const QRegularExpression widthRegex(R"(\[(\d+)(?::(\d+))?\])");
+                        auto                     match = widthRegex.match(width);
+                        if (match.hasMatch()) {
+                            bool      msb_ok = false;
+                            const int msb    = match.captured(1).toInt(&msb_ok);
+                            if (msb_ok) {
+                                if (match.capturedLength(2) > 0) {
+                                    bool      lsb_ok = false;
+                                    const int lsb    = match.captured(2).toInt(&lsb_ok);
+                                    if (lsb_ok) {
+                                        widthInfo.effectiveWidth = qAbs(msb - lsb) + 1;
+                                    }
+                                } else {
+                                    widthInfo.effectiveWidth = msb + 1;
+                                }
+                            }
+                        } else {
+                            widthInfo.effectiveWidth = 1;
                         }
                     }
                 }
@@ -695,6 +753,14 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                             /* Default to 1-bit if no width specified */
                             widthInfo.effectiveWidth = 1;
                         }
+
+                        /* Get port direction from module definition */
+                        if (moduleData["port"][portName.toStdString()]["direction"]
+                            && moduleData["port"][portName.toStdString()]["direction"].IsScalar()) {
+                            widthInfo.direction = QString::fromStdString(
+                                moduleData["port"][portName.toStdString()]["direction"]
+                                    .as<std::string>());
+                        }
                     }
                 }
 
@@ -736,10 +802,8 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
         portWidthInfos[qMakePair(instanceName, portName)] = widthInfo;
     }
 
-    /* Compare effective widths for consistency */
-    int  referenceWidth = -1;
-    bool firstPort      = true;
-    bool hasBitSelect   = false;
+    /* Use original width comparison logic but add special handling for bit selections */
+    bool hasBitSelect = false;
 
     /* Check if any port has bit selection */
     for (auto it = portWidthInfos.constBegin(); it != portWidthInfos.constEnd(); ++it) {
@@ -750,7 +814,42 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
         }
     }
 
-    /* Compare effective widths for consistency - bit selections don't automatically mean it's OK */
+    /* Special case: Handle the scenario where bit selections provide complete coverage.
+     * Check if there's a common target width and bit selections provide full coverage. */
+    if (hasBitSelect) {
+        /* Find target width from ports WITHOUT bit selections (full-width connections) */
+        int targetWidth = 0;
+        for (auto it = portWidthInfos.constBegin(); it != portWidthInfos.constEnd(); ++it) {
+            const PortWidthInfo &info = it.value();
+            /* Only consider ports without bit selections as potential target width */
+            if (info.bitSelect.isEmpty() && info.effectiveWidth > targetWidth) {
+                targetWidth = info.effectiveWidth;
+            }
+        }
+
+        /* Collect all bit selections */
+        QStringList allBitSelections;
+        for (auto it = portWidthInfos.constBegin(); it != portWidthInfos.constEnd(); ++it) {
+            const PortWidthInfo &info = it.value();
+            if (!info.bitSelect.isEmpty()) {
+                allBitSelections.append(info.bitSelect);
+            }
+        }
+
+        /* Check if bit selections provide complete coverage of the target width */
+        if (targetWidth > 0 && !allBitSelections.isEmpty()) {
+            bool fullCoverage = doBitRangesProvideFullCoverage(allBitSelections, targetWidth);
+            if (fullCoverage) {
+                /* Complete bit coverage found - no width mismatch */
+                return true;
+            }
+        }
+    }
+
+    /* Default behavior: compare all effective widths for consistency */
+    int  referenceWidth = -1;
+    bool firstPort      = true;
+
     for (auto it = portWidthInfos.constBegin(); it != portWidthInfos.constEnd(); ++it) {
         const PortWidthInfo &info = it.value();
 
@@ -766,7 +865,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
         }
     }
 
-    /* All effective widths are consistent or some are unspecified */
+    /* All effective widths are consistent */
     return true;
 }
 
