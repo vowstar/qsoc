@@ -254,6 +254,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         const QString portName = QString::fromStdString(
                             connectionNode["port"].as<std::string>());
 
+                        /* If this is a top-level port connection, add it to portToNetConnections */
+                        if (instanceName == "top") {
+                            portToNetConnections[portName] = netName;
+                        }
+
                         /* Check if this port has invert attribute */
                         bool hasInvert = false;
                         if (netlistData["instance"]
@@ -352,6 +357,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 bool    connectedToTopPort = false;
                 QString connectedPortName;
                 QString topLevelPortDirection = "unknown";
+                QString reversedDirection = "unknown"; /* Default fallback, defined in outer scope */
 
                 /* Check if this net is connected to a top-level port */
                 for (auto it = portToNetConnections.begin(); it != portToNetConnections.end();
@@ -383,7 +389,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             }
 
                             /* Reverse the direction for internal checking */
-                            QString reversedDirection;
                             if (topLevelPortDirection == "output") {
                                 reversedDirection
                                     = "input"; /* Top-level output is an input for internal nets */
@@ -393,55 +398,52 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             } else if (topLevelPortDirection == "inout") {
                                 reversedDirection = "inout"; /* Bidirectional remains bidirectional */
                             }
-
-                            /* Add top-level port to connection list */
-                            portConnections.append(
-                                PortConnection::createTopLevelPort(connectedPortName));
-
-                            /* Get port width */
-                            QString portWidthSpec = "";
-                            QString portDirection = "unknown";
-
-                            /* Get port direction */
-                            if (netlistData["port"]
-                                && netlistData["port"][connectedPortName.toStdString()]) {
-                                auto portNode = netlistData["port"][connectedPortName.toStdString()];
-
-                                /* Get port direction */
-                                if (portNode["direction"] && portNode["direction"].IsScalar()) {
-                                    const QString dirStr
-                                        = QString::fromStdString(
-                                              portNode["direction"].as<std::string>())
-                                              .toLower();
-
-                                    /* Handle both full and abbreviated forms */
-                                    if (dirStr == "out" || dirStr == "output") {
-                                        portDirection = "output";
-                                    } else if (dirStr == "in" || dirStr == "input") {
-                                        portDirection = "input";
-                                    } else if (dirStr == "inout") {
-                                        portDirection = "inout";
-                                    }
-                                }
-
-                                /* Get port width/type */
-                                if (portNode["type"] && portNode["type"].IsScalar()) {
-                                    portWidthSpec = QString::fromStdString(
-                                        portNode["type"].as<std::string>());
-                                }
-                            }
-
-                            /* Initialize bitSelection as empty string */
-                            const QString bitSelection = "";
-
-                            /* Add to detailed port information with reversed direction */
-                            portDetails.append(
-                                PortDetailInfo::createTopLevelPort(
-                                    connectedPortName,
-                                    portWidthSpec,
-                                    reversedDirection,
-                                    bitSelection));
                         }
+
+                        /* Add top-level port to connection list */
+                        portConnections.append(
+                            PortConnection::createTopLevelPort(connectedPortName));
+
+                        /* Get port width */
+                        QString portWidthSpec = "";
+
+                        /* Get port width/type from the same node we used for direction */
+                        if (netlistData["port"]
+                            && netlistData["port"][connectedPortName.toStdString()]) {
+                            auto portNode = netlistData["port"][connectedPortName.toStdString()];
+
+                            /* Get port width/type */
+                            if (portNode["type"] && portNode["type"].IsScalar()) {
+                                portWidthSpec = QString::fromStdString(
+                                    portNode["type"].as<std::string>());
+                            }
+                        }
+
+                        /* Initialize bitSelection as empty string */
+                        const QString bitSelection = "";
+
+                        /* CRITICAL FIX: Top-level port direction internal/external viewpoint
+                         *
+                         * Top-level OUTPUT port:
+                         *   - External viewpoint: outputs signal to outside world
+                         *   - Internal viewpoint: receives signal from internal logic (acts as INPUT)
+                         *   - Internal module OUTPUT drives top-level OUTPUT = VALID (not multidriven)
+                         *
+                         * Top-level INPUT port:
+                         *   - External viewpoint: receives signal from outside world
+                         *   - Internal viewpoint: provides signal to internal logic (acts as OUTPUT)
+                         *   - Internal module INPUT connects to top-level INPUT = VALID (not undriven)
+                         *
+                         * Store ORIGINAL direction here - checkPortDirectionConsistencyWithBitOverlap
+                         * will handle the internal/external direction conversion uniformly.
+                         */
+                        /* Add to detailed port information with original direction */
+                        portDetails.append(
+                            PortDetailInfo::createTopLevelPort(
+                                connectedPortName,
+                                portWidthSpec,
+                                topLevelPortDirection,
+                                bitSelection));
                         break;
                     }
                 }
@@ -471,6 +473,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         }
                         const QString portName = QString::fromStdString(
                             connectionNode["port"].as<std::string>());
+
+                        /* If this is a top-level port connection, add it to portToNetConnections */
+                        if (instanceName == "top") {
+                            portToNetConnections[portName] = netName;
+                        }
 
                         /* Create a module port connection */
                         portConnections.append(
@@ -620,14 +627,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             }
 
                             if (detail.type == PortType::TopLevel) {
-                                /* For top-level ports, we need to display the original direction, not the reversed one */
+                                /* For top-level ports, display the actual direction used in checking */
                                 QString displayDirection = detail.direction;
-                                /* input -> output, output -> input, inout -> inout */
-                                if (displayDirection == "input") {
-                                    displayDirection = "output";
-                                } else if (displayDirection == "output") {
-                                    displayDirection = "input";
-                                }
 
                                 out << "     *   Top-Level Port: " << detail.portName
                                     << ", Direction: " << displayDirection
@@ -706,23 +707,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             }
 
                             if (detail.type == PortType::TopLevel) {
-                                /* For top-level ports, we need to display the original direction, not the reversed one */
+                                /* For top-level ports, display the actual direction used in checking */
                                 QString displayDirection = detail.direction;
-                                if (displayDirection == "input") {
-                                    displayDirection = "output";
-                                } else if (displayDirection == "output") {
-                                    displayDirection = "input";
-                                }
-                                /* inout remains inout */
 
-                                QString sourceType = "Top-Level Port";
-
-                                // Check if this is a comb/seq/fsm output based on port type
-                                if (detail.type == PortType::CombSeqFsm) {
-                                    sourceType = "Comb/Seq/FSM Output";
-                                }
-
-                                out << "     *   " << sourceType << ": " << detail.portName
+                                out << "     *   Top-Level Port: " << detail.portName
                                     << ", Direction: " << displayDirection
                                     << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
@@ -790,14 +778,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             }
 
                             if (detail.type == PortType::TopLevel) {
-                                /* For top-level ports, we need to display the original direction, not the reversed one */
+                                /* For top-level ports, display the actual direction used in checking */
                                 QString displayDirection = detail.direction;
-                                if (displayDirection == "input") {
-                                    displayDirection = "output";
-                                } else if (displayDirection == "output") {
-                                    displayDirection = "input";
-                                }
-                                /* inout remains inout */
 
                                 out << "     *   Top-Level Port: " << detail.portName
                                     << ", Direction: " << displayDirection

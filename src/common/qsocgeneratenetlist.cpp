@@ -891,7 +891,8 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
             direction = "output";
         } else if (conn.type == PortType::TopLevel) {
             /* For top-level ports, we need to reverse the direction for internal net perspective
-             * e.g., a top-level output is actually an input from the internal net's perspective */
+             * e.g., a top-level output is an input from the internal net's perspective (receives from internal)
+             * e.g., a top-level input is an output from the internal net's perspective (provides to internal) */
             if (netlistData["port"] && netlistData["port"][conn.portName.toStdString()]
                 && netlistData["port"][conn.portName.toStdString()]["direction"]
                 && netlistData["port"][conn.portName.toStdString()]["direction"].IsScalar()) {
@@ -998,6 +999,28 @@ QSocGenerateManager::checkPortDirectionConsistencyWithBitOverlap(
 
         /* Handle direction reversal for top-level ports */
         if (port.type == PortType::TopLevel) {
+            /* CRITICAL FIX: Top-level port internal/external direction conversion
+             *
+             * The fundamental issue:
+             * - Top-level ports are defined from EXTERNAL perspective (chip interface)
+             * - Internal net checking requires INTERNAL perspective (inside the chip)
+             * - These two perspectives have OPPOSITE directions for the same port
+             *
+             * Examples:
+             * 1. jtag_tck (top-level OUTPUT):
+             *    - External: "output" (chip outputs clock signal)
+             *    - Internal: "input" (internal logic feeds the top-level port)
+             *    - Check: internal module output + internal input = VALID (not multidriven)
+             *
+             * 2. jtag_tdo (top-level INPUT):
+             *    - External: "input" (chip receives data signal)
+             *    - Internal: "output" (top-level port feeds internal logic)
+             *    - Check: internal input + internal output = VALID (not undriven)
+             *
+             * Without this conversion, we get false warnings:
+             * - Top-level OUTPUT + Module OUTPUT = "multiple drivers" (WRONG)
+             * - Top-level INPUT + Module INPUT = "undriven" (WRONG)
+             */
             if (direction == "out" || direction == "output") {
                 direction = "input"; /* Top-level output is an input for internal nets */
             } else if (direction == "in" || direction == "input") {
