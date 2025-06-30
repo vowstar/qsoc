@@ -2020,4 +2020,78 @@ The Verilog generation follows this structure:
 === NOTE ON VERILOG PORT WIDTHS
 <soc-net-verilog-widths>
 QSoC correctly handles Verilog port width declarations where LSB is not zero. For example, a port declared as `output [7:3] signal` in Verilog has a width of 5 bits. The SOC_NET format and processing logic properly calculates this width as `|7-3|+1 = 5`. This ensures accurate width checking even with non-zero-based bit ranges.
+
+== NETLIST VALIDATION FEATURES
+<soc-net-validation>
+QSoC includes comprehensive netlist validation capabilities to ensure design integrity and catch potential issues early in the design process.
+
+=== PORT DIRECTION CHECKING
+<soc-net-port-direction>
+The netlist processor performs sophisticated port direction validation to detect connectivity issues:
+
+*Top-Level Port Handling*:
+- Correctly recognizes that top-level `input` ports should drive internal logic
+- Correctly recognizes that top-level `output` ports should be driven by internal logic
+- Prevents false warnings about top-level port direction conflicts
+- Properly handles bidirectional (`inout`) top-level ports
+
+*Multiple Driver Detection*:
+- Identifies nets with multiple output drivers that could cause conflicts
+- Allows legitimate multiple drivers on non-overlapping bit ranges
+- Reports potential bus contention issues with detailed diagnostic information
+
+*Undriven Net Detection*:
+- Identifies nets that have no driving source (all input ports)
+- Helps catch incomplete connections and missing driver assignments
+- Provides clear error messages indicating which nets need attention
+
+=== BIT-LEVEL OVERLAP DETECTION
+<soc-net-bit-overlap>
+Advanced bit-level analysis prevents conflicts in multi-driver scenarios:
+
+*Bit Range Analysis*:
+- Analyzes bit selections like `[7:4]` and `[3:0]` for overlap detection
+- Allows multiple drivers on non-overlapping bit ranges of the same net
+- Detects conflicts when bit ranges overlap between different drivers
+
+*Supported Bit Selection Formats*:
+- Range selections: `signal[7:0]`, `signal[15:8]`
+- Single bit selections: `signal[3]`, `signal[0]`
+- Mixed range scenarios with proper overlap validation
+
+*Example Scenarios*:
+```yaml
+# Valid: Non-overlapping bit ranges
+net:
+  data_bus:
+    - { instance: cpu, port: data_out[7:4] }    # Upper nibble
+    - { instance: mem, port: data_out[3:0] }    # Lower nibble
+    
+# Invalid: Overlapping bit ranges (will generate warning)
+net:
+  addr_bus:
+    - { instance: cpu, port: addr_out[7:4] }    # Bits 7-4
+    - { instance: dma, port: addr_out[5:2] }    # Bits 5-2 overlap with 5-4
+```
+
+=== VALIDATION DIAGNOSTICS
+<soc-net-diagnostics>
+QSoC provides detailed diagnostic information for all validation issues:
+
+*Comprehensive Error Reports*:
+- Exact instance and port names involved in conflicts
+- Bit range information for overlap detection
+- Clear descriptions of the nature of each problem
+- Suggestions for resolving connectivity issues
+
+*Warning Categories*:
+- `Multiple Drivers`: Multiple outputs driving the same net or overlapping bits
+- `Undriven Nets`: Nets with no output drivers
+- `Width Mismatches`: Port width incompatibilities
+- `Direction Conflicts`: Improper port direction usage
+
+*Integration with Generation Flow*:
+- Validation occurs during Verilog generation process
+- Issues are reported without preventing generation (when possible)
+- Allows iterative design refinement with immediate feedback
 </rewritten_file>

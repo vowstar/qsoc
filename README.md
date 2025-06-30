@@ -6,7 +6,8 @@ QSoC is a Quick, Quality, Quintessential development environment for modern
 SoC (System on Chip) development based on the Qt framework.
 
 QSoC empowers hardware engineers with streamlined features for designing complex
-SoC systems.
+SoC systems, including advanced netlist validation with bit-level overlap detection
+and comprehensive port direction checking.
 
 ## Development
 
@@ -39,6 +40,8 @@ cmake --build build -j
 
 ```bash
 cmake --build build --target test
+# or using ctest directly
+cd build && ctest
 ```
 
 ### SPDX License Headers
