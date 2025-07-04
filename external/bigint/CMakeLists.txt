@@ -1,7 +1,7 @@
 # This CMake file builds the Big Integer Library
 # Original library by Matt McCutchen, placed in the public domain
 
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 
 project(bigint VERSION 2010.04.30 LANGUAGES CXX)
 
