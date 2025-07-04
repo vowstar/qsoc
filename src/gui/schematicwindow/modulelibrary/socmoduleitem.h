@@ -122,10 +122,10 @@ private:
     std::shared_ptr<QSchematic::Items::Label>            m_label;      /**< Module name label */
     QList<std::shared_ptr<QSchematic::Items::Connector>> m_ports; /**< List of port connectors */
 
-    static constexpr qreal PORT_SPACING = 20.0; /**< Spacing between ports */
-    static constexpr qreal MIN_WIDTH    = 80.0; /**< Minimum module width */
-    static constexpr qreal MIN_HEIGHT   = 60.0; /**< Minimum module height */
-    static constexpr qreal LABEL_HEIGHT = 20.0; /**< Height reserved for label */
+    static constexpr qreal PORT_SPACING = 30.0;  /**< Spacing between ports */
+    static constexpr qreal MIN_WIDTH    = 160.0; /**< Minimum module width */
+    static constexpr qreal MIN_HEIGHT   = 100.0; /**< Minimum module height */
+    static constexpr qreal LABEL_HEIGHT = 30.0;  /**< Height reserved for label */
 };
 
 } // namespace ModuleLibrary

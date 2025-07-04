@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "socmoduleitem.h"
+#include "socmoduleconnector.h"
 
 #include <qschematic/items/connector.hpp>
 #include <qschematic/items/label.hpp>
@@ -30,9 +31,9 @@ SocModuleItem::SocModuleItem(
     m_label->setHasConnectionPoint(false);
 
     // Set initial properties
-    setAllowMouseResize(false);
-    setAllowMouseRotate(false);
-    setConnectorsMovable(false);
+    setAllowMouseResize(true);
+    setAllowMouseRotate(true);
+    setConnectorsMovable(true);
     setConnectorsSnapPolicy(QSchematic::Items::Connector::NodeSizerectOutline);
     setConnectorsSnapToGrid(true);
 
@@ -94,16 +95,32 @@ void SocModuleItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
     Q_UNUSED(option)
     Q_UNUSED(widget)
 
-    // Set up drawing
-    QPen   pen(Qt::black, 2.0);
-    QBrush brush(QColor(240, 240, 255));
+    // Draw the bounding rect if debug mode is enabled
+    if (_settings.debug) {
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QBrush(Qt::red));
+        painter->drawRect(boundingRect());
+    }
 
-    painter->setPen(pen);
-    painter->setBrush(brush);
+    QRectF rect   = sizeRect();
+    qreal  radius = _settings.gridSize / 2;
 
-    // Draw module rectangle
-    QRectF rect = sizeRect();
-    painter->drawRect(rect);
+    // Body pen
+    QPen bodyPen;
+    bodyPen.setWidthF(1.5);
+    bodyPen.setStyle(Qt::SolidLine);
+    bodyPen.setColor(QColor(Qt::black));
+
+    // Body brush with gradient
+    QLinearGradient gradient(0, 0, 0, rect.height());
+    gradient.setColorAt(0, QColor(245, 245, 255));
+    gradient.setColorAt(1, QColor(220, 220, 240));
+    QBrush bodyBrush(gradient);
+
+    // Draw the component body
+    painter->setPen(bodyPen);
+    painter->setBrush(bodyBrush);
+    painter->drawRoundedRect(rect, radius, radius);
 
     // Draw module name
     painter->setPen(QPen(Qt::black));
@@ -116,7 +133,19 @@ void SocModuleItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
     painter->drawText(textRect, Qt::AlignCenter, m_moduleName);
 
     // Draw separator line
-    painter->drawLine(0, LABEL_HEIGHT + 5, rect.width(), LABEL_HEIGHT + 5);
+    QPen separatorPen(QColor(180, 180, 180), 1.0);
+    painter->setPen(separatorPen);
+    painter->drawLine(10, LABEL_HEIGHT + 5, rect.width() - 10, LABEL_HEIGHT + 5);
+
+    // Resize handles
+    if (isSelected() && allowMouseResize()) {
+        paintResizeHandles(*painter);
+    }
+
+    // Rotate handle
+    if (isSelected() && allowMouseRotate()) {
+        paintRotateHandle(*painter);
+    }
 }
 
 void SocModuleItem::createPortsFromYaml()
@@ -150,33 +179,34 @@ void SocModuleItem::createPortsFromYaml()
 
     // Calculate required size
     const int   maxPorts       = qMax(inputPorts.size(), outputPorts.size());
-    const qreal requiredHeight = qMax(MIN_HEIGHT, LABEL_HEIGHT + 20 + maxPorts * PORT_SPACING);
+    const qreal requiredHeight = qMax(MIN_HEIGHT, LABEL_HEIGHT + 30 + maxPorts * PORT_SPACING);
     const qreal requiredWidth  = MIN_WIDTH;
 
     setSize(requiredWidth, requiredHeight);
 
+    // Get grid size for proper positioning
+    const int gridSize = _settings.gridSize > 0 ? _settings.gridSize : 20;
+
     // Create input ports (left side)
     for (int i = 0; i < inputPorts.size(); ++i) {
-        QPoint gridPos(
-            0,
-            static_cast<int>(
-                (LABEL_HEIGHT + 15 + i * PORT_SPACING) / 10)); // Convert to grid coordinates
-        auto connector = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, gridPos, inputPorts[i], this);
-        connector->setText(inputPorts[i]);
+        const qreal yPos = LABEL_HEIGHT + 20 + i * PORT_SPACING;
+        QPoint      gridPos(
+            0,                                  // Left edge
+            static_cast<int>(yPos / gridSize)); // Convert to grid coordinates
+        auto connector = std::make_shared<SocModuleConnector>(
+            gridPos, inputPorts[i], SocModuleConnector::Input, this);
         addConnector(connector);
         m_ports.append(connector);
     }
 
     // Create output ports (right side)
     for (int i = 0; i < outputPorts.size(); ++i) {
-        QPoint gridPos(
-            static_cast<int>(requiredWidth / 10),
-            static_cast<int>(
-                (LABEL_HEIGHT + 15 + i * PORT_SPACING) / 10)); // Convert to grid coordinates
-        auto connector = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, gridPos, outputPorts[i], this);
-        connector->setText(outputPorts[i]);
+        const qreal yPos = LABEL_HEIGHT + 20 + i * PORT_SPACING;
+        QPoint      gridPos(
+            static_cast<int>(requiredWidth / gridSize), // Right edge
+            static_cast<int>(yPos / gridSize));         // Convert to grid coordinates
+        auto connector = std::make_shared<SocModuleConnector>(
+            gridPos, outputPorts[i], SocModuleConnector::Output, this);
         addConnector(connector);
         m_ports.append(connector);
     }
