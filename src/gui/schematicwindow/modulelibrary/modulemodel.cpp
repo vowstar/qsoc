@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "modulemodel.h"
+#include "common/qsocmodulemanager.h"
+#include "socmoduleitem.h"
 
 #include <qschematic/items/item.hpp>
 #include <qschematic/items/itemmimedata.hpp>
@@ -11,6 +13,7 @@
 #include <QDebug>
 #include <QIcon>
 #include <QMimeData>
+#include <QRegularExpression>
 
 using namespace ModuleLibrary;
 
@@ -79,9 +82,10 @@ void ModuleModuleTreeItem::deleteChild(int row)
 
 /* ModuleModel implementation */
 
-ModuleModel::ModuleModel(QObject *parent)
+ModuleModel::ModuleModel(QObject *parent, QSocModuleManager *moduleManager)
     : QAbstractItemModel(parent)
     , rootItem_(new ModuleModuleTreeItem(Root, nullptr))
+    , m_moduleManager(moduleManager)
 {
     createModel();
 }
@@ -174,8 +178,12 @@ QVariant ModuleModel::data(const QModelIndex &index, int role) const
         return {};
 
     case CategoryLogic:
-        if (role == Qt::DisplayRole)
+        if (role == Qt::DisplayRole) {
+            // For dynamically created categories, use the library name
+            // We need to track which library this category represents
+            // For now, use generic names
             return tr("Logic Gates");
+        }
         if (role == Qt::DecorationRole)
             return QIcon::fromTheme("folder");
         break;
@@ -192,6 +200,15 @@ QVariant ModuleModel::data(const QModelIndex &index, int role) const
             return tr("I/O Ports");
         if (role == Qt::DecorationRole)
             return QIcon::fromTheme("folder");
+        break;
+
+    case CategoryLibrary:
+        if (!info)
+            return {};
+        if (role == Qt::DisplayRole)
+            return info->name;
+        if (role == Qt::DecorationRole)
+            return info->icon.isNull() ? QIcon::fromTheme("folder") : info->icon;
         break;
 
     case Module:
@@ -251,72 +268,98 @@ QMimeData *ModuleModel::mimeData(const QModelIndexList &indexes) const
     return mimeData;
 }
 
+void ModuleModel::setModuleManager(QSocModuleManager *moduleManager)
+{
+    m_moduleManager = moduleManager;
+    reloadModules();
+}
+
+void ModuleModel::reloadModules()
+{
+    createModel();
+}
+
+void ModuleModel::refresh()
+{
+    reloadModules();
+}
+
 void ModuleModel::createModel()
 {
+    qDebug() << "ModuleModel: createModel() called";
+
     // Clear existing model
     while (rootItem_->childCount() > 0) {
         beginRemoveRows(QModelIndex(), 0, 0);
         rootItem_->deleteChild(0);
         endRemoveRows();
     }
+    qDebug() << "ModuleModel: Existing model cleared";
 
-    // Create Logic Gates category
-    auto *logicCategory = new ModuleModuleTreeItem(CategoryLogic, nullptr, rootItem_);
-    beginInsertRows(QModelIndex(), rootItem_->childCount(), rootItem_->childCount());
-    rootItem_->appendChild(logicCategory);
-    endInsertRows();
+    if (!m_moduleManager) {
+        qDebug() << "No module manager available, creating empty model";
+        return;
+    }
 
-    // Create Memory category
-    auto *memoryCategory = new ModuleModuleTreeItem(CategoryMemory, nullptr, rootItem_);
-    beginInsertRows(QModelIndex(), rootItem_->childCount(), rootItem_->childCount());
-    rootItem_->appendChild(memoryCategory);
-    endInsertRows();
+    qDebug() << "ModuleModel: Module manager available, proceeding with load";
 
-    // Create I/O Ports category
-    auto *ioCategory = new ModuleModuleTreeItem(CategoryIO, nullptr, rootItem_);
-    beginInsertRows(QModelIndex(), rootItem_->childCount(), rootItem_->childCount());
-    rootItem_->appendChild(ioCategory);
-    endInsertRows();
+    // Load all modules from the module manager
+    if (!m_moduleManager->load()) {
+        qDebug() << "Failed to load modules from module manager";
+        return;
+    }
 
-    // Add some example modules
+    // Get all available modules
+    QStringList moduleNames = m_moduleManager->listModule();
 
-    // Logic Gates
-    auto *andGate = new QSchematic::Items::Node(0); // We should use proper items here
-    andGate->setSize(QSizeF(50, 50));
-    addTreeItem(tr("AND Gate"), QIcon::fromTheme("applications-utilities"), andGate, logicCategory);
+    if (moduleNames.isEmpty()) {
+        qDebug() << "No modules found in module manager";
+        return;
+    }
 
-    auto *orGate = new QSchematic::Items::Node(0);
-    orGate->setSize(QSizeF(50, 50));
-    addTreeItem(tr("OR Gate"), QIcon::fromTheme("applications-utilities"), orGate, logicCategory);
+    qDebug() << "ModuleModel: Found" << moduleNames.size() << "modules";
 
-    auto *notGate = new QSchematic::Items::Node(0);
-    notGate->setSize(QSizeF(50, 30));
-    addTreeItem(tr("NOT Gate"), QIcon::fromTheme("applications-utilities"), notGate, logicCategory);
+    // Group modules by library
+    QMap<QString, QStringList> modulesByLibrary;
 
-    // Memory
-    auto *register8bit = new QSchematic::Items::Node(0);
-    register8bit->setSize(QSizeF(80, 60));
-    addTreeItem(
-        tr("8-bit Register"), QIcon::fromTheme("applications-system"), register8bit, memoryCategory);
+    for (const QString &moduleName : moduleNames) {
+        QString libraryName = m_moduleManager->getModuleLibrary(moduleName);
+        if (libraryName.isEmpty()) {
+            libraryName = tr("Unknown");
+        }
+        modulesByLibrary[libraryName].append(moduleName);
+    }
 
-    auto *ram = new QSchematic::Items::Node(0);
-    ram->setSize(QSizeF(100, 80));
-    addTreeItem(tr("RAM"), QIcon::fromTheme("applications-system"), ram, memoryCategory);
+    qDebug() << "ModuleModel: Creating" << modulesByLibrary.size() << "library categories";
 
-    // I/O Ports
-    auto *input = new QSchematic::Items::Node(0);
-    input->setSize(QSizeF(30, 30));
-    addTreeItem(tr("Input Port"), QIcon::fromTheme("go-previous"), input, ioCategory);
+    // Create categories for each library
+    for (auto it = modulesByLibrary.constBegin(); it != modulesByLibrary.constEnd(); ++it) {
+        const QString     &libraryName = it.key();
+        const QStringList &modules     = it.value();
 
-    auto *output = new QSchematic::Items::Node(0);
-    output->setSize(QSizeF(30, 30));
-    addTreeItem(tr("Output Port"), QIcon::fromTheme("go-next"), output, ioCategory);
+        // Create library category with library name info
+        auto *libraryInfo
+            = new ModuleInfo(libraryName, QIcon::fromTheme("folder"), nullptr, libraryName);
+        auto *libraryCategory = new ModuleModuleTreeItem(CategoryLibrary, libraryInfo, rootItem_);
+        beginInsertRows(QModelIndex(), rootItem_->childCount(), rootItem_->childCount());
+        rootItem_->appendChild(libraryCategory);
+        endInsertRows();
 
-    // Add a text label as an example
-    auto *label = new QSchematic::Items::Label(0);
-    label->setText(tr("Text Label"));
-    label->setHasConnectionPoint(false);
-    addTreeItem(tr("Text Label"), QIcon::fromTheme("accessories-text-editor"), label, ioCategory);
+        // Add modules to this library category
+        for (const QString &moduleName : modules) {
+            YAML::Node moduleYaml = m_moduleManager->getModuleYaml(moduleName);
+            if (moduleYaml.IsNull()) {
+                qDebug() << "Failed to get YAML data for module:" << moduleName;
+                continue;
+            }
+
+            // Create SOC module item
+            auto *socModuleItem = new SocModuleItem(moduleName, moduleYaml);
+
+            // Add to tree
+            addTreeItem(moduleName, QIcon::fromTheme("cpu"), socModuleItem, libraryCategory);
+        }
+    }
 }
 
 void ModuleModel::addTreeItem(

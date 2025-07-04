@@ -8,6 +8,10 @@
 #include <QIcon>
 #include <QString>
 
+#include <yaml-cpp/yaml.h>
+
+class QSocModuleManager;
+
 namespace QSchematic::Items {
 class Item;
 }
@@ -16,13 +20,14 @@ namespace ModuleLibrary {
 
 /**
  * @brief Module information structure.
- * @details This structure contains information about a module.
+ * @details This structure contains information about a module or category.
  */
 struct ModuleInfo
 {
-    QString                        name; /**< Name of the module */
-    QIcon                          icon; /**< Icon of the module */
-    const QSchematic::Items::Item *item; /**< Item associated with the module */
+    QString                        name;    /**< Name of the module/category */
+    QString                        library; /**< Library name (for categories) */
+    QIcon                          icon;    /**< Icon of the module */
+    const QSchematic::Items::Item *item;    /**< Item associated with the module */
 
     /**
      * @brief Constructor for ModuleInfo.
@@ -30,9 +35,15 @@ struct ModuleInfo
      * @param[in] name Name of the module
      * @param[in] icon Icon of the module
      * @param[in] item Item associated with the module
+     * @param[in] library Library name (optional)
      */
-    ModuleInfo(const QString &name, const QIcon &icon, const QSchematic::Items::Item *item)
+    ModuleInfo(
+        const QString                 &name,
+        const QIcon                   &icon,
+        const QSchematic::Items::Item *item,
+        const QString                 &library = QString())
         : name(name)
+        , library(library)
         , icon(icon)
         , item(item)
     {}
@@ -141,11 +152,12 @@ public:
      * @details This enum defines the types of module library items.
      */
     enum ItemTypes {
-        Root,           /**< Root item */
-        CategoryLogic,  /**< Logic category */
-        CategoryMemory, /**< Memory category */
-        CategoryIO,     /**< I/O category */
-        Module          /**< Module item */
+        Root,            /**< Root item */
+        CategoryLogic,   /**< Logic category */
+        CategoryMemory,  /**< Memory category */
+        CategoryIO,      /**< I/O category */
+        CategoryLibrary, /**< Library category */
+        Module           /**< Module item */
     };
     Q_ENUM(ItemTypes)
 
@@ -153,8 +165,9 @@ public:
      * @brief Constructor for ModuleModel.
      * @details This constructor will initialize the module library model.
      * @param[in] parent Parent object
+     * @param[in] moduleManager QSocModuleManager instance for loading modules
      */
-    explicit ModuleModel(QObject *parent = nullptr);
+    explicit ModuleModel(QObject *parent = nullptr, QSocModuleManager *moduleManager = nullptr);
 
     /**
      * @brief Destructor for ModuleModel.
@@ -236,6 +249,26 @@ public:
      */
     QMimeData *mimeData(const QModelIndexList &indexes) const override;
 
+    /**
+     * @brief Set the module manager.
+     * @details This function sets the QSocModuleManager instance and reloads the model.
+     * @param[in] moduleManager QSocModuleManager instance
+     */
+    void setModuleManager(QSocModuleManager *moduleManager);
+
+    /**
+     * @brief Reload modules from the module manager.
+     * @details This function reloads the module data from QSocModuleManager.
+     */
+    void reloadModules();
+
+public slots:
+    /**
+     * @brief Refresh the model.
+     * @details This slot refreshes the model by reloading modules from QSocModuleManager.
+     */
+    void refresh();
+
 private:
     /**
      * @brief Create the model.
@@ -257,7 +290,8 @@ private:
         const QSchematic::Items::Item *item,
         ModuleModuleTreeItem          *parent);
 
-    ModuleModuleTreeItem *rootItem_; /**< Root item of the model */
+    ModuleModuleTreeItem *rootItem_;       /**< Root item of the model */
+    QSocModuleManager    *m_moduleManager; /**< QSocModuleManager instance */
 };
 
 } // namespace ModuleLibrary

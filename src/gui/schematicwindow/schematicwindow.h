@@ -10,6 +10,9 @@
 #include <qschematic/settings.hpp>
 #include <qschematic/view.hpp>
 
+class QSocModuleManager;
+class QSocProjectManager;
+
 namespace ModuleLibrary {
 class ModuleWidget;
 }
@@ -33,14 +36,22 @@ public:
      * @brief Constructor for SchematicWindow.
      * @details This constructor will initialize the schematic window.
      * @param[in] parent parent object
+     * @param[in] projectManager project manager instance
      */
-    SchematicWindow(QWidget *parent = nullptr);
+    SchematicWindow(QWidget *parent = nullptr, QSocProjectManager *projectManager = nullptr);
 
     /**
      * @brief Destructor for SchematicWindow.
      * @details This destructor will free the schematic window.
      */
     ~SchematicWindow();
+
+    /**
+     * @brief Set the project manager.
+     * @details This function sets the project manager and initializes the module manager.
+     * @param[in] projectManager project manager instance
+     */
+    void setProjectManager(QSocProjectManager *projectManager);
 
 private slots:
     /**
@@ -112,5 +123,11 @@ private:
 
     /* Module library widget. */
     ModuleLibrary::ModuleWidget *moduleLibraryWidget;
+
+    /* Module manager. */
+    QSocModuleManager *moduleManager;
+
+    /* Project manager. */
+    QSocProjectManager *projectManager;
 };
 #endif // SCHEMATICWINDOW_H

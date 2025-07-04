@@ -6,6 +6,8 @@
 
 #include <QWidget>
 
+class QSocModuleManager;
+
 namespace QSchematic::Items {
 class Item;
 }
@@ -30,8 +32,9 @@ public:
      * @brief Constructor for ModuleWidget.
      * @details This constructor will initialize the module library widget.
      * @param[in] parent Parent object
+     * @param[in] moduleManager QSocModuleManager instance
      */
-    explicit ModuleWidget(QWidget *parent = nullptr);
+    explicit ModuleWidget(QWidget *parent = nullptr, QSocModuleManager *moduleManager = nullptr);
 
     /**
      * @brief Destructor for ModuleWidget.
@@ -44,6 +47,13 @@ public:
      * @details This function will expand all items in the tree view.
      */
     void expandAll();
+
+    /**
+     * @brief Set the module manager.
+     * @details This function sets the module manager and refreshes the model.
+     * @param[in] moduleManager QSocModuleManager instance
+     */
+    void setModuleManager(QSocModuleManager *moduleManager);
 
 signals:
     /**
