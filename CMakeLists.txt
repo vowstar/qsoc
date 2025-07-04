@@ -151,12 +151,12 @@ if (GPDS_FOUND)
 else()
     set(GPDS_BUILD_TESTS OFF CACHE BOOL "disable gpds tests")
     set(GPDS_BUILD_EXAMPLES OFF CACHE BOOL "disable gpds examples build")
-    set(GPDS_FEATURE_SPDLOG OFF CACHE BOOL "disable gpds spdlog build")
-    set(QSCHEMATIC_DEPENDENCY_GPDS_TARGET gpds-static CACHE STRING "qschematic gpds local target name")
+    set(GPDS_BUILD_STATIC ON CACHE BOOL "Build static library.")
+    set(GPDS_BUILD_SHARED OFF CACHE BOOL "Build shared library.")
     add_subdirectory(external/gpds)
     add_library(gpds::gpds-static ALIAS gpds-static)
     set(GPDS_INCLUDE_DIRS
-        "${CMAKE_CURRENT_SOURCE_DIR}/external/gpds/lib/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/gpds/gpds"
     )
     set(GPDS_LIBRARIES gpds::gpds-static)
     message(STATUS "Use local gpds library: ${GPDS_LIBRARIES} ${GPDS_INCLUDE_DIRS}")
@@ -169,10 +169,47 @@ if (QSCHEMATIC_FOUND)
 else()
     set(QSCHEMATIC_BUILD_DEMO               OFF CACHE BOOL "disable qschematic demo build")
     set(QSCHEMATIC_DEPENDENCY_GPDS_DOWNLOAD OFF CACHE BOOL "disable qschematic gpds sources download")
-    set(QSCHEMATIC_DEPENDENCY_GPDS_LOCAL    ON  CACHE BOOL "enable qschematic gpds local sources")
-    # Generate dummy gpds gpds-targets.cmake to avoid error
-    set(gpds_DIR "${CMAKE_CURRENT_BINARY_DIR}/external/gpds/lib/gpds")
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/external/gpds/lib/gpds/gpds-targets.cmake" "\n")
+    set(QSCHEMATIC_DEPENDENCY_GPDS_TARGET   "gpds::gpds-static" CACHE STRING "The CMake target of the GPDS library to use")
+    # Generate gpds-config.cmake to provide gpds::gpds-static target
+    set(gpds_DIR "${CMAKE_CURRENT_BINARY_DIR}/external/gpds/gpds")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/external/gpds/gpds")
+
+    # Create gpds-config.cmake with proper target definitions
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/external/gpds/gpds/gpds-config.cmake" "
+# GPDS Configuration File
+set(PACKAGE_VERSION \"1.10.0\")
+set(GPDS_VERSION \"1.10.0\")
+
+# Define the gpds::gpds-static target if it doesn't exist
+if(NOT TARGET gpds::gpds-static)
+    add_library(gpds::gpds-static INTERFACE IMPORTED)
+    set_target_properties(gpds::gpds-static PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES \"${CMAKE_CURRENT_SOURCE_DIR}/external/gpds\"
+        INTERFACE_LINK_LIBRARIES \"gpds-static\"
+    )
+endif()
+
+# Set variables for compatibility
+set(GPDS_FOUND TRUE)
+set(GPDS_INCLUDE_DIRS \"${CMAKE_CURRENT_SOURCE_DIR}/external/gpds\")
+set(GPDS_LIBRARIES gpds::gpds-static)
+")
+
+    # Create gpds-config-version.cmake for version checking
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/external/gpds/gpds/gpds-config-version.cmake" "
+# GPDS Version Configuration File
+set(PACKAGE_VERSION \"1.10.0\")
+
+# Version compatibility check
+if(\"1.10.0\" VERSION_LESS \"\${PACKAGE_FIND_VERSION}\")
+    set(PACKAGE_VERSION_COMPATIBLE FALSE)
+else()
+    set(PACKAGE_VERSION_COMPATIBLE TRUE)
+    if(\"\${PACKAGE_FIND_VERSION}\" STREQUAL \"1.10.0\")
+        set(PACKAGE_VERSION_EXACT TRUE)
+    endif()
+endif()
+")
     add_subdirectory(external/qschematic)
     set(QSCHEMATIC_INCLUDE_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}/external/qschematic/qschematic"
