@@ -55,6 +55,18 @@ public:
 
 private slots:
     /**
+     * @brief Open schematic file.
+     * @details This function will open a schematic file (*.soc_sch).
+     */
+    void on_actionOpen_triggered();
+
+    /**
+     * @brief Save schematic file.
+     * @details This function will save the schematic file as *.soc_sch.
+     */
+    void on_actionSave_triggered();
+
+    /**
      * @brief Print schematic file.
      * @details This function will print the schematic file.
      */

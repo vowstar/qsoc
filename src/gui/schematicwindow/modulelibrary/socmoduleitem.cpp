@@ -26,7 +26,7 @@ SocModuleItem::SocModuleItem(
     m_label = std::make_shared<QSchematic::Items::Label>();
     m_label->setParentItem(this);
     m_label->setVisible(true);
-    m_label->setMovable(false);
+    m_label->setMovable(true); // Make label draggable
     m_label->setText(m_moduleName);
     m_label->setHasConnectionPoint(false);
 
@@ -102,28 +102,26 @@ void SocModuleItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
         painter->drawRect(boundingRect());
     }
 
-    QRectF rect   = sizeRect();
-    qreal  radius = _settings.gridSize / 2;
+    QRectF rect = sizeRect();
 
-    // Body pen
+    // Body pen (Color4DBodyEx: #840000)
     QPen bodyPen;
     bodyPen.setWidthF(1.5);
     bodyPen.setStyle(Qt::SolidLine);
-    bodyPen.setColor(QColor(Qt::black));
+    bodyPen.setColor(QColor(132, 0, 0));
 
-    // Body brush with gradient
-    QLinearGradient gradient(0, 0, 0, rect.height());
-    gradient.setColorAt(0, QColor(245, 245, 255));
-    gradient.setColorAt(1, QColor(220, 220, 240));
-    QBrush bodyBrush(gradient);
+    // Body brush (Color4DBodyBgEx: #FFFFC2)
+    QBrush bodyBrush;
+    bodyBrush.setStyle(Qt::SolidPattern);
+    bodyBrush.setColor(QColor(255, 255, 194));
 
-    // Draw the component body
+    // Draw the component body (sharp rectangle, no rounded corners)
     painter->setPen(bodyPen);
     painter->setBrush(bodyBrush);
-    painter->drawRoundedRect(rect, radius, radius);
+    painter->drawRect(rect);
 
-    // Draw module name
-    painter->setPen(QPen(Qt::black));
+    // Draw module name (Color4DReferenceEx: #008484)
+    painter->setPen(QPen(QColor(0, 132, 132)));
     QFont font = painter->font();
     font.setBold(true);
     font.setPointSize(10);
@@ -132,8 +130,8 @@ void SocModuleItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
     QRectF textRect(0, 5, rect.width(), LABEL_HEIGHT);
     painter->drawText(textRect, Qt::AlignCenter, m_moduleName);
 
-    // Draw separator line
-    QPen separatorPen(QColor(180, 180, 180), 1.0);
+    // Draw separator line (Color4DGridEx: #848484)
+    QPen separatorPen(QColor(132, 132, 132), 1.0);
     painter->setPen(separatorPen);
     painter->drawLine(10, LABEL_HEIGHT + 5, rect.width() - 10, LABEL_HEIGHT + 5);
 
@@ -150,35 +148,54 @@ void SocModuleItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
 
 void SocModuleItem::createPortsFromYaml()
 {
-    if (!m_moduleYaml || !m_moduleYaml["port"]) {
-        qDebug() << "No port data found in module YAML for" << m_moduleName;
+    if (!m_moduleYaml) {
+        qDebug() << "No module YAML data found for" << m_moduleName;
         return;
     }
 
-    const YAML::Node &ports = m_moduleYaml["port"];
-
     QStringList inputPorts;
     QStringList outputPorts;
+    QStringList inoutPorts;
+    QStringList busPorts;
 
-    // Categorize ports by direction
-    for (const auto &portPair : ports) {
-        const std::string portName = portPair.first.as<std::string>();
-        const YAML::Node &portData = portPair.second;
+    // Process regular ports
+    if (m_moduleYaml["port"]) {
+        const YAML::Node &ports = m_moduleYaml["port"];
 
-        if (portData["direction"]) {
-            const std::string direction  = portData["direction"].as<std::string>();
-            const QString     portNameQt = QString::fromStdString(portName);
+        for (const auto &portPair : ports) {
+            const std::string portName = portPair.first.as<std::string>();
+            const YAML::Node &portData = portPair.second;
 
-            if (direction == "in" || direction == "input") {
-                inputPorts.append(portNameQt);
-            } else if (direction == "out" || direction == "output") {
-                outputPorts.append(portNameQt);
+            if (portData["direction"]) {
+                const std::string direction  = portData["direction"].as<std::string>();
+                const QString     portNameQt = QString::fromStdString(portName);
+
+                if (direction == "in" || direction == "input") {
+                    inputPorts.append(portNameQt);
+                } else if (direction == "out" || direction == "output") {
+                    outputPorts.append(portNameQt);
+                } else if (direction == "inout") {
+                    inoutPorts.append(portNameQt);
+                }
             }
         }
     }
 
+    // Process bus ports
+    if (m_moduleYaml["bus"]) {
+        const YAML::Node &buses = m_moduleYaml["bus"];
+
+        for (const auto &busPair : buses) {
+            const std::string busName   = busPair.first.as<std::string>();
+            const QString     busNameQt = QString::fromStdString(busName);
+            busPorts.append(busNameQt);
+        }
+    }
+
     // Calculate required size
-    const int   maxPorts       = qMax(inputPorts.size(), outputPorts.size());
+    const int   leftSidePorts  = inputPorts.size() + busPorts.size();
+    const int   rightSidePorts = outputPorts.size() + inoutPorts.size();
+    const int   maxPorts       = qMax(leftSidePorts, rightSidePorts);
     const qreal requiredHeight = qMax(MIN_HEIGHT, LABEL_HEIGHT + 30 + maxPorts * PORT_SPACING);
     const qreal requiredWidth  = MIN_WIDTH;
 
@@ -188,27 +205,57 @@ void SocModuleItem::createPortsFromYaml()
     const int gridSize = _settings.gridSize > 0 ? _settings.gridSize : 20;
 
     // Create input ports (left side)
+    int leftPortIndex = 0;
     for (int i = 0; i < inputPorts.size(); ++i) {
-        const qreal yPos = LABEL_HEIGHT + 20 + i * PORT_SPACING;
+        const qreal yPos = LABEL_HEIGHT + 20 + leftPortIndex * PORT_SPACING;
         QPoint      gridPos(
             0,                                  // Left edge
             static_cast<int>(yPos / gridSize)); // Convert to grid coordinates
         auto connector = std::make_shared<SocModuleConnector>(
-            gridPos, inputPorts[i], SocModuleConnector::Input, this);
+            gridPos, inputPorts[i], SocModuleConnector::Input, SocModuleConnector::Left, this);
         addConnector(connector);
         m_ports.append(connector);
+        leftPortIndex++;
+    }
+
+    // Create bus ports (left side, after input ports)
+    for (int i = 0; i < busPorts.size(); ++i) {
+        const qreal yPos = LABEL_HEIGHT + 20 + leftPortIndex * PORT_SPACING;
+        QPoint      gridPos(
+            0,                                  // Left edge
+            static_cast<int>(yPos / gridSize)); // Convert to grid coordinates
+        auto connector = std::make_shared<SocModuleConnector>(
+            gridPos, busPorts[i], SocModuleConnector::Bus, SocModuleConnector::Left, this);
+        addConnector(connector);
+        m_ports.append(connector);
+        leftPortIndex++;
     }
 
     // Create output ports (right side)
+    int rightPortIndex = 0;
     for (int i = 0; i < outputPorts.size(); ++i) {
-        const qreal yPos = LABEL_HEIGHT + 20 + i * PORT_SPACING;
+        const qreal yPos = LABEL_HEIGHT + 20 + rightPortIndex * PORT_SPACING;
         QPoint      gridPos(
             static_cast<int>(requiredWidth / gridSize), // Right edge
             static_cast<int>(yPos / gridSize));         // Convert to grid coordinates
         auto connector = std::make_shared<SocModuleConnector>(
-            gridPos, outputPorts[i], SocModuleConnector::Output, this);
+            gridPos, outputPorts[i], SocModuleConnector::Output, SocModuleConnector::Right, this);
         addConnector(connector);
         m_ports.append(connector);
+        rightPortIndex++;
+    }
+
+    // Create inout ports (right side, after output ports)
+    for (int i = 0; i < inoutPorts.size(); ++i) {
+        const qreal yPos = LABEL_HEIGHT + 20 + rightPortIndex * PORT_SPACING;
+        QPoint      gridPos(
+            static_cast<int>(requiredWidth / gridSize), // Right edge
+            static_cast<int>(yPos / gridSize));         // Convert to grid coordinates
+        auto connector = std::make_shared<SocModuleConnector>(
+            gridPos, inoutPorts[i], SocModuleConnector::InOut, SocModuleConnector::Right, this);
+        addConnector(connector);
+        m_ports.append(connector);
+        rightPortIndex++;
     }
 
     updateLabelPosition();
@@ -216,29 +263,45 @@ void SocModuleItem::createPortsFromYaml()
 
 QSizeF SocModuleItem::calculateRequiredSize() const
 {
-    if (!m_moduleYaml || !m_moduleYaml["port"]) {
+    if (!m_moduleYaml) {
         return QSizeF(MIN_WIDTH, MIN_HEIGHT);
     }
 
-    const YAML::Node &ports       = m_moduleYaml["port"];
-    int               inputCount  = 0;
-    int               outputCount = 0;
+    int inputCount  = 0;
+    int outputCount = 0;
+    int inoutCount  = 0;
+    int busCount    = 0;
 
-    for (const auto &portPair : ports) {
-        const YAML::Node &portData = portPair.second;
+    // Count regular ports
+    if (m_moduleYaml["port"]) {
+        const YAML::Node &ports = m_moduleYaml["port"];
 
-        if (portData["direction"]) {
-            const std::string direction = portData["direction"].as<std::string>();
+        for (const auto &portPair : ports) {
+            const YAML::Node &portData = portPair.second;
 
-            if (direction == "in" || direction == "input") {
-                inputCount++;
-            } else if (direction == "out" || direction == "output") {
-                outputCount++;
+            if (portData["direction"]) {
+                const std::string direction = portData["direction"].as<std::string>();
+
+                if (direction == "in" || direction == "input") {
+                    inputCount++;
+                } else if (direction == "out" || direction == "output") {
+                    outputCount++;
+                } else if (direction == "inout") {
+                    inoutCount++;
+                }
             }
         }
     }
 
-    const int   maxPorts       = qMax(inputCount, outputCount);
+    // Count bus ports
+    if (m_moduleYaml["bus"]) {
+        const YAML::Node &buses = m_moduleYaml["bus"];
+        busCount                = buses.size();
+    }
+
+    const int   leftSidePorts  = inputCount + busCount;
+    const int   rightSidePorts = outputCount + inoutCount;
+    const int   maxPorts       = qMax(leftSidePorts, rightSidePorts);
     const qreal requiredHeight = qMax(MIN_HEIGHT, LABEL_HEIGHT + 20 + maxPorts * PORT_SPACING);
 
     return QSizeF(MIN_WIDTH, requiredHeight);

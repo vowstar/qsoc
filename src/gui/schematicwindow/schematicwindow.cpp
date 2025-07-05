@@ -11,7 +11,13 @@
 #include <qschematic/commands/item_add.hpp>
 #include <qschematic/items/item.hpp>
 
+#include <QFileDialog>
 #include <QGridLayout>
+#include <QMessageBox>
+#include <QStandardPaths>
+
+#include <gpds/archiver_xml.hpp>
+#include <gpds/container.hpp>
 
 SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectManager)
     : QMainWindow(parent)

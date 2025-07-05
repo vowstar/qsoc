@@ -15,19 +15,22 @@ namespace ModuleLibrary {
 class SocModuleConnector : public QSchematic::Items::Connector
 {
 public:
-    enum PortType { Input, Output };
+    enum PortType { Input, Output, InOut, Bus };
+    enum Position { Left, Right, Top, Bottom };
 
     /**
      * @brief Constructor for SocModuleConnector.
      * @param[in] gridPoint Grid position for the connector
      * @param[in] text Text label for the connector
-     * @param[in] portType Type of port (Input/Output)
+     * @param[in] portType Type of port (Input/Output/InOut/Bus)
+     * @param[in] position Position on module (Left/Right/Top/Bottom)
      * @param[in] parent Parent graphics item
      */
     explicit SocModuleConnector(
         const QPoint  &gridPoint,
         const QString &text,
         PortType       portType = Input,
+        Position       position = Left,
         QGraphicsItem *parent   = nullptr);
 
     /**
@@ -62,8 +65,50 @@ public:
      */
     void setPortType(PortType portType) { m_portType = portType; }
 
+    /**
+     * @brief Get the module position.
+     * @return Module position
+     */
+    Position modulePosition() const { return m_position; }
+
+    /**
+     * @brief Set the module position.
+     * @param[in] position Module position
+     */
+    void setModulePosition(Position position) { m_position = position; }
+
 private:
     PortType m_portType;
+    Position m_position;
+
+    /**
+     * @brief Create input port shape (rectangle with inward triangle tab)
+     * @return QPolygonF shape
+     */
+    QPolygonF createInputShape() const;
+
+    /**
+     * @brief Create output port shape (rectangle with outward triangle tab)
+     * @return QPolygonF shape
+     */
+    QPolygonF createOutputShape() const;
+
+    /**
+     * @brief Create inout port shape (rectangle with triangles on both sides)
+     * @return QPolygonF shape
+     */
+    QPolygonF createInOutShape() const;
+
+    /**
+     * @brief Create bus port shape (simple rectangle)
+     * @return QPolygonF shape
+     */
+    QPolygonF createBusShape() const;
+
+    /**
+     * @brief Update position based on current location relative to parent
+     */
+    void updatePositionFromLocation();
 };
 
 } // namespace ModuleLibrary
