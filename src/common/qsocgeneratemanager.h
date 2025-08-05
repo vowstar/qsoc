@@ -343,12 +343,13 @@ public slots:
 
     /**
      * @brief Render a Jinja2 template with provided data files.
-     * @details Loads data from CSV, YAML, and JSON files, then renders a Jinja2 template
+     * @details Loads data from CSV, YAML, JSON, and SystemRDL files, then renders a Jinja2 template
      *          and saves the result to the output directory.
      * @param templateFilePath Path to the Jinja2 template file.
      * @param csvFiles List of CSV data files to load.
      * @param yamlFiles List of YAML data files to load.
      * @param jsonFiles List of JSON data files to load.
+     * @param rdlFiles List of SystemRDL data files to load.
      * @param outputFileName Output file name (without extension).
      * @retval true Template rendered and saved successfully.
      * @retval false Failed to render or save template.
@@ -358,6 +359,7 @@ public slots:
         const QStringList &csvFiles,
         const QStringList &yamlFiles,
         const QStringList &jsonFiles,
+        const QStringList &rdlFiles,
         const QString     &outputFileName);
 
     /**

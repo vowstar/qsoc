@@ -11,6 +11,8 @@
 #include <QJsonObject>
 #include <QTextStream>
 
+#include <systemrdl_api.h>
+
 #include <charconv>
 #include <fstream>
 #include <inja/inja.hpp>
@@ -23,6 +25,7 @@ bool QSocGenerateManager::renderTemplate(
     const QStringList &csvFiles,
     const QStringList &yamlFiles,
     const QStringList &jsonFiles,
+    const QStringList &rdlFiles,
     const QString     &outputFileName)
 {
     using json      = nlohmann::json;
@@ -306,6 +309,47 @@ bool QSocGenerateManager::renderTemplate(
             qCritical() << QCoreApplication::translate(
                                "generate", "Error: Failed to process JSON file \"%1\": %2")
                                .arg(jsonFilePath)
+                               .arg(e.what());
+            return false;
+        }
+    }
+
+    /* Process SystemRDL files */
+    for (const QString &rdlFilePath : rdlFiles) {
+        if (!QFile::exists(rdlFilePath)) {
+            qCritical() << QCoreApplication::translate(
+                               "generate", "Error: SystemRDL file does not exist: \"%1\"")
+                               .arg(rdlFilePath);
+            return false;
+        }
+
+        try {
+            /* Use SystemRDL library to elaborate the RDL file to JSON */
+            const systemrdl::Result result = systemrdl::file::elaborate(rdlFilePath.toStdString());
+
+            if (!result.ok()) {
+                qCritical() << QCoreApplication::translate(
+                                   "generate",
+                                   "Error: Failed to elaborate SystemRDL file \"%1\": %2")
+                                   .arg(rdlFilePath)
+                                   .arg(QString::fromStdString(result.error()));
+                return false;
+            }
+
+            /* Parse the elaborated JSON result */
+            const json rdlJson = json::parse(result.value());
+
+            /* Get file basename for keying */
+            const QFileInfo fileInfo(rdlFilePath);
+            const QString   baseName = fileInfo.baseName();
+
+            /* Add RDL data to data object using file basename as key */
+            dataObject[baseName.toStdString()] = rdlJson;
+
+        } catch (const std::exception &e) {
+            qCritical() << QCoreApplication::translate(
+                               "generate", "Error: Failed to process SystemRDL file \"%1\": %2")
+                               .arg(rdlFilePath)
                                .arg(e.what());
             return false;
         }
