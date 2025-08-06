@@ -40,6 +40,8 @@ The following terms are used in system descriptions.
     [CLI], [Command Line Interface, a means of interacting with a computer program where the user issues commands to the program in the form of successive lines of text],
     [Verilog], [A hardware description language used to model electronic systems],
     [Bus], [A communication system that transfers data between components inside a computer or between computers],
+    [SystemRDL], [A standard language for describing and specifying the behavior of register and memory structures within semiconductor IP],
+    [RCSV], [Register-CSV format, a CSV-based approach for describing register structures following RCSV v0.3 specification],
   )]
   , caption: [TERMINOLOGY OF SYSTEM]
   , kind: table

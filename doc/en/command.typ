@@ -192,7 +192,7 @@ The `generate verilog` command generates Verilog code from netlist files.
 
 === Template Generation Options
 <template-generation>
-The `generate template` command generates files from Jinja2 templates using various data sources.
+The `generate template` command generates files from Jinja2 templates using CSV, YAML, JSON, SystemRDL (RDL), and RCSV (Register-CSV) data sources.
 
 #figure(
   align(center)[#table(
@@ -205,11 +205,62 @@ The `generate template` command generates files from Jinja2 templates using vari
     [--csv <file>], [CSV data file (can be used multiple times)],
     [--yaml <file>], [YAML data file (can be used multiple times)],
     [--json <file>], [JSON data file (can be used multiple times)],
+    [--rdl <file>], [SystemRDL data file (can be used multiple times)],
+    [--rcsv <file>], [RCSV (Register-CSV) data file (can be used multiple times)],
     [templates], [The Jinja2 template files to be processed],
   )]
   , caption: [TEMPLATE GENERATION OPTIONS]
   , kind: table
   )
+
+=== Template Generation Examples
+<template-generation-examples>
+The following examples demonstrate usage of different data sources with template generation:
+
+==== SystemRDL Template Usage
+```bash
+# Generate from SystemRDL file
+qsoc generate template --rdl registers.rdl template.h.j2
+
+# Multiple SystemRDL files (independent namespaces)
+qsoc generate template --rdl cpu_regs.rdl --rdl mem_regs.rdl system.h.j2
+```
+
+==== RCSV Template Usage
+```bash
+# Generate from RCSV file
+qsoc generate template --rcsv chip_registers.csv template.h.j2
+
+# Mixed data sources
+qsoc generate template --csv config.csv --rdl registers.rdl --rcsv peripherals.csv template.h.j2
+```
+
+==== Data Source Namespacing
+Each data file creates an independent namespace in templates using the file's basename:
+- `registers.rdl` → accessible as `{{ registers.* }}` in templates
+- `config.csv` → accessible as `{{ config.* }}` in templates
+- `chip_regs.csv` → accessible as `{{ chip_regs.* }}` in templates
+
+==== SystemRDL Template Access Patterns
+SystemRDL files generate simplified JSON format accessible in templates:
+```jinja2
+// Access addrmap information
+{{ chip.addrmap.inst_name }}
+
+// Iterate through registers
+{% for reg in chip.registers %}
+  Register: {{ reg.inst_name }} @ {{ reg.absolute_address }}
+  {% for field in reg.fields %}
+    Field: {{ field.inst_name }} [{{ field.msb }}:{{ field.lsb }}]
+  {% endfor %}
+{% endfor %}
+```
+
+==== RCSV Processing
+RCSV files are processed through two-stage conversion:
+1. CSV to SystemRDL conversion using `csv_to_rdl()`
+2. SystemRDL elaboration to simplified JSON using `elaborate_simplified()`
+This ensures RCSV files follow the same template access patterns as RDL files.
 
 === Stub Generation Options
 <stub-generation>
