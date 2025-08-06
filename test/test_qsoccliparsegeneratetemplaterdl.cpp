@@ -162,11 +162,16 @@ private slots:
 
         const QString rdlFilePath = createTempFile("simple_chip.rdl", rdlContent);
 
-        /* Create a simple Jinja2 template that uses RDL data */
-        const QString templateContent = R"(// Generated from SystemRDL
-{% for item in simple_chip.model %}
-// Chip: {{ item.inst_name }}
-#define CHIP_NAME "{{ item.inst_name }}"
+        /* Create a simple Jinja2 template that uses simplified RDL data */
+        const QString templateContent = R"(// Generated from SystemRDL (Simplified JSON)
+// Chip: {{ simple_chip.addrmap.inst_name }}
+#define CHIP_NAME "{{ simple_chip.addrmap.inst_name }}"
+
+{% for reg in simple_chip.registers %}
+// Register: {{ reg.inst_name }} @ {{ reg.absolute_address }}
+{% for field in reg.fields %}
+//   Field: {{ field.inst_name }} [{{ field.msb }}:{{ field.lsb }}]
+{% endfor %}
 {% endfor %})";
 
         const QString templateFilePath = createTempFile("chip_header.h.j2", templateContent);
@@ -192,6 +197,12 @@ private slots:
         QVERIFY2(
             verifyTemplateContent("chip_header.h", "simple_chip"),
             "Generated file should contain simple_chip name");
+        QVERIFY2(
+            verifyTemplateContent("chip_header.h", "Register: ctrl_reg"),
+            "Generated file should contain register information from simplified JSON");
+        QVERIFY2(
+            verifyTemplateContent("chip_header.h", "Field: enable"),
+            "Generated file should contain field information from simplified JSON");
     }
 
     void testRdlTemplateWithMultipleFiles()
@@ -221,16 +232,18 @@ private slots:
         const QString rdlFilePath1 = createTempFile("cpu_regs.rdl", rdlContent1);
         const QString rdlFilePath2 = createTempFile("memory_regs.rdl", rdlContent2);
 
-        /* Create template that uses both RDL files */
-        const QString templateContent = R"(// Multi-chip register definitions
+        /* Create template that uses both RDL files with simplified JSON format */
+        const QString templateContent = R"(// Multi-chip register definitions (Simplified JSON)
 {% if cpu_regs %}
-{% for item in cpu_regs.model %}
-// CPU: {{ item.inst_name }}
+// CPU: {{ cpu_regs.addrmap.inst_name }}
+{% for reg in cpu_regs.registers %}
+//   CPU Register: {{ reg.inst_name }}
 {% endfor %}
 {% endif %}
 {% if memory_regs %}
-{% for item in memory_regs.model %}
-// Memory: {{ item.inst_name }}
+// Memory: {{ memory_regs.addrmap.inst_name }}
+{% for reg in memory_regs.registers %}
+//   Memory Register: {{ reg.inst_name }}
 {% endfor %}
 {% endif %})";
 
@@ -259,6 +272,12 @@ private slots:
         QVERIFY2(
             verifyTemplateContent("multi_chip.h", "Memory: memory_regs"),
             "Generated file should contain memory registers");
+        QVERIFY2(
+            verifyTemplateContent("multi_chip.h", "CPU Register: cpu_ctrl"),
+            "Generated file should contain specific CPU register from simplified JSON");
+        QVERIFY2(
+            verifyTemplateContent("multi_chip.h", "Memory Register: mem_ctrl"),
+            "Generated file should contain specific memory register from simplified JSON");
     }
 
     void testRdlWithOtherDataSources()
@@ -293,12 +312,16 @@ metadata:
         const QString csvFilePath  = createTempFile("params.csv", csvContent);
         const QString yamlFilePath = createTempFile("metadata.yaml", yamlContent);
 
-        /* Create template that uses all data sources */
+        /* Create template that uses all data sources with simplified JSON format */
         const QString templateContent = R"(// Project: {{ metadata.project }}
 // Author: {{ metadata.author }}
 
-{% for chip in test_chip.model %}
-// Chip: {{ chip.inst_name }}
+// Chip: {{ test_chip.addrmap.inst_name }} (Simplified JSON Format)
+{% for reg in test_chip.registers %}
+// Register: {{ reg.inst_name }} @ {{ reg.absolute_address }}
+{% for field in reg.fields %}
+//   Field: {{ field.inst_name }} [{{ field.msb }}:{{ field.lsb }}]
+{% endfor %}
 {% endfor %}
 
 // Parameters from CSV:
@@ -336,6 +359,12 @@ metadata:
         QVERIFY2(
             verifyTemplateContent("combined.h", "test_chip"),
             "Generated file should contain RDL data");
+        QVERIFY2(
+            verifyTemplateContent("combined.h", "Register: test_reg"),
+            "Generated file should contain register info from simplified JSON");
+        QVERIFY2(
+            verifyTemplateContent("combined.h", "Field: test"),
+            "Generated file should contain field info from simplified JSON");
     }
 
     void testRdlFileNotFound()

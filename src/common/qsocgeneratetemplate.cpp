@@ -324,8 +324,9 @@ bool QSocGenerateManager::renderTemplate(
         }
 
         try {
-            /* Use SystemRDL library to elaborate the RDL file to JSON */
-            const systemrdl::Result result = systemrdl::file::elaborate(rdlFilePath.toStdString());
+            /* Use SystemRDL library to elaborate the RDL file to simplified JSON */
+            const systemrdl::Result result = systemrdl::file::elaborate_simplified(
+                rdlFilePath.toStdString());
 
             if (!result.ok()) {
                 qCritical() << QCoreApplication::translate(
