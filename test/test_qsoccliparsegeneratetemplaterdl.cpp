@@ -449,6 +449,6 @@ metadata:
 
 QStringList Test::messageList = QStringList();
 
-QTEST_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 
 #include "test_qsoccliparsegeneratetemplaterdl.moc"
