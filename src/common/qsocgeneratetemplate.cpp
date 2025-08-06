@@ -26,6 +26,7 @@ bool QSocGenerateManager::renderTemplate(
     const QStringList &yamlFiles,
     const QStringList &jsonFiles,
     const QStringList &rdlFiles,
+    const QStringList &rcsvFiles,
     const QString     &outputFileName)
 {
     using json      = nlohmann::json;
@@ -351,6 +352,58 @@ bool QSocGenerateManager::renderTemplate(
             qCritical() << QCoreApplication::translate(
                                "generate", "Error: Failed to process SystemRDL file \"%1\": %2")
                                .arg(rdlFilePath)
+                               .arg(e.what());
+            return false;
+        }
+    }
+
+    /* Process RCSV files */
+    for (const QString &rcsvFilePath : rcsvFiles) {
+        if (!QFile::exists(rcsvFilePath)) {
+            qCritical() << QCoreApplication::translate(
+                               "generate", "Error: RCSV file does not exist: \"%1\"")
+                               .arg(rcsvFilePath);
+            return false;
+        }
+
+        try {
+            /* Use SystemRDL library to convert RCSV file to SystemRDL */
+            const systemrdl::Result csvToRdlResult = systemrdl::file::csv_to_rdl(
+                rcsvFilePath.toStdString());
+
+            if (!csvToRdlResult.ok()) {
+                qCritical() << QCoreApplication::translate(
+                                   "generate", "Error: Failed to convert RCSV file \"%1\": %2")
+                                   .arg(rcsvFilePath)
+                                   .arg(QString::fromStdString(csvToRdlResult.error()));
+                return false;
+            }
+
+            /* Use SystemRDL library to elaborate the converted SystemRDL to simplified JSON */
+            const systemrdl::Result result = systemrdl::elaborate_simplified(csvToRdlResult.value());
+
+            if (!result.ok()) {
+                qCritical() << QCoreApplication::translate(
+                                   "generate", "Error: Failed to elaborate RCSV file \"%1\": %2")
+                                   .arg(rcsvFilePath)
+                                   .arg(QString::fromStdString(result.error()));
+                return false;
+            }
+
+            /* Parse the elaborated JSON result */
+            const json rcsvJson = json::parse(result.value());
+
+            /* Get file basename for keying */
+            const QFileInfo fileInfo(rcsvFilePath);
+            const QString   baseName = fileInfo.baseName();
+
+            /* Add RCSV data to data object using file basename as key */
+            dataObject[baseName.toStdString()] = rcsvJson;
+
+        } catch (const std::exception &e) {
+            qCritical() << QCoreApplication::translate(
+                               "generate", "Error: Failed to process RCSV file \"%1\": %2")
+                               .arg(rcsvFilePath)
                                .arg(e.what());
             return false;
         }

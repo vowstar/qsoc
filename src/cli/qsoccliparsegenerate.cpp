@@ -302,6 +302,10 @@ bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)
         {"rdl",
          QCoreApplication::translate("main", "SystemRDL data file (can be used multiple times)."),
          "rdl file"},
+        {"rcsv",
+         QCoreApplication::translate(
+             "main", "RCSV (Register-CSV) data file (can be used multiple times)."),
+         "rcsv file"},
     });
 
     parser.addPositionalArgument(
@@ -357,6 +361,7 @@ bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)
     QStringList yamlFiles;
     QStringList jsonFiles;
     QStringList rdlFiles;
+    QStringList rcsvFiles;
 
     if (parser.isSet("csv")) {
         csvFiles = parser.values("csv");
@@ -372,6 +377,10 @@ bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)
 
     if (parser.isSet("rdl")) {
         rdlFiles = parser.values("rdl");
+    }
+
+    if (parser.isSet("rcsv")) {
+        rcsvFiles = parser.values("rcsv");
     }
 
     /* Process each template file */
@@ -394,7 +403,13 @@ bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)
         }
 
         if (!generateManager->renderTemplate(
-                templateFilePath, csvFiles, yamlFiles, jsonFiles, rdlFiles, outputFileName)) {
+                templateFilePath,
+                csvFiles,
+                yamlFiles,
+                jsonFiles,
+                rdlFiles,
+                rcsvFiles,
+                outputFileName)) {
             return showError(
                 1,
                 QCoreApplication::translate("main", "Error: failed to render template: %1")
