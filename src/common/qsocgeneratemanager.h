@@ -13,6 +13,7 @@
 
 // Forward declaration for Reset primitive
 class QSocResetPrimitive;
+class QSocFSMPrimitive;
 
 #include <QObject>
 #include <QPair>
@@ -510,32 +511,12 @@ private:
         const YAML::Node &seqItem, const QString &regName, QTextStream &out, int indentLevel);
 
     /**
-     * @brief Generate FSM Verilog code for a single FSM
+     * @brief Generate FSM Verilog code using FSM primitive
      * @param fsmItem The YAML node containing the FSM specification
      * @param out Output text stream
+     * @return true if generation successful, false otherwise
      */
-    void generateFSMVerilog(const YAML::Node &fsmItem, QTextStream &out);
-
-    /**
-     * @brief Generate Table-mode FSM Verilog code
-     * @param fsmItem The YAML node containing the FSM specification
-     * @param out Output text stream
-     */
-    void generateTableFSM(const YAML::Node &fsmItem, QTextStream &out);
-
-    /**
-     * @brief Generate Microcode-mode FSM Verilog code
-     * @param fsmItem The YAML node containing the FSM specification
-     * @param out Output text stream
-     */
-    void generateMicrocodeFSM(const YAML::Node &fsmItem, QTextStream &out);
-
-    /**
-     * @brief Format a condition string for proper Verilog syntax
-     * @param condition The condition string to format
-     * @return Formatted condition string
-     */
-    QString formatConditionForVerilog(const QString &condition);
+    bool generateFSMPrimitive(const YAML::Node &fsmItem, QTextStream &out);
 
     /**
      * @brief Generate reset primitive controller from YAML configuration
@@ -555,6 +536,7 @@ private:
     QLLMService *llmService = nullptr;
     /** Reset primitive generator. */
     QSocResetPrimitive *resetPrimitive = nullptr;
+    QSocFSMPrimitive   *fsmPrimitive   = nullptr;
     /** Netlist data. */
     YAML::Node netlistData;
 };

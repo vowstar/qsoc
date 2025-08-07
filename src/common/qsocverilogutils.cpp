@@ -62,17 +62,11 @@ QString QSocVerilogUtils::formatConditionForVerilog(const QString &condition)
         } else {
             /* For multi-bit numbers, try to determine width from context */
             int value = num.toInt();
-            if (value <= 1) {
-                replacement = QString("1'b%1").arg(value);
-            } else if (value <= 15) {
-                replacement = QString("4'h%1").arg(value, 0, 16);
-            } else if (value <= 255) {
-                replacement = QString("8'h%1").arg(value, 0, 16);
-            } else if (value <= 65535) {
-                replacement = QString("16'h%1").arg(value, 0, 16);
-            } else {
-                replacement = QString("32'h%1").arg(value, 0, 16);
+            int width = 1;
+            while ((1 << width) <= value) {
+                width++;
             }
+            replacement = QString("%1'd%2").arg(width).arg(num);
         }
         formatted.replace(
             QRegularExpression(QString("\\b%1\\b").arg(QRegularExpression::escape(num))),
