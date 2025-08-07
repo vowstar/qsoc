@@ -14,6 +14,7 @@
 // Forward declaration for Reset primitive
 class QSocResetPrimitive;
 class QSocFSMPrimitive;
+class QSocCombPrimitive;
 
 #include <QObject>
 #include <QPair>
@@ -475,14 +476,12 @@ private:
     bool processCombLogic();
 
     /**
-     * @brief Generate nested combinational logic value (for if/case nesting)
-     * @param valueNode The YAML node containing the value (scalar or nested structure)
-     * @param outputSignal The output signal name
-     * @param indentLevel The indentation level for proper formatting
-     * @return Generated Verilog code string
+     * @brief Generate combinational logic using Comb primitive
+     * @param netlistData YAML node containing the full netlist
+     * @param out Output text stream for generated Verilog
+     * @return true if generation successful, false otherwise
      */
-    QString generateNestedCombValue(
-        const YAML::Node &valueNode, const QString &outputSignal, int indentLevel);
+    bool generateCombPrimitive(const YAML::Node &netlistData, QTextStream &out);
 
     /**
      * @brief Process sequential logic section in the netlist
@@ -537,6 +536,7 @@ private:
     /** Reset primitive generator. */
     QSocResetPrimitive *resetPrimitive = nullptr;
     QSocFSMPrimitive   *fsmPrimitive   = nullptr;
+    QSocCombPrimitive  *combPrimitive  = nullptr;
     /** Netlist data. */
     YAML::Node netlistData;
 };

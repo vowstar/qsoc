@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocgeneratemanager.h"
+#include "common/qsocgenerateprimitivecomb.h"
 #include "common/qsocgenerateprimitivefsm.h"
 #include "common/qsocgenerateprimitivereset.h"
 #include "common/qstaticstringweaver.h"
@@ -31,6 +32,7 @@ QSocGenerateManager::QSocGenerateManager(
     , llmService(llmService)
     , resetPrimitive(new QSocResetPrimitive(this))
     , fsmPrimitive(new QSocFSMPrimitive(this))
+    , combPrimitive(new QSocCombPrimitive(this))
 {
     /* All private members set by constructor */
 }
@@ -39,6 +41,7 @@ QSocGenerateManager::~QSocGenerateManager()
 {
     delete resetPrimitive;
     delete fsmPrimitive;
+    delete combPrimitive;
 }
 
 void QSocGenerateManager::setProjectManager(QSocProjectManager *projectManager)
