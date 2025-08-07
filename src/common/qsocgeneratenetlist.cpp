@@ -47,10 +47,12 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
         bool hasInstances = netlistData["instance"] && netlistData["instance"].IsMap()
                             && netlistData["instance"].size() > 0;
         bool hasCombSeqFsm = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"];
+        bool hasReset      = netlistData["reset"] && netlistData["reset"].IsSequence()
+                        && netlistData["reset"].size() > 0;
 
-        if (!hasInstances && !hasCombSeqFsm) {
+        if (!hasInstances && !hasCombSeqFsm && !hasReset) {
             qCritical() << "Error: Invalid netlist format, no 'instance' section and no 'comb', "
-                           "'seq', or 'fsm' section found";
+                           "'seq', 'fsm', or 'reset' section found";
             return false;
         }
 

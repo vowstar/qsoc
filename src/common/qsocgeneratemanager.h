@@ -11,6 +11,9 @@
 #include "common/qsocnumberinfo.h"
 #include "common/qsocprojectmanager.h"
 
+// Forward declaration for Reset primitive
+class QSocResetPrimitive;
+
 #include <QObject>
 #include <QPair>
 #include <QString>
@@ -534,6 +537,14 @@ private:
      */
     QString formatConditionForVerilog(const QString &condition);
 
+    /**
+     * @brief Generate reset primitive controller from YAML configuration
+     * @param resetNode The YAML node containing reset configuration
+     * @param out Output text stream
+     * @return true if generation successful, false otherwise
+     */
+    bool generateResetPrimitive(const YAML::Node &resetNode, QTextStream &out);
+
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;
     /** Module manager. */
@@ -542,6 +553,8 @@ private:
     QSocBusManager *busManager = nullptr;
     /** LLM service. */
     QLLMService *llmService = nullptr;
+    /** Reset primitive generator. */
+    QSocResetPrimitive *resetPrimitive = nullptr;
     /** Netlist data. */
     YAML::Node netlistData;
 };

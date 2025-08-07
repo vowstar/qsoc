@@ -3,6 +3,7 @@
 
 #include "common/qsocgeneratemanager.h"
 #include "common/qstaticstringweaver.h"
+#include "qsocgenerateprimitivereset.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -30,10 +31,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     bool hasInstances = netlistData["instance"] && netlistData["instance"].IsMap()
                         && netlistData["instance"].size() > 0;
     bool hasCombSeqFsm = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"];
+    bool hasReset      = netlistData["reset"] && netlistData["reset"].IsSequence()
+                    && netlistData["reset"].size() > 0;
 
-    if (!hasInstances && !hasCombSeqFsm) {
+    if (!hasInstances && !hasCombSeqFsm && !hasReset) {
         qCritical() << "Error: Invalid netlist data, no 'instance' section and no 'comb', "
-                       "'seq', or 'fsm' section found";
+                       "'seq', 'fsm', or 'reset' section found";
         return false;
     }
 
@@ -1679,6 +1682,31 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         }
     }
 
+    /* Generate reset primitive controllers after FSM logic */
+    if (netlistData["reset"] && netlistData["reset"].IsSequence()
+        && netlistData["reset"].size() > 0) {
+        out << "\n    /* Reset primitive controllers */\n";
+
+        for (size_t i = 0; i < netlistData["reset"].size(); ++i) {
+            const YAML::Node &resetItem = netlistData["reset"][i];
+
+            if (!resetItem.IsMap()) {
+                qWarning() << "Skipping invalid reset item at index" << i;
+                continue;
+            }
+
+            if (!generateResetPrimitive(resetItem, out)) {
+                qWarning() << "Failed to generate reset primitive at index" << i;
+                continue;
+            }
+
+            /* Add blank line between different reset blocks */
+            if (i < netlistData["reset"].size() - 1) {
+                out << "\n";
+            }
+        }
+    }
+
     /* Close module */
     out << "\nendmodule\n";
 
@@ -2805,4 +2833,14 @@ void QSocGenerateManager::generateMicrocodeFSM(const YAML::Node &fsmItem, QTextS
         }
     }
     out << "\n";
+}
+
+bool QSocGenerateManager::generateResetPrimitive(const YAML::Node &resetNode, QTextStream &out)
+{
+    if (!resetPrimitive) {
+        qWarning() << "Reset primitive generator not initialized";
+        return false;
+    }
+
+    return resetPrimitive->generateResetController(resetNode, out);
 }
