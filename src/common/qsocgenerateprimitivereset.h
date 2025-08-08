@@ -23,14 +23,14 @@ class QSocResetPrimitive
 {
 public:
     /**
-     * @brief Reset mode enumeration
+     * @brief Reset type enumeration (new unified format)
      */
-    enum ResetMode {
-        AsyncComb,     // A: Async reset + Async release (combinational)
-        AsyncSync,     // A(N,clk): Async reset + Sync release
-        AsyncCounter,  // AC(N,W,T,clk): Async reset + Counter timeout
-        AsyncThenSync, // AS(N1,N2,clk): Async reset + Sync release + Sync reset
-        Sync           // S(N,clk): Sync reset + Sync release
+    enum ResetType {
+        ASYNC_COMB, // Legacy A: Async reset + Async release (combinational)
+        ASYNC_SYNC, // Legacy A(N,clk): Async reset + Sync release
+        ASYNC_CNT,  // Legacy AC(N,W,T,clk): Async reset + Counter timeout
+        ASYNC_PIPE, // Legacy AS(N1,N2,clk): Async reset + Sync release + Pipeline
+        SYNC_ONLY   // Legacy S(N,clk): Sync reset + Sync release
     };
 
     /**
@@ -55,17 +55,18 @@ public:
     };
 
     /**
-     * @brief Reset connection configuration
+     * @brief Reset connection configuration (new unified format)
      */
     struct ResetConnection
     {
-        QString   sourceName;   // Source signal name
-        QString   targetName;   // Target signal name
-        ResetMode mode;         // Reset mode
-        int       syncDepth;    // Synchronization depth
-        int       counterWidth; // Counter width (for AC mode)
-        int       timeout;      // Timeout value (for AC mode)
-        QString   clock;        // Clock signal name
+        QString   sourceName;     // Source signal name
+        QString   targetName;     // Target signal name
+        ResetType type;           // Reset type (ASYNC_COMB, ASYNC_SYNC, etc.)
+        int       sync_depth;     // Synchronization depth
+        int       counter_width;  // Counter width (for ASYNC_CNT type)
+        int       timeout_cycles; // Timeout cycles (for ASYNC_CNT type)
+        int       pipe_depth;     // Pipeline depth (for ASYNC_PIPE type)
+        QString   clock;          // Clock signal name
     };
 
     /**
@@ -160,12 +161,11 @@ private:
     void generateResetInstance(const ResetConnection &connection, QTextStream &out);
 
     /**
-     * @brief Parse reset mode from string
-     * @param modeStr Mode string (e.g., "A", "A(4,clk)", "AC(2,8,255,clk)")
-     * @param connection Output connection structure
-     * @return true if parse successful
+     * @brief Parse reset type from string
+     * @param typeStr Type string (e.g., "ASYNC_COMB", "ASYNC_SYNC", "ASYNC_CNT")
+     * @return Reset type enumeration value
      */
-    bool parseResetMode(const QString &modeStr, ResetConnection &connection);
+    ResetType parseResetType(const QString &typeStr);
 
     /**
      * @brief Get wire name for source-target connection

@@ -60,75 +60,89 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                             ? QString::fromStdString(resetNode["test_enable"].as<std::string>())
                             : "test_en";
 
-    // Parse sources
-    if (resetNode["sources"] && resetNode["sources"].IsSequence()) {
-        for (size_t i = 0; i < resetNode["sources"].size(); ++i) {
-            const YAML::Node &srcNode = resetNode["sources"][i];
-            if (!srcNode.IsMap() || !srcNode["name"])
-                continue;
-
+    // Parse sources (new format: source: {name: {polarity: ...}})
+    if (resetNode["source"] && resetNode["source"].IsMap()) {
+        for (auto it = resetNode["source"].begin(); it != resetNode["source"].end(); ++it) {
             ResetSource source;
-            source.name    = QString::fromStdString(srcNode["name"].as<std::string>());
-            source.active  = srcNode["active"]
-                                 ? QString::fromStdString(srcNode["active"].as<std::string>())
-                                 : "high";
-            source.comment = srcNode["comment"]
-                                 ? QString::fromStdString(srcNode["comment"].as<std::string>())
+            source.name = QString::fromStdString(it->first.as<std::string>());
+
+            if (it->second.IsMap() && it->second["polarity"]) {
+                QString polarity = QString::fromStdString(it->second["polarity"].as<std::string>());
+                source.active    = (polarity == "low") ? "low" : "high";
+            } else if (it->second.IsScalar()) {
+                QString polarity = QString::fromStdString(it->second.as<std::string>());
+                source.active    = (polarity == "low") ? "low" : "high";
+            } else {
+                source.active = "high"; // default
+            }
+
+            source.comment = it->second.IsMap() && it->second["comment"]
+                                 ? QString::fromStdString(it->second["comment"].as<std::string>())
                                  : "";
 
             config.sources.append(source);
         }
     }
 
-    // Parse targets
-    if (resetNode["targets"] && resetNode["targets"].IsSequence()) {
-        for (size_t i = 0; i < resetNode["targets"].size(); ++i) {
-            const YAML::Node &tgtNode = resetNode["targets"][i];
-            if (!tgtNode.IsMap() || !tgtNode["name"])
+    // Parse targets and their links (new format)
+    if (resetNode["target"] && resetNode["target"].IsMap()) {
+        for (auto tgtIt = resetNode["target"].begin(); tgtIt != resetNode["target"].end(); ++tgtIt) {
+            const YAML::Node &tgtNode = tgtIt->second;
+            if (!tgtNode.IsMap())
                 continue;
 
             ResetTarget target;
-            target.name    = QString::fromStdString(tgtNode["name"].as<std::string>());
-            target.active  = tgtNode["active"]
-                                 ? QString::fromStdString(tgtNode["active"].as<std::string>())
-                                 : "low";
+            target.name = QString::fromStdString(tgtIt->first.as<std::string>());
+
+            // Parse target polarity
+            if (tgtNode["polarity"]) {
+                QString polarity = QString::fromStdString(tgtNode["polarity"].as<std::string>());
+                target.active    = (polarity == "low") ? "low" : "high";
+            } else {
+                target.active = "low"; // default for targets
+            }
+
             target.comment = tgtNode["comment"]
                                  ? QString::fromStdString(tgtNode["comment"].as<std::string>())
                                  : "";
 
-            // Parse sources affecting this target
-            if (tgtNode["sources"] && tgtNode["sources"].IsSequence()) {
-                for (size_t j = 0; j < tgtNode["sources"].size(); ++j) {
-                    target.sources.append(
-                        QString::fromStdString(tgtNode["sources"][j].as<std::string>()));
+            // Parse links for this target
+            if (tgtNode["link"] && tgtNode["link"].IsMap()) {
+                for (auto linkIt = tgtNode["link"].begin(); linkIt != tgtNode["link"].end();
+                     ++linkIt) {
+                    const YAML::Node &linkNode = linkIt->second;
+                    if (!linkNode.IsMap() || !linkNode["type"])
+                        continue;
+
+                    ResetConnection connection;
+                    connection.sourceName = QString::fromStdString(linkIt->first.as<std::string>());
+                    connection.targetName = target.name;
+                    connection.clock      = config.clock; // Use controller clock
+
+                    // Parse type
+                    QString typeStr = QString::fromStdString(linkNode["type"].as<std::string>());
+                    connection.type = parseResetType(typeStr);
+
+                    // Parse parameters based on type
+                    connection.sync_depth     = linkNode["sync_depth"]
+                                                    ? linkNode["sync_depth"].as<int>()
+                                                    : 0;
+                    connection.counter_width  = linkNode["counter_width"]
+                                                    ? linkNode["counter_width"].as<int>()
+                                                    : 0;
+                    connection.timeout_cycles = linkNode["timeout_cycles"]
+                                                    ? linkNode["timeout_cycles"].as<int>()
+                                                    : 0;
+                    connection.pipe_depth     = linkNode["pipe_depth"]
+                                                    ? linkNode["pipe_depth"].as<int>()
+                                                    : 0;
+
+                    config.connections.append(connection);
+                    target.sources.append(connection.sourceName); // Track source for target
                 }
             }
 
             config.targets.append(target);
-        }
-    }
-
-    // Parse connections (source-target relationships with modes)
-    if (resetNode["connections"] && resetNode["connections"].IsSequence()) {
-        for (size_t i = 0; i < resetNode["connections"].size(); ++i) {
-            const YAML::Node &connNode = resetNode["connections"][i];
-            if (!connNode.IsMap())
-                continue;
-
-            ResetConnection connection;
-            connection.sourceName = QString::fromStdString(connNode["source"].as<std::string>());
-            connection.targetName = QString::fromStdString(connNode["target"].as<std::string>());
-
-            QString modeStr = connNode["mode"]
-                                  ? QString::fromStdString(connNode["mode"].as<std::string>())
-                                  : "A";
-
-            if (!parseResetMode(modeStr, connection)) {
-                qWarning() << "Failed to parse reset mode:" << modeStr;
-                continue;
-            }
-
-            config.connections.append(connection);
         }
     }
 
@@ -335,9 +349,10 @@ void QSocResetPrimitive::generateResetInstance(const ResetConnection &connection
     out << "    /*\n";
     out << "     * " << connection.sourceName << " -> " << connection.targetName << ": ";
 
-    switch (connection.mode) {
-    case AsyncComb: {
-        out << "A: Async reset Async release combinational logic\n";
+    switch (connection.type) {
+    case ASYNC_COMB: {
+        out << "ASYNC_COMB: Async reset Async release combinational logic\n";
+        out << "     * (Legacy A: combinational logic)\n";
         out << "     */\n";
 
         // Determine if source needs inversion
@@ -354,15 +369,15 @@ void QSocResetPrimitive::generateResetInstance(const ResetConnection &connection
         break;
     }
 
-    case AsyncSync: {
-        out << "A(" << connection.syncDepth << "," << connection.clock
-            << "): Async reset sync release\n";
-        out << "     * (with sync_depth=" << connection.syncDepth << ", clock=" << connection.clock
+    case ASYNC_SYNC: {
+        out << "ASYNC_SYNC: Async reset sync release\n";
+        out << "     * (Legacy A(" << connection.sync_depth << "," << connection.clock << ")\n";
+        out << "     * with sync_depth=" << connection.sync_depth << ", clock=" << connection.clock
             << ")\n";
         out << "     */\n";
 
         out << "    datapath_reset_sync #(\n";
-        out << "        .RST_SYNC_LEVEL(" << connection.syncDepth
+        out << "        .RST_SYNC_LEVEL(" << connection.sync_depth
             << ")  /**< Delay cycles for reset */\n";
         out << "    ) " << instanceName << " (\n";
         out << "        .clk         (" << connection.clock
@@ -383,20 +398,22 @@ void QSocResetPrimitive::generateResetInstance(const ResetConnection &connection
         break;
     }
 
-    case AsyncCounter: {
-        out << "AC(" << connection.syncDepth << "," << connection.counterWidth << ","
-            << connection.timeout << "," << connection.clock << "): Async reset sync release\n";
-        out << "     * using one-shot counter (with sync_depth=" << connection.syncDepth
-            << ", width=" << connection.counterWidth << ", timeout=" << connection.timeout
+    case ASYNC_CNT: {
+        out << "ASYNC_CNT: Async reset sync release using one-shot counter\n";
+        out << "     * (Legacy AC(" << connection.sync_depth << "," << connection.counter_width
+            << "," << connection.timeout_cycles << "," << connection.clock << "))\n";
+        out << "     * with sync_depth=" << connection.sync_depth
+            << ", width=" << connection.counter_width << ", timeout=" << connection.timeout_cycles
             << ", clock=" << connection.clock << ")\n";
         out << "     */\n";
 
         out << "    datapath_reset_counter #(\n";
-        out << "        .RST_SYNC_LEVEL(" << connection.syncDepth
+        out << "        .RST_SYNC_LEVEL(" << connection.sync_depth
             << "),   /**< Reset synchronization levels */\n";
-        out << "        .CNT_WIDTH     (" << connection.counterWidth
+        out << "        .CNT_WIDTH     (" << connection.counter_width
             << "),   /**< Counter width */\n";
-        out << "        .TIMEOUT       (" << connection.timeout << ")  /**< Timeout value */\n";
+        out << "        .TIMEOUT       (" << connection.timeout_cycles
+            << ")  /**< Timeout value */\n";
         out << "    ) " << instanceName << " (\n";
         out << "        .clk          (" << connection.clock
             << "),                              /**< Clock signal */\n";
@@ -409,54 +426,87 @@ void QSocResetPrimitive::generateResetInstance(const ResetConnection &connection
         break;
     }
 
-    default: {
-        out << "Unsupported reset mode\n";
+    case SYNC_ONLY: {
+        out << "SYNC_ONLY: Sync reset sync release\n";
+        out << "     * (Legacy S(" << connection.sync_depth << "," << connection.clock << ")\n";
+        out << "     * with sync_depth=" << connection.sync_depth << ", clock=" << connection.clock
+            << ")\n";
         out << "     */\n";
-        out << "    // FIXME: Unsupported reset mode for " << connection.sourceName << " -> "
+
+        out << "    datapath_reset_sync #(\n";
+        out << "        .RST_SYNC_LEVEL(" << connection.sync_depth
+            << ")  /**< Delay cycles for reset */\n";
+        out << "    ) " << instanceName << " (\n";
+        out << "        .clk         (" << connection.clock
+            << "),                                  /**< Clock signal */\n";
+        out << "        .rst_n_a     (" << connection.sourceName
+            << "),                             /**< Sync reset input */\n";
+        out << "        .reset_bypass(test_en),                                  /**< Bypass reset "
+               "when DFT scan */\n";
+        out << "        .rst_n_sync  (" << wireName << ")  /**< Sync reset output */\n";
+        out << "    );\n";
+        break;
+    }
+
+    case ASYNC_PIPE: {
+        out << "ASYNC_PIPE: Async reset sync release with pipeline\n";
+        out << "     * (Legacy AS(" << connection.sync_depth << "," << connection.pipe_depth << ","
+            << connection.clock << ")\n";
+        out << "     * with sync_depth=" << connection.sync_depth
+            << ", pipe_depth=" << connection.pipe_depth << ", clock=" << connection.clock << ")\n";
+        out << "     */\n";
+
+        // For now, implement as two-stage: first async_sync, then pipeline
+        out << "    // TODO: Implement ASYNC_PIPE as two-stage reset with pipeline\n";
+        out << "    datapath_reset_sync #(\n";
+        out << "        .RST_SYNC_LEVEL(" << connection.sync_depth
+            << ")  /**< Initial sync depth */\n";
+        out << "    ) " << instanceName << " (\n";
+        out << "        .clk         (" << connection.clock
+            << "),                                  /**< Clock signal */\n";
+
+        if (connection.sourceName.endsWith("_n")) {
+            out << "        .rst_n_a     (" << connection.sourceName
+                << "),                             /**< Active low reset input */\n";
+        } else {
+            out << "        .rst_n_a     (~" << connection.sourceName
+                << "),                             /**< Active low reset input */\n";
+        }
+
+        out << "        .reset_bypass(test_en),                                  /**< Bypass reset "
+               "when DFT scan */\n";
+        out << "        .rst_n_sync  (" << wireName
+            << ")  /**< Pipeline reset output (simplified) */\n";
+        out << "    );\n";
+        break;
+    }
+
+    default: {
+        out << "Unsupported reset type\n";
+        out << "     */\n";
+        out << "    // FIXME: Unsupported reset type for " << connection.sourceName << " -> "
             << connection.targetName << "\n";
         break;
     }
     }
 }
 
-bool QSocResetPrimitive::parseResetMode(const QString &modeStr, ResetConnection &connection)
+QSocResetPrimitive::ResetType QSocResetPrimitive::parseResetType(const QString &typeStr)
 {
-    // Default values
-    connection.mode         = AsyncComb;
-    connection.syncDepth    = 0;
-    connection.counterWidth = 0;
-    connection.timeout      = 0;
-    connection.clock        = "";
-
-    if (modeStr == "A") {
-        connection.mode = AsyncComb;
-        return true;
+    if (typeStr == "ASYNC_COMB") {
+        return ASYNC_COMB;
+    } else if (typeStr == "ASYNC_SYNC") {
+        return ASYNC_SYNC;
+    } else if (typeStr == "ASYNC_CNT") {
+        return ASYNC_CNT;
+    } else if (typeStr == "ASYNC_PIPE") {
+        return ASYNC_PIPE;
+    } else if (typeStr == "SYNC_ONLY") {
+        return SYNC_ONLY;
+    } else {
+        qWarning() << "Unsupported reset type:" << typeStr << ", defaulting to ASYNC_COMB";
+        return ASYNC_COMB;
     }
-
-    // Parse A(N,clk) format
-    QRegularExpression      asyncSyncRegex(R"(^A\((\d+),(\w+)\)$)");
-    QRegularExpressionMatch match = asyncSyncRegex.match(modeStr);
-    if (match.hasMatch()) {
-        connection.mode      = AsyncSync;
-        connection.syncDepth = match.captured(1).toInt();
-        connection.clock     = match.captured(2);
-        return true;
-    }
-
-    // Parse AC(N,W,T,clk) format
-    QRegularExpression asyncCounterRegex(R"(^AC\((\d+),(\d+),(\d+),(\w+)\)$)");
-    match = asyncCounterRegex.match(modeStr);
-    if (match.hasMatch()) {
-        connection.mode         = AsyncCounter;
-        connection.syncDepth    = match.captured(1).toInt();
-        connection.counterWidth = match.captured(2).toInt();
-        connection.timeout      = match.captured(3).toInt();
-        connection.clock        = match.captured(4);
-        return true;
-    }
-
-    qWarning() << "Unsupported reset mode format:" << modeStr;
-    return false;
 }
 
 QString QSocResetPrimitive::getConnectionWireName(
@@ -468,12 +518,18 @@ QString QSocResetPrimitive::getConnectionWireName(
 QString QSocResetPrimitive::getInstanceName(const ResetConnection &connection)
 {
     QString baseName;
-    switch (connection.mode) {
-    case AsyncSync:
+    switch (connection.type) {
+    case ASYNC_SYNC:
         baseName = "u_reset_sync_";
         break;
-    case AsyncCounter:
+    case ASYNC_CNT:
         baseName = "u_reset_counter_";
+        break;
+    case SYNC_ONLY:
+        baseName = "u_reset_sync_only_";
+        break;
+    case ASYNC_PIPE:
+        baseName = "u_reset_pipe_";
         break;
     default:
         baseName = "u_reset_logic_";
