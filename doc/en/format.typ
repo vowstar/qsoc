@@ -1446,6 +1446,281 @@ All generated signals use the FSM name as prefix:
 - `{fsm_name}_pc`, `{fsm_name}_nxt_pc` (microcode-mode)
 - `{fsm_name}_rom` (microcode-mode)
 
+=== RESET PRIMITIVES
+<soc-net-reset>
+The `reset` section defines reset controller primitives that generate proper reset signaling throughout the SoC. Reset primitives provide comprehensive reset management with support for multiple reset sources, different reset types, signal polarity handling, and standardized module generation.
+
+==== Reset Overview
+<soc-net-reset-overview>
+Reset controllers are essential for proper SoC operation, ensuring that all logic blocks start in a known state and can be reset reliably. QSoC supports sophisticated reset topologies with multiple reset sources mapping to multiple reset targets through a clear source → target → link relationship structure.
+
+Key features include:
+- Five distinct reset types with clear semantics
+- Signal polarity normalization (active high/low)
+- Multi-source to multi-target reset matrices
+- Structured YAML configuration without string parsing
+- Test mode bypass support
+- Standalone reset controller module generation
+
+==== Reset Structure
+<soc-net-reset-structure>
+Reset controllers use a modern structured YAML format that eliminates complex string parsing and provides clear type definitions:
+
+```yaml
+# Modern reset controller format
+reset:
+  - name: main_reset_ctrl          # Reset controller instance name
+    clock: clk_sys                 # Clock for synchronous reset operations
+    test_enable: test_en           # Test enable bypass signal (optional)
+    source:                        # Reset source definitions (singular)
+      por_rst_n: low               # Active low reset source
+      i3c_soc_rst: high            # Active high reset source
+      trig_rst: low                # Trigger-based reset (active low)
+    target:                        # Reset target definitions (singular)
+      cpu_rst_n:
+        polarity: low              # Active low target output
+        link:                      # Link definitions for each source
+          por_rst_n:
+            type: ASYNC_SYNC       # Clear type name, no abbreviations
+            sync_depth: 4          # Structured parameters
+          i3c_soc_rst:
+            type: ASYNC_COMB       # Simple combinational pass-through
+      peri_rst_n:
+        polarity: low
+        link:
+          por_rst_n:
+            type: ASYNC_COMB       # Direct connection
+```
+
+==== Reset Types
+<soc-net-reset-types>
+Reset controllers support five distinct reset types, each with clear naming and specific use cases:
+
+#figure(
+  align(center)[#table(
+      columns: (0.25fr, 0.35fr, 0.4fr),
+      align: (auto, left, left),
+      table.header([Type], [Behavior], [Use Cases]),
+      table.hline(),
+      [`ASYNC_COMB`], [Async reset, async release (combinational)], [Simple pass-through, clock-independent resets]),
+      [`ASYNC_SYNC`], [Async reset, sync release with configurable depth], [Standard synchronous reset release]),
+      [`ASYNC_CNT`], [Async reset, sync release with counter], [Power-on-reset with timeout]),
+      [`SYNC_ONLY`], [Synchronous reset with configurable depth], [Fully synchronous reset systems]),
+      [`ASYNC_PIPE`], [Async reset with pipeline synchronization], [Complex reset sequencing with pipelining]),
+    )],
+  caption: [RESET TYPES],
+  kind: table,
+)
+
+===== Type Parameters
+Each reset type accepts structured parameters instead of string parsing:
+
+```yaml
+# ASYNC_COMB: No parameters needed
+target:
+  simple_rst_n:
+    polarity: low
+    link:
+      por_rst_n:
+        type: ASYNC_COMB           # Direct combinational connection
+
+# ASYNC_SYNC: Structured sync parameters
+target:
+  cpu_rst_n:
+    polarity: low
+    link:
+      por_rst_n:
+        type: ASYNC_SYNC
+        sync_depth: 4              # 4-clock synchronization depth
+
+# ASYNC_CNT: Counter-based parameters
+target:
+  por_rst_n:
+    polarity: low
+    link:
+      por_in:
+        type: ASYNC_CNT
+        sync_depth: 2              # Initial sync depth
+        counter_width: 8           # Counter bit width
+        timeout_cycles: 255        # Timeout value
+
+# SYNC_ONLY: Synchronous-only parameters
+target:
+  sync_rst_n:
+    polarity: low
+    link:
+      reset_req:
+        type: SYNC_ONLY
+        sync_depth: 3              # 3-clock synchronous depth
+
+# ASYNC_PIPE: Pipeline parameters
+target:
+  dma_rst_n:
+    polarity: low
+    link:
+      trig_rst:
+        type: ASYNC_PIPE
+        sync_depth: 3              # Initial sync depth
+        pipe_depth: 4              # Pipeline depth
+```
+
+==== Reset Properties
+<soc-net-reset-properties>
+Reset controller properties provide structured configuration:
+
+#figure(
+  align(center)[#table(
+      columns: (0.2fr, 0.3fr, 0.5fr),
+      align: (auto, left, left),
+      table.header([Property], [Type], [Description]),
+      table.hline(),
+      [name], [String], [Reset controller instance name (required)]),
+      [clock], [String], [Clock signal name for sync operations (required)]),
+      [test_enable], [String], [Test enable bypass signal (optional)]),
+      [source], [Map], [Reset source definitions with polarity (required)]),
+      [target], [Map], [Reset target definitions with links (required)]),
+    )],
+  caption: [RESET CONTROLLER PROPERTIES],
+  kind: table,
+)
+
+===== Source Properties
+Reset sources define input reset signals with simple polarity specification:
+
+#figure(
+  align(center)[#table(
+      columns: (0.3fr, 0.7fr),
+      align: (auto, left),
+      table.header([Property], [Description]),
+      table.hline(),
+      [polarity], [Signal polarity: `low` (active low) or `high` (active high)]),
+    )],
+  caption: [RESET SOURCE PROPERTIES],
+  kind: table,
+)
+
+===== Target Properties
+Reset targets define output reset signals with structured link definitions:
+
+#figure(
+  align(center)[#table(
+      columns: (0.3fr, 0.7fr),
+      align: (auto, left),
+      table.header([Property], [Description]),
+      table.hline(),
+      [polarity], [Target signal polarity: `low` (active low) or `high` (active high)]),
+      [link], [Map of source connections with type and parameters]),
+    )],
+  caption: [RESET TARGET PROPERTIES],
+  kind: table,
+)
+
+===== Link Parameters
+Each reset type supports specific structured parameters:
+
+#figure(
+  align(center)[#table(
+      columns: (0.25fr, 0.25fr, 0.5fr),
+      align: (auto, auto, left),
+      table.header([Type], [Parameters], [Description]),
+      table.hline(),
+      [`ASYNC_COMB`], [None], [No parameters required]),
+      [`ASYNC_SYNC`], [`sync_depth`], [Number of synchronization flip-flops]),
+      [`ASYNC_CNT`], [`sync_depth`, `counter_width`, `timeout_cycles`], [Sync depth, counter width, timeout value]),
+      [`SYNC_ONLY`], [`sync_depth`], [Number of synchronous reset flip-flops]),
+      [`ASYNC_PIPE`], [`sync_depth`, `pipe_depth`], [Initial sync depth and pipeline stages]),
+    )],
+  caption: [RESET TYPE PARAMETERS],
+  kind: table,
+)
+
+==== Code Generation
+<soc-net-reset-generation>
+Reset controllers generate standalone modules that are instantiated in the main design, providing clean separation and reusability.
+
+===== Generated Code Structure
+The reset controller generates a dedicated `rstctrl` module with:
+1. Clock and test enable inputs
+2. Reset source signal inputs with polarity documentation
+3. Reset target signal outputs with polarity documentation
+4. Internal wire declarations for signal normalization
+5. Reset logic instantiations using proven primitives
+6. Output assignment logic with proper signal combination
+
+===== Generated Modules
+The reset controller instantiates proven reset synchronization primitives:
+- `datapath_reset_sync`: Async reset, sync release synchronizer
+- `datapath_reset_counter`: Async reset with timeout counter (planned)
+- Custom combinational logic for signal routing and polarity handling
+
+===== Generated Code Example
+```verilog
+module rstctrl (
+    /* Reset clock */
+    input  clk_sys,     /**< System clock input */
+    /* Reset source */
+    input  por_rst_n,   /**< Reset source: por_rst_n (active low) */
+    /* Reset target */
+    output cpu_rst_n,   /**< Reset target: cpu_rst_n (active low) */
+    /* DFT */
+    input  test_en      /**< Test enable signal */
+);
+
+    /* Wires for reset connections */
+    wire normalize_por_rst_n_to_cpu_rst_n;
+
+    /* Reset logic instances */
+    datapath_reset_sync #(
+        .RST_SYNC_LEVEL(4)  /**< Delay cycles for reset */
+    ) u_reset_sync_normalize_por_rst_n_to_cpu_rst_n (
+        .clk         (clk_sys),
+        .rst_n_a     (~por_rst_n),                           
+        .reset_bypass(test_en),
+        .rst_n_sync  (normalize_por_rst_n_to_cpu_rst_n)
+    );
+
+    /* Reset output assignments */
+    assign cpu_rst_n = &{normalize_por_rst_n_to_cpu_rst_n};
+
+endmodule
+```
+
+==== Migration from Legacy Format
+<soc-net-reset-migration>
+The new format eliminates several legacy design patterns:
+
+#figure(
+  align(center)[#table(
+      columns: (0.5fr, 0.5fr),
+      align: (auto, auto),
+      table.header([Legacy Format], [New Format]),
+      table.hline(),
+      [`sources:` (plural)], [`source:` (singular)]),
+      [`targets:` (plural)], [`target:` (singular)]),
+      [`mode: A(4,clk_sys)` (string parsing)], [`type: ASYNC_SYNC`, `sync_depth: 4` (structured)]),
+      [`mode: AC(2,8,255,clk)` (cryptic)], [`type: ASYNC_CNT`, `sync_depth: 2`, `counter_width: 8`, `timeout_cycles: 255`]),
+      [`polarity: active_low`], [`polarity: low` (simplified)]),
+    )],
+  caption: [LEGACY TO NEW FORMAT MIGRATION],
+  kind: table,
+)
+
+==== Best Practices
+<soc-net-reset-practices>
+===== Design Guidelines
+- Use `ASYNC_SYNC` for most digital logic requiring synchronized reset release
+- Use `ASYNC_COMB` only for simple pass-through or clock-independent paths
+- Implement power-on-reset with `ASYNC_CNT` for reliable startup timing
+- Group related resets in the same controller for better organization
+- Use descriptive reset source and target names
+
+===== YAML Structure Guidelines
+- Always use singular forms (`source`, `target`) instead of plurals
+- Specify clear type names instead of cryptic abbreviations
+- Use structured parameters instead of string parsing
+- Maintain consistent polarity naming (`low`/`high`)
+- Include test_enable bypass for DFT compliance
+
 === BUS SECTION
 <soc-net-bus>
 The `bus` section defines bus interface connections that will be automatically expanded into individual net connections. Bus connections use the list format:
