@@ -44,14 +44,12 @@ cmake --build build --target test
 cd build && ctest
 ```
 
-### SPDX License Headers
+### Building Documentation
 
-QSoC supports automatic management of SPDX license and copyright headers for source files.
-
-To enable SPDX headers:
+To build the documentation:
 
 ```bash
-cmake -B build -G Ninja -DENABLE_SPDX_HEADERS=ON
+cd doc && nix build .#qsoc-manual
 ```
 
-For detailed information on SPDX header management, please see [cmake/README.md](cmake/README.md).
+For detailed information on documentation building, please see [doc/README.md](doc/README.md).
