@@ -1446,7 +1446,7 @@ All generated signals use the FSM name as prefix:
 - `{fsm_name}_pc`, `{fsm_name}_nxt_pc` (microcode-mode)
 - `{fsm_name}_rom` (microcode-mode)
 
-=== RESET PRIMITIVES
+=== RESET SECTION
 <soc-net-reset>
 The `reset` section defines reset controller primitives that generate proper reset signaling throughout the SoC. Reset primitives provide comprehensive reset management with support for multiple reset sources, different reset types, signal polarity handling, and standardized module generation.
 
@@ -1502,11 +1502,11 @@ Reset controllers support five distinct reset types, each with clear naming and 
       align: (auto, left, left),
       table.header([Type], [Behavior], [Use Cases]),
       table.hline(),
-      [`ASYNC_COMB`], [Async reset, async release (combinational)], [Simple pass-through, clock-independent resets]),
-      [`ASYNC_SYNC`], [Async reset, sync release with configurable depth], [Standard synchronous reset release]),
-      [`ASYNC_CNT`], [Async reset, sync release with counter], [Power-on-reset with timeout]),
-      [`SYNC_ONLY`], [Synchronous reset with configurable depth], [Fully synchronous reset systems]),
-      [`ASYNC_PIPE`], [Async reset with pipeline synchronization], [Complex reset sequencing with pipelining]),
+      [`ASYNC_COMB`], [Async reset, async release (combinational)], [Simple pass-through, clock-independent resets],
+      [`ASYNC_SYNC`], [Async reset, sync release with configurable depth], [Standard synchronous reset release],
+      [`ASYNC_CNT`], [Async reset, sync release with counter], [Power-on-reset with timeout],
+      [`SYNC_ONLY`], [Synchronous reset with configurable depth], [Fully synchronous reset systems],
+      [`ASYNC_PIPE`], [Async reset with pipeline synchronization], [Complex reset sequencing with pipelining],
     )],
   caption: [RESET TYPES],
   kind: table,
@@ -1574,11 +1574,11 @@ Reset controller properties provide structured configuration:
       align: (auto, left, left),
       table.header([Property], [Type], [Description]),
       table.hline(),
-      [name], [String], [Reset controller instance name (required)]),
-      [clock], [String], [Clock signal name for sync operations (required)]),
-      [test_enable], [String], [Test enable bypass signal (optional)]),
-      [source], [Map], [Reset source definitions with polarity (required)]),
-      [target], [Map], [Reset target definitions with links (required)]),
+      [name], [String], [Reset controller instance name (required)],
+      [clock], [String], [Clock signal name for sync operations (required)],
+      [test_enable], [String], [Test enable bypass signal (optional)],
+      [source], [Map], [Reset source definitions with polarity (required)],
+      [target], [Map], [Reset target definitions with links (required)],
     )],
   caption: [RESET CONTROLLER PROPERTIES],
   kind: table,
@@ -1593,7 +1593,7 @@ Reset sources define input reset signals with simple polarity specification:
       align: (auto, left),
       table.header([Property], [Description]),
       table.hline(),
-      [polarity], [Signal polarity: `low` (active low) or `high` (active high)]),
+      [polarity], [Signal polarity: `low` (active low) or `high` (active high)],
     )],
   caption: [RESET SOURCE PROPERTIES],
   kind: table,
@@ -1608,8 +1608,8 @@ Reset targets define output reset signals with structured link definitions:
       align: (auto, left),
       table.header([Property], [Description]),
       table.hline(),
-      [polarity], [Target signal polarity: `low` (active low) or `high` (active high)]),
-      [link], [Map of source connections with type and parameters]),
+      [polarity], [Target signal polarity: `low` (active low) or `high` (active high)],
+      [link], [Map of source connections with type and parameters],
     )],
   caption: [RESET TARGET PROPERTIES],
   kind: table,
@@ -1624,11 +1624,11 @@ Each reset type supports specific structured parameters:
       align: (auto, auto, left),
       table.header([Type], [Parameters], [Description]),
       table.hline(),
-      [`ASYNC_COMB`], [None], [No parameters required]),
-      [`ASYNC_SYNC`], [`sync_depth`], [Number of synchronization flip-flops]),
-      [`ASYNC_CNT`], [`sync_depth`, `counter_width`, `timeout_cycles`], [Sync depth, counter width, timeout value]),
-      [`SYNC_ONLY`], [`sync_depth`], [Number of synchronous reset flip-flops]),
-      [`ASYNC_PIPE`], [`sync_depth`, `pipe_depth`], [Initial sync depth and pipeline stages]),
+      [`ASYNC_COMB`], [None], [No parameters required],
+      [`ASYNC_SYNC`], [`sync_depth`], [Number of synchronization flip-flops],
+      [`ASYNC_CNT`], [`sync_depth`, `counter_width`, `timeout_cycles`], [Sync depth, counter width, timeout value],
+      [`SYNC_ONLY`], [`sync_depth`], [Number of synchronous reset flip-flops],
+      [`ASYNC_PIPE`], [`sync_depth`, `pipe_depth`], [Initial sync depth and pipeline stages],
     )],
   caption: [RESET TYPE PARAMETERS],
   kind: table,
@@ -1685,26 +1685,6 @@ module rstctrl (
 endmodule
 ```
 
-==== Migration from Legacy Format
-<soc-net-reset-migration>
-The new format eliminates several legacy design patterns:
-
-#figure(
-  align(center)[#table(
-      columns: (0.5fr, 0.5fr),
-      align: (auto, auto),
-      table.header([Legacy Format], [New Format]),
-      table.hline(),
-      [`sources:` (plural)], [`source:` (singular)]),
-      [`targets:` (plural)], [`target:` (singular)]),
-      [`mode: A(4,clk_sys)` (string parsing)], [`type: ASYNC_SYNC`, `sync_depth: 4` (structured)]),
-      [`mode: AC(2,8,255,clk)` (cryptic)], [`type: ASYNC_CNT`, `sync_depth: 2`, `counter_width: 8`, `timeout_cycles: 255`]),
-      [`polarity: active_low`], [`polarity: low` (simplified)]),
-    )],
-  caption: [LEGACY TO NEW FORMAT MIGRATION],
-  kind: table,
-)
-
 ==== Best Practices
 <soc-net-reset-practices>
 ===== Design Guidelines
@@ -1721,7 +1701,7 @@ The new format eliminates several legacy design patterns:
 - Maintain consistent polarity naming (`low`/`high`)
 - Include test_enable bypass for DFT compliance
 
-=== CLOCK PRIMITIVES
+=== CLOCK SECTION
 <soc-net-clock>
 The `clock` section defines clock controller primitives that generate proper clock management throughout the SoC. Clock primitives provide comprehensive clock control with support for multiple clock sources, six distinct clock types, signal inversion, gating, division, and multiplexing with glitch-free switching.
 
@@ -1849,12 +1829,12 @@ Clock controllers support six distinct clock types, each optimized for specific 
       align: (auto, left, left),
       table.header([Type], [Behavior], [Use Cases]),
       table.hline(),
-      [`PASS_THRU`], [Direct forward connection], [Simple clock buffering, test clocks]),
-      [`GATE_ONLY`], [ICG gate only], [Power management, conditional clocking]),
-      [`DIV_ICG`], [Narrow-pulse divider (counter + ICG)], [High-speed clock division, precise timing]),
-      [`DIV_DFF`], [50% duty cycle divider (toggle/D-FF)], [Standard clock division, symmetric clocks]),
-      [`GATE_DIV_ICG`], [Gate → ICG divider combination], [Power-managed divided clocks]),
-      [`GATE_DIV_DFF`], [Gate → D-FF divider combination], [Power-managed symmetric divided clocks]),
+      [`PASS_THRU`], [Direct forward connection], [Simple clock buffering, test clocks],
+      [`GATE_ONLY`], [ICG gate only], [Power management, conditional clocking],
+      [`DIV_ICG`], [Narrow-pulse divider (counter + ICG)], [High-speed clock division, precise timing],
+      [`DIV_DFF`], [50% duty cycle divider (toggle/D-FF)], [Standard clock division, symmetric clocks],
+      [`GATE_DIV_ICG`], [Gate → ICG divider combination], [Power-managed divided clocks],
+      [`GATE_DIV_DFF`], [Gate → D-FF divider combination], [Power-managed symmetric divided clocks],
     )],
   caption: [CLOCK TYPES],
   kind: table,
@@ -1944,8 +1924,8 @@ Clock controllers support two multiplexer types for multi-source clock selection
       align: (auto, left, left),
       table.header([Mux Type], [Behavior], [Use Cases]),
       table.hline(),
-      [`STD_MUX`], [Pure combinational mux, no CDC], [Test mode selection, simple switching]),
-      [`GF_MUX`], [Two-stage glitch-free mux], [Production clock switching, critical paths]),
+      [`STD_MUX`], [Pure combinational mux, no CDC], [Test mode selection, simple switching],
+      [`GF_MUX`], [Two-stage glitch-free mux], [Production clock switching, critical paths],
     )],
   caption: [CLOCK MULTIPLEXER TYPES],
   kind: table,
@@ -1991,12 +1971,12 @@ Clock controller properties provide comprehensive configuration:
       align: (auto, left, left),
       table.header([Property], [Type], [Description]),
       table.hline(),
-      [name], [String], [Clock controller instance name (required)]),
-      [clock], [String], [Default synchronous clock for operations (required)]),
-      [default_ref_clock], [String], [Default reference clock for GF_MUX (optional)]),
-      [test_enable], [String], [Test enable bypass signal (optional)]),
-      [input], [Map], [Clock input definitions with frequency specs (required)]),
-      [target], [Map], [Clock target definitions with links (required)]),
+      [name], [String], [Clock controller instance name (required)],
+      [clock], [String], [Default synchronous clock for operations (required)],
+      [default_ref_clock], [String], [Default reference clock for GF_MUX (optional)],
+      [test_enable], [String], [Test enable bypass signal (optional)],
+      [input], [Map], [Clock input definitions with frequency specs (required)],
+      [target], [Map], [Clock target definitions with links (required)],
     )],
   caption: [CLOCK CONTROLLER PROPERTIES],
   kind: table,
@@ -2011,8 +1991,8 @@ Clock inputs define source clock signals with specifications:
       align: (auto, left),
       table.header([Property], [Description]),
       table.hline(),
-      [freq], [Input frequency with unit (e.g., "24MHz", "800MHz") (required)]),
-      [duty_cycle], [Optional duty cycle specification (e.g., "50%")]),
+      [freq], [Input frequency with unit (e.g., "24MHz", "800MHz") (required)],
+      [duty_cycle], [Optional duty cycle specification (e.g., "50%")],
     )],
   caption: [CLOCK INPUT PROPERTIES],
   kind: table,
@@ -2027,9 +2007,9 @@ Clock targets define output clock signals with structured processing:
       align: (auto, left),
       table.header([Property], [Description]),
       table.hline(),
-      [freq], [Target frequency for SDC generation (required)]),
-      [link], [Map of source connections with type and parameters (required)]),
-      [mux], [Multiplexer configuration (required only when ≥2 links)]),
+      [freq], [Target frequency for SDC generation (required)],
+      [link], [Map of source connections with type and parameters (required)],
+      [mux], [Multiplexer configuration (required only when ≥2 links)],
     )],
   caption: [CLOCK TARGET PROPERTIES],
   kind: table,
@@ -2044,12 +2024,12 @@ Each clock type supports specific structured parameters:
       align: (auto, auto, left),
       table.header([Type], [Parameters], [Description]),
       table.hline(),
-      [`PASS_THRU`], [`invert` (optional)], [Clock inversion flag]),
-      [`GATE_ONLY`], [`gate.enable`, `gate.polarity`], [Gate enable signal and polarity]),
-      [`DIV_ICG`], [`div.ratio`, `div.reset`, `invert`], [Division ratio, reset, optional inversion]),
-      [`DIV_DFF`], [`div.ratio`, `div.reset`, `invert`], [Even division ratio, reset, optional inversion]),
-      [`GATE_DIV_ICG`], [`gate.*`, `div.*`, `invert`], [Combined gate and ICG division parameters]),
-      [`GATE_DIV_DFF`], [`gate.*`, `div.*`, `invert`], [Combined gate and DFF division parameters]),
+      [`PASS_THRU`], [`invert` (optional)], [Clock inversion flag],
+      [`GATE_ONLY`], [`gate.enable`, `gate.polarity`], [Gate enable signal and polarity],
+      [`DIV_ICG`], [`div.ratio`, `div.reset`, `invert`], [Division ratio, reset, optional inversion],
+      [`DIV_DFF`], [`div.ratio`, `div.reset`, `invert`], [Even division ratio, reset, optional inversion],
+      [`GATE_DIV_ICG`], [`gate.*`, `div.*`, `invert`], [Combined gate and ICG division parameters],
+      [`GATE_DIV_DFF`], [`gate.*`, `div.*`, `invert`], [Combined gate and DFF division parameters],
     )],
   caption: [CLOCK TYPE PARAMETERS],
   kind: table,
@@ -2234,8 +2214,8 @@ QSoC provides two primary connection attributes:
       align: (auto, left, left),
       table.header([Attribute], [Purpose], [Use Cases]),
       table.hline(),
-      [`link`], [Internal signal routing with flexible bit selection], [Module-to-module connections, bus segmentation, signal distribution]),
-      [`uplink`], [Direct I/O port mapping], [Chip pins, power/ground, clock/reset signals]),
+      [`link`], [Internal signal routing with flexible bit selection], [Module-to-module connections, bus segmentation, signal distribution],
+      [`uplink`], [Direct I/O port mapping], [Chip pins, power/ground, clock/reset signals],
     )],
   caption: [LINK VS UPLINK COMPARISON],
   kind: table,
@@ -2831,4 +2811,3 @@ QSoC provides detailed diagnostic information for all validation issues:
 - Validation occurs during Verilog generation process
 - Issues are reported without preventing generation (when possible)
 - Allows iterative design refinement with immediate feedback
-</rewritten_file>
