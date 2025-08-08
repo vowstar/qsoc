@@ -1721,6 +1721,468 @@ The new format eliminates several legacy design patterns:
 - Maintain consistent polarity naming (`low`/`high`)
 - Include test_enable bypass for DFT compliance
 
+=== CLOCK PRIMITIVES
+<soc-net-clock>
+The `clock` section defines clock controller primitives that generate proper clock management throughout the SoC. Clock primitives provide comprehensive clock control with support for multiple clock sources, six distinct clock types, signal inversion, gating, division, and multiplexing with glitch-free switching.
+
+==== Clock Overview
+<soc-net-clock-overview>
+Clock controllers are essential for proper SoC operation, providing clean and controlled clock signals to all digital blocks. QSoC supports sophisticated clock topologies with multiple clock sources mapping to multiple clock targets through a clear input → target → link relationship structure.
+
+Key features include:
+- Six distinct clock types with clear semantics (PASS_THRU, GATE_ONLY, DIV_ICG, DIV_DFF, GATE_DIV_ICG, GATE_DIV_DFF)
+- Clock signal inversion and polarity control
+- Clock gating with enable signals and polarity specification
+- Clock division with configurable ratios (ICG-based and D-FF-based)
+- Clock multiplexing with standard and glitch-free switching
+- Template RTL cells that can be replaced with foundry-specific IP
+- Test enable bypass support for DFT compliance
+- Frequency specifications for SDC generation
+
+==== Clock Structure
+<soc-net-clock-structure>
+Clock controllers use a structured YAML format that provides clear type definitions and eliminates complex parameter parsing:
+
+```yaml
+# Comprehensive clock controller example
+clock:
+  - name: soc_clk_ctrl                # Clock controller instance name
+    clock: clk_sys                    # Default synchronous clock
+    default_ref_clock: clk_sys        # Default reference clock for GF_MUX
+    test_enable: test_en              # Test enable bypass signal (optional)
+    input:                            # Clock input definitions
+      osc_24m:
+        freq: 24MHz                   # Input frequency specification
+        duty_cycle: 50%               # Optional duty cycle specification
+      pll_800m:
+        freq: 800MHz
+      test_clk:
+        freq: 100MHz
+    target:                           # Clock target definitions
+      # Simple pass-through clock
+      adc_clk:
+        freq: 24MHz                   # Target frequency for SDC generation
+        link:
+          osc_24m:
+            type: PASS_THRU           # Direct forward connection
+            invert: false             # Optional inversion (default: false)
+      
+      # Gated clock
+      dbg_clk:
+        freq: 800MHz
+        link:
+          pll_800m:
+            type: GATE_ONLY           # ICG gate only
+            gate:
+              enable: dbg_clk_en      # Gate enable signal
+              polarity: high          # Enable polarity (high/low)
+      
+      # Divided clock with ICG
+      uart_clk:
+        freq: 200MHz
+        link:
+          pll_800m:
+            type: DIV_ICG             # Narrow-pulse divider
+            div:
+              ratio: 4                # Division ratio
+              reset: rst_n            # Reset signal
+      
+      # Divided clock with D-FF and inversion
+      slow_clk_n:
+        freq: 12MHz
+        link:
+          osc_24m:
+            type: DIV_DFF             # 50% duty cycle divider
+            invert: true              # Inverted output
+            div:
+              ratio: 2                # Division ratio (≥2)
+              reset: rst_n
+      
+      # Gated and divided clock (ICG)
+      peri_clk:
+        freq: 100MHz
+        link:
+          pll_800m:
+            type: GATE_DIV_ICG        # Gate → ICG divider
+            gate:
+              enable: peri_clk_en
+            div:
+              ratio: 8
+              reset: rst_n
+      
+      # Multi-source with standard mux
+      func_clk:
+        freq: 100MHz
+        link:
+          pll_800m:
+            type: DIV_ICG
+            div:
+              ratio: 8
+              reset: rst_n
+          test_clk:
+            type: PASS_THRU
+        mux:                          # Present only when ≥2 links
+          type: STD_MUX               # Standard combinational mux
+          select: func_sel            # Mux select signal
+      
+      # Multi-source with glitch-free mux
+      safe_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+            type: PASS_THRU
+          test_clk:
+            type: PASS_THRU
+        mux:
+          type: GF_MUX                # Glitch-free mux
+          select: safe_sel
+          ref_clock: clk_sys          # Reference clock (optional)
+```
+
+==== Clock Types
+<soc-net-clock-types>
+Clock controllers support six distinct clock types, each optimized for specific use cases:
+
+#figure(
+  align(center)[#table(
+      columns: (0.2fr, 0.35fr, 0.45fr),
+      align: (auto, left, left),
+      table.header([Type], [Behavior], [Use Cases]),
+      table.hline(),
+      [`PASS_THRU`], [Direct forward connection], [Simple clock buffering, test clocks]),
+      [`GATE_ONLY`], [ICG gate only], [Power management, conditional clocking]),
+      [`DIV_ICG`], [Narrow-pulse divider (counter + ICG)], [High-speed clock division, precise timing]),
+      [`DIV_DFF`], [50% duty cycle divider (toggle/D-FF)], [Standard clock division, symmetric clocks]),
+      [`GATE_DIV_ICG`], [Gate → ICG divider combination], [Power-managed divided clocks]),
+      [`GATE_DIV_DFF`], [Gate → D-FF divider combination], [Power-managed symmetric divided clocks]),
+    )],
+  caption: [CLOCK TYPES],
+  kind: table,
+)
+
+===== Type-Specific Parameters
+Each clock type accepts structured parameters for precise control:
+
+```yaml
+# PASS_THRU: Direct connection with optional inversion
+target:
+  simple_clk:
+    freq: 24MHz
+    link:
+      osc_24m:
+        type: PASS_THRU
+        invert: false               # Optional inversion
+
+# GATE_ONLY: Clock gating with enable control
+target:
+  gated_clk:
+    freq: 800MHz
+    link:
+      pll_clk:
+        type: GATE_ONLY
+        gate:
+          enable: clk_enable        # Gate enable signal
+          polarity: high            # Enable polarity (default: high)
+
+# DIV_ICG: Narrow-pulse division
+target:
+  div_clk:
+    freq: 200MHz
+    link:
+      pll_clk:
+        type: DIV_ICG
+        div:
+          ratio: 4                  # Division ratio (≥2)
+          reset: rst_n              # Reset signal
+
+# DIV_DFF: 50% duty cycle division
+target:
+  sym_clk:
+    freq: 100MHz
+    link:
+      pll_clk:
+        type: DIV_DFF
+        div:
+          ratio: 8                  # Even division ratio
+          reset: rst_n
+
+# GATE_DIV_ICG: Combined gating and ICG division
+target:
+  managed_clk:
+    freq: 50MHz
+    link:
+      pll_clk:
+        type: GATE_DIV_ICG
+        gate:
+          enable: clk_en
+          polarity: high
+        div:
+          ratio: 16
+          reset: rst_n
+
+# GATE_DIV_DFF: Combined gating and D-FF division
+target:
+  managed_sym_clk:
+    freq: 25MHz
+    link:
+      pll_clk:
+        type: GATE_DIV_DFF
+        gate:
+          enable: clk_en
+        div:
+          ratio: 32
+          reset: rst_n
+```
+
+==== Clock Multiplexing
+<soc-net-clock-mux>
+Clock controllers support two multiplexer types for multi-source clock selection:
+
+#figure(
+  align(center)[#table(
+      columns: (0.2fr, 0.35fr, 0.45fr),
+      align: (auto, left, left),
+      table.header([Mux Type], [Behavior], [Use Cases]),
+      table.hline(),
+      [`STD_MUX`], [Pure combinational mux, no CDC], [Test mode selection, simple switching]),
+      [`GF_MUX`], [Two-stage glitch-free mux], [Production clock switching, critical paths]),
+    )],
+  caption: [CLOCK MULTIPLEXER TYPES],
+  kind: table,
+)
+
+===== Multiplexer Configuration
+```yaml
+# Standard multiplexer (combinational)
+target:
+  func_clk:
+    freq: 100MHz
+    link:
+      main_clk:
+        type: PASS_THRU
+      test_clk:
+        type: PASS_THRU
+    mux:
+      type: STD_MUX
+      select: test_mode           # Direct select signal
+
+# Glitch-free multiplexer (synchronized)
+target:
+  safe_clk:
+    freq: 100MHz
+    link:
+      osc_clk:
+        type: PASS_THRU
+      backup_clk:
+        type: PASS_THRU
+    mux:
+      type: GF_MUX
+      select: clk_switch          # Async select signal
+      ref_clock: ref_clk          # Synchronization reference
+```
+
+==== Clock Properties
+<soc-net-clock-properties>
+Clock controller properties provide comprehensive configuration:
+
+#figure(
+  align(center)[#table(
+      columns: (0.25fr, 0.25fr, 0.5fr),
+      align: (auto, left, left),
+      table.header([Property], [Type], [Description]),
+      table.hline(),
+      [name], [String], [Clock controller instance name (required)]),
+      [clock], [String], [Default synchronous clock for operations (required)]),
+      [default_ref_clock], [String], [Default reference clock for GF_MUX (optional)]),
+      [test_enable], [String], [Test enable bypass signal (optional)]),
+      [input], [Map], [Clock input definitions with frequency specs (required)]),
+      [target], [Map], [Clock target definitions with links (required)]),
+    )],
+  caption: [CLOCK CONTROLLER PROPERTIES],
+  kind: table,
+)
+
+===== Input Properties
+Clock inputs define source clock signals with specifications:
+
+#figure(
+  align(center)[#table(
+      columns: (0.3fr, 0.7fr),
+      align: (auto, left),
+      table.header([Property], [Description]),
+      table.hline(),
+      [freq], [Input frequency with unit (e.g., "24MHz", "800MHz") (required)]),
+      [duty_cycle], [Optional duty cycle specification (e.g., "50%")]),
+    )],
+  caption: [CLOCK INPUT PROPERTIES],
+  kind: table,
+)
+
+===== Target Properties
+Clock targets define output clock signals with structured processing:
+
+#figure(
+  align(center)[#table(
+      columns: (0.3fr, 0.7fr),
+      align: (auto, left),
+      table.header([Property], [Description]),
+      table.hline(),
+      [freq], [Target frequency for SDC generation (required)]),
+      [link], [Map of source connections with type and parameters (required)]),
+      [mux], [Multiplexer configuration (required only when ≥2 links)]),
+    )],
+  caption: [CLOCK TARGET PROPERTIES],
+  kind: table,
+)
+
+===== Link Parameters
+Each clock type supports specific structured parameters:
+
+#figure(
+  align(center)[#table(
+      columns: (0.25fr, 0.35fr, 0.4fr),
+      align: (auto, auto, left),
+      table.header([Type], [Parameters], [Description]),
+      table.hline(),
+      [`PASS_THRU`], [`invert` (optional)], [Clock inversion flag]),
+      [`GATE_ONLY`], [`gate.enable`, `gate.polarity`], [Gate enable signal and polarity]),
+      [`DIV_ICG`], [`div.ratio`, `div.reset`, `invert`], [Division ratio, reset, optional inversion]),
+      [`DIV_DFF`], [`div.ratio`, `div.reset`, `invert`], [Even division ratio, reset, optional inversion]),
+      [`GATE_DIV_ICG`], [`gate.*`, `div.*`, `invert`], [Combined gate and ICG division parameters]),
+      [`GATE_DIV_DFF`], [`gate.*`, `div.*`, `invert`], [Combined gate and DFF division parameters]),
+    )],
+  caption: [CLOCK TYPE PARAMETERS],
+  kind: table,
+)
+
+==== Template RTL Cells
+<soc-net-clock-templates>
+Clock controllers generate template RTL cells that serve as behavioural placeholders:
+
+```verilog
+// Standard clock mux (combinational)
+module CKMUX_CELL (
+    input  wire CLK0,
+    input  wire CLK1,
+    input  wire SEL,     // 0=CLK0, 1=CLK1
+    output wire CLK_OUT
+);
+    assign CLK_OUT = SEL ? CLK1 : CLK0;
+endmodule
+
+// Glitch-free clock mux (synchronized)
+module CKMUX_GF_CELL (
+    input  wire CLK0,
+    input  wire CLK1,
+    input  wire SEL,       // async
+    input  wire REF_CLK,   // reference clock
+    output wire CLK_OUT
+);
+    reg sel_q;
+    always @(posedge REF_CLK) sel_q <= SEL;
+    assign CLK_OUT = sel_q ? CLK1 : CLK0;
+endmodule
+
+// Integrated clock-gate (ICG) cell
+module CKGATE_CELL (
+    input  wire CLK_IN,
+    input  wire CLK_EN,
+    output wire CLK_OUT
+);
+    assign CLK_OUT = CLK_IN & CLK_EN;
+endmodule
+```
+
+===== Foundry Replacement
+Replace template cells with process-specific implementations:
+- Standard library mapping via synthesis tools
+- Manual instantiation of foundry macros (e.g., `CLKMUX2_X1`, `CKLNQD2BWP`)
+- Technology-specific clock gating cells with proper DFT features
+
+==== Code Generation
+<soc-net-clock-generation>
+Clock controllers generate standalone modules that provide clean clock management infrastructure.
+
+===== Generated Code Structure
+The clock controller generates a dedicated `clkctrl` module with:
+1. Template RTL cell definitions (if not already defined)
+2. Clock and test enable inputs with frequency documentation
+3. Clock input signal declarations with frequency specifications
+4. Clock target signal outputs with frequency documentation
+5. Internal wire declarations for intermediate clock signals
+6. Clock logic instantiations using template cells or foundry IP
+7. Output assignment logic with proper multiplexing and inversion
+
+===== Generated Code Example
+```verilog
+// Template cells generated first
+module CKGATE_CELL (...);
+// ... template implementations
+
+`ifndef DEF_CLKCTRL
+`define DEF_CLKCTRL
+
+module clkctrl (
+    /* Default clock */
+    input  clk_sys,       /**< Default synchronous clock */
+    /* Clock inputs */
+    input  osc_24m,       /**< Clock input: osc_24m (24MHz) */
+    input  pll_800m,      /**< Clock input: pll_800m (800MHz) */
+    /* Clock targets */
+    output adc_clk,       /**< Clock target: adc_clk (24MHz) */
+    output uart_clk,      /**< Clock target: uart_clk (200MHz) */
+    /* Test enable */
+    input  test_en        /**< Test enable signal */
+);
+
+    /* Wire declarations for clock connections */
+    wire clk_adc_clk_from_osc_24m;
+    wire clk_uart_clk_from_pll_800m;
+
+    /* Clock logic instances */
+    // osc_24m -> adc_clk: PASS_THRU
+    assign clk_adc_clk_from_osc_24m = osc_24m;
+    
+    // pll_800m -> uart_clk: DIV_ICG
+    CKDIV_ICG #(.RATIO(4)) u_uart_clk_pll_800m (
+        .CLK_IN  (pll_800m),
+        .RST_N   (rst_n),
+        .CLK_OUT (clk_uart_clk_from_pll_800m)
+    );
+
+    /* Clock output assignments */
+    assign adc_clk = clk_adc_clk_from_osc_24m;
+    assign uart_clk = clk_uart_clk_from_pll_800m;
+
+endmodule
+
+`endif  /* DEF_CLKCTRL */
+```
+
+==== Best Practices
+<soc-net-clock-practices>
+===== Design Guidelines
+- Use `PASS_THRU` for simple clock buffering and test clock routing
+- Use `GATE_ONLY` for power management and conditional clock control
+- Use `DIV_ICG` for high-speed clock division where narrow pulses are acceptable
+- Use `DIV_DFF` for clock division requiring 50% duty cycle symmetry
+- Use combined `GATE_DIV_*` types for power-managed divided clocks
+- Prefer `GF_MUX` over `STD_MUX` for production clock switching to avoid glitches
+
+===== YAML Structure Guidelines
+- Always specify input frequencies for proper SDC generation
+- Use clear clock names that indicate their purpose and frequency
+- Group related clocks in the same controller for better organization
+- Specify duty cycle only when it differs from the standard 50%
+- Use `default_ref_clock` to minimize repetitive `ref_clock` specifications
+- Include `test_enable` bypass for comprehensive DFT support
+
+===== Frequency Management
+- Ensure target frequencies are mathematically consistent with division ratios
+- Use proper SI units (Hz, kHz, MHz, GHz) for clarity
+- Document expected frequency ranges in comments for complex clock trees
+- Consider clock domain crossing requirements when designing multi-clock systems
+
 === BUS SECTION
 <soc-net-bus>
 The `bus` section defines bus interface connections that will be automatically expanded into individual net connections. Bus connections use the list format:
