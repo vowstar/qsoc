@@ -515,6 +515,189 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(clk_sys)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(safe_sel)"));
     }
+
+    void test_gf_mux_custom_ref_clock()
+    {
+        // Create netlist file with GF_MUX using custom ref_clock (different from default)
+        QString netlistContent = R"(
+port:
+  osc_24m:
+    direction: input
+    type: logic
+  test_clk:
+    direction: input
+    type: logic
+  custom_sel:
+    direction: input
+    type: logic
+  clk_sys:
+    direction: input
+    type: logic
+  custom_ref:
+    direction: input
+    type: logic
+  custom_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_clk_ctrl
+    clock: clk_sys
+    default_ref_clock: clk_sys
+    input:
+      osc_24m:
+        freq: 24MHz
+      test_clk:
+        freq: 100MHz
+    target:
+      custom_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+            type: PASS_THRU
+          test_clk:
+            type: PASS_THRU
+        mux:
+          type: GF_MUX
+          select: custom_sel
+          ref_clock: custom_ref
+)";
+
+        QString netlistPath = createTempFile("test_gf_mux_custom_ref.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_gf_mux_custom_ref.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify the generated content contains expected clock logic */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKMUX_GF_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(custom_ref)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(custom_sel)"));
+    }
+
+    void test_mixed_ref_clock_scenario()
+    {
+        // Create netlist file with mixed ref_clock scenario - some using default, some custom
+        QString netlistContent = R"(
+port:
+  osc_24m:
+    direction: input
+    type: logic
+  test_clk:
+    direction: input
+    type: logic
+  sel1:
+    direction: input
+    type: logic
+  sel2:
+    direction: input
+    type: logic
+  clk_sys:
+    direction: input
+    type: logic
+  special_ref:
+    direction: input
+    type: logic
+  default_clk:
+    direction: output
+    type: logic
+  custom_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_clk_ctrl
+    clock: clk_sys
+    default_ref_clock: clk_sys
+    input:
+      osc_24m:
+        freq: 24MHz
+      test_clk:
+        freq: 100MHz
+    target:
+      default_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+            type: PASS_THRU
+          test_clk:
+            type: PASS_THRU
+        mux:
+          type: GF_MUX
+          select: sel1
+          # Uses default_ref_clock (clk_sys)
+      custom_clk:
+        freq: 100MHz
+        link:
+          osc_24m:
+            type: PASS_THRU
+          test_clk:
+            type: PASS_THRU
+        mux:
+          type: GF_MUX
+          select: sel2
+          ref_clock: special_ref
+)";
+
+        QString netlistPath = createTempFile("test_mixed_ref_clock.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_mixed_ref_clock.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify the generated content contains expected clock logic */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKMUX_GF_CELL"));
+        // First target uses default ref_clock
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(clk_sys)"));
+        // Second target uses custom ref_clock
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(special_ref)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(sel1)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(sel2)"));
+    }
 };
 
 QStringList Test::messageList;
