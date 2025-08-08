@@ -15,6 +15,7 @@
 class QSocResetPrimitive;
 class QSocFSMPrimitive;
 class QSocCombPrimitive;
+class QSocSeqPrimitive;
 
 #include <QObject>
 #include <QPair>
@@ -490,26 +491,6 @@ private:
     bool processSeqLogic();
 
     /**
-     * @brief Generate nested sequential logic value (for if/case nesting)
-     * @param valueNode The YAML node containing the value (scalar or nested structure)
-     * @param regName The register name
-     * @param indentLevel The indentation level for proper formatting
-     * @return Generated Verilog code string
-     */
-    QString generateNestedSeqValue(
-        const YAML::Node &valueNode, const QString &regName, int indentLevel);
-
-    /**
-     * @brief Generate sequential logic content for a register
-     * @param seqItem The YAML node containing the sequential logic specification
-     * @param regName The register name
-     * @param out Output text stream
-     * @param indentLevel The indentation level for proper formatting
-     */
-    void generateSeqLogicContent(
-        const YAML::Node &seqItem, const QString &regName, QTextStream &out, int indentLevel);
-
-    /**
      * @brief Generate FSM Verilog code using FSM primitive
      * @param fsmItem The YAML node containing the FSM specification
      * @param out Output text stream
@@ -525,6 +506,14 @@ private:
      */
     bool generateResetPrimitive(const YAML::Node &resetNode, QTextStream &out);
 
+    /**
+     * @brief Generate sequential logic using Seq primitive
+     * @param netlistData YAML node containing the full netlist
+     * @param out Output text stream for generated Verilog
+     * @return true if generation successful, false otherwise
+     */
+    bool generateSeqPrimitive(const YAML::Node &netlistData, QTextStream &out);
+
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;
     /** Module manager. */
@@ -537,6 +526,7 @@ private:
     QSocResetPrimitive *resetPrimitive = nullptr;
     QSocFSMPrimitive   *fsmPrimitive   = nullptr;
     QSocCombPrimitive  *combPrimitive  = nullptr;
+    QSocSeqPrimitive   *seqPrimitive   = nullptr;
     /** Netlist data. */
     YAML::Node netlistData;
 };

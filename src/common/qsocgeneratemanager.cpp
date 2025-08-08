@@ -5,6 +5,7 @@
 #include "common/qsocgenerateprimitivecomb.h"
 #include "common/qsocgenerateprimitivefsm.h"
 #include "common/qsocgenerateprimitivereset.h"
+#include "common/qsocgenerateprimitiveseq.h"
 #include "common/qstaticstringweaver.h"
 
 #include <QCoreApplication>
@@ -33,6 +34,7 @@ QSocGenerateManager::QSocGenerateManager(
     , resetPrimitive(new QSocResetPrimitive(this))
     , fsmPrimitive(new QSocFSMPrimitive(this))
     , combPrimitive(new QSocCombPrimitive(this))
+    , seqPrimitive(new QSocSeqPrimitive(this))
 {
     /* All private members set by constructor */
 }
@@ -42,6 +44,7 @@ QSocGenerateManager::~QSocGenerateManager()
     delete resetPrimitive;
     delete fsmPrimitive;
     delete combPrimitive;
+    delete seqPrimitive;
 }
 
 void QSocGenerateManager::setProjectManager(QSocProjectManager *projectManager)
