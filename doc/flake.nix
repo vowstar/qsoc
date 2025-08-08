@@ -54,6 +54,11 @@
               # Use custom configuration
               export FONTCONFIG_FILE=$(pwd)/fontconfig/conf.d/99-custom-fonts.conf
               export FONTCONFIG_PATH=${pkgs.fontconfig.out}/etc/fonts
+              # Update version in cover.svg
+              if [ -f "image/cover.svg" ]; then
+                sed -i 's/Version [0-9]\+\.[0-9]\+\.[0-9]\+/Version '"$version"'/g' image/cover.svg
+              fi
+              # Convert Markdown files to Typst
               for md in *.md; do
                 if [ -f "$md" ]; then
                   typ_file="$md.typ"
@@ -71,6 +76,7 @@
                   ' "$typ_file"
                 fi
               done
+              # Compile Typst files
               export FILE_NAME=$(echo "${pkgName}" | sed 's/-/_/g')_$version.pdf
               typst compile main.typ "$FILE_NAME"
             '';
