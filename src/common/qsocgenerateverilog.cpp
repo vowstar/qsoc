@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocgeneratemanager.h"
+#include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivecomb.h"
 #include "common/qsocgenerateprimitiveseq.h"
 #include "common/qstaticstringweaver.h"
@@ -36,10 +37,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     bool hasCombSeqFsm = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"];
     bool hasReset      = netlistData["reset"] && netlistData["reset"].IsSequence()
                     && netlistData["reset"].size() > 0;
+    bool hasClock = netlistData["clock"] && netlistData["clock"].IsSequence()
+                    && netlistData["clock"].size() > 0;
 
-    if (!hasInstances && !hasCombSeqFsm && !hasReset) {
+    if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock) {
         qCritical() << "Error: Invalid netlist data, no 'instance' section and no 'comb', "
-                       "'seq', 'fsm', or 'reset' section found";
+                       "'seq', 'fsm', 'reset', or 'clock' section found";
         return false;
     }
 
@@ -1443,6 +1446,31 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         }
     }
 
+    /* Generate clock primitive controllers after reset logic */
+    if (netlistData["clock"] && netlistData["clock"].IsSequence()
+        && netlistData["clock"].size() > 0) {
+        out << "\n    /* Clock primitive controllers */\n";
+
+        for (size_t i = 0; i < netlistData["clock"].size(); ++i) {
+            const YAML::Node &clockItem = netlistData["clock"][i];
+
+            if (!clockItem.IsMap()) {
+                qWarning() << "Skipping invalid clock item at index" << i;
+                continue;
+            }
+
+            if (!generateClockPrimitive(clockItem, out)) {
+                qWarning() << "Failed to generate clock primitive at index" << i;
+                continue;
+            }
+
+            /* Add blank line between different clock blocks */
+            if (i < netlistData["clock"].size() - 1) {
+                out << "\n";
+            }
+        }
+    }
+
     /* Close module */
     out << "\nendmodule\n";
 
@@ -1820,6 +1848,16 @@ bool QSocGenerateManager::generateResetPrimitive(const YAML::Node &resetNode, QT
     }
 
     return resetPrimitive->generateResetController(resetNode, out);
+}
+
+bool QSocGenerateManager::generateClockPrimitive(const YAML::Node &clockNode, QTextStream &out)
+{
+    if (!clockPrimitive) {
+        qWarning() << "Clock primitive generator not initialized";
+        return false;
+    }
+
+    return clockPrimitive->generateClockController(clockNode, out);
 }
 
 bool QSocGenerateManager::generateSeqPrimitive(const YAML::Node &netlistData, QTextStream &out)

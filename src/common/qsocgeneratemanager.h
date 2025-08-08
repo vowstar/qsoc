@@ -11,8 +11,9 @@
 #include "common/qsocnumberinfo.h"
 #include "common/qsocprojectmanager.h"
 
-// Forward declaration for Reset primitive
+// Forward declarations for primitives
 class QSocResetPrimitive;
+class QSocClockPrimitive;
 class QSocFSMPrimitive;
 class QSocCombPrimitive;
 class QSocSeqPrimitive;
@@ -507,6 +508,14 @@ private:
     bool generateResetPrimitive(const YAML::Node &resetNode, QTextStream &out);
 
     /**
+     * @brief Generate clock control logic using Clock primitive
+     * @param clockNode YAML node containing clock configuration
+     * @param out Output text stream
+     * @return true if generation successful, false otherwise
+     */
+    bool generateClockPrimitive(const YAML::Node &clockNode, QTextStream &out);
+
+    /**
      * @brief Generate sequential logic using Seq primitive
      * @param netlistData YAML node containing the full netlist
      * @param out Output text stream for generated Verilog
@@ -522,8 +531,9 @@ private:
     QSocBusManager *busManager = nullptr;
     /** LLM service. */
     QLLMService *llmService = nullptr;
-    /** Reset primitive generator. */
+    /** Primitive generators. */
     QSocResetPrimitive *resetPrimitive = nullptr;
+    QSocClockPrimitive *clockPrimitive = nullptr;
     QSocFSMPrimitive   *fsmPrimitive   = nullptr;
     QSocCombPrimitive  *combPrimitive  = nullptr;
     QSocSeqPrimitive   *seqPrimitive   = nullptr;

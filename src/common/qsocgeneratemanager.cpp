@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocgeneratemanager.h"
+#include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivecomb.h"
 #include "common/qsocgenerateprimitivefsm.h"
 #include "common/qsocgenerateprimitivereset.h"
@@ -32,6 +33,7 @@ QSocGenerateManager::QSocGenerateManager(
     , busManager(busManager)
     , llmService(llmService)
     , resetPrimitive(new QSocResetPrimitive(this))
+    , clockPrimitive(new QSocClockPrimitive(this))
     , fsmPrimitive(new QSocFSMPrimitive(this))
     , combPrimitive(new QSocCombPrimitive(this))
     , seqPrimitive(new QSocSeqPrimitive(this))
@@ -42,6 +44,7 @@ QSocGenerateManager::QSocGenerateManager(
 QSocGenerateManager::~QSocGenerateManager()
 {
     delete resetPrimitive;
+    delete clockPrimitive;
     delete fsmPrimitive;
     delete combPrimitive;
     delete seqPrimitive;
