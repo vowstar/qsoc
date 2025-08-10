@@ -70,14 +70,16 @@ public:
     };
 
     /**
-     * @brief Reset flags configuration
+     * @brief Reset reason recording configuration
      */
-    struct ResetFlagsConfig
+    struct ResetReasonConfig
     {
-        bool    enabled;   // Enable reset flags recording
-        QString porSignal; // Power-on reset signal name
-        QString flagBus;   // Output flag bus name
-        QString aonClock;  // Always-on clock (optional)
+        bool    enabled;     // Enable reset reason recording
+        QString porSignal;   // Power-on reset signal name (encoding 0)
+        QString reasonBus;   // Output reason code bus name
+        QString aonClock;    // Always-on clock for recording logic
+        QString clearSignal; // Optional external clear signal
+        int     reasonWidth; // Width of reason code (calculated automatically)
     };
 
     /**
@@ -92,7 +94,7 @@ public:
         QList<ResetSource>     sources;     // Reset sources
         QList<ResetTarget>     targets;     // Reset targets
         QList<ResetConnection> connections; // Source-target connections
-        ResetFlagsConfig       flags;       // Reset flags configuration
+        ResetReasonConfig      reason;      // Reset reason recording configuration
     };
 
 public:
@@ -140,11 +142,11 @@ private:
     void generateResetLogic(const ResetControllerConfig &config, QTextStream &out);
 
     /**
-     * @brief Generate reset flags recording logic
+     * @brief Generate reset reason recording logic (Per-source async-set flops)
      * @param config Reset controller configuration
      * @param out Output text stream
      */
-    void generateResetFlags(const ResetControllerConfig &config, QTextStream &out);
+    void generateResetReason(const ResetControllerConfig &config, QTextStream &out);
 
     /**
      * @brief Generate output assignments  

@@ -30,8 +30,8 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
     generateWireDeclarations(config, out);
     generateResetLogic(config, out);
 
-    if (config.flags.enabled) {
-        generateResetFlags(config, out);
+    if (config.reason.enabled) {
+        generateResetReason(config, out);
     }
 
     generateOutputAssignments(config, out);
@@ -147,21 +147,33 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
         }
     }
 
-    // Parse reset flags configuration
-    config.flags.enabled = false;
-    if (resetNode["record_reset_flags"] && resetNode["record_reset_flags"].as<bool>()) {
-        config.flags.enabled   = true;
-        config.flags.porSignal = resetNode["por_signal"]
-                                     ? QString::fromStdString(
-                                           resetNode["por_signal"].as<std::string>())
-                                     : "por_rst_n";
-        config.flags.flagBus   = resetNode["flag_bus"]
-                                     ? QString::fromStdString(resetNode["flag_bus"].as<std::string>())
-                                     : "reset_flags";
-        config.flags.aonClock  = resetNode["aon_clock"]
-                                     ? QString::fromStdString(
-                                          resetNode["aon_clock"].as<std::string>())
-                                     : "";
+    // Parse reset reason recording configuration
+    config.reason.enabled = false;
+    if (resetNode["record_reset_reason"] && resetNode["record_reset_reason"].as<bool>()) {
+        config.reason.enabled     = true;
+        config.reason.porSignal   = resetNode["por_signal"]
+                                        ? QString::fromStdString(
+                                            resetNode["por_signal"].as<std::string>())
+                                        : "por_rst_n";
+        config.reason.reasonBus   = resetNode["reason_bus"]
+                                        ? QString::fromStdString(
+                                            resetNode["reason_bus"].as<std::string>())
+                                        : "last_reset_reason";
+        config.reason.aonClock    = resetNode["aon_clock"]
+                                        ? QString::fromStdString(
+                                           resetNode["aon_clock"].as<std::string>())
+                                        : "clk_32k";
+        config.reason.clearSignal = resetNode["reason_clear"]
+                                        ? QString::fromStdString(
+                                              resetNode["reason_clear"].as<std::string>())
+                                        : "";
+        // Calculate reason width: ceil(log2(sources.size() + 1))
+        int numSources            = config.sources.size();
+        config.reason.reasonWidth = numSources > 0
+                                        ? static_cast<int>(std::ceil(std::log2(numSources + 1)))
+                                        : 1;
+        if (config.reason.reasonWidth == 0)
+            config.reason.reasonWidth = 1;
     }
 
     return config;
@@ -204,16 +216,17 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
         out << " */\n";
     }
 
-    // Reset flags output (if enabled)
-    if (config.flags.enabled) {
-        int flagWidth = config.sources.size();
-        int widthBits = static_cast<int>(std::ceil(std::log2(flagWidth)));
-        if (widthBits == 0)
-            widthBits = 1;
-
-        out << "    /* Reset flags */\n";
-        out << "    output [" << (flagWidth - 1) << ":0] " << config.flags.flagBus
-            << ",    /**< Reset source flags */\n";
+    // Reset reason output (if enabled)
+    if (config.reason.enabled) {
+        out << "    /* Reset reason recording */\n";
+        if (config.reason.reasonWidth > 1) {
+            out << "    output [" << (config.reason.reasonWidth - 1) << ":0] "
+                << config.reason.reasonBus
+                << ",    /**< Last reset reason code (0=POR, 1-N=sources) */\n";
+        } else {
+            out << "    output " << config.reason.reasonBus
+                << ",                    /**< Last reset reason code (0=POR, 1=source) */\n";
+        }
     }
 
     // Test enable
@@ -243,46 +256,83 @@ void QSocResetPrimitive::generateResetLogic(const ResetControllerConfig &config,
     }
 }
 
-void QSocResetPrimitive::generateResetFlags(const ResetControllerConfig &config, QTextStream &out)
+void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config, QTextStream &out)
 {
-    if (!config.flags.enabled || config.sources.isEmpty()) {
+    if (!config.reason.enabled || config.sources.isEmpty()) {
         return;
     }
 
-    out << "    /* Reset flags recording logic */\n";
-    out << "    genvar rst_flag_i;\n";
-    out << "    generate\n";
-    out << "        for (rst_flag_i = 0; rst_flag_i < " << config.sources.size()
-        << "; rst_flag_i++) begin : g_reset_flags\n";
+    out << "    /* Reset reason recording logic (Per-source async-set flops) */\n";
+    out << "    // Each reset source drives async-set of a capture flop\n";
+    out << "    // POR encoding: 0, Sources encoding: 1-" << config.sources.size() << "\n\n";
 
-    // Generate per-source async preset flags
-    out << "            always_ff @(";
-    if (!config.flags.aonClock.isEmpty()) {
-        out << "posedge " << config.flags.aonClock << " or ";
-    }
-    out << "negedge " << config.flags.porSignal << ")\n";
-    out << "                case (rst_flag_i)\n";
-
+    // Generate per-source async-set flags
     for (int i = 0; i < config.sources.size(); ++i) {
-        const auto &source = config.sources[i];
-        out << "                    " << i << ": begin\n";
-        out << "                        if (!" << config.flags.porSignal << ")\n";
-        out << "                            " << config.flags.flagBus << "[" << i
-            << "] <= 1'b0;  // POR clear\n";
+        const auto &source   = config.sources[i];
+        QString     flagName = QString("rst_reason_flag_%1").arg(i);
+
+        out << "    // Source " << (i + 1) << ": " << source.name << " (async-set flop)\n";
+        out << "    reg " << flagName << ";\n";
+        out << "    always @(posedge " << config.reason.aonClock << " or ";
 
         if (source.active == "high") {
-            out << "                        else if (" << source.name << ")\n";
+            out << "posedge " << source.name << " or ";
         } else {
-            out << "                        else if (!" << source.name << ")\n";
+            out << "negedge " << source.name << " or ";
         }
-        out << "                            " << config.flags.flagBus << "[" << i
-            << "] <= 1'b1;  // Capture event\n";
-        out << "                    end\n";
+        out << "negedge " << config.reason.porSignal;
+        if (!config.reason.clearSignal.isEmpty()) {
+            out << " or posedge " << config.reason.clearSignal;
+        }
+        out << ") begin\n";
+
+        out << "        if (!" << config.reason.porSignal << ")\n";
+        out << "            " << flagName << " <= 1'b0;  // POR clear\n";
+
+        if (!config.reason.clearSignal.isEmpty()) {
+            out << "        else if (" << config.reason.clearSignal << ")\n";
+            out << "            " << flagName << " <= 1'b0;  // External clear\n";
+        }
+
+        if (source.active == "high") {
+            out << "        else if (" << source.name << ")\n";
+        } else {
+            out << "        else if (!" << source.name << ")\n";
+        }
+        out << "            " << flagName << " <= 1'b1;  // Async-set capture\n";
+        out << "        else\n";
+        out << "            " << flagName << " <= 1'b0;  // Sync clear after encoding\n";
+        out << "    end\n\n";
     }
 
-    out << "                endcase\n";
+    // Generate priority encoder for reason code
+    out << "    // Priority encoder: Higher index = higher priority\n";
+    out << "    reg [" << (config.reason.reasonWidth - 1) << ":0] " << config.reason.reasonBus
+        << "_reg;\n";
+    out << "    always @(posedge " << config.reason.aonClock << " or negedge "
+        << config.reason.porSignal << ") begin\n";
+    out << "        if (!" << config.reason.porSignal << ")\n";
+    out << "            " << config.reason.reasonBus << "_reg <= " << config.reason.reasonWidth
+        << "'b0;  // POR = 0\n";
+    out << "        else begin\n";
+
+    // Generate priority case statement (higher index wins)
+    for (int i = config.sources.size() - 1; i >= 0; --i) {
+        QString flagName = QString("rst_reason_flag_%1").arg(i);
+        out << "            if (" << flagName << ")\n";
+        out << "                " << config.reason.reasonBus
+            << "_reg <= " << config.reason.reasonWidth << "'d" << (i + 1) << ";  // Source "
+            << (i + 1) << ": " << config.sources[i].name << "\n";
+        if (i > 0)
+            out << "            else ";
+    }
     out << "        end\n";
-    out << "    endgenerate\n\n";
+    out << "    end\n\n";
+
+    // Output assignment
+    out << "    // Output assignment\n";
+    out << "    assign " << config.reason.reasonBus << " = " << config.reason.reasonBus
+        << "_reg;\n\n";
 }
 
 void QSocResetPrimitive::generateOutputAssignments(
