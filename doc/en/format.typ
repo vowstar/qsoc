@@ -1578,6 +1578,11 @@ Reset controller properties provide structured configuration:
       [name], [String], [Reset controller instance name (required)],
       [clock], [String], [Clock signal name for sync operations (required)],
       [test_enable], [String], [Test enable bypass signal (optional)],
+      [record_reset_reason], [Boolean], [Enable reset reason recording (optional)],
+      [aon_clock], [String], [Always-on clock for reason recording (required if recording enabled)],
+      [por_signal], [String], [Power-on reset signal name (default: por_rst_n)],
+      [reason_bus], [String], [Output reason code bus name (default: last_reset_reason)],
+      [reason_clear], [String], [External clear signal for reason recording (optional)],
       [source], [Map], [Reset source definitions with polarity (required)],
       [target], [Map], [Reset target definitions with links (required)],
     )],
@@ -1635,18 +1640,68 @@ Each reset type supports specific structured parameters:
   kind: table,
 )
 
+==== Reset Reason Recording
+<soc-net-reset-reason>
+Reset controllers can optionally record the source of the last reset using Per-source async-set flops implementation.
+
+===== Configuration
+Enable reset reason recording with these properties:
+```yaml
+reset:
+  - name: my_reset_ctrl
+    record_reset_reason: true     # Enable recording
+    aon_clock: clk_32k           # Always-on clock (required)
+    por_signal: por_rst_n        # POR signal (encoding 0)
+    reason_bus: last_reset_reason # Output bus name
+    reason_clear: reason_clear   # Optional external clear
+```
+
+===== Implementation Details
+The reset reason recorder uses Per-source async-set flops:
+- Each reset source drives the async-set of a dedicated flip-flop
+- Preset asserts immediately without clock edge requirement
+- Recovery/removal timing is met because preset is released only after source de-assertion
+- Always-on clock ensures operation even when main clocks are stopped
+- Priority encoder generates reason codes: 0=POR, 1-N=sources (higher index = higher priority)
+
+===== Generated Logic
+```verilog
+// Per-source async-set flag (example for ext_rst_n)
+reg rst_reason_flag_1;
+always @(posedge clk_32k or negedge ext_rst_n or
+         negedge por_rst_n or posedge reason_clear) begin
+    if (!por_rst_n)        rst_reason_flag_1 <= 1'b0;  // POR clear
+    else if (reason_clear) rst_reason_flag_1 <= 1'b0;  // External clear
+    else if (!ext_rst_n)   rst_reason_flag_1 <= 1'b1;  // Async-set capture
+    else                   rst_reason_flag_1 <= 1'b0;  // Sync clear
+end
+
+// Priority encoder with higher index = higher priority
+always @(posedge clk_32k or negedge por_rst_n) begin
+    if (!por_rst_n) last_reset_reason_reg <= WIDTH'b0;  // POR = 0
+    else begin
+        if (rst_reason_flag_3)      last_reset_reason_reg <= WIDTH'd4;  // Source 4
+        else if (rst_reason_flag_2) last_reset_reason_reg <= WIDTH'd3;  // Source 3
+        else if (rst_reason_flag_1) last_reset_reason_reg <= WIDTH'd2;  // Source 2
+        else if (rst_reason_flag_0) last_reset_reason_reg <= WIDTH'd1;  // Source 1
+    end
+end
+```
+
 ==== Code Generation
 <soc-net-reset-generation>
 Reset controllers generate standalone modules that are instantiated in the main design, providing clean separation and reusability.
 
 ===== Generated Code Structure
-The reset controller generates a dedicated `rstctrl` module with:
+The reset controller generates a dedicated module with:
 1. Clock and test enable inputs
 2. Reset source signal inputs with polarity documentation
 3. Reset target signal outputs with polarity documentation
-4. Internal wire declarations for signal normalization
-5. Reset logic instantiations using proven primitives
-6. Output assignment logic with proper signal combination
+4. Optional reset reason output bus (if recording enabled)
+5. Internal wire declarations for signal normalization
+6. Reset logic using simplified DFF-based implementations
+7. Optional reset reason recording logic (Per-source async-set flops)
+8. Output assignment logic with proper signal combination
 
 ===== Generated Modules
 The reset controller instantiates proven reset synchronization primitives:
@@ -1675,7 +1730,7 @@ module rstctrl (
         .RST_SYNC_LEVEL(4)  /**< Delay cycles for reset */
     ) u_reset_sync_normalize_por_rst_n_to_cpu_rst_n (
         .clk         (clk_sys),
-        .rst_n_a     (~por_rst_n),                           
+        .rst_n_a     (~por_rst_n),
         .reset_bypass(test_en),
         .rst_n_sync  (normalize_por_rst_n_to_cpu_rst_n)
     );
@@ -1747,7 +1802,7 @@ clock:
           osc_24m:
             type: PASS_THRU           # Direct forward connection
             invert: false             # Optional inversion (default: false)
-      
+
       # Gated clock
       dbg_clk:
         freq: 800MHz
@@ -1757,7 +1812,7 @@ clock:
             gate:
               enable: dbg_clk_en      # Gate enable signal
               polarity: high          # Enable polarity (high/low)
-      
+
       # Divided clock with ICG
       uart_clk:
         freq: 200MHz
@@ -1767,7 +1822,7 @@ clock:
             div:
               ratio: 4                # Division ratio
               reset: rst_n            # Reset signal
-      
+
       # Divided clock with D-FF and inversion
       slow_clk_n:
         freq: 12MHz
@@ -1778,7 +1833,7 @@ clock:
             div:
               ratio: 2                # Division ratio (≥2)
               reset: rst_n
-      
+
       # Gated and divided clock (ICG)
       peri_clk:
         freq: 100MHz
@@ -1790,7 +1845,7 @@ clock:
             div:
               ratio: 8
               reset: rst_n
-      
+
       # Multi-source with standard mux
       func_clk:
         freq: 100MHz
@@ -1805,7 +1860,7 @@ clock:
         mux:                          # Present only when ≥2 links
           type: STD_MUX               # Standard combinational mux
           select: func_sel            # Mux select signal
-      
+
       # Multi-source with glitch-free mux
       safe_clk:
         freq: 24MHz
@@ -2123,7 +2178,7 @@ module clkctrl (
     /* Clock logic instances */
     // osc_24m -> adc_clk: PASS_THRU
     assign clk_adc_clk_from_osc_24m = osc_24m;
-    
+
     // pll_800m -> uart_clk: DIV_ICG
     CKDIV_ICG #(.RATIO(4)) u_uart_clk_pll_800m (
         .CLK_IN  (pll_800m),
@@ -2784,7 +2839,7 @@ net:
   data_bus:
     - { instance: cpu, port: data_out[7:4] }    # Upper nibble
     - { instance: mem, port: data_out[3:0] }    # Lower nibble
-    
+
 # Invalid: Overlapping bit ranges (will generate warning)
 net:
   addr_bus:
