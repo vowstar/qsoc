@@ -147,33 +147,53 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
         }
     }
 
-    // Parse reset reason recording configuration
+    // Parse reset reason recording configuration (simplified)
     config.reason.enabled = false;
-    if (resetNode["record_reset_reason"] && resetNode["record_reset_reason"].as<bool>()) {
-        config.reason.enabled     = true;
-        config.reason.porSignal   = resetNode["por_signal"]
-                                        ? QString::fromStdString(
-                                            resetNode["por_signal"].as<std::string>())
-                                        : "por_rst_n";
-        config.reason.reasonBus   = resetNode["reason_bus"]
-                                        ? QString::fromStdString(
-                                            resetNode["reason_bus"].as<std::string>())
-                                        : "last_reset_reason";
-        config.reason.aonClock    = resetNode["aon_clock"]
-                                        ? QString::fromStdString(
-                                           resetNode["aon_clock"].as<std::string>())
-                                        : "clk_32k";
-        config.reason.clearSignal = resetNode["reason_clear"]
-                                        ? QString::fromStdString(
-                                              resetNode["reason_clear"].as<std::string>())
-                                        : "";
-        // Calculate reason width: ceil(log2(sources.size() + 1))
-        int numSources            = config.sources.size();
-        config.reason.reasonWidth = numSources > 0
-                                        ? static_cast<int>(std::ceil(std::log2(numSources + 1)))
-                                        : 1;
-        if (config.reason.reasonWidth == 0)
-            config.reason.reasonWidth = 1;
+    if (resetNode["reason"] && resetNode["reason"].IsMap()) {
+        const YAML::Node &reasonNode = resetNode["reason"];
+        if (reasonNode["enable"] && reasonNode["enable"].as<bool>()) {
+            config.reason.enabled = true;
+
+            // Required: always-on clock
+            config.reason.aonClock = reasonNode["register_clock"]
+                                         ? QString::fromStdString(
+                                               reasonNode["register_clock"].as<std::string>())
+                                         : "clk_32k";
+
+            // Output bus name
+            config.reason.outputBus = reasonNode["output_bus"]
+                                          ? QString::fromStdString(
+                                                reasonNode["output_bus"].as<std::string>())
+                                          : "reset_reason_bits";
+
+            // Software clear signal
+            config.reason.clearSignal = reasonNode["clear_signal"]
+                                            ? QString::fromStdString(
+                                                  reasonNode["clear_signal"].as<std::string>())
+                                            : "reason_clear";
+
+            // Auto-detect POR signal (first active-low source or default)
+            config.reason.porSignal = "por_rst_n"; // Default
+            for (const auto &source : config.sources) {
+                if (source.name.contains("por", Qt::CaseInsensitive) && source.active == "low") {
+                    config.reason.porSignal = source.name;
+                    break;
+                }
+            }
+
+            // Build source order (exclude POR,按source声明顺序)
+            config.reason.sourceOrder.clear();
+            for (const auto &source : config.sources) {
+                if (source.name != config.reason.porSignal) {
+                    config.reason.sourceOrder.append(source.name);
+                }
+            }
+
+            // Calculate bit vector width
+            config.reason.vectorWidth = config.reason.sourceOrder.size();
+            if (config.reason.vectorWidth == 0)
+                config.reason.vectorWidth = 1; // Minimum 1 bit
+        }
     }
 
     return config;
@@ -219,13 +239,13 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
     // Reset reason output (if enabled)
     if (config.reason.enabled) {
         out << "    /* Reset reason recording */\n";
-        if (config.reason.reasonWidth > 1) {
-            out << "    output [" << (config.reason.reasonWidth - 1) << ":0] "
-                << config.reason.reasonBus
-                << ",    /**< Last reset reason code (0=POR, 1-N=sources) */\n";
+        if (config.reason.vectorWidth > 1) {
+            out << "    output [" << (config.reason.vectorWidth - 1) << ":0] "
+                << config.reason.outputBus
+                << ",    /**< Reset reason bit vector (per-source sticky flags) */\n";
         } else {
-            out << "    output " << config.reason.reasonBus
-                << ",                    /**< Last reset reason code (0=POR, 1=source) */\n";
+            out << "    output " << config.reason.outputBus
+                << ",                    /**< Reset reason bit vector (single sticky flag) */\n";
         }
     }
 
@@ -258,81 +278,85 @@ void QSocResetPrimitive::generateResetLogic(const ResetControllerConfig &config,
 
 void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config, QTextStream &out)
 {
-    if (!config.reason.enabled || config.sources.isEmpty()) {
+    if (!config.reason.enabled || config.reason.sourceOrder.isEmpty()) {
         return;
     }
 
-    out << "    /* Reset reason recording logic (Per-source async-set flops) */\n";
-    out << "    // Each reset source drives async-set of a capture flop\n";
-    out << "    // POR encoding: 0, Sources encoding: 1-" << config.sources.size() << "\n\n";
+    out << "    /* Reset reason recording logic (Per-source sticky flags) */\n";
+    out << "    // Each reset source has a sticky flag: async-set + async-clear + sync-hold\n";
+    out << "    // POR = all bits 0, Software can decode individual sources from bit vector\n\n";
 
-    // Generate per-source async-set flags
-    for (int i = 0; i < config.sources.size(); ++i) {
-        const auto &source   = config.sources[i];
-        QString     flagName = QString("rst_reason_flag_%1").arg(i);
+    // Generate per-source sticky flags (exclude POR)
+    for (int i = 0; i < config.reason.sourceOrder.size(); ++i) {
+        const QString &sourceName = config.reason.sourceOrder[i];
+        QString        flagName   = QString("reason_flag_%1").arg(i);
 
-        out << "    // Source " << (i + 1) << ": " << source.name << " (async-set flop)\n";
+        // Find source info for polarity
+        QString sourceActive = "low"; // Default
+        for (const auto &source : config.sources) {
+            if (source.name == sourceName) {
+                sourceActive = source.active;
+                break;
+            }
+        }
+
+        out << "    // Bit[" << i << "]: " << sourceName << " (sticky flag)\n";
         out << "    reg " << flagName << ";\n";
         out << "    always @(posedge " << config.reason.aonClock << " or ";
 
-        if (source.active == "high") {
-            out << "posedge " << source.name << " or ";
+        // Async set condition based on source polarity
+        if (sourceActive == "high") {
+            out << "posedge " << sourceName << " or ";
         } else {
-            out << "negedge " << source.name << " or ";
+            out << "negedge " << sourceName << " or ";
         }
+
+        // Async clear conditions: POR + SW clear
         out << "negedge " << config.reason.porSignal;
         if (!config.reason.clearSignal.isEmpty()) {
             out << " or posedge " << config.reason.clearSignal;
         }
         out << ") begin\n";
 
+        // Async clear priorities
         out << "        if (!" << config.reason.porSignal << ")\n";
-        out << "            " << flagName << " <= 1'b0;  // POR clear\n";
+        out << "            " << flagName << " <= 1'b0;  // POR async clear\n";
 
         if (!config.reason.clearSignal.isEmpty()) {
             out << "        else if (" << config.reason.clearSignal << ")\n";
-            out << "            " << flagName << " <= 1'b0;  // External clear\n";
+            out << "            " << flagName << " <= 1'b0;  // SW async clear\n";
         }
 
-        if (source.active == "high") {
-            out << "        else if (" << source.name << ")\n";
+        // Async set condition
+        if (sourceActive == "high") {
+            out << "        else if (" << sourceName << ")\n";
         } else {
-            out << "        else if (!" << source.name << ")\n";
+            out << "        else if (!" << sourceName << ")\n";
         }
         out << "            " << flagName << " <= 1'b1;  // Async-set capture\n";
+
+        // Sync hold (CRITICAL: no auto-clear!)
         out << "        else\n";
-        out << "            " << flagName << " <= 1'b0;  // Sync clear after encoding\n";
+        out << "            " << flagName << " <= " << flagName << ";  // Hold sticky state\n";
         out << "    end\n\n";
     }
 
-    // Generate priority encoder for reason code
-    out << "    // Priority encoder: Higher index = higher priority\n";
-    out << "    reg [" << (config.reason.reasonWidth - 1) << ":0] " << config.reason.reasonBus
-        << "_reg;\n";
-    out << "    always @(posedge " << config.reason.aonClock << " or negedge "
-        << config.reason.porSignal << ") begin\n";
-    out << "        if (!" << config.reason.porSignal << ")\n";
-    out << "            " << config.reason.reasonBus << "_reg <= " << config.reason.reasonWidth
-        << "'b0;  // POR = 0\n";
-    out << "        else begin\n";
+    // Generate bit vector output assignment (no encoding)
+    out << "    // Bit vector output: no encoding, direct flags\n";
+    out << "    assign " << config.reason.outputBus << " = ";
 
-    // Generate priority case statement (higher index wins)
-    for (int i = config.sources.size() - 1; i >= 0; --i) {
-        QString flagName = QString("rst_reason_flag_%1").arg(i);
-        out << "            if (" << flagName << ")\n";
-        out << "                " << config.reason.reasonBus
-            << "_reg <= " << config.reason.reasonWidth << "'d" << (i + 1) << ";  // Source "
-            << (i + 1) << ": " << config.sources[i].name << "\n";
-        if (i > 0)
-            out << "            else ";
+    if (config.reason.vectorWidth > 1) {
+        out << "{";
+        for (int i = config.reason.vectorWidth - 1; i >= 0; --i) {
+            out << "reason_flag_" << i;
+            if (i > 0)
+                out << ", ";
+        }
+        out << "}";
+    } else {
+        out << "reason_flag_0";
     }
-    out << "        end\n";
-    out << "    end\n\n";
-
-    // Output assignment
-    out << "    // Output assignment\n";
-    out << "    assign " << config.reason.reasonBus << " = " << config.reason.reasonBus
-        << "_reg;\n\n";
+    out << ";  // bit[N-1:0] = {flag_N-1, ..., flag_1, flag_0}\n\n";
 }
 
 void QSocResetPrimitive::generateOutputAssignments(

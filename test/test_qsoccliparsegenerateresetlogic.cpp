@@ -614,7 +614,7 @@ reset:
     void testResetReasonRecording()
     {
         QString netlistContent = R"(
-# Test netlist with reset reason recording feature
+# Test netlist with reset reason recording feature - Per-source sticky flags
 port:
   clk_32k:
     direction: input
@@ -631,10 +631,13 @@ port:
   wdt_rst_n:
     direction: input
     type: logic
+  i3c_soc_rst:
+    direction: input
+    type: logic
   sys_rst_n:
     direction: output
     type: logic
-  last_reset_reason:
+  reset_reason_bits:
     direction: output
     type: logic [2:0]
   test_en:
@@ -649,18 +652,16 @@ instance: {}
 net: {}
 
 reset:
-  - name: reason_reset_ctrl
+  - name: reason_reset_ctrl_bitvec
     clock: clk_sys
     test_enable: test_en
-    record_reset_reason: true
-    aon_clock: clk_32k
-    por_signal: por_rst_n
-    reason_bus: last_reset_reason
-    reason_clear: reason_clear
+    
     source:
-      por_rst_n: low
-      ext_rst_n: low
-      wdt_rst_n: low
+      por_rst_n: low              # POR (auto-detected, not in bit vector)
+      ext_rst_n: low              # bit[0] 
+      wdt_rst_n: low              # bit[1]
+      i3c_soc_rst: high           # bit[2]
+    
     target:
       sys_rst_n:
         polarity: low
@@ -671,6 +672,15 @@ reset:
             type: ASYNC_COMB
           wdt_rst_n:
             type: ASYNC_COMB
+          i3c_soc_rst:
+            type: ASYNC_COMB
+    
+    # Simplified reason configuration
+    reason:
+      enable: true
+      register_clock: clk_32k      # Always-on clock
+      output_bus: reset_reason_bits # Output bit vector name
+      clear_signal: reason_clear   # Software clear signal
 )";
 
         QString netlistPath = createTempFile("test_reset_reason.soc_net", netlistContent);
@@ -696,46 +706,65 @@ reset:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify reset reason recording logic (Per-source async-set flops) */
+        /* Verify reset reason recording logic (Per-source sticky flags) */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "Reset reason recording logic (Per-source async-set flops)"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "Each reset source drives async-set of a capture flop"));
+            verilogContent, "Reset reason recording logic (Per-source sticky flags)"));
         QVERIFY(
-            verifyVerilogContentNormalized(verilogContent, "POR encoding: 0, Sources encoding: 1-3"));
-
-        /* Verify per-source async-set flag registers */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg rst_reason_flag_0"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg rst_reason_flag_1"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg rst_reason_flag_2"));
-
-        /* Verify async-set logic for each source */
+            verifyVerilogContentNormalized(verilogContent, "async-set + async-clear + sync-hold"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "always @(posedge clk_32k or negedge por_rst_n"));
+            verilogContent,
+            "POR = all bits 0, Software can decode individual sources from bit vector"));
+
+        /* Verify per-source sticky flag registers */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg reason_flag_0"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg reason_flag_1"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg reason_flag_2"));
+
+        /* Verify async-set logic with proper sensitivity lists */
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "always @(posedge clk_32k or negedge ext_rst_n"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "always @(posedge clk_32k or negedge wdt_rst_n"));
-
-        /* Verify priority encoder logic */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "Priority encoder: Higher index = higher priority"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg [1:0] last_reset_reason_reg"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (rst_reason_flag_2)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "last_reset_reason_reg <= 2'd3"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (rst_reason_flag_1)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "last_reset_reason_reg <= 2'd2"));
+            verilogContent, "always @(posedge clk_32k or posedge i3c_soc_rst"));
 
-        /* Verify output assignment */
+        /* Verify sticky flag behavior - CRITICAL: Hold state logic */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "assign last_reset_reason = last_reset_reason_reg"));
+            verilogContent, "reason_flag_0 <= reason_flag_0;  // Hold sticky state"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reason_flag_1 <= reason_flag_1;  // Hold sticky state"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reason_flag_2 <= reason_flag_2;  // Hold sticky state"));
 
-        /* Verify external clear signal support */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "posedge reason_clear"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "External clear"));
+        /* Verify async-set capture conditions */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (!ext_rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reason_flag_0 <= 1'b1;  // Async-set capture"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (!wdt_rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reason_flag_1 <= 1'b1;  // Async-set capture"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (i3c_soc_rst)"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reason_flag_2 <= 1'b1;  // Async-set capture"));
+
+        /* Verify bit vector output assignment (no encoding) */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "Bit vector output: no encoding, direct flags"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reset_reason_bits = {"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reason_flag_2, reason_flag_1, reason_flag_0"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "bit[N-1:0] = {flag_N-1, ..., flag_1, flag_0}"));
+
+        /* Verify POR and SW clear conditions */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!por_rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "POR async clear"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (reason_clear)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "SW async clear"));
 
         /* Verify module naming */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module reason_reset_ctrl"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module reason_reset_ctrl_bitvec"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "DEF_REASON_RESET_CTRL_BITVEC"));
     }
 };
 

@@ -1578,11 +1578,11 @@ Reset controller properties provide structured configuration:
       [name], [String], [Reset controller instance name (required)],
       [clock], [String], [Clock signal name for sync operations (required)],
       [test_enable], [String], [Test enable bypass signal (optional)],
-      [record_reset_reason], [Boolean], [Enable reset reason recording (optional)],
-      [aon_clock], [String], [Always-on clock for reason recording (required if recording enabled)],
-      [por_signal], [String], [Power-on reset signal name (default: por_rst_n)],
-      [reason_bus], [String], [Output reason code bus name (default: last_reset_reason)],
-      [reason_clear], [String], [External clear signal for reason recording (optional)],
+      [reason], [Map], [Reset reason recording configuration block (optional)],
+      [reason.enable], [Boolean], [Enable reset reason recording (default: false)],
+      [reason.register_clock], [String], [Always-on clock for recording logic (default: clk_32k)],
+      [reason.output_bus], [String], [Output bit vector bus name (default: reset_reason_bits)],
+      [reason.clear_signal], [String], [Software clear signal name (optional)],
       [source], [Map], [Reset source definitions with polarity (required)],
       [target], [Map], [Reset target definitions with links (required)],
     )],
@@ -1642,50 +1642,51 @@ Each reset type supports specific structured parameters:
 
 ==== Reset Reason Recording
 <soc-net-reset-reason>
-Reset controllers can optionally record the source of the last reset using Per-source async-set flops implementation.
+Reset controllers can optionally record the source of the last reset using Per-source sticky flags with bit vector output. This implementation provides reliable narrow pulse capture and flexible software decoding.
 
 ===== Configuration
-Enable reset reason recording with these properties:
+Enable reset reason recording with the simplified configuration format:
 ```yaml
 reset:
   - name: my_reset_ctrl
-    record_reset_reason: true     # Enable recording
-    aon_clock: clk_32k           # Always-on clock (required)
-    por_signal: por_rst_n        # POR signal (encoding 0)
-    reason_bus: last_reset_reason # Output bus name
-    reason_clear: reason_clear   # Optional external clear
+    source:
+      por_rst_n: low              # POR (auto-detected, excluded from bit vector)
+      ext_rst_n: low              # bit[0]
+      wdt_rst_n: low              # bit[1]
+      i3c_soc_rst: high           # bit[2]
+
+    # Simplified reason configuration
+    reason:
+      enable: true
+      register_clock: clk_32k      # Always-on clock
+      output_bus: reset_reason_bits # Output bit vector name
+      clear_signal: reason_clear   # Software clear signal
 ```
 
 ===== Implementation Details
-The reset reason recorder uses Per-source async-set flops:
-- Each reset source drives the async-set of a dedicated flip-flop
-- Preset asserts immediately without clock edge requirement
-- Recovery/removal timing is met because preset is released only after source de-assertion
+The reset reason recorder uses Per-source sticky flags with bit vector output:
+- Each non-POR reset source gets a dedicated sticky flag (async-set + async-clear + sync-hold)
+- *Critical fix*: Sticky flags use sync-hold (`flag <= flag`) to prevent narrow pulse loss
+- No encoding - software receives raw bit vector for maximum flexibility
 - Always-on clock ensures operation even when main clocks are stopped
-- Priority encoder generates reason codes: 0=POR, 1-N=sources (higher index = higher priority)
+- POR signal auto-detected from source list (typically first active-low source containing "por")
 
 ===== Generated Logic
 ```verilog
-// Per-source async-set flag (example for ext_rst_n)
-reg rst_reason_flag_1;
+// Per-source sticky flag (example for ext_rst_n - bit[0])
+reg reason_flag_0;
 always @(posedge clk_32k or negedge ext_rst_n or
          negedge por_rst_n or posedge reason_clear) begin
-    if (!por_rst_n)        rst_reason_flag_1 <= 1'b0;  // POR clear
-    else if (reason_clear) rst_reason_flag_1 <= 1'b0;  // External clear
-    else if (!ext_rst_n)   rst_reason_flag_1 <= 1'b1;  // Async-set capture
-    else                   rst_reason_flag_1 <= 1'b0;  // Sync clear
+    if (!por_rst_n)        reason_flag_0 <= 1'b0;  // POR async clear
+    else if (reason_clear) reason_flag_0 <= 1'b0;  // SW async clear
+    else if (!ext_rst_n)   reason_flag_0 <= 1'b1;  // Async-set capture
+    else                   reason_flag_0 <= reason_flag_0;  // Hold sticky state
 end
 
-// Priority encoder with higher index = higher priority
-always @(posedge clk_32k or negedge por_rst_n) begin
-    if (!por_rst_n) last_reset_reason_reg <= WIDTH'b0;  // POR = 0
-    else begin
-        if (rst_reason_flag_3)      last_reset_reason_reg <= WIDTH'd4;  // Source 4
-        else if (rst_reason_flag_2) last_reset_reason_reg <= WIDTH'd3;  // Source 3
-        else if (rst_reason_flag_1) last_reset_reason_reg <= WIDTH'd2;  // Source 2
-        else if (rst_reason_flag_0) last_reset_reason_reg <= WIDTH'd1;  // Source 1
-    end
-end
+// Bit vector output: no encoding, direct flags
+assign reset_reason_bits = {
+    reason_flag_2, reason_flag_1, reason_flag_0
+};  // bit[N-1:0] = {flag_N-1, ..., flag_1, flag_0}
 ```
 
 ==== Code Generation
@@ -1700,7 +1701,7 @@ The reset controller generates a dedicated module with:
 4. Optional reset reason output bus (if recording enabled)
 5. Internal wire declarations for signal normalization
 6. Reset logic using simplified DFF-based implementations
-7. Optional reset reason recording logic (Per-source async-set flops)
+7. Optional reset reason recording logic (Per-source sticky flags)
 8. Output assignment logic with proper signal combination
 
 ===== Generated Modules
