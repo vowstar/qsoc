@@ -38,7 +38,8 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
 
     // Close module
     out << "\nendmodule\n\n";
-    out << "`endif  /* DEF_" << config.moduleName.toUpper() << " */\n";
+    QString macroName = "DEF_" + config.moduleName.toUpper().replace("-", "_").replace(" ", "_");
+    out << "`endif  /* " << macroName << " */\n";
 
     return true;
 }
@@ -53,7 +54,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                                     : "reset_ctrl";
     config.moduleName = resetNode["module_name"]
                             ? QString::fromStdString(resetNode["module_name"].as<std::string>())
-                            : "rstctrl";
+                            : config.name;
     config.clock = resetNode["clock"] ? QString::fromStdString(resetNode["clock"].as<std::string>())
                                       : "clk_sys";
     config.testEnable = resetNode["test_enable"]
@@ -168,8 +169,9 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
 
 void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &config, QTextStream &out)
 {
-    out << "\n`ifndef DEF_" << config.moduleName.toUpper() << "\n";
-    out << "`define DEF_" << config.moduleName.toUpper() << "\n\n";
+    QString macroName = "DEF_" + config.moduleName.toUpper().replace("-", "_").replace(" ", "_");
+    out << "\n`ifndef " << macroName << "\n";
+    out << "`define " << macroName << "\n\n";
 
     out << "module " << config.moduleName << " (\n";
 
@@ -237,7 +239,7 @@ void QSocResetPrimitive::generateResetLogic(const ResetControllerConfig &config,
     out << "    /* Reset logic instances */\n";
 
     for (const auto &connection : config.connections) {
-        generateResetInstance(connection, out);
+        generateResetInstance(connection, config, out);
     }
 }
 
@@ -341,10 +343,11 @@ void QSocResetPrimitive::generateOutputAssignments(
     }
 }
 
-void QSocResetPrimitive::generateResetInstance(const ResetConnection &connection, QTextStream &out)
+void QSocResetPrimitive::generateResetInstance(
+    const ResetConnection &connection, const ResetControllerConfig &config, QTextStream &out)
 {
     QString wireName     = getConnectionWireName(connection.sourceName, connection.targetName);
-    QString instanceName = getInstanceName(connection);
+    QString instanceName = getInstanceName(connection, config);
 
     out << "    /*\n";
     out << "     * " << connection.sourceName << " -> " << connection.targetName << ": ";
@@ -376,30 +379,33 @@ void QSocResetPrimitive::generateResetInstance(const ResetConnection &connection
             << ")\n";
         out << "     */\n";
 
-        out << "    datapath_reset_sync #(\n";
-        out << "        .RST_SYNC_LEVEL(" << connection.sync_depth
-            << ")  /**< Delay cycles for reset */\n";
-        out << "    ) " << instanceName << " (\n";
-        out << "        .clk         (" << connection.clock
-            << "),                                  /**< Clock signal */\n";
-
+        // Generate classic N-stage synchronizer
+        out << "    reg [" << (connection.sync_depth - 1) << ":0] " << instanceName << "_ff;\n";
+        out << "    always @(posedge " << connection.clock;
         if (connection.sourceName.endsWith("_n")) {
-            out << "        .rst_n_a     (" << connection.sourceName
-                << "),                             /**< Active low reset input */\n";
+            out << " or negedge " << connection.sourceName << ") begin\n";
+            out << "        if (!" << connection.sourceName << ")\n";
         } else {
-            out << "        .rst_n_a     (~" << connection.sourceName
-                << "),                             /**< Active low reset input */\n";
+            out << " or posedge " << connection.sourceName << ") begin\n";
+            out << "        if (" << connection.sourceName << ")\n";
         }
-
-        out << "        .reset_bypass(test_en),                                  /**< Bypass reset "
-               "when DFT scan */\n";
-        out << "        .rst_n_sync  (" << wireName << ")  /**< Active low reset output */\n";
-        out << "    );\n";
+        out << "            " << instanceName << "_ff <= " << connection.sync_depth << "'b0;\n";
+        out << "        else\n";
+        out << "            " << instanceName << "_ff <= {" << instanceName << "_ff["
+            << (connection.sync_depth - 2) << ":0], 1'b1};\n";
+        out << "    end\n";
+        out << "    assign " << wireName << " = test_en ? ";
+        if (connection.sourceName.endsWith("_n")) {
+            out << connection.sourceName;
+        } else {
+            out << "~" << connection.sourceName;
+        }
+        out << " : " << instanceName << "_ff[" << (connection.sync_depth - 1) << "];\n";
         break;
     }
 
     case ASYNC_CNT: {
-        out << "ASYNC_CNT: Async reset sync release using one-shot counter\n";
+        out << "ASYNC_CNT: Async reset counter timeout release\n";
         out << "     * (Legacy AC(" << connection.sync_depth << "," << connection.counter_width
             << "," << connection.timeout_cycles << "," << connection.clock << "))\n";
         out << "     * with sync_depth=" << connection.sync_depth
@@ -407,22 +413,37 @@ void QSocResetPrimitive::generateResetInstance(const ResetConnection &connection
             << ", clock=" << connection.clock << ")\n";
         out << "     */\n";
 
-        out << "    datapath_reset_counter #(\n";
-        out << "        .RST_SYNC_LEVEL(" << connection.sync_depth
-            << "),   /**< Reset synchronization levels */\n";
-        out << "        .CNT_WIDTH     (" << connection.counter_width
-            << "),   /**< Counter width */\n";
-        out << "        .TIMEOUT       (" << connection.timeout_cycles
-            << ")  /**< Timeout value */\n";
-        out << "    ) " << instanceName << " (\n";
-        out << "        .clk          (" << connection.clock
-            << "),                              /**< Clock signal */\n";
-        out << "        .rst_n_a      (" << connection.sourceName
-            << "),                            /**< Active low reset input */\n";
-        out << "        .reset_bypass (test_en),                              /**< Bypass reset "
-               "when DFT scan */\n";
-        out << "        .rst_n_timeout(" << wireName << ")  /**< Active low reset output */\n";
-        out << "    );\n";
+        // Generate DFF-based counter implementation
+        out << "    reg [" << (connection.counter_width - 1) << ":0] " << instanceName
+            << "_counter;\n";
+        out << "    reg " << instanceName << "_counting;\n";
+        out << "    always @(posedge " << connection.clock;
+        if (connection.sourceName.endsWith("_n")) {
+            out << " or negedge " << connection.sourceName << ") begin\n";
+            out << "        if (!" << connection.sourceName << ") begin\n";
+        } else {
+            out << " or posedge " << connection.sourceName << ") begin\n";
+            out << "        if (" << connection.sourceName << ") begin\n";
+        }
+        out << "            " << instanceName << "_counter <= " << connection.counter_width
+            << "'b0;\n";
+        out << "            " << instanceName << "_counting <= 1'b1;\n";
+        out << "        end else if (" << instanceName << "_counting && " << instanceName
+            << "_counter < " << connection.timeout_cycles << ") begin\n";
+        out << "            " << instanceName << "_counter <= " << instanceName
+            << "_counter + 1'b1;\n";
+        out << "        end else if (" << instanceName
+            << "_counter >= " << connection.timeout_cycles << ") begin\n";
+        out << "            " << instanceName << "_counting <= 1'b0;\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "    assign " << wireName << " = test_en ? ";
+        if (connection.sourceName.endsWith("_n")) {
+            out << connection.sourceName;
+        } else {
+            out << "~" << connection.sourceName;
+        }
+        out << " : (" << instanceName << "_counting ? 1'b0 : 1'b1);\n";
         break;
     }
 
@@ -433,51 +454,91 @@ void QSocResetPrimitive::generateResetInstance(const ResetConnection &connection
             << ")\n";
         out << "     */\n";
 
-        out << "    datapath_reset_sync #(\n";
-        out << "        .RST_SYNC_LEVEL(" << connection.sync_depth
-            << ")  /**< Delay cycles for reset */\n";
-        out << "    ) " << instanceName << " (\n";
-        out << "        .clk         (" << connection.clock
-            << "),                                  /**< Clock signal */\n";
-        out << "        .rst_n_a     (" << connection.sourceName
-            << "),                             /**< Sync reset input */\n";
-        out << "        .reset_bypass(test_en),                                  /**< Bypass reset "
-               "when DFT scan */\n";
-        out << "        .rst_n_sync  (" << wireName << ")  /**< Sync reset output */\n";
-        out << "    );\n";
+        // Generate synchronous reset/release synchronizer
+        out << "    reg [" << (connection.sync_depth - 1) << ":0] " << instanceName << "_ff;\n";
+        out << "    always @(posedge " << connection.clock << ") begin\n";
+        if (connection.sourceName.endsWith("_n")) {
+            out << "        if (!" << connection.sourceName << ")\n";
+        } else {
+            out << "        if (" << connection.sourceName << ")\n";
+        }
+        out << "            " << instanceName << "_ff <= " << connection.sync_depth << "'b0;\n";
+        out << "        else\n";
+        out << "            " << instanceName << "_ff <= {" << instanceName << "_ff["
+            << (connection.sync_depth - 2) << ":0], 1'b1};\n";
+        out << "    end\n";
+        out << "    assign " << wireName << " = test_en ? ";
+        if (connection.sourceName.endsWith("_n")) {
+            out << connection.sourceName;
+        } else {
+            out << "~" << connection.sourceName;
+        }
+        out << " : " << instanceName << "_ff[" << (connection.sync_depth - 1) << "];\n";
         break;
     }
 
-    case ASYNC_PIPE: {
-        out << "ASYNC_PIPE: Async reset sync release with pipeline\n";
-        out << "     * (Legacy AS(" << connection.sync_depth << "," << connection.pipe_depth << ","
-            << connection.clock << ")\n";
-        out << "     * with sync_depth=" << connection.sync_depth
-            << ", pipe_depth=" << connection.pipe_depth << ", clock=" << connection.clock << ")\n";
+    case ASYNC_SYNCNT: {
+        out << "ASYNC_SYNCNT: Async reset with sync-then-count release\n";
+        out << "     * (Legacy AS(" << connection.sync_depth << "," << connection.counter_width
+            << "," << connection.timeout_cycles << "," << connection.clock << ")\n";
+        out << "     * Two-stage: sync_depth=" << connection.sync_depth
+            << ", count_width=" << connection.counter_width
+            << ", timeout=" << connection.timeout_cycles << ", clock=" << connection.clock << ")\n";
         out << "     */\n";
 
-        // For now, implement as two-stage: first async_sync, then pipeline
-        out << "    // TODO: Implement ASYNC_PIPE as two-stage reset with pipeline\n";
-        out << "    datapath_reset_sync #(\n";
-        out << "        .RST_SYNC_LEVEL(" << connection.sync_depth
-            << ")  /**< Initial sync depth */\n";
-        out << "    ) " << instanceName << " (\n";
-        out << "        .clk         (" << connection.clock
-            << "),                                  /**< Clock signal */\n";
+        // Generate intermediate wire names
+        QString syncWireName = wireName + "_stage1";
 
+        // Stage 1: Sync release synchronizer
+        out << "    /* Stage 1: Sync release */\n";
+        out << "    reg [" << (connection.sync_depth - 1) << ":0] " << instanceName
+            << "_sync_ff;\n";
+        out << "    always @(posedge " << connection.clock;
         if (connection.sourceName.endsWith("_n")) {
-            out << "        .rst_n_a     (" << connection.sourceName
-                << "),                             /**< Active low reset input */\n";
+            out << " or negedge " << connection.sourceName << ") begin\n";
+            out << "        if (!" << connection.sourceName << ")\n";
         } else {
-            out << "        .rst_n_a     (~" << connection.sourceName
-                << "),                             /**< Active low reset input */\n";
+            out << " or posedge " << connection.sourceName << ") begin\n";
+            out << "        if (" << connection.sourceName << ")\n";
         }
+        out << "            " << instanceName << "_sync_ff <= " << connection.sync_depth
+            << "'b0;\n";
+        out << "        else\n";
+        out << "            " << instanceName << "_sync_ff <= {" << instanceName << "_sync_ff["
+            << (connection.sync_depth - 2) << ":0], 1'b1};\n";
+        out << "    end\n";
+        out << "    wire " << syncWireName << " = " << instanceName << "_sync_ff["
+            << (connection.sync_depth - 1) << "];\n\n";
 
-        out << "        .reset_bypass(test_en),                                  /**< Bypass reset "
-               "when DFT scan */\n";
-        out << "        .rst_n_sync  (" << wireName
-            << ")  /**< Pipeline reset output (simplified) */\n";
-        out << "    );\n";
+        // Stage 2: Counter timeout
+        out << "    /* Stage 2: Counter timeout */\n";
+        out << "    reg [" << (connection.counter_width - 1) << ":0] " << instanceName
+            << "_counter;\n";
+        out << "    reg " << instanceName << "_counting;\n";
+        out << "    always @(posedge " << connection.clock << " or negedge " << syncWireName
+            << ") begin\n";
+        out << "        if (!" << syncWireName << ") begin\n";
+        out << "            " << instanceName << "_counter <= " << connection.counter_width
+            << "'b0;\n";
+        out << "            " << instanceName << "_counting <= 1'b1;\n";
+        out << "        end else if (" << instanceName << "_counting && " << instanceName
+            << "_counter < " << connection.timeout_cycles << ") begin\n";
+        out << "            " << instanceName << "_counter <= " << instanceName
+            << "_counter + 1'b1;\n";
+        out << "        end else if (" << instanceName
+            << "_counter >= " << connection.timeout_cycles << ") begin\n";
+        out << "            " << instanceName << "_counting <= 1'b0;\n";
+        out << "        end\n";
+        out << "    end\n";
+
+        // Output assignment with test bypass
+        out << "    assign " << wireName << " = test_en ? ";
+        if (connection.sourceName.endsWith("_n")) {
+            out << connection.sourceName;
+        } else {
+            out << "~" << connection.sourceName;
+        }
+        out << " : (" << instanceName << "_counting ? 1'b0 : 1'b1);\n";
         break;
     }
 
@@ -499,8 +560,8 @@ QSocResetPrimitive::ResetType QSocResetPrimitive::parseResetType(const QString &
         return ASYNC_SYNC;
     } else if (typeStr == "ASYNC_CNT") {
         return ASYNC_CNT;
-    } else if (typeStr == "ASYNC_PIPE") {
-        return ASYNC_PIPE;
+    } else if (typeStr == "ASYNC_SYNCNT") {
+        return ASYNC_SYNCNT;
     } else if (typeStr == "SYNC_ONLY") {
         return SYNC_ONLY;
     } else {
@@ -512,29 +573,36 @@ QSocResetPrimitive::ResetType QSocResetPrimitive::parseResetType(const QString &
 QString QSocResetPrimitive::getConnectionWireName(
     const QString &sourceName, const QString &targetName)
 {
-    return QString("normalize_%1_to_%2").arg(sourceName).arg(targetName);
+    // Use a shorter, more descriptive wire name
+    return QString("%1_%2_sync").arg(sourceName).arg(targetName);
 }
 
-QString QSocResetPrimitive::getInstanceName(const ResetConnection &connection)
+QString QSocResetPrimitive::getInstanceName(
+    const ResetConnection &connection, const ResetControllerConfig &config)
 {
-    QString baseName;
+    QString typePrefix;
     switch (connection.type) {
     case ASYNC_SYNC:
-        baseName = "u_reset_sync_";
+        typePrefix = "sync";
         break;
     case ASYNC_CNT:
-        baseName = "u_reset_counter_";
+        typePrefix = "cnt";
         break;
     case SYNC_ONLY:
-        baseName = "u_reset_sync_only_";
+        typePrefix = "sync_only";
         break;
-    case ASYNC_PIPE:
-        baseName = "u_reset_pipe_";
+    case ASYNC_SYNCNT:
+        typePrefix = "syncnt";
         break;
     default:
-        baseName = "u_reset_logic_";
+        typePrefix = "logic";
         break;
     }
 
-    return baseName + getConnectionWireName(connection.sourceName, connection.targetName);
+    // Format: u_{controller_name}_{type}_{source}_{target}
+    return QString("u_%1_%2_%3_%4")
+        .arg(config.name)
+        .arg(typePrefix)
+        .arg(connection.sourceName)
+        .arg(connection.targetName);
 }

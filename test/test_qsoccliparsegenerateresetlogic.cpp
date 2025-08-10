@@ -195,9 +195,9 @@ reset:
 
         /* Verify basic reset assignments for ASYNC_COMB type (combinational) */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "assign normalize_por_rst_n_to_cpu_rst_n = por_rst_n"));
+            verilogContent, "assign por_rst_n_cpu_rst_n_sync = por_rst_n"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "assign normalize_por_rst_n_to_peri_rst_n = por_rst_n"));
+            verilogContent, "assign por_rst_n_peri_rst_n_sync = por_rst_n"));
 
         /* Verify output assignments */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign cpu_rst_n = &"));
@@ -264,12 +264,18 @@ reset:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify reset sync module instantiation */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "datapath_reset_sync #("));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RST_SYNC_LEVEL(4)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_sys)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_n_a(~i3c_soc_rst)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".reset_bypass(test_en)"));
+        /* Verify simplified ASYNC_SYNC reset implementation */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reg [3:0] u_sync_reset_ctrl_sync_i3c_soc_rst_cpu_rst_n_ff;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk_sys or posedge i3c_soc_rst)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (i3c_soc_rst)"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "u_sync_reset_ctrl_sync_i3c_soc_rst_cpu_rst_n_ff <= 4'b0"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent,
+            "assign i3c_soc_rst_cpu_rst_n_sync = test_en ? ~i3c_soc_rst : "
+            "u_sync_reset_ctrl_sync_i3c_soc_rst_cpu_rst_n_ff[3]"));
     }
 
     void testCounterResetController()
@@ -334,14 +340,19 @@ reset:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify reset counter module instantiation */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "datapath_reset_counter #("));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RST_SYNC_LEVEL(2)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CNT_WIDTH(8)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".TIMEOUT(255)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_sys)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_n_a(por_rst_n)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".reset_bypass(test_en)"));
+        /* Verify simplified ASYNC_CNT reset implementation */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reg [7:0] u_counter_reset_ctrl_cnt_por_rst_n_cpu_por_rst_n_counter;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reg u_counter_reset_ctrl_cnt_por_rst_n_cpu_por_rst_n_counting;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk_sys or negedge por_rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "u_counter_reset_ctrl_cnt_por_rst_n_cpu_por_rst_n_counter < 255"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent,
+            "assign por_rst_n_cpu_por_rst_n_sync = test_en ? por_rst_n : "
+            "(u_counter_reset_ctrl_cnt_por_rst_n_cpu_por_rst_n_counting ? 1'b0 : 1'b1)"));
     }
 
     void testMultiSourceMultiTarget()
@@ -428,19 +439,26 @@ reset:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify multiple reset sync modules for cpu_rst_n */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "datapath_reset_sync"));
+        /* Verify simplified DFF-based ASYNC_SYNC implementations */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reg [3:0] u_multi_reset_ctrl_sync_por_rst_n_cpu_rst_n_ff;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reg [3:0] u_multi_reset_ctrl_sync_i3c_soc_rst_cpu_rst_n_ff;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reg [3:0] u_multi_reset_ctrl_sync_trig_cpu_rst_cpu_rst_n_ff;"));
 
         /* Verify wire declarations for intermediate signals */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire por_rst_n_cpu_rst_n_sync;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire i3c_soc_rst_cpu_rst_n_sync;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire trig_cpu_rst_cpu_rst_n_sync;"));
 
         /* Verify AND logic for combining multiple reset sources */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign cpu_rst_n = &"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign i3c_rst_n = &"));
 
-        /* Verify polarity handling */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "~i3c_soc_rst"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "~trig_cpu_rst"));
+        /* Verify polarity handling in assign statements */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "test_en ? ~i3c_soc_rst"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "test_en ? ~trig_cpu_rst"));
     }
 
     void testSyncOnlyReset()
@@ -504,18 +522,23 @@ reset:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify SYNC_ONLY reset module instantiation */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "datapath_reset_sync #("));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RST_SYNC_LEVEL(2)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_sys)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_n_a(sync_rst_n)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".reset_bypass(test_en)"));
+        /* Verify simplified SYNC_ONLY reset implementation */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reg [1:0] u_sync_only_reset_ctrl_sync_only_sync_rst_n_peri_rst_n_ff;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "always @(posedge clk_sys)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!sync_rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "u_sync_only_reset_ctrl_sync_only_sync_rst_n_peri_rst_n_ff <= 2'b0"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent,
+            "assign sync_rst_n_peri_rst_n_sync = test_en ? sync_rst_n : "
+            "u_sync_only_reset_ctrl_sync_only_sync_rst_n_peri_rst_n_ff[1]"));
     }
 
-    void testAsyncPipeReset()
+    void testAsyncSyncntReset()
     {
         QString netlistContent = R"(
-# Test netlist with ASYNC_PIPE reset controller
+# Test netlist with ASYNC_SYNCNT reset controller
 port:
   clk_sys:
     direction: input
@@ -535,7 +558,7 @@ instance: {}
 net: {}
 
 reset:
-  - name: pipe_reset_ctrl
+  - name: syncnt_reset_ctrl
     clock: clk_sys
     test_enable: test_en
     source:
@@ -545,12 +568,13 @@ reset:
         polarity: low
         link:
           trig_rst:
-            type: ASYNC_PIPE
+            type: ASYNC_SYNCNT
             sync_depth: 3
-            pipe_depth: 4
+            counter_width: 8
+            timeout_cycles: 15
 )";
 
-        QString netlistPath = createTempFile("test_pipe_reset.soc_net", netlistContent);
+        QString netlistPath = createTempFile("test_syncnt_reset.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
 
         {
@@ -564,7 +588,7 @@ reset:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_pipe_reset.v");
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_syncnt_reset.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -573,11 +597,18 @@ reset:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify ASYNC_PIPE reset module instantiation (simplified as async_sync for now) */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "datapath_reset_sync #("));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RST_SYNC_LEVEL(3)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_sys)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_n_a(~trig_rst)"));
+        /* Verify ASYNC_SYNCNT reset implementation with sync-then-count stages */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "ASYNC_SYNCNT: Async reset with sync-then-count release"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "Stage 1: Sync release"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "Stage 2: Counter timeout"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reg [2:0] u_syncnt_reset_ctrl_syncnt_trig_rst_dma_rst_n_sync_ff;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "reg [7:0] u_syncnt_reset_ctrl_syncnt_trig_rst_dma_rst_n_counter;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "u_syncnt_reset_ctrl_syncnt_trig_rst_dma_rst_n_counter < 15"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module syncnt_reset_ctrl"));
     }
 };
 

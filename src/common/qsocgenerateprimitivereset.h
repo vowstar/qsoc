@@ -26,11 +26,11 @@ public:
      * @brief Reset type enumeration (new unified format)
      */
     enum ResetType {
-        ASYNC_COMB, // Legacy A: Async reset + Async release (combinational)
-        ASYNC_SYNC, // Legacy A(N,clk): Async reset + Sync release
-        ASYNC_CNT,  // Legacy AC(N,W,T,clk): Async reset + Counter timeout
-        ASYNC_PIPE, // Legacy AS(N1,N2,clk): Async reset + Sync release + Pipeline
-        SYNC_ONLY   // Legacy S(N,clk): Sync reset + Sync release
+        ASYNC_COMB,   // Legacy A: Async reset + Async release (combinational)
+        ASYNC_SYNC,   // Legacy A(N,clk): Async reset + Sync release
+        ASYNC_CNT,    // Legacy AC(N,W,T,clk): Async reset + Counter timeout
+        ASYNC_SYNCNT, // Legacy AS(N1,N2,clk): Async reset + Sync-then-Count release
+        SYNC_ONLY     // Legacy S(N,clk): Sync reset + Sync release
     };
 
     /**
@@ -156,9 +156,11 @@ private:
     /**
      * @brief Generate single reset connection instance
      * @param connection Reset connection configuration
+     * @param config Reset controller configuration
      * @param out Output text stream
      */
-    void generateResetInstance(const ResetConnection &connection, QTextStream &out);
+    void generateResetInstance(
+        const ResetConnection &connection, const ResetControllerConfig &config, QTextStream &out);
 
     /**
      * @brief Parse reset type from string
@@ -178,9 +180,10 @@ private:
     /**
      * @brief Get instance name for reset logic
      * @param connection Reset connection
+     * @param config Reset controller configuration
      * @return Generated instance name
      */
-    QString getInstanceName(const ResetConnection &connection);
+    QString getInstanceName(const ResetConnection &connection, const ResetControllerConfig &config);
 
 private:
     QSocGenerateManager *m_parent; // Parent manager for accessing utilities
