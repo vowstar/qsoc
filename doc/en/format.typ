@@ -1506,7 +1506,7 @@ Reset controllers support five distinct reset types, each with clear naming and 
       [`ASYNC_SYNC`], [Async reset, sync release with configurable depth], [Standard synchronous reset release],
       [`ASYNC_CNT`], [Async reset, sync release with counter], [Power-on-reset with timeout],
       [`SYNC_ONLY`], [Synchronous reset with configurable depth], [Fully synchronous reset systems],
-      [`ASYNC_PIPE`], [Async reset with pipeline synchronization], [Complex reset sequencing with pipelining],
+      [`ASYNC_SYNCNT`], [Async reset with sync-then-count release], [Two-stage reset: sync release followed by counter timeout],
     )],
   caption: [RESET TYPES],
   kind: table,
@@ -1553,15 +1553,16 @@ target:
         type: SYNC_ONLY
         sync_depth: 3              # 3-clock synchronous depth
 
-# ASYNC_PIPE: Pipeline parameters
+# ASYNC_SYNCNT: Sync-then-count parameters
 target:
   dma_rst_n:
     polarity: low
     link:
       trig_rst:
-        type: ASYNC_PIPE
+        type: ASYNC_SYNCNT
         sync_depth: 3              # Initial sync depth
-        pipe_depth: 4              # Pipeline depth
+        counter_width: 8           # Counter bit width
+        timeout_cycles: 15         # Counter timeout value
 ```
 
 ==== Reset Properties
@@ -1628,7 +1629,7 @@ Each reset type supports specific structured parameters:
       [`ASYNC_SYNC`], [`sync_depth`], [Number of synchronization flip-flops],
       [`ASYNC_CNT`], [`sync_depth`, `counter_width`, `timeout_cycles`], [Sync depth, counter width, timeout value],
       [`SYNC_ONLY`], [`sync_depth`], [Number of synchronous reset flip-flops],
-      [`ASYNC_PIPE`], [`sync_depth`, `pipe_depth`], [Initial sync depth and pipeline stages],
+      [`ASYNC_SYNCNT`], [`sync_depth`, `counter_width`, `timeout_cycles`], [Sync depth, counter width, and timeout cycles for two-stage release],
     )],
   caption: [RESET TYPE PARAMETERS],
   kind: table,
