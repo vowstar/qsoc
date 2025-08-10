@@ -610,6 +610,133 @@ reset:
             verilogContent, "u_syncnt_reset_ctrl_syncnt_trig_rst_dma_rst_n_counter < 15"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "module syncnt_reset_ctrl"));
     }
+
+    void testResetReasonRecording()
+    {
+        QString netlistContent = R"(
+# Test netlist with reset reason recording feature
+port:
+  clk_32k:
+    direction: input
+    type: logic
+  clk_sys:
+    direction: input
+    type: logic
+  por_rst_n:
+    direction: input
+    type: logic
+  ext_rst_n:
+    direction: input
+    type: logic
+  wdt_rst_n:
+    direction: input
+    type: logic
+  sys_rst_n:
+    direction: output
+    type: logic
+  last_reset_reason:
+    direction: output
+    type: logic [2:0]
+  test_en:
+    direction: input
+    type: logic
+  reason_clear:
+    direction: input
+    type: logic
+
+instance: {}
+
+net: {}
+
+reset:
+  - name: reason_reset_ctrl
+    clock: clk_sys
+    test_enable: test_en
+    record_reset_reason: true
+    aon_clock: clk_32k
+    por_signal: por_rst_n
+    reason_bus: last_reset_reason
+    reason_clear: reason_clear
+    source:
+      por_rst_n: low
+      ext_rst_n: low
+      wdt_rst_n: low
+    target:
+      sys_rst_n:
+        polarity: low
+        link:
+          por_rst_n:
+            type: ASYNC_COMB
+          ext_rst_n:
+            type: ASYNC_COMB
+          wdt_rst_n:
+            type: ASYNC_COMB
+)";
+
+        QString netlistPath = createTempFile("test_reset_reason.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_reset_reason.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify reset reason recording logic (Per-source async-set flops) */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "Reset reason recording logic (Per-source async-set flops)"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "Each reset source drives async-set of a capture flop"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "POR encoding: 0, Sources encoding: 1-3"));
+
+        /* Verify per-source async-set flag registers */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg rst_reason_flag_0"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg rst_reason_flag_1"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg rst_reason_flag_2"));
+
+        /* Verify async-set logic for each source */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk_32k or negedge por_rst_n"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk_32k or negedge ext_rst_n"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk_32k or negedge wdt_rst_n"));
+
+        /* Verify priority encoder logic */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "Priority encoder: Higher index = higher priority"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg [1:0] last_reset_reason_reg"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (rst_reason_flag_2)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "last_reset_reason_reg <= 2'd3"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (rst_reason_flag_1)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "last_reset_reason_reg <= 2'd2"));
+
+        /* Verify output assignment */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "assign last_reset_reason = last_reset_reason_reg"));
+
+        /* Verify external clear signal support */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "posedge reason_clear"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "External clear"));
+
+        /* Verify module naming */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module reason_reset_ctrl"));
+    }
 };
 
 QStringList Test::messageList;
