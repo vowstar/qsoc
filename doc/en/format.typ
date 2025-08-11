@@ -2205,6 +2205,23 @@ module CKGATE_CELL (
 endmodule
 ```
 
+===== Auto-generated template file: clock_cell.v
+<soc-net-clock-template-file>
+When any `clock` primitive is present, QSoC will ensure an output file `clock_cell.v` exists in the project output directory. This file contains all required template clock cells with the `QSOC_` prefix:
+
+- `QSOC_CKMUX_CELL`
+- `QSOC_CKMUX_GF_CELL`
+- `QSOC_CKGATE_CELL`
+- `QSOC_CKDIV_ICG`
+- `QSOC_CKDIV_DFF`
+
+Behavior:
+- If `clock_cell.v` does not exist, it will be created with a header, `timescale`, and all templates.
+- If it exists but some modules are missing, the missing modules are appended at the end.
+- If complete, it is left unchanged.
+
+Coding style follows the stub style used elsewhere (file header comment, brief/doc comments, and port comments). No synthesis guards or `celldefine`/`endcelldefine` macros, and no include guards, are used.
+
 ===== Foundry Replacement
 Replace template cells with process-specific implementations:
 - Standard library mapping via synthesis tools

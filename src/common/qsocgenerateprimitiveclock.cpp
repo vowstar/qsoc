@@ -25,10 +25,16 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
         return false;
     }
 
-    // Generate template RTL cells first
-    generateTemplateCells(out);
+    // Generate or update clock_cell.v file
+    if (m_parent && m_parent->getProjectManager()) {
+        QString outputDir = m_parent->getProjectManager()->getOutputPath();
+        if (!generateClockCellFile(outputDir)) {
+            qWarning() << "Failed to generate clock_cell.v file";
+            return false;
+        }
+    }
 
-    // Generate Verilog code
+    // Generate Verilog code (without template cells)
     generateModuleHeader(config, out);
     generateWireDeclarations(config, out);
     generateClockLogic(config, out);
@@ -146,96 +152,6 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
     }
 
     return config;
-}
-
-void QSocClockPrimitive::generateTemplateCells(QTextStream &out)
-{
-    out << "// ============================================================\n";
-    out << "// Template RTL cells (behavioural placeholders)\n";
-    out << "// Replace with foundry-specific macros in synthesis\n";
-    out << "// ============================================================\n\n";
-
-    // Standard clock mux
-    out << "`ifndef DEF_CKMUX_CELL\n";
-    out << "`define DEF_CKMUX_CELL\n\n";
-    out << "module CKMUX_CELL (\n";
-    out << "    input  wire CLK0,\n";
-    out << "    input  wire CLK1,\n";
-    out << "    input  wire SEL,     // 0=CLK0, 1=CLK1\n";
-    out << "    output wire CLK_OUT\n";
-    out << ");\n";
-    out << "    assign CLK_OUT = SEL ? CLK1 : CLK0;\n";
-    out << "endmodule\n\n";
-    out << "`endif  /* DEF_CKMUX_CELL */\n\n";
-
-    // Glitch-free clock mux
-    out << "`ifndef DEF_CKMUX_GF_CELL\n";
-    out << "`define DEF_CKMUX_GF_CELL\n\n";
-    out << "module CKMUX_GF_CELL (\n";
-    out << "    input  wire CLK0,\n";
-    out << "    input  wire CLK1,\n";
-    out << "    input  wire SEL,       // async\n";
-    out << "    input  wire REF_CLK,   // reference clock\n";
-    out << "    output wire CLK_OUT\n";
-    out << ");\n";
-    out << "    reg sel_q;\n";
-    out << "    always @(posedge REF_CLK) sel_q <= SEL;   // sync\n";
-    out << "    assign CLK_OUT = sel_q ? CLK1 : CLK0;\n";
-    out << "endmodule\n\n";
-    out << "`endif  /* DEF_CKMUX_GF_CELL */\n\n";
-
-    // Clock gate cell
-    out << "`ifndef DEF_CKGATE_CELL\n";
-    out << "`define DEF_CKGATE_CELL\n\n";
-    out << "module CKGATE_CELL (\n";
-    out << "    input  wire CLK_IN,\n";
-    out << "    input  wire CLK_EN,\n";
-    out << "    output wire CLK_OUT\n";
-    out << ");\n";
-    out << "    assign CLK_OUT = CLK_IN & CLK_EN;\n";
-    out << "endmodule\n\n";
-    out << "`endif  /* DEF_CKGATE_CELL */\n\n";
-
-    // ICG-based divider
-    out << "`ifndef DEF_CKDIV_ICG\n";
-    out << "`define DEF_CKDIV_ICG\n\n";
-    out << "module CKDIV_ICG #(\n";
-    out << "    parameter integer RATIO = 4\n";
-    out << ")(\n";
-    out << "    input  wire CLK_IN,\n";
-    out << "    input  wire RST_N,\n";
-    out << "    output wire CLK_OUT\n";
-    out << ");\n";
-    out << "    localparam W = $clog2(RATIO);\n";
-    out << "    reg [W-1:0] cnt;\n";
-    out << "    always @(posedge CLK_IN or negedge RST_N)\n";
-    out << "        if (!RST_N) cnt <= 0;\n";
-    out << "        else        cnt <= (cnt==RATIO-1) ? 0 : cnt+1;\n";
-    out << "    wire pulse_en = (cnt==0);\n";
-    out << "    CKGATE_CELL u_icg (.CLK_IN(CLK_IN), .CLK_EN(pulse_en), .CLK_OUT(CLK_OUT));\n";
-    out << "endmodule\n\n";
-    out << "`endif  /* DEF_CKDIV_ICG */\n\n";
-
-    // D-FF divider
-    out << "`ifndef DEF_CKDIV_DFF\n";
-    out << "`define DEF_CKDIV_DFF\n\n";
-    out << "module CKDIV_DFF #(\n";
-    out << "    parameter integer RATIO = 2   // even ≥2\n";
-    out << ")(\n";
-    out << "    input  wire CLK_IN,\n";
-    out << "    input  wire RST_N,\n";
-    out << "    output wire CLK_OUT\n";
-    out << ");\n";
-    out << "    localparam W = $clog2(RATIO);\n";
-    out << "    reg [W-1:0] cnt;\n";
-    out << "    reg clk_q;\n";
-    out << "    always @(posedge CLK_IN or negedge RST_N)\n";
-    out << "        if (!RST_N) begin cnt <= 0; clk_q <= 0; end\n";
-    out << "        else if (cnt==RATIO/2-1) begin cnt<=0; clk_q<=~clk_q; end\n";
-    out << "        else cnt<=cnt+1;\n";
-    out << "    assign CLK_OUT = clk_q;\n";
-    out << "endmodule\n\n";
-    out << "`endif  /* DEF_CKDIV_DFF */\n\n";
 }
 
 void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &config, QTextStream &out)
@@ -357,7 +273,7 @@ void QSocClockPrimitive::generateClockInstance(
         break;
 
     case GATE_ONLY:
-        out << "    CKGATE_CELL " << instanceName << " (\n";
+        out << "    QSOC_CKGATE_CELL " << instanceName << " (\n";
         out << "        .CLK_IN  (" << link.sourceName << "),\n";
         out << "        .CLK_EN  (" << link.gate.enable << "),\n";
         out << "        .CLK_OUT (" << wireName << ")\n";
@@ -365,7 +281,7 @@ void QSocClockPrimitive::generateClockInstance(
         break;
 
     case DIV_ICG:
-        out << "    CKDIV_ICG #(\n";
+        out << "    QSOC_CKDIV_ICG #(\n";
         out << "        .RATIO(" << link.div.ratio << ")\n";
         out << "    ) " << instanceName << " (\n";
         out << "        .CLK_IN  (" << link.sourceName << "),\n";
@@ -375,7 +291,7 @@ void QSocClockPrimitive::generateClockInstance(
         break;
 
     case DIV_DFF:
-        out << "    CKDIV_DFF #(\n";
+        out << "    QSOC_CKDIV_DFF #(\n";
         out << "        .RATIO(" << link.div.ratio << ")\n";
         out << "    ) " << instanceName << " (\n";
         out << "        .CLK_IN  (" << link.sourceName << "),\n";
@@ -387,12 +303,12 @@ void QSocClockPrimitive::generateClockInstance(
     case GATE_DIV_ICG: {
         QString gateWire = QString("gated_%1_%2").arg(targetName, link.sourceName);
         out << "    wire " << gateWire << ";\n";
-        out << "    CKGATE_CELL " << instanceName << "_gate (\n";
+        out << "    QSOC_CKGATE_CELL " << instanceName << "_gate (\n";
         out << "        .CLK_IN  (" << link.sourceName << "),\n";
         out << "        .CLK_EN  (" << link.gate.enable << "),\n";
         out << "        .CLK_OUT (" << gateWire << ")\n";
         out << "    );\n";
-        out << "    CKDIV_ICG #(\n";
+        out << "    QSOC_CKDIV_ICG #(\n";
         out << "        .RATIO(" << link.div.ratio << ")\n";
         out << "    ) " << instanceName << "_div (\n";
         out << "        .CLK_IN  (" << gateWire << "),\n";
@@ -405,12 +321,12 @@ void QSocClockPrimitive::generateClockInstance(
     case GATE_DIV_DFF: {
         QString gateWire = QString("gated_%1_%2").arg(targetName, link.sourceName);
         out << "    wire " << gateWire << ";\n";
-        out << "    CKGATE_CELL " << instanceName << "_gate (\n";
+        out << "    QSOC_CKGATE_CELL " << instanceName << "_gate (\n";
         out << "        .CLK_IN  (" << link.sourceName << "),\n";
         out << "        .CLK_EN  (" << link.gate.enable << "),\n";
         out << "        .CLK_OUT (" << gateWire << ")\n";
         out << "    );\n";
-        out << "    CKDIV_DFF #(\n";
+        out << "    QSOC_CKDIV_DFF #(\n";
         out << "        .RATIO(" << link.div.ratio << ")\n";
         out << "    ) " << instanceName << "_div (\n";
         out << "        .CLK_IN  (" << gateWire << "),\n";
@@ -449,7 +365,7 @@ void QSocClockPrimitive::generateMuxInstance(
     if (target.mux.type == STD_MUX) {
         // Generate cascaded standard mux for multiple inputs
         if (target.links.size() == 2) {
-            out << "    CKMUX_CELL " << instanceName << " (\n";
+            out << "    QSOC_CKMUX_CELL " << instanceName << " (\n";
             out << "        .CLK0    (" << inputWires[0] << "),\n";
             out << "        .CLK1    (" << inputWires[1] << "),\n";
             out << "        .SEL     (" << target.mux.select << "),\n";
@@ -471,7 +387,7 @@ void QSocClockPrimitive::generateMuxInstance(
     } else if (target.mux.type == GF_MUX) {
         // Glitch-free mux (currently only supports 2 inputs)
         if (target.links.size() == 2) {
-            out << "    CKMUX_GF_CELL " << instanceName << " (\n";
+            out << "    QSOC_CKMUX_GF_CELL " << instanceName << " (\n";
             out << "        .CLK0    (" << inputWires[0] << "),\n";
             out << "        .CLK1    (" << inputWires[1] << "),\n";
             out << "        .SEL     (" << target.mux.select << "),\n";
@@ -545,4 +461,224 @@ QString QSocClockPrimitive::getClockTypeString(ClockType type)
         return "GATE_DIV_DFF: Gate → D-FF divider";
     }
     return "UNKNOWN";
+}
+
+bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
+{
+    QString filePath = QDir(outputDir).filePath("clock_cell.v");
+
+    QFile file(filePath);
+
+    // Behavior:
+    // - If file doesn't exist: create it with header, timescale, and ALL required cells
+    // - If file exists but is incomplete: append ONLY missing cells at the end
+    // - If file exists and complete: do nothing
+
+    if (!file.exists()) {
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            qWarning() << "Cannot open clock_cell.v for writing:" << file.errorString();
+            return false;
+        }
+
+        QTextStream out(&file);
+
+        // Write file header
+        out << "/**\n";
+        out << " * @file clock_cell.v\n";
+        out << " * @brief Template clock cells for QSoC clock primitives\n";
+        out << " *\n";
+        out << " * @details This file contains template clock cell modules for clock primitives.\n";
+        out << " *          Auto-generated template file. Generated by qsoc.\n";
+        out << " * CAUTION: Please replace the templates in this file\n";
+        out << " *          with your technology's standard-cell implementations\n";
+        out << " *          before using in production.\n";
+        out << " */\n\n";
+
+        out << "`timescale 1ns / 1ps\n\n";
+
+        // Generate all required template cells
+        const QStringList requiredCells = getRequiredTemplateCells();
+        for (const QString &cellName : requiredCells) {
+            out << generateTemplateCellDefinition(cellName);
+            out << "\n";
+        }
+
+        file.close();
+        return true;
+    }
+
+    // File exists. Determine which cells are missing.
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning() << "Cannot open clock_cell.v for reading:" << file.errorString();
+        return false;
+    }
+
+    const QString     content       = file.readAll();
+    const QStringList requiredCells = getRequiredTemplateCells();
+    file.close();
+
+    QStringList missingCells;
+    for (const QString &cellName : requiredCells) {
+        if (!content.contains(QString("module %1").arg(cellName))) {
+            missingCells << cellName;
+        }
+    }
+
+    if (missingCells.isEmpty()) {
+        // Already complete
+        return true;
+    }
+
+    // Append missing cells at the end of the file
+    if (!file.open(QIODevice::Append | QIODevice::Text)) {
+        qWarning() << "Cannot open clock_cell.v for appending:" << file.errorString();
+        return false;
+    }
+
+    QTextStream outAppend(&file);
+    outAppend << "\n"; // Ensure separation
+    for (const QString &cellName : missingCells) {
+        outAppend << generateTemplateCellDefinition(cellName);
+        outAppend << "\n";
+    }
+    file.close();
+    return true;
+}
+
+bool QSocClockPrimitive::isClockCellFileComplete(const QString &filePath)
+{
+    QFile file(filePath);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return false;
+    }
+
+    QString content = file.readAll();
+    file.close();
+
+    // Check if all required cells are present
+    QStringList requiredCells = getRequiredTemplateCells();
+    for (const QString &cellName : requiredCells) {
+        if (!content.contains(QString("module %1").arg(cellName))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+QStringList QSocClockPrimitive::getRequiredTemplateCells()
+{
+    return {
+        "QSOC_CKMUX_CELL",
+        "QSOC_CKMUX_GF_CELL",
+        "QSOC_CKGATE_CELL",
+        "QSOC_CKDIV_ICG",
+        "QSOC_CKDIV_DFF"};
+}
+
+QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellName)
+{
+    QString     result;
+    QTextStream out(&result);
+
+    if (cellName == "QSOC_CKMUX_CELL") {
+        out << "/**\n";
+        out << " * @brief Standard clock multiplexer module\n";
+        out << " *\n";
+        out << " * @details Template implementation of 2-to-1 clock multiplexer.\n";
+        out << " */\n";
+        out << "module QSOC_CKMUX_CELL (\n";
+        out << "    input  wire CLK0,     /**< Clock input 0 */\n";
+        out << "    input  wire CLK1,     /**< Clock input 1 */\n";
+        out << "    input  wire SEL,      /**< Select signal: 0=CLK0, 1=CLK1 */\n";
+        out << "    output wire CLK_OUT   /**< Clock output */\n";
+        out << ");\n";
+        out << "    /* Template implementation - replace with foundry-specific IP */\n";
+        out << "    assign CLK_OUT = SEL ? CLK1 : CLK0;\n";
+        out << "endmodule\n";
+
+    } else if (cellName == "QSOC_CKMUX_GF_CELL") {
+        out << "/**\n";
+        out << " * @brief Glitch-free clock multiplexer module\n";
+        out << " *\n";
+        out << " * @details Template implementation of glitch-free 2-to-1 clock multiplexer.\n";
+        out << " */\n";
+        out << "module QSOC_CKMUX_GF_CELL (\n";
+        out << "    input  wire CLK0,     /**< Clock input 0 */\n";
+        out << "    input  wire CLK1,     /**< Clock input 1 */\n";
+        out << "    input  wire SEL,      /**< Select signal (async) */\n";
+        out << "    input  wire REF_CLK,  /**< Reference clock */\n";
+        out << "    output wire CLK_OUT   /**< Clock output */\n";
+        out << ");\n";
+        out << "    /* Template implementation - replace with foundry-specific IP */\n";
+        out << "    reg sel_q;\n";
+        out << "    always @(posedge REF_CLK) sel_q <= SEL;\n";
+        out << "    assign CLK_OUT = sel_q ? CLK1 : CLK0;\n";
+        out << "endmodule\n";
+
+    } else if (cellName == "QSOC_CKGATE_CELL") {
+        out << "/**\n";
+        out << " * @brief Clock gate cell module\n";
+        out << " *\n";
+        out << " * @details Template implementation of clock gate cell.\n";
+        out << " */\n";
+        out << "module QSOC_CKGATE_CELL (\n";
+        out << "    input  wire CLK_IN,   /**< Clock input */\n";
+        out << "    input  wire CLK_EN,   /**< Clock enable */\n";
+        out << "    output wire CLK_OUT   /**< Clock output */\n";
+        out << ");\n";
+        out << "    /* Template implementation - replace with foundry-specific IP */\n";
+        out << "    assign CLK_OUT = CLK_IN & CLK_EN;\n";
+        out << "endmodule\n";
+
+    } else if (cellName == "QSOC_CKDIV_ICG") {
+        out << "/**\n";
+        out << " * @brief ICG-based clock divider module\n";
+        out << " *\n";
+        out << " * @details Template implementation of ICG-based clock divider.\n";
+        out << " */\n";
+        out << "module QSOC_CKDIV_ICG #(\n";
+        out << "    parameter integer RATIO = 4    /**< Division ratio */\n";
+        out << ")(\n";
+        out << "    input  wire CLK_IN,   /**< Clock input */\n";
+        out << "    input  wire RST_N,    /**< Reset (active low) */\n";
+        out << "    output wire CLK_OUT   /**< Clock output */\n";
+        out << ");\n";
+        out << "    /* Template implementation - replace with foundry-specific IP */\n";
+        out << "    localparam W = $clog2(RATIO);\n";
+        out << "    reg [W-1:0] cnt;\n";
+        out << "    always @(posedge CLK_IN or negedge RST_N)\n";
+        out << "        if (!RST_N) cnt <= 0;\n";
+        out << "        else        cnt <= (cnt==RATIO-1) ? 0 : cnt+1;\n";
+        out << "    wire pulse_en = (cnt==0);\n";
+        out << "    QSOC_CKGATE_CELL u_icg (.CLK_IN(CLK_IN), .CLK_EN(pulse_en), "
+               ".CLK_OUT(CLK_OUT));\n";
+        out << "endmodule\n";
+
+    } else if (cellName == "QSOC_CKDIV_DFF") {
+        out << "/**\n";
+        out << " * @brief D-FF based clock divider module\n";
+        out << " *\n";
+        out << " * @details Template implementation of D-FF based clock divider.\n";
+        out << " */\n";
+        out << "module QSOC_CKDIV_DFF #(\n";
+        out << "    parameter integer RATIO = 2    /**< Division ratio (even ≥2) */\n";
+        out << ")(\n";
+        out << "    input  wire CLK_IN,   /**< Clock input */\n";
+        out << "    input  wire RST_N,    /**< Reset (active low) */\n";
+        out << "    output wire CLK_OUT   /**< Clock output */\n";
+        out << ");\n";
+        out << "    /* Template implementation - replace with foundry-specific IP */\n";
+        out << "    localparam W = $clog2(RATIO);\n";
+        out << "    reg [W-1:0] cnt;\n";
+        out << "    reg clk_q;\n";
+        out << "    always @(posedge CLK_IN or negedge RST_N)\n";
+        out << "        if (!RST_N) begin cnt <= 0; clk_q <= 0; end\n";
+        out << "        else if (cnt==RATIO/2-1) begin cnt<=0; clk_q<=~clk_q; end\n";
+        out << "        else cnt<=cnt+1;\n";
+        out << "    assign CLK_OUT = clk_q;\n";
+        out << "endmodule\n";
+    }
+
+    return result;
 }

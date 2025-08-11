@@ -2,6 +2,8 @@
 #define QSOCGENERATEPRIMITIVECLOCK_H
 
 #include <yaml-cpp/yaml.h>
+#include <QDir>
+#include <QFile>
 #include <QMap>
 #include <QString>
 #include <QStringList>
@@ -144,10 +146,31 @@ public:
 
 private:
     /**
-     * @brief Generate template RTL cells (placeholders for foundry IP)
-     * @param out Output text stream
+     * @brief Generate or update clock_cell.v file with template cells
+     * @param outputDir Output directory path
+     * @return true if successful, false otherwise
      */
-    void generateTemplateCells(QTextStream &out);
+    bool generateClockCellFile(const QString &outputDir);
+
+    /**
+     * @brief Check if clock_cell.v file exists and is complete
+     * @param filePath Path to clock_cell.v file
+     * @return true if file exists and contains all required cells
+     */
+    bool isClockCellFileComplete(const QString &filePath);
+
+    /**
+     * @brief Get all required template cell names with QSOC_ prefix
+     * @return List of cell names
+     */
+    QStringList getRequiredTemplateCells();
+
+    /**
+     * @brief Generate single template cell definition
+     * @param cellName Cell name (with QSOC_ prefix)
+     * @return Cell definition string
+     */
+    QString generateTemplateCellDefinition(const QString &cellName);
 
     /**
      * @brief Generate module header and ports

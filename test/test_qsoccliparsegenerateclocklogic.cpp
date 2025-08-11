@@ -104,6 +104,39 @@ private slots:
         return normalizedVerilog.contains(normalizedContentToVerify);
     }
 
+    bool verifyClockCellFileComplete()
+    {
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        if (!QFile::exists(clockCellPath)) {
+            qWarning() << "clock_cell.v not found at" << clockCellPath;
+            return false;
+        }
+
+        QFile file(clockCellPath);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            qWarning() << "Failed to open clock_cell.v:" << file.errorString();
+            return false;
+        }
+        const QString content = file.readAll();
+        file.close();
+
+        const QStringList requiredCells
+            = {"QSOC_CKMUX_CELL",
+               "QSOC_CKMUX_GF_CELL",
+               "QSOC_CKGATE_CELL",
+               "QSOC_CKDIV_ICG",
+               "QSOC_CKDIV_DFF"};
+
+        for (const QString &cell : requiredCells) {
+            if (!content.contains(QString("module %1").arg(cell))) {
+                qWarning() << "Missing cell in clock_cell.v:" << cell;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     void test_pass_thru_clock()
     {
         // Create netlist file with PASS_THRU clock
@@ -164,6 +197,9 @@ clock:
             verilogContent, "assign clk_adc_clk_from_osc_24m = osc_24m"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "assign adc_clk = clk_adc_clk_from_osc_24m"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
     }
 
     void test_gate_only_clock()
@@ -229,6 +265,9 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKGATE_CELL"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_IN(pll_800m)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_EN(dbg_clk_en)"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
     }
 
     void test_div_icg_clock()
@@ -294,6 +333,9 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKDIV_ICG"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RATIO(4)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RST_N(rst_n)"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
     }
 
     void test_div_dff_clock()
@@ -360,6 +402,9 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKDIV_DFF"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RATIO(2)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "~clk_slow_clk_n_from_osc_24m"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
     }
 
     void test_std_mux_clock()
@@ -438,6 +483,9 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKMUX_CELL"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(func_sel)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKDIV_ICG"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
     }
 
     void test_gf_mux_clock()
@@ -514,6 +562,9 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKMUX_GF_CELL"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(clk_sys)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(safe_sel)"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
     }
 
     void test_gf_mux_custom_ref_clock()
@@ -595,6 +646,9 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKMUX_GF_CELL"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(custom_ref)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(custom_sel)"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
     }
 
     void test_mixed_ref_clock_scenario()
@@ -697,6 +751,9 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(special_ref)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(sel1)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(sel2)"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
     }
 };
 
