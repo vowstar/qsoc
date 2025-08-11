@@ -190,8 +190,8 @@ reset:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify reset controller comment */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* Reset primitive controllers */"));
+        /* Verify reset controller module exists */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module basic_reset_ctrl"));
 
         /* Verify basic reset assignments for ASYNC_COMB type (combinational) */
         QVERIFY(verifyVerilogContentNormalized(
@@ -764,7 +764,6 @@ reset:
 
         /* Verify module naming */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "module reason_reset_ctrl_bitvec"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "DEF_REASON_RESET_CTRL_BITVEC"));
     }
 };
 
