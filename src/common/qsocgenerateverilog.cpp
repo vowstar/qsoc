@@ -88,7 +88,114 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     out << " * NOTE: Auto-generated file, do not edit manually.\n";
     out << " */\n\n";
 
-    /* Generate module declaration */
+    /* Generate reset primitive controllers first (before top-level module) */
+    if (netlistData["reset"] && netlistData["reset"].IsSequence()
+        && netlistData["reset"].size() > 0) {
+        for (size_t i = 0; i < netlistData["reset"].size(); ++i) {
+            const YAML::Node &resetItem = netlistData["reset"][i];
+
+            if (!resetItem.IsMap()) {
+                qWarning() << "Skipping invalid reset item at index" << i;
+                continue;
+            }
+
+            if (!generateResetPrimitive(resetItem, out)) {
+                qWarning() << "Failed to generate reset primitive at index" << i;
+                continue;
+            }
+
+            /* Add blank line between different reset blocks */
+            if (i < netlistData["reset"].size() - 1) {
+                out << "\n";
+            }
+        }
+    }
+
+    /* Generate clock primitive controllers second (before top-level module) */
+    if (netlistData["clock"] && netlistData["clock"].IsSequence()
+        && netlistData["clock"].size() > 0) {
+        for (size_t i = 0; i < netlistData["clock"].size(); ++i) {
+            const YAML::Node &clockItem = netlistData["clock"][i];
+
+            if (!clockItem.IsMap()) {
+                qWarning() << "Skipping invalid clock item at index" << i;
+                continue;
+            }
+
+            if (!generateClockPrimitive(clockItem, out)) {
+                qWarning() << "Failed to generate clock primitive at index" << i;
+                continue;
+            }
+
+            /* Add blank line between different clock blocks */
+            if (i < netlistData["clock"].size() - 1) {
+                out << "\n";
+            }
+        }
+    }
+
+    /* Generate FSM primitive controllers third (before top-level module) */
+    if (netlistData["fsm"] && netlistData["fsm"].IsSequence() && netlistData["fsm"].size() > 0) {
+        for (size_t i = 0; i < netlistData["fsm"].size(); ++i) {
+            const YAML::Node &fsmItem = netlistData["fsm"][i];
+
+            if (!fsmItem.IsMap() || !fsmItem["name"] || !fsmItem["name"].IsScalar()
+                || !fsmItem["clk"] || !fsmItem["clk"].IsScalar() || !fsmItem["rst"]
+                || !fsmItem["rst"].IsScalar() || !fsmItem["rst_state"]
+                || !fsmItem["rst_state"].IsScalar()) {
+                qWarning() << "Warning: FSM" << i << "has invalid format, skipping";
+                continue; /* Skip invalid FSM items */
+            }
+
+            if (!generateFSMPrimitive(fsmItem, out)) {
+                qWarning() << "Failed to generate FSM primitive at index" << i;
+                continue;
+            }
+
+            /* Add blank line between different FSM blocks */
+            if (i < netlistData["fsm"].size() - 1) {
+                out << "\n";
+            }
+        }
+    }
+
+    /* Check if we need to generate a top-level module */
+    bool hasPorts = netlistData["port"] && netlistData["port"].IsMap()
+                    && netlistData["port"].size() > 0;
+    bool hasNets = netlistData["net"] && netlistData["net"].IsMap()
+                   && netlistData["net"].size() > 0;
+    bool hasBus = netlistData["bus"] && netlistData["bus"].IsMap() && netlistData["bus"].size() > 0;
+
+    bool needsTopLevelModule = hasInstances || hasPorts || hasNets || hasBus;
+
+    if (!needsTopLevelModule) {
+        /* No top-level module needed */
+        if (hasCombSeqFsm) {
+            /* If only comb/seq exist, generate a wrapper module for them */
+            out << "module " << outputFileName << " ();\n\n";
+
+            /* Generate combinational logic */
+            if (!generateCombPrimitive(netlistData, out)) {
+                qWarning() << "Failed to generate combinational logic primitives";
+                return false;
+            }
+
+            /* Generate sequential logic */
+            if (!generateSeqPrimitive(netlistData, out)) {
+                qWarning() << "Failed to generate sequential logic primitives";
+                return false;
+            }
+
+            out << "\nendmodule\n";
+        }
+
+        outputFile.close();
+        qInfo() << "Successfully generated Verilog file:" << outputFilePath;
+        formatVerilogFile(outputFilePath);
+        return true;
+    }
+
+    /* Generate top-level module declaration */
     out << "module " << outputFileName;
 
     /* Add module parameters if they exist */
@@ -1394,82 +1501,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         return false;
     }
 
-    /* Generate FSM logic after sequential logic */
-    if (netlistData["fsm"] && netlistData["fsm"].IsSequence() && netlistData["fsm"].size() > 0) {
-        out << "\n    /* Finite State Machine logic */\n";
-
-        for (size_t i = 0; i < netlistData["fsm"].size(); ++i) {
-            const YAML::Node &fsmItem = netlistData["fsm"][i];
-
-            if (!fsmItem.IsMap() || !fsmItem["name"] || !fsmItem["name"].IsScalar()
-                || !fsmItem["clk"] || !fsmItem["clk"].IsScalar() || !fsmItem["rst"]
-                || !fsmItem["rst"].IsScalar() || !fsmItem["rst_state"]
-                || !fsmItem["rst_state"].IsScalar()) {
-                qWarning() << "Warning: FSM" << i << "has invalid format, skipping";
-                continue; /* Skip invalid FSM items */
-            }
-
-            if (!generateFSMPrimitive(fsmItem, out)) {
-                qWarning() << "Failed to generate FSM primitive at index" << i;
-                continue;
-            }
-
-            /* Add blank line between different FSM blocks */
-            if (i < netlistData["fsm"].size() - 1) {
-                out << "\n";
-            }
-        }
-    }
-
-    /* Generate reset primitive controllers after FSM logic */
-    if (netlistData["reset"] && netlistData["reset"].IsSequence()
-        && netlistData["reset"].size() > 0) {
-        out << "\n    /* Reset primitive controllers */\n";
-
-        for (size_t i = 0; i < netlistData["reset"].size(); ++i) {
-            const YAML::Node &resetItem = netlistData["reset"][i];
-
-            if (!resetItem.IsMap()) {
-                qWarning() << "Skipping invalid reset item at index" << i;
-                continue;
-            }
-
-            if (!generateResetPrimitive(resetItem, out)) {
-                qWarning() << "Failed to generate reset primitive at index" << i;
-                continue;
-            }
-
-            /* Add blank line between different reset blocks */
-            if (i < netlistData["reset"].size() - 1) {
-                out << "\n";
-            }
-        }
-    }
-
-    /* Generate clock primitive controllers after reset logic */
-    if (netlistData["clock"] && netlistData["clock"].IsSequence()
-        && netlistData["clock"].size() > 0) {
-        out << "\n    /* Clock primitive controllers */\n";
-
-        for (size_t i = 0; i < netlistData["clock"].size(); ++i) {
-            const YAML::Node &clockItem = netlistData["clock"][i];
-
-            if (!clockItem.IsMap()) {
-                qWarning() << "Skipping invalid clock item at index" << i;
-                continue;
-            }
-
-            if (!generateClockPrimitive(clockItem, out)) {
-                qWarning() << "Failed to generate clock primitive at index" << i;
-                continue;
-            }
-
-            /* Add blank line between different clock blocks */
-            if (i < netlistData["clock"].size() - 1) {
-                out << "\n";
-            }
-        }
-    }
+    /* NOTE: FSM, reset, and clock primitive modules are now generated 
+     * at file level before the top-level module. No inline generation needed. */
 
     /* Close module */
     out << "\nendmodule\n";

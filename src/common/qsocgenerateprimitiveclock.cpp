@@ -36,7 +36,6 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
 
     // Close module
     out << "\nendmodule\n\n";
-    out << "`endif  /* DEF_" << config.moduleName.toUpper() << " */\n";
 
     return true;
 }
@@ -241,10 +240,7 @@ void QSocClockPrimitive::generateTemplateCells(QTextStream &out)
 
 void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &config, QTextStream &out)
 {
-    out << "`ifndef DEF_" << config.moduleName.toUpper() << "\n";
-    out << "`define DEF_" << config.moduleName.toUpper() << "\n\n";
-
-    out << "module " << config.moduleName << " (\n";
+    out << "\nmodule " << config.moduleName << " (\n";
 
     QStringList portList;
 

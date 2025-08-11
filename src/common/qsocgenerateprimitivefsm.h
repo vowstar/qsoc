@@ -37,6 +37,13 @@ public:
 
 private:
     /**
+     * @brief Generate module header with ports for FSM
+     * @param fsmNode The YAML node containing the FSM specification
+     * @param out Output text stream
+     */
+    void generateModuleHeader(const YAML::Node &fsmNode, QTextStream &out);
+
+    /**
      * @brief Generate Table-mode FSM Verilog code
      * @param fsmItem The YAML node containing the FSM specification
      * @param out Output text stream

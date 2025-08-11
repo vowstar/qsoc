@@ -31,13 +31,211 @@ bool QSocFSMPrimitive::generateFSMVerilog(const YAML::Node &fsmNode, QTextStream
     /* Check if this is microcode mode */
     bool isMicrocodeMode = fsmNode["fields"] && fsmNode["fields"].IsMap();
 
+    /* Generate module wrapper */
+    generateModuleHeader(fsmNode, out);
+
+    /* Generate FSM logic inside module */
     if (isMicrocodeMode) {
         generateMicrocodeFSM(fsmNode, out);
     } else {
         generateTableFSM(fsmNode, out);
     }
 
+    /* Close module */
+    out << "\nendmodule\n\n";
+
     return true;
+}
+
+void QSocFSMPrimitive::generateModuleHeader(const YAML::Node &fsmNode, QTextStream &out)
+{
+    const QString fsmName   = QString::fromStdString(fsmNode["name"].as<std::string>());
+    const QString clkSignal = QString::fromStdString(fsmNode["clk"].as<std::string>());
+    const QString rstSignal = QString::fromStdString(fsmNode["rst"].as<std::string>());
+
+    /* Start module declaration */
+    out << "module " << fsmName << " (\n";
+
+    /* Always include clock and reset */
+    out << "    /* FSM clock and reset */\n";
+    out << "    input  " << clkSignal << ",                   /**< FSM clock input */\n";
+    out << "    input  " << rstSignal << ",                   /**< FSM reset input */\n";
+
+    /* Check if this is microcode mode to determine additional ports */
+    bool isMicrocodeMode = fsmNode["fields"] && fsmNode["fields"].IsMap();
+
+    if (isMicrocodeMode) {
+        /* Microcode FSM ports */
+
+        /* Branch condition input for microcode FSM */
+        QMap<QString, QPair<int, int>> fields;
+        bool                           hasBranch = false;
+        if (fsmNode["fields"] && fsmNode["fields"].IsMap()) {
+            for (const auto &fieldEntry : fsmNode["fields"]) {
+                if (fieldEntry.first.IsScalar()) {
+                    const QString fieldName = QString::fromStdString(
+                        fieldEntry.first.as<std::string>());
+                    if (fieldName == "branch") {
+                        hasBranch = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (hasBranch) {
+            out << "    /* Branch condition */\n";
+            out << "    input  cond,                        /**< Branch condition signal */\n";
+        }
+
+        /* ROM mode dependent ports */
+        QString romMode = "parameter";
+        if (fsmNode["rom_mode"] && fsmNode["rom_mode"].IsScalar()) {
+            romMode = QString::fromStdString(fsmNode["rom_mode"].as<std::string>());
+        }
+
+        if (romMode == "port") {
+            out << "    /* ROM write interface */\n";
+            out << "    input  " << fsmName << "_rom_we,           /**< ROM write enable */\n";
+            out << "    input  [" << fsmName.toUpper() << "_AW-1:0] " << fsmName
+                << "_rom_addr,     /**< ROM write address */\n";
+            out << "    input  [" << fsmName.toUpper() << "_DW:0] " << fsmName
+                << "_rom_wdata,    /**< ROM write data */\n";
+        }
+
+        /* Control outputs from fields (excluding branch and next) */
+        if (fsmNode["fields"] && fsmNode["fields"].IsMap()) {
+            out << "    /* Control outputs */\n";
+            for (const auto &fieldEntry : fsmNode["fields"]) {
+                if (!fieldEntry.first.IsScalar() || !fieldEntry.second.IsSequence()
+                    || fieldEntry.second.size() != 2) {
+                    continue;
+                }
+
+                const QString fieldName = QString::fromStdString(fieldEntry.first.as<std::string>());
+                const int loBit = fieldEntry.second[0].as<int>();
+                const int hiBit = fieldEntry.second[1].as<int>();
+
+                if (fieldName != "branch" && fieldName != "next") {
+                    QString outputPortName = fieldName;
+                    if (fieldName == "ctrl") {
+                        outputPortName = "ctrl_bus"; /* Map ctrl field to ctrl_bus port */
+                    }
+
+                    if (loBit == hiBit) {
+                        out << "    output " << outputPortName << ",                      /**< "
+                            << fieldName << " field output */\n";
+                    } else {
+                        out << "    output [" << hiBit << ":" << loBit << "] " << outputPortName
+                            << ",        /**< " << fieldName << " field output */\n";
+                    }
+                }
+            }
+        }
+    } else {
+        /* Table FSM ports */
+
+        /* Collect input signals from transition conditions */
+        QSet<QString> inputSignals;
+        if (fsmNode["trans"] && fsmNode["trans"].IsMap()) {
+            for (const auto &transEntry : fsmNode["trans"]) {
+                if (transEntry.second.IsSequence()) {
+                    for (const auto &transition : transEntry.second) {
+                        if (transition.IsMap() && transition["cond"]) {
+                            const QString condition = QString::fromStdString(
+                                transition["cond"].as<std::string>());
+                            // Extract signal names from conditions (simple parsing)
+                            QStringList tokens = condition.split(
+                                QRegularExpression(
+                                    "[\\s\\(\\)\\&\\|\\=\\!\\<\\>\\+\\-\\*\\/\\%\\^\\~]+"),
+                                Qt::SkipEmptyParts);
+                            for (const QString &token : tokens) {
+                                if (!token.isEmpty() && token != "1" && token != "0"
+                                    && !token.startsWith("'") && !token.contains("'d")) {
+                                    inputSignals.insert(token);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /* Add input signals from Mealy conditions */
+        if (fsmNode["mealy"] && fsmNode["mealy"].IsSequence()) {
+            for (const auto &mealyEntry : fsmNode["mealy"]) {
+                if (mealyEntry.IsMap() && mealyEntry["cond"]) {
+                    const QString condition = QString::fromStdString(
+                        mealyEntry["cond"].as<std::string>());
+                    QStringList tokens = condition.split(
+                        QRegularExpression("[\\s\\(\\)\\&\\|\\=\\!\\<\\>\\+\\-\\*\\/\\%\\^\\~]+"),
+                        Qt::SkipEmptyParts);
+                    for (const QString &token : tokens) {
+                        if (!token.isEmpty() && token != "1" && token != "0"
+                            && !token.startsWith("'") && !token.contains("'d")
+                            && !token.contains("cur_state") && !token.contains("_CUR_STATE")) {
+                            inputSignals.insert(token);
+                        }
+                    }
+                }
+            }
+        }
+
+        /* Remove clock and reset as they're already declared */
+        inputSignals.remove(clkSignal);
+        inputSignals.remove(rstSignal);
+
+        if (!inputSignals.isEmpty()) {
+            out << "    /* Input signals */\n";
+            for (const QString &signal : inputSignals) {
+                // Check if it's a bus signal based on common patterns
+                if (signal.contains("cnt") || signal.contains("data") || signal.contains("addr")) {
+                    out << "    input  [7:0] " << signal
+                        << ",               /**< Input signal */\n";
+                } else {
+                    out << "    input  " << signal << ",                    /**< Input signal */\n";
+                }
+            }
+        }
+
+        /* Collect output signals from Moore and Mealy outputs */
+        QSet<QString> outputSignals;
+        if (fsmNode["moore"] && fsmNode["moore"].IsMap()) {
+            for (const auto &mooreEntry : fsmNode["moore"]) {
+                if (mooreEntry.second.IsMap()) {
+                    for (const auto &output : mooreEntry.second) {
+                        if (output.first.IsScalar()) {
+                            outputSignals.insert(
+                                QString::fromStdString(output.first.as<std::string>()));
+                        }
+                    }
+                }
+            }
+        }
+
+        if (fsmNode["mealy"] && fsmNode["mealy"].IsSequence()) {
+            for (const auto &mealyEntry : fsmNode["mealy"]) {
+                if (mealyEntry.IsMap() && mealyEntry["sig"]) {
+                    outputSignals.insert(
+                        QString::fromStdString(mealyEntry["sig"].as<std::string>()));
+                }
+            }
+        }
+
+        if (!outputSignals.isEmpty()) {
+            out << "    /* Output signals */\n";
+            QStringList sortedOutputs = outputSignals.values();
+            sortedOutputs.sort();
+            for (int i = 0; i < sortedOutputs.size(); ++i) {
+                const QString &signal        = sortedOutputs[i];
+                QString        trailingComma = (i < sortedOutputs.size() - 1) ? "," : "";
+                out << "    output " << signal << trailingComma
+                    << "                    /**< Output signal */\n";
+            }
+        }
+    }
+
+    out << ");\n\n";
 }
 
 void QSocFSMPrimitive::generateTableFSM(const YAML::Node &fsmItem, QTextStream &out)

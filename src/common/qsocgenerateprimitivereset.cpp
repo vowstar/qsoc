@@ -38,8 +38,6 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
 
     // Close module
     out << "\nendmodule\n\n";
-    QString macroName = "DEF_" + config.moduleName.toUpper().replace("-", "_").replace(" ", "_");
-    out << "`endif  /* " << macroName << " */\n";
 
     return true;
 }
@@ -201,11 +199,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
 
 void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &config, QTextStream &out)
 {
-    QString macroName = "DEF_" + config.moduleName.toUpper().replace("-", "_").replace(" ", "_");
-    out << "\n`ifndef " << macroName << "\n";
-    out << "`define " << macroName << "\n\n";
-
-    out << "module " << config.moduleName << " (\n";
+    out << "\nmodule " << config.moduleName << " (\n";
 
     // Clock input
     out << "    /* Reset clock */\n";

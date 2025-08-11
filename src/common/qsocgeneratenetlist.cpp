@@ -76,22 +76,26 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
 bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
 {
     try {
-        /* Validate basic netlist structure */
-        if (!netlistData["instance"]) {
-            qCritical() << "Error: Invalid netlist format, missing 'instance' section";
+        /* Validate basic netlist structure - allow missing instance if primitives exist */
+        bool hasInstances  = netlistData["instance"] && netlistData["instance"].IsMap();
+        bool hasPrimitives = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"]
+                             || netlistData["reset"] || netlistData["clock"];
+
+        if (!hasInstances && !hasPrimitives) {
+            qCritical() << "Error: Invalid netlist format, missing 'instance' section and no "
+                           "primitives found";
             return false;
         }
 
-        if (!netlistData["instance"].IsMap()) {
+        if (netlistData["instance"] && !netlistData["instance"].IsMap()) {
             qCritical() << "Error: Invalid netlist format, 'instance' section is not a map";
             return false;
         }
 
-        // Allow empty instance section if comb, seq, or fsm section exists
-        if (netlistData["instance"].size() == 0 && !netlistData["comb"] && !netlistData["seq"]
-            && !netlistData["fsm"]) {
+        // Allow empty instance section if any primitives exist
+        if (hasInstances && netlistData["instance"].size() == 0 && !hasPrimitives) {
             qCritical() << "Error: Invalid netlist format, 'instance' section is empty and no "
-                           "'comb', 'seq', or 'fsm' section found";
+                           "primitives found";
             return false;
         }
 
@@ -116,10 +120,14 @@ bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
 bool QSocGenerateManager::processNetlist()
 {
     try {
-        /* Check if netlistData is valid */
-        if (!netlistData["instance"]) {
-            qCritical() << "Error: Invalid netlist data, missing 'instance' section, call "
-                           "loadNetlist() first";
+        /* Check if netlistData is valid - allow missing instance if primitives exist */
+        bool hasInstances  = netlistData["instance"] && netlistData["instance"].IsMap();
+        bool hasPrimitives = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"]
+                             || netlistData["reset"] || netlistData["clock"];
+
+        if (!hasInstances && !hasPrimitives) {
+            qCritical() << "Error: Invalid netlist data, missing 'instance' section and no "
+                           "primitives found, call loadNetlist() first";
             return false;
         }
 
