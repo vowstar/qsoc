@@ -158,11 +158,24 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                                                reasonNode["register_clock"].as<std::string>())
                                          : "clk_32k";
 
-            // Output bus name
-            config.reason.outputBus = reasonNode["output_bus"]
-                                          ? QString::fromStdString(
-                                                reasonNode["output_bus"].as<std::string>())
-                                          : "reset_reason_bits";
+            // Output bus name (support legacy naming with automatic mapping)
+            if (reasonNode["output_bus"]) {
+                QString outputBus = QString::fromStdString(
+                    reasonNode["output_bus"].as<std::string>());
+                if (outputBus == "reset_reason_bits") {
+                    config.reason.outputBus = "reason"; // Auto-map legacy naming
+                } else {
+                    config.reason.outputBus = outputBus;
+                }
+            } else {
+                config.reason.outputBus = "reason"; // New unified default
+            }
+
+            // Valid signal name
+            config.reason.validSignal = reasonNode["valid_signal"]
+                                            ? QString::fromStdString(
+                                                  reasonNode["valid_signal"].as<std::string>())
+                                            : "reason_valid";
 
             // Software clear signal
             config.reason.clearSignal = reasonNode["clear_signal"]
@@ -248,6 +261,11 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
             out << "    output " << config.reason.outputBus
                 << ",                    /**< Reset reason bit vector (single sticky flag) */\n";
         }
+
+        // Add valid signal output
+        out << "    output " << config.reason.validSignal
+            << ",          /**< Reset reason valid flag (indicates reason output is meaningful) "
+               "*/\n";
     }
 
     // Control signals
@@ -290,16 +308,18 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
         return;
     }
 
-    out << "    /* Reset reason recording logic (Per-source sticky flags) */\n";
-    out << "    // Each reset source has a sticky flag: async-set + async-clear + sync-hold\n";
-    out << "    // POR = all bits 0, Software can decode individual sources from bit vector\n\n";
+    out << "    /* Reset reason recording logic (Sync-clear async-capture sticky flags) */\n";
+    out << "    // New architecture: async-set + sync-clear only, avoids S+R registers\n";
+    out << "    // 2-cycle clear window after POR release or SW clear pulse\n";
+    out << "    // Outputs gated by valid signal for proper initialization\n\n";
 
-    // Generate per-source sticky flags (exclude POR)
+    // Generate event normalization (convert all to LOW-active)
+    out << "    /* Event normalization: convert all sources to LOW-active format */\n";
     for (int i = 0; i < config.reason.sourceOrder.size(); ++i) {
         const QString &sourceName = config.reason.sourceOrder[i];
-        QString        flagName   = QString("reason_flag_%1").arg(i);
+        QString        eventName  = QString("%1_event_n").arg(sourceName);
 
-        // Find source info for polarity
+        // Find source polarity
         QString sourceActive = "low"; // Default
         for (const auto &source : config.sources) {
             if (source.name == sourceName) {
@@ -308,63 +328,99 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
             }
         }
 
-        out << "    // Bit[" << i << "]: " << sourceName << " (sticky flag)\n";
-        out << "    reg " << flagName << ";\n";
-        out << "    always @(posedge " << config.reason.aonClock << " or ";
-
-        // Async set condition based on source polarity
+        out << "    wire " << eventName << " = ";
         if (sourceActive == "high") {
-            out << "posedge " << sourceName << " or ";
+            out << "~" << sourceName << ";  // Convert HIGH-active to LOW-active\n";
         } else {
-            out << "negedge " << sourceName << " or ";
+            out << sourceName << ";   // Already LOW-active\n";
         }
+    }
+    out << "\n";
 
-        // Async clear conditions: POR + SW clear
-        out << "negedge " << config.reason.porSignal;
-        if (!config.reason.clearSignal.isEmpty()) {
-            out << " or posedge " << config.reason.clearSignal;
-        }
-        out << ") begin\n";
+    // Generate SW clear synchronizer and pulse generator
+    if (!config.reason.clearSignal.isEmpty()) {
+        out << "    /* Synchronize software clear and generate pulse */\n";
+        out << "    reg swc_d1, swc_d2, swc_d3;\n";
+        out << "    always @(posedge " << config.reason.aonClock << " or negedge "
+            << config.reason.porSignal << ") begin\n";
+        out << "        if (!" << config.reason.porSignal << ") begin\n";
+        out << "            swc_d1 <= 1'b0;\n";
+        out << "            swc_d2 <= 1'b0;\n";
+        out << "            swc_d3 <= 1'b0;\n";
+        out << "        end else begin\n";
+        out << "            swc_d1 <= " << config.reason.clearSignal << ";\n";
+        out << "            swc_d2 <= swc_d1;\n";
+        out << "            swc_d3 <= swc_d2;\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "    wire sw_clear_pulse = swc_d2 & ~swc_d3;  // Rising-edge pulse\n\n";
+    }
 
-        // Async clear priorities
-        out << "        if (!" << config.reason.porSignal << ")\n";
-        out << "            " << flagName << " <= 1'b0;  // POR async clear\n";
+    // Generate 2-cycle clear controller
+    out << "    /* 2-cycle clear controller and valid signal generation */\n";
+    out << "    reg        init_done;   // Set after first post-POR action\n";
+    out << "    reg [1:0]  clr_sr;      // 2-cycle clear shift register\n";
+    out << "    reg        valid_q;     // " << config.reason.validSignal << " register\n\n";
 
-        if (!config.reason.clearSignal.isEmpty()) {
-            out << "        else if (" << config.reason.clearSignal << ")\n";
-            out << "            " << flagName << " <= 1'b0;  // SW async clear\n";
-        }
+    out << "    wire clr_en = |clr_sr;  // Clear enable (any bit in shift register)\n\n";
 
-        // Async set condition
-        if (sourceActive == "high") {
-            out << "        else if (" << sourceName << ")\n";
-        } else {
-            out << "        else if (!" << sourceName << ")\n";
-        }
-        out << "            " << flagName << " <= 1'b1;  // Async-set capture\n";
+    out << "    always @(posedge " << config.reason.aonClock << " or negedge "
+        << config.reason.porSignal << ") begin\n";
+    out << "        if (!" << config.reason.porSignal << ") begin\n";
+    out << "            init_done <= 1'b0;\n";
+    out << "            clr_sr    <= 2'b00;\n";
+    out << "            valid_q   <= 1'b0;\n";
+    out << "        end else begin\n";
+    out << "            // Start clear after POR release (first clock)\n";
+    out << "            if (!init_done) begin\n";
+    out << "                init_done <= 1'b1;\n";
+    out << "                clr_sr    <= 2'b11;  // Fixed two-cycle clear window\n";
+    out << "                valid_q   <= 1'b0;\n";
 
-        // Sync hold (CRITICAL: no auto-clear!)
-        out << "        else\n";
-        out << "            " << flagName << " <= " << flagName << ";  // Hold sticky state\n";
+    if (!config.reason.clearSignal.isEmpty()) {
+        out << "            // SW clear retriggers the same two-cycle clear\n";
+        out << "            end else if (sw_clear_pulse) begin\n";
+        out << "                clr_sr  <= 2'b11;\n";
+        out << "                valid_q <= 1'b0;\n";
+    }
+
+    out << "            // Shift down the clear window\n";
+    out << "            end else if (clr_en) begin\n";
+    out << "                clr_sr <= {1'b0, clr_sr[1]};\n";
+    out << "            // Declare valid once clear window is over\n";
+    out << "            end else begin\n";
+    out << "                valid_q <= 1'b1;\n";
+    out << "            end\n";
+    out << "        end\n";
+    out << "    end\n\n";
+
+    // Generate sticky flags with pure async-set + sync-clear
+    out << "    /* Sticky flags: async-set on event, sync-clear during clear window */\n";
+    out << "    reg [" << (config.reason.vectorWidth - 1) << ":0] flags;\n\n";
+
+    // Generate per-flag logic
+    for (int i = 0; i < config.reason.sourceOrder.size(); ++i) {
+        const QString &sourceName = config.reason.sourceOrder[i];
+        QString        eventName  = QString("%1_event_n").arg(sourceName);
+
+        out << "    // Bit[" << i << "]: " << sourceName << " sticky flag\n";
+        out << "    always @(posedge " << config.reason.aonClock << " or negedge " << eventName
+            << ") begin\n";
+        out << "        if (!" << eventName << ") begin\n";
+        out << "            flags[" << i << "] <= 1'b1;      // Async set on event assert\n";
+        out << "        end else if (clr_en) begin\n";
+        out << "            flags[" << i << "] <= 1'b0;      // Sync clear during clear window\n";
+        out << "        end else begin\n";
+        out << "            flags[" << i << "] <= flags[" << i << "];  // Hold state\n";
+        out << "        end\n";
         out << "    end\n\n";
     }
 
-    // Generate bit vector output assignment (no encoding)
-    out << "    // Bit vector output: no encoding, direct flags\n";
-    out << "    assign " << config.reason.outputBus << " = ";
-
-    if (config.reason.vectorWidth > 1) {
-        out << "{";
-        for (int i = config.reason.vectorWidth - 1; i >= 0; --i) {
-            out << "reason_flag_" << i;
-            if (i > 0)
-                out << ", ";
-        }
-        out << "}";
-    } else {
-        out << "reason_flag_0";
-    }
-    out << ";  // bit[N-1:0] = {flag_N-1, ..., flag_1, flag_0}\n\n";
+    // Generate gated outputs
+    out << "    /* Output gating: zeros until valid */\n";
+    out << "    assign " << config.reason.validSignal << " = valid_q;\n";
+    out << "    assign " << config.reason.outputBus << " = " << config.reason.validSignal
+        << " ? flags : " << config.reason.vectorWidth << "'b0;\n\n";
 }
 
 void QSocResetPrimitive::generateOutputAssignments(

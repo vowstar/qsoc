@@ -637,9 +637,12 @@ port:
   sys_rst_n:
     direction: output
     type: logic
-  reset_reason_bits:
+  reason:
     direction: output
     type: logic [2:0]
+  reason_valid:
+    direction: output
+    type: logic
   test_en:
     direction: input
     type: logic
@@ -679,7 +682,8 @@ reset:
     reason:
       enable: true
       register_clock: clk_32k      # Always-on clock
-      output_bus: reset_reason_bits # Output bit vector name
+      output_bus: reason           # Output bit vector name (new unified naming)
+      valid_signal: reason_valid   # Valid signal name
       clear_signal: reason_clear   # Software clear signal
 )";
 
@@ -706,69 +710,80 @@ reset:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify reset reason recording logic (Per-source sticky flags) */
+        /* Verify new reset reason recording architecture */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "Reset reason recording logic (Per-source sticky flags)"));
+            verilogContent, "Reset reason recording logic (Sync-clear async-capture sticky flags)"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "async-set + sync-clear only, avoids S+R registers"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "2-cycle clear window after POR release or SW clear pulse"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "Outputs gated by valid signal for proper initialization"));
+
+        /* Verify event normalization */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "Event normalization: convert all sources to LOW-active format"));
         QVERIFY(
-            verifyVerilogContentNormalized(verilogContent, "async-set + async-clear + sync-hold"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent,
-            "POR = all bits 0, Software can decode individual sources from bit vector"));
+            verifyVerilogContentNormalized(verilogContent, "wire ext_rst_n_event_n = ext_rst_n"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "wire wdt_rst_n_event_n = wdt_rst_n"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "wire i3c_soc_rst_event_n = ~i3c_soc_rst"));
 
-        /* Verify per-source sticky flag registers */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg reason_flag_0"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg reason_flag_1"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg reason_flag_2"));
+        /* Verify SW clear synchronizer */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "Synchronize software clear and generate pulse"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg swc_d1, swc_d2, swc_d3"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "wire sw_clear_pulse = swc_d2 & ~swc_d3"));
 
-        /* Verify async-set logic with proper sensitivity lists */
+        /* Verify 2-cycle clear controller */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "always @(posedge clk_32k or negedge ext_rst_n"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "always @(posedge clk_32k or negedge wdt_rst_n"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "always @(posedge clk_32k or posedge i3c_soc_rst"));
+            verilogContent, "2-cycle clear controller and valid signal generation"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg [1:0]  clr_sr"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg        valid_q"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire clr_en = |clr_sr"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "clr_sr <= 2'b11"));
 
-        /* Verify sticky flag behavior - CRITICAL: Hold state logic */
+        /* Verify simplified sticky flags - NO S+R registers */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reason_flag_0 <= reason_flag_0;  // Hold sticky state"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reason_flag_1 <= reason_flag_1;  // Hold sticky state"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reason_flag_2 <= reason_flag_2;  // Hold sticky state"));
+            verilogContent, "Sticky flags: async-set on event, sync-clear during clear window"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg [2:0] flags"));
 
-        /* Verify async-set capture conditions */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (!ext_rst_n)"));
+        /* Verify clean async-set + sync-clear only (no complex sensitivity lists) */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reason_flag_0 <= 1'b1;  // Async-set capture"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (!wdt_rst_n)"));
+            verilogContent, "always @(posedge clk_32k or negedge ext_rst_n_event_n)"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reason_flag_1 <= 1'b1;  // Async-set capture"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (i3c_soc_rst)"));
+            verilogContent, "always @(posedge clk_32k or negedge wdt_rst_n_event_n)"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reason_flag_2 <= 1'b1;  // Async-set capture"));
+            verilogContent, "always @(posedge clk_32k or negedge i3c_soc_rst_event_n)"));
 
-        /* Verify bit vector output assignment (no encoding) */
+        /* Verify pure async-set + sync-clear logic */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "Bit vector output: no encoding, direct flags"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reset_reason_bits = {"));
+            verilogContent, "flags[0] <= 1'b1;      // Async set on event assert"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (clr_en) begin"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reason_flag_2, reason_flag_1, reason_flag_0"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "bit[N-1:0] = {flag_N-1, ..., flag_1, flag_0}"));
+            verilogContent, "flags[0] <= 1'b0;      // Sync clear during clear window"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "flags[0] <= flags[0];  // Hold state"));
 
-        /* Verify POR and SW clear conditions */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!por_rst_n)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "POR async clear"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (reason_clear)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "SW async clear"));
+        /* Verify output gating with new unified naming */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "Output gating: zeros until valid"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reason_valid = valid_q"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "assign reason = reason_valid ? flags : 3'b0"));
 
-        /* Verify module interface ports - CRITICAL: Reset reason control ports */
+        /* Verify module interface ports with new unified naming */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input        clk_32k,"));
         QVERIFY(
             verifyVerilogContentNormalized(verilogContent, "Always-on clock for reason recording"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input        reason_clear"));
         QVERIFY(
             verifyVerilogContentNormalized(verilogContent, "Software clear signal for reset reason"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [2:0] reason,"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output       reason_valid,"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "Reset reason valid flag (indicates reason output is meaningful)"));
 
         /* Verify module naming */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "module reason_reset_ctrl_bitvec"));

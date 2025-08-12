@@ -70,13 +70,14 @@ public:
     };
 
     /**
-     * @brief Reset reason recording configuration (Per-source sticky flags)
+     * @brief Reset reason recording configuration (Sync-clear async-capture sticky flags)
      */
     struct ResetReasonConfig
     {
         bool        enabled;     // Enable reset reason recording
         QString     aonClock;    // Always-on clock for recording logic (required)
         QString     outputBus;   // Output bit vector bus name
+        QString     validSignal; // Valid signal name for output gating
         QString     clearSignal; // Software clear signal name
         QString     porSignal;   // POR signal for async clear (auto-detected)
         QStringList sourceOrder; // Source names in bit order (LSB to MSB)

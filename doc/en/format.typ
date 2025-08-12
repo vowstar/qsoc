@@ -1656,7 +1656,8 @@ Reset controller properties provide structured configuration:
       [reason], [Map], [Reset reason recording configuration block (optional)],
       [reason.enable], [Boolean], [Enable reset reason recording (default: false)],
       [reason.register_clock], [String], [Always-on clock for recording logic (default: clk_32k). Generated as module input port.],
-      [reason.output_bus], [String], [Output bit vector bus name (default: reset_reason_bits). Generated as module output port.],
+      [reason.output_bus], [String], [Output bit vector bus name (default: reason). Generated as module output port.],
+      [reason.valid_signal], [String], [Valid signal name (default: reason_valid). Generated as module output port.],
       [reason.clear_signal], [String], [Software clear signal name (optional). Generated as module input port if specified.],
       [source], [Map], [Reset source definitions with polarity (required)],
       [target], [Map], [Reset target definitions with links (required)],
@@ -1717,7 +1718,7 @@ Each reset type supports specific structured parameters:
 
 ==== Reset Reason Recording
 <soc-net-reset-reason>
-Reset controllers can optionally record the source of the last reset using Per-source sticky flags with bit vector output. This implementation provides reliable narrow pulse capture and flexible software decoding.
+Reset controllers can optionally record the source of the last reset using sync-clear async-capture sticky flags with bit vector output. This implementation provides reliable narrow pulse capture and flexible software decoding.
 
 ===== Configuration
 Enable reset reason recording with the simplified configuration format:
@@ -1734,34 +1735,51 @@ reset:
     reason:
       enable: true
       register_clock: clk_32k      # Always-on clock
-      output_bus: reset_reason_bits # Output bit vector name
+      output_bus: reason           # Output bit vector name (unified naming)
+      valid_signal: reason_valid   # Valid signal name
       clear_signal: reason_clear   # Software clear signal
 ```
 
 ===== Implementation Details
-The reset reason recorder uses Per-source sticky flags with bit vector output:
-- Each non-POR reset source gets a dedicated sticky flag (async-set + async-clear + sync-hold)
-- *Critical fix*: Sticky flags use sync-hold (`flag <= flag`) to prevent narrow pulse loss
-- No encoding - software receives raw bit vector for maximum flexibility
+The reset reason recorder uses **sync-clear async-capture** sticky flags to avoid S+R register timing issues:
+- Each non-POR reset source gets a dedicated sticky flag (async-set on event, sync-clear during clear window)
+- Clean async-set + sync-clear architecture avoids problematic S+R registers that cause STA difficulties
+- Event normalization converts all sources to LOW-active format for consistent handling
+- 2-cycle clear window after POR release or software clear pulse ensures proper initialization
+- Output gating with valid signal prevents invalid data during initialization
 - Always-on clock ensures operation even when main clocks are stopped
 - POR signal auto-detected from source list (typically first active-low source containing "por")
 
 ===== Generated Logic
 ```verilog
-// Per-source sticky flag (example for ext_rst_n - bit[0])
-reg reason_flag_0;
-always @(posedge clk_32k or negedge ext_rst_n or
-         negedge por_rst_n or posedge reason_clear) begin
-    if (!por_rst_n)        reason_flag_0 <= 1'b0;  // POR async clear
-    else if (reason_clear) reason_flag_0 <= 1'b0;  // SW async clear
-    else if (!ext_rst_n)   reason_flag_0 <= 1'b1;  // Async-set capture
-    else                   reason_flag_0 <= reason_flag_0;  // Hold sticky state
+// Event normalization: convert all sources to LOW-active format
+wire ext_rst_n_event_n = ext_rst_n;   // Already LOW-active
+wire wdt_rst_n_event_n = wdt_rst_n;   // Already LOW-active
+wire i3c_soc_rst_event_n = ~i3c_soc_rst;  // Convert HIGH-active to LOW-active
+
+// 2-cycle clear controller and valid signal generation
+reg        init_done;  // Set after first post-POR action
+reg [1:0]  clr_sr;     // 2-cycle clear shift register
+reg        valid_q;    // reason_valid register
+wire       clr_en = |clr_sr;  // Clear enable (any bit in shift register)
+
+// Sticky flags: async-set on event, sync-clear during clear window
+reg [2:0] flags;
+
+// Bit[0]: ext_rst_n sticky flag - pure async-set + sync-clear
+always @(posedge clk_32k or negedge ext_rst_n_event_n) begin
+    if (!ext_rst_n_event_n) begin
+        flags[0] <= 1'b1;      // Async set on event assert
+    end else if (clr_en) begin
+        flags[0] <= 1'b0;      // Sync clear during clear window
+    end else begin
+        flags[0] <= flags[0];  // Hold state
+    end
 end
 
-// Bit vector output: no encoding, direct flags
-assign reset_reason_bits = {
-    reason_flag_2, reason_flag_1, reason_flag_0
-};  // bit[N-1:0] = {flag_N-1, ..., flag_1, flag_0}
+// Output gating: zeros until valid
+assign reason_valid = valid_q;
+assign reason = reason_valid ? flags : 3'b0;
 ```
 
 ==== Code Generation
