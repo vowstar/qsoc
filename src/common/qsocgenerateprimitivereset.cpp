@@ -201,9 +201,16 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
 {
     out << "\nmodule " << config.moduleName << " (\n";
 
-    // Clock input
-    out << "    /* Reset clock */\n";
-    out << "    input  " << config.clock << ",                   /**< System clock input */\n";
+    // Clock inputs
+    out << "    /* Reset clocks */\n";
+    out << "    input        " << config.clock << ",            /**< System clock input */\n";
+
+    // Add reset reason clock if enabled
+    if (config.reason.enabled && !config.reason.aonClock.isEmpty()
+        && config.reason.aonClock != config.clock) {
+        out << "    input        " << config.reason.aonClock
+            << ",            /**< Always-on clock for reason recording */\n";
+    }
 
     // Reset sources
     out << "    /* Reset source */\n";
@@ -236,16 +243,23 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
         if (config.reason.vectorWidth > 1) {
             out << "    output [" << (config.reason.vectorWidth - 1) << ":0] "
                 << config.reason.outputBus
-                << ",    /**< Reset reason bit vector (per-source sticky flags) */\n";
+                << ",  /**< Reset reason bit vector (per-source sticky flags) */\n";
         } else {
             out << "    output " << config.reason.outputBus
                 << ",                    /**< Reset reason bit vector (single sticky flag) */\n";
         }
     }
 
-    // Test enable
-    out << "    /* DFT */\n";
-    out << "    input  " << config.testEnable << "                    /**< Test enable signal */\n";
+    // Control signals
+    out << "    /* Control signals */\n";
+    out << "    input        " << config.testEnable << ",            /**< Test enable signal */\n";
+
+    // Add reset reason clear signal if enabled and specified
+    if (config.reason.enabled && !config.reason.clearSignal.isEmpty()) {
+        out << "    input        " << config.reason.clearSignal
+            << "        /**< Software clear signal for reset reason */\n";
+    }
+
     out << ");\n\n";
 }
 

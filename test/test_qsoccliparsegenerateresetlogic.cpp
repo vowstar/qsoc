@@ -762,6 +762,14 @@ reset:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "else if (reason_clear)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "SW async clear"));
 
+        /* Verify module interface ports - CRITICAL: Reset reason control ports */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input        clk_32k,"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "Always-on clock for reason recording"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input        reason_clear"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "Software clear signal for reset reason"));
+
         /* Verify module naming */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "module reason_reset_ctrl_bitvec"));
     }

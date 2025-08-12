@@ -1655,9 +1655,9 @@ Reset controller properties provide structured configuration:
       [test_enable], [String], [Test enable bypass signal (optional)],
       [reason], [Map], [Reset reason recording configuration block (optional)],
       [reason.enable], [Boolean], [Enable reset reason recording (default: false)],
-      [reason.register_clock], [String], [Always-on clock for recording logic (default: clk_32k)],
-      [reason.output_bus], [String], [Output bit vector bus name (default: reset_reason_bits)],
-      [reason.clear_signal], [String], [Software clear signal name (optional)],
+      [reason.register_clock], [String], [Always-on clock for recording logic (default: clk_32k). Generated as module input port.],
+      [reason.output_bus], [String], [Output bit vector bus name (default: reset_reason_bits). Generated as module output port.],
+      [reason.clear_signal], [String], [Software clear signal name (optional). Generated as module input port if specified.],
       [source], [Map], [Reset source definitions with polarity (required)],
       [target], [Map], [Reset target definitions with links (required)],
     )],
@@ -1770,14 +1770,15 @@ Reset controllers generate standalone modules that are instantiated in the main 
 
 ===== Generated Code Structure
 The reset controller generates a dedicated module with:
-1. Clock and test enable inputs
+1. Clock inputs (system clock and optional always-on clock for reason recording)
 2. Reset source signal inputs with polarity documentation
 3. Reset target signal outputs with polarity documentation
 4. Optional reset reason output bus (if recording enabled)
-5. Internal wire declarations for signal normalization
-6. Reset logic using simplified DFF-based implementations
-7. Optional reset reason recording logic (Per-source sticky flags)
-8. Output assignment logic with proper signal combination
+5. Control signal inputs (test enable and optional reason clear signal)
+6. Internal wire declarations for signal normalization
+7. Reset logic using simplified DFF-based implementations
+8. Optional reset reason recording logic (Per-source sticky flags)
+9. Output assignment logic with proper signal combination
 
 ===== Variable Naming Conventions
 Reset logic uses simplified variable naming for improved readability:
