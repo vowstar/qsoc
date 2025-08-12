@@ -32,15 +32,15 @@ document are property of their respective owners, and are hereby acknowledged.
 
 #figure(
   align(center)[#table(
-    columns: (0.25fr, 0.25fr,0.25fr, 1fr),
-    align: (auto,auto,auto,auto,),
-    table.header([Revision], [Date], [Author], [Description],),
-    table.hline(),
-    [1.0.0], [2025-04-08], [Huang Rui], [Initial release of QSoC Manual],
-    [1.0.1], [2025-06-29], [Huang Rui], [Updated QSoC Manual with netlist improvements],
-    [1.0.2], [2025-08-06], [Huang Rui], [Added SystemRDL support for template generation],
-  )]
-  , kind: table
-  )
+      columns: (0.25fr, 0.25fr, 0.25fr, 1fr),
+      align: (auto, auto, auto, auto),
+      table.header([Revision], [Date], [Author], [Description]),
+      table.hline(),
+      [1.0.0], [2025-04-08], [Huang Rui], [Initial release of QSoC Manual],
+      [1.0.1], [2025-06-29], [Huang Rui], [Updated QSoC Manual with netlist improvements],
+      [1.0.2], [2025-08-06], [Huang Rui], [Added SystemRDL support for template generation],
+    )],
+  kind: table,
+)
 
 #pagebreak()

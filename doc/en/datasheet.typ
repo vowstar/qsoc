@@ -32,15 +32,10 @@
   set page(paper: "a4")
 
   // Figure styles
-  show figure.caption: set text(
-    weight: "semibold",
-    font: fonts.headings
-  )
+  show figure.caption: set text(weight: "semibold", font: fonts.headings)
 
   // Table styles
-  show figure.where(
-    kind: table
-  ): set figure.caption(position: top)
+  show figure.where(kind: table): set figure.caption(position: top)
 
   set table(
     stroke: 0.5pt,
@@ -68,7 +63,7 @@
               #link(metadata.product_url)[#metadata.product]
               #linebreak()
               #metadata.revision - #metadata.publish_date
-            ]
+            ],
           )
         } else {
           grid(
@@ -84,7 +79,7 @@
             [
               #set align(right)
               #link(metadata.website_url)[#image(metadata.logo, height: 28pt)]
-            ]
+            ],
           )
         }
       }
@@ -110,7 +105,7 @@
           [
             #set align(right)
             #counter(page).display("1 / 1", both: true)
-          ]
+          ],
         )
       } else {
         grid(
@@ -124,7 +119,7 @@
           [
             #set align(right)
             Copyright © #link(metadata.website_url)[#metadata.organization]
-          ]
+          ],
         )
       }
     }
@@ -136,20 +131,24 @@
     numbering: "(1 / 1)",
     footer-descent: 2em,
     header: header_layout(),
-    footer: footer_layout()
+    footer: footer_layout(),
   )
 
   set heading(numbering: "1.")
 
   show heading: it => block([
     #v(0.3em)
-    #text(weight: "bold", font: fonts.headings, [#counter(heading).display() #it.body])
+    #text(weight: "bold", font: fonts.headings, [#counter(
+        heading,
+      ).display() #it.body])
     #v(0.8em)
   ])
 
   show heading.where(level: 1): it => {
     block([
-      #text(weight: "bold", font: fonts.headings, [#counter(heading).display() #it.body])
+      #text(weight: "bold", font: fonts.headings, [#counter(
+          heading,
+        ).display() #it.body])
       #v(0.3em)
     ])
   }
@@ -162,16 +161,13 @@
 
   let render_overview_page = () => {
     v(-0.65em)
-    align(
-      center,
-      block({
-        set text(16pt, font: fonts.headings, weight: "medium")
-        metadata.title
-        v(-0.5em)
-        line(length: 100%, stroke: 1pt)
-        v(0.3em)
-      })
-    )
+    align(center, block({
+      set text(16pt, font: fonts.headings, weight: "medium")
+      metadata.title
+      v(-0.5em)
+      line(length: 100%, stroke: 1pt)
+      v(0.3em)
+    }))
     columns(2, gutter: 30pt)[
       = Features
       <TitlePageFeatures>
@@ -191,15 +187,13 @@
     set heading(numbering: none)
     show heading: it => block([#it.body])
     [
-      #block(
-        [
-          #columns(1, gutter: 30pt)[
-            = Contents
-            <Directory>
-            #outline(title: none, depth: 3)
-          ]
+      #block([
+        #columns(1, gutter: 30pt)[
+          = Contents
+          <Directory>
+          #outline(title: none, depth: 3)
         ]
-      )
+      ])
     ]
   }
 
@@ -210,27 +204,17 @@
       = Indexing
       #columns(2, gutter: 30pt)[
         == Figures
-        #outline(
-          title: none,
-          target: figure.where(kind: image)
-        )
+        #outline(title: none, target: figure.where(kind: image))
 
         == Tables
-        #outline(
-          title: none,
-          target: figure.where(kind: table)
-        )
+        #outline(title: none, target: figure.where(kind: table))
       ]
     ]
   }
 
   let render_backcover_page = () => [
     #counter(page).update(n => n - 1)
-    #set page(
-      numbering: none,
-      header: none,
-      footer: none,
-    )
+    #set page(numbering: none, header: none, footer: none)
     #show heading: it => it.body
 
     #v(2.5cm)
