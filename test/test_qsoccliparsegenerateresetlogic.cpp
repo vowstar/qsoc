@@ -266,16 +266,16 @@ reset:
 
         /* Verify simplified ASYNC_SYNC reset implementation */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reg [3:0] u_sync_reset_ctrl_sync_i3c_soc_rst_cpu_rst_n_ff;"));
+            verilogContent, "reg [3:0] sync_i3c_soc_rst_cpu_rst_n_ff;"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "always @(posedge clk_sys or posedge i3c_soc_rst)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (i3c_soc_rst)"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "u_sync_reset_ctrl_sync_i3c_soc_rst_cpu_rst_n_ff <= 4'b0"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "sync_i3c_soc_rst_cpu_rst_n_ff <= 4'b0"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent,
             "assign i3c_soc_rst_cpu_rst_n_sync = test_en ? ~i3c_soc_rst : "
-            "u_sync_reset_ctrl_sync_i3c_soc_rst_cpu_rst_n_ff[3]"));
+            "sync_i3c_soc_rst_cpu_rst_n_ff[3]"));
     }
 
     void testCounterResetController()
@@ -342,17 +342,17 @@ reset:
 
         /* Verify simplified ASYNC_CNT reset implementation */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reg [7:0] u_counter_reset_ctrl_cnt_por_rst_n_cpu_por_rst_n_counter;"));
+            verilogContent, "reg [7:0] cnt_por_rst_n_cpu_por_rst_n_counter;"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reg u_counter_reset_ctrl_cnt_por_rst_n_cpu_por_rst_n_counting;"));
+            verilogContent, "reg cnt_por_rst_n_cpu_por_rst_n_counting;"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "always @(posedge clk_sys or negedge por_rst_n)"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "u_counter_reset_ctrl_cnt_por_rst_n_cpu_por_rst_n_counter < 255"));
+            verilogContent, "cnt_por_rst_n_cpu_por_rst_n_counter < 255"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent,
             "assign por_rst_n_cpu_por_rst_n_sync = test_en ? por_rst_n : "
-            "(u_counter_reset_ctrl_cnt_por_rst_n_cpu_por_rst_n_counting ? 1'b0 : 1'b1)"));
+            "(cnt_por_rst_n_cpu_por_rst_n_counting ? 1'b0 : 1'b1)"));
     }
 
     void testMultiSourceMultiTarget()
@@ -440,12 +440,12 @@ reset:
         verilogFile.close();
 
         /* Verify simplified DFF-based ASYNC_SYNC implementations */
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "reg [3:0] sync_por_rst_n_cpu_rst_n_ff;"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reg [3:0] u_multi_reset_ctrl_sync_por_rst_n_cpu_rst_n_ff;"));
+            verilogContent, "reg [3:0] sync_i3c_soc_rst_cpu_rst_n_ff;"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reg [3:0] u_multi_reset_ctrl_sync_i3c_soc_rst_cpu_rst_n_ff;"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reg [3:0] u_multi_reset_ctrl_sync_trig_cpu_rst_cpu_rst_n_ff;"));
+            verilogContent, "reg [3:0] sync_trig_cpu_rst_cpu_rst_n_ff;"));
 
         /* Verify wire declarations for intermediate signals */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire por_rst_n_cpu_rst_n_sync;"));
@@ -524,15 +524,15 @@ reset:
 
         /* Verify simplified SYNC_ONLY reset implementation */
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reg [1:0] u_sync_only_reset_ctrl_sync_only_sync_rst_n_peri_rst_n_ff;"));
+            verilogContent, "reg [1:0] sync_only_sync_rst_n_peri_rst_n_ff;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "always @(posedge clk_sys)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "if (!sync_rst_n)"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "u_sync_only_reset_ctrl_sync_only_sync_rst_n_peri_rst_n_ff <= 2'b0"));
+            verilogContent, "sync_only_sync_rst_n_peri_rst_n_ff <= 2'b0"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent,
             "assign sync_rst_n_peri_rst_n_sync = test_en ? sync_rst_n : "
-            "u_sync_only_reset_ctrl_sync_only_sync_rst_n_peri_rst_n_ff[1]"));
+            "sync_only_sync_rst_n_peri_rst_n_ff[1]"));
     }
 
     void testAsyncSyncntReset()
@@ -603,11 +603,11 @@ reset:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "Stage 1: Sync release"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "Stage 2: Counter timeout"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reg [2:0] u_syncnt_reset_ctrl_syncnt_trig_rst_dma_rst_n_sync_ff;"));
+            verilogContent, "reg [2:0] syncnt_trig_rst_dma_rst_n_sync_ff;"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "reg [7:0] u_syncnt_reset_ctrl_syncnt_trig_rst_dma_rst_n_counter;"));
-        QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "u_syncnt_reset_ctrl_syncnt_trig_rst_dma_rst_n_counter < 15"));
+            verilogContent, "reg [7:0] syncnt_trig_rst_dma_rst_n_counter;"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "syncnt_trig_rst_dma_rst_n_counter < 15"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "module syncnt_reset_ctrl"));
     }
 

@@ -1779,10 +1779,21 @@ The reset controller generates a dedicated module with:
 7. Optional reset reason recording logic (Per-source sticky flags)
 8. Output assignment logic with proper signal combination
 
+===== Variable Naming Conventions
+Reset logic uses simplified variable naming for improved readability:
+- *Wire names*: `{source}_{target}_sync` (e.g., `por_rst_n_cpu_rst_n_sync`)
+- *Register names*: `{type}_{source}_{target}_{suffix}` format:
+  - Flip-flops: `sync_por_rst_n_cpu_rst_n_ff`
+  - Counters: `cnt_wdt_rst_n_cpu_rst_n_counter`
+  - Count flags: `cnt_wdt_rst_n_cpu_rst_n_counting`
+  - Stage wires: `syncnt_trig_rst_dma_rst_n_sync_stage1`
+- *Type prefixes*: `sync` (ASYNC_SYNC), `cnt` (ASYNC_CNT), `syncnt` (ASYNC_SYNCNT), `sync_only` (SYNC_ONLY)
+- *No controller prefixes*: Variables use only essential identifiers for conciseness
+
 ===== Generated Modules
-The reset controller instantiates proven reset synchronization primitives:
-- `datapath_reset_sync`: Async reset, sync release synchronizer
-- `datapath_reset_counter`: Async reset with timeout counter (planned)
+The reset controller generates dedicated modules with inline DFF-based implementations:
+- Direct flip-flop instantiation for synchronizers (no external modules)
+- Counter-based timeout logic for ASYNC_CNT and ASYNC_SYNCNT types
 - Custom combinational logic for signal routing and polarity handling
 
 ===== Generated Code Example
@@ -1799,20 +1810,23 @@ module rstctrl (
 );
 
     /* Wires for reset connections */
-    wire normalize_por_rst_n_to_cpu_rst_n;
+    wire por_rst_n_cpu_rst_n_sync;
 
     /* Reset logic instances */
-    datapath_reset_sync #(
-        .RST_SYNC_LEVEL(4)  /**< Delay cycles for reset */
-    ) u_reset_sync_normalize_por_rst_n_to_cpu_rst_n (
-        .clk         (clk_sys),
-        .rst_n_a     (~por_rst_n),
-        .reset_bypass(test_en),
-        .rst_n_sync  (normalize_por_rst_n_to_cpu_rst_n)
-    );
+    /*
+     * por_rst_n -> cpu_rst_n: ASYNC_SYNC: Async reset sync release
+     * (Legacy A(4,clk_sys)
+     * with sync_depth=4, clock=clk_sys)
+     */
+    reg [3:0] sync_por_rst_n_cpu_rst_n_ff;
+    always @(posedge clk_sys or negedge por_rst_n) begin
+        if (!por_rst_n) sync_por_rst_n_cpu_rst_n_ff <= 4'b0;
+        else sync_por_rst_n_cpu_rst_n_ff <= {sync_por_rst_n_cpu_rst_n_ff[2:0], 1'b1};
+    end
+    assign por_rst_n_cpu_rst_n_sync = test_en ? por_rst_n : sync_por_rst_n_cpu_rst_n_ff[3];
 
     /* Reset output assignments */
-    assign cpu_rst_n = &{normalize_por_rst_n_to_cpu_rst_n};
+    assign cpu_rst_n = &{por_rst_n_cpu_rst_n_sync};
 
 endmodule
 ```

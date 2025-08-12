@@ -667,10 +667,6 @@ QString QSocResetPrimitive::getInstanceName(
         break;
     }
 
-    // Format: u_{controller_name}_{type}_{source}_{target}
-    return QString("u_%1_%2_%3_%4")
-        .arg(config.name)
-        .arg(typePrefix)
-        .arg(connection.sourceName)
-        .arg(connection.targetName);
+    // Simplified format: {type}_{source}_{target}
+    return QString("%1_%2_%3").arg(typePrefix).arg(connection.sourceName).arg(connection.targetName);
 }
