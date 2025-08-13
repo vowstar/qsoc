@@ -2480,6 +2480,82 @@ test_module:
         QVERIFY(verifyVerilogContent("test_multi_driver", "Comb/Seq/FSM Output: data_out"));
         QVERIFY(verifyVerilogContent("test_multi_driver", "Module: test_module"));
     }
+
+    void testBusExpansionWidthPreservation()
+    {
+        messageList.clear();
+
+        /* Create a simple test that verifies bus expansion preserves width information */
+        /* Use the existing c906 module and create a simple bus-like structure */
+        const QString content = R"(
+---
+version: "1.0"
+module: "test_bus_width_preservation"
+port:
+  clk:
+    direction: in
+    type: "logic"
+  rst_n:
+    direction: in
+    type: "logic"
+instance:
+  u_cpu0:
+    module: "c906"
+    port:
+      # Test range preservation: [21:2] should not become [21:0]
+      biu_pad_arid:
+        type: "logic[21:2]"
+      # Test another range: [15:4] should not become [15:0]  
+      biu_pad_awid:
+        type: "logic[15:4]"
+      # Test single bit
+      axim_clk_en:
+        type: "logic"
+net:
+  test_addr_signal:
+    - instance: u_cpu0
+      port: biu_pad_arid
+      type: "logic[21:2]"
+  test_data_signal:
+    - instance: u_cpu0
+      port: biu_pad_awid
+      type: "logic[15:4]"
+  test_enable_signal:
+    - instance: u_cpu0
+      port: axim_clk_en
+      type: "logic"
+)";
+
+        const QString filePath = createTempFile("test_bus_width_preservation.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_bus_width_preservation"));
+
+        /* Verify that wire declarations preserve the original range format */
+        /* The preserved type should maintain [21:2] range, not convert to [21:0] */
+        QVERIFY(
+            verifyVerilogContent("test_bus_width_preservation", "wire [ 21:2] test_addr_signal"));
+
+        /* Verify that [15:4] range is preserved for data */
+        QVERIFY(
+            verifyVerilogContent("test_bus_width_preservation", "wire [ 15:4] test_data_signal"));
+
+        /* Verify that single-bit enable signal works correctly */
+        QVERIFY(verifyVerilogContent("test_bus_width_preservation", "wire test_enable_signal"));
+
+        /* Verify that the wire declarations do NOT use incorrect [msb:0] format */
+        QVERIFY(
+            !verifyVerilogContent("test_bus_width_preservation", "wire [ 21:0] test_addr_signal"));
+        QVERIFY(
+            !verifyVerilogContent("test_bus_width_preservation", "wire [ 15:0] test_data_signal"));
+    }
 };
 
 QStringList Test::messageList;

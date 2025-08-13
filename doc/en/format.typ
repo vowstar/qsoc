@@ -2362,6 +2362,30 @@ bus:
 
 During netlist processing, bus connections are expanded based on bus interface definitions in the module files, generating individual nets for each bus signal.
 
+==== Width Information Preservation
+<soc-net-bus-width-preservation>
+When QSoC expands bus connections into individual nets, it preserves the original port width specifications from module definitions. This ensures that signals with specific bit ranges (e.g., `logic[21:2]`) maintain their exact width in the generated Verilog, rather than being converted to a standard `[msb:0]` format.
+
+For example, if a module defines:
+```yaml
+port:
+  addr_port:
+    type: logic[21:2]
+    direction: out
+```
+
+The generated Verilog wire declaration will correctly preserve the range:
+```verilog
+wire [21:2] bus_addr_signal;  // Preserves [21:2] range
+```
+
+Rather than incorrectly expanding to:
+```verilog
+wire [21:0] bus_addr_signal;  // Incorrect [21:0] format
+```
+
+This preservation is critical for hardware designs that rely on specific address ranges, bit alignments, or have hardware-imposed constraints on signal indexing.
+
 Bus connection properties include:
 
 #figure(

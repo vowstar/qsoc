@@ -603,6 +603,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         QString portWidthSpec = "";
                         QString portDirection = "unknown";
 
+                        /* Check if this connection has preserved type information from bus expansion */
+                        if (connectionNode["type"] && connectionNode["type"].IsScalar()) {
+                            portWidthSpec = QString::fromStdString(
+                                connectionNode["type"].as<std::string>());
+                            qDebug() << "Using preserved type for port" << portName << "in instance"
+                                     << instanceName << ":" << portWidthSpec;
+                        }
+
                         /* Check if this port has bits selection attribute */
                         QString bitSelection = "";
                         if (connectionNode["bits"] && connectionNode["bits"].IsScalar()) {
@@ -625,8 +633,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                                 if (moduleData["port"] && moduleData["port"].IsMap()
                                     && moduleData["port"][portName.toStdString()]) {
-                                    /* Get port width */
-                                    if (moduleData["port"][portName.toStdString()]["type"]
+                                    /* Get port width only if not already preserved from bus expansion */
+                                    if (portWidthSpec.isEmpty()
+                                        && moduleData["port"][portName.toStdString()]["type"]
                                         && moduleData["port"][portName.toStdString()]["type"]
                                                .IsScalar()) {
                                         const QString originalType = QString::fromStdString(
@@ -957,73 +966,98 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     QString netWidth = "";
                     int     maxWidth = 0;
 
-                    /* Find the maximum bit index needed for this net based on port widths */
-                    int maxBitIndex = -1;
-
+                    /* First check if any connection has preserved type information with range format */
+                    QString preservedRangeType = "";
                     for (const auto &detail : portDetails) {
-                        int requiredMaxBit = -1;
-
-                        /* Always check the port's original width first */
                         if (!detail.width.isEmpty()) {
-                            /* Check if it's a single bit type (logic, wire) */
-                            if (detail.width == "logic" || detail.width == "wire") {
-                                /* Single bit port - wire should be single bit regardless of bit selection */
-                                requiredMaxBit = 0;
-                            } else {
-                                /* Attempt to extract width value from format like [31:0] or [7] */
-                                const QRegularExpression widthRegex(
-                                    R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
-                                const QRegularExpressionMatch match = widthRegex.match(detail.width);
-                                if (match.hasMatch()) {
-                                    bool      msb_ok = false;
-                                    const int msb    = match.captured(1).toInt(&msb_ok);
-
-                                    if (msb_ok) {
-                                        requiredMaxBit = msb;
-                                    }
-                                }
+                            /* Check if this looks like a preserved range type [X:Y] format */
+                            const QRegularExpression rangeRegex(
+                                R"(logic\s*\[\s*(\d+)\s*:\s*(\d+)\s*\])");
+                            const QRegularExpressionMatch rangeMatch = rangeRegex.match(
+                                detail.width);
+                            if (rangeMatch.hasMatch()) {
+                                /* Found preserved range type - use it directly */
+                                preservedRangeType = detail.width;
+                                break;
                             }
-                        }
-
-                        /* If no port width found, fall back to bit selection */
-                        /* Note: This fallback should only be used when port width is unknown */
-                        if (requiredMaxBit == -1 && !detail.bitSelect.isEmpty()) {
-                            /* Parse bit selection like [7:4], [3:0], or [5] */
-                            const QRegularExpression bitSelectRegex(
-                                R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
-                            const QRegularExpressionMatch bitMatch = bitSelectRegex.match(
-                                detail.bitSelect);
-                            if (bitMatch.hasMatch()) {
-                                bool      msb_ok = false;
-                                const int msb    = bitMatch.captured(1).toInt(&msb_ok);
-                                if (msb_ok) {
-                                    if (bitMatch.capturedLength(2) > 0) {
-                                        /* Range selection like [7:4] - we need up to MSB */
-                                        requiredMaxBit = msb;
-                                    } else {
-                                        /* Single bit selection like [5] - we need up to that bit */
-                                        requiredMaxBit = msb;
-                                    }
-                                }
-                            }
-                        }
-
-                        /* Update the maximum bit index needed */
-                        if (requiredMaxBit > maxBitIndex) {
-                            maxBitIndex = requiredMaxBit;
                         }
                     }
 
-                    /* Generate the net width specification */
-                    if (maxBitIndex >= 0) {
-                        if (maxBitIndex == 0) {
-                            /* Single bit, no range needed */
-                            netWidth = "";
-                        } else {
-                            /* Multi-bit, generate [msb:0] format */
-                            netWidth = QString("[%1:0]").arg(maxBitIndex);
+                    /* If we found preserved range type, use it directly */
+                    if (!preservedRangeType.isEmpty()) {
+                        netWidth = preservedRangeType;
+                        qDebug() << "Using preserved range type for net" << netName << ":"
+                                 << netWidth;
+                    } else {
+                        /* Find the maximum bit index needed for this net based on port widths */
+                        int maxBitIndex = -1;
+
+                        for (const auto &detail : portDetails) {
+                            int requiredMaxBit = -1;
+
+                            /* Always check the port's original width first */
+                            if (!detail.width.isEmpty()) {
+                                /* Check if it's a single bit type (logic, wire) */
+                                if (detail.width == "logic" || detail.width == "wire") {
+                                    /* Single bit port - wire should be single bit regardless of bit selection */
+                                    requiredMaxBit = 0;
+                                } else {
+                                    /* Attempt to extract width value from format like [31:0] or [7] */
+                                    const QRegularExpression widthRegex(
+                                        R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+                                    const QRegularExpressionMatch match = widthRegex.match(
+                                        detail.width);
+                                    if (match.hasMatch()) {
+                                        bool      msb_ok = false;
+                                        const int msb    = match.captured(1).toInt(&msb_ok);
+
+                                        if (msb_ok) {
+                                            requiredMaxBit = msb;
+                                        }
+                                    }
+                                }
+                            }
+
+                            /* If no port width found, fall back to bit selection */
+                            /* Note: This fallback should only be used when port width is unknown */
+                            if (requiredMaxBit == -1 && !detail.bitSelect.isEmpty()) {
+                                /* Parse bit selection like [7:4], [3:0], or [5] */
+                                const QRegularExpression bitSelectRegex(
+                                    R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+                                const QRegularExpressionMatch bitMatch = bitSelectRegex.match(
+                                    detail.bitSelect);
+                                if (bitMatch.hasMatch()) {
+                                    bool      msb_ok = false;
+                                    const int msb    = bitMatch.captured(1).toInt(&msb_ok);
+                                    if (msb_ok) {
+                                        if (bitMatch.capturedLength(2) > 0) {
+                                            /* Range selection like [7:4] - we need up to MSB */
+                                            requiredMaxBit = msb;
+                                        } else {
+                                            /* Single bit selection like [5] - we need up to that bit */
+                                            requiredMaxBit = msb;
+                                        }
+                                    }
+                                }
+                            }
+
+                            /* Update the maximum bit index needed */
+                            if (requiredMaxBit > maxBitIndex) {
+                                maxBitIndex = requiredMaxBit;
+                            }
                         }
-                        maxWidth = maxBitIndex + 1;
+
+                        /* Generate the net width specification */
+                        if (maxBitIndex >= 0) {
+                            if (maxBitIndex == 0) {
+                                /* Single bit, no range needed */
+                                netWidth = "";
+                            } else {
+                                /* Multi-bit, generate [msb:0] format */
+                                netWidth = QString("[%1:0]").arg(maxBitIndex);
+                            }
+                            maxWidth = maxBitIndex + 1;
+                        }
                     }
 
                     /* If no width found from ports, try from net type as fallback */

@@ -437,6 +437,19 @@ bool QSocGenerateManager::processNetlist()
                                 connectionNode["instance"] = conn.instanceName;
                                 connectionNode["port"]     = mappedPortName;
 
+                                /* Preserve port type/width information from module definition */
+                                if (moduleData["port"] && moduleData["port"].IsMap()
+                                    && moduleData["port"][mappedPortName]
+                                    && moduleData["port"][mappedPortName]["type"]
+                                    && moduleData["port"][mappedPortName]["type"].IsScalar()) {
+                                    connectionNode["type"]
+                                        = moduleData["port"][mappedPortName]["type"]
+                                              .as<std::string>();
+                                    qDebug()
+                                        << "Preserved port type for" << mappedPortName.c_str()
+                                        << ":" << connectionNode["type"].as<std::string>().c_str();
+                                }
+
                                 /* Add connection to the net using List format */
                                 netlistData["net"][netName].push_back(connectionNode);
 
