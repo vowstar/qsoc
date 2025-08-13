@@ -445,18 +445,10 @@ bool QSocGenerateManager::processNetlist()
                                     connectionNode["type"]
                                         = moduleData["port"][mappedPortName]["type"]
                                               .as<std::string>();
-                                    qDebug()
-                                        << "Preserved port type for" << mappedPortName.c_str()
-                                        << ":" << connectionNode["type"].as<std::string>().c_str();
                                 }
 
                                 /* Add connection to the net using List format */
                                 netlistData["net"][netName].push_back(connectionNode);
-
-                                /* Debug the structure we just created */
-                                qDebug() << "Added connection to net:" << netName.c_str()
-                                         << "instance:" << conn.instanceName.c_str()
-                                         << "port:" << mappedPortName.c_str();
 
                             } catch (const YAML::Exception &e) {
                                 qWarning()
@@ -471,24 +463,6 @@ bool QSocGenerateManager::processNetlist()
                         /* If no connections were added to this net, remove it */
                         if (netlistData["net"][netName].size() == 0) {
                             netlistData["net"].remove(netName);
-                        }
-                        /* Add debug output to verify structure */
-                        else {
-                            qDebug() << "Created net:" << netName.c_str() << "with structure:";
-                            for (const auto &connectionNode : netlistData["net"][netName]) {
-                                if (connectionNode.IsMap() && connectionNode["instance"]
-                                    && connectionNode["instance"].IsScalar()) {
-                                    qDebug() << "  Instance:"
-                                             << QString::fromStdString(
-                                                    connectionNode["instance"].as<std::string>());
-                                    if (connectionNode["port"]
-                                        && connectionNode["port"].IsScalar()) {
-                                        qDebug() << "    Port:"
-                                                 << QString::fromStdString(
-                                                        connectionNode["port"].as<std::string>());
-                                    }
-                                }
-                            }
                         }
                     }
 

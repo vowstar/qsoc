@@ -607,8 +607,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         if (connectionNode["type"] && connectionNode["type"].IsScalar()) {
                             portWidthSpec = QString::fromStdString(
                                 connectionNode["type"].as<std::string>());
-                            qDebug() << "Using preserved type for port" << portName << "in instance"
-                                     << instanceName << ":" << portWidthSpec;
                         }
 
                         /* Check if this port has bits selection attribute */
@@ -986,8 +984,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     /* If we found preserved range type, use it directly */
                     if (!preservedRangeType.isEmpty()) {
                         netWidth = preservedRangeType;
-                        qDebug() << "Using preserved range type for net" << netName << ":"
-                                 << netWidth;
                     } else {
                         /* Find the maximum bit index needed for this net based on port widths */
                         int maxBitIndex = -1;
@@ -1871,13 +1867,6 @@ QSocNumberInfo QSocGenerateManager::parseNumber(const QString &numStr)
             result.width = calculatedWidth;
         }
     }
-
-    /* Add debug output */
-    qDebug() << "Parsed number:" << numStr << "Value:"
-             << QString::fromStdString(QSocNumberInfo::bigIntegerToStringWithBase(result.value, 10))
-             << "Base:" << static_cast<int>(result.base) << "Width:" << result.width
-             << (result.hasExplicitWidth ? "(explicit)" : "(calculated)")
-             << (result.errorDetected ? " (error detected)" : "");
 
     return result;
 }

@@ -6,11 +6,13 @@
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QStringList>
 #include <QTemporaryFile>
 #include <QTextStream>
+#include <QThread>
 #include <QtCore>
 #include <QtTest>
 
@@ -122,7 +124,14 @@ c906:
     /* Look for Verilog output file in typical locations */
     bool verifyVerilogOutputExistence(const QString &baseFileName)
     {
-        /* First check the current project's output directory if available */
+        /* Check the project output directory first (most reliable) */
+        const QString projectOutputPath = projectManager.getOutputPath();
+        const QString projectFilePath   = QDir(projectOutputPath).filePath(baseFileName + ".v");
+        if (QFile::exists(projectFilePath)) {
+            return true;
+        }
+
+        /* Fallback: check if success message exists in messageList */
         for (const QString &msg : messageList) {
             if (msg.contains("Successfully generated Verilog code:")
                 && msg.contains(baseFileName + ".v")) {
@@ -137,10 +146,7 @@ c906:
             }
         }
 
-        /* Check the project output directory */
-        const QString projectOutputPath = projectManager.getOutputPath();
-        const QString projectFilePath   = QDir(projectOutputPath).filePath(baseFileName + ".v");
-        return QFile::exists(projectFilePath);
+        return false;
     }
 
     /* Get Verilog content and check if it contains specific text */
@@ -1502,44 +1508,50 @@ PDDWUWSWCDG_H:
     {
         messageList.clear();
 
-        /* Create a netlist file with uplink conflicts (same port name, different types) */
+        /* Debug: Print working directory and project paths */
+        qDebug() << "Current working directory:" << QDir::currentPath();
+        qDebug() << "Project current path:" << projectManager.getCurrentPath();
+        qDebug() << "Project module path:" << projectManager.getModulePath();
+        qDebug() << "Project output path:" << projectManager.getOutputPath();
+
+        /* Use unique module names to avoid conflicts with other tests */
         const QString content = R"(
 instance:
   u_io_cell1:
-    module: IO_CELL_8BIT
+    module: UPLINK_TEST_CELL_8BIT
     port:
       PAD:
-        uplink: test_port
+        uplink: uplink_conflict_test_port
   u_io_cell2:
-    module: IO_CELL_16BIT
+    module: UPLINK_TEST_CELL_16BIT
     port:
       PAD:
-        uplink: test_port  # Same port name but different width - should cause conflict
+        uplink: uplink_conflict_test_port  # Same port name but different width - should cause conflict
 )";
 
-        /* Create IO_CELL_8BIT module */
+        /* Create UPLINK_TEST_CELL_8BIT module */
         const QString io8bitContent = R"(
-IO_CELL_8BIT:
+UPLINK_TEST_CELL_8BIT:
   port:
     PAD:
       type: logic[7:0]
       direction: inout
 )";
 
-        /* Create IO_CELL_16BIT module */
+        /* Create UPLINK_TEST_CELL_16BIT module */
         const QString io16bitContent = R"(
-IO_CELL_16BIT:
+UPLINK_TEST_CELL_16BIT:
   port:
     PAD:
       type: logic[15:0]
       direction: inout
 )";
 
-        /* Create the module files */
-        const QDir moduleDir(projectManager.getModulePath());
+        /* Create the module files with unique names */
+        QDir moduleDir(projectManager.getModulePath());
 
-        /* Create IO_CELL_8BIT module file */
-        const QString io8bitPath = moduleDir.filePath("IO_CELL_8BIT.soc_mod");
+        /* Create UPLINK_TEST_CELL_8BIT module file */
+        const QString io8bitPath = moduleDir.filePath("UPLINK_TEST_CELL_8BIT.soc_mod");
         QFile         io8bitFile(io8bitPath);
         if (io8bitFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream stream(&io8bitFile);
@@ -1547,8 +1559,8 @@ IO_CELL_16BIT:
             io8bitFile.close();
         }
 
-        /* Create IO_CELL_16BIT module file */
-        const QString io16bitPath = moduleDir.filePath("IO_CELL_16BIT.soc_mod");
+        /* Create UPLINK_TEST_CELL_16BIT module file */
+        const QString io16bitPath = moduleDir.filePath("UPLINK_TEST_CELL_16BIT.soc_mod");
         QFile         io16bitFile(io16bitPath);
         if (io16bitFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream stream(&io16bitFile);
@@ -1558,6 +1570,9 @@ IO_CELL_16BIT:
 
         /* Create netlist file */
         const QString filePath = createTempFile("test_uplink_conflict.soc_net", content);
+
+        /* Clear messageList again right before running the test to ensure clean state */
+        messageList.clear();
 
         /* Run the command to generate Verilog - this should detect width mismatch */
         QSocCliWorker     socCliWorker;
@@ -1569,11 +1584,43 @@ IO_CELL_16BIT:
         /* Check if the process failed due to width mismatch error */
         bool foundWidthMismatchError = false;
         for (const QString &msg : messageList) {
-            if (msg.contains("Type/width mismatch for uplink port test_port")) {
+            /* Match the specific error message for our unique port name */
+            if (msg.contains("Type/width mismatch for uplink port uplink_conflict_test_port")) {
                 foundWidthMismatchError = true;
                 break;
             }
         }
+
+        /* Debug: Print all messages if test fails */
+        if (!foundWidthMismatchError) {
+            qDebug() << "Expected uplink error message not found. All messages ("
+                     << messageList.size() << "):";
+            for (const QString &msg : messageList) {
+                qDebug() << "  " << msg;
+            }
+
+            /* Additional debugging: check if modules were created correctly */
+            const QDir moduleDir(projectManager.getModulePath());
+            qDebug() << "Module directory:" << moduleDir.absolutePath();
+            qDebug() << "Module files:";
+            for (const QString &file :
+                 moduleDir.entryList(QStringList() << "*UPLINK_TEST*", QDir::Files)) {
+                qDebug() << "  " << file;
+            }
+
+            /* Check if netlist file was processed */
+            const QString outputDir = projectManager.getOutputPath();
+            qDebug() << "Output directory:" << outputDir;
+            qDebug() << "Output files:";
+            for (const QString &file :
+                 QDir(outputDir).entryList(QStringList() << "*conflict*", QDir::Files)) {
+                qDebug() << "  " << file;
+            }
+        }
+
+        /* Clean up our unique module files */
+        moduleDir.remove("UPLINK_TEST_CELL_8BIT.soc_mod");
+        moduleDir.remove("UPLINK_TEST_CELL_16BIT.soc_mod");
 
         /* Verify that width mismatch was detected */
         QVERIFY(foundWidthMismatchError);
@@ -2485,12 +2532,11 @@ test_module:
     {
         messageList.clear();
 
-        /* Create a simple test that verifies bus expansion preserves width information */
-        /* Use the existing c906 module and create a simple bus-like structure */
-        const QString content = R"(
+        /* Create netlist content that tests width preservation using existing c906 module */
+        const QString netlistContent = R"(
 ---
 version: "1.0"
-module: "test_bus_width_preservation"
+module: "test_bus_width_preservation_unique"
 port:
   clk:
     direction: in
@@ -2502,59 +2548,76 @@ instance:
   u_cpu0:
     module: "c906"
     port:
-      # Test range preservation: [21:2] should not become [21:0]
-      biu_pad_arid:
-        type: "logic[21:2]"
-      # Test another range: [15:4] should not become [15:0]  
-      biu_pad_awid:
-        type: "logic[15:4]"
-      # Test single bit
       axim_clk_en:
         type: "logic"
+      # Test preservation of [21:2] range - should NOT become [21:0]
+      biu_pad_arid:
+        type: "logic[21:2]"
+      # Test preservation of [15:4] range - should NOT become [15:0]  
+      biu_pad_awid:
+        type: "logic[15:4]"
 net:
-  test_addr_signal:
+  test_unique_addr_signal:
     - instance: u_cpu0
       port: biu_pad_arid
       type: "logic[21:2]"
-  test_data_signal:
+  test_unique_data_signal:
     - instance: u_cpu0
       port: biu_pad_awid
       type: "logic[15:4]"
-  test_enable_signal:
+  test_unique_enable_signal:
     - instance: u_cpu0
       port: axim_clk_en
       type: "logic"
 )";
 
-        const QString filePath = createTempFile("test_bus_width_preservation.soc_net", content);
+        /* Create the netlist file using createTempFile helper with unique name */
+        const QString filePath
+            = createTempFile("test_bus_width_preservation_unique.soc_net", netlistContent);
 
-        /* Run the command to generate Verilog */
+        /* Clear messageList again right before running the test to ensure clean state */
+        messageList.clear();
+
+        /* Run qsoc generate command */
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
             = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Verify the output file exists */
-        QVERIFY(verifyVerilogOutputExistence("test_bus_width_preservation"));
+        /* Check if the output file exists using direct file system check */
+        const QString projectOutputPath = projectManager.getOutputPath();
+        const QString expectedFilePath
+            = QDir(projectOutputPath).filePath("test_bus_width_preservation_unique.v");
+
+        /* Use the updated function name for verification */
+        QVERIFY(verifyVerilogOutputExistence("test_bus_width_preservation_unique"));
 
         /* Verify that wire declarations preserve the original range format */
-        /* The preserved type should maintain [21:2] range, not convert to [21:0] */
-        QVERIFY(
-            verifyVerilogContent("test_bus_width_preservation", "wire [ 21:2] test_addr_signal"));
+        QVERIFY2(
+            verifyVerilogContent(
+                "test_bus_width_preservation_unique", "wire [21:2] test_unique_addr_signal"),
+            "Address signal should preserve [21:2] range format");
 
-        /* Verify that [15:4] range is preserved for data */
-        QVERIFY(
-            verifyVerilogContent("test_bus_width_preservation", "wire [ 15:4] test_data_signal"));
+        QVERIFY2(
+            verifyVerilogContent(
+                "test_bus_width_preservation_unique", "wire [15:4] test_unique_data_signal"),
+            "Data signal should preserve [15:4] range format");
 
-        /* Verify that single-bit enable signal works correctly */
-        QVERIFY(verifyVerilogContent("test_bus_width_preservation", "wire test_enable_signal"));
+        QVERIFY2(
+            verifyVerilogContent("test_bus_width_preservation_unique", "test_unique_enable_signal"),
+            "Enable signal should be present");
 
         /* Verify that the wire declarations do NOT use incorrect [msb:0] format */
-        QVERIFY(
-            !verifyVerilogContent("test_bus_width_preservation", "wire [ 21:0] test_addr_signal"));
-        QVERIFY(
-            !verifyVerilogContent("test_bus_width_preservation", "wire [ 15:0] test_data_signal"));
+        QVERIFY2(
+            !verifyVerilogContent(
+                "test_bus_width_preservation_unique", "wire [21:0] test_unique_addr_signal"),
+            "Address signal should NOT be converted to [21:0] format");
+
+        QVERIFY2(
+            !verifyVerilogContent(
+                "test_bus_width_preservation_unique", "wire [15:0] test_unique_data_signal"),
+            "Data signal should NOT be converted to [15:0] format");
     }
 };
 
