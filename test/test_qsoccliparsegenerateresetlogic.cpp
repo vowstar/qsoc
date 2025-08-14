@@ -671,6 +671,7 @@ reset:
       output: reason               # Output bit vector name
       valid: reason_valid          # Valid signal name
       clear: reason_clear          # Software clear signal
+      root_reset: por_rst_n        # Root reset signal for async clear (explicitly specified)
 )";
 
         QString netlistPath = createTempFile("test_reset_reason.soc_net", netlistContent);

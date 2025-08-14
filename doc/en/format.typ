@@ -1658,6 +1658,7 @@ Reset controller properties provide structured configuration:
       [reason.output], [String], [Output bit vector bus name (default: reason). Generated as module output port.],
       [reason.valid], [String], [Valid signal name (default: reason_valid). Generated as module output port.],
       [reason.clear], [String], [Software clear signal name (optional). Generated as module input port if specified.],
+      [reason.root_reset], [String], [Root reset signal name for async clear (required when reason recording enabled). Must exist in source list.],
       [source], [Map], [Reset source definitions with polarity (required)],
       [target], [Map], [Reset target definitions with links (required)],
     )],
@@ -1674,7 +1675,7 @@ Reset sources define input reset signals with simple polarity specification:
       align: (auto, left),
       table.header([Property], [Description]),
       table.hline(),
-      [polarity], [Signal polarity: `low` (active low) or `high` (active high)],
+      [polarity], [Signal polarity: `low` (active low) or `high` (active high) - *REQUIRED*],
     )],
   caption: [RESET SOURCE PROPERTIES],
   kind: table,
@@ -1689,7 +1690,7 @@ Reset targets define output reset signals with structured link definitions:
       align: (auto, left),
       table.header([Property], [Description]),
       table.hline(),
-      [polarity], [Target signal polarity: `low` (active low) or `high` (active high)],
+      [polarity], [Target signal polarity: `low` (active low) or `high` (active high) - *REQUIRED*],
       [link], [Map of source connections with type and parameters],
     )],
   caption: [RESET TARGET PROPERTIES],
@@ -1725,7 +1726,7 @@ Enable reset reason recording with the simplified configuration format:
 reset:
   - name: my_reset_ctrl
     source:
-      por_rst_n: low              # POR (auto-detected, excluded from bit vector)
+      por_rst_n: low              # Root reset (excluded from bit vector)
       ext_rst_n: low              # bit[0]
       wdt_rst_n: low              # bit[1]
       i3c_soc_rst: high           # bit[2]
@@ -1736,6 +1737,7 @@ reset:
       output: reason               # Output bit vector name
       valid: reason_valid          # Valid signal name
       clear: reason_clear          # Software clear signal
+      root_reset: por_rst_n        # Root reset signal for async clear (explicitly specified)
 ```
 
 ===== Implementation Details
@@ -1746,7 +1748,7 @@ The reset reason recorder uses *sync-clear async-capture* sticky flags to avoid 
 - 2-cycle clear window after POR release or software clear pulse ensures proper initialization
 - Output gating with valid signal prevents invalid data during initialization
 - Always-on clock ensures operation even when main clocks are stopped
-- POR signal auto-detected from source list (typically first active-low source containing "por")
+- Root reset signal explicitly specified in `reason.root_reset` field
 - *Generate statement optimization*: Uses Verilog `generate` blocks to reduce code duplication for multiple sticky flags
 
 ===== Generated Logic

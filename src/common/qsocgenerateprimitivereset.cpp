@@ -72,7 +72,11 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                 QString polarity = QString::fromStdString(it->second.as<std::string>());
                 source.active    = (polarity == "low") ? "low" : "high";
             } else {
-                source.active = "high"; // default
+                qCritical() << "Error: 'polarity' field is required for source '" << source.name
+                            << "'";
+                qCritical() << "Please specify polarity explicitly: 'high' or 'low'";
+                qCritical() << "Example: source: { " << source.name << ": low }";
+                return config; // Return with error
             }
 
             source.comment = it->second.IsMap() && it->second["comment"]
@@ -98,7 +102,11 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                 QString polarity = QString::fromStdString(tgtNode["polarity"].as<std::string>());
                 target.active    = (polarity == "low") ? "low" : "high";
             } else {
-                target.active = "low"; // default for targets
+                qCritical() << "Error: 'polarity' field is required for target '" << target.name
+                            << "'";
+                qCritical() << "Please specify polarity explicitly: 'high' or 'low'";
+                qCritical() << "Example: target: { " << target.name << ": { polarity: low } }";
+                return config; // Return with error
             }
 
             target.comment = tgtNode["comment"]
@@ -177,19 +185,40 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                                   ? QString::fromStdString(reasonNode["clear"].as<std::string>())
                                   : "reason_clear";
 
-        // Auto-detect POR signal (first active-low source or default)
-        config.reason.porSignal = "por_rst_n"; // Default
-        for (const auto &source : config.sources) {
-            if (source.name.contains("por", Qt::CaseInsensitive) && source.active == "low") {
-                config.reason.porSignal = source.name;
-                break;
+        // Explicit root reset signal specification (KISS: no auto-detection!)
+        if (reasonNode["root_reset"]) {
+            config.reason.rootReset = QString::fromStdString(
+                reasonNode["root_reset"].as<std::string>());
+
+            // Validate that root_reset exists in source list
+            bool rootResetFound = false;
+            for (const auto &source : config.sources) {
+                if (source.name == config.reason.rootReset) {
+                    rootResetFound = true;
+                    break;
+                }
             }
+
+            if (!rootResetFound) {
+                qCritical() << "Error: Specified root_reset '" << config.reason.rootReset
+                            << "' not found in source list.";
+                qCritical() << "Available sources:";
+                for (const auto &source : config.sources) {
+                    qCritical() << "  - " << source.name << " (polarity: " << source.active << ")";
+                }
+                return config; // Return with error
+            }
+        } else {
+            qCritical() << "Error: 'root_reset' field is required in reason configuration.";
+            qCritical() << "Please specify which source signal should be used as the root reset.";
+            qCritical() << "Example: reason: { root_reset: por_rst_n, ... }";
+            return config; // Return with error
         }
 
         // Build source order (exclude POR,按source声明顺序)
         config.reason.sourceOrder.clear();
         for (const auto &source : config.sources) {
-            if (source.name != config.reason.porSignal) {
+            if (source.name != config.reason.rootReset) {
                 config.reason.sourceOrder.append(source.name);
             }
         }
@@ -335,8 +364,8 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
         out << "    /* Synchronize software clear and generate pulse */\n";
         out << "    reg swc_d1, swc_d2, swc_d3;\n";
         out << "    always @(posedge " << config.reason.clock << " or negedge "
-            << config.reason.porSignal << ") begin\n";
-        out << "        if (!" << config.reason.porSignal << ") begin\n";
+            << config.reason.rootReset << ") begin\n";
+        out << "        if (!" << config.reason.rootReset << ") begin\n";
         out << "            swc_d1 <= 1'b0;\n";
         out << "            swc_d2 <= 1'b0;\n";
         out << "            swc_d3 <= 1'b0;\n";
@@ -359,8 +388,8 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
     out << "    wire clr_en = |clr_sr;  /* Clear enable (active during 2-cycle window) */\n\n";
 
     out << "    always @(posedge " << config.reason.clock << " or negedge "
-        << config.reason.porSignal << ") begin\n";
-    out << "        if (!" << config.reason.porSignal << ") begin\n";
+        << config.reason.rootReset << ") begin\n";
+    out << "        if (!" << config.reason.rootReset << ") begin\n";
     out << "            init_done <= 1'b0;\n";
     out << "            clr_sr    <= 2'b00;\n";
     out << "            valid_q   <= 1'b0;\n";
@@ -495,6 +524,15 @@ void QSocResetPrimitive::generateResetInstance(
     QString wireName     = getConnectionWireName(connection.sourceName, connection.targetName);
     QString instanceName = getInstanceName(connection, config);
 
+    // Find source polarity from explicit configuration (KISS: no guessing!)
+    QString sourcePolarity = "high"; // This will be an error if not found
+    for (const auto &source : config.sources) {
+        if (source.name == connection.sourceName) {
+            sourcePolarity = source.active;
+            break;
+        }
+    }
+
     out << "    /*\n";
     out << "     * " << connection.sourceName << " -> " << connection.targetName << ": ";
 
@@ -503,14 +541,12 @@ void QSocResetPrimitive::generateResetInstance(
         out << "ASYNC_DIRECT: Async reset Async release direct connection\n";
         out << "     */\n";
 
-        // Determine if source needs inversion
-        QString sourceSignal = connection.sourceName;
-        // Assume sources ending with _n are active low, others are active high
-        if (connection.sourceName.endsWith("_n")) {
-            sourceSignal = connection.sourceName; // Keep as-is for active low
+        // Use explicit polarity configuration (KISS: no naming assumptions!)
+        QString sourceSignal;
+        if (sourcePolarity == "low") {
+            sourceSignal = connection.sourceName; // Already active low
         } else {
-            sourceSignal
-                = "~" + connection.sourceName; // Invert for active high to get active low output
+            sourceSignal = "~" + connection.sourceName; // Convert active high to active low output
         }
 
         out << "    assign " << wireName << " = " << sourceSignal << ";\n";
@@ -526,20 +562,25 @@ void QSocResetPrimitive::generateResetInstance(
         // Generate classic N-stage synchronizer
         out << "    reg [" << (connection.sync_depth - 1) << ":0] " << instanceName << "_ff;\n";
         out << "    always @(posedge " << connection.clock;
-        if (connection.sourceName.endsWith("_n")) {
+
+        // Use explicit polarity configuration (KISS: no naming assumptions!)
+        if (sourcePolarity == "low") {
             out << " or negedge " << connection.sourceName << ") begin\n";
             out << "        if (!" << connection.sourceName << ")\n";
         } else {
             out << " or posedge " << connection.sourceName << ") begin\n";
             out << "        if (" << connection.sourceName << ")\n";
         }
+
         out << "            " << instanceName << "_ff <= " << connection.sync_depth << "'b0;\n";
         out << "        else\n";
         out << "            " << instanceName << "_ff <= {" << instanceName << "_ff["
             << (connection.sync_depth - 2) << ":0], 1'b1};\n";
         out << "    end\n";
         out << "    assign " << wireName << " = test_en ? ";
-        if (connection.sourceName.endsWith("_n")) {
+
+        // Use explicit polarity for test bypass logic
+        if (sourcePolarity == "low") {
             out << connection.sourceName;
         } else {
             out << "~" << connection.sourceName;
@@ -560,13 +601,16 @@ void QSocResetPrimitive::generateResetInstance(
             << "_counter;\n";
         out << "    reg " << instanceName << "_counting;\n";
         out << "    always @(posedge " << connection.clock;
-        if (connection.sourceName.endsWith("_n")) {
+
+        // Use explicit polarity configuration (KISS: no naming assumptions!)
+        if (sourcePolarity == "low") {
             out << " or negedge " << connection.sourceName << ") begin\n";
             out << "        if (!" << connection.sourceName << ") begin\n";
         } else {
             out << " or posedge " << connection.sourceName << ") begin\n";
             out << "        if (" << connection.sourceName << ") begin\n";
         }
+
         out << "            " << instanceName << "_counter <= " << connection.counter_width
             << "'b0;\n";
         out << "            " << instanceName << "_counting <= 1'b1;\n";
@@ -580,7 +624,9 @@ void QSocResetPrimitive::generateResetInstance(
         out << "        end\n";
         out << "    end\n";
         out << "    assign " << wireName << " = test_en ? ";
-        if (connection.sourceName.endsWith("_n")) {
+
+        // Use explicit polarity for test bypass logic
+        if (sourcePolarity == "low") {
             out << connection.sourceName;
         } else {
             out << "~" << connection.sourceName;
@@ -598,18 +644,23 @@ void QSocResetPrimitive::generateResetInstance(
         // Generate synchronous reset/release synchronizer
         out << "    reg [" << (connection.sync_depth - 1) << ":0] " << instanceName << "_ff;\n";
         out << "    always @(posedge " << connection.clock << ") begin\n";
-        if (connection.sourceName.endsWith("_n")) {
+
+        // Use explicit polarity configuration (KISS: no naming assumptions!)
+        if (sourcePolarity == "low") {
             out << "        if (!" << connection.sourceName << ")\n";
         } else {
             out << "        if (" << connection.sourceName << ")\n";
         }
+
         out << "            " << instanceName << "_ff <= " << connection.sync_depth << "'b0;\n";
         out << "        else\n";
         out << "            " << instanceName << "_ff <= {" << instanceName << "_ff["
             << (connection.sync_depth - 2) << ":0], 1'b1};\n";
         out << "    end\n";
         out << "    assign " << wireName << " = test_en ? ";
-        if (connection.sourceName.endsWith("_n")) {
+
+        // Use explicit polarity for test bypass logic
+        if (sourcePolarity == "low") {
             out << connection.sourceName;
         } else {
             out << "~" << connection.sourceName;
@@ -633,13 +684,16 @@ void QSocResetPrimitive::generateResetInstance(
         out << "    reg [" << (connection.sync_depth - 1) << ":0] " << instanceName
             << "_sync_ff;\n";
         out << "    always @(posedge " << connection.clock;
-        if (connection.sourceName.endsWith("_n")) {
+
+        // Use explicit polarity configuration (KISS: no naming assumptions!)
+        if (sourcePolarity == "low") {
             out << " or negedge " << connection.sourceName << ") begin\n";
             out << "        if (!" << connection.sourceName << ")\n";
         } else {
             out << " or posedge " << connection.sourceName << ") begin\n";
             out << "        if (" << connection.sourceName << ")\n";
         }
+
         out << "            " << instanceName << "_sync_ff <= " << connection.sync_depth
             << "'b0;\n";
         out << "        else\n";
@@ -672,7 +726,9 @@ void QSocResetPrimitive::generateResetInstance(
 
         // Output assignment with test bypass
         out << "    assign " << wireName << " = test_en ? ";
-        if (connection.sourceName.endsWith("_n")) {
+
+        // Use explicit polarity for test bypass logic
+        if (sourcePolarity == "low") {
             out << connection.sourceName;
         } else {
             out << "~" << connection.sourceName;

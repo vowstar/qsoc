@@ -79,7 +79,7 @@ public:
         QString     output;      // Output bit vector bus name
         QString     valid;       // Valid signal name for output gating
         QString     clear;       // Software clear signal name
-        QString     porSignal;   // POR signal for async clear (auto-detected)
+        QString     rootReset;   // Root reset signal for async clear (explicitly specified)
         QStringList sourceOrder; // Source names in bit order (LSB to MSB)
         int         vectorWidth; // Total bit vector width (calculated)
     };
