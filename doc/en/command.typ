@@ -29,7 +29,9 @@ commands and subcommands are available:
     [], [list], [List all buses within designated libraries],
     [], [show], [Show detailed information on a chosen bus],
     [schematic], [], [Process schematic designs (not implemented yet)],
-    [generate], [verilog], [Generate Verilog code from netlist files],
+    [generate],
+    [verilog],
+    [Generate Verilog code and unconnected port reports from netlist files],
     [],
     [template],
     [Generate files from Jinja2 templates using various data sources],
@@ -191,11 +193,39 @@ The `generate verilog` command generates Verilog code from netlist files.
     table.hline(),
     [-d, --directory <path>], [The path to the project directory],
     [-p, --project <name>], [The project name],
+    [-m, --merge], [Merge multiple netlist files in order before processing],
     [files], [The netlist files to be processed],
   )],
   caption: [VERILOG GENERATION OPTIONS],
   kind: table,
 )
+
+==== Unconnected Port Report
+<unconnected-port-report>
+The Verilog generation automatically creates an unconnected port report when unconnected ports are detected. The report is saved as `<module_name>.nc.rpt` in YAML format containing:
+
+- Summary statistics (total instances and ports)
+- Detailed breakdown by instance and port
+- Port type and direction information
+
+Example report structure:
+```yaml
+# Unconnected port report - soc_top
+# Generated: 2025-01-XX XX:XX:XX
+# Tool: qsoc vX.X.X
+
+summary:
+  total_instance: 2
+  total_port: 3
+
+instance:
+  u_axi4_interconnect:
+    module: axi4_interconnect
+    port:
+      araddr:
+        type: logic[39:0]
+        direction: input
+```
 
 === Template Generation Options
 <template-generation>
