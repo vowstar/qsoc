@@ -1,4 +1,26 @@
-/.vscode
-/*.pro.user*
-/*.txt.user*
+# Temp and user files
+*.bak
+*~
+*.log
+*.swp
+*.swo
+*.user
+*.layout
+
+# macOS files
+.DS_Store
+
+# Windows files
+Thumbs.db
+Desktop.ini
+
+# Linux files
+*.gch
+
+# Development
 /build
+/.vscode
+/.qtcreator
+/*.*.user
+/*.*.user*
+/*.local

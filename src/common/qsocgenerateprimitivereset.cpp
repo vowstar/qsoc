@@ -313,7 +313,7 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
     out << "    // 2-cycle clear window after POR release or SW clear pulse\n";
     out << "    // Outputs gated by valid signal for proper initialization\n\n";
 
-    // Generate event normalization (convert all to LOW-active)
+    // Generate event normalization (convert all to LOW-active _n signals)
     out << "    /* Event normalization: convert all sources to LOW-active format */\n";
     for (int i = 0; i < config.reason.sourceOrder.size(); ++i) {
         const QString &sourceName = config.reason.sourceOrder[i];
@@ -330,9 +330,9 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
 
         out << "    wire " << eventName << " = ";
         if (sourceActive == "high") {
-            out << "~" << sourceName << ";  // Convert HIGH-active to LOW-active\n";
+            out << "~" << sourceName << ";  /* HIGH-active -> LOW-active */\n";
         } else {
-            out << sourceName << ";   // Already LOW-active\n";
+            out << sourceName << ";   /* Already LOW-active */\n";
         }
     }
     out << "\n";
@@ -356,13 +356,14 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
         out << "    wire sw_clear_pulse = swc_d2 & ~swc_d3;  // Rising-edge pulse\n\n";
     }
 
-    // Generate 2-cycle clear controller
-    out << "    /* 2-cycle clear controller and valid signal generation */\n";
-    out << "    reg        init_done;   // Set after first post-POR action\n";
-    out << "    reg [1:0]  clr_sr;      // 2-cycle clear shift register\n";
-    out << "    reg        valid_q;     // " << config.reason.validSignal << " register\n\n";
+    // Generate fixed 2-cycle clear controller (no configurable parameters)
+    out << "    /* Fixed 2-cycle clear controller and valid signal generation */\n";
+    out << "    /* Design rationale: 2-cycle clear ensures clean removal of async events */\n";
+    out << "    reg        init_done;   /* Set after first post-POR action */\n";
+    out << "    reg [1:0]  clr_sr;      /* Fixed 2-cycle clear shift register */\n";
+    out << "    reg        valid_q;     /* " << config.reason.validSignal << " register */\n\n";
 
-    out << "    wire clr_en = |clr_sr;  // Clear enable (any bit in shift register)\n\n";
+    out << "    wire clr_en = |clr_sr;  /* Clear enable (active during 2-cycle window) */\n\n";
 
     out << "    always @(posedge " << config.reason.aonClock << " or negedge "
         << config.reason.porSignal << ") begin\n";
@@ -371,50 +372,64 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
     out << "            clr_sr    <= 2'b00;\n";
     out << "            valid_q   <= 1'b0;\n";
     out << "        end else begin\n";
-    out << "            // Start clear after POR release (first clock)\n";
+    out << "            /* Start fixed 2-cycle clear after POR release */\n";
     out << "            if (!init_done) begin\n";
     out << "                init_done <= 1'b1;\n";
-    out << "                clr_sr    <= 2'b11;  // Fixed two-cycle clear window\n";
+    out << "                clr_sr    <= 2'b11;  /* Fixed: exactly 2 cycles */\n";
     out << "                valid_q   <= 1'b0;\n";
 
     if (!config.reason.clearSignal.isEmpty()) {
-        out << "            // SW clear retriggers the same two-cycle clear\n";
+        out << "            /* SW clear retriggers fixed 2-cycle clear */\n";
         out << "            end else if (sw_clear_pulse) begin\n";
-        out << "                clr_sr  <= 2'b11;\n";
+        out << "                clr_sr  <= 2'b11;  /* Fixed: exactly 2 cycles */\n";
         out << "                valid_q <= 1'b0;\n";
     }
 
-    out << "            // Shift down the clear window\n";
+    out << "            /* Shift down the 2-cycle clear window */\n";
     out << "            end else if (clr_en) begin\n";
     out << "                clr_sr <= {1'b0, clr_sr[1]};\n";
-    out << "            // Declare valid once clear window is over\n";
+    out << "            /* Set valid after fixed 2-cycle clear completes */\n";
     out << "            end else begin\n";
     out << "                valid_q <= 1'b1;\n";
     out << "            end\n";
     out << "        end\n";
     out << "    end\n\n";
 
-    // Generate sticky flags with pure async-set + sync-clear
+    // Generate sticky flags with pure async-set + sync-clear using generate statement
     out << "    /* Sticky flags: async-set on event, sync-clear during clear window */\n";
     out << "    reg [" << (config.reason.vectorWidth - 1) << ":0] flags;\n\n";
 
-    // Generate per-flag logic
-    for (int i = 0; i < config.reason.sourceOrder.size(); ++i) {
+    // Create event vector for generate block
+    out << "    /* Event vector for generate block */\n";
+    out << "    wire [" << (config.reason.vectorWidth - 1) << ":0] src_event_n = {\n";
+    for (int i = config.reason.sourceOrder.size() - 1; i >= 0; --i) {
         const QString &sourceName = config.reason.sourceOrder[i];
         QString        eventName  = QString("%1_event_n").arg(sourceName);
-
-        out << "    // Bit[" << i << "]: " << sourceName << " sticky flag\n";
-        out << "    always @(posedge " << config.reason.aonClock << " or negedge " << eventName
-            << ") begin\n";
-        out << "        if (!" << eventName << ") begin\n";
-        out << "            flags[" << i << "] <= 1'b1;      // Async set on event assert\n";
-        out << "        end else if (clr_en) begin\n";
-        out << "            flags[" << i << "] <= 1'b0;      // Sync clear during clear window\n";
-        out << "        end else begin\n";
-        out << "            flags[" << i << "] <= flags[" << i << "];  // Hold state\n";
-        out << "        end\n";
-        out << "    end\n\n";
+        out << "        " << eventName;
+        if (i > 0)
+            out << ",";
+        out << "\n";
     }
+    out << "    };\n\n";
+
+    // Use generate statement for all flags
+    out << "    /* Generate sticky flags using generate for loop */\n";
+    out << "    genvar i;\n";
+    out << "    generate\n";
+    out << "        for (i = 0; i < " << config.reason.vectorWidth
+        << "; i = i + 1) begin : g_flag\n";
+    out << "            always @(posedge " << config.reason.aonClock
+        << " or negedge src_event_n[i]) begin\n";
+    out << "                if (!src_event_n[i]) begin\n";
+    out << "                    flags[i] <= 1'b1;      /* Async set on event assert (low) */\n";
+    out << "                end else if (clr_en) begin\n";
+    out << "                    flags[i] <= 1'b0;      /* Sync clear during clear window */\n";
+    out << "                end else begin\n";
+    out << "                    flags[i] <= flags[i];  /* Hold state */\n";
+    out << "                end\n";
+    out << "            end\n";
+    out << "        end\n";
+    out << "    endgenerate\n\n";
 
     // Generate gated outputs
     out << "    /* Output gating: zeros until valid */\n";
