@@ -5,6 +5,7 @@
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivecomb.h"
 #include "common/qsocgenerateprimitiveseq.h"
+#include "common/qsocgeneratereportunconnected.h"
 #include "common/qstaticstringweaver.h"
 #include "qsocgenerateprimitivefsm.h"
 #include "qsocgenerateprimitivereset.h"
@@ -23,6 +24,9 @@
 
 bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 {
+    /* Create unconnected port reporter for collecting data */
+    QSocGenerateReportUnconnected unconnectedPortReporter;
+
     /* Check if netlistData is valid (instance section is now optional) */
 
     // Check if instance section exists and is valid when present
@@ -1472,6 +1476,22 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 portConnections.append(
                                     QString("        .%1(%2)").arg(portName).arg(connectionValue));
                             } else {
+                                /* Collect unconnected port information for reporting */
+                                QSocGenerateReportUnconnected::UnconnectedPortInfo portInfo;
+                                portInfo.instanceName = instanceName;
+                                portInfo.moduleName   = moduleName;
+                                portInfo.portName     = portName;
+                                portInfo.direction    = direction;
+
+                                /* Clean the type for reporting - combine width and base type */
+                                if (width.isEmpty()) {
+                                    portInfo.type = "logic";
+                                } else {
+                                    portInfo.type = QString("logic%1").arg(width);
+                                }
+
+                                unconnectedPortReporter.addUnconnectedPort(portInfo);
+
                                 /* Format FIXME message with width if available */
                                 if (width.isEmpty()) {
                                     portConnections.append(
@@ -1539,6 +1559,17 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     outputFile.close();
     qInfo() << "Successfully generated Verilog file:" << outputFilePath;
+
+    /* Generate unconnected port report if we have unconnected ports */
+    if (unconnectedPortReporter.getUnconnectedPortCount() > 0) {
+        const QString reportOutputPath = projectManager->getOutputPath();
+        if (unconnectedPortReporter.generateReport(reportOutputPath, outputFileName)) {
+            qInfo() << "Successfully generated unconnected port report:"
+                    << QDir(reportOutputPath).filePath(outputFileName + ".nc.rpt");
+        } else {
+            qWarning() << "Failed to generate unconnected port report";
+        }
+    }
 
     /* Format generated Verilog file if verible-verilog-format is available */
     formatVerilogFile(outputFilePath);
