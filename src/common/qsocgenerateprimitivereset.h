@@ -23,14 +23,14 @@ class QSocResetPrimitive
 {
 public:
     /**
-     * @brief Reset type enumeration (new unified format)
+     * @brief Reset type enumeration (simplified naming)
      */
     enum ResetType {
-        ASYNC_COMB,   // Legacy A: Async reset + Async release (combinational)
-        ASYNC_SYNC,   // Legacy A(N,clk): Async reset + Sync release
-        ASYNC_CNT,    // Legacy AC(N,W,T,clk): Async reset + Counter timeout
-        ASYNC_SYNCNT, // Legacy AS(N1,N2,clk): Async reset + Sync-then-Count release
-        SYNC_ONLY     // Legacy S(N,clk): Sync reset + Sync release
+        ASYNC_DIRECT,     // Async reset + Async release (direct connection)
+        ASYNC_SYNC,       // Async reset + Sync release
+        ASYNC_COUNT,      // Async reset + Counter timeout release
+        ASYNC_SYNC_COUNT, // Async reset + Sync-then-Count release
+        SYNC_ONLY         // Sync reset + Sync release
     };
 
     /**
@@ -75,10 +75,10 @@ public:
     struct ResetReasonConfig
     {
         bool        enabled;     // Enable reset reason recording
-        QString     aonClock;    // Always-on clock for recording logic (required)
-        QString     outputBus;   // Output bit vector bus name
-        QString     validSignal; // Valid signal name for output gating
-        QString     clearSignal; // Software clear signal name
+        QString     clock;       // Always-on clock for recording logic (required)
+        QString     output;      // Output bit vector bus name
+        QString     valid;       // Valid signal name for output gating
+        QString     clear;       // Software clear signal name
         QString     porSignal;   // POR signal for async clear (auto-detected)
         QStringList sourceOrder; // Source names in bit order (LSB to MSB)
         int         vectorWidth; // Total bit vector width (calculated)

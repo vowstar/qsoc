@@ -1557,14 +1557,14 @@ reset:
         link:                      # Link definitions for each source
           por_rst_n:
             type: ASYNC_SYNC       # Clear type name, no abbreviations
-            sync_depth: 4          # Structured parameters
+            depth: 4               # Structured parameters
           i3c_soc_rst:
-            type: ASYNC_COMB       # Simple combinational pass-through
+            type: ASYNC_DIRECT     # Simple combinational pass-through
       peri_rst_n:
         polarity: low
         link:
           por_rst_n:
-            type: ASYNC_COMB       # Direct connection
+            type: ASYNC_DIRECT     # Direct connection
 ```
 
 ==== Reset Types
@@ -1577,11 +1577,11 @@ Reset controllers support five distinct reset types, each with clear naming and 
       align: (auto, left, left),
       table.header([Type], [Behavior], [Use Cases]),
       table.hline(),
-      [`ASYNC_COMB`], [Async reset, async release (combinational)], [Simple pass-through, clock-independent resets],
+      [`ASYNC_DIRECT`], [Async reset, async release (combinational)], [Simple pass-through, clock-independent resets],
       [`ASYNC_SYNC`], [Async reset, sync release with configurable depth], [Standard synchronous reset release],
-      [`ASYNC_CNT`], [Async reset, sync release with counter], [Power-on-reset with timeout],
+      [`ASYNC_COUNT`], [Async reset, sync release with counter], [Power-on-reset with timeout],
       [`SYNC_ONLY`], [Synchronous reset with configurable depth], [Fully synchronous reset systems],
-      [`ASYNC_SYNCNT`], [Async reset with sync-then-count release], [Two-stage reset: sync release followed by counter timeout],
+      [`ASYNC_SYNC_COUNT`], [Async reset with sync-then-count release], [Two-stage reset: sync release followed by counter timeout],
     )],
   caption: [RESET TYPES],
   kind: table,
@@ -1591,13 +1591,13 @@ Reset controllers support five distinct reset types, each with clear naming and 
 Each reset type accepts structured parameters instead of string parsing:
 
 ```yaml
-# ASYNC_COMB: No parameters needed
+# ASYNC_DIRECT: No parameters needed
 target:
   simple_rst_n:
     polarity: low
     link:
       por_rst_n:
-        type: ASYNC_COMB           # Direct combinational connection
+        type: ASYNC_DIRECT         # Direct combinational connection
 
 # ASYNC_SYNC: Structured sync parameters
 target:
@@ -1606,18 +1606,18 @@ target:
     link:
       por_rst_n:
         type: ASYNC_SYNC
-        sync_depth: 4              # 4-clock synchronization depth
+        depth: 4                   # 4-clock synchronization depth
 
-# ASYNC_CNT: Counter-based parameters
+# ASYNC_COUNT: Counter-based parameters
 target:
   por_rst_n:
     polarity: low
     link:
       por_in:
-        type: ASYNC_CNT
-        sync_depth: 2              # Initial sync depth
-        counter_width: 8           # Counter bit width
-        timeout_cycles: 255        # Timeout value
+        type: ASYNC_COUNT
+        depth: 2                   # Initial sync depth
+        width: 8                   # Counter bit width
+        timeout: 255               # Timeout value
 
 # SYNC_ONLY: Synchronous-only parameters
 target:
@@ -1626,18 +1626,18 @@ target:
     link:
       reset_req:
         type: SYNC_ONLY
-        sync_depth: 3              # 3-clock synchronous depth
+        depth: 3                   # 3-clock synchronous depth
 
-# ASYNC_SYNCNT: Sync-then-count parameters
+# ASYNC_SYNC_COUNT: Sync-then-count parameters
 target:
   dma_rst_n:
     polarity: low
     link:
       trig_rst:
-        type: ASYNC_SYNCNT
-        sync_depth: 3              # Initial sync depth
-        counter_width: 8           # Counter bit width
-        timeout_cycles: 15         # Counter timeout value
+        type: ASYNC_SYNC_COUNT
+        depth: 3                   # Initial sync depth
+        width: 8                   # Counter bit width
+        timeout: 15                # Counter timeout value
 ```
 
 ==== Reset Properties
@@ -1654,11 +1654,10 @@ Reset controller properties provide structured configuration:
       [clock], [String], [Clock signal name for sync operations (required)],
       [test_enable], [String], [Test enable bypass signal (optional)],
       [reason], [Map], [Reset reason recording configuration block (optional)],
-      [reason.enable], [Boolean], [Enable reset reason recording (default: false)],
-      [reason.register_clock], [String], [Always-on clock for recording logic (default: clk_32k). Generated as module input port.],
-      [reason.output_bus], [String], [Output bit vector bus name (default: reason). Generated as module output port.],
-      [reason.valid_signal], [String], [Valid signal name (default: reason_valid). Generated as module output port.],
-      [reason.clear_signal], [String], [Software clear signal name (optional). Generated as module input port if specified.],
+      [reason.clock], [String], [Always-on clock for recording logic (default: clk_32k). Generated as module input port.],
+      [reason.output], [String], [Output bit vector bus name (default: reason). Generated as module output port.],
+      [reason.valid], [String], [Valid signal name (default: reason_valid). Generated as module output port.],
+      [reason.clear], [String], [Software clear signal name (optional). Generated as module input port if specified.],
       [source], [Map], [Reset source definitions with polarity (required)],
       [target], [Map], [Reset target definitions with links (required)],
     )],
@@ -1706,11 +1705,11 @@ Each reset type supports specific structured parameters:
       align: (auto, auto, left),
       table.header([Type], [Parameters], [Description]),
       table.hline(),
-      [`ASYNC_COMB`], [None], [No parameters required],
-      [`ASYNC_SYNC`], [`sync_depth`], [Number of synchronization flip-flops],
-      [`ASYNC_CNT`], [`sync_depth`, `counter_width`, `timeout_cycles`], [Sync depth, counter width, timeout value],
-      [`SYNC_ONLY`], [`sync_depth`], [Number of synchronous reset flip-flops],
-      [`ASYNC_SYNCNT`], [`sync_depth`, `counter_width`, `timeout_cycles`], [Sync depth, counter width, and timeout cycles for two-stage release],
+      [`ASYNC_DIRECT`], [None], [No parameters required],
+      [`ASYNC_SYNC`], [`depth`], [Number of synchronization flip-flops],
+      [`ASYNC_COUNT`], [`depth`, `width`, `timeout`], [Sync depth, counter width, timeout value],
+      [`SYNC_ONLY`], [`depth`], [Number of synchronous reset flip-flops],
+      [`ASYNC_SYNC_COUNT`], [`depth`, `width`, `timeout`], [Sync depth, counter width, and timeout cycles for two-stage release],
     )],
   caption: [RESET TYPE PARAMETERS],
   kind: table,
@@ -1733,15 +1732,14 @@ reset:
 
     # Simplified reason configuration
     reason:
-      enable: true
-      register_clock: clk_32k      # Always-on clock
-      output_bus: reason           # Output bit vector name (unified naming)
-      valid_signal: reason_valid   # Valid signal name
-      clear_signal: reason_clear   # Software clear signal
+      clock: clk_32k               # Always-on clock for recording logic
+      output: reason               # Output bit vector name
+      valid: reason_valid          # Valid signal name
+      clear: reason_clear          # Software clear signal
 ```
 
 ===== Implementation Details
-The reset reason recorder uses **sync-clear async-capture** sticky flags to avoid S+R register timing issues:
+The reset reason recorder uses *sync-clear async-capture* sticky flags to avoid S+R register timing issues:
 - Each non-POR reset source gets a dedicated sticky flag (async-set on event, sync-clear during clear window)
 - Clean async-set + sync-clear architecture avoids problematic S+R registers that cause STA difficulties
 - Event normalization converts all sources to LOW-active format for consistent handling
@@ -1749,6 +1747,7 @@ The reset reason recorder uses **sync-clear async-capture** sticky flags to avoi
 - Output gating with valid signal prevents invalid data during initialization
 - Always-on clock ensures operation even when main clocks are stopped
 - POR signal auto-detected from source list (typically first active-low source containing "por")
+- *Generate statement optimization*: Uses Verilog `generate` blocks to reduce code duplication for multiple sticky flags
 
 ===== Generated Logic
 ```verilog
@@ -1766,16 +1765,26 @@ wire       clr_en = |clr_sr;  // Clear enable (any bit in shift register)
 // Sticky flags: async-set on event, sync-clear during clear window
 reg [2:0] flags;
 
-// Bit[0]: ext_rst_n sticky flag - pure async-set + sync-clear
-always @(posedge clk_32k or negedge ext_rst_n_event_n) begin
-    if (!ext_rst_n_event_n) begin
-        flags[0] <= 1'b1;      // Async set on event assert
-    end else if (clr_en) begin
-        flags[0] <= 1'b0;      // Sync clear during clear window
-    end else begin
-        flags[0] <= flags[0];  // Hold state
+// Event vector for generate block
+wire [2:0] src_event_n = {
+    i3c_soc_rst_event_n,
+    wdt_rst_n_event_n,
+    ext_rst_n_event_n
+};
+
+// Reset reason flags generation using generate for loop
+genvar reason_idx;
+generate
+    for (reason_idx = 0; reason_idx < 3; reason_idx = reason_idx + 1) begin : gen_reason
+        always @(posedge clk_32k or negedge src_event_n[reason_idx]) begin
+            if (!src_event_n[reason_idx]) begin
+                flags[reason_idx] <= 1'b1;      // Async set on event assert
+            end else if (clr_en) begin
+                flags[reason_idx] <= 1'b0;      // Sync clear during clear window
+            end
+        end
     end
-end
+endgenerate
 
 // Output gating: zeros until valid
 assign reason_valid = valid_q;
@@ -1801,18 +1810,21 @@ The reset controller generates a dedicated module with:
 ===== Variable Naming Conventions
 Reset logic uses simplified variable naming for improved readability:
 - *Wire names*: `{source}_{target}_sync` (e.g., `por_rst_n_cpu_rst_n_sync`)
+- *Generate blocks*: Use descriptive names for clarity:
+  - Genvar: `reason_idx` (not generic `i`)
+  - Block name: `gen_reason` (describes functionality)
 - *Register names*: `{type}_{source}_{target}_{suffix}` format:
   - Flip-flops: `sync_por_rst_n_cpu_rst_n_ff`
-  - Counters: `cnt_wdt_rst_n_cpu_rst_n_counter`
-  - Count flags: `cnt_wdt_rst_n_cpu_rst_n_counting`
-  - Stage wires: `syncnt_trig_rst_dma_rst_n_sync_stage1`
-- *Type prefixes*: `sync` (ASYNC_SYNC), `cnt` (ASYNC_CNT), `syncnt` (ASYNC_SYNCNT), `sync_only` (SYNC_ONLY)
+  - Counters: `count_wdt_rst_n_cpu_rst_n_counter`
+  - Count flags: `count_wdt_rst_n_cpu_rst_n_counting`
+  - Stage wires: `sync_count_trig_rst_dma_rst_n_sync_stage1`
+- *Type prefixes*: `sync` (ASYNC_SYNC), `count` (ASYNC_COUNT), `sync_count` (ASYNC_SYNC_COUNT), `sync` (SYNC_ONLY)
 - *No controller prefixes*: Variables use only essential identifiers for conciseness
 
 ===== Generated Modules
 The reset controller generates dedicated modules with inline DFF-based implementations:
 - Direct flip-flop instantiation for synchronizers (no external modules)
-- Counter-based timeout logic for ASYNC_CNT and ASYNC_SYNCNT types
+- Counter-based timeout logic for ASYNC_COUNT and ASYNC_SYNC_COUNT types
 - Custom combinational logic for signal routing and polarity handling
 
 ===== Generated Code Example
@@ -1834,8 +1846,7 @@ module rstctrl (
     /* Reset logic instances */
     /*
      * por_rst_n -> cpu_rst_n: ASYNC_SYNC: Async reset sync release
-     * (Legacy A(4,clk_sys)
-     * with sync_depth=4, clock=clk_sys)
+     * with depth=4, clock=clk_sys
      */
     reg [3:0] sync_por_rst_n_cpu_rst_n_ff;
     always @(posedge clk_sys or negedge por_rst_n) begin
@@ -1854,8 +1865,8 @@ endmodule
 <soc-net-reset-practices>
 ===== Design Guidelines
 - Use `ASYNC_SYNC` for most digital logic requiring synchronized reset release
-- Use `ASYNC_COMB` only for simple pass-through or clock-independent paths
-- Implement power-on-reset with `ASYNC_CNT` for reliable startup timing
+- Use `ASYNC_DIRECT` only for simple pass-through or clock-independent paths
+- Implement power-on-reset with `ASYNC_COUNT` for reliable startup timing
 - Group related resets in the same controller for better organization
 - Use descriptive reset source and target names
 

@@ -122,14 +122,17 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                     QString typeStr = QString::fromStdString(linkNode["type"].as<std::string>());
                     connection.type = parseResetType(typeStr);
 
-                    // Parse parameters based on type
-                    connection.sync_depth     = linkNode["sync_depth"]
+                    // Parse parameters based on type (support new simplified names)
+                    connection.sync_depth     = linkNode["depth"] ? linkNode["depth"].as<int>()
+                                                : linkNode["sync_depth"]
                                                     ? linkNode["sync_depth"].as<int>()
                                                     : 0;
-                    connection.counter_width  = linkNode["counter_width"]
+                    connection.counter_width  = linkNode["width"] ? linkNode["width"].as<int>()
+                                                : linkNode["counter_width"]
                                                     ? linkNode["counter_width"].as<int>()
                                                     : 0;
-                    connection.timeout_cycles = linkNode["timeout_cycles"]
+                    connection.timeout_cycles = linkNode["timeout"] ? linkNode["timeout"].as<int>()
+                                                : linkNode["timeout_cycles"]
                                                     ? linkNode["timeout_cycles"].as<int>()
                                                     : 0;
                     connection.pipe_depth     = linkNode["pipe_depth"]
@@ -149,62 +152,52 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
     config.reason.enabled = false;
     if (resetNode["reason"] && resetNode["reason"].IsMap()) {
         const YAML::Node &reasonNode = resetNode["reason"];
-        if (reasonNode["enable"] && reasonNode["enable"].as<bool>()) {
-            config.reason.enabled = true;
+        config.reason.enabled        = true; // Having reason node means enabled
 
-            // Required: always-on clock
-            config.reason.aonClock = reasonNode["register_clock"]
-                                         ? QString::fromStdString(
-                                               reasonNode["register_clock"].as<std::string>())
-                                         : "clk_32k";
+        // Always-on clock for recording logic
+        config.reason.clock = reasonNode["clock"]
+                                  ? QString::fromStdString(reasonNode["clock"].as<std::string>())
+                                  : "clk_32k";
 
-            // Output bus name (support legacy naming with automatic mapping)
-            if (reasonNode["output_bus"]) {
-                QString outputBus = QString::fromStdString(
-                    reasonNode["output_bus"].as<std::string>());
-                if (outputBus == "reset_reason_bits") {
-                    config.reason.outputBus = "reason"; // Auto-map legacy naming
-                } else {
-                    config.reason.outputBus = outputBus;
-                }
-            } else {
-                config.reason.outputBus = "reason"; // New unified default
+        // Output bus name
+        config.reason.output = reasonNode["output"]
+                                   ? QString::fromStdString(reasonNode["output"].as<std::string>())
+                                   : "reason";
+
+        // Valid signal name (support simplified field name)
+        config.reason.valid = reasonNode["valid"]
+                                  ? QString::fromStdString(reasonNode["valid"].as<std::string>())
+                              : reasonNode["valid_signal"]
+                                  ? QString::fromStdString(
+                                        reasonNode["valid_signal"].as<std::string>())
+                                  : "reason_valid";
+
+        // Software clear signal
+        config.reason.clear = reasonNode["clear"]
+                                  ? QString::fromStdString(reasonNode["clear"].as<std::string>())
+                                  : "reason_clear";
+
+        // Auto-detect POR signal (first active-low source or default)
+        config.reason.porSignal = "por_rst_n"; // Default
+        for (const auto &source : config.sources) {
+            if (source.name.contains("por", Qt::CaseInsensitive) && source.active == "low") {
+                config.reason.porSignal = source.name;
+                break;
             }
-
-            // Valid signal name
-            config.reason.validSignal = reasonNode["valid_signal"]
-                                            ? QString::fromStdString(
-                                                  reasonNode["valid_signal"].as<std::string>())
-                                            : "reason_valid";
-
-            // Software clear signal
-            config.reason.clearSignal = reasonNode["clear_signal"]
-                                            ? QString::fromStdString(
-                                                  reasonNode["clear_signal"].as<std::string>())
-                                            : "reason_clear";
-
-            // Auto-detect POR signal (first active-low source or default)
-            config.reason.porSignal = "por_rst_n"; // Default
-            for (const auto &source : config.sources) {
-                if (source.name.contains("por", Qt::CaseInsensitive) && source.active == "low") {
-                    config.reason.porSignal = source.name;
-                    break;
-                }
-            }
-
-            // Build source order (exclude POR,按source声明顺序)
-            config.reason.sourceOrder.clear();
-            for (const auto &source : config.sources) {
-                if (source.name != config.reason.porSignal) {
-                    config.reason.sourceOrder.append(source.name);
-                }
-            }
-
-            // Calculate bit vector width
-            config.reason.vectorWidth = config.reason.sourceOrder.size();
-            if (config.reason.vectorWidth == 0)
-                config.reason.vectorWidth = 1; // Minimum 1 bit
         }
+
+        // Build source order (exclude POR,按source声明顺序)
+        config.reason.sourceOrder.clear();
+        for (const auto &source : config.sources) {
+            if (source.name != config.reason.porSignal) {
+                config.reason.sourceOrder.append(source.name);
+            }
+        }
+
+        // Calculate bit vector width
+        config.reason.vectorWidth = config.reason.sourceOrder.size();
+        if (config.reason.vectorWidth == 0)
+            config.reason.vectorWidth = 1; // Minimum 1 bit
     }
 
     return config;
@@ -219,9 +212,9 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
     out << "    input        " << config.clock << ",            /**< System clock input */\n";
 
     // Add reset reason clock if enabled
-    if (config.reason.enabled && !config.reason.aonClock.isEmpty()
-        && config.reason.aonClock != config.clock) {
-        out << "    input        " << config.reason.aonClock
+    if (config.reason.enabled && !config.reason.clock.isEmpty()
+        && config.reason.clock != config.clock) {
+        out << "    input        " << config.reason.clock
             << ",            /**< Always-on clock for reason recording */\n";
     }
 
@@ -255,15 +248,15 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
         out << "    /* Reset reason recording */\n";
         if (config.reason.vectorWidth > 1) {
             out << "    output [" << (config.reason.vectorWidth - 1) << ":0] "
-                << config.reason.outputBus
+                << config.reason.output
                 << ",  /**< Reset reason bit vector (per-source sticky flags) */\n";
         } else {
-            out << "    output " << config.reason.outputBus
+            out << "    output " << config.reason.output
                 << ",                    /**< Reset reason bit vector (single sticky flag) */\n";
         }
 
         // Add valid signal output
-        out << "    output " << config.reason.validSignal
+        out << "    output " << config.reason.valid
             << ",          /**< Reset reason valid flag (indicates reason output is meaningful) "
                "*/\n";
     }
@@ -273,8 +266,8 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
     out << "    input        " << config.testEnable << ",            /**< Test enable signal */\n";
 
     // Add reset reason clear signal if enabled and specified
-    if (config.reason.enabled && !config.reason.clearSignal.isEmpty()) {
-        out << "    input        " << config.reason.clearSignal
+    if (config.reason.enabled && !config.reason.clear.isEmpty()) {
+        out << "    input        " << config.reason.clear
             << "        /**< Software clear signal for reset reason */\n";
     }
 
@@ -338,17 +331,17 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
     out << "\n";
 
     // Generate SW clear synchronizer and pulse generator
-    if (!config.reason.clearSignal.isEmpty()) {
+    if (!config.reason.clear.isEmpty()) {
         out << "    /* Synchronize software clear and generate pulse */\n";
         out << "    reg swc_d1, swc_d2, swc_d3;\n";
-        out << "    always @(posedge " << config.reason.aonClock << " or negedge "
+        out << "    always @(posedge " << config.reason.clock << " or negedge "
             << config.reason.porSignal << ") begin\n";
         out << "        if (!" << config.reason.porSignal << ") begin\n";
         out << "            swc_d1 <= 1'b0;\n";
         out << "            swc_d2 <= 1'b0;\n";
         out << "            swc_d3 <= 1'b0;\n";
         out << "        end else begin\n";
-        out << "            swc_d1 <= " << config.reason.clearSignal << ";\n";
+        out << "            swc_d1 <= " << config.reason.clear << ";\n";
         out << "            swc_d2 <= swc_d1;\n";
         out << "            swc_d3 <= swc_d2;\n";
         out << "        end\n";
@@ -361,11 +354,11 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
     out << "    /* Design rationale: 2-cycle clear ensures clean removal of async events */\n";
     out << "    reg        init_done;   /* Set after first post-POR action */\n";
     out << "    reg [1:0]  clr_sr;      /* Fixed 2-cycle clear shift register */\n";
-    out << "    reg        valid_q;     /* " << config.reason.validSignal << " register */\n\n";
+    out << "    reg        valid_q;     /* " << config.reason.valid << " register */\n\n";
 
     out << "    wire clr_en = |clr_sr;  /* Clear enable (active during 2-cycle window) */\n\n";
 
-    out << "    always @(posedge " << config.reason.aonClock << " or negedge "
+    out << "    always @(posedge " << config.reason.clock << " or negedge "
         << config.reason.porSignal << ") begin\n";
     out << "        if (!" << config.reason.porSignal << ") begin\n";
     out << "            init_done <= 1'b0;\n";
@@ -378,7 +371,7 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
     out << "                clr_sr    <= 2'b11;  /* Fixed: exactly 2 cycles */\n";
     out << "                valid_q   <= 1'b0;\n";
 
-    if (!config.reason.clearSignal.isEmpty()) {
+    if (!config.reason.clear.isEmpty()) {
         out << "            /* SW clear retriggers fixed 2-cycle clear */\n";
         out << "            end else if (sw_clear_pulse) begin\n";
         out << "                clr_sr  <= 2'b11;  /* Fixed: exactly 2 cycles */\n";
@@ -413,19 +406,19 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
     out << "    };\n\n";
 
     // Use generate statement for all flags
-    out << "    /* Generate sticky flags using generate for loop */\n";
-    out << "    genvar i;\n";
+    out << "    /* Reset reason flags generation using generate for loop */\n";
+    out << "    genvar reason_idx;\n";
     out << "    generate\n";
-    out << "        for (i = 0; i < " << config.reason.vectorWidth
-        << "; i = i + 1) begin : g_flag\n";
-    out << "            always @(posedge " << config.reason.aonClock
-        << " or negedge src_event_n[i]) begin\n";
-    out << "                if (!src_event_n[i]) begin\n";
-    out << "                    flags[i] <= 1'b1;      /* Async set on event assert (low) */\n";
+    out << "        for (reason_idx = 0; reason_idx < " << config.reason.vectorWidth
+        << "; reason_idx = reason_idx + 1) begin : gen_reason\n";
+    out << "            always @(posedge " << config.reason.clock
+        << " or negedge src_event_n[reason_idx]) begin\n";
+    out << "                if (!src_event_n[reason_idx]) begin\n";
+    out << "                    flags[reason_idx] <= 1'b1;      /* Async set on event assert (low) "
+           "*/\n";
     out << "                end else if (clr_en) begin\n";
-    out << "                    flags[i] <= 1'b0;      /* Sync clear during clear window */\n";
-    out << "                end else begin\n";
-    out << "                    flags[i] <= flags[i];  /* Hold state */\n";
+    out << "                    flags[reason_idx] <= 1'b0;      /* Sync clear during clear window "
+           "*/\n";
     out << "                end\n";
     out << "            end\n";
     out << "        end\n";
@@ -433,8 +426,8 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
 
     // Generate gated outputs
     out << "    /* Output gating: zeros until valid */\n";
-    out << "    assign " << config.reason.validSignal << " = valid_q;\n";
-    out << "    assign " << config.reason.outputBus << " = " << config.reason.validSignal
+    out << "    assign " << config.reason.valid << " = valid_q;\n";
+    out << "    assign " << config.reason.output << " = " << config.reason.valid
         << " ? flags : " << config.reason.vectorWidth << "'b0;\n\n";
 }
 
@@ -506,9 +499,8 @@ void QSocResetPrimitive::generateResetInstance(
     out << "     * " << connection.sourceName << " -> " << connection.targetName << ": ";
 
     switch (connection.type) {
-    case ASYNC_COMB: {
-        out << "ASYNC_COMB: Async reset Async release combinational logic\n";
-        out << "     * (Legacy A: combinational logic)\n";
+    case ASYNC_DIRECT: {
+        out << "ASYNC_DIRECT: Async reset Async release direct connection\n";
         out << "     */\n";
 
         // Determine if source needs inversion
@@ -527,9 +519,8 @@ void QSocResetPrimitive::generateResetInstance(
 
     case ASYNC_SYNC: {
         out << "ASYNC_SYNC: Async reset sync release\n";
-        out << "     * (Legacy A(" << connection.sync_depth << "," << connection.clock << ")\n";
-        out << "     * with sync_depth=" << connection.sync_depth << ", clock=" << connection.clock
-            << ")\n";
+        out << "     * sync_depth=" << connection.sync_depth << ", clock=" << connection.clock
+            << "\n";
         out << "     */\n";
 
         // Generate classic N-stage synchronizer
@@ -557,13 +548,11 @@ void QSocResetPrimitive::generateResetInstance(
         break;
     }
 
-    case ASYNC_CNT: {
-        out << "ASYNC_CNT: Async reset counter timeout release\n";
-        out << "     * (Legacy AC(" << connection.sync_depth << "," << connection.counter_width
-            << "," << connection.timeout_cycles << "," << connection.clock << "))\n";
-        out << "     * with sync_depth=" << connection.sync_depth
+    case ASYNC_COUNT: {
+        out << "ASYNC_COUNT: Async reset counter timeout release\n";
+        out << "     * sync_depth=" << connection.sync_depth
             << ", width=" << connection.counter_width << ", timeout=" << connection.timeout_cycles
-            << ", clock=" << connection.clock << ")\n";
+            << ", clock=" << connection.clock << "\n";
         out << "     */\n";
 
         // Generate DFF-based counter implementation
@@ -602,9 +591,8 @@ void QSocResetPrimitive::generateResetInstance(
 
     case SYNC_ONLY: {
         out << "SYNC_ONLY: Sync reset sync release\n";
-        out << "     * (Legacy S(" << connection.sync_depth << "," << connection.clock << ")\n";
-        out << "     * with sync_depth=" << connection.sync_depth << ", clock=" << connection.clock
-            << ")\n";
+        out << "     * sync_depth=" << connection.sync_depth << ", clock=" << connection.clock
+            << "\n";
         out << "     */\n";
 
         // Generate synchronous reset/release synchronizer
@@ -630,13 +618,11 @@ void QSocResetPrimitive::generateResetInstance(
         break;
     }
 
-    case ASYNC_SYNCNT: {
-        out << "ASYNC_SYNCNT: Async reset with sync-then-count release\n";
-        out << "     * (Legacy AS(" << connection.sync_depth << "," << connection.counter_width
-            << "," << connection.timeout_cycles << "," << connection.clock << ")\n";
+    case ASYNC_SYNC_COUNT: {
+        out << "ASYNC_SYNC_COUNT: Async reset with sync-then-count release\n";
         out << "     * Two-stage: sync_depth=" << connection.sync_depth
             << ", count_width=" << connection.counter_width
-            << ", timeout=" << connection.timeout_cycles << ", clock=" << connection.clock << ")\n";
+            << ", timeout=" << connection.timeout_cycles << ", clock=" << connection.clock << "\n";
         out << "     */\n";
 
         // Generate intermediate wire names
@@ -707,27 +693,57 @@ void QSocResetPrimitive::generateResetInstance(
 
 QSocResetPrimitive::ResetType QSocResetPrimitive::parseResetType(const QString &typeStr)
 {
-    if (typeStr == "ASYNC_COMB") {
-        return ASYNC_COMB;
+    // New simplified naming (preferred)
+    if (typeStr == "ASYNC_DIRECT") {
+        return ASYNC_DIRECT;
     } else if (typeStr == "ASYNC_SYNC") {
         return ASYNC_SYNC;
-    } else if (typeStr == "ASYNC_CNT") {
-        return ASYNC_CNT;
-    } else if (typeStr == "ASYNC_SYNCNT") {
-        return ASYNC_SYNCNT;
+    } else if (typeStr == "ASYNC_COUNT") {
+        return ASYNC_COUNT;
+    } else if (typeStr == "ASYNC_SYNC_COUNT") {
+        return ASYNC_SYNC_COUNT;
     } else if (typeStr == "SYNC_ONLY") {
         return SYNC_ONLY;
+    }
+    // Legacy names (for backward compatibility)
+    else if (typeStr == "ASYNC_COMB") {
+        return ASYNC_DIRECT;
+    } else if (typeStr == "ASYNC_CNT") {
+        return ASYNC_COUNT;
+    } else if (typeStr == "ASYNC_SYNCNT") {
+        return ASYNC_SYNC_COUNT;
     } else {
-        qWarning() << "Unsupported reset type:" << typeStr << ", defaulting to ASYNC_COMB";
-        return ASYNC_COMB;
+        qWarning() << "Unsupported reset type:" << typeStr << ", defaulting to ASYNC_DIRECT";
+        return ASYNC_DIRECT;
     }
 }
 
 QString QSocResetPrimitive::getConnectionWireName(
     const QString &sourceName, const QString &targetName)
 {
-    // Use a shorter, more descriptive wire name
-    return QString("%1_%2_sync").arg(sourceName).arg(targetName);
+    // Normalize signal names: remove _n from source, ensure _n is only at the end
+    QString normalizedSource = sourceName;
+    QString normalizedTarget = targetName;
+
+    // Remove _n suffix from source name for clean concatenation
+    if (normalizedSource.endsWith("_n")) {
+        normalizedSource = normalizedSource.left(normalizedSource.length() - 2);
+    }
+
+    // Remove _n suffix from target name for clean concatenation
+    if (normalizedTarget.endsWith("_n")) {
+        normalizedTarget = normalizedTarget.left(normalizedTarget.length() - 2);
+    }
+
+    // Create wire name: sync_<source>_<target> + _n if target was originally _n
+    QString wireName = QString("sync_%1_%2").arg(normalizedSource).arg(normalizedTarget);
+
+    // Add _n suffix if target was originally active low
+    if (targetName.endsWith("_n")) {
+        wireName += "_n";
+    }
+
+    return wireName;
 }
 
 QString QSocResetPrimitive::getInstanceName(
@@ -735,23 +751,52 @@ QString QSocResetPrimitive::getInstanceName(
 {
     QString typePrefix;
     switch (connection.type) {
+    case ASYNC_DIRECT:
+        typePrefix = "direct";
+        break;
     case ASYNC_SYNC:
         typePrefix = "sync";
         break;
-    case ASYNC_CNT:
-        typePrefix = "cnt";
+    case ASYNC_COUNT:
+        typePrefix = "count";
+        break;
+    case ASYNC_SYNC_COUNT:
+        typePrefix = "sync_count";
         break;
     case SYNC_ONLY:
-        typePrefix = "sync_only";
-        break;
-    case ASYNC_SYNCNT:
-        typePrefix = "syncnt";
+        typePrefix = "sync";
         break;
     default:
         typePrefix = "logic";
         break;
     }
 
-    // Simplified format: {type}_{source}_{target}
-    return QString("%1_%2_%3").arg(typePrefix).arg(connection.sourceName).arg(connection.targetName);
+    // Normalize signal names: remove _n from source and target for clean concatenation
+    QString normalizedSource = connection.sourceName;
+    QString normalizedTarget = connection.targetName;
+
+    // Remove _n suffix from source name for clean concatenation
+    if (normalizedSource.endsWith("_n")) {
+        normalizedSource = normalizedSource.left(normalizedSource.length() - 2);
+    }
+
+    // Remove _n suffix from target name for clean concatenation
+    if (normalizedTarget.endsWith("_n")) {
+        normalizedTarget = normalizedTarget.left(normalizedTarget.length() - 2);
+    }
+
+    // KISS format: simplified source_target naming
+    // Remove common 'rst' from both if present to reduce redundancy
+    QString cleanSource = normalizedSource;
+    QString cleanTarget = normalizedTarget;
+
+    // Remove trailing '_rst' from both to reduce redundancy
+    if (cleanSource.endsWith("_rst")) {
+        cleanSource = cleanSource.left(cleanSource.length() - 4);
+    }
+    if (cleanTarget.endsWith("_rst")) {
+        cleanTarget = cleanTarget.left(cleanTarget.length() - 4);
+    }
+
+    return QString("%1_%2").arg(cleanSource).arg(cleanTarget);
 }
