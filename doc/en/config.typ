@@ -9,14 +9,14 @@ QSoC uses YAML-based configuration files at three different levels of priority:
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 0.7fr, 1fr),
-      align: (auto, left, left),
-      table.header([Level], [Path], [Description]),
-      table.hline(),
-      [System], [`/etc/qsoc/qsoc.yml`], [System-wide configuration],
-      [User], [`~/.config/qsoc/qsoc.yml`], [User-specific configuration],
-      [Project], [`.qsoc.yml`], [Project-specific configuration],
-    )],
+    columns: (0.2fr, 0.7fr, 1fr),
+    align: (auto, left, left),
+    table.header([Level], [Path], [Description]),
+    table.hline(),
+    [System], [`/etc/qsoc/qsoc.yml`], [System-wide configuration],
+    [User], [`~/.config/qsoc/qsoc.yml`], [User-specific configuration],
+    [Project], [`.qsoc.yml`], [Project-specific configuration],
+  )],
   caption: [CONFIGURATION FILE LOCATIONS],
   kind: table,
 )
@@ -27,15 +27,16 @@ QSoC applies configuration settings in the following order of precedence (highes
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([Priority], [Source]),
-      table.hline(),
-      [1 (Highest)], [Environment variables (QSOC_API_KEY, QSOC_AI_PROVIDER, etc.)],
-      [2], [Project-level configuration (`.qsoc.yml` in project directory)],
-      [3], [User-level configuration (`~/.config/qsoc/qsoc.yml`)],
-      [4 (Lowest)], [System-level configuration (`/etc/qsoc/qsoc.yml`)],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Priority], [Source]),
+    table.hline(),
+    [1 (Highest)],
+    [Environment variables (QSOC_API_KEY, QSOC_AI_PROVIDER, etc.)],
+    [2], [Project-level configuration (`.qsoc.yml` in project directory)],
+    [3], [User-level configuration (`~/.config/qsoc/qsoc.yml`)],
+    [4 (Lowest)], [System-level configuration (`/etc/qsoc/qsoc.yml`)],
+  )],
   caption: [CONFIGURATION PRIORITY ORDER],
   kind: table,
 )
@@ -46,15 +47,16 @@ These options can be specified at the root level of any configuration file:
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([Option], [Description]),
-      table.hline(),
-      [ai_provider], [AI provider to use (deepseek, openai, groq, claude, ollama)],
-      [api_key], [Global API key for AI service authentication],
-      [ai_model], [Default AI model to use],
-      [api_url], [Base URL for the API endpoint],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [ai_provider],
+    [AI provider to use (deepseek, openai, groq, claude, ollama)],
+    [api_key], [Global API key for AI service authentication],
+    [ai_model], [Default AI model to use],
+    [api_url], [Base URL for the API endpoint],
+  )],
   caption: [GLOBAL CONFIGURATION OPTIONS],
   kind: table,
 )
@@ -67,14 +69,15 @@ Provider-specific settings can be specified in nested format for different AI pr
 <deepseek-config>
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([Option], [Description]),
-      table.hline(),
-      [api_key], [DeepSeek API key],
-      [api_url], [DeepSeek API endpoint URL (default: https://api.deepseek.com/v1/chat/completions)],
-      [ai_model], [DeepSeek model to use (default: deepseek-chat)],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [api_key], [DeepSeek API key],
+    [api_url],
+    [DeepSeek API endpoint URL (default: https://api.deepseek.com/v1/chat/completions)],
+    [ai_model], [DeepSeek model to use (default: deepseek-chat)],
+  )],
   caption: [DEEPSEEK CONFIGURATION OPTIONS],
   kind: table,
 )
@@ -83,14 +86,15 @@ Provider-specific settings can be specified in nested format for different AI pr
 <openai-config>
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([Option], [Description]),
-      table.hline(),
-      [api_key], [OpenAI API key],
-      [api_url], [OpenAI API endpoint URL (default: https://api.openai.com/v1/chat/completions)],
-      [ai_model], [OpenAI model to use (default: gpt-4o-mini)],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [api_key], [OpenAI API key],
+    [api_url],
+    [OpenAI API endpoint URL (default: https://api.openai.com/v1/chat/completions)],
+    [ai_model], [OpenAI model to use (default: gpt-4o-mini)],
+  )],
   caption: [OPENAI CONFIGURATION OPTIONS],
   kind: table,
 )
@@ -99,14 +103,15 @@ Provider-specific settings can be specified in nested format for different AI pr
 <groq-config>
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([Option], [Description]),
-      table.hline(),
-      [api_key], [Groq API key],
-      [api_url], [Groq API endpoint URL (default: https://api.groq.com/openai/v1/chat/completions)],
-      [ai_model], [Groq model to use (default: mixtral-8x7b-32768)],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [api_key], [Groq API key],
+    [api_url],
+    [Groq API endpoint URL (default: https://api.groq.com/openai/v1/chat/completions)],
+    [ai_model], [Groq model to use (default: mixtral-8x7b-32768)],
+  )],
   caption: [GROQ CONFIGURATION OPTIONS],
   kind: table,
 )
@@ -115,14 +120,15 @@ Provider-specific settings can be specified in nested format for different AI pr
 <claude-config>
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([Option], [Description]),
-      table.hline(),
-      [api_key], [Claude API key],
-      [api_url], [Claude API endpoint URL (default: https://api.anthropic.com/v1/messages)],
-      [ai_model], [Claude model to use (default: claude-3-5-sonnet-20241022)],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [api_key], [Claude API key],
+    [api_url],
+    [Claude API endpoint URL (default: https://api.anthropic.com/v1/messages)],
+    [ai_model], [Claude model to use (default: claude-3-5-sonnet-20241022)],
+  )],
   caption: [CLAUDE CONFIGURATION OPTIONS],
   kind: table,
 )
@@ -131,13 +137,14 @@ Provider-specific settings can be specified in nested format for different AI pr
 <ollama-config>
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([Option], [Description]),
-      table.hline(),
-      [api_url], [Ollama API endpoint URL (default: http://localhost:11434/api/generate)],
-      [ai_model], [Ollama model to use (default: llama3)],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [api_url],
+    [Ollama API endpoint URL (default: http://localhost:11434/api/generate)],
+    [ai_model], [Ollama model to use (default: llama3)],
+  )],
   caption: [OLLAMA CONFIGURATION OPTIONS],
   kind: table,
 )
@@ -148,16 +155,16 @@ QSoC supports various proxy settings for network connections:
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([Option], [Description]),
-      table.hline(),
-      [proxy_type], [Proxy type (system, none, default, socks5, http)],
-      [proxy_host], [Proxy server hostname or IP address],
-      [proxy_port], [Proxy server port number],
-      [proxy_user], [Username for proxy authentication (if required)],
-      [proxy_password], [Password for proxy authentication (if required)],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [proxy_type], [Proxy type (system, none, default, socks5, http)],
+    [proxy_host], [Proxy server hostname or IP address],
+    [proxy_port], [Proxy server port number],
+    [proxy_user], [Username for proxy authentication (if required)],
+    [proxy_password], [Password for proxy authentication (if required)],
+  )],
   caption: [PROXY CONFIGURATION OPTIONS],
   kind: table,
 )
@@ -168,15 +175,16 @@ QSoC supports configuration via environment variables, which have the highest pr
 
 #figure(
   align(center)[#table(
-      columns: (0.4fr, 1fr),
-      align: (auto, left),
-      table.header([Variable], [Description]),
-      table.hline(),
-      [QSOC_AI_PROVIDER], [AI provider to use (overrides configuration files)],
-      [QSOC_API_KEY], [API key for authentication (overrides configuration files)],
-      [QSOC_AI_MODEL], [AI model to use (overrides configuration files)],
-      [QSOC_API_URL], [API endpoint URL (overrides configuration files)],
-    )],
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Variable], [Description]),
+    table.hline(),
+    [QSOC_AI_PROVIDER], [AI provider to use (overrides configuration files)],
+    [QSOC_API_KEY],
+    [API key for authentication (overrides configuration files)],
+    [QSOC_AI_MODEL], [AI model to use (overrides configuration files)],
+    [QSOC_API_URL], [API endpoint URL (overrides configuration files)],
+  )],
   caption: [ENVIRONMENT VARIABLES],
   kind: table,
 )
