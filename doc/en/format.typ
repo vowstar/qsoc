@@ -50,20 +50,23 @@ A SOC_NET file consists of several key sections:
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Section], [Description]),
-      table.hline(),
-      [port], [Defines top-level ports of the design],
-      [instance], [Defines module instances and their parameters],
-      [net], [Defines explicit connections between instance ports],
-      [bus], [Defines bus interface connections (automatically expanded into nets)],
-      [comb], [Defines combinational logic blocks for behavioral descriptions],
-      [seq], [Defines sequential logic blocks for register-based descriptions],
-      [fsm], [Defines finite state machine blocks for complex control logic],
-      [reset], [Defines reset controller primitives (generates standalone modules)],
-      [clock], [Defines clock controller primitives (generates standalone modules)],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Section], [Description]),
+    table.hline(),
+    [port], [Defines top-level ports of the design],
+    [instance], [Defines module instances and their parameters],
+    [net], [Defines explicit connections between instance ports],
+    [bus],
+    [Defines bus interface connections (automatically expanded into nets)],
+    [comb], [Defines combinational logic blocks for behavioral descriptions],
+    [seq], [Defines sequential logic blocks for register-based descriptions],
+    [fsm], [Defines finite state machine blocks for complex control logic],
+    [reset],
+    [Defines reset controller primitives (generates standalone modules)],
+    [clock],
+    [Defines clock controller primitives (generates standalone modules)],
+  )],
   caption: [SOC_NET FILE SECTIONS],
   kind: table,
 )
@@ -93,13 +96,13 @@ Port properties include:
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Property], [Description]),
-      table.hline(),
-      [direction], [Port direction (input, output, or inout)],
-      [type], [Port data type and width (e.g., logic[7:0])],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Property], [Description]),
+    table.hline(),
+    [direction], [Port direction (input, output, or inout)],
+    [type], [Port data type and width (e.g., logic[7:0])],
+  )],
   caption: [PORT PROPERTIES],
   kind: table,
 )
@@ -149,14 +152,14 @@ Instance properties include:
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Property], [Description]),
-      table.hline(),
-      [module], [Module name (must exist in the module library)],
-      [parameter], [Optional module parameters (name-value pairs)],
-      [port], [Optional port-specific attributes like tie values],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Property], [Description]),
+    table.hline(),
+    [module], [Module name (must exist in the module library)],
+    [parameter], [Optional module parameters (name-value pairs)],
+    [port], [Optional port-specific attributes like tie values],
+  )],
   caption: [INSTANCE PROPERTIES],
   kind: table,
 )
@@ -165,15 +168,16 @@ Port attributes within an instance can include:
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Attribute], [Description]),
-      table.hline(),
-      [tie], [Tie the port to a specific value],
-      [invert], [Invert the port signal (true/false)],
-      [link], [Create a net with the specified name and connect this port to it],
-      [uplink], [Create a net with the specified name, connect this port to it, AND create a top-level port with the same name],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Attribute], [Description]),
+    table.hline(),
+    [tie], [Tie the port to a specific value],
+    [invert], [Invert the port signal (true/false)],
+    [link], [Create a net with the specified name and connect this port to it],
+    [uplink],
+    [Create a net with the specified name, connect this port to it, AND create a top-level port with the same name],
+  )],
   caption: [PORT ATTRIBUTES],
   kind: table,
 )
@@ -228,14 +232,14 @@ Each connection in the list format supports the following properties:
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Property], [Description]),
-      table.hline(),
-      [instance], [Instance name to connect (required)],
-      [port], [Port name to connect (required)],
-      [bits], [Optional bit selection (e.g., "[7:0]" or "[5]")],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Property], [Description]),
+    table.hline(),
+    [instance], [Instance name to connect (required)],
+    [port], [Port name to connect (required)],
+    [bits], [Optional bit selection (e.g., "[7:0]" or "[5]")],
+  )],
   caption: [NET CONNECTION PROPERTIES],
   kind: table,
 )
@@ -250,14 +254,16 @@ The `comb` section is a sequence of combinational logic items, each describing o
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 0.4fr, 0.4fr),
-      align: (auto, left, left),
-      table.header([Type], [Description], [Verilog Output]),
-      table.hline(),
-      [`expr`], [Simple assignment with expression], [`assign` statement],
-      [`if`], [Conditional logic with if-else chain], [`always @(*)` block with if-else],
-      [`case`], [Case statement logic], [`always @(*)` block with case statement],
-    )],
+    columns: (0.2fr, 0.4fr, 0.4fr),
+    align: (auto, left, left),
+    table.header([Type], [Description], [Verilog Output]),
+    table.hline(),
+    [`expr`], [Simple assignment with expression], [`assign` statement],
+    [`if`],
+    [Conditional logic with if-else chain],
+    [`always @(*)` block with if-else],
+    [`case`], [Case statement logic], [`always @(*)` block with case statement],
+  )],
   caption: [COMBINATIONAL LOGIC TYPES],
   kind: table,
 )
@@ -340,13 +346,14 @@ end
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Field], [Description]),
-      table.hline(),
-      [`cond`], [Condition expression (required, scalar)],
-      [`then`], [Value when condition is true (required, scalar or nested structure)],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Field], [Description]),
+    table.hline(),
+    [`cond`], [Condition expression (required, scalar)],
+    [`then`],
+    [Value when condition is true (required, scalar or nested structure)],
+  )],
   caption: [CONDITIONAL LOGIC FIELDS],
   kind: table,
 )
@@ -393,14 +400,14 @@ end
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Field], [Description]),
-      table.hline(),
-      [`case`], [Expression to switch on (required, scalar)],
-      [`cases`], [Map of match values to result expressions (required, map)],
-      [`default`], [Default value to avoid latches (recommended, scalar)],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Field], [Description]),
+    table.hline(),
+    [`case`], [Expression to switch on (required, scalar)],
+    [`cases`], [Map of match values to result expressions (required, map)],
+    [`default`], [Default value to avoid latches (recommended, scalar)],
+  )],
   caption: [CASE STATEMENT FIELDS],
   kind: table,
 )
@@ -553,20 +560,20 @@ The `seq` section is a sequence of sequential logic items, each describing one r
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 0.7fr),
-      align: (auto, left),
-      table.header([Feature], [Description]),
-      table.hline(),
-      [`reg`], [Register name (required)],
-      [`clk`], [Clock signal (required)],
-      [`edge`], [Clock edge type: "pos" (default) or "neg"],
-      [`rst`], [Reset signal (optional)],
-      [`rst_val`], [Reset value (required when rst is present)],
-      [`enable`], [Enable signal (optional)],
-      [`next`], [Simple next-state expression],
-      [`if`], [Conditional next-state logic],
-      [`default`], [Default value for conditional logic],
-    )],
+    columns: (0.3fr, 0.7fr),
+    align: (auto, left),
+    table.header([Feature], [Description]),
+    table.hline(),
+    [`reg`], [Register name (required)],
+    [`clk`], [Clock signal (required)],
+    [`edge`], [Clock edge type: "pos" (default) or "neg"],
+    [`rst`], [Reset signal (optional)],
+    [`rst_val`], [Reset value (required when rst is present)],
+    [`enable`], [Enable signal (optional)],
+    [`next`], [Simple next-state expression],
+    [`if`], [Conditional next-state logic],
+    [`default`], [Default value for conditional logic],
+  )],
   caption: [SEQUENTIAL LOGIC FEATURES],
   kind: table,
 )
@@ -765,13 +772,13 @@ end
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Field], [Description]),
-      table.hline(),
-      [`cond`], [Condition expression (required, scalar)],
-      [`then`], [Value when condition is true (required, scalar)],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Field], [Description]),
+    table.hline(),
+    [`cond`], [Condition expression (required, scalar)],
+    [`then`], [Value when condition is true (required, scalar)],
+  )],
   caption: [CONDITIONAL SEQUENTIAL LOGIC FIELDS],
   kind: table,
 )
@@ -839,15 +846,15 @@ end
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Field], [Description]),
-      table.hline(),
-      [`then`], [Can be scalar expression OR nested case structure],
-      [`case`], [Expression to switch on (required in nested structure)],
-      [`cases`], [Map of case values to result expressions (required)],
-      [`default`], [Default case value (recommended in nested structure)],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Field], [Description]),
+    table.hline(),
+    [`then`], [Can be scalar expression OR nested case structure],
+    [`case`], [Expression to switch on (required in nested structure)],
+    [`cases`], [Map of case values to result expressions (required)],
+    [`default`], [Default case value (recommended in nested structure)],
+  )],
   caption: [NESTED SEQUENTIAL LOGIC FIELDS],
   kind: table,
 )
@@ -1312,13 +1319,13 @@ The `fsm` section is a sequence of FSM items, each describing one finite state m
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([FSM Type], [Description]),
-      table.hline(),
-      [Table-mode], [State transition tables with Moore/Mealy outputs],
-      [Microcode-mode], [ROM-based sequencer with branch decoding],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([FSM Type], [Description]),
+    table.hline(),
+    [Table-mode], [State transition tables with Moore/Mealy outputs],
+    [Microcode-mode], [ROM-based sequencer with branch decoding],
+  )],
   caption: [FSM ARCHITECTURES],
   kind: table,
 )
@@ -1573,16 +1580,26 @@ Reset controllers support five distinct reset types, each with clear naming and 
 
 #figure(
   align(center)[#table(
-      columns: (0.25fr, 0.35fr, 0.4fr),
-      align: (auto, left, left),
-      table.header([Type], [Behavior], [Use Cases]),
-      table.hline(),
-      [`ASYNC_DIRECT`], [Async reset, async release (combinational)], [Simple pass-through, clock-independent resets],
-      [`ASYNC_SYNC`], [Async reset, sync release with configurable depth], [Standard synchronous reset release],
-      [`ASYNC_COUNT`], [Async reset, sync release with counter], [Power-on-reset with timeout],
-      [`SYNC_ONLY`], [Synchronous reset with configurable depth], [Fully synchronous reset systems],
-      [`ASYNC_SYNC_COUNT`], [Async reset with sync-then-count release], [Two-stage reset: sync release followed by counter timeout],
-    )],
+    columns: (0.25fr, 0.35fr, 0.4fr),
+    align: (auto, left, left),
+    table.header([Type], [Behavior], [Use Cases]),
+    table.hline(),
+    [`ASYNC_DIRECT`],
+    [Async reset, async release (combinational)],
+    [Simple pass-through, clock-independent resets],
+    [`ASYNC_SYNC`],
+    [Async reset, sync release with configurable depth],
+    [Standard synchronous reset release],
+    [`ASYNC_COUNT`],
+    [Async reset, sync release with counter],
+    [Power-on-reset with timeout],
+    [`SYNC_ONLY`],
+    [Synchronous reset with configurable depth],
+    [Fully synchronous reset systems],
+    [`ASYNC_SYNC_COUNT`],
+    [Async reset with sync-then-count release],
+    [Two-stage reset: sync release followed by counter timeout],
+  )],
   caption: [RESET TYPES],
   kind: table,
 )
@@ -1646,22 +1663,32 @@ Reset controller properties provide structured configuration:
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 0.3fr, 0.5fr),
-      align: (auto, left, left),
-      table.header([Property], [Type], [Description]),
-      table.hline(),
-      [name], [String], [Reset controller instance name (required)],
-      [clock], [String], [Clock signal name for sync operations (required)],
-      [test_enable], [String], [Test enable bypass signal (optional)],
-      [reason], [Map], [Reset reason recording configuration block (optional)],
-      [reason.clock], [String], [Always-on clock for recording logic (default: clk_32k). Generated as module input port.],
-      [reason.output], [String], [Output bit vector bus name (default: reason). Generated as module output port.],
-      [reason.valid], [String], [Valid signal name (default: reason_valid). Generated as module output port.],
-      [reason.clear], [String], [Software clear signal name (optional). Generated as module input port if specified.],
-      [reason.root_reset], [String], [Root reset signal name for async clear (required when reason recording enabled). Must exist in source list.],
-      [source], [Map], [Reset source definitions with polarity (required)],
-      [target], [Map], [Reset target definitions with links (required)],
-    )],
+    columns: (0.2fr, 0.3fr, 0.5fr),
+    align: (auto, left, left),
+    table.header([Property], [Type], [Description]),
+    table.hline(),
+    [name], [String], [Reset controller instance name (required)],
+    [clock], [String], [Clock signal name for sync operations (required)],
+    [test_enable], [String], [Test enable bypass signal (optional)],
+    [reason], [Map], [Reset reason recording configuration block (optional)],
+    [reason.clock],
+    [String],
+    [Always-on clock for recording logic (default: clk_32k). Generated as module input port.],
+    [reason.output],
+    [String],
+    [Output bit vector bus name (default: reason). Generated as module output port.],
+    [reason.valid],
+    [String],
+    [Valid signal name (default: reason_valid). Generated as module output port.],
+    [reason.clear],
+    [String],
+    [Software clear signal name (optional). Generated as module input port if specified.],
+    [reason.root_reset],
+    [String],
+    [Root reset signal name for async clear (required when reason recording enabled). Must exist in source list.],
+    [source], [Map], [Reset source definitions with polarity (required)],
+    [target], [Map], [Reset target definitions with links (required)],
+  )],
   caption: [RESET CONTROLLER PROPERTIES],
   kind: table,
 )
@@ -1671,12 +1698,13 @@ Reset sources define input reset signals with simple polarity specification:
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 0.7fr),
-      align: (auto, left),
-      table.header([Property], [Description]),
-      table.hline(),
-      [polarity], [Signal polarity: `low` (active low) or `high` (active high) - *REQUIRED*],
-    )],
+    columns: (0.3fr, 0.7fr),
+    align: (auto, left),
+    table.header([Property], [Description]),
+    table.hline(),
+    [polarity],
+    [Signal polarity: `low` (active low) or `high` (active high) - *REQUIRED*],
+  )],
   caption: [RESET SOURCE PROPERTIES],
   kind: table,
 )
@@ -1686,13 +1714,14 @@ Reset targets define output reset signals with structured link definitions:
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 0.7fr),
-      align: (auto, left),
-      table.header([Property], [Description]),
-      table.hline(),
-      [polarity], [Target signal polarity: `low` (active low) or `high` (active high) - *REQUIRED*],
-      [link], [Map of source connections with type and parameters],
-    )],
+    columns: (0.3fr, 0.7fr),
+    align: (auto, left),
+    table.header([Property], [Description]),
+    table.hline(),
+    [polarity],
+    [Target signal polarity: `low` (active low) or `high` (active high) - *REQUIRED*],
+    [link], [Map of source connections with type and parameters],
+  )],
   caption: [RESET TARGET PROPERTIES],
   kind: table,
 )
@@ -1702,16 +1731,20 @@ Each reset type supports specific structured parameters:
 
 #figure(
   align(center)[#table(
-      columns: (0.25fr, 0.25fr, 0.5fr),
-      align: (auto, auto, left),
-      table.header([Type], [Parameters], [Description]),
-      table.hline(),
-      [`ASYNC_DIRECT`], [None], [No parameters required],
-      [`ASYNC_SYNC`], [`depth`], [Number of synchronization flip-flops],
-      [`ASYNC_COUNT`], [`depth`, `width`, `timeout`], [Sync depth, counter width, timeout value],
-      [`SYNC_ONLY`], [`depth`], [Number of synchronous reset flip-flops],
-      [`ASYNC_SYNC_COUNT`], [`depth`, `width`, `timeout`], [Sync depth, counter width, and timeout cycles for two-stage release],
-    )],
+    columns: (0.25fr, 0.25fr, 0.5fr),
+    align: (auto, auto, left),
+    table.header([Type], [Parameters], [Description]),
+    table.hline(),
+    [`ASYNC_DIRECT`], [None], [No parameters required],
+    [`ASYNC_SYNC`], [`depth`], [Number of synchronization flip-flops],
+    [`ASYNC_COUNT`],
+    [`depth`, `width`, `timeout`],
+    [Sync depth, counter width, timeout value],
+    [`SYNC_ONLY`], [`depth`], [Number of synchronous reset flip-flops],
+    [`ASYNC_SYNC_COUNT`],
+    [`depth`, `width`, `timeout`],
+    [Sync depth, counter width, and timeout cycles for two-stage release],
+  )],
   caption: [RESET TYPE PARAMETERS],
   kind: table,
 )
@@ -1906,12 +1939,12 @@ Clock controllers use a structured YAML format that provides clear type definiti
 clock:
   - name: soc_clk_ctrl                # Clock controller instance name
     clock: clk_sys                    # Default synchronous clock
-    default_ref_clock: clk_sys        # Default reference clock for GF_MUX
-    test_enable: test_en              # Test enable bypass signal (optional)
+    ref_clock: clk_sys                # Reference clock for GF_MUX (optional)
+    test_en: test_en                  # Test enable bypass signal (optional)
     input:                            # Clock input definitions
       osc_24m:
         freq: 24MHz                   # Input frequency specification
-        duty_cycle: 50%               # Optional duty cycle specification
+        duty: 50%                     # Optional duty cycle specification
       pll_800m:
         freq: 800MHz
       test_clk:
@@ -2003,17 +2036,27 @@ Clock controllers support six distinct clock types, each optimized for specific 
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 0.35fr, 0.45fr),
-      align: (auto, left, left),
-      table.header([Type], [Behavior], [Use Cases]),
-      table.hline(),
-      [`PASS_THRU`], [Direct forward connection], [Simple clock buffering, test clocks],
-      [`GATE_ONLY`], [ICG gate only], [Power management, conditional clocking],
-      [`DIV_ICG`], [Narrow-pulse divider (counter + ICG)], [High-speed clock division, precise timing],
-      [`DIV_DFF`], [50% duty cycle divider (toggle/D-FF)], [Standard clock division, symmetric clocks],
-      [`GATE_DIV_ICG`], [Gate → ICG divider combination], [Power-managed divided clocks],
-      [`GATE_DIV_DFF`], [Gate → D-FF divider combination], [Power-managed symmetric divided clocks],
-    )],
+    columns: (0.2fr, 0.35fr, 0.45fr),
+    align: (auto, left, left),
+    table.header([Type], [Behavior], [Use Cases]),
+    table.hline(),
+    [`PASS_THRU`],
+    [Direct forward connection],
+    [Simple clock buffering, test clocks],
+    [`GATE_ONLY`], [ICG gate only], [Power management, conditional clocking],
+    [`DIV_ICG`],
+    [Narrow-pulse divider (counter + ICG)],
+    [High-speed clock division, precise timing],
+    [`DIV_DFF`],
+    [50% duty cycle divider (toggle/D-FF)],
+    [Standard clock division, symmetric clocks],
+    [`GATE_DIV_ICG`],
+    [Gate → ICG divider combination],
+    [Power-managed divided clocks],
+    [`GATE_DIV_DFF`],
+    [Gate → D-FF divider combination],
+    [Power-managed symmetric divided clocks],
+  )],
   caption: [CLOCK TYPES],
   kind: table,
 )
@@ -2098,13 +2141,17 @@ Clock controllers support two multiplexer types for multi-source clock selection
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 0.35fr, 0.45fr),
-      align: (auto, left, left),
-      table.header([Mux Type], [Behavior], [Use Cases]),
-      table.hline(),
-      [`STD_MUX`], [Pure combinational mux, no CDC], [Test mode selection, simple switching],
-      [`GF_MUX`], [Two-stage glitch-free mux], [Production clock switching, critical paths],
-    )],
+    columns: (0.2fr, 0.35fr, 0.45fr),
+    align: (auto, left, left),
+    table.header([Mux Type], [Behavior], [Use Cases]),
+    table.hline(),
+    [`STD_MUX`],
+    [Pure combinational mux, no CDC],
+    [Test mode selection, simple switching],
+    [`GF_MUX`],
+    [Two-stage glitch-free mux],
+    [Production clock switching, critical paths],
+  )],
   caption: [CLOCK MULTIPLEXER TYPES],
   kind: table,
 )
@@ -2145,17 +2192,17 @@ Clock controller properties provide comprehensive configuration:
 
 #figure(
   align(center)[#table(
-      columns: (0.25fr, 0.25fr, 0.5fr),
-      align: (auto, left, left),
-      table.header([Property], [Type], [Description]),
-      table.hline(),
-      [name], [String], [Clock controller instance name (required)],
-      [clock], [String], [Default synchronous clock for operations (required)],
-      [default_ref_clock], [String], [Default reference clock for GF_MUX (optional)],
-      [test_enable], [String], [Test enable bypass signal (optional)],
-      [input], [Map], [Clock input definitions with frequency specs (required)],
-      [target], [Map], [Clock target definitions with links (required)],
-    )],
+    columns: (0.25fr, 0.25fr, 0.5fr),
+    align: (auto, left, left),
+    table.header([Property], [Type], [Description]),
+    table.hline(),
+    [name], [String], [Clock controller instance name - *REQUIRED*],
+    [clock], [String], [Default synchronous clock for operations - *REQUIRED*],
+    [ref_clock], [String], [Reference clock for GF_MUX (optional)],
+    [test_en], [String], [Test enable bypass signal (optional)],
+    [input], [Map], [Clock input definitions with frequency specs (required)],
+    [target], [Map], [Clock target definitions with links (required)],
+  )],
   caption: [CLOCK CONTROLLER PROPERTIES],
   kind: table,
 )
@@ -2165,13 +2212,13 @@ Clock inputs define source clock signals with specifications:
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 0.7fr),
-      align: (auto, left),
-      table.header([Property], [Description]),
-      table.hline(),
-      [freq], [Input frequency with unit (e.g., "24MHz", "800MHz") (required)],
-      [duty_cycle], [Optional duty cycle specification (e.g., "50%")],
-    )],
+    columns: (0.3fr, 0.7fr),
+    align: (auto, left),
+    table.header([Property], [Description]),
+    table.hline(),
+    [freq], [Input frequency with unit (e.g., "24MHz", "800MHz") (required)],
+    [duty], [Optional duty cycle specification (e.g., "50%")],
+  )],
   caption: [CLOCK INPUT PROPERTIES],
   kind: table,
 )
@@ -2181,14 +2228,14 @@ Clock targets define output clock signals with structured processing:
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 0.7fr),
-      align: (auto, left),
-      table.header([Property], [Description]),
-      table.hline(),
-      [freq], [Target frequency for SDC generation (required)],
-      [link], [Map of source connections with type and parameters (required)],
-      [mux], [Multiplexer configuration (required only when ≥2 links)],
-    )],
+    columns: (0.3fr, 0.7fr),
+    align: (auto, left),
+    table.header([Property], [Description]),
+    table.hline(),
+    [freq], [Target frequency for SDC generation (required)],
+    [link], [Map of source connections with type and parameters (required)],
+    [mux], [Multiplexer configuration (required only when ≥2 links)],
+  )],
   caption: [CLOCK TARGET PROPERTIES],
   kind: table,
 )
@@ -2198,17 +2245,27 @@ Each clock type supports specific structured parameters:
 
 #figure(
   align(center)[#table(
-      columns: (0.25fr, 0.35fr, 0.4fr),
-      align: (auto, auto, left),
-      table.header([Type], [Parameters], [Description]),
-      table.hline(),
-      [`PASS_THRU`], [`invert` (optional)], [Clock inversion flag],
-      [`GATE_ONLY`], [`gate.enable`, `gate.polarity`], [Gate enable signal and polarity],
-      [`DIV_ICG`], [`div.ratio`, `div.reset`, `invert`], [Division ratio, reset, optional inversion],
-      [`DIV_DFF`], [`div.ratio`, `div.reset`, `invert`], [Even division ratio, reset, optional inversion],
-      [`GATE_DIV_ICG`], [`gate.*`, `div.*`, `invert`], [Combined gate and ICG division parameters],
-      [`GATE_DIV_DFF`], [`gate.*`, `div.*`, `invert`], [Combined gate and DFF division parameters],
-    )],
+    columns: (0.25fr, 0.35fr, 0.4fr),
+    align: (auto, auto, left),
+    table.header([Type], [Parameters], [Description]),
+    table.hline(),
+    [`PASS_THRU`], [`invert` (optional)], [Clock inversion flag],
+    [`GATE_ONLY`],
+    [`gate.enable`, `gate.polarity`],
+    [Gate enable signal and polarity],
+    [`DIV_ICG`],
+    [`div.ratio`, `div.reset`, `invert`],
+    [Division ratio, reset, optional inversion],
+    [`DIV_DFF`],
+    [`div.ratio`, `div.reset`, `invert`],
+    [Even division ratio, reset, optional inversion],
+    [`GATE_DIV_ICG`],
+    [`gate.*`, `div.*`, `invert`],
+    [Combined gate and ICG division parameters],
+    [`GATE_DIV_DFF`],
+    [`gate.*`, `div.*`, `invert`],
+    [Combined gate and DFF division parameters],
+  )],
   caption: [CLOCK TYPE PARAMETERS],
   kind: table,
 )
@@ -2344,8 +2401,8 @@ endmodule
 - Use clear clock names that indicate their purpose and frequency
 - Group related clocks in the same controller for better organization
 - Specify duty cycle only when it differs from the standard 50%
-- Use `default_ref_clock` to minimize repetitive `ref_clock` specifications
-- Include `test_enable` bypass for comprehensive DFT support
+- Specify `ref_clock` explicitly when using GF_MUX
+- Include `test_en` bypass for comprehensive DFT support
 
 ===== Frequency Management
 - Ensure target frequencies are mathematically consistent with division ratios
@@ -2403,13 +2460,13 @@ Bus connection properties include:
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 1fr),
-      align: (auto, left),
-      table.header([Property], [Description]),
-      table.hline(),
-      [instance], [Instance name to connect (required)],
-      [port], [Bus interface port name defined in the module (required)],
-    )],
+    columns: (0.2fr, 1fr),
+    align: (auto, left),
+    table.header([Property], [Description]),
+    table.hline(),
+    [instance], [Instance name to connect (required)],
+    [port], [Bus interface port name defined in the module (required)],
+  )],
   caption: [BUS CONNECTION PROPERTIES],
   kind: table,
 )
@@ -2424,13 +2481,17 @@ QSoC provides two primary connection attributes:
 
 #figure(
   align(center)[#table(
-      columns: (0.2fr, 0.4fr, 0.4fr),
-      align: (auto, left, left),
-      table.header([Attribute], [Purpose], [Use Cases]),
-      table.hline(),
-      [`link`], [Internal signal routing with flexible bit selection], [Module-to-module connections, bus segmentation, signal distribution],
-      [`uplink`], [Direct I/O port mapping], [Chip pins, power/ground, clock/reset signals],
-    )],
+    columns: (0.2fr, 0.4fr, 0.4fr),
+    align: (auto, left, left),
+    table.header([Attribute], [Purpose], [Use Cases]),
+    table.hline(),
+    [`link`],
+    [Internal signal routing with flexible bit selection],
+    [Module-to-module connections, bus segmentation, signal distribution],
+    [`uplink`],
+    [Direct I/O port mapping],
+    [Chip pins, power/ground, clock/reset signals],
+  )],
   caption: [LINK VS UPLINK COMPARISON],
   kind: table,
 )
@@ -2657,13 +2718,15 @@ Bit selection allows connecting specific bits of a port to a net, enabling flexi
 
 #figure(
   align(center)[#table(
-      columns: (0.3fr, 1fr),
-      align: (auto, left),
-      table.header([Format], [Description]),
-      table.hline(),
-      [[high:low]], [Range selection (e.g., "[7:3]" selects bits 7 through 3, 5 bits wide)],
-      [[bit]], [Single bit selection (e.g., "[5]" selects only bit 5, 1 bit wide)],
-    )],
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Format], [Description]),
+    table.hline(),
+    [[high:low]],
+    [Range selection (e.g., "[7:3]" selects bits 7 through 3, 5 bits wide)],
+    [[bit]],
+    [Single bit selection (e.g., "[5]" selects only bit 5, 1 bit wide)],
+  )],
   caption: [BIT SELECTION FORMATS],
   kind: table,
 )

@@ -51,15 +51,30 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
 {
     ClockControllerConfig config;
 
-    // Parse basic properties
-    config.name       = QString::fromStdString(clockNode["name"].as<std::string>("clkctrl"));
-    config.moduleName = "clkctrl";
-    config.clock      = QString::fromStdString(clockNode["clock"].as<std::string>("clk_sys"));
-    config.default_ref_clock = QString::fromStdString(
-        clockNode["default_ref_clock"].as<std::string>(config.clock.toStdString()));
+    // Parse basic properties (KISS: require explicit values)
+    if (!clockNode["name"]) {
+        qCritical() << "Error: 'name' field is required in clock configuration";
+        qCritical() << "Example: clock: { name: my_clk_ctrl, ... }";
+        return config;
+    }
+    config.name       = QString::fromStdString(clockNode["name"].as<std::string>());
+    config.moduleName = config.name; // Use same name for module
 
-    if (clockNode["test_enable"]) {
-        config.test_enable = QString::fromStdString(clockNode["test_enable"].as<std::string>());
+    if (!clockNode["clock"]) {
+        qCritical() << "Error: 'clock' field is required in clock configuration";
+        qCritical() << "Example: clock: { clock: clk_sys, ... }";
+        return config;
+    }
+    config.clock = QString::fromStdString(clockNode["clock"].as<std::string>());
+
+    // Optional ref_clock for GF_MUX
+    if (clockNode["ref_clock"]) {
+        config.ref_clock = QString::fromStdString(clockNode["ref_clock"].as<std::string>());
+    }
+
+    // Optional test enable
+    if (clockNode["test_en"]) {
+        config.test_en = QString::fromStdString(clockNode["test_en"].as<std::string>());
     }
 
     // Parse clock inputs
@@ -72,9 +87,8 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 if (it->second["freq"]) {
                     input.freq = QString::fromStdString(it->second["freq"].as<std::string>());
                 }
-                if (it->second["duty_cycle"]) {
-                    input.duty_cycle = QString::fromStdString(
-                        it->second["duty_cycle"].as<std::string>());
+                if (it->second["duty"]) {
+                    input.duty = QString::fromStdString(it->second["duty"].as<std::string>());
                 }
             }
             config.inputs.append(input);
@@ -96,7 +110,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 for (auto linkIt = it->second["link"].begin(); linkIt != it->second["link"].end();
                      ++linkIt) {
                     ClockLink link;
-                    link.sourceName = QString::fromStdString(linkIt->first.as<std::string>());
+                    link.source = QString::fromStdString(linkIt->first.as<std::string>());
 
                     if (linkIt->second["type"]) {
                         link.type = parseClockType(
@@ -117,7 +131,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
 
                     // Parse divider configuration
                     if (linkIt->second["div"] && linkIt->second["div"].IsMap()) {
-                        link.div.ratio = linkIt->second["div"]["ratio"].as<int>(2);
+                        link.div.ratio = linkIt->second["div"]["ratio"].as<int>(1);
                         if (linkIt->second["div"]["reset"]) {
                             link.div.reset = QString::fromStdString(
                                 linkIt->second["div"]["reset"].as<std::string>());
@@ -142,8 +156,12 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     target.mux.ref_clock = QString::fromStdString(
                         it->second["mux"]["ref_clock"].as<std::string>());
                 } else if (target.mux.type == GF_MUX) {
-                    // Use default_ref_clock for GF_MUX if not specified
-                    target.mux.ref_clock = config.default_ref_clock;
+                    // GF_MUX requires explicit ref_clock (KISS principle)
+                    qCritical() << "Error: 'ref_clock' is required for GF_MUX on target:"
+                                << target.name;
+                    qCritical()
+                        << "Example: mux: { type: GF_MUX, select: sel_sig, ref_clock: clk_sys }";
+                    return config;
                 }
             }
 
@@ -186,8 +204,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     }
 
     // Add test enable if specified
-    if (!config.test_enable.isEmpty()) {
-        portList << QString("    input  %1     /**< Test enable signal */").arg(config.test_enable);
+    if (!config.test_en.isEmpty()) {
+        portList << QString("    input  %1     /**< Test enable signal */").arg(config.test_en);
     }
 
     // Join ports and remove last comma
@@ -208,7 +226,7 @@ void QSocClockPrimitive::generateWireDeclarations(
     for (const auto &target : config.targets) {
         for (int i = 0; i < target.links.size(); ++i) {
             const auto &link     = target.links[i];
-            QString     wireName = getLinkWireName(target.name, link.sourceName, i);
+            QString     wireName = getLinkWireName(target.name, link.source, i);
             out << "    wire " << wireName << ";\n";
         }
     }
@@ -238,7 +256,7 @@ void QSocClockPrimitive::generateOutputAssignments(
     for (const auto &target : config.targets) {
         if (target.links.size() == 1) {
             // Single source - direct assignment
-            QString wireName   = getLinkWireName(target.name, target.links[0].sourceName, 0);
+            QString wireName   = getLinkWireName(target.name, target.links[0].source, 0);
             QString outputExpr = wireName;
 
             // Apply inversion if needed
@@ -259,22 +277,22 @@ void QSocClockPrimitive::generateOutputAssignments(
 void QSocClockPrimitive::generateClockInstance(
     const ClockLink &link, const QString &targetName, int linkIndex, QTextStream &out)
 {
-    QString wireName     = getLinkWireName(targetName, link.sourceName, linkIndex);
-    QString instanceName = getInstanceName(targetName, link.sourceName, linkIndex);
+    QString wireName     = getLinkWireName(targetName, link.source, linkIndex);
+    QString instanceName = getInstanceName(targetName, link.source, linkIndex);
 
     out << "    /*\n";
-    out << "     * " << link.sourceName << " -> " << targetName << ": "
-        << getClockTypeString(link.type) << "\n";
+    out << "     * " << link.source << " -> " << targetName << ": " << getClockTypeString(link.type)
+        << "\n";
     out << "     */\n";
 
     switch (link.type) {
     case PASS_THRU:
-        out << "    assign " << wireName << " = " << link.sourceName << ";\n";
+        out << "    assign " << wireName << " = " << link.source << ";\n";
         break;
 
     case GATE_ONLY:
         out << "    QSOC_CKGATE_CELL " << instanceName << " (\n";
-        out << "        .CLK_IN  (" << link.sourceName << "),\n";
+        out << "        .CLK_IN  (" << link.source << "),\n";
         out << "        .CLK_EN  (" << link.gate.enable << "),\n";
         out << "        .CLK_OUT (" << wireName << ")\n";
         out << "    );\n";
@@ -284,7 +302,7 @@ void QSocClockPrimitive::generateClockInstance(
         out << "    QSOC_CKDIV_ICG #(\n";
         out << "        .RATIO(" << link.div.ratio << ")\n";
         out << "    ) " << instanceName << " (\n";
-        out << "        .CLK_IN  (" << link.sourceName << "),\n";
+        out << "        .CLK_IN  (" << link.source << "),\n";
         out << "        .RST_N   (" << link.div.reset << "),\n";
         out << "        .CLK_OUT (" << wireName << ")\n";
         out << "    );\n";
@@ -294,17 +312,17 @@ void QSocClockPrimitive::generateClockInstance(
         out << "    QSOC_CKDIV_DFF #(\n";
         out << "        .RATIO(" << link.div.ratio << ")\n";
         out << "    ) " << instanceName << " (\n";
-        out << "        .CLK_IN  (" << link.sourceName << "),\n";
+        out << "        .CLK_IN  (" << link.source << "),\n";
         out << "        .RST_N   (" << link.div.reset << "),\n";
         out << "        .CLK_OUT (" << wireName << ")\n";
         out << "    );\n";
         break;
 
     case GATE_DIV_ICG: {
-        QString gateWire = QString("gated_%1_%2").arg(targetName, link.sourceName);
+        QString gateWire = QString("gated_%1_%2").arg(targetName, link.source);
         out << "    wire " << gateWire << ";\n";
         out << "    QSOC_CKGATE_CELL " << instanceName << "_gate (\n";
-        out << "        .CLK_IN  (" << link.sourceName << "),\n";
+        out << "        .CLK_IN  (" << link.source << "),\n";
         out << "        .CLK_EN  (" << link.gate.enable << "),\n";
         out << "        .CLK_OUT (" << gateWire << ")\n";
         out << "    );\n";
@@ -319,10 +337,10 @@ void QSocClockPrimitive::generateClockInstance(
     }
 
     case GATE_DIV_DFF: {
-        QString gateWire = QString("gated_%1_%2").arg(targetName, link.sourceName);
+        QString gateWire = QString("gated_%1_%2").arg(targetName, link.source);
         out << "    wire " << gateWire << ";\n";
         out << "    QSOC_CKGATE_CELL " << instanceName << "_gate (\n";
-        out << "        .CLK_IN  (" << link.sourceName << "),\n";
+        out << "        .CLK_IN  (" << link.source << "),\n";
         out << "        .CLK_EN  (" << link.gate.enable << "),\n";
         out << "        .CLK_OUT (" << gateWire << ")\n";
         out << "    );\n";
@@ -350,7 +368,7 @@ void QSocClockPrimitive::generateMuxInstance(
     QStringList inputWires;
     for (int i = 0; i < target.links.size(); ++i) {
         const auto &link     = target.links[i];
-        QString     wireName = getLinkWireName(target.name, link.sourceName, i);
+        QString     wireName = getLinkWireName(target.name, link.source, i);
 
         if (link.invert) {
             QString invertedWire = QString("%1_inv").arg(wireName);
@@ -379,7 +397,7 @@ void QSocClockPrimitive::generateMuxInstance(
             for (int i = 0; i < inputWires.size(); ++i) {
                 out << "            " << i << ": " << muxOut << "_reg = " << inputWires[i] << ";\n";
             }
-            out << "            default: " << muxOut << "_reg = " << inputWires[0] << ";\n";
+            out << "            default: " << muxOut << "_reg = 1'bx; // Invalid select\n";
             out << "        endcase\n";
             out << "    end\n";
             out << "    assign " << muxOut << " = " << muxOut << "_reg;\n";
@@ -415,15 +433,24 @@ QSocClockPrimitive::ClockType QSocClockPrimitive::parseClockType(const QString &
     if (typeStr == "GATE_DIV_DFF")
         return GATE_DIV_DFF;
 
-    qWarning() << "Unknown clock type:" << typeStr << ", defaulting to PASS_THRU";
-    return PASS_THRU;
+    // KISS: Error on unknown type instead of silent default
+    qCritical() << "Error: Unknown clock type:" << typeStr;
+    qCritical()
+        << "Valid types: PASS_THRU, GATE_ONLY, DIV_ICG, DIV_DFF, GATE_DIV_ICG, GATE_DIV_DFF";
+    return PASS_THRU; // Still return something for compilation
 }
 
 QSocClockPrimitive::MuxType QSocClockPrimitive::parseMuxType(const QString &typeStr)
 {
+    if (typeStr == "STD_MUX")
+        return STD_MUX;
     if (typeStr == "GF_MUX")
         return GF_MUX;
-    return STD_MUX; // Default
+
+    // KISS: Validate mux type
+    qCritical() << "Error: Unknown mux type:" << typeStr;
+    qCritical() << "Valid types: STD_MUX, GF_MUX";
+    return STD_MUX; // Still return something for compilation
 }
 
 QString QSocClockPrimitive::getLinkWireName(

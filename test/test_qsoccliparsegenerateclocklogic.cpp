@@ -516,7 +516,7 @@ net: {}
 clock:
   - name: test_clk_ctrl
     clock: clk_sys
-    default_ref_clock: clk_sys
+    ref_clock: clk_sys
     input:
       osc_24m:
         freq: 24MHz
@@ -533,6 +533,7 @@ clock:
         mux:
           type: GF_MUX
           select: safe_sel
+          ref_clock: clk_sys
 )";
 
         QString netlistPath = createTempFile("test_gf_mux.soc_net", netlistContent);
@@ -598,7 +599,7 @@ net: {}
 clock:
   - name: test_clk_ctrl
     clock: clk_sys
-    default_ref_clock: clk_sys
+    ref_clock: clk_sys
     input:
       osc_24m:
         freq: 24MHz
@@ -688,7 +689,7 @@ net: {}
 clock:
   - name: test_clk_ctrl
     clock: clk_sys
-    default_ref_clock: clk_sys
+    ref_clock: clk_sys
     input:
       osc_24m:
         freq: 24MHz
@@ -705,7 +706,7 @@ clock:
         mux:
           type: GF_MUX
           select: sel1
-          # Uses default_ref_clock (clk_sys)
+          ref_clock: clk_sys
       custom_clk:
         freq: 100MHz
         link:

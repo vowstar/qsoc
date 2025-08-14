@@ -50,10 +50,10 @@ public:
      */
     struct ClockInput
     {
-        QString name;       // Input clock signal name
-        QString freq;       // Frequency with unit (e.g., "24MHz", "800MHz")
-        QString duty_cycle; // Optional duty cycle (e.g., "50%")
-        QString comment;    // Optional comment
+        QString name;    // Input clock signal name
+        QString freq;    // Frequency with unit (e.g., "24MHz", "800MHz")
+        QString duty;    // Optional duty cycle (e.g., "50%")
+        QString comment; // Optional comment
     };
 
     /**
@@ -89,11 +89,11 @@ public:
      */
     struct ClockLink
     {
-        QString      sourceName; // Source clock name
-        ClockType    type;       // Clock operation type
-        bool         invert;     // Optional clock inversion
-        ClockGate    gate;       // Gate configuration (if type contains "GATE")
-        ClockDivider div;        // Divider configuration (if type contains "DIV")
+        QString      source; // Source clock name
+        ClockType    type;   // Clock operation type
+        bool         invert; // Optional clock inversion
+        ClockGate    gate;   // Gate configuration (if type contains "GATE")
+        ClockDivider div;    // Divider configuration (if type contains "DIV")
     };
 
     /**
@@ -113,13 +113,13 @@ public:
      */
     struct ClockControllerConfig
     {
-        QString            name;              // Controller instance name
-        QString            moduleName;        // Module name (default: "clkctrl")
-        QString            clock;             // Default synchronous clock
-        QString            default_ref_clock; // Default reference clock for GF_MUX
-        QString            test_enable;       // Test enable signal (optional)
-        QList<ClockInput>  inputs;            // Clock inputs
-        QList<ClockTarget> targets;           // Clock targets
+        QString            name;       // Controller instance name
+        QString            moduleName; // Module name
+        QString            clock;      // Default synchronous clock
+        QString            ref_clock;  // Reference clock for GF_MUX
+        QString            test_en;    // Test enable signal (optional)
+        QList<ClockInput>  inputs;     // Clock inputs
+        QList<ClockTarget> targets;    // Clock targets
     };
 
 public:
@@ -213,7 +213,7 @@ private:
     /**
      * @brief Generate clock multiplexer instance
      * @param target Clock target with multiplexer
-     * @param config Controller configuration (for default_ref_clock)
+     * @param config Controller configuration (for ref_clock)
      * @param out Output text stream
      */
     void generateMuxInstance(
