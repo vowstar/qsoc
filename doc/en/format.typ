@@ -1530,14 +1530,14 @@ All generated signals use the FSM name as prefix:
 
 === RESET SECTION
 <soc-net-reset>
-The `reset` section defines reset controller primitives that generate proper reset signaling throughout the SoC. Reset primitives provide comprehensive reset management with support for multiple reset sources, different reset types, signal polarity handling, and standardized module generation.
+The `reset` section defines reset controller primitives that generate proper reset signaling throughout the SoC. Reset primitives provide comprehensive reset management with support for multiple reset sources, component-based processing, signal polarity handling, and standardized module generation.
 
 ==== Reset Overview
 <soc-net-reset-overview>
 Reset controllers are essential for proper SoC operation, ensuring that all logic blocks start in a known state and can be reset reliably. QSoC supports sophisticated reset topologies with multiple reset sources mapping to multiple reset targets through a clear source → target → link relationship structure.
 
 Key features include:
-- Five distinct reset types with clear semantics
+- Component-based reset processing architecture
 - Signal polarity normalization (active high/low)
 - Multi-source to multi-target reset matrices
 - Structured YAML configuration without string parsing
@@ -1546,10 +1546,10 @@ Key features include:
 
 ==== Reset Structure
 <soc-net-reset-structure>
-Reset controllers use a modern structured YAML format that eliminates complex string parsing and provides clear type definitions:
+Reset controllers use a modern structured YAML format that eliminates complex string parsing and provides component-based processing:
 
 ```yaml
-# Modern reset controller format
+# Modern component-based reset controller format
 reset:
   - name: main_reset_ctrl          # Reset controller instance name
     clock: clk_sys                 # Clock for synchronous reset operations
@@ -1560,102 +1560,25 @@ reset:
       trig_rst: low                # Trigger-based reset (active low)
     target:                        # Reset target definitions (singular)
       cpu_rst_n:
-        polarity: low              # Active low target output
+        active: low                # Active low target output
         link:                      # Link definitions for each source
           por_rst_n:
-            type: ASYNC_SYNC       # Clear type name, no abbreviations
-            depth: 4               # Structured parameters
+            source: por_rst_n
+            async:                 # Component: qsoc_rst_sync
+              clock: clk_sys
+              stage: 4             # 4-stage synchronizer
           i3c_soc_rst:
-            type: ASYNC_DIRECT     # Simple combinational pass-through
+            source: i3c_soc_rst    # Direct assignment (no components)
       peri_rst_n:
-        polarity: low
+        active: low
         link:
           por_rst_n:
-            type: ASYNC_DIRECT     # Direct connection
+            source: por_rst_n      # Direct assignment (no components)
 ```
 
-==== Reset Types
-<soc-net-reset-types>
-Reset controllers support five distinct reset types, each with clear naming and specific use cases:
-
-#figure(
-  align(center)[#table(
-    columns: (0.25fr, 0.35fr, 0.4fr),
-    align: (auto, left, left),
-    table.header([Type], [Behavior], [Use Cases]),
-    table.hline(),
-    [`ASYNC_DIRECT`],
-    [Async reset, async release (combinational)],
-    [Simple pass-through, clock-independent resets],
-    [`ASYNC_SYNC`],
-    [Async reset, sync release with configurable depth],
-    [Standard synchronous reset release],
-    [`ASYNC_COUNT`],
-    [Async reset, sync release with counter],
-    [Power-on-reset with timeout],
-    [`SYNC_ONLY`],
-    [Synchronous reset with configurable depth],
-    [Fully synchronous reset systems],
-    [`ASYNC_SYNC_COUNT`],
-    [Async reset with sync-then-count release],
-    [Two-stage reset: sync release followed by counter timeout],
-  )],
-  caption: [RESET TYPES],
-  kind: table,
-)
-
-===== Type Parameters
-Each reset type accepts structured parameters instead of string parsing:
-
-```yaml
-# ASYNC_DIRECT: No parameters needed
-target:
-  simple_rst_n:
-    polarity: low
-    link:
-      por_rst_n:
-        type: ASYNC_DIRECT         # Direct combinational connection
-
-# ASYNC_SYNC: Structured sync parameters
-target:
-  cpu_rst_n:
-    polarity: low
-    link:
-      por_rst_n:
-        type: ASYNC_SYNC
-        depth: 4                   # 4-clock synchronization depth
-
-# ASYNC_COUNT: Counter-based parameters
-target:
-  por_rst_n:
-    polarity: low
-    link:
-      por_in:
-        type: ASYNC_COUNT
-        depth: 2                   # Initial sync depth
-        width: 8                   # Counter bit width
-        timeout: 255               # Timeout value
-
-# SYNC_ONLY: Synchronous-only parameters
-target:
-  sync_rst_n:
-    polarity: low
-    link:
-      reset_req:
-        type: SYNC_ONLY
-        depth: 3                   # 3-clock synchronous depth
-
-# ASYNC_SYNC_COUNT: Sync-then-count parameters
-target:
-  dma_rst_n:
-    polarity: low
-    link:
-      trig_rst:
-        type: ASYNC_SYNC_COUNT
-        depth: 3                   # Initial sync depth
-        width: 8                   # Counter bit width
-        timeout: 15                # Counter timeout value
-```
+==== Reset Components
+<soc-net-reset-components>
+Reset controllers use component-based architecture with three standard reset processing modules. Each link can specify different processing attributes, automatically selecting the appropriate component:
 
 ==== Reset Properties
 <soc-net-reset-properties>
@@ -1702,7 +1625,7 @@ Reset sources define input reset signals with simple polarity specification:
     align: (auto, left),
     table.header([Property], [Description]),
     table.hline(),
-    [polarity],
+    [active],
     [Signal polarity: `low` (active low) or `high` (active high) - *REQUIRED*],
   )],
   caption: [RESET SOURCE PROPERTIES],
@@ -1718,36 +1641,14 @@ Reset targets define output reset signals with structured link definitions:
     align: (auto, left),
     table.header([Property], [Description]),
     table.hline(),
-    [polarity],
+    [active],
     [Target signal polarity: `low` (active low) or `high` (active high) - *REQUIRED*],
-    [link], [Map of source connections with type and parameters],
+    [link], [Map of source connections with component attributes],
   )],
   caption: [RESET TARGET PROPERTIES],
   kind: table,
 )
 
-===== Link Parameters
-Each reset type supports specific structured parameters:
-
-#figure(
-  align(center)[#table(
-    columns: (0.25fr, 0.25fr, 0.5fr),
-    align: (auto, auto, left),
-    table.header([Type], [Parameters], [Description]),
-    table.hline(),
-    [`ASYNC_DIRECT`], [None], [No parameters required],
-    [`ASYNC_SYNC`], [`depth`], [Number of synchronization flip-flops],
-    [`ASYNC_COUNT`],
-    [`depth`, `width`, `timeout`],
-    [Sync depth, counter width, timeout value],
-    [`SYNC_ONLY`], [`depth`], [Number of synchronous reset flip-flops],
-    [`ASYNC_SYNC_COUNT`],
-    [`depth`, `width`, `timeout`],
-    [Sync depth, counter width, and timeout cycles for two-stage release],
-  )],
-  caption: [RESET TYPE PARAMETERS],
-  kind: table,
-)
 
 ==== Reset Reason Recording
 <soc-net-reset-reason>
@@ -1853,15 +1754,15 @@ Reset logic uses simplified variable naming for improved readability:
   - Counters: `count_wdt_rst_n_cpu_rst_n_counter`
   - Count flags: `count_wdt_rst_n_cpu_rst_n_counting`
   - Stage wires: `sync_count_trig_rst_dma_rst_n_sync_stage1`
-- *Type prefixes*: `sync` (ASYNC_SYNC), `count` (ASYNC_COUNT), `sync_count` (ASYNC_SYNC_COUNT), `sync` (SYNC_ONLY)
+- *Component prefixes*: `sync` (qsoc_rst_sync), `count` (qsoc_rst_count), `pipe` (qsoc_rst_pipe)
 - *No controller prefixes*: Variables use only essential identifiers for conciseness
 
 ===== Generated Modules
 The reset controller generates dedicated modules with component-based implementations:
 - Component instantiation using qsoc_rst_sync, qsoc_rst_pipe, and qsoc_rst_count modules
-- Async reset synchronizer (qsoc_rst_sync) for ASYNC_SYNC type
-- Sync reset pipeline (qsoc_rst_pipe) for SYNC_ONLY type
-- Counter-based reset release (qsoc_rst_count) for ASYNC_COUNT type
+- Async reset synchronizer (qsoc_rst_sync) when async attribute is specified
+- Sync reset pipeline (qsoc_rst_pipe) when sync attribute is specified
+- Counter-based reset release (qsoc_rst_count) when count attribute is specified
 - Custom combinational logic for signal routing and polarity handling
 
 ===== Generated Code Example
