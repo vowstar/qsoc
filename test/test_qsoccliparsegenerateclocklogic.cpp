@@ -121,11 +121,15 @@ private slots:
         file.close();
 
         const QStringList requiredCells
-            = {"QSOC_CKMUX_CELL",
-               "QSOC_CKMUX_GF_CELL",
-               "QSOC_CKGATE_CELL",
-               "QSOC_CKDIV_ICG",
-               "QSOC_CKDIV_DFF"};
+            = {"QSOC_CKGATE_CELL",
+               "QSOC_CKINV_CELL",
+               "QSOC_CLKOR2_CELL",
+               "QSOC_CLKMUX2_CELL",
+               "QSOC_CLKXOR2_CELL",
+               "QSOC_CLKDIV_CELL",
+               "QSOC_CLKMUX_GF_CELL",
+               "QSOC_CLKMUX_STD_CELL",
+               "QSOC_CLKOR_TREE"};
 
         for (const QString &cell : requiredCells) {
             if (!content.contains(QString("module %1").arg(cell))) {
@@ -163,9 +167,7 @@ clock:
       adc_clk:
         freq: 24MHz
         link:
-          osc_24m:
-            type: PASS_THRU
-            invert: false
+          osc_24m:            # Direct pass-through (KISS format)
 )";
 
         QString netlistPath = createTempFile("test_pass_thru.soc_net", netlistContent);
@@ -191,8 +193,11 @@ clock:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "PASS_THRU"));
+        /* Verify the generated content contains expected clock connection */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "assign adc_clk = clk_adc_clk_from_osc_24m;"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "assign clk_adc_clk_from_osc_24m = osc_24m;"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "assign clk_adc_clk_from_osc_24m = osc_24m"));
         QVERIFY(verifyVerilogContentNormalized(
@@ -230,12 +235,10 @@ clock:
     target:
       dbg_clk:
         freq: 800MHz
+        icg:                   # Target-level ICG (KISS format)
+          enable: dbg_clk_en
         link:
-          pll_800m:
-            type: GATE_ONLY
-            gate:
-              enable: dbg_clk_en
-              polarity: high
+          pll_800m:            # Direct connection
 )";
 
         QString netlistPath = createTempFile("test_gate_only.soc_net", netlistContent);
@@ -262,9 +265,9 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKGATE_CELL"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_IN(pll_800m)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_EN(dbg_clk_en)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CKGATE_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_dbg_clk_from_pll_800m)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(dbg_clk_en)"));
 
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
@@ -298,12 +301,11 @@ clock:
     target:
       uart_clk:
         freq: 200MHz
+        div:                   # Target-level divider (KISS format)
+          ratio: 4
+          reset: rst_n
         link:
-          pll_800m:
-            type: DIV_ICG
-            div:
-              ratio: 4
-              reset: rst_n
+          pll_800m:            # Direct connection
 )";
 
         QString netlistPath = createTempFile("test_div_icg.soc_net", netlistContent);
@@ -330,9 +332,9 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKDIV_ICG"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RATIO(4)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RST_N(rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKDIV_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".width"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_n(rst_n)"));
 
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
@@ -368,11 +370,10 @@ clock:
         freq: 12MHz
         link:
           osc_24m:
-            type: DIV_DFF
-            invert: true
             div:
               ratio: 2
               reset: rst_n
+            inv:
 )";
 
         QString netlistPath = createTempFile("test_div_dff.soc_net", netlistContent);
@@ -399,8 +400,8 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKDIV_DFF"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".RATIO(2)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKDIV_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(8'd2)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "~clk_slow_clk_n_from_osc_24m"));
 
         // clock_cell.v should be created and complete
@@ -409,7 +410,7 @@ clock:
 
     void test_std_mux_clock()
     {
-        // Create netlist file with STD_MUX multi-source clock
+        // Create netlist file with STD_MUX multi-source clock (KISS format)
         QString netlistContent = R"(
 port:
   pll_800m:
@@ -443,17 +444,13 @@ clock:
     target:
       func_clk:
         freq: 100MHz
+        div:                    # Target-level divider (KISS format)
+          ratio: 8
+          reset: rst_n
         link:
-          pll_800m:
-            type: DIV_ICG
-            div:
-              ratio: 8
-              reset: rst_n
-          test_clk:
-            type: PASS_THRU
-        mux:
-          type: STD_MUX
-          select: func_sel
+          pll_800m:             # Direct connection
+          test_clk:             # Direct connection  
+        select: func_sel        # No reset → auto STD_MUX
 )";
 
         QString netlistPath = createTempFile("test_std_mux.soc_net", netlistContent);
@@ -480,9 +477,9 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKMUX_CELL"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(func_sel)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKDIV_ICG"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKMUX_STD_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_sel(func_sel)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKDIV_CELL"));
 
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
@@ -490,7 +487,7 @@ clock:
 
     void test_gf_mux_clock()
     {
-        // Create netlist file with GF_MUX (glitch-free) multi-source clock
+        // Create netlist file with GF_MUX (glitch-free) multi-source clock (KISS format)
         QString netlistContent = R"(
 port:
   osc_24m:
@@ -502,7 +499,7 @@ port:
   safe_sel:
     direction: input
     type: logic
-  clk_sys:
+  sys_rst_n:
     direction: input
     type: logic
   safe_clk:
@@ -516,7 +513,6 @@ net: {}
 clock:
   - name: test_clk_ctrl
     clock: clk_sys
-    ref_clock: clk_sys
     input:
       osc_24m:
         freq: 24MHz
@@ -526,14 +522,10 @@ clock:
       safe_clk:
         freq: 24MHz
         link:
-          osc_24m:
-            type: PASS_THRU
-          test_clk:
-            type: PASS_THRU
-        mux:
-          type: GF_MUX
-          select: safe_sel
-          ref_clock: clk_sys
+          osc_24m:              # Direct connection
+          test_clk:             # Direct connection
+        select: safe_sel
+        reset: sys_rst_n        # Has reset → auto GF_MUX
 )";
 
         QString netlistPath = createTempFile("test_gf_mux.soc_net", netlistContent);
@@ -560,9 +552,9 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKMUX_GF_CELL"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(clk_sys)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(safe_sel)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKMUX_GF_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(sys_rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(safe_sel)"));
 
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
@@ -570,7 +562,7 @@ clock:
 
     void test_gf_mux_custom_ref_clock()
     {
-        // Create netlist file with GF_MUX using custom ref_clock (different from default)
+        // Create netlist file with GF_MUX using KISS format with DFT signals
         QString netlistContent = R"(
 port:
   osc_24m:
@@ -582,10 +574,13 @@ port:
   custom_sel:
     direction: input
     type: logic
-  clk_sys:
+  sys_rst_n:
     direction: input
     type: logic
-  custom_ref:
+  test_enable:
+    direction: input
+    type: logic
+  test_clock:
     direction: input
     type: logic
   custom_clk:
@@ -599,7 +594,6 @@ net: {}
 clock:
   - name: test_clk_ctrl
     clock: clk_sys
-    ref_clock: clk_sys
     input:
       osc_24m:
         freq: 24MHz
@@ -609,14 +603,12 @@ clock:
       custom_clk:
         freq: 24MHz
         link:
-          osc_24m:
-            type: PASS_THRU
-          test_clk:
-            type: PASS_THRU
-        mux:
-          type: GF_MUX
-          select: custom_sel
-          ref_clock: custom_ref
+          osc_24m:              # Direct connection
+          test_clk:             # Direct connection
+        select: custom_sel
+        reset: sys_rst_n        # Has reset → auto GF_MUX
+        test_enable: test_enable # DFT test enable
+        test_clock: test_clock  # DFT test clock
 )";
 
         QString netlistPath = createTempFile("test_gf_mux_custom_ref.soc_net", netlistContent);
@@ -644,9 +636,11 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKMUX_GF_CELL"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(custom_ref)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(custom_sel)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKMUX_GF_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(sys_rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(custom_sel)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en(test_enable)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_clk(test_clock)"));
 
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
@@ -654,7 +648,7 @@ clock:
 
     void test_mixed_ref_clock_scenario()
     {
-        // Create netlist file with mixed ref_clock scenario - some using default, some custom
+        // Create netlist file with mixed clock mux scenario (KISS format)
         QString netlistContent = R"(
 port:
   osc_24m:
@@ -669,10 +663,10 @@ port:
   sel2:
     direction: input
     type: logic
-  clk_sys:
+  sys_rst_n:
     direction: input
     type: logic
-  special_ref:
+  por_rst_n:
     direction: input
     type: logic
   default_clk:
@@ -689,7 +683,6 @@ net: {}
 clock:
   - name: test_clk_ctrl
     clock: clk_sys
-    ref_clock: clk_sys
     input:
       osc_24m:
         freq: 24MHz
@@ -699,25 +692,17 @@ clock:
       default_clk:
         freq: 24MHz
         link:
-          osc_24m:
-            type: PASS_THRU
-          test_clk:
-            type: PASS_THRU
-        mux:
-          type: GF_MUX
-          select: sel1
-          ref_clock: clk_sys
+          osc_24m:              # Direct connection
+          test_clk:             # Direct connection
+        select: sel1
+        reset: sys_rst_n        # Has reset → auto GF_MUX
       custom_clk:
         freq: 100MHz
         link:
-          osc_24m:
-            type: PASS_THRU
-          test_clk:
-            type: PASS_THRU
-        mux:
-          type: GF_MUX
-          select: sel2
-          ref_clock: special_ref
+          osc_24m:              # Direct connection
+          test_clk:             # Direct connection
+        select: sel2
+        reset: por_rst_n        # Has reset → auto GF_MUX
 )";
 
         QString netlistPath = createTempFile("test_mixed_ref_clock.soc_net", netlistContent);
@@ -745,13 +730,104 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CKMUX_GF_CELL"));
-        // First target uses default ref_clock
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(clk_sys)"));
-        // Second target uses custom ref_clock
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".REF_CLK(special_ref)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(sel1)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".SEL(sel2)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKMUX_GF_CELL"));
+        // Verify both mux instances with different reset signals
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(sys_rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(por_rst_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(sel1)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(sel2)"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
+    }
+
+    void test_same_name_target_source()
+    {
+        // Test case where target and source have the same name (same clock net)
+        // This tests clock tree hierarchy: osc_24m -> sys_clk (div) -> sys_clk (icg) -> cpu_clk
+        QString netlistContent = R"(
+port:
+  osc_24m:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  sys_clk_en:
+    direction: input
+    type: logic
+  sys_clk:
+    direction: output
+    type: logic
+  cpu_clk:
+    direction: output
+    type: logic
+
+instance: {}
+net: {}
+
+clock:
+  - name: same_name_clk_ctrl
+    clock: sys_clk
+    test_en: test_en
+    input:
+      osc_24m:
+        freq: 24MHz
+    target:
+      # First target: sys_clk with divider (400MHz/10 = 40MHz)
+      sys_clk:
+        freq: 40MHz
+        div:
+          ratio: 10
+          reset: rst_n
+        link:
+          pll_400m:            # External source (not defined as target)
+      
+      # Second target: cpu_clk using sys_clk as source with ICG
+      # This shows sys_clk is both a target (above) and source (below)
+      cpu_clk:
+        freq: 40MHz
+        icg:
+          enable: sys_clk_en
+        link:
+          sys_clk:             # Uses the sys_clk defined above as target
+)";
+
+        QString netlistPath = createTempFile("test_same_name.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_same_name.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify the generated content handles same-name correctly */
+        // Should have sys_clk divider instance
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKDIV_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(8'd10)"));
+
+        // Should have cpu_clk ICG instance
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CKGATE_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(sys_clk_en)"));
+
+        // Should use sys_clk as both output and intermediate signal
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output sys_clk"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output cpu_clk"));
 
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());

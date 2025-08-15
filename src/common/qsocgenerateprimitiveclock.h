@@ -26,18 +26,6 @@ class QSocClockPrimitive
 {
 public:
     /**
-     * @brief Clock type enumeration (6 clock types)
-     */
-    enum ClockType {
-        PASS_THRU,    // Direct forward
-        GATE_ONLY,    // ICG gate only
-        DIV_ICG,      // Narrow-pulse divider (counter + ICG)
-        DIV_DFF,      // 50% divider (toggle/D-FF)
-        GATE_DIV_ICG, // Gate → ICG divider
-        GATE_DIV_DFF  // Gate → D-FF divider
-    };
-
-    /**
      * @brief Clock multiplexer type enumeration
      */
     enum MuxType {
@@ -61,8 +49,10 @@ public:
      */
     struct ClockGate
     {
-        QString enable;   // Gate enable signal
-        QString polarity; // "high" or "low" (default: "high")
+        QString enable;      // Gate enable signal
+        QString polarity;    // "high" or "low" (default: "high")
+        QString test_enable; // Test enable signal (optional)
+        QString reset;       // Reset signal name (active-low default)
     };
 
     /**
@@ -70,8 +60,9 @@ public:
      */
     struct ClockDivider
     {
-        int     ratio; // Division ratio (≥2)
-        QString reset; // Reset signal name
+        int     ratio = 1;   // Division ratio (default 1 = no division)
+        QString reset;       // Reset signal name (active-low default)
+        QString test_enable; // Test enable signal (optional)
     };
 
     /**
@@ -79,9 +70,11 @@ public:
      */
     struct ClockMux
     {
-        MuxType type;      // STD_MUX or GF_MUX
-        QString select;    // Mux select signal
-        QString ref_clock; // Reference clock (GF_MUX only, optional)
+        MuxType type;        // STD_MUX or GF_MUX (auto-selected based on reset presence)
+        QString select;      // Mux select signal
+        QString reset;       // Reset signal name (GF_MUX only, active-low default)
+        QString test_enable; // DFT test enable signal (GF_MUX only, optional)
+        QString test_clock;  // DFT test clock signal (GF_MUX only, optional)
     };
 
     /**
@@ -89,11 +82,10 @@ public:
      */
     struct ClockLink
     {
-        QString      source; // Source clock name
-        ClockType    type;   // Clock operation type
-        bool         invert; // Optional clock inversion
-        ClockGate    gate;   // Gate configuration (if type contains "GATE")
-        ClockDivider div;    // Divider configuration (if type contains "DIV")
+        QString      source;      // Source clock name
+        ClockGate    icg;         // ICG configuration (KISS format)
+        ClockDivider div;         // Divider configuration (KISS format)
+        bool         inv = false; // Inverter flag (KISS format)
     };
 
     /**
@@ -101,11 +93,14 @@ public:
      */
     struct ClockTarget
     {
-        QString          name;    // Target clock signal name
-        QString          freq;    // Target frequency for SDC generation
-        QList<ClockLink> links;   // List of source connections
-        ClockMux         mux;     // Multiplexer configuration (if ≥2 links)
-        QString          comment; // Optional comment
+        QString          name;        // Target clock signal name
+        QString          freq;        // Target frequency for SDC generation
+        QList<ClockLink> links;       // List of source connections
+        ClockMux         mux;         // Multiplexer configuration (if ≥2 links)
+        ClockGate        icg;         // Target-level ICG (KISS format)
+        ClockDivider     div;         // Target-level divider (KISS format)
+        bool             inv = false; // Target-level inverter (KISS format)
+        QString          comment;     // Optional comment
     };
 
     /**
@@ -215,16 +210,13 @@ private:
      * @param target Clock target with multiplexer
      * @param config Controller configuration (for ref_clock)
      * @param out Output text stream
+     * @param outputName Output wire name (optional, uses target.name if empty)
      */
     void generateMuxInstance(
-        const ClockTarget &target, const ClockControllerConfig &config, QTextStream &out);
-
-    /**
-     * @brief Parse clock type from string
-     * @param typeStr Type string (e.g., "PASS_THRU", "DIV_ICG", "GATE_DIV_DFF")
-     * @return Clock type enumeration value
-     */
-    ClockType parseClockType(const QString &typeStr);
+        const ClockTarget           &target,
+        const ClockControllerConfig &config,
+        QTextStream                 &out,
+        const QString               &outputName = "");
 
     /**
      * @brief Parse multiplexer type from string
@@ -250,13 +242,6 @@ private:
      * @return Generated instance name
      */
     QString getInstanceName(const QString &targetName, const QString &sourceName, int linkIndex);
-
-    /**
-     * @brief Get clock type string for comments
-     * @param type Clock type enumeration
-     * @return Human-readable type string
-     */
-    QString getClockTypeString(ClockType type);
 
 private:
     QSocGenerateManager *m_parent; // Parent manager for accessing utilities
