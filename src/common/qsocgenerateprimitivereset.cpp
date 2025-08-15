@@ -665,79 +665,50 @@ void QSocResetPrimitive::generateOutputAssignments(
 
 void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
 {
-    // Generate qsoc_rst_sync module
+    out << "`timescale 1ns / 1ps\n\n";
+
+    // qsoc_rst_sync - Asynchronous reset synchronizer
     out << "/**\n";
-    out << " * @file qsoc_rst_sync.v\n";
     out << " * @brief Asynchronous reset synchronizer (active-low)\n";
-    out << " *\n";
-    out << " * @details Async assert, sync deassert after STAGE clocks.\n";
-    out << " *          Test bypass when test_enable=1.\n";
-    out << " */\n";
-    out << "`timescale 1ns/10ps\n";
-    out << "`ifndef DEF_QSOC_RST_SYNC\n";
-    out << "`define DEF_QSOC_RST_SYNC\n\n";
-    out << "/**\n";
-    out << " * @brief Reset synchronizer\n";
-    out << " * @param STAGE [31:0] Number of sync stage (>=2 recommended)\n";
-    out << " * @port  clk         Clock\n";
-    out << " * @port  rst_in_n    Async reset in, active-low\n";
-    out << " * @port  test_enable Test bypass; when 1, pass-through rst_in_n\n";
-    out << " * @port  rst_out_n   Sync reset out, active-low\n";
+    out << " * @param STAGE Number of sync stages (>=2 recommended)\n";
     out << " */\n";
     out << "module qsoc_rst_sync\n";
     out << "#(\n";
     out << "  parameter [31:0] STAGE = 32'h3\n";
     out << ")\n";
     out << "(\n";
-    out << "  input  wire clk,          /**< clock */\n";
-    out << "  input  wire rst_in_n,     /**< async reset in, active-low */\n";
-    out << "  input  wire test_enable,  /**< test bypass; 1 = pass-through */\n";
-    out << "  output wire rst_out_n     /**< sync reset out, active-low */\n";
+    out << "  input  wire clk,\n";
+    out << "  input  wire rst_in_n,\n";
+    out << "  input  wire test_enable,\n";
+    out << "  output wire rst_out_n\n";
     out << ");\n\n";
     out << "  reg  [STAGE-1:0] sync_reg;\n";
     out << "  wire             core_rst_n;\n\n";
-    out << "  /* async assert, sync release */\n";
     out << "  always @(posedge clk or negedge rst_in_n) begin\n";
     out << "    if (!rst_in_n) begin\n";
     out << "      sync_reg <= {STAGE{1'b0}};\n";
     out << "    end else begin\n";
-    out << "      /* STAGE >= 2 is recommended */\n";
     out << "      sync_reg <= {sync_reg[STAGE-2:0], 1'b1};\n";
     out << "    end\n";
     out << "  end\n\n";
     out << "  assign core_rst_n = sync_reg[STAGE-1];\n";
     out << "  assign rst_out_n  = test_enable ? rst_in_n : core_rst_n;\n\n";
     out << "endmodule\n\n";
-    out << "`endif\n\n";
 
-    // Generate qsoc_rst_pipe module
+    // qsoc_rst_pipe - Synchronous reset pipeline
     out << "/**\n";
-    out << " * @file qsoc_rst_pipe.v\n";
     out << " * @brief Synchronous reset pipeline (active-low)\n";
-    out << " *\n";
-    out << " * @details Adds STAGE cycle release delay to a sync reset.\n";
-    out << " *          Test bypass when test_enable=1.\n";
-    out << " */\n";
-    out << "`timescale 1ns/10ps\n";
-    out << "`ifndef DEF_QSOC_RST_PIPE\n";
-    out << "`define DEF_QSOC_RST_PIPE\n\n";
-    out << "/**\n";
-    out << " * @brief Reset pipeline\n";
-    out << " * @param STAGE [31:0] Number of pipeline stage (>=1)\n";
-    out << " * @port  clk         Clock\n";
-    out << " * @port  rst_in_n    Sync reset in, active-low\n";
-    out << " * @port  test_enable Test bypass; when 1, pass-through rst_in_n\n";
-    out << " * @port  rst_out_n   Delayed reset out, active-low\n";
+    out << " * @param STAGE Number of pipeline stages (>=1)\n";
     out << " */\n";
     out << "module qsoc_rst_pipe\n";
     out << "#(\n";
     out << "  parameter [31:0] STAGE = 32'h4\n";
     out << ")\n";
     out << "(\n";
-    out << "  input  wire clk,          /**< clock */\n";
-    out << "  input  wire rst_in_n,     /**< sync reset in, active-low */\n";
-    out << "  input  wire test_enable,  /**< test bypass; 1 = pass-through */\n";
-    out << "  output wire rst_out_n     /**< delayed reset out, active-low */\n";
+    out << "  input  wire clk,\n";
+    out << "  input  wire rst_in_n,\n";
+    out << "  input  wire test_enable,\n";
+    out << "  output wire rst_out_n\n";
     out << ");\n\n";
     out << "  reg  [STAGE-1:0] pipe_reg;\n";
     out << "  wire             core_rst_n;\n\n";
@@ -751,38 +722,22 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
     out << "  assign core_rst_n = pipe_reg[STAGE-1];\n";
     out << "  assign rst_out_n  = test_enable ? rst_in_n : core_rst_n;\n\n";
     out << "endmodule\n\n";
-    out << "`endif\n\n";
 
-    // Generate qsoc_rst_count module
+    // qsoc_rst_count - Counter-based reset release
     out << "/**\n";
-    out << " * @file qsoc_rst_count.v\n";
     out << " * @brief Counter-based reset release (active-low)\n";
-    out << " *\n";
-    out << " * @details After rst_in_n deasserts, count CYCLE then release.\n";
-    out << " *          Test bypass when test_enable=1.\n";
-    out << " */\n";
-    out << "`timescale 1ns/10ps\n";
-    out << "`ifndef DEF_QSOC_RST_COUNT\n";
-    out << "`define DEF_QSOC_RST_COUNT\n\n";
-    out << "/**\n";
-    out << " * @brief Reset release by counter\n";
-    out << " * @param CYCLE [31:0] Number of cycle before release\n";
-    out << " * @port  clk          Clock\n";
-    out << " * @port  rst_in_n     Input reset, active-low\n";
-    out << " * @port  test_enable  Test bypass; when 1, pass-through rst_in_n\n";
-    out << " * @port  rst_out_n    Output reset, active-low\n";
+    out << " * @param CYCLE Number of cycles before release\n";
     out << " */\n";
     out << "module qsoc_rst_count\n";
     out << "#(\n";
     out << "  parameter [31:0] CYCLE = 32'h10\n";
     out << ")\n";
     out << "(\n";
-    out << "  input  wire clk,          /**< clock */\n";
-    out << "  input  wire rst_in_n,     /**< async reset in, active-low */\n";
-    out << "  input  wire test_enable,  /**< test bypass; 1 = pass-through */\n";
-    out << "  output wire rst_out_n     /**< delayed reset out, active-low */\n";
+    out << "  input  wire clk,\n";
+    out << "  input  wire rst_in_n,\n";
+    out << "  input  wire test_enable,\n";
+    out << "  output wire rst_out_n\n";
     out << ");\n\n";
-    out << "  /* derive counter width for 1..2^32 using HEX thresholds */\n";
     out << "  localparam [5:0] CNT_WIDTH =\n";
     out << "    (CYCLE <= 32'h2)         ? 6'h01 :\n";
     out << "    (CYCLE <= 32'h4)         ? 6'h02 :\n";
@@ -817,7 +772,6 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
     out << "    (CYCLE <= 32'h80000000)  ? 6'h1F : 6'h20;\n\n";
     out << "  reg [CNT_WIDTH-1:0] cnt;\n";
     out << "  reg                 core_rst_n;\n\n";
-    out << "  /* async assert, sync count and release */\n";
     out << "  always @(posedge clk or negedge rst_in_n) begin\n";
     out << "    if (!rst_in_n) begin\n";
     out << "      cnt        <= {CNT_WIDTH{1'b0}};\n";
@@ -831,7 +785,6 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
     out << "  end\n\n";
     out << "  assign rst_out_n = test_enable ? rst_in_n : core_rst_n;\n\n";
     out << "endmodule\n\n";
-    out << "`endif /* DEF_QSOC_RST_COUNT */\n\n";
 }
 
 bool QSocResetPrimitive::generateResetCellFile(const QString &outputDir)

@@ -917,15 +917,8 @@ reset:
         QVERIFY(verifyVerilogContentNormalized(resetCellContent, "module qsoc_rst_count"));
         QVERIFY(verifyVerilogContentNormalized(resetCellContent, "parameter [31:0] CYCLE"));
 
-        /* Verify timescale and guards */
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`timescale 1ns/10ps"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`ifndef DEF_QSOC_RST_SYNC"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`define DEF_QSOC_RST_SYNC"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`ifndef DEF_QSOC_RST_PIPE"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`define DEF_QSOC_RST_PIPE"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`ifndef DEF_QSOC_RST_COUNT"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`define DEF_QSOC_RST_COUNT"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`endif /* DEF_QSOC_RST_COUNT */"));
+        /* Verify clean timescale */
+        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`timescale 1ns / 1ps"));
 
         /* Verify that the main reset controller uses the generated modules */
         QFile verilogFile(verilogPath);
