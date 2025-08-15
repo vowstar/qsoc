@@ -1857,44 +1857,63 @@ Reset logic uses simplified variable naming for improved readability:
 - *No controller prefixes*: Variables use only essential identifiers for conciseness
 
 ===== Generated Modules
-The reset controller generates dedicated modules with inline DFF-based implementations:
-- Direct flip-flop instantiation for synchronizers (no external modules)
-- Counter-based timeout logic for ASYNC_COUNT and ASYNC_SYNC_COUNT types
+The reset controller generates dedicated modules with component-based implementations:
+- Component instantiation using qsoc_rst_sync, qsoc_rst_pipe, and qsoc_rst_count modules
+- Async reset synchronizer (qsoc_rst_sync) for ASYNC_SYNC type
+- Sync reset pipeline (qsoc_rst_pipe) for SYNC_ONLY type
+- Counter-based reset release (qsoc_rst_count) for ASYNC_COUNT type
 - Custom combinational logic for signal routing and polarity handling
 
 ===== Generated Code Example
 ```verilog
 module rstctrl (
-    /* Reset clock */
-    input  clk_sys,     /**< System clock input */
-    /* Reset source */
-    input  por_rst_n,   /**< Reset source: por_rst_n (active low) */
-    /* Reset target */
-    output cpu_rst_n,   /**< Reset target: cpu_rst_n (active low) */
-    /* DFT */
-    input  test_en      /**< Test enable signal */
+    /* Clock inputs */
+    input  wire clk_sys,
+    /* Reset sources */
+    input  wire por_rst_n,
+    /* Test enable signals */
+    input  wire test_en,
+    /* Reset targets */
+    output wire cpu_rst_n
 );
 
-    /* Wires for reset connections */
-    wire por_rst_n_cpu_rst_n_sync;
+    /* Wire declarations */
+    wire cpu_rst_link0_n;
 
     /* Reset logic instances */
-    /*
-     * por_rst_n -> cpu_rst_n: ASYNC_SYNC: Async reset sync release
-     * with depth=4, clock=clk_sys
-     */
-    reg [3:0] sync_por_rst_n_cpu_rst_n_ff;
-    always @(posedge clk_sys or negedge por_rst_n) begin
-        if (!por_rst_n) sync_por_rst_n_cpu_rst_n_ff <= 4'b0;
-        else sync_por_rst_n_cpu_rst_n_ff <= {sync_por_rst_n_cpu_rst_n_ff[2:0], 1'b1};
-    end
-    assign por_rst_n_cpu_rst_n_sync = test_en ? por_rst_n : sync_por_rst_n_cpu_rst_n_ff[3];
+    /* Target: cpu_rst_n */
+    qsoc_rst_sync #(
+        .STAGE(4)
+    ) i_cpu_rst_link0_async (
+        .clk        (clk_sys),
+        .rst_in_n   (por_rst_n),
+        .test_enable(test_en),
+        .rst_out_n  (cpu_rst_link0_n)
+    );
 
-    /* Reset output assignments */
-    assign cpu_rst_n = &{por_rst_n_cpu_rst_n_sync};
+    /* Target output assignments */
+    assign cpu_rst_n = cpu_rst_link0_n;
 
 endmodule
 ```
+
+===== Reset Component Modules
+The reset controller uses three standard component modules:
+
+*qsoc_rst_sync*: Asynchronous reset synchronizer (active-low)
+- Async assert, sync deassert after STAGE clocks
+- Test bypass when test_enable=1
+- Parameters: STAGE (>=2 recommended)
+
+*qsoc_rst_pipe*: Synchronous reset pipeline (active-low)
+- Adds STAGE cycle release delay to a sync reset
+- Test bypass when test_enable=1
+- Parameters: STAGE (>=1)
+
+*qsoc_rst_count*: Counter-based reset release (active-low)
+- After rst_in_n deasserts, count CYCLE then release
+- Test bypass when test_enable=1
+- Parameters: CYCLE (number of cycles before release)
 
 ==== Best Practices
 <soc-net-reset-practices>

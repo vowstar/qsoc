@@ -23,65 +23,81 @@ class QSocResetPrimitive
 {
 public:
     /**
-     * @brief Reset type enumeration (simplified naming)
+     * @brief Async reset synchronizer configuration (qsoc_rst_sync)
      */
-    enum ResetType {
-        ASYNC_DIRECT,     // Async reset + Async release (direct connection)
-        ASYNC_SYNC,       // Async reset + Sync release
-        ASYNC_COUNT,      // Async reset + Counter timeout release
-        ASYNC_SYNC_COUNT, // Async reset + Sync-then-Count release
-        SYNC_ONLY         // Sync reset + Sync release
-    };
-
-    /**
-     * @brief Reset source configuration
-     */
-    struct ResetSource
+    struct AsyncConfig
     {
-        QString name;    // Source signal name
-        QString active;  // "high" or "low" polarity
-        QString comment; // Optional comment
+        QString test_enable = "test_en"; /**< Test enable signal name */
+        QString clock;                   /**< Clock signal name */
+        int     stage = 3;               /**< Number of sync stages */
     };
 
     /**
-     * @brief Reset target configuration  
+     * @brief Sync reset pipeline configuration (qsoc_rst_pipe)
+     */
+    struct SyncConfig
+    {
+        QString test_enable = "test_en"; /**< Test enable signal name */
+        QString clock;                   /**< Clock signal name */
+        int     stage = 4;               /**< Number of pipeline stages */
+    };
+
+    /**
+     * @brief Counter-based reset configuration (qsoc_rst_count)
+     */
+    struct CountConfig
+    {
+        QString test_enable = "test_en"; /**< Test enable signal name */
+        QString clock;                   /**< Clock signal name */
+        int     cycle = 16;              /**< Counter cycles */
+    };
+
+    /**
+     * @brief Reset link configuration (source to internal connection)
+     */
+    struct ResetLink
+    {
+        QString     source; /**< Source signal name */
+        AsyncConfig async;  /**< Async config (qsoc_rst_sync) */
+        SyncConfig  sync;   /**< Sync config (qsoc_rst_pipe) */
+        CountConfig count;  /**< Count config (qsoc_rst_count) */
+    };
+
+    /**
+     * @brief Reset target configuration
      */
     struct ResetTarget
     {
-        QString     name;    // Target signal name
-        QString     active;  // "high" or "low" polarity (usually "low" for _n)
-        QStringList sources; // List of source names affecting this target
-        QString     comment; // Optional comment
+        QString          name;   /**< Target signal name */
+        QString          active; /**< Output active level ("high" or "low") */
+        AsyncConfig      async;  /**< Target-level async config */
+        SyncConfig       sync;   /**< Target-level sync config */
+        CountConfig      count;  /**< Target-level count config */
+        QList<ResetLink> links;  /**< Input links */
     };
 
     /**
-     * @brief Reset connection configuration (new unified format)
-     */
-    struct ResetConnection
-    {
-        QString   sourceName;     // Source signal name
-        QString   targetName;     // Target signal name
-        ResetType type;           // Reset type (ASYNC_COMB, ASYNC_SYNC, etc.)
-        int       sync_depth;     // Synchronization depth
-        int       counter_width;  // Counter width (for ASYNC_CNT type)
-        int       timeout_cycles; // Timeout cycles (for ASYNC_CNT type)
-        int       pipe_depth;     // Pipeline depth (for ASYNC_PIPE type)
-        QString   clock;          // Clock signal name
-    };
-
-    /**
-     * @brief Reset reason recording configuration (Sync-clear async-capture sticky flags)
+     * @brief Reset reason recording configuration
      */
     struct ResetReasonConfig
     {
-        bool        enabled;     // Enable reset reason recording
-        QString     clock;       // Always-on clock for recording logic (required)
-        QString     output;      // Output bit vector bus name
-        QString     valid;       // Valid signal name for output gating
-        QString     clear;       // Software clear signal name
-        QString     rootReset;   // Root reset signal for async clear (explicitly specified)
-        QStringList sourceOrder; // Source names in bit order (LSB to MSB)
-        int         vectorWidth; // Total bit vector width (calculated)
+        bool        enabled = false; /**< Enable reset reason recording */
+        QString     clock;           /**< Always-on clock for recording logic */
+        QString     output;          /**< Output bit vector bus name */
+        QString     valid;           /**< Valid signal name for output gating */
+        QString     clear;           /**< Software clear signal name */
+        QString     rootReset;       /**< Root reset signal for async clear */
+        QStringList sourceOrder;     /**< Source names in bit order (LSB to MSB) */
+        int         vectorWidth = 0; /**< Total bit vector width */
+    };
+
+    /**
+     * @brief Reset source information
+     */
+    struct ResetSource
+    {
+        QString name;   /**< Source signal name */
+        QString active; /**< Source active level ("high" or "low") */
     };
 
     /**
@@ -89,14 +105,13 @@ public:
      */
     struct ResetControllerConfig
     {
-        QString                name;        // Controller instance name
-        QString                moduleName;  // Module name (default: "rstctrl")
-        QString                clock;       // Main clock signal
-        QString                testEnable;  // Test enable signal (default: "test_en")
-        QList<ResetSource>     sources;     // Reset sources
-        QList<ResetTarget>     targets;     // Reset targets
-        QList<ResetConnection> connections; // Source-target connections
-        ResetReasonConfig      reason;      // Reset reason recording configuration
+        QString            name       = "rstctrl"; /**< Controller instance name */
+        QString            moduleName = "rstctrl"; /**< Module name */
+        QString            clock;                  /**< Main clock signal */
+        QString            testEnable = "test_en"; /**< Test enable signal */
+        QList<ResetSource> sources;                /**< Reset sources */
+        QList<ResetTarget> targets;                /**< Reset targets */
+        ResetReasonConfig  reason;                 /**< Reset reason recording */
     };
 
 public:
@@ -158,36 +173,59 @@ private:
     void generateOutputAssignments(const ResetControllerConfig &config, QTextStream &out);
 
     /**
-     * @brief Generate single reset connection instance
-     * @param connection Reset connection configuration
-     * @param config Reset controller configuration
+     * @brief Generate reset cell template file
+     * @param out Output text stream for reset_cell.v
+     */
+    void generateResetCellFile(QTextStream &out);
+
+    /**
+     * @brief Generate single reset component instance
+     * @param targetName Target name for instance naming
+     * @param linkIndex Link index for instance naming
+     * @param async Async config (if component exists)
+     * @param sync Sync config (if component exists)  
+     * @param count Count config (if component exists)
+     * @param inv Inverter flag (not used in new architecture)
+     * @param inputSignal Input signal name
+     * @param outputSignal Output signal name
      * @param out Output text stream
      */
-    void generateResetInstance(
-        const ResetConnection &connection, const ResetControllerConfig &config, QTextStream &out);
+    void generateResetComponentInstance(
+        const QString     &targetName,
+        int                linkIndex,
+        const AsyncConfig *async,
+        const SyncConfig  *sync,
+        const CountConfig *count,
+        bool               inv,
+        const QString     &inputSignal,
+        const QString     &outputSignal,
+        QTextStream       &out);
 
     /**
-     * @brief Parse reset type from string
-     * @param typeStr Type string (e.g., "ASYNC_COMB", "ASYNC_SYNC", "ASYNC_CNT")
-     * @return Reset type enumeration value
-     */
-    ResetType parseResetType(const QString &typeStr);
-
-    /**
-     * @brief Get wire name for source-target connection
-     * @param sourceName Source signal name  
+     * @brief Get wire name for link connection
      * @param targetName Target signal name
+     * @param linkIndex Link index
      * @return Generated wire name
      */
-    QString getConnectionWireName(const QString &sourceName, const QString &targetName);
+    QString getLinkWireName(const QString &targetName, int linkIndex);
 
     /**
-     * @brief Get instance name for reset logic
-     * @param connection Reset connection
-     * @param config Reset controller configuration
+     * @brief Get instance name for reset component
+     * @param targetName Target name
+     * @param linkIndex Link index (-1 for target-level)
+     * @param componentType Component type ("async", "sync", "count")
      * @return Generated instance name
      */
-    QString getInstanceName(const ResetConnection &connection, const ResetControllerConfig &config);
+    QString getComponentInstanceName(
+        const QString &targetName, int linkIndex, const QString &componentType);
+
+    /**
+     * @brief Get normalized source signal (convert to low-active)
+     * @param sourceName Source signal name
+     * @param config Reset controller configuration
+     * @return Normalized source signal
+     */
+    QString getNormalizedSource(const QString &sourceName, const ResetControllerConfig &config);
 
 private:
     QSocGenerateManager *m_parent; // Parent manager for accessing utilities

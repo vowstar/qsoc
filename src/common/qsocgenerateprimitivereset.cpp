@@ -20,8 +20,8 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
     // Parse configuration
     ResetControllerConfig config = parseResetConfig(resetNode);
 
-    if (config.sources.isEmpty() || config.targets.isEmpty()) {
-        qWarning() << "Reset configuration must have at least one source and target";
+    if (config.targets.isEmpty()) {
+        qWarning() << "Reset configuration must have at least one target";
         return false;
     }
 
@@ -59,35 +59,29 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                             ? QString::fromStdString(resetNode["test_enable"].as<std::string>())
                             : "test_en";
 
-    // Parse sources (new format: source: {name: {polarity: ...}})
+    // Parse sources (source: {name: {polarity: ...}})
     if (resetNode["source"] && resetNode["source"].IsMap()) {
         for (auto it = resetNode["source"].begin(); it != resetNode["source"].end(); ++it) {
             ResetSource source;
             source.name = QString::fromStdString(it->first.as<std::string>());
 
-            if (it->second.IsMap() && it->second["polarity"]) {
-                QString polarity = QString::fromStdString(it->second["polarity"].as<std::string>());
-                source.active    = (polarity == "low") ? "low" : "high";
+            if (it->second.IsMap() && it->second["active"]) {
+                source.active = QString::fromStdString(it->second["active"].as<std::string>());
             } else if (it->second.IsScalar()) {
-                QString polarity = QString::fromStdString(it->second.as<std::string>());
-                source.active    = (polarity == "low") ? "low" : "high";
+                source.active = QString::fromStdString(it->second.as<std::string>());
             } else {
-                qCritical() << "Error: 'polarity' field is required for source '" << source.name
+                qCritical() << "Error: 'active' field is required for source '" << source.name
                             << "'";
-                qCritical() << "Please specify polarity explicitly: 'high' or 'low'";
+                qCritical() << "Please specify active level explicitly: 'high' or 'low'";
                 qCritical() << "Example: source: { " << source.name << ": low }";
-                return config; // Return with error
+                return config;
             }
-
-            source.comment = it->second.IsMap() && it->second["comment"]
-                                 ? QString::fromStdString(it->second["comment"].as<std::string>())
-                                 : "";
 
             config.sources.append(source);
         }
     }
 
-    // Parse targets and their links (new format)
+    // Parse targets with component-based configuration
     if (resetNode["target"] && resetNode["target"].IsMap()) {
         for (auto tgtIt = resetNode["target"].begin(); tgtIt != resetNode["target"].end(); ++tgtIt) {
             const YAML::Node &tgtNode = tgtIt->second;
@@ -97,58 +91,106 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             ResetTarget target;
             target.name = QString::fromStdString(tgtIt->first.as<std::string>());
 
-            // Parse target polarity
-            if (tgtNode["polarity"]) {
-                QString polarity = QString::fromStdString(tgtNode["polarity"].as<std::string>());
-                target.active    = (polarity == "low") ? "low" : "high";
+            // Parse target active level
+            if (tgtNode["active"]) {
+                target.active = QString::fromStdString(tgtNode["active"].as<std::string>());
             } else {
-                qCritical() << "Error: 'polarity' field is required for target '" << target.name
+                qCritical() << "Error: 'active' field is required for target '" << target.name
                             << "'";
-                qCritical() << "Please specify polarity explicitly: 'high' or 'low'";
-                qCritical() << "Example: target: { " << target.name << ": { polarity: low } }";
-                return config; // Return with error
+                return config;
             }
 
-            target.comment = tgtNode["comment"]
-                                 ? QString::fromStdString(tgtNode["comment"].as<std::string>())
-                                 : "";
+            // Parse target-level components
+            if (tgtNode["async"]) {
+                const YAML::Node &asyncNode = tgtNode["async"];
+                target.async.clock          = asyncNode["clock"] ? QString::fromStdString(
+                                                              asyncNode["clock"].as<std::string>())
+                                                                 : config.clock;
+                target.async.test_enable    = asyncNode["test_enable"]
+                                                  ? QString::fromStdString(
+                                                     asyncNode["test_enable"].as<std::string>())
+                                                  : config.testEnable;
+                target.async.stage          = asyncNode["stage"] ? asyncNode["stage"].as<int>() : 3;
+            }
+
+            if (tgtNode["sync"]) {
+                const YAML::Node &syncNode = tgtNode["sync"];
+                target.sync.clock          = syncNode["clock"]
+                                                 ? QString::fromStdString(syncNode["clock"].as<std::string>())
+                                                 : config.clock;
+                target.sync.test_enable    = syncNode["test_enable"]
+                                                 ? QString::fromStdString(
+                                                    syncNode["test_enable"].as<std::string>())
+                                                 : config.testEnable;
+                target.sync.stage          = syncNode["stage"] ? syncNode["stage"].as<int>() : 4;
+            }
+
+            if (tgtNode["count"]) {
+                const YAML::Node &countNode = tgtNode["count"];
+                target.count.clock          = countNode["clock"] ? QString::fromStdString(
+                                                              countNode["clock"].as<std::string>())
+                                                                 : config.clock;
+                target.count.test_enable    = countNode["test_enable"]
+                                                  ? QString::fromStdString(
+                                                     countNode["test_enable"].as<std::string>())
+                                                  : config.testEnable;
+                target.count.cycle = countNode["cycle"] ? countNode["cycle"].as<int>() : 16;
+            }
 
             // Parse links for this target
             if (tgtNode["link"] && tgtNode["link"].IsMap()) {
                 for (auto linkIt = tgtNode["link"].begin(); linkIt != tgtNode["link"].end();
                      ++linkIt) {
                     const YAML::Node &linkNode = linkIt->second;
-                    if (!linkNode.IsMap() || !linkNode["type"])
+                    if (!linkNode.IsMap())
                         continue;
 
-                    ResetConnection connection;
-                    connection.sourceName = QString::fromStdString(linkIt->first.as<std::string>());
-                    connection.targetName = target.name;
-                    connection.clock      = config.clock; // Use controller clock
+                    ResetLink link;
+                    link.source = QString::fromStdString(linkIt->first.as<std::string>());
 
-                    // Parse type
-                    QString typeStr = QString::fromStdString(linkNode["type"].as<std::string>());
-                    connection.type = parseResetType(typeStr);
+                    // Parse link-level components
+                    if (linkNode["async"]) {
+                        const YAML::Node &asyncNode = linkNode["async"];
+                        link.async.clock            = asyncNode["clock"]
+                                                          ? QString::fromStdString(
+                                                     asyncNode["clock"].as<std::string>())
+                                                          : config.clock;
+                        link.async.test_enable
+                            = asyncNode["test_enable"]
+                                  ? QString::fromStdString(
+                                        asyncNode["test_enable"].as<std::string>())
+                                  : config.testEnable;
+                        link.async.stage = asyncNode["stage"] ? asyncNode["stage"].as<int>() : 3;
+                    }
 
-                    // Parse parameters based on type (support new simplified names)
-                    connection.sync_depth     = linkNode["depth"] ? linkNode["depth"].as<int>()
-                                                : linkNode["sync_depth"]
-                                                    ? linkNode["sync_depth"].as<int>()
-                                                    : 0;
-                    connection.counter_width  = linkNode["width"] ? linkNode["width"].as<int>()
-                                                : linkNode["counter_width"]
-                                                    ? linkNode["counter_width"].as<int>()
-                                                    : 0;
-                    connection.timeout_cycles = linkNode["timeout"] ? linkNode["timeout"].as<int>()
-                                                : linkNode["timeout_cycles"]
-                                                    ? linkNode["timeout_cycles"].as<int>()
-                                                    : 0;
-                    connection.pipe_depth     = linkNode["pipe_depth"]
-                                                    ? linkNode["pipe_depth"].as<int>()
-                                                    : 0;
+                    if (linkNode["sync"]) {
+                        const YAML::Node &syncNode = linkNode["sync"];
+                        link.sync.clock            = syncNode["clock"]
+                                                         ? QString::fromStdString(
+                                                    syncNode["clock"].as<std::string>())
+                                                         : config.clock;
+                        link.sync.test_enable      = syncNode["test_enable"]
+                                                         ? QString::fromStdString(
+                                                          syncNode["test_enable"].as<std::string>())
+                                                         : config.testEnable;
+                        link.sync.stage = syncNode["stage"] ? syncNode["stage"].as<int>() : 4;
+                    }
 
-                    config.connections.append(connection);
-                    target.sources.append(connection.sourceName); // Track source for target
+                    if (linkNode["count"]) {
+                        const YAML::Node &countNode = linkNode["count"];
+                        link.count.clock            = countNode["clock"]
+                                                          ? QString::fromStdString(
+                                                     countNode["clock"].as<std::string>())
+                                                          : config.clock;
+                        link.count.test_enable
+                            = countNode["test_enable"]
+                                  ? QString::fromStdString(
+                                        countNode["test_enable"].as<std::string>())
+                                  : config.testEnable;
+                        link.count.cycle = countNode["cycle"] ? countNode["cycle"].as<int>() : 16;
+                    }
+
+                    target.links.append(link);
                 }
             }
 
@@ -204,9 +246,9 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                             << "' not found in source list.";
                 qCritical() << "Available sources:";
                 for (const auto &source : config.sources) {
-                    qCritical() << "  - " << source.name << " (polarity: " << source.active << ")";
+                    qCritical() << "  - " << source.name << " (active: " << source.active << ")";
                 }
-                return config; // Return with error
+                return config;
             }
         } else {
             qCritical() << "Error: 'root_reset' field is required in reason configuration.";
@@ -215,7 +257,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             return config; // Return with error
         }
 
-        // Build source order (exclude POR,按source声明顺序)
+        // Build source order (exclude root_reset, use source declaration order)
         config.reason.sourceOrder.clear();
         for (const auto &source : config.sources) {
             if (source.name != config.reason.rootReset) {
@@ -236,68 +278,107 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
 {
     out << "\nmodule " << config.moduleName << " (\n";
 
-    // Clock inputs
-    out << "    /* Reset clocks */\n";
-    out << "    input        " << config.clock << ",            /**< System clock input */\n";
+    // Collect all unique clock signals
+    QStringList clocks;
+    clocks.append(config.clock);
 
-    // Add reset reason clock if enabled
-    if (config.reason.enabled && !config.reason.clock.isEmpty()
-        && config.reason.clock != config.clock) {
-        out << "    input        " << config.reason.clock
-            << ",            /**< Always-on clock for reason recording */\n";
+    for (const auto &target : config.targets) {
+        for (const auto &link : target.links) {
+            if (!link.async.clock.isEmpty() && !clocks.contains(link.async.clock))
+                clocks.append(link.async.clock);
+            if (!link.sync.clock.isEmpty() && !clocks.contains(link.sync.clock))
+                clocks.append(link.sync.clock);
+            if (!link.count.clock.isEmpty() && !clocks.contains(link.count.clock))
+                clocks.append(link.count.clock);
+        }
+        if (!target.async.clock.isEmpty() && !clocks.contains(target.async.clock))
+            clocks.append(target.async.clock);
+        if (!target.sync.clock.isEmpty() && !clocks.contains(target.sync.clock))
+            clocks.append(target.sync.clock);
+        if (!target.count.clock.isEmpty() && !clocks.contains(target.count.clock))
+            clocks.append(target.count.clock);
     }
 
-    // Reset sources
-    out << "    /* Reset source */\n";
-    for (const auto &source : config.sources) {
-        QString comment = source.comment.isEmpty() ? QString("Reset source: %1").arg(source.name)
-                                                   : source.comment;
-        out << "    input  " << source.name << ",                 /**< " << comment;
-        if (source.active == "low") {
-            out << " (active low)";
+    // Add reason clock if enabled
+    if (config.reason.enabled && !config.reason.clock.isEmpty()
+        && !clocks.contains(config.reason.clock)) {
+        clocks.append(config.reason.clock);
+    }
+
+    // Collect all unique source signals
+    QStringList sources;
+    for (const auto &target : config.targets) {
+        for (const auto &link : target.links) {
+            if (!sources.contains(link.source))
+                sources.append(link.source);
         }
-        out << " */\n";
+    }
+
+    // Collect all unique test_enable signals
+    QStringList testEnables;
+    testEnables.append(config.testEnable);
+    for (const auto &target : config.targets) {
+        for (const auto &link : target.links) {
+            if (!link.async.test_enable.isEmpty() && !testEnables.contains(link.async.test_enable))
+                testEnables.append(link.async.test_enable);
+            if (!link.sync.test_enable.isEmpty() && !testEnables.contains(link.sync.test_enable))
+                testEnables.append(link.sync.test_enable);
+            if (!link.count.test_enable.isEmpty() && !testEnables.contains(link.count.test_enable))
+                testEnables.append(link.count.test_enable);
+        }
+        if (!target.async.test_enable.isEmpty() && !testEnables.contains(target.async.test_enable))
+            testEnables.append(target.async.test_enable);
+        if (!target.sync.test_enable.isEmpty() && !testEnables.contains(target.sync.test_enable))
+            testEnables.append(target.sync.test_enable);
+        if (!target.count.test_enable.isEmpty() && !testEnables.contains(target.count.test_enable))
+            testEnables.append(target.count.test_enable);
+    }
+
+    // Clock inputs
+    out << "    /* Clock inputs */\n";
+    for (const auto &clock : clocks) {
+        out << "    input  wire " << clock << ",\n";
+    }
+
+    // Source inputs
+    out << "    /* Reset sources */\n";
+    for (const auto &source : sources) {
+        out << "    input  wire " << source << ",\n";
+    }
+
+    // Test enable inputs
+    out << "    /* Test enable signals */\n";
+    for (const auto &testEn : testEnables) {
+        out << "    input  wire " << testEn << ",\n";
+    }
+
+    // Reset reason clear signal
+    if (config.reason.enabled && !config.reason.clear.isEmpty()) {
+        out << "    /* Reset reason clear */\n";
+        out << "    input  wire " << config.reason.clear << ",\n";
     }
 
     // Reset targets
-    out << "    /* Reset target */\n";
+    out << "    /* Reset targets */\n";
     for (int i = 0; i < config.targets.size(); ++i) {
         const auto &target = config.targets[i];
-        QString comment    = target.comment.isEmpty() ? QString("Reset target: %1").arg(target.name)
-                                                      : target.comment;
-        out << "    output " << target.name << ",             /**< " << comment;
-        if (target.active == "low") {
-            out << " (active low)";
+        out << "    output wire " << target.name;
+        if (i < config.targets.size() - 1 || config.reason.enabled) {
+            out << ",";
         }
-        out << " */\n";
+        out << "\n";
     }
 
-    // Reset reason output (if enabled)
+    // Reset reason outputs
     if (config.reason.enabled) {
-        out << "    /* Reset reason recording */\n";
+        out << "    /* Reset reason outputs */\n";
         if (config.reason.vectorWidth > 1) {
-            out << "    output [" << (config.reason.vectorWidth - 1) << ":0] "
-                << config.reason.output
-                << ",  /**< Reset reason bit vector (per-source sticky flags) */\n";
+            out << "    output wire [" << (config.reason.vectorWidth - 1) << ":0] "
+                << config.reason.output << ",\n";
         } else {
-            out << "    output " << config.reason.output
-                << ",                    /**< Reset reason bit vector (single sticky flag) */\n";
+            out << "    output wire " << config.reason.output << ",\n";
         }
-
-        // Add valid signal output
-        out << "    output " << config.reason.valid
-            << ",          /**< Reset reason valid flag (indicates reason output is meaningful) "
-               "*/\n";
-    }
-
-    // Control signals
-    out << "    /* Control signals */\n";
-    out << "    input        " << config.testEnable << ",            /**< Test enable signal */\n";
-
-    // Add reset reason clear signal if enabled and specified
-    if (config.reason.enabled && !config.reason.clear.isEmpty()) {
-        out << "    input        " << config.reason.clear
-            << "        /**< Software clear signal for reset reason */\n";
+        out << "    output wire " << config.reason.valid << "\n";
     }
 
     out << ");\n\n";
@@ -306,12 +387,26 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
 void QSocResetPrimitive::generateWireDeclarations(
     const ResetControllerConfig &config, QTextStream &out)
 {
-    // Generate connection wires
-    out << "    /* Wires for reset connections */\n";
-    for (const auto &connection : config.connections) {
-        QString wireName = getConnectionWireName(connection.sourceName, connection.targetName);
-        out << "    wire " << wireName << ";\n";
+    out << "    /* Wire declarations */\n";
+
+    // Generate wires for each link and target processing stage
+    for (int targetIdx = 0; targetIdx < config.targets.size(); ++targetIdx) {
+        const auto &target = config.targets[targetIdx];
+
+        // Link-level wires
+        for (int linkIdx = 0; linkIdx < target.links.size(); ++linkIdx) {
+            QString wireName = getLinkWireName(target.name, linkIdx);
+            out << "    wire " << wireName << ";\n";
+        }
+
+        // Target-level intermediate wire (if target has processing)
+        bool hasTargetProcessing = !target.async.clock.isEmpty() || !target.sync.clock.isEmpty()
+                                   || !target.count.clock.isEmpty();
+        if (hasTargetProcessing && target.links.size() > 0) {
+            out << "    wire " << target.name << "_internal;\n";
+        }
     }
+
     out << "\n";
 }
 
@@ -319,8 +414,40 @@ void QSocResetPrimitive::generateResetLogic(const ResetControllerConfig &config,
 {
     out << "    /* Reset logic instances */\n";
 
-    for (const auto &connection : config.connections) {
-        generateResetInstance(connection, config, out);
+    for (int targetIdx = 0; targetIdx < config.targets.size(); ++targetIdx) {
+        const auto &target = config.targets[targetIdx];
+
+        out << "    /* Target: " << target.name << " */\n";
+
+        // Generate link-level processing
+        for (int linkIdx = 0; linkIdx < target.links.size(); ++linkIdx) {
+            const auto &link       = target.links[linkIdx];
+            QString     outputWire = getLinkWireName(target.name, linkIdx);
+
+            // Determine if we need component processing for this link
+            bool hasAsync = !link.async.clock.isEmpty();
+            bool hasSync  = !link.sync.clock.isEmpty();
+            bool hasCount = !link.count.clock.isEmpty();
+
+            if (hasAsync || hasSync || hasCount) {
+                generateResetComponentInstance(
+                    target.name,
+                    linkIdx,
+                    hasAsync ? &link.async : nullptr,
+                    hasSync ? &link.sync : nullptr,
+                    hasCount ? &link.count : nullptr,
+                    false, // no inv in new architecture
+                    link.source,
+                    outputWire,
+                    out);
+            } else {
+                // Direct connection - apply source polarity normalization
+                QString normalizedSource = getNormalizedSource(link.source, config);
+                out << "    assign " << outputWire << " = " << normalizedSource << ";\n";
+            }
+        }
+
+        out << "\n";
     }
 }
 
@@ -341,7 +468,7 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
         const QString &sourceName = config.reason.sourceOrder[i];
         QString        eventName  = QString("%1_event_n").arg(sourceName);
 
-        // Find source polarity
+        // Find source active level
         QString sourceActive = "low"; // Default
         for (const auto &source : config.sources) {
             if (source.name == sourceName) {
@@ -463,396 +590,335 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
 void QSocResetPrimitive::generateOutputAssignments(
     const ResetControllerConfig &config, QTextStream &out)
 {
-    out << "    /* Reset output assignments */\n";
+    out << "    /* Target output assignments */\n";
 
     for (const auto &target : config.targets) {
-        out << "    /* Reset target: " << target.name;
-        if (target.active == "low") {
-            out << " (active low)";
-        }
-        out << " */\n";
+        QString inputSignal;
 
-        out << "    assign " << target.name << " = ";
-
-        if (target.active == "low") {
-            // Active low - AND all normalized signals
-            out << "& {\n";
-
-            QStringList wireNames;
-            for (const auto &connection : config.connections) {
-                if (connection.targetName == target.name) {
-                    wireNames.append(
-                        getConnectionWireName(connection.sourceName, connection.targetName));
-                }
-            }
-
-            for (int i = 0; i < wireNames.size(); ++i) {
-                out << "        " << wireNames[i];
-                if (i < wireNames.size() - 1) {
-                    out << ",";
-                }
-                out << "\n";
-            }
-            out << "    };\n";
+        if (target.links.size() == 0) {
+            // No links - assign constant based on active level
+            inputSignal = (target.active == "low") ? "1'b1" : "1'b0";
+        } else if (target.links.size() == 1) {
+            // Single link
+            inputSignal = getLinkWireName(target.name, 0);
         } else {
-            // Active high - OR all normalized signals
-            out << "| {\n";
-
-            QStringList wireNames;
-            for (const auto &connection : config.connections) {
-                if (connection.targetName == target.name) {
-                    wireNames.append(
-                        getConnectionWireName(connection.sourceName, connection.targetName));
-                }
+            // Multiple links - AND them together (assuming active-low reset processing)
+            out << "    wire " << target.name << "_combined = ";
+            for (int i = 0; i < target.links.size(); ++i) {
+                if (i > 0)
+                    out << " & ";
+                out << getLinkWireName(target.name, i);
             }
-
-            for (int i = 0; i < wireNames.size(); ++i) {
-                out << "        " << wireNames[i];
-                if (i < wireNames.size() - 1) {
-                    out << ",";
-                }
-                out << "\n";
-            }
-            out << "    };\n";
+            out << ";\n";
+            inputSignal = target.name + "_combined";
         }
+
+        // Check if target has processing
+        bool hasAsync = !target.async.clock.isEmpty();
+        bool hasSync  = !target.sync.clock.isEmpty();
+        bool hasCount = !target.count.clock.isEmpty();
+
+        if (hasAsync || hasSync || hasCount) {
+            // Target-level processing
+            generateResetComponentInstance(
+                target.name,
+                -1, // -1 indicates target-level
+                hasAsync ? &target.async : nullptr,
+                hasSync ? &target.sync : nullptr,
+                hasCount ? &target.count : nullptr,
+                false, // no inv
+                inputSignal,
+                target.name + "_processed",
+                out);
+
+            // Apply active level conversion for final output
+            out << "    assign " << target.name << " = ";
+            if (target.active == "low") {
+                out << target.name << "_processed"; // Keep low-active
+            } else {
+                out << "~" << target.name << "_processed"; // Convert to high-active
+            }
+            out << ";\n";
+        } else {
+            // Direct assignment with active level conversion
+            out << "    assign " << target.name << " = ";
+            if (target.active == "low") {
+                out << inputSignal; // Keep low-active
+            } else {
+                out << "~" << inputSignal; // Convert to high-active
+            }
+            out << ";\n";
+        }
+    }
+
+    out << "\n";
+}
+
+void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
+{
+    // Generate qsoc_rst_sync module
+    out << "/**\n";
+    out << " * @file qsoc_rst_sync.v\n";
+    out << " * @brief Asynchronous reset synchronizer (active-low)\n";
+    out << " *\n";
+    out << " * @details Async assert, sync deassert after STAGE clocks.\n";
+    out << " *          Test bypass when test_enable=1.\n";
+    out << " */\n";
+    out << "`timescale 1ns/10ps\n";
+    out << "`ifndef DEF_QSOC_RST_SYNC\n";
+    out << "`define DEF_QSOC_RST_SYNC\n\n";
+    out << "/**\n";
+    out << " * @brief Reset synchronizer\n";
+    out << " * @param STAGE [31:0] Number of sync stage (>=2 recommended)\n";
+    out << " * @port  clk         Clock\n";
+    out << " * @port  rst_in_n    Async reset in, active-low\n";
+    out << " * @port  test_enable Test bypass; when 1, pass-through rst_in_n\n";
+    out << " * @port  rst_out_n   Sync reset out, active-low\n";
+    out << " */\n";
+    out << "module qsoc_rst_sync\n";
+    out << "#(\n";
+    out << "  parameter [31:0] STAGE = 32'h3\n";
+    out << ")\n";
+    out << "(\n";
+    out << "  input  wire clk,          /**< clock */\n";
+    out << "  input  wire rst_in_n,     /**< async reset in, active-low */\n";
+    out << "  input  wire test_enable,  /**< test bypass; 1 = pass-through */\n";
+    out << "  output wire rst_out_n     /**< sync reset out, active-low */\n";
+    out << ");\n\n";
+    out << "  reg  [STAGE-1:0] sync_reg;\n";
+    out << "  wire             core_rst_n;\n\n";
+    out << "  /* async assert, sync release */\n";
+    out << "  always @(posedge clk or negedge rst_in_n) begin\n";
+    out << "    if (!rst_in_n) begin\n";
+    out << "      sync_reg <= {STAGE{1'b0}};\n";
+    out << "    end else begin\n";
+    out << "      /* STAGE >= 2 is recommended */\n";
+    out << "      sync_reg <= {sync_reg[STAGE-2:0], 1'b1};\n";
+    out << "    end\n";
+    out << "  end\n\n";
+    out << "  assign core_rst_n = sync_reg[STAGE-1];\n";
+    out << "  assign rst_out_n  = test_enable ? rst_in_n : core_rst_n;\n\n";
+    out << "endmodule\n\n";
+    out << "`endif\n\n";
+
+    // Generate qsoc_rst_pipe module
+    out << "/**\n";
+    out << " * @file qsoc_rst_pipe.v\n";
+    out << " * @brief Synchronous reset pipeline (active-low)\n";
+    out << " *\n";
+    out << " * @details Adds STAGE cycle release delay to a sync reset.\n";
+    out << " *          Test bypass when test_enable=1.\n";
+    out << " */\n";
+    out << "`timescale 1ns/10ps\n";
+    out << "`ifndef DEF_QSOC_RST_PIPE\n";
+    out << "`define DEF_QSOC_RST_PIPE\n\n";
+    out << "/**\n";
+    out << " * @brief Reset pipeline\n";
+    out << " * @param STAGE [31:0] Number of pipeline stage (>=1)\n";
+    out << " * @port  clk         Clock\n";
+    out << " * @port  rst_in_n    Sync reset in, active-low\n";
+    out << " * @port  test_enable Test bypass; when 1, pass-through rst_in_n\n";
+    out << " * @port  rst_out_n   Delayed reset out, active-low\n";
+    out << " */\n";
+    out << "module qsoc_rst_pipe\n";
+    out << "#(\n";
+    out << "  parameter [31:0] STAGE = 32'h4\n";
+    out << ")\n";
+    out << "(\n";
+    out << "  input  wire clk,          /**< clock */\n";
+    out << "  input  wire rst_in_n,     /**< sync reset in, active-low */\n";
+    out << "  input  wire test_enable,  /**< test bypass; 1 = pass-through */\n";
+    out << "  output wire rst_out_n     /**< delayed reset out, active-low */\n";
+    out << ");\n\n";
+    out << "  reg  [STAGE-1:0] pipe_reg;\n";
+    out << "  wire             core_rst_n;\n\n";
+    out << "  always @(posedge clk) begin\n";
+    out << "    if (!rst_in_n) begin\n";
+    out << "      pipe_reg <= {STAGE{1'b0}};\n";
+    out << "    end else begin\n";
+    out << "      pipe_reg <= {pipe_reg[STAGE-2:0], 1'b1};\n";
+    out << "    end\n";
+    out << "  end\n\n";
+    out << "  assign core_rst_n = pipe_reg[STAGE-1];\n";
+    out << "  assign rst_out_n  = test_enable ? rst_in_n : core_rst_n;\n\n";
+    out << "endmodule\n\n";
+    out << "`endif\n\n";
+
+    // Generate qsoc_rst_count module
+    out << "/**\n";
+    out << " * @file qsoc_rst_count.v\n";
+    out << " * @brief Counter-based reset release (active-low)\n";
+    out << " *\n";
+    out << " * @details After rst_in_n deasserts, count CYCLE then release.\n";
+    out << " *          Test bypass when test_enable=1.\n";
+    out << " */\n";
+    out << "`timescale 1ns/10ps\n";
+    out << "`ifndef DEF_QSOC_RST_COUNT\n";
+    out << "`define DEF_QSOC_RST_COUNT\n\n";
+    out << "/**\n";
+    out << " * @brief Reset release by counter\n";
+    out << " * @param CYCLE [31:0] Number of cycle before release\n";
+    out << " * @port  clk          Clock\n";
+    out << " * @port  rst_in_n     Input reset, active-low\n";
+    out << " * @port  test_enable  Test bypass; when 1, pass-through rst_in_n\n";
+    out << " * @port  rst_out_n    Output reset, active-low\n";
+    out << " */\n";
+    out << "module qsoc_rst_count\n";
+    out << "#(\n";
+    out << "  parameter [31:0] CYCLE = 32'h10\n";
+    out << ")\n";
+    out << "(\n";
+    out << "  input  wire clk,          /**< clock */\n";
+    out << "  input  wire rst_in_n,     /**< async reset in, active-low */\n";
+    out << "  input  wire test_enable,  /**< test bypass; 1 = pass-through */\n";
+    out << "  output wire rst_out_n     /**< delayed reset out, active-low */\n";
+    out << ");\n\n";
+    out << "  /* derive counter width for 1..2^32 using HEX thresholds */\n";
+    out << "  localparam [5:0] CNT_WIDTH =\n";
+    out << "    (CYCLE <= 32'h2)         ? 6'h01 :\n";
+    out << "    (CYCLE <= 32'h4)         ? 6'h02 :\n";
+    out << "    (CYCLE <= 32'h8)         ? 6'h03 :\n";
+    out << "    (CYCLE <= 32'h10)        ? 6'h04 :\n";
+    out << "    (CYCLE <= 32'h20)        ? 6'h05 :\n";
+    out << "    (CYCLE <= 32'h40)        ? 6'h06 :\n";
+    out << "    (CYCLE <= 32'h80)        ? 6'h07 :\n";
+    out << "    (CYCLE <= 32'h100)       ? 6'h08 :\n";
+    out << "    (CYCLE <= 32'h200)       ? 6'h09 :\n";
+    out << "    (CYCLE <= 32'h400)       ? 6'h0A :\n";
+    out << "    (CYCLE <= 32'h800)       ? 6'h0B :\n";
+    out << "    (CYCLE <= 32'h1000)      ? 6'h0C :\n";
+    out << "    (CYCLE <= 32'h2000)      ? 6'h0D :\n";
+    out << "    (CYCLE <= 32'h4000)      ? 6'h0E :\n";
+    out << "    (CYCLE <= 32'h8000)      ? 6'h0F :\n";
+    out << "    (CYCLE <= 32'h10000)     ? 6'h10 :\n";
+    out << "    (CYCLE <= 32'h20000)     ? 6'h11 :\n";
+    out << "    (CYCLE <= 32'h40000)     ? 6'h12 :\n";
+    out << "    (CYCLE <= 32'h80000)     ? 6'h13 :\n";
+    out << "    (CYCLE <= 32'h100000)    ? 6'h14 :\n";
+    out << "    (CYCLE <= 32'h200000)    ? 6'h15 :\n";
+    out << "    (CYCLE <= 32'h400000)    ? 6'h16 :\n";
+    out << "    (CYCLE <= 32'h800000)    ? 6'h17 :\n";
+    out << "    (CYCLE <= 32'h1000000)   ? 6'h18 :\n";
+    out << "    (CYCLE <= 32'h2000000)   ? 6'h19 :\n";
+    out << "    (CYCLE <= 32'h4000000)   ? 6'h1A :\n";
+    out << "    (CYCLE <= 32'h8000000)   ? 6'h1B :\n";
+    out << "    (CYCLE <= 32'h10000000)  ? 6'h1C :\n";
+    out << "    (CYCLE <= 32'h20000000)  ? 6'h1D :\n";
+    out << "    (CYCLE <= 32'h40000000)  ? 6'h1E :\n";
+    out << "    (CYCLE <= 32'h80000000)  ? 6'h1F : 6'h20;\n\n";
+    out << "  reg [CNT_WIDTH-1:0] cnt;\n";
+    out << "  reg                 core_rst_n;\n\n";
+    out << "  /* async assert, sync count and release */\n";
+    out << "  always @(posedge clk or negedge rst_in_n) begin\n";
+    out << "    if (!rst_in_n) begin\n";
+    out << "      cnt        <= {CNT_WIDTH{1'b0}};\n";
+    out << "      core_rst_n <= 1'b0;\n";
+    out << "    end else if (cnt < CYCLE[CNT_WIDTH-1:0]) begin\n";
+    out << "      cnt        <= cnt + {{(CNT_WIDTH-1){1'b0}}, 1'b1};\n";
+    out << "      core_rst_n <= 1'b0;\n";
+    out << "    end else begin\n";
+    out << "      core_rst_n <= 1'b1;\n";
+    out << "    end\n";
+    out << "  end\n\n";
+    out << "  assign rst_out_n = test_enable ? rst_in_n : core_rst_n;\n\n";
+    out << "endmodule\n\n";
+    out << "`endif /* DEF_QSOC_RST_COUNT */\n\n";
+}
+
+void QSocResetPrimitive::generateResetComponentInstance(
+    const QString     &targetName,
+    int                linkIndex,
+    const AsyncConfig *async,
+    const SyncConfig  *sync,
+    const CountConfig *count,
+    bool               inv,
+    const QString     &inputSignal,
+    const QString     &outputSignal,
+    QTextStream       &out)
+{
+    Q_UNUSED(inv); // No inv in new architecture
+
+    QString instanceName = getComponentInstanceName(
+        targetName,
+        linkIndex,
+        async  ? "async"
+        : sync ? "sync"
+               : "count");
+
+    if (async && !async->clock.isEmpty()) {
+        // Generate qsoc_rst_sync instance
+        out << "    qsoc_rst_sync #(\n";
+        out << "        .STAGE(" << async->stage << ")\n";
+        out << "    ) " << instanceName << " (\n";
+        out << "        .clk(" << async->clock << "),\n";
+        out << "        .rst_in_n(" << inputSignal << "),\n";
+        out << "        .test_enable(" << async->test_enable << "),\n";
+        out << "        .rst_out_n(" << outputSignal << ")\n";
+        out << "    );\n";
+    } else if (sync && !sync->clock.isEmpty()) {
+        // Generate qsoc_rst_pipe instance
+        out << "    qsoc_rst_pipe #(\n";
+        out << "        .STAGE(" << sync->stage << ")\n";
+        out << "    ) " << instanceName << " (\n";
+        out << "        .clk(" << sync->clock << "),\n";
+        out << "        .rst_in_n(" << inputSignal << "),\n";
+        out << "        .test_enable(" << sync->test_enable << "),\n";
+        out << "        .rst_out_n(" << outputSignal << ")\n";
+        out << "    );\n";
+    } else if (count && !count->clock.isEmpty()) {
+        // Generate qsoc_rst_count instance
+        out << "    qsoc_rst_count #(\n";
+        out << "        .CYCLE(" << count->cycle << ")\n";
+        out << "    ) " << instanceName << " (\n";
+        out << "        .clk(" << count->clock << "),\n";
+        out << "        .rst_in_n(" << inputSignal << "),\n";
+        out << "        .test_enable(" << count->test_enable << "),\n";
+        out << "        .rst_out_n(" << outputSignal << ")\n";
+        out << "    );\n";
     }
 }
 
-void QSocResetPrimitive::generateResetInstance(
-    const ResetConnection &connection, const ResetControllerConfig &config, QTextStream &out)
+QString QSocResetPrimitive::getNormalizedSource(
+    const QString &sourceName, const ResetControllerConfig &config)
 {
-    QString wireName     = getConnectionWireName(connection.sourceName, connection.targetName);
-    QString instanceName = getInstanceName(connection, config);
-
-    // Find source polarity from explicit configuration (KISS: no guessing!)
-    QString sourcePolarity = "high"; // This will be an error if not found
+    // Find source active level and normalize to low-active
     for (const auto &source : config.sources) {
-        if (source.name == connection.sourceName) {
-            sourcePolarity = source.active;
-            break;
+        if (source.name == sourceName) {
+            if (source.active == "high") {
+                return "~" + sourceName; // Convert high-active to low-active
+            } else {
+                return sourceName; // Already low-active
+            }
         }
     }
 
-    out << "    /*\n";
-    out << "     * " << connection.sourceName << " -> " << connection.targetName << ": ";
-
-    switch (connection.type) {
-    case ASYNC_DIRECT: {
-        out << "ASYNC_DIRECT: Async reset Async release direct connection\n";
-        out << "     */\n";
-
-        // Use explicit polarity configuration (KISS: no naming assumptions!)
-        QString sourceSignal;
-        if (sourcePolarity == "low") {
-            sourceSignal = connection.sourceName; // Already active low
-        } else {
-            sourceSignal = "~" + connection.sourceName; // Convert active high to active low output
-        }
-
-        out << "    assign " << wireName << " = " << sourceSignal << ";\n";
-        break;
-    }
-
-    case ASYNC_SYNC: {
-        out << "ASYNC_SYNC: Async reset sync release\n";
-        out << "     * sync_depth=" << connection.sync_depth << ", clock=" << connection.clock
-            << "\n";
-        out << "     */\n";
-
-        // Generate classic N-stage synchronizer
-        out << "    reg [" << (connection.sync_depth - 1) << ":0] " << instanceName << "_ff;\n";
-        out << "    always @(posedge " << connection.clock;
-
-        // Use explicit polarity configuration (KISS: no naming assumptions!)
-        if (sourcePolarity == "low") {
-            out << " or negedge " << connection.sourceName << ") begin\n";
-            out << "        if (!" << connection.sourceName << ")\n";
-        } else {
-            out << " or posedge " << connection.sourceName << ") begin\n";
-            out << "        if (" << connection.sourceName << ")\n";
-        }
-
-        out << "            " << instanceName << "_ff <= " << connection.sync_depth << "'b0;\n";
-        out << "        else\n";
-        out << "            " << instanceName << "_ff <= {" << instanceName << "_ff["
-            << (connection.sync_depth - 2) << ":0], 1'b1};\n";
-        out << "    end\n";
-        out << "    assign " << wireName << " = test_en ? ";
-
-        // Use explicit polarity for test bypass logic
-        if (sourcePolarity == "low") {
-            out << connection.sourceName;
-        } else {
-            out << "~" << connection.sourceName;
-        }
-        out << " : " << instanceName << "_ff[" << (connection.sync_depth - 1) << "];\n";
-        break;
-    }
-
-    case ASYNC_COUNT: {
-        out << "ASYNC_COUNT: Async reset counter timeout release\n";
-        out << "     * sync_depth=" << connection.sync_depth
-            << ", width=" << connection.counter_width << ", timeout=" << connection.timeout_cycles
-            << ", clock=" << connection.clock << "\n";
-        out << "     */\n";
-
-        // Generate DFF-based counter implementation
-        out << "    reg [" << (connection.counter_width - 1) << ":0] " << instanceName
-            << "_counter;\n";
-        out << "    reg " << instanceName << "_counting;\n";
-        out << "    always @(posedge " << connection.clock;
-
-        // Use explicit polarity configuration (KISS: no naming assumptions!)
-        if (sourcePolarity == "low") {
-            out << " or negedge " << connection.sourceName << ") begin\n";
-            out << "        if (!" << connection.sourceName << ") begin\n";
-        } else {
-            out << " or posedge " << connection.sourceName << ") begin\n";
-            out << "        if (" << connection.sourceName << ") begin\n";
-        }
-
-        out << "            " << instanceName << "_counter <= " << connection.counter_width
-            << "'b0;\n";
-        out << "            " << instanceName << "_counting <= 1'b1;\n";
-        out << "        end else if (" << instanceName << "_counting && " << instanceName
-            << "_counter < " << connection.timeout_cycles << ") begin\n";
-        out << "            " << instanceName << "_counter <= " << instanceName
-            << "_counter + 1'b1;\n";
-        out << "        end else if (" << instanceName
-            << "_counter >= " << connection.timeout_cycles << ") begin\n";
-        out << "            " << instanceName << "_counting <= 1'b0;\n";
-        out << "        end\n";
-        out << "    end\n";
-        out << "    assign " << wireName << " = test_en ? ";
-
-        // Use explicit polarity for test bypass logic
-        if (sourcePolarity == "low") {
-            out << connection.sourceName;
-        } else {
-            out << "~" << connection.sourceName;
-        }
-        out << " : (" << instanceName << "_counting ? 1'b0 : 1'b1);\n";
-        break;
-    }
-
-    case SYNC_ONLY: {
-        out << "SYNC_ONLY: Sync reset sync release\n";
-        out << "     * sync_depth=" << connection.sync_depth << ", clock=" << connection.clock
-            << "\n";
-        out << "     */\n";
-
-        // Generate synchronous reset/release synchronizer
-        out << "    reg [" << (connection.sync_depth - 1) << ":0] " << instanceName << "_ff;\n";
-        out << "    always @(posedge " << connection.clock << ") begin\n";
-
-        // Use explicit polarity configuration (KISS: no naming assumptions!)
-        if (sourcePolarity == "low") {
-            out << "        if (!" << connection.sourceName << ")\n";
-        } else {
-            out << "        if (" << connection.sourceName << ")\n";
-        }
-
-        out << "            " << instanceName << "_ff <= " << connection.sync_depth << "'b0;\n";
-        out << "        else\n";
-        out << "            " << instanceName << "_ff <= {" << instanceName << "_ff["
-            << (connection.sync_depth - 2) << ":0], 1'b1};\n";
-        out << "    end\n";
-        out << "    assign " << wireName << " = test_en ? ";
-
-        // Use explicit polarity for test bypass logic
-        if (sourcePolarity == "low") {
-            out << connection.sourceName;
-        } else {
-            out << "~" << connection.sourceName;
-        }
-        out << " : " << instanceName << "_ff[" << (connection.sync_depth - 1) << "];\n";
-        break;
-    }
-
-    case ASYNC_SYNC_COUNT: {
-        out << "ASYNC_SYNC_COUNT: Async reset with sync-then-count release\n";
-        out << "     * Two-stage: sync_depth=" << connection.sync_depth
-            << ", count_width=" << connection.counter_width
-            << ", timeout=" << connection.timeout_cycles << ", clock=" << connection.clock << "\n";
-        out << "     */\n";
-
-        // Generate intermediate wire names
-        QString syncWireName = wireName + "_stage1";
-
-        // Stage 1: Sync release synchronizer
-        out << "    /* Stage 1: Sync release */\n";
-        out << "    reg [" << (connection.sync_depth - 1) << ":0] " << instanceName
-            << "_sync_ff;\n";
-        out << "    always @(posedge " << connection.clock;
-
-        // Use explicit polarity configuration (KISS: no naming assumptions!)
-        if (sourcePolarity == "low") {
-            out << " or negedge " << connection.sourceName << ") begin\n";
-            out << "        if (!" << connection.sourceName << ")\n";
-        } else {
-            out << " or posedge " << connection.sourceName << ") begin\n";
-            out << "        if (" << connection.sourceName << ")\n";
-        }
-
-        out << "            " << instanceName << "_sync_ff <= " << connection.sync_depth
-            << "'b0;\n";
-        out << "        else\n";
-        out << "            " << instanceName << "_sync_ff <= {" << instanceName << "_sync_ff["
-            << (connection.sync_depth - 2) << ":0], 1'b1};\n";
-        out << "    end\n";
-        out << "    wire " << syncWireName << " = " << instanceName << "_sync_ff["
-            << (connection.sync_depth - 1) << "];\n\n";
-
-        // Stage 2: Counter timeout
-        out << "    /* Stage 2: Counter timeout */\n";
-        out << "    reg [" << (connection.counter_width - 1) << ":0] " << instanceName
-            << "_counter;\n";
-        out << "    reg " << instanceName << "_counting;\n";
-        out << "    always @(posedge " << connection.clock << " or negedge " << syncWireName
-            << ") begin\n";
-        out << "        if (!" << syncWireName << ") begin\n";
-        out << "            " << instanceName << "_counter <= " << connection.counter_width
-            << "'b0;\n";
-        out << "            " << instanceName << "_counting <= 1'b1;\n";
-        out << "        end else if (" << instanceName << "_counting && " << instanceName
-            << "_counter < " << connection.timeout_cycles << ") begin\n";
-        out << "            " << instanceName << "_counter <= " << instanceName
-            << "_counter + 1'b1;\n";
-        out << "        end else if (" << instanceName
-            << "_counter >= " << connection.timeout_cycles << ") begin\n";
-        out << "            " << instanceName << "_counting <= 1'b0;\n";
-        out << "        end\n";
-        out << "    end\n";
-
-        // Output assignment with test bypass
-        out << "    assign " << wireName << " = test_en ? ";
-
-        // Use explicit polarity for test bypass logic
-        if (sourcePolarity == "low") {
-            out << connection.sourceName;
-        } else {
-            out << "~" << connection.sourceName;
-        }
-        out << " : (" << instanceName << "_counting ? 1'b0 : 1'b1);\n";
-        break;
-    }
-
-    default: {
-        out << "Unsupported reset type\n";
-        out << "     */\n";
-        out << "    // FIXME: Unsupported reset type for " << connection.sourceName << " -> "
-            << connection.targetName << "\n";
-        break;
-    }
-    }
+    // Default to low-active if not found
+    return sourceName;
 }
 
-QSocResetPrimitive::ResetType QSocResetPrimitive::parseResetType(const QString &typeStr)
+QString QSocResetPrimitive::getLinkWireName(const QString &targetName, int linkIndex)
 {
-    // New simplified naming (preferred)
-    if (typeStr == "ASYNC_DIRECT") {
-        return ASYNC_DIRECT;
-    } else if (typeStr == "ASYNC_SYNC") {
-        return ASYNC_SYNC;
-    } else if (typeStr == "ASYNC_COUNT") {
-        return ASYNC_COUNT;
-    } else if (typeStr == "ASYNC_SYNC_COUNT") {
-        return ASYNC_SYNC_COUNT;
-    } else if (typeStr == "SYNC_ONLY") {
-        return SYNC_ONLY;
+    // Remove _n suffix for clean naming
+    QString cleanTarget = targetName;
+    if (cleanTarget.endsWith("_n")) {
+        cleanTarget = cleanTarget.left(cleanTarget.length() - 2);
     }
-    // Legacy names (for backward compatibility)
-    else if (typeStr == "ASYNC_COMB") {
-        return ASYNC_DIRECT;
-    } else if (typeStr == "ASYNC_CNT") {
-        return ASYNC_COUNT;
-    } else if (typeStr == "ASYNC_SYNCNT") {
-        return ASYNC_SYNC_COUNT;
+
+    return QString("%1_link%2_n").arg(cleanTarget).arg(linkIndex);
+}
+
+QString QSocResetPrimitive::getComponentInstanceName(
+    const QString &targetName, int linkIndex, const QString &componentType)
+{
+    // Remove _n suffix for clean naming
+    QString cleanTarget = targetName;
+    if (cleanTarget.endsWith("_n")) {
+        cleanTarget = cleanTarget.left(cleanTarget.length() - 2);
+    }
+
+    if (linkIndex >= 0) {
+        return QString("i_%1_link%2_%3").arg(cleanTarget).arg(linkIndex).arg(componentType);
     } else {
-        qWarning() << "Unsupported reset type:" << typeStr << ", defaulting to ASYNC_DIRECT";
-        return ASYNC_DIRECT;
+        return QString("i_%1_target_%2").arg(cleanTarget).arg(componentType);
     }
-}
-
-QString QSocResetPrimitive::getConnectionWireName(
-    const QString &sourceName, const QString &targetName)
-{
-    // Normalize signal names: remove _n from source, ensure _n is only at the end
-    QString normalizedSource = sourceName;
-    QString normalizedTarget = targetName;
-
-    // Remove _n suffix from source name for clean concatenation
-    if (normalizedSource.endsWith("_n")) {
-        normalizedSource = normalizedSource.left(normalizedSource.length() - 2);
-    }
-
-    // Remove _n suffix from target name for clean concatenation
-    if (normalizedTarget.endsWith("_n")) {
-        normalizedTarget = normalizedTarget.left(normalizedTarget.length() - 2);
-    }
-
-    // Create wire name: sync_<source>_<target> + _n if target was originally _n
-    QString wireName = QString("sync_%1_%2").arg(normalizedSource).arg(normalizedTarget);
-
-    // Add _n suffix if target was originally active low
-    if (targetName.endsWith("_n")) {
-        wireName += "_n";
-    }
-
-    return wireName;
-}
-
-QString QSocResetPrimitive::getInstanceName(
-    const ResetConnection &connection, const ResetControllerConfig &config)
-{
-    QString typePrefix;
-    switch (connection.type) {
-    case ASYNC_DIRECT:
-        typePrefix = "direct";
-        break;
-    case ASYNC_SYNC:
-        typePrefix = "sync";
-        break;
-    case ASYNC_COUNT:
-        typePrefix = "count";
-        break;
-    case ASYNC_SYNC_COUNT:
-        typePrefix = "sync_count";
-        break;
-    case SYNC_ONLY:
-        typePrefix = "sync";
-        break;
-    default:
-        typePrefix = "logic";
-        break;
-    }
-
-    // Normalize signal names: remove _n from source and target for clean concatenation
-    QString normalizedSource = connection.sourceName;
-    QString normalizedTarget = connection.targetName;
-
-    // Remove _n suffix from source name for clean concatenation
-    if (normalizedSource.endsWith("_n")) {
-        normalizedSource = normalizedSource.left(normalizedSource.length() - 2);
-    }
-
-    // Remove _n suffix from target name for clean concatenation
-    if (normalizedTarget.endsWith("_n")) {
-        normalizedTarget = normalizedTarget.left(normalizedTarget.length() - 2);
-    }
-
-    // KISS format: simplified source_target naming
-    // Remove common 'rst' from both if present to reduce redundancy
-    QString cleanSource = normalizedSource;
-    QString cleanTarget = normalizedTarget;
-
-    // Remove trailing '_rst' from both to reduce redundancy
-    if (cleanSource.endsWith("_rst")) {
-        cleanSource = cleanSource.left(cleanSource.length() - 4);
-    }
-    if (cleanTarget.endsWith("_rst")) {
-        cleanTarget = cleanTarget.left(cleanTarget.length() - 4);
-    }
-
-    return QString("%1_%2").arg(cleanSource).arg(cleanTarget);
 }
