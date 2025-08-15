@@ -179,6 +179,13 @@ private:
     void generateResetCellFile(QTextStream &out);
 
     /**
+     * @brief Generate or update reset_cell.v file with template cells
+     * @param outputDir Output directory path
+     * @return true if successful, false otherwise
+     */
+    bool generateResetCellFile(const QString &outputDir);
+
+    /**
      * @brief Generate single reset component instance
      * @param targetName Target name for instance naming
      * @param linkIndex Link index for instance naming

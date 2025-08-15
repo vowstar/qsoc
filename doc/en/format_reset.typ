@@ -246,7 +246,7 @@ assign reason = reason_valid ? flags : 3'b0;
 
 == CODE GENERATION
 <soc-net-reset-generation>
-Reset controllers generate standalone modules that are instantiated in the main design, providing clean separation and reusability.
+Reset controllers generate standalone modules that are instantiated in the main design, providing clean separation and reusability. Additionally, QSoC automatically generates a `reset_cell.v` template file containing the required reset component modules (`qsoc_rst_sync`, `qsoc_rst_pipe`, `qsoc_rst_count`).
 
 === Generated Code Structure
 <soc-net-reset-code-structure>
@@ -337,6 +337,46 @@ The reset controller uses three standard component modules:
 - After rst_in_n deasserts, count CYCLE then release
 - Test bypass when test_enable=1
 - Parameters: CYCLE (number of cycles before release)
+
+=== Auto-generated Template File: reset_cell.v
+<soc-net-reset-template-file>
+When any `reset` primitive is present, QSoC ensures an output file `reset_cell.v` exists containing all required template cells:
+
+- `qsoc_rst_sync` - Asynchronous reset synchronizer with test enable
+- `qsoc_rst_pipe` - Synchronous reset pipeline with test enable
+- `qsoc_rst_count` - Counter-based reset release with test enable
+
+The generated file includes proper header comments, timescale directives, and include guards to prevent multiple inclusions. Users should replace these template implementations with their technology-specific standard cell implementations before using in production.
+
+Example template structure:
+```verilog
+/**
+ * @file reset_cell.v
+ * @brief Template reset cells for QSoC reset primitives
+ *
+ * CAUTION: Please replace the templates in this file
+ *          with your technology's standard-cell implementations
+ *          before using in production.
+ */
+
+`timescale 1ns/10ps
+
+`ifndef DEF_QSOC_RST_SYNC
+`define DEF_QSOC_RST_SYNC
+module qsoc_rst_sync #(
+  parameter [31:0] STAGE = 32'h3
+)(
+  input  wire clk,
+  input  wire rst_in_n,
+  input  wire test_enable,
+  output wire rst_out_n
+);
+  // Template implementation
+endmodule
+`endif
+
+// Additional modules: qsoc_rst_pipe, qsoc_rst_count...
+```
 
 == BEST PRACTICES
 <soc-net-reset-practices>
