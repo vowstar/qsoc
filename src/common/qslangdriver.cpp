@@ -113,7 +113,7 @@ bool QSlangDriver::parseArgs(const QString &args)
         slang::OS::capturedStderr.clear();
         /* Move the compilation object to class member */
         compilation = std::move(driver.createCompilation());
-        if (!driver.reportCompilation(*compilation, false)) {
+        if (!driver.runFullCompilation(false)) {
             if (!slang::OS::capturedStdout.empty()) {
                 QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
             }
