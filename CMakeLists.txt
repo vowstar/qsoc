@@ -290,18 +290,29 @@ else()
 endif()
 
 # FMT
-pkg_check_modules(FMT IMPORTED_TARGET fmt>=10.0.0)
-if (FMT_FOUND)
-    message(STATUS "Use system fmt library: ${FMT_LIBRARIES} ${FMT_VERSION}")
+# Check if fmt target already exists (to avoid conflicts with FetchContent or other mechanisms)
+if(NOT TARGET fmt::fmt)
+    pkg_check_modules(FMT IMPORTED_TARGET fmt>=10.0.0)
+    if (FMT_FOUND)
+        message(STATUS "Use system fmt library: ${FMT_LIBRARIES} ${FMT_VERSION}")
+    else()
+        set(FMT_INSTALL OFF CACHE BOOL "disable fmt install")
+        set(FMT_TEST OFF CACHE BOOL "disable fmt tests")
+        add_subdirectory(external/fmt)
+        set(FMT_INCLUDE_DIRS
+            "${CMAKE_CURRENT_SOURCE_DIR}/external/fmt/include"
+        )
+        set(FMT_LIBRARIES fmt::fmt)
+        message(STATUS "Use local fmt library: ${FMT_LIBRARIES} ${FMT_INCLUDE_DIRS}")
+    endif()
 else()
-    set(FMT_INSTALL OFF CACHE BOOL "disable fmt install")
-    set(FMT_TEST OFF CACHE BOOL "disable fmt tests")
-    add_subdirectory(external/fmt)
-    set(FMT_INCLUDE_DIRS
-        "${CMAKE_CURRENT_SOURCE_DIR}/external/fmt/include"
-    )
+    # fmt target already exists, just set the variables
     set(FMT_LIBRARIES fmt::fmt)
-    message(STATUS "Use local fmt library: ${FMT_LIBRARIES} ${FMT_INCLUDE_DIRS}")
+    get_target_property(FMT_INCLUDE_DIRS fmt::fmt INTERFACE_INCLUDE_DIRECTORIES)
+    if(NOT FMT_INCLUDE_DIRS)
+        set(FMT_INCLUDE_DIRS "")
+    endif()
+    message(STATUS "Use existing fmt target: ${FMT_LIBRARIES}")
 endif()
 
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.cpp")
