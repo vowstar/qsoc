@@ -92,6 +92,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     out << " * NOTE: Auto-generated file, do not edit manually.\n";
     out << " */\n\n";
 
+    out << "`timescale 1ns / 1ps\n\n";
+
     /* Generate reset primitive controllers first (before top-level module) */
     if (netlistData["reset"] && netlistData["reset"].IsSequence()
         && netlistData["reset"].size() > 0) {
