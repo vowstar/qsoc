@@ -121,15 +121,15 @@ private slots:
         file.close();
 
         const QStringList requiredCells
-            = {"QSOC_CKGATE_CELL",
-               "QSOC_CKINV_CELL",
-               "QSOC_CLKOR2_CELL",
-               "QSOC_CLKMUX2_CELL",
-               "QSOC_CLKXOR2_CELL",
-               "QSOC_CLKDIV_CELL",
-               "QSOC_CLKMUX_GF_CELL",
-               "QSOC_CLKMUX_STD_CELL",
-               "QSOC_CLKOR_TREE"};
+            = {"qsoc_tc_clk_gate",
+               "qsoc_tc_clk_inv",
+               "qsoc_tc_clk_or2",
+               "qsoc_tc_clk_mux2",
+               "qsoc_tc_clk_xor2",
+               "qsoc_clk_div",
+               "qsoc_clk_mux_gf",
+               "qsoc_clk_mux_raw",
+               "qsoc_clk_or_tree"};
 
         for (const QString &cell : requiredCells) {
             if (!content.contains(QString("module %1").arg(cell))) {
@@ -265,7 +265,7 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CKGATE_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_dbg_clk_from_pll_800m)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(dbg_clk_en)"));
 
@@ -332,7 +332,7 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKDIV_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".width"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_n(rst_n)"));
 
@@ -400,7 +400,7 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKDIV_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(8'd2)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "~clk_slow_clk_n_from_osc_24m"));
 
@@ -477,9 +477,9 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKMUX_STD_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_mux_raw"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_sel(func_sel)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKDIV_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
 
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
@@ -552,7 +552,7 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKMUX_GF_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_mux_gf"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(sys_rst_n)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(safe_sel)"));
 
@@ -636,7 +636,7 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKMUX_GF_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_mux_gf"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(sys_rst_n)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(custom_sel)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en(test_enable)"));
@@ -730,7 +730,7 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKMUX_GF_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_mux_gf"));
         // Verify both mux instances with different reset signals
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(sys_rst_n)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(por_rst_n)"));
@@ -818,11 +818,11 @@ clock:
 
         /* Verify the generated content handles same-name correctly */
         // Should have sys_clk divider instance
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CLKDIV_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(8'd10)"));
 
         // Should have cpu_clk ICG instance
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "QSOC_CKGATE_CELL"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(sys_clk_en)"));
 
         // Should use sys_clk as both output and intermediate signal

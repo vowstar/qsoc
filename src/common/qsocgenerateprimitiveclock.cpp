@@ -345,7 +345,7 @@ void QSocClockPrimitive::generateOutputAssignments(
         if (!target.icg.enable.isEmpty()) {
             QString icgOutput = QString("%1_icg_out").arg(target.name);
             out << "    wire " << icgOutput << ";\n";
-            out << "    QSOC_CKGATE_CELL #(\n";
+            out << "    qsoc_tc_clk_gate #(\n";
             out << "        .enable_reset(1'b0)\n";
             out << "    ) " << instanceName << "_icg (\n";
             out << "        .clk(" << currentSignal << "),\n";
@@ -365,7 +365,7 @@ void QSocClockPrimitive::generateOutputAssignments(
         if (target.div.ratio > 1) {
             QString divOutput = QString("%1_div_out").arg(target.name);
             out << "    wire " << divOutput << ";\n";
-            out << "    QSOC_CLKDIV_CELL #(\n";
+            out << "    qsoc_clk_div #(\n";
             out << "        .width(8),\n";
             out << "        .default_val(" << target.div.ratio << "),\n";
             out << "        .enable_reset(1'b0)\n";
@@ -391,7 +391,7 @@ void QSocClockPrimitive::generateOutputAssignments(
         if (target.inv) {
             QString invOutput = QString("%1_inv_out").arg(target.name);
             out << "    wire " << invOutput << ";\n";
-            out << "    QSOC_CKINV_CELL " << instanceName << "_inv (\n";
+            out << "    qsoc_tc_clk_inv " << instanceName << "_inv (\n";
             out << "        .clk_in(" << currentSignal << "),\n";
             out << "        .clk_out(" << invOutput << ")\n";
             out << "    );\n";
@@ -438,7 +438,7 @@ void QSocClockPrimitive::generateClockInstance(
         if (!link.icg.enable.isEmpty()) {
             QString icgWire = wireName + "_preicg";
             out << "    wire " << icgWire << ";\n";
-            out << "    QSOC_CKGATE_CELL #(\n";
+            out << "    qsoc_tc_clk_gate #(\n";
             out << "        .enable_reset(1'b0)\n";
             out << "    ) " << instanceName << "_icg (\n";
             out << "        .clk(" << currentWire << "),\n";
@@ -456,7 +456,7 @@ void QSocClockPrimitive::generateClockInstance(
         if (link.div.ratio > 1) {
             QString divWire = wireName + "_prediv";
             out << "    wire " << divWire << ";\n";
-            out << "    QSOC_CLKDIV_CELL #(\n";
+            out << "    qsoc_clk_div #(\n";
             out << "        .width(8),\n";
             out << "        .default_val(" << link.div.ratio << "),\n";
             out << "        .enable_reset(1'b0)\n";
@@ -478,7 +478,7 @@ void QSocClockPrimitive::generateClockInstance(
 
         // Step 3: Link-level inverter
         if (link.inv) {
-            out << "    QSOC_CKINV_CELL " << instanceName << "_inv (\n";
+            out << "    qsoc_tc_clk_inv " << instanceName << "_inv (\n";
             out << "        .clk_in(" << currentWire << "),\n";
             out << "        .clk_out(" << wireName << ")\n";
             out << "    );\n";
@@ -528,8 +528,8 @@ void QSocClockPrimitive::generateMuxInstance(
     }
 
     if (target.mux.type == STD_MUX) {
-        // Standard mux using QSOC_CLKMUX_STD_CELL
-        out << "    QSOC_CLKMUX_STD_CELL #(\n";
+        // Standard mux using qsoc_clk_mux_raw
+        out << "    qsoc_clk_mux_raw #(\n";
         out << "        .NUM_INPUTS(" << numInputs << ")\n";
         out << "    ) " << instanceName << " (\n";
 
@@ -548,8 +548,8 @@ void QSocClockPrimitive::generateMuxInstance(
         out << "    );\n";
 
     } else if (target.mux.type == GF_MUX) {
-        // Glitch-free mux using QSOC_CLKMUX_GF_CELL
-        out << "    QSOC_CLKMUX_GF_CELL #(\n";
+        // Glitch-free mux using qsoc_clk_mux_gf
+        out << "    qsoc_clk_mux_gf #(\n";
         out << "        .NUM_INPUTS(" << numInputs << "),\n";
         out << "        .NUM_SYNC_STAGES(2),\n";
         out << "        .CLOCK_DURING_RESET(1'b1)\n";
@@ -720,15 +720,15 @@ bool QSocClockPrimitive::isClockCellFileComplete(const QString &filePath)
 QStringList QSocClockPrimitive::getRequiredTemplateCells()
 {
     return {
-        "QSOC_CKGATE_CELL",
-        "QSOC_CKINV_CELL",
-        "QSOC_CLKOR2_CELL",
-        "QSOC_CLKMUX2_CELL",
-        "QSOC_CLKXOR2_CELL",
-        "QSOC_CLKDIV_CELL",
-        "QSOC_CLKMUX_GF_CELL",
-        "QSOC_CLKMUX_STD_CELL",
-        "QSOC_CLKOR_TREE"};
+        "qsoc_tc_clk_gate",
+        "qsoc_tc_clk_inv",
+        "qsoc_tc_clk_or2",
+        "qsoc_tc_clk_mux2",
+        "qsoc_tc_clk_xor2",
+        "qsoc_clk_div",
+        "qsoc_clk_or_tree",
+        "qsoc_clk_mux_gf",
+        "qsoc_clk_mux_raw"};
 }
 
 QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellName)
@@ -736,14 +736,14 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
     QString     result;
     QTextStream out(&result);
 
-    if (cellName == "QSOC_CKGATE_CELL") {
+    if (cellName == "qsoc_tc_clk_gate") {
         out << "/**\n";
         out << " * @brief Clock gate cell module\n";
         out << " *\n";
         out << " * @details Template implementation of clock gate cell with test and reset "
                "support.\n";
         out << " */\n";
-        out << "module QSOC_CKGATE_CELL #(\n";
+        out << "module qsoc_tc_clk_gate #(\n";
         out << "    parameter enable_reset = 1'b0\n";
         out << ")(\n";
         out << "    input  wire clk,        /**< Clock input */\n";
@@ -759,13 +759,13 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    assign clk_out = clk & final_en;\n";
         out << "endmodule\n";
 
-    } else if (cellName == "QSOC_CKINV_CELL") {
+    } else if (cellName == "qsoc_tc_clk_inv") {
         out << "/**\n";
         out << " * @brief Clock inverter cell module\n";
         out << " *\n";
         out << " * @details Template implementation of clock inverter cell.\n";
         out << " */\n";
-        out << "module QSOC_CKINV_CELL (\n";
+        out << "module qsoc_tc_clk_inv (\n";
         out << "    input  wire CLK_IN,   /**< Clock input */\n";
         out << "    output wire CLK_OUT   /**< Clock output */\n";
         out << ");\n";
@@ -773,13 +773,13 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    assign CLK_OUT = ~CLK_IN;\n";
         out << "endmodule\n";
 
-    } else if (cellName == "QSOC_CLKOR2_CELL") {
+    } else if (cellName == "qsoc_tc_clk_or2") {
         out << "/**\n";
         out << " * @brief 2-input clock OR gate cell module\n";
         out << " *\n";
         out << " * @details Template implementation of 2-input clock OR gate cell.\n";
         out << " */\n";
-        out << "module QSOC_CLKOR2_CELL (\n";
+        out << "module qsoc_tc_clk_or2 (\n";
         out << "    input  wire CLK_IN0,  /**< Clock input 0 */\n";
         out << "    input  wire CLK_IN1,  /**< Clock input 1 */\n";
         out << "    output wire CLK_OUT   /**< Clock output */\n";
@@ -788,13 +788,13 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    assign CLK_OUT = CLK_IN0 | CLK_IN1;\n";
         out << "endmodule\n";
 
-    } else if (cellName == "QSOC_CLKMUX2_CELL") {
+    } else if (cellName == "qsoc_tc_clk_mux2") {
         out << "/**\n";
         out << " * @brief 2-to-1 clock multiplexer cell module\n";
         out << " *\n";
         out << " * @details Template implementation of 2-to-1 clock multiplexer.\n";
         out << " */\n";
-        out << "module QSOC_CLKMUX2_CELL (\n";
+        out << "module qsoc_tc_clk_mux2 (\n";
         out << "    input  wire CLK_IN0,  /**< Clock input 0 */\n";
         out << "    input  wire CLK_IN1,  /**< Clock input 1 */\n";
         out << "    input  wire CLK_SEL,  /**< Select signal: 0=CLK_IN0, 1=CLK_IN1 */\n";
@@ -804,13 +804,13 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    assign CLK_OUT = CLK_SEL ? CLK_IN1 : CLK_IN0;\n";
         out << "endmodule\n";
 
-    } else if (cellName == "QSOC_CLKXOR2_CELL") {
+    } else if (cellName == "qsoc_tc_clk_xor2") {
         out << "/**\n";
         out << " * @brief 2-input clock XOR gate cell module\n";
         out << " *\n";
         out << " * @details Template implementation of 2-input clock XOR gate cell.\n";
         out << " */\n";
-        out << "module QSOC_CLKXOR2_CELL (\n";
+        out << "module qsoc_tc_clk_xor2 (\n";
         out << "    input  wire CLK_IN0,  /**< Clock input 0 */\n";
         out << "    input  wire CLK_IN1,  /**< Clock input 1 */\n";
         out << "    output wire CLK_OUT   /**< Clock output */\n";
@@ -819,56 +819,285 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    assign CLK_OUT = CLK_IN0 ^ CLK_IN1;\n";
         out << "endmodule\n";
 
-    } else if (cellName == "QSOC_CLKDIV_CELL") {
+    } else if (cellName == "qsoc_clk_div") {
         out << "/**\n";
         out << " * @brief Configurable clock divider cell module\n";
         out << " *\n";
-        out << " * @details Template implementation matching clk_int_div interface.\n";
+        out << " * @details Professional implementation matching clk_int_div interface with "
+               "glitch-free operation.\n";
+        out << " *          Supports both odd and even division with 50% duty cycle output.\n";
         out << " */\n";
-        out << "module QSOC_CLKDIV_CELL #(\n";
-        out << "    parameter integer width = 4,\n";
-        out << "    parameter integer default_val = 0,\n";
-        out << "    parameter enable_reset = 1'b0\n";
+        out << "module qsoc_clk_div #(\n";
+        out << "    parameter integer WIDTH = 4,           /**< Division value width */\n";
+        out << "    parameter integer DEFAULT_VAL = 0,     /**< Default divider value after reset "
+               "*/\n";
+        out << "    parameter ENABLE_RESET = 1'b0          /**< Enable clock during reset */\n";
         out << ")(\n";
         out << "    input  wire                clk,        /**< Clock input */\n";
         out << "    input  wire                rst_n,      /**< Reset (active low) */\n";
         out << "    input  wire                en,         /**< Enable */\n";
         out << "    input  wire                test_en,    /**< Test mode enable */\n";
-        out << "    input  wire [width-1:0]    div,        /**< Division value */\n";
+        out << "    input  wire [WIDTH-1:0]    div,        /**< Division value */\n";
         out << "    input  wire                div_valid,  /**< Division value valid */\n";
-        out << "    output wire                div_ready,  /**< Division ready */\n";
-        out << "    output reg                 clk_out,    /**< Clock output */\n";
-        out << "    output wire [width-1:0]    count       /**< Cycle counter */\n";
+        out << "    output reg                 div_ready,  /**< Division ready */\n";
+        out << "    output wire                clk_out,    /**< Clock output */\n";
+        out << "    output wire [WIDTH-1:0]    count       /**< Cycle counter */\n";
         out << ");\n";
-        out << "    /* Template implementation - replace with foundry-specific IP */\n";
-        out << "    reg [width-1:0] cnt_q;\n";
-        out << "    reg [width-1:0] div_q;\n";
-        out << "    reg clk_q;\n";
+        out << "\n";
+        out << "    /* Parameter validation - equivalent to $clog2 check for Verilog 2005 */\n";
+        out << "    function integer clog2;\n";
+        out << "        input integer value;\n";
+        out << "        begin\n";
+        out << "            clog2 = 0;\n";
+        out << "            while ((1 << clog2) < value) begin\n";
+        out << "                clog2 = clog2 + 1;\n";
+        out << "            end\n";
+        out << "        end\n";
+        out << "    endfunction\n";
         out << "    \n";
-        out << "    assign div_ready = 1'b1;\n";
-        out << "    assign count = cnt_q;\n";
+        out << "    initial begin\n";
+        out << "        if (clog2(DEFAULT_VAL + 1) > WIDTH) begin\n";
+        out << "            $display(\"ERROR: Default divider value %0d is not representable with "
+               "the configured div value width of %0d bits.\", DEFAULT_VAL, WIDTH);\n";
+        out << "            $finish;\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "\n";
+        out << "    /* Reset value calculation */\n";
+        out << "    localparam [WIDTH-1:0] div_reset_value = (DEFAULT_VAL != 0) ? DEFAULT_VAL : "
+               "1;\n";
         out << "    \n";
+        out << "    /* State registers */\n";
+        out << "    reg [WIDTH-1:0] div_d, div_q;\n";
+        out << "    reg toggle_ffs_en;\n";
+        out << "    reg t_ff1_d, t_ff1_q;\n";
+        out << "    reg t_ff1_en;\n";
+        out << "    reg t_ff2_d, t_ff2_q;\n";
+        out << "    reg t_ff2_en;\n";
+        out << "    reg [WIDTH-1:0] cycle_cntr_d, cycle_cntr_q;\n";
+        out << "    reg cycle_counter_en;\n";
+        out << "    reg clk_div_bypass_en_d, clk_div_bypass_en_q;\n";
+        out << "    reg use_odd_division_d, use_odd_division_q;\n";
+        out << "    reg gate_en_d, gate_en_q;\n";
+        out << "    reg gate_is_open_q;\n";
+        out << "    reg clear_cycle_counter;\n";
+        out << "    reg clear_toggle_flops;\n";
+        out << "    reg [1:0] clk_gate_state_d, clk_gate_state_q;\n";
+        out << "\n";
+        out << "    /* FSM state encoding */\n";
+        out << "    parameter [1:0] IDLE = 2'b00;\n";
+        out << "    parameter [1:0] LOAD_DIV = 2'b01;\n";
+        out << "    parameter [1:0] WAIT_END_PERIOD = 2'b10;\n";
+        out << "\n";
+        out << "    /* Internal signals */\n";
+        out << "    wire [WIDTH-1:0] div_i_normalized;\n";
+        out << "    wire odd_clk;\n";
+        out << "    wire even_clk;\n";
+        out << "    wire generated_clock;\n";
+        out << "    wire ungated_output_clock;\n";
+        out << "    \n";
+        out << "    localparam use_odd_division_reset_value = DEFAULT_VAL[0];\n";
+        out << "    localparam clk_div_bypass_en_reset_value = (DEFAULT_VAL < 2) ? 1'b1 : 1'b0;\n";
+        out << "\n";
+        out << "    /* Normalize div input - avoid div=0 issues */\n";
+        out << "    assign div_i_normalized = (div != 0) ? div : 1;\n";
+        out << "\n";
+        out << "    /* Divider Load FSM */\n";
+        out << "    always @(*) begin\n";
+        out << "        div_d = div_q;\n";
+        out << "        div_ready = 1'b0;\n";
+        out << "        clk_div_bypass_en_d = clk_div_bypass_en_q;\n";
+        out << "        use_odd_division_d = use_odd_division_q;\n";
+        out << "        clk_gate_state_d = clk_gate_state_q;\n";
+        out << "        cycle_counter_en = 1'b1;\n";
+        out << "        clear_cycle_counter = 1'b0;\n";
+        out << "        clear_toggle_flops = 1'b0;\n";
+        out << "        toggle_ffs_en = 1'b1;\n";
+        out << "        gate_en_d = 1'b0;\n";
+        out << "\n";
+        out << "        case (clk_gate_state_q)\n";
+        out << "            IDLE: begin\n";
+        out << "                gate_en_d = 1'b1;\n";
+        out << "                toggle_ffs_en = 1'b1;\n";
+        out << "                if (div_valid) begin\n";
+        out << "                    if (div_i_normalized == div_q) begin\n";
+        out << "                        div_ready = 1'b1;\n";
+        out << "                    end else begin\n";
+        out << "                        clk_gate_state_d = LOAD_DIV;\n";
+        out << "                        gate_en_d = 1'b0;\n";
+        out << "                    end\n";
+        out << "                end else if (!en && gate_is_open_q == 1'b0) begin\n";
+        out << "                    cycle_counter_en = 1'b0;\n";
+        out << "                    toggle_ffs_en = 1'b0;\n";
+        out << "                end\n";
+        out << "            end\n";
+        out << "\n";
+        out << "            LOAD_DIV: begin\n";
+        out << "                gate_en_d = 1'b0;\n";
+        out << "                toggle_ffs_en = 1'b1;\n";
+        out << "                if ((gate_is_open_q == 1'b0) || clk_div_bypass_en_q) begin\n";
+        out << "                    toggle_ffs_en = 1'b0;\n";
+        out << "                    div_d = div_i_normalized;\n";
+        out << "                    div_ready = 1'b1;\n";
+        out << "                    clear_cycle_counter = 1'b1;\n";
+        out << "                    clear_toggle_flops = 1'b1;\n";
+        out << "                    use_odd_division_d = div_i_normalized[0];\n";
+        out << "                    clk_div_bypass_en_d = (div_i_normalized == 1);\n";
+        out << "                    clk_gate_state_d = WAIT_END_PERIOD;\n";
+        out << "                end\n";
+        out << "            end\n";
+        out << "\n";
+        out << "            WAIT_END_PERIOD: begin\n";
+        out << "                gate_en_d = 1'b0;\n";
+        out << "                toggle_ffs_en = 1'b0;\n";
+        out << "                if (cycle_cntr_q == div_q - 1) begin\n";
+        out << "                    clk_gate_state_d = IDLE;\n";
+        out << "                end\n";
+        out << "            end\n";
+        out << "\n";
+        out << "            default: begin\n";
+        out << "                clk_gate_state_d = IDLE;\n";
+        out << "            end\n";
+        out << "        endcase\n";
+        out << "    end\n";
+        out << "\n";
+        out << "    /* State registers */\n";
         out << "    always @(posedge clk, negedge rst_n) begin\n";
         out << "        if (!rst_n) begin\n";
-        out << "            cnt_q <= {width{1'b0}};\n";
-        out << "            clk_q <= 1'b0;\n";
-        out << "            div_q <= default_val;\n";
-        out << "        end else if (div_valid) begin\n";
-        out << "            div_q <= div;\n";
-        out << "        end else if (en) begin\n";
-        out << "            if (cnt_q == div_q - 1) begin\n";
-        out << "                cnt_q <= {width{1'b0}};\n";
-        out << "                clk_q <= ~clk_q;\n";
-        out << "            end else begin\n";
-        out << "                cnt_q <= cnt_q + 1;\n";
+        out << "            use_odd_division_q <= use_odd_division_reset_value;\n";
+        out << "            clk_div_bypass_en_q <= clk_div_bypass_en_reset_value;\n";
+        out << "            div_q <= div_reset_value;\n";
+        out << "            clk_gate_state_q <= IDLE;\n";
+        out << "            gate_en_q <= ENABLE_RESET;\n";
+        out << "        end else begin\n";
+        out << "            use_odd_division_q <= use_odd_division_d;\n";
+        out << "            clk_div_bypass_en_q <= clk_div_bypass_en_d;\n";
+        out << "            div_q <= div_d;\n";
+        out << "            clk_gate_state_q <= clk_gate_state_d;\n";
+        out << "            gate_en_q <= gate_en_d;\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "\n";
+        out << "    /* Cycle Counter */\n";
+        out << "    always @(*) begin\n";
+        out << "        cycle_cntr_d = cycle_cntr_q;\n";
+        out << "        if (clear_cycle_counter) begin\n";
+        out << "            cycle_cntr_d = {WIDTH{1'b0}};\n";
+        out << "        end else begin\n";
+        out << "            if (cycle_counter_en) begin\n";
+        out << "                if (clk_div_bypass_en_q || (cycle_cntr_q == div_q-1)) begin\n";
+        out << "                    cycle_cntr_d = {WIDTH{1'b0}};\n";
+        out << "                end else begin\n";
+        out << "                    cycle_cntr_d = cycle_cntr_q + 1;\n";
+        out << "                end\n";
         out << "            end\n";
         out << "        end\n";
         out << "    end\n";
-        out << "    \n";
-        out << "    assign clk_out = test_en ? clk : (en ? clk_q : 1'b0);\n";
+        out << "\n";
+        out << "    always @(posedge clk, negedge rst_n) begin\n";
+        out << "        if (!rst_n) begin\n";
+        out << "            cycle_cntr_q <= {WIDTH{1'b0}};\n";
+        out << "        end else begin\n";
+        out << "            cycle_cntr_q <= cycle_cntr_d;\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "\n";
+        out << "    assign count = cycle_cntr_q;\n";
+        out << "\n";
+        out << "    /* T-Flip-Flops with intentional blocking assignments */\n";
+        out << "    always @(posedge clk, negedge rst_n) begin\n";
+        out << "        if (!rst_n) begin\n";
+        out << "            t_ff1_q = 1'b0; /* Intentional blocking assignment */\n";
+        out << "        end else begin\n";
+        out << "            if (t_ff1_en) begin\n";
+        out << "                t_ff1_q = t_ff1_d; /* Intentional blocking assignment */\n";
+        out << "            end\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "\n";
+        out << "    always @(negedge clk, negedge rst_n) begin\n";
+        out << "        if (!rst_n) begin\n";
+        out << "            t_ff2_q = 1'b0; /* Intentional blocking assignment */\n";
+        out << "        end else begin\n";
+        out << "            if (t_ff2_en) begin\n";
+        out << "                t_ff2_q = t_ff2_d; /* Intentional blocking assignment */\n";
+        out << "            end\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "\n";
+        out << "    always @(*) begin\n";
+        out << "        if (clear_toggle_flops) begin\n";
+        out << "            t_ff1_d = 1'b0;\n";
+        out << "            t_ff2_d = 1'b0;\n";
+        out << "        end else begin\n";
+        out << "            t_ff1_d = t_ff1_en ? !t_ff1_q : t_ff1_q;\n";
+        out << "            t_ff2_d = t_ff2_en ? !t_ff2_q : t_ff2_q;\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "\n";
+        out << "    /* T-FF enable control */\n";
+        out << "    always @(*) begin\n";
+        out << "        t_ff1_en = 1'b0;\n";
+        out << "        t_ff2_en = 1'b0;\n";
+        out << "        if (!clk_div_bypass_en_q && toggle_ffs_en) begin\n";
+        out << "            if (use_odd_division_q) begin\n";
+        out << "                t_ff1_en = (cycle_cntr_q == 0) ? 1'b1 : 1'b0;\n";
+        out << "                t_ff2_en = (cycle_cntr_q == (div_q+1)/2) ? 1'b1 : 1'b0;\n";
+        out << "            end else begin\n";
+        out << "                t_ff1_en = (cycle_cntr_q == 0 || cycle_cntr_q == div_q/2) ? 1'b1 : "
+               "1'b0;\n";
+        out << "            end\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "\n";
+        out << "    assign even_clk = t_ff1_q;\n";
+        out << "\n";
+        out << "    /* Clock XOR for odd division logic */\n";
+        out << "    qsoc_tc_clk_xor2 i_odd_clk_xor (\n";
+        out << "        .CLK_IN0(t_ff1_q),\n";
+        out << "        .CLK_IN1(t_ff2_q),\n";
+        out << "        .CLK_OUT(odd_clk)\n";
+        out << "    );\n";
+        out << "\n";
+        out << "    /* Clock MUX to select between odd and even division logic */\n";
+        out << "    qsoc_tc_clk_mux2 i_clk_mux (\n";
+        out << "        .CLK_IN0(even_clk),\n";
+        out << "        .CLK_IN1(odd_clk),\n";
+        out << "        .CLK_SEL(use_odd_division_q),\n";
+        out << "        .CLK_OUT(generated_clock)\n";
+        out << "    );\n";
+        out << "\n";
+        out << "    /* Clock MUX to bypass clock if divide-by-1 */\n";
+        out << "    qsoc_tc_clk_mux2 i_clk_bypass_mux (\n";
+        out << "        .CLK_IN0(generated_clock),\n";
+        out << "        .CLK_IN1(clk),\n";
+        out << "        .CLK_SEL(clk_div_bypass_en_q || test_en),\n";
+        out << "        .CLK_OUT(ungated_output_clock)\n";
+        out << "    );\n";
+        out << "\n";
+        out << "    /* Clock gate feedback signal */\n";
+        out << "    always @(posedge ungated_output_clock, negedge rst_n) begin\n";
+        out << "        if (!rst_n) begin\n";
+        out << "            gate_is_open_q <= 1'b0;\n";
+        out << "        end else begin\n";
+        out << "            gate_is_open_q <= gate_en_q & en;\n";
+        out << "        end\n";
+        out << "    end\n";
+        out << "\n";
+        out << "    /* Final clock gate for glitch protection */\n";
+        out << "    qsoc_tc_clk_gate #(\n";
+        out << "        .enable_reset(1'b1)\n";
+        out << "    ) i_clk_gate (\n";
+        out << "        .clk(ungated_output_clock),\n";
+        out << "        .en(gate_en_q & en),\n";
+        out << "        .test_en(test_en),\n";
+        out << "        .rst_n(rst_n),\n";
+        out << "        .clk_out(clk_out)\n";
+        out << "    );\n";
+        out << "\n";
         out << "endmodule\n";
 
-    } else if (cellName == "QSOC_CLKMUX_GF_CELL") {
+    } else if (cellName == "qsoc_clk_mux_gf") {
         out << "/**\n";
         out << " * @brief Glitch-free clock multiplexer cell module\n";
         out << " *\n";
@@ -876,22 +1105,29 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << " *          based on ETH Zurich common_cells library design.\n";
         out << " *          Supports multi-input with parametrized sync stages and DFT.\n";
         out << " */\n";
-        out << "module QSOC_CLKMUX_GF_CELL #(\n";
+        out << "module qsoc_clk_mux_gf #(\n";
         out << "    parameter integer NUM_INPUTS = 2,        /**< Number of clock inputs */\n";
         out << "    parameter integer NUM_SYNC_STAGES = 2,   /**< Synchronizer stages */\n";
-        out << "    parameter CLOCK_DURING_RESET = 1'b1,      /**< Clock during reset */\n";
-        out << "    localparam SelWidth = "
-               "(NUM_INPUTS<=2)?1:(NUM_INPUTS<=4)?2:(NUM_INPUTS<=8)?3:(NUM_INPUTS<=16)?4:(NUM_"
-               "INPUTS<=32)?5:(NUM_INPUTS<=64)?6:(NUM_INPUTS<=128)?7:(NUM_INPUTS<=256)?8:(NUM_"
-               "INPUTS<=512)?9:(NUM_INPUTS<=1024)?10:(NUM_INPUTS<=2048)?11:(NUM_INPUTS<=4096)?12:"
-               "32\n";
+        out << "    parameter CLOCK_DURING_RESET = 1'b1,     /**< Clock during reset */\n";
+        out << "    parameter [5:0] WIDTH =                  /**< Helper: select signal width */\n";
+        out << "        (NUM_INPUTS <= 2)    ? 6'h01 :\n";
+        out << "        (NUM_INPUTS <= 4)    ? 6'h02 :\n";
+        out << "        (NUM_INPUTS <= 8)    ? 6'h03 :\n";
+        out << "        (NUM_INPUTS <= 16)   ? 6'h04 :\n";
+        out << "        (NUM_INPUTS <= 32)   ? 6'h05 :\n";
+        out << "        (NUM_INPUTS <= 64)   ? 6'h06 :\n";
+        out << "        (NUM_INPUTS <= 128)  ? 6'h07 :\n";
+        out << "        (NUM_INPUTS <= 256)  ? 6'h08 :\n";
+        out << "        (NUM_INPUTS <= 512)  ? 6'h09 :\n";
+        out << "        (NUM_INPUTS <= 1024) ? 6'h0A :\n";
+        out << "        (NUM_INPUTS <= 2048) ? 6'h0B :\n";
+        out << "        (NUM_INPUTS <= 4096) ? 6'h0C : 6'h20\n";
         out << ") (\n";
         out << "    input  wire [NUM_INPUTS-1:0] clk_in,        /**< Clock inputs */\n";
         out << "    input  wire                  test_clk,      /**< DFT test clock */\n";
         out << "    input  wire                  test_en,       /**< DFT test enable */\n";
-        out << "    input  wire                  async_rst_n,   /**< Async reset (active low) "
-               "*/\n";
-        out << "    input  wire [SelWidth-1:0]   async_sel,     /**< Async select signal */\n";
+        out << "    input  wire                  async_rst_n,   /**< Async reset (active low) */\n";
+        out << "    input  wire [WIDTH-1:0]      async_sel,     /**< Async select signal */\n";
         out << "    output reg                   clk_out        /**< Clock output */\n";
         out << ");\n";
         out << "    /* Template implementation - replace with foundry-specific IP */\n";
@@ -900,7 +1136,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    \n";
         out << "    // Internal signals for glitch-free switching\n";
         out << "    reg [NUM_INPUTS-1:0]        sel_onehot;\n";
-        out << "    reg [NUM_INPUTS-1:0*2-1:0]   glitch_filter_d, glitch_filter_q;\n";
+        out << "    reg [NUM_INPUTS*2-1:0]   glitch_filter_d, glitch_filter_q;\n";
         out << "    wire [NUM_INPUTS-1:0]        gate_enable_unfiltered;\n";
         out << "    wire [NUM_INPUTS-1:0]        glitch_filter_output;\n";
         out << "    wire [NUM_INPUTS-1:0]        gate_enable_sync;\n";
@@ -908,7 +1144,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    reg [NUM_INPUTS-1:0]        clock_disabled_q;\n";
         out << "    wire [NUM_INPUTS-1:0]        gated_clock;\n";
         out << "    wire                         output_clock;\n";
-        out << "    wire [NUM_INPUTS-1:0]        reset_synced;\n";
+        out << "    reg [NUM_INPUTS-1:0]        reset_synced;\n";
         out << "    \n";
         out << "    // Onehot decoder\n";
         out << "    always @(*) begin\n";
@@ -919,7 +1155,11 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    \n";
         out << "    // Generate logic for each input clock\n";
         out << "    for (genvar i = 0; i < NUM_INPUTS; i++) begin : gen_input_stages\n";
-        out << "        // Synchronize reset to each clock domain\n";
+        out << "        // Synchronize reset to each clock domain using dedicated reset "
+               "generator\n";
+        out << "        // Note: For full compatibility, this should be replaced with a proper "
+               "rstgen module\n";
+        out << "        // For now, implementing equivalent functionality inline\n";
         out << "        always @(posedge clk_in[i] or negedge async_rst_n) begin\n";
         out << "            if (!async_rst_n) begin\n";
         out << "                reset_synced[i] <= 1'b0;\n";
@@ -941,22 +1181,24 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        end\n";
         out << "        \n";
         out << "        // Glitch filter (2-stage)\n";
-        out << "        assign glitch_filter_d[i][0] = gate_enable_unfiltered[i];\n";
-        out << "        assign glitch_filter_d[i][1] = glitch_filter_q[i][0];\n";
+        out << "        assign glitch_filter_d[i*2+0] = gate_enable_unfiltered[i];\n";
+        out << "        assign glitch_filter_d[i*2+1] = glitch_filter_q[i*2+0];\n";
         out << "        \n";
         out << "        always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
         out << "            if (!reset_synced[i]) begin\n";
-        out << "                glitch_filter_q[i] <= 2'b00;\n";
+        out << "                glitch_filter_q[i*2+1:i*2] <= 2'b00;\n";
         out << "            end else begin\n";
-        out << "                glitch_filter_q[i] <= glitch_filter_d[i];\n";
+        out << "                glitch_filter_q[i*2+1:i*2] <= glitch_filter_d[i*2+1:i*2];\n";
         out << "            end\n";
         out << "        end\n";
         out << "        \n";
-        out << "        assign glitch_filter_output[i] = glitch_filter_q[i][1] & \n";
-        out << "                                         glitch_filter_q[i][0] & \n";
+        out << "        assign glitch_filter_output[i] = glitch_filter_q[i*2+1] & \n";
+        out << "                                         glitch_filter_q[i*2+0] & \n";
         out << "                                         gate_enable_unfiltered[i];\n";
         out << "        \n";
-        out << "        // Synchronizer chain for enable signal\n";
+        out << "        // Synchronizer chain for enable signal (equivalent to sync module)\n";
+        out << "        // Note: This implements the same functionality as sync "
+               "#(.STAGES(NUM_SYNC_STAGES))\n";
         out << "        if (NUM_SYNC_STAGES >= 1) begin : gen_sync\n";
         out << "            reg [NUM_SYNC_STAGES-1:0] sync_chain;\n";
         out << "            always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
@@ -988,13 +1230,16 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "            assign gate_enable[i] = gate_enable_sync[i];\n";
         out << "        end\n";
         out << "        \n";
-        out << "        // Clock gating (simplified behavioral model)\n";
-        out << "        reg gate_en_latched;\n";
-        out << "        always @(*) begin\n";
-        out << "            if (~clk_in[i])\n";
-        out << "                gate_en_latched = gate_enable[i];\n";
-        out << "        end\n";
-        out << "        assign gated_clock[i] = clk_in[i] & gate_en_latched;\n";
+        out << "        // Clock gating using dedicated clock gate cell\n";
+        out << "        qsoc_tc_clk_gate #(\n";
+        out << "            .enable_reset(1'b0)\n";
+        out << "        ) i_clk_gate (\n";
+        out << "            .clk(clk_in[i]),\n";
+        out << "            .en(gate_enable[i]),\n";
+        out << "            .test_en(1'b0),\n";
+        out << "            .rst_n(reset_synced[i]),\n";
+        out << "            .clk_out(gated_clock[i])\n";
+        out << "        );\n";
         out << "        \n";
         out << "        // Feedback for mutual exclusion\n";
         out << "        always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
@@ -1006,70 +1251,186 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        end\n";
         out << "    end\n";
         out << "    \n";
-        out << "    // Output OR gate\n";
-        out << "    assign output_clock = |gated_clock;\n";
+        out << "    // Output OR gate using dedicated clock OR tree\n";
+        out << "    qsoc_clk_or_tree #(\n";
+        out << "        .INPUT_COUNT(NUM_INPUTS)\n";
+        out << "    ) i_clk_or_tree (\n";
+        out << "        .clk_in(gated_clock),\n";
+        out << "        .clk_out(output_clock)\n";
+        out << "    );\n";
         out << "    \n";
-        out << "    // DFT mux: select between functional clock and test clock\n";
-        out << "    assign clk_out = test_en ? test_clk : output_clock;\n";
+        out << "    // DFT mux: select between functional clock and test clock using dedicated "
+               "clock mux\n";
+        out << "    qsoc_tc_clk_mux2 i_test_clk_mux (\n";
+        out << "        .CLK_IN0(output_clock),\n";
+        out << "        .CLK_IN1(test_clk),\n";
+        out << "        .CLK_SEL(test_en),\n";
+        out << "        .CLK_OUT(clk_out)\n";
+        out << "    );\n";
         out << "    \n";
         out << "endmodule\n";
-        out << "\n";
+
+    } else if (cellName == "qsoc_clk_mux_raw") {
         out << "/**\n";
         out << " * @brief Standard (non-glitch-free) clock multiplexer cell module\n";
         out << " *\n";
         out << " * @details Template implementation of simple N-input clock multiplexer\n";
         out << " *          using pure combinational logic. No glitch protection.\n";
         out << " */\n";
-        out << "module QSOC_CLKMUX_STD_CELL #(\n";
+        out << "module qsoc_clk_mux_raw #(\n";
         out << "    parameter integer NUM_INPUTS = 2,\n";
-        out << "    localparam SelWidth = "
-               "(NUM_INPUTS<=2)?1:(NUM_INPUTS<=4)?2:(NUM_INPUTS<=8)?3:(NUM_INPUTS<=16)?4:(NUM_"
-               "INPUTS<=32)?5:(NUM_INPUTS<=64)?6:(NUM_INPUTS<=128)?7:(NUM_INPUTS<=256)?8:(NUM_"
-               "INPUTS<=512)?9:(NUM_INPUTS<=1024)?10:(NUM_INPUTS<=2048)?11:(NUM_INPUTS<=4096)?12:"
-               "32\n";
+        out << "    parameter [5:0] WIDTH =                  /**< Helper: select signal width */\n";
+        out << "        (NUM_INPUTS <= 2)    ? 6'h01 :\n";
+        out << "        (NUM_INPUTS <= 4)    ? 6'h02 :\n";
+        out << "        (NUM_INPUTS <= 8)    ? 6'h03 :\n";
+        out << "        (NUM_INPUTS <= 16)   ? 6'h04 :\n";
+        out << "        (NUM_INPUTS <= 32)   ? 6'h05 :\n";
+        out << "        (NUM_INPUTS <= 64)   ? 6'h06 :\n";
+        out << "        (NUM_INPUTS <= 128)  ? 6'h07 :\n";
+        out << "        (NUM_INPUTS <= 256)  ? 6'h08 :\n";
+        out << "        (NUM_INPUTS <= 512)  ? 6'h09 :\n";
+        out << "        (NUM_INPUTS <= 1024) ? 6'h0A :\n";
+        out << "        (NUM_INPUTS <= 2048) ? 6'h0B :\n";
+        out << "        (NUM_INPUTS <= 4096) ? 6'h0C : 6'h20\n";
         out << ") (\n";
         out << "    input  wire [NUM_INPUTS-1:0] clk_in,        /**< Clock inputs */\n";
-        out << "    input  wire [SelWidth-1:0]   clk_sel,       /**< Clock select signal */\n";
+        out << "    input  wire [WIDTH-1:0]      clk_sel,       /**< Clock select signal */\n";
         out << "    output wire                  clk_out        /**< Clock output */\n";
         out << ");\n";
         out << "    /* Template implementation - replace with foundry-specific IP */\n";
         out << "    \n";
-        out << "    // Note: NUM_INPUTS must be >= 2 for proper operation\n";
-        out << "    \n";
-        out << "    // Simple mux using case statement\n";
-        out << "    reg selected_clk;\n";
-        out << "    always @(*) begin\n";
-        out << "        case (clk_sel)\n";
-        out << "            0: selected_clk = clk_in[0];\n";
-        out << "            1: selected_clk = (NUM_INPUTS > 1) ? clk_in[1] : clk_in[0];\n";
-        out << "            2: selected_clk = (NUM_INPUTS > 2) ? clk_in[2] : clk_in[0];\n";
-        out << "            3: selected_clk = (NUM_INPUTS > 3) ? clk_in[3] : clk_in[0];\n";
-        out << "            default: selected_clk = clk_in[0];\n";
-        out << "        endcase\n";
-        out << "    end\n";
-        out << "    assign clk_out = selected_clk;\n";
+        out << "    /* Generate recursive binary tree multiplexer structure */\n";
+        out << "    generate\n";
+        out << "        if (NUM_INPUTS < 1) begin : gen_error\n";
+        out << "            /* Error condition - invalid parameter */\n";
+        out << "            initial begin\n";
+        out << "                $display(\"ERROR: qsoc_clk_mux_raw cannot be parametrized "
+               "with less than 1 input but was %0d\", NUM_INPUTS);\n";
+        out << "                $finish;\n";
+        out << "            end\n";
+        out << "        end else if (NUM_INPUTS == 1) begin : gen_leaf_single\n";
+        out << "            /* Single input - direct connection */\n";
+        out << "            assign clk_out = clk_in[0];\n";
+        out << "        end else if (NUM_INPUTS == 2) begin : gen_leaf_dual\n";
+        out << "            /* Two inputs - single MUX2 cell */\n";
+        out << "            qsoc_tc_clk_mux2 i_clkmux2 (\n";
+        out << "                .CLK_IN0(clk_in[0]),\n";
+        out << "                .CLK_IN1(clk_in[1]),\n";
+        out << "                .CLK_SEL(clk_sel[0]),\n";
+        out << "                .CLK_OUT(clk_out)\n";
+        out << "            );\n";
+        out << "        end else begin : gen_recursive\n";
+        out << "            /* More than 2 inputs - build recursive tree */\n";
+        out << "            wire branch_a;      /**< Output from first branch */\n";
+        out << "            wire branch_b;      /**< Output from second branch */\n";
+        out << "            \n";
+        out << "            /* Use MSB to select between two halves, remaining bits for "
+               "sub-selection */\n";
+        out << "            wire msb_sel;       /**< MSB selects between upper and lower half */\n";
+        out << "            wire [WIDTH-2:0] lower_sel;  /**< Lower bits for sub-mux selection "
+               "*/\n";
+        out << "            \n";
+        out << "            assign msb_sel = clk_sel[WIDTH-1];\n";
+        out << "            assign lower_sel = clk_sel[WIDTH-2:0];\n";
+        out << "            \n";
+        out << "            /* First branch handles lower half of inputs */\n";
+        out << "            qsoc_clk_mux_raw #(\n";
+        out << "                .NUM_INPUTS(NUM_INPUTS/2)\n";
+        out << "            ) i_mux_branch_a (\n";
+        out << "                .clk_in(clk_in[0+:NUM_INPUTS/2]),\n";
+        out << "                .clk_sel(lower_sel),\n";
+        out << "                .clk_out(branch_a)\n";
+        out << "            );\n";
+        out << "            \n";
+        out << "            /* Second branch handles upper half plus any odd input */\n";
+        out << "            qsoc_clk_mux_raw #(\n";
+        out << "                .NUM_INPUTS(NUM_INPUTS/2 + NUM_INPUTS%2)\n";
+        out << "            ) i_mux_branch_b (\n";
+        out << "                .clk_in(clk_in[NUM_INPUTS-1:NUM_INPUTS/2]),\n";
+        out << "                .clk_sel(lower_sel),\n";
+        out << "                .clk_out(branch_b)\n";
+        out << "            );\n";
+        out << "            \n";
+        out << "            /* Combine branches with final MUX2 cell using MSB */\n";
+        out << "            qsoc_tc_clk_mux2 i_clkmux2_final (\n";
+        out << "                .CLK_IN0(branch_a),\n";
+        out << "                .CLK_IN1(branch_b),\n";
+        out << "                .CLK_SEL(msb_sel),\n";
+        out << "                .CLK_OUT(clk_out)\n";
+        out << "            );\n";
+        out << "        end\n";
+        out << "    endgenerate\n";
         out << "    \n";
         out << "endmodule\n";
+        out << "\n";
+        out << "\n";
 
-    } else if (cellName == "QSOC_CLKMUX_STD_CELL") {
-        // This is already defined inline with QSOC_CLKMUX_GF_CELL above
-        // Return empty string to avoid duplication
-        return "";
-
-    } else if (cellName == "QSOC_CLKOR_TREE") {
+    } else if (cellName == "qsoc_clk_or_tree") {
         out << "/**\n";
         out << " * @brief Clock OR tree cell module\n";
         out << " *\n";
-        out << " * @details Template implementation of multi-input clock OR tree.\n";
+        out << " * @details Generates an N-input clock OR tree using binary tree of "
+               "qsoc_tc_clk_or2 instances.\n";
+        out << " *          This module recursively builds a balanced tree structure to minimize "
+               "propagation delay.\n";
         out << " */\n";
-        out << "module QSOC_CLKOR_TREE #(\n";
-        out << "    parameter integer INPUT_COUNT = 4    /**< Number of clock inputs */\n";
+        out << "module qsoc_clk_or_tree #(\n";
+        out << "    parameter integer INPUT_COUNT = 4    /**< Number of clock inputs (must be >= "
+               "1) */\n";
         out << ")(\n";
         out << "    input  wire [INPUT_COUNT-1:0] clk_in,  /**< Clock inputs */\n";
         out << "    output wire                   clk_out  /**< Clock output */\n";
         out << ");\n";
-        out << "    /* Template implementation - replace with foundry-specific IP */\n";
-        out << "    assign clk_out = |clk_in;\n";
+        out << "    \n";
+        out << "    /* Generate recursive binary tree structure */\n";
+        out << "    generate\n";
+        out << "        if (INPUT_COUNT < 1) begin : gen_error\n";
+        out << "            /* Error condition - invalid parameter */\n";
+        out << "            initial begin\n";
+        out << "                $display(\"ERROR: qsoc_clk_or_tree cannot be parametrized with "
+               "less than 1 input but was %0d\", INPUT_COUNT);\n";
+        out << "                $finish;\n";
+        out << "            end\n";
+        out << "        end else if (INPUT_COUNT == 1) begin : gen_leaf_single\n";
+        out << "            /* Single input - direct connection */\n";
+        out << "            assign clk_out = clk_in[0];\n";
+        out << "        end else if (INPUT_COUNT == 2) begin : gen_leaf_dual\n";
+        out << "            /* Two inputs - single OR2 cell */\n";
+        out << "            qsoc_tc_clk_or2 i_clkor2 (\n";
+        out << "                .CLK_IN0(clk_in[0]),\n";
+        out << "                .CLK_IN1(clk_in[1]),\n";
+        out << "                .CLK_OUT(clk_out)\n";
+        out << "            );\n";
+        out << "        end else begin : gen_recursive\n";
+        out << "            /* More than 2 inputs - build recursive tree */\n";
+        out << "            wire branch_a;  /**< Output from first branch */\n";
+        out << "            wire branch_b;  /**< Output from second branch */\n";
+        out << "            \n";
+        out << "            /* First branch handles lower half of inputs */\n";
+        out << "            qsoc_clk_or_tree #(\n";
+        out << "                .INPUT_COUNT(INPUT_COUNT/2)\n";
+        out << "            ) i_or_branch_a (\n";
+        out << "                .clk_in(clk_in[0+:INPUT_COUNT/2]),\n";
+        out << "                .clk_out(branch_a)\n";
+        out << "            );\n";
+        out << "            \n";
+        out << "            /* Second branch handles upper half plus any odd input */\n";
+        out << "            qsoc_clk_or_tree #(\n";
+        out << "                .INPUT_COUNT(INPUT_COUNT/2 + INPUT_COUNT%2)\n";
+        out << "            ) i_or_branch_b (\n";
+        out << "                .clk_in(clk_in[INPUT_COUNT-1:INPUT_COUNT/2]),\n";
+        out << "                .clk_out(branch_b)\n";
+        out << "            );\n";
+        out << "            \n";
+        out << "            /* Combine branches with final OR2 cell */\n";
+        out << "            qsoc_tc_clk_or2 i_clkor2_final (\n";
+        out << "                .CLK_IN0(branch_a),\n";
+        out << "                .CLK_IN1(branch_b),\n";
+        out << "                .CLK_OUT(clk_out)\n";
+        out << "            );\n";
+        out << "        end\n";
+        out << "    endgenerate\n";
+        out << "    \n";
         out << "endmodule\n";
     }
 
