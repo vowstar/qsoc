@@ -438,11 +438,16 @@ if(CPPCHECK_COMMAND)
         COMMAND ${CPPCHECK_COMMAND}
             --enable=all
             --inconclusive
-            --quiet
+            --max-ctu-depth=0
             --suppressions-list=${CMAKE_CURRENT_SOURCE_DIR}/.cppcheck-suppressions
-            --project=${CMAKE_BINARY_DIR}/compile_commands.json
+            --cppcheck-build-dir=${CMAKE_BINARY_DIR}/cppcheck
+            -I${CMAKE_CURRENT_SOURCE_DIR}/src
+            -I${CMAKE_CURRENT_SOURCE_DIR}/test
+            -I${CMAKE_BINARY_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/test
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Running cppcheck static analysis"
+        COMMENT "Running cppcheck static analysis on src and test directories"
     )
 else()
     message(STATUS "cppcheck not found, install it for faster static analysis")

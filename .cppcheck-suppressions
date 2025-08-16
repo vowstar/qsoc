@@ -4,6 +4,10 @@
 # System includes
 missingIncludeSystem
 
+# Qt MOC files - suppress missing include warnings
+missingInclude:*test/*.cpp
+missingInclude:*src/gui/*.cpp
+
 # Qt MOC, UIC, RCC generated files - suppress all errors in these files
 *:*_moc.cpp
 *:moc_*.cpp
