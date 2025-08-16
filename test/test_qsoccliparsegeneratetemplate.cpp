@@ -566,6 +566,106 @@ endmodule // {{ module.name }})";
             verifyTemplateContent("module_implementation", "Module Implementation: cpu_wrapper"));
         QVERIFY(verifyTemplateContent("module_implementation", "endmodule // cpu_wrapper"));
     }
+
+    void testGenerateTemplateWithFormatFilter()
+    {
+        messageList.clear();
+        const QDir projectDir(projectManager.getCurrentPath());
+
+        /* Create JSON data file with various data types */
+        const QString jsonContent  = R"({
+    "name": "Alice",
+    "age": 30,
+    "price": 123.456,
+    "isActive": true,
+    "description": null
+})";
+        const QString jsonFilePath = projectDir.filePath("format_test_data.json");
+        QFile         jsonFile(jsonFilePath);
+        QVERIFY(jsonFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream jsonStream(&jsonFile);
+        jsonStream << jsonContent;
+        jsonFile.close();
+
+        /* Create template file with format filter tests */
+        const QString templateContent  = R"(// Format Filter Tests
+// Basic positional formatting
+{{ "My name is {0} and I am {1} years old."|format(name, age) }}
+
+// Simple placeholder formatting
+{{ "Hello, {}! You are {} years old."|format(name, age) }}
+
+// Float formatting with precision
+{{ "The price is £{:.2f}"|format(price) }}
+
+// Integer formatting
+{{ "Age as integer: {:d}"|format(age) }}
+
+// String formatting
+{{ "Name as string: {:s}"|format(name) }}
+
+// Boolean formatting
+{{ "Active status: {}"|format(isActive) }}
+
+// Null value formatting
+{{ "Description: {}"|format(description) }}
+
+// Mixed formatting with multiple arguments
+{{ "User {0} (age {1:d}) has balance £{2:.2f}"|format(name, age, price) }}
+)";
+        const QString templateFilePath = projectDir.filePath("format_test_template.j2");
+        QFile         templateFile(templateFilePath);
+        QVERIFY(templateFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream templateStream(&templateFile);
+        templateStream << templateContent;
+        templateFile.close();
+
+        /* Run the command */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc",
+               "generate",
+               "template",
+               "-d",
+               projectManager.getCurrentPath(),
+               "--json",
+               jsonFilePath,
+               templateFilePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        std::cout << messageList.join("\n").toStdString() << '\n';
+
+        /* Verify results */
+        QVERIFY(verifyTemplateOutputExistence("format_test_template"));
+
+        /* Test basic positional formatting */
+        QVERIFY(
+            verifyTemplateContent("format_test_template", "My name is Alice and I am 30 years old."));
+
+        /* Test simple placeholder formatting */
+        QVERIFY(
+            verifyTemplateContent("format_test_template", "Hello, Alice! You are 30 years old."));
+
+        /* Test float formatting with precision */
+        QVERIFY(verifyTemplateContent("format_test_template", "The price is £123.46"));
+
+        /* Test integer formatting */
+        QVERIFY(verifyTemplateContent("format_test_template", "Age as integer: 30"));
+
+        /* Test string formatting */
+        QVERIFY(verifyTemplateContent("format_test_template", "Name as string: Alice"));
+
+        /* Test boolean formatting */
+        QVERIFY(verifyTemplateContent("format_test_template", "Active status: true"));
+
+        /* Test null value formatting */
+        QVERIFY(verifyTemplateContent("format_test_template", "Description: "));
+
+        /* Test mixed formatting */
+        QVERIFY(
+            verifyTemplateContent("format_test_template", "User Alice (age 30) has balance £123.46"));
+    }
 };
 
 QStringList Test::messageList;
