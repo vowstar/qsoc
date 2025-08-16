@@ -73,6 +73,27 @@ public:
      * @return Formatted string with proper bit width
      */
     QString formatVerilogProperWidth() const;
+
+    /**
+     * @brief Parse a Verilog or C-style numeric literal
+     *
+     * Handles formats like:
+     * - Standard: 123, 0xFF, 0644
+     * - Verilog: 8'b10101010, 32'hDEADBEEF
+     * - With underscores: 32'h1234_5678, 16'b1010_1010
+     *
+     * If width is not specified, calculates a reasonable width based on the value.
+     *
+     * @param numStr Input string containing the numeric literal
+     * @return QSocNumberInfo struct with parsed information
+     */
+    static QSocNumberInfo parseNumber(const QString &numStr);
+
+    /**
+     * @brief Convert BigInteger value to int64_t
+     * @return int64_t representation, or 0 if conversion fails or value is too large
+     */
+    int64_t toInt64() const;
 };
 
 #endif // QSOCNUMBERINFO_H

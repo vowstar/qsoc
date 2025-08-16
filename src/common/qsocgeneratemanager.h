@@ -195,21 +195,6 @@ public:
     bool checkPortWidthConsistency(const QList<PortConnection> &connections);
 
     /**
-     * @brief Parse a Verilog or C-style numeric literal
-     *
-     * Handles formats like:
-     * - Standard: 123, 0xFF, 0644
-     * - Verilog: 8'b10101010, 32'hDEADBEEF
-     * - With underscores: 32'h1234_5678, 16'b1010_1010
-     *
-     * If width is not specified, calculates a reasonable width based on the value.
-     *
-     * @param numStr Input string containing the numeric literal
-     * @return NumberInfo struct with parsed information
-     */
-    QSocNumberInfo parseNumber(const QString &numStr);
-
-    /**
      * @brief Clean type strings for wire declarations
      * @details Removes type keywords (logic, reg, wire, etc.) from type strings,
      *          keeping only width information like [7:0]. Uses a general regex

@@ -597,7 +597,39 @@ bool QSocGenerateManager::renderTemplate(
                 /* Use fmt::vformat for runtime format strings to avoid consteval issues */
                 if (arg.is_string()) {
                     std::string str_val = arg.get<std::string>();
-                    result              = fmt::vformat(formatStr, fmt::make_format_args(str_val));
+
+                    /* Check if string looks like a number (C or Verilog style) before parsing */
+                    const QString qstr            = QString::fromStdString(str_val);
+                    bool          looksLikeNumber = false;
+
+                    /* Check for common number patterns */
+                    if (qstr.startsWith("0x") || qstr.startsWith("0X") || /* C hex */
+                        qstr.startsWith("0b") || qstr.startsWith("0B") || /* C binary */
+                        qstr.startsWith("'h") || qstr.startsWith("'H") || /* Verilog hex */
+                        qstr.startsWith("'b") || qstr.startsWith("'B") || /* Verilog binary */
+                        qstr.startsWith("'o") || qstr.startsWith("'O") || /* Verilog octal */
+                        qstr.startsWith("'d") || qstr.startsWith("'D") || /* Verilog decimal */
+                        (qstr.startsWith("0") && qstr.length() > 1
+                         && qstr.at(1).isDigit())) { /* C octal */
+                        looksLikeNumber = true;
+                    }
+
+                    if (looksLikeNumber) {
+                        /* Try to parse the string as a number */
+                        const QSocNumberInfo numberInfo = QSocNumberInfo::parseNumber(qstr);
+
+                        if (!numberInfo.errorDetected) {
+                            /* String was successfully parsed as a number, use its int64_t value */
+                            const int64_t int_val = numberInfo.toInt64();
+                            result = fmt::vformat(formatStr, fmt::make_format_args(int_val));
+                        } else {
+                            /* Parsing failed, treat as regular string */
+                            result = fmt::vformat(formatStr, fmt::make_format_args(str_val));
+                        }
+                    } else {
+                        /* Doesn't look like a number, treat as regular string */
+                        result = fmt::vformat(formatStr, fmt::make_format_args(str_val));
+                    }
                 } else if (arg.is_number_integer()) {
                     int64_t int_val = arg.get<int64_t>();
                     result          = fmt::vformat(formatStr, fmt::make_format_args(int_val));
