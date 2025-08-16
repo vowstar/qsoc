@@ -81,6 +81,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         "${BIGINT_INCLUDE_DIRS}"
         "${ANTLR4_INCLUDE_DIRS}"
         "${SYSTEMRDL_INCLUDE_DIRS}"
+        "${FMT_INCLUDE_DIRS}"
     )
 
     target_link_libraries(${TARGET_NAME} PRIVATE
@@ -104,6 +105,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         ${BIGINT_LIBRARIES}
         ${ANTLR4_LIBRARIES}
         ${SYSTEMRDL_LIBRARIES}
+        ${FMT_LIBRARIES}
     )
 endfunction()
 

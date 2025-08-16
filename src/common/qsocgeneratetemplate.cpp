@@ -14,6 +14,7 @@
 #include <systemrdl_api.h>
 
 #include <charconv>
+#include <fmt/format.h>
 #include <fstream>
 #include <inja/inja.hpp>
 #include <nlohmann/json.hpp>
@@ -524,7 +525,7 @@ bool QSocGenerateManager::renderTemplate(
                     "generate",
                     "Warning: regex_replace requires at least 3 arguments (input, pattern, "
                     "replacement)");
-                return nlohmann::json{""};
+                return std::string("");
             }
 
             try {
@@ -574,137 +575,56 @@ bool QSocGenerateManager::renderTemplate(
                 qWarning() << QCoreApplication::translate(
                                   "generate", "Warning: Error in regex_replace: %1")
                                   .arg(e.what());
-                return nlohmann::json{""};
+                return std::string("");
             }
         });
 
-        /* Add format filter */
+        /* Add format filter using fmt library */
         env.add_callback("format", [](inja::Arguments &args) -> nlohmann::json {
-            if (args.size() < 1) {
+            if (args.size() < 2) {
                 qWarning() << QCoreApplication::translate(
-                    "generate", "Warning: format requires at least 1 argument (format_string)");
-                return nlohmann::json{""};
+                    "generate",
+                    "Warning: format requires at least 2 arguments (format_string, value)");
+                return std::string("");
             }
 
             try {
-                /* Extract format string */
-                const std::string formatStr  = args.at(0)->get<std::string>();
-                QString           qFormatStr = QString::fromStdString(formatStr);
+                const std::string formatStr = args.at(0)->get<std::string>();
+                const auto       &arg       = *args.at(1);
 
-                /* Process each argument and replace placeholders */
-                for (size_t i = 1; i < args.size(); ++i) {
-                    const auto &arg = *args.at(i);
-                    QString     replacement;
+                std::string result;
 
-                    /* Convert argument to string based on its type */
-                    if (arg.is_string()) {
-                        replacement = QString::fromStdString(arg.get<std::string>());
-                    } else if (arg.is_number_integer()) {
-                        replacement = QString::number(arg.get<int64_t>());
-                    } else if (arg.is_number_float()) {
-                        replacement = QString::number(arg.get<double>());
-                    } else if (arg.is_boolean()) {
-                        replacement = arg.get<bool>() ? "true" : "false";
-                    } else if (arg.is_null()) {
-                        replacement = "";
-                    } else {
-                        /* For other types, try to convert to string */
-                        replacement = QString::fromStdString(arg.dump());
-                    }
-
-                    /* Replace positional placeholders {0}, {1}, {2}, etc. */
-                    QString placeholder = QString("{%1}").arg(i - 1);
-                    qFormatStr.replace(placeholder, replacement);
-
-                    /* Replace simple {} placeholders in order */
-                    if (qFormatStr.contains("{}")) {
-                        int pos = qFormatStr.indexOf("{}");
-                        if (pos != -1) {
-                            qFormatStr.replace(pos, 2, replacement);
-                        }
-                    }
+                /* Use fmt::vformat for runtime format strings to avoid consteval issues */
+                if (arg.is_string()) {
+                    std::string str_val = arg.get<std::string>();
+                    result              = fmt::vformat(formatStr, fmt::make_format_args(str_val));
+                } else if (arg.is_number_integer()) {
+                    int64_t int_val = arg.get<int64_t>();
+                    result          = fmt::vformat(formatStr, fmt::make_format_args(int_val));
+                } else if (arg.is_number_float()) {
+                    double double_val = arg.get<double>();
+                    result            = fmt::vformat(formatStr, fmt::make_format_args(double_val));
+                } else if (arg.is_boolean()) {
+                    std::string bool_str = arg.get<bool>() ? "true" : "false";
+                    result               = fmt::vformat(formatStr, fmt::make_format_args(bool_str));
+                } else if (arg.is_null()) {
+                    std::string empty_str = "";
+                    result = fmt::vformat(formatStr, fmt::make_format_args(empty_str));
+                } else {
+                    std::string dump_str = arg.dump();
+                    result               = fmt::vformat(formatStr, fmt::make_format_args(dump_str));
                 }
 
-                /* Handle format specifiers like {:.2f}, {:d}, {:s} */
-                QRegularExpression              formatSpecRegex(R"(\{([^}]*):([^}]+)\})");
-                QRegularExpressionMatchIterator iterator = formatSpecRegex.globalMatch(qFormatStr);
-                QStringList                     matches;
+                return result;
 
-                /* Collect all matches first to avoid iterator invalidation */
-                while (iterator.hasNext()) {
-                    QRegularExpressionMatch match = iterator.next();
-                    matches.append(match.captured(0));
-                }
-
-                /* Process format specifiers */
-                for (const QString &fullMatch : matches) {
-                    QRegularExpressionMatch match = formatSpecRegex.match(fullMatch);
-                    if (match.hasMatch()) {
-                        QString indexStr   = match.captured(1);
-                        QString formatSpec = match.captured(2);
-
-                        /* Determine which argument to format */
-                        size_t argIndex = 1; /* Default to first argument */
-                        if (!indexStr.isEmpty()) {
-                            bool ok;
-                            int  index = indexStr.toInt(&ok);
-                            if (ok && index >= 0) {
-                                argIndex = static_cast<size_t>(index) + 1;
-                            }
-                        }
-
-                        /* Apply format specifier if argument exists */
-                        if (argIndex < args.size()) {
-                            const auto &arg = *args.at(argIndex);
-                            QString     formatted;
-
-                            if (formatSpec.startsWith('.') && formatSpec.endsWith('f')) {
-                                /* Floating point format like .2f */
-                                QString precisionStr = formatSpec.mid(1, formatSpec.length() - 2);
-                                bool    ok;
-                                int     precision = precisionStr.toInt(&ok);
-                                if (ok && arg.is_number()) {
-                                    formatted = QString::number(arg.get<double>(), 'f', precision);
-                                } else {
-                                    formatted = QString::fromStdString(arg.dump());
-                                }
-                            } else if (formatSpec == "d") {
-                                /* Integer format */
-                                if (arg.is_number_integer()) {
-                                    formatted = QString::number(arg.get<int64_t>());
-                                } else if (arg.is_number_float()) {
-                                    formatted = QString::number(
-                                        static_cast<int64_t>(arg.get<double>()));
-                                } else {
-                                    formatted = QString::fromStdString(arg.dump());
-                                }
-                            } else if (formatSpec == "s") {
-                                /* String format */
-                                if (arg.is_string()) {
-                                    formatted = QString::fromStdString(arg.get<std::string>());
-                                } else {
-                                    formatted = QString::fromStdString(arg.dump());
-                                }
-                            } else {
-                                /* Unknown format specifier, use raw value */
-                                if (arg.is_string()) {
-                                    formatted = QString::fromStdString(arg.get<std::string>());
-                                } else {
-                                    formatted = QString::fromStdString(arg.dump());
-                                }
-                            }
-
-                            qFormatStr.replace(fullMatch, formatted);
-                        }
-                    }
-                }
-
-                return nlohmann::json{qFormatStr.toStdString()};
-
+            } catch (const fmt::format_error &e) {
+                qWarning() << QCoreApplication::translate("generate", "Warning: fmt format error: %1")
+                                  .arg(e.what());
+                return std::string("");
             } catch (const std::exception &e) {
                 qWarning() << QCoreApplication::translate("generate", "Warning: Error in format: %1")
                                   .arg(e.what());
-                return nlohmann::json{""};
+                return std::string("");
             }
         });
 

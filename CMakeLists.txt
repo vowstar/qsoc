@@ -289,6 +289,21 @@ else()
     message(STATUS "Use local systemrdl library: ${SYSTEMRDL_LIBRARIES} ${SYSTEMRDL_INCLUDE_DIRS}")
 endif()
 
+# FMT
+pkg_check_modules(FMT IMPORTED_TARGET fmt>=10.0.0)
+if (FMT_FOUND)
+    message(STATUS "Use system fmt library: ${FMT_LIBRARIES} ${FMT_VERSION}")
+else()
+    set(FMT_INSTALL OFF CACHE BOOL "disable fmt install")
+    set(FMT_TEST OFF CACHE BOOL "disable fmt tests")
+    add_subdirectory(external/fmt)
+    set(FMT_INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/fmt/include"
+    )
+    set(FMT_LIBRARIES fmt::fmt)
+    message(STATUS "Use local fmt library: ${FMT_LIBRARIES} ${FMT_INCLUDE_DIRS}")
+endif()
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "resource/*.qrc")
@@ -354,6 +369,7 @@ target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     "${BIGINT_INCLUDE_DIRS}"
     "${ANTLR4_INCLUDE_DIRS}"
     "${SYSTEMRDL_INCLUDE_DIRS}"
+    "${FMT_INCLUDE_DIRS}"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -376,6 +392,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${BIGINT_LIBRARIES}
     ${ANTLR4_LIBRARIES}
     ${SYSTEMRDL_LIBRARIES}
+    ${FMT_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

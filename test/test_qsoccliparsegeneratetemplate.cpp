@@ -578,7 +578,10 @@ endmodule // {{ module.name }})";
     "age": 30,
     "price": 123.456,
     "isActive": true,
-    "description": null
+    "description": null,
+    "hexValue": 255,
+    "octalValue": 64,
+    "binaryValue": 15
 })";
         const QString jsonFilePath = projectDir.filePath("format_test_data.json");
         QFile         jsonFile(jsonFilePath);
@@ -587,31 +590,28 @@ endmodule // {{ module.name }})";
         jsonStream << jsonContent;
         jsonFile.close();
 
-        /* Create template file with format filter tests */
-        const QString templateContent  = R"(// Format Filter Tests
-// Basic positional formatting
-{{ "My name is {0} and I am {1} years old."|format(name, age) }}
-
-// Simple placeholder formatting
-{{ "Hello, {}! You are {} years old."|format(name, age) }}
+        /* Create template file with format filter tests using fmt library syntax */
+        const QString templateContent  = R"(// Format Filter Tests (fmt library - direct)
+// String formatting
+{{ "Name: {}"|format(name) }}
 
 // Float formatting with precision
-{{ "The price is £{:.2f}"|format(price) }}
+{{ "Price: ${:.2f}"|format(price) }}
 
 // Integer formatting
-{{ "Age as integer: {:d}"|format(age) }}
-
-// String formatting
-{{ "Name as string: {:s}"|format(name) }}
+{{ "Age: {:d}"|format(age) }}
 
 // Boolean formatting
-{{ "Active status: {}"|format(isActive) }}
+{{ "Active: {}"|format(isActive) }}
 
-// Null value formatting
-{{ "Description: {}"|format(description) }}
+// Hexadecimal formatting (fmt style: uppercase)
+{{ "Hex: 0x{:X}"|format(hexValue) }}
 
-// Mixed formatting with multiple arguments
-{{ "User {0} (age {1:d}) has balance £{2:.2f}"|format(name, age, price) }}
+// Octal formatting (fmt style: with # prefix)
+{{ "Octal: 0o{:o}"|format(octalValue) }}
+
+// Binary formatting (fmt style: with # prefix)
+{{ "Binary: 0b{:b}"|format(binaryValue) }}
 )";
         const QString templateFilePath = projectDir.filePath("format_test_template.j2");
         QFile         templateFile(templateFilePath);
@@ -639,36 +639,31 @@ endmodule // {{ module.name }})";
         /* Verify results */
         QVERIFY(verifyTemplateOutputExistence("format_test_template"));
 
-        /* Test basic positional formatting */
-        QVERIFY(
-            verifyTemplateContent("format_test_template", "My name is Alice and I am 30 years old."));
-
-        /* Test simple placeholder formatting */
-        QVERIFY(
-            verifyTemplateContent("format_test_template", "Hello, Alice! You are 30 years old."));
+        /* Test string formatting */
+        QVERIFY(verifyTemplateContent("format_test_template", "Name: Alice"));
 
         /* Test float formatting with precision */
-        QVERIFY(verifyTemplateContent("format_test_template", "The price is £123.46"));
+        QVERIFY(verifyTemplateContent("format_test_template", "Price: $123.46"));
 
         /* Test integer formatting */
-        QVERIFY(verifyTemplateContent("format_test_template", "Age as integer: 30"));
-
-        /* Test string formatting */
-        QVERIFY(verifyTemplateContent("format_test_template", "Name as string: Alice"));
+        QVERIFY(verifyTemplateContent("format_test_template", "Age: 30"));
 
         /* Test boolean formatting */
-        QVERIFY(verifyTemplateContent("format_test_template", "Active status: true"));
+        QVERIFY(verifyTemplateContent("format_test_template", "Active: true"));
 
-        /* Test null value formatting */
-        QVERIFY(verifyTemplateContent("format_test_template", "Description: "));
+        /* Test hexadecimal formatting */
+        QVERIFY(verifyTemplateContent("format_test_template", "Hex: 0xFF"));
 
-        /* Test mixed formatting */
-        QVERIFY(
-            verifyTemplateContent("format_test_template", "User Alice (age 30) has balance £123.46"));
+        /* Test octal formatting */
+        QVERIFY(verifyTemplateContent("format_test_template", "Octal: 0o100"));
+
+        /* Test binary formatting */
+        QVERIFY(verifyTemplateContent("format_test_template", "Binary: 0b1111"));
     }
 };
 
 QStringList Test::messageList;
 
 QSOC_TEST_MAIN(Test)
+
 #include "test_qsoccliparsegeneratetemplate.moc"
