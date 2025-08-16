@@ -435,6 +435,7 @@ if(CPPCHECK_COMMAND)
     message(STATUS "Found cppcheck: ${CPPCHECK_COMMAND}")
     add_custom_target(
         cppcheck
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/cppcheck
         COMMAND ${CPPCHECK_COMMAND}
             --enable=all
             --inconclusive
