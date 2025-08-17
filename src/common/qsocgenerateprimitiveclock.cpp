@@ -554,7 +554,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             QString icgOutput = QString("%1_icg_out").arg(target.name);
             out << "    wire " << icgOutput << ";\n";
             out << "    qsoc_tc_clk_gate #(\n";
-            out << "        .enable_reset(1'b0)\n";
+            out << "        .CLOCK_DURING_RESET(1'b0)\n";
             out << "    ) " << instanceName << "_icg (\n";
             out << "        .clk(" << currentSignal << "),\n";
             out << "        .en(" << target.icg.enable << "),\n";
@@ -584,7 +584,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             out << "    qsoc_clk_div #(\n";
             out << "        .WIDTH(" << target.div.width << "),\n";
             out << "        .DEFAULT_VAL(" << target.div.default_val << "),\n";
-            out << "        .ENABLE_RESET(" << (target.div.clock_on_reset ? "1'b1" : "1'b0")
+            out << "        .CLOCK_DURING_RESET(" << (target.div.clock_on_reset ? "1'b1" : "1'b0")
                 << ")\n";
             out << "    ) " << instanceName << "_div (\n";
             out << "        .clk(" << currentSignal << "),\n";
@@ -677,7 +677,7 @@ void QSocClockPrimitive::generateClockInstance(
             QString icgWire = wireName + "_preicg";
             out << "    wire " << icgWire << ";\n";
             out << "    qsoc_tc_clk_gate #(\n";
-            out << "        .enable_reset(1'b0)\n";
+            out << "        .CLOCK_DURING_RESET(1'b0)\n";
             out << "    ) " << instanceName << "_icg (\n";
             out << "        .clk(" << currentWire << "),\n";
             out << "        .en(" << link.icg.enable << "),\n";
@@ -705,7 +705,8 @@ void QSocClockPrimitive::generateClockInstance(
             out << "    qsoc_clk_div #(\n";
             out << "        .WIDTH(" << link.div.width << "),\n";
             out << "        .DEFAULT_VAL(" << link.div.default_val << "),\n";
-            out << "        .ENABLE_RESET(" << (link.div.clock_on_reset ? "1'b1" : "1'b0") << ")\n";
+            out << "        .CLOCK_DURING_RESET(" << (link.div.clock_on_reset ? "1'b1" : "1'b0")
+                << ")\n";
             out << "    ) " << instanceName << "_div (\n";
             out << "        .clk(" << currentWire << "),\n";
             out << "        .rst_n(" << (link.div.reset.isEmpty() ? "1'b1" : link.div.reset)
@@ -987,6 +988,7 @@ bool QSocClockPrimitive::isClockCellFileComplete(const QString &filePath)
 QStringList QSocClockPrimitive::getRequiredTemplateCells()
 {
     return {
+        "qsoc_tc_clk_buf",
         "qsoc_tc_clk_gate",
         "qsoc_tc_clk_inv",
         "qsoc_tc_clk_or2",
@@ -1003,7 +1005,21 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
     QString     result;
     QTextStream out(&result);
 
-    if (cellName == "qsoc_tc_clk_gate") {
+    if (cellName == "qsoc_tc_clk_buf") {
+        out << "/**\n";
+        out << " * @brief Clock buffer cell module\n";
+        out << " *\n";
+        out << " * @details Template implementation of clock buffer cell.\n";
+        out << " */\n";
+        out << "module qsoc_tc_clk_buf (\n";
+        out << "    input  wire clk,      /**< Clock input */\n";
+        out << "    output wire clk_out   /**< Clock output */\n";
+        out << ");\n";
+        out << "    /* Template implementation - replace with foundry-specific IP */\n";
+        out << "    assign clk_out = clk;\n";
+        out << "endmodule\n";
+
+    } else if (cellName == "qsoc_tc_clk_gate") {
         out << "/**\n";
         out << " * @brief Clock gate cell module\n";
         out << " *\n";
@@ -1011,7 +1027,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
                "support.\n";
         out << " */\n";
         out << "module qsoc_tc_clk_gate #(\n";
-        out << "    parameter enable_reset = 1'b0\n";
+        out << "    parameter CLOCK_DURING_RESET = 1'b0\n";
         out << ")(\n";
         out << "    input  wire clk,        /**< Clock input */\n";
         out << "    input  wire en,         /**< Clock enable */\n";
@@ -1021,8 +1037,8 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << ");\n";
         out << "    /* Template implementation - replace with foundry-specific IP */\n";
         out << "    wire final_en;\n";
-        out << "    // Force enable when test_en or (reset and enable_reset parameter)\n";
-        out << "    assign final_en = test_en | (!rst_n & enable_reset) | (rst_n & en);\n";
+        out << "    // Force enable when test_en or (reset and CLOCK_DURING_RESET parameter)\n";
+        out << "    assign final_en = test_en | (!rst_n & CLOCK_DURING_RESET) | (rst_n & en);\n";
         out << "    assign clk_out = clk & final_en;\n";
         out << "endmodule\n";
 
@@ -1098,7 +1114,8 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    parameter integer WIDTH = 4,           /**< Division value width */\n";
         out << "    parameter integer DEFAULT_VAL = 0,     /**< Default divider value after reset "
                "*/\n";
-        out << "    parameter ENABLE_RESET = 1'b0          /**< Enable clock during reset */\n";
+        out << "    parameter CLOCK_DURING_RESET = 1'b0          /**< Enable clock during reset "
+               "*/\n";
         out << ")(\n";
         out << "    input  wire                clk,        /**< Clock input */\n";
         out << "    input  wire                rst_n,      /**< Reset (active low) */\n";
@@ -1235,7 +1252,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "            clk_div_bypass_en_q <= clk_div_bypass_en_reset_value;\n";
         out << "            div_q <= div_reset_value;\n";
         out << "            clk_gate_state_q <= IDLE;\n";
-        out << "            gate_en_q <= ENABLE_RESET;\n";
+        out << "            gate_en_q <= CLOCK_DURING_RESET;\n";
         out << "        end else begin\n";
         out << "            use_odd_division_q <= use_odd_division_d;\n";
         out << "            clk_div_bypass_en_q <= clk_div_bypass_en_d;\n";
@@ -1353,7 +1370,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "\n";
         out << "    /* Final clock gate for glitch protection */\n";
         out << "    qsoc_tc_clk_gate #(\n";
-        out << "        .enable_reset(1'b1)\n";
+        out << "        .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
         out << "    ) i_clk_gate (\n";
         out << "        .clk(ungated_output_clock),\n";
         out << "        .en(gate_en_q & en),\n";
@@ -1499,7 +1516,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        \n";
         out << "        // Clock gating using dedicated clock gate cell\n";
         out << "        qsoc_tc_clk_gate #(\n";
-        out << "            .enable_reset(1'b0)\n";
+        out << "            .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
         out << "        ) i_clk_gate (\n";
         out << "            .clk(clk_in[i]),\n";
         out << "            .en(gate_enable[i]),\n";
