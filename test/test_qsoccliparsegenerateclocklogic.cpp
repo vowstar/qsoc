@@ -303,6 +303,7 @@ clock:
         freq: 200MHz
         div:                   # Target-level divider (KISS format)
           ratio: 4
+          width: 3             # Required: divider width in bits
           reset: rst_n
         link:
           pll_800m:            # Direct connection
@@ -333,7 +334,7 @@ clock:
 
         /* Verify the generated content contains expected clock logic */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".width"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".WIDTH(3)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_n(rst_n)"));
 
         // clock_cell.v should be created and complete
@@ -372,6 +373,7 @@ clock:
           osc_24m:
             div:
               ratio: 2
+              width: 2           # Required: divider width in bits
               reset: rst_n
             inv:
 )";
@@ -401,7 +403,7 @@ clock:
 
         /* Verify the generated content contains expected clock logic */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(8'd2)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(2'd2)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "~clk_slow_clk_n_from_osc_24m"));
 
         // clock_cell.v should be created and complete
@@ -446,6 +448,7 @@ clock:
         freq: 100MHz
         div:                    # Target-level divider (KISS format)
           ratio: 8
+          width: 4              # Required: divider width in bits
           reset: rst_n
         link:
           pll_800m:             # Direct connection
@@ -779,6 +782,7 @@ clock:
         freq: 40MHz
         div:
           ratio: 10
+          width: 4              # Required: divider width in bits
           reset: rst_n
         link:
           pll_400m:            # External source (not defined as target)
@@ -819,7 +823,7 @@ clock:
         /* Verify the generated content handles same-name correctly */
         // Should have sys_clk divider instance
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(8'd10)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(4'd10)"));
 
         // Should have cpu_clk ICG instance
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));

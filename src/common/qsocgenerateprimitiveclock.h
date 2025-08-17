@@ -60,21 +60,37 @@ public:
      */
     struct ClockDivider
     {
-        int     ratio = 1;   // Division ratio (default 1 = no division)
-        QString reset;       // Reset signal name (active-low default)
-        QString test_enable; // Test enable signal (optional)
+        // Core parameters (required for proper operation)
+        int ratio = 1; // Division ratio (default 1 = no division)
+        int width = 0; // Divider width in bits (0 = error, must be specified)
+
+        // Optional configuration parameters
+        int  default_val    = 0;     // Reset default value (default 0)
+        bool clock_on_reset = false; // Enable clock output during reset (default false)
+
+        // Control signals (empty string = use safe defaults)
+        QString reset;       // Reset signal name (empty = 1'b1)
+        QString enable;      // Enable signal name (empty = 1'b1)
+        QString test_enable; // Test enable signal (empty = use global or 1'b0)
+
+        // Dynamic configuration interface (empty = not connected)
+        QString div_signal; // Dynamic division ratio input (empty = use static ratio)
+        QString div_valid;  // Division value valid signal (empty = 1'b1)
+        QString div_ready;  // Division ready output signal (empty = unconnected)
+        QString count;      // Cycle counter output (empty = unconnected)
     };
 
     /**
-     * @brief Clock multiplexer configuration
+     * @brief Clock multiplexer configuration - DEPRECATED
+     * Use target-level signals (select, reset, test_enable, test_clock) instead
      */
     struct ClockMux
     {
-        MuxType type;        // STD_MUX or GF_MUX (auto-selected based on reset presence)
-        QString select;      // Mux select signal
-        QString reset;       // Reset signal name (GF_MUX only, active-low default)
-        QString test_enable; // DFT test enable signal (GF_MUX only, optional)
-        QString test_clock;  // DFT test clock signal (GF_MUX only, optional)
+        MuxType type = STD_MUX; // Auto-selected based on reset presence, kept for compatibility
+        QString select;         // DEPRECATED: use target.select
+        QString reset;          // DEPRECATED: use target.reset
+        QString test_enable;    // DEPRECATED: use target.test_enable
+        QString test_clock;     // DEPRECATED: use target.test_clock
     };
 
     /**
@@ -96,11 +112,17 @@ public:
         QString          name;        // Target clock signal name
         QString          freq;        // Target frequency for SDC generation
         QList<ClockLink> links;       // List of source connections
-        ClockMux         mux;         // Multiplexer configuration (if ≥2 links)
+        ClockMux         mux;         // Multiplexer configuration (if ≥2 links) - DEPRECATED
         ClockGate        icg;         // Target-level ICG (KISS format)
         ClockDivider     div;         // Target-level divider (KISS format)
         bool             inv = false; // Target-level inverter (KISS format)
         QString          comment;     // Optional comment
+
+        // Target-level MUX signals (new format per documentation)
+        QString select;      // MUX select signal (required for ≥2 links)
+        QString reset;       // Reset signal for GF_MUX auto-selection (optional)
+        QString test_enable; // DFT test enable signal (GF_MUX only, optional)
+        QString test_clock;  // DFT test clock signal (GF_MUX only, optional)
     };
 
     /**
