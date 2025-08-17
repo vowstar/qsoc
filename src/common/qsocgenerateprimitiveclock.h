@@ -81,6 +81,17 @@ public:
     };
 
     /**
+     * @brief Clock STA guide configuration
+     */
+    struct ClockSTAGuide
+    {
+        QString cell;     // Foundry cell name (e.g., TSMC_CKBUF)
+        QString in;       // Input port name (e.g., I)
+        QString out;      // Output port name (e.g., Z)
+        QString instance; // Instance name (e.g., u_cpu_clk_sta_guide)
+    };
+
+    /**
      * @brief Clock multiplexer configuration - DEPRECATED
      * Use target-level signals (select, reset, test_enable, test_clock) instead
      */
@@ -98,10 +109,11 @@ public:
      */
     struct ClockLink
     {
-        QString      source;      // Source clock name
-        ClockGate    icg;         // ICG configuration (KISS format)
-        ClockDivider div;         // Divider configuration (KISS format)
-        bool         inv = false; // Inverter flag (KISS format)
+        QString       source;      // Source clock name
+        ClockGate     icg;         // ICG configuration
+        ClockDivider  div;         // Divider configuration
+        bool          inv = false; // Inverter flag
+        ClockSTAGuide sta_guide;   // STA guide buffer configuration
     };
 
     /**
@@ -113,9 +125,10 @@ public:
         QString          freq;        // Target frequency for SDC generation
         QList<ClockLink> links;       // List of source connections
         ClockMux         mux;         // Multiplexer configuration (if ≥2 links) - DEPRECATED
-        ClockGate        icg;         // Target-level ICG (KISS format)
-        ClockDivider     div;         // Target-level divider (KISS format)
-        bool             inv = false; // Target-level inverter (KISS format)
+        ClockGate        icg;         // Target-level ICG
+        ClockDivider     div;         // Target-level divider
+        bool             inv = false; // Target-level inverter
+        ClockSTAGuide    sta_guide;   // Target-level STA guide buffer
         QString          comment;     // Optional comment
 
         // Target-level MUX signals (new format per documentation)

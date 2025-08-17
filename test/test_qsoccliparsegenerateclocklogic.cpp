@@ -836,6 +836,168 @@ clock:
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
+
+    void test_target_level_sta_guide()
+    {
+        // Test target-level STA guide buffer
+        QString netlistContent = R"(
+port:
+  osc_24m:
+    direction: input
+    type: logic
+  cpu_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_clk_ctrl
+    clock: clk_sys
+    input:
+      osc_24m:
+        freq: 24MHz
+    target:
+      cpu_clk:
+        freq: 24MHz
+        sta_guide:
+          cell: TSMC_CKBUF_X2
+          in: I
+          out: Z
+          instance: u_cpu_clk_sta_guide
+        link:
+          osc_24m:            # Direct pass-through
+)";
+
+        QString netlistPath = createTempFile("test_target_sta_guide.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_target_sta_guide.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify the generated content contains STA guide buffer */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "TSMC_CKBUF_X2"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "u_cpu_clk_target_sta"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".I(clk_cpu_clk_from_osc_24m)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".Z(cpu_clk_sta_out)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign cpu_clk = cpu_clk_sta_out"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
+    }
+
+    void test_link_level_sta_guide()
+    {
+        // Test link-level STA guide buffer with processing chain
+        QString netlistContent = R"(
+port:
+  pll_800m:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  cpu_en:
+    direction: input
+    type: logic
+  cpu_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_clk_ctrl
+    clock: clk_sys
+    input:
+      pll_800m:
+        freq: 800MHz
+    target:
+      cpu_clk:
+        freq: 200MHz
+        link:
+          pll_800m:
+            icg:
+              enable: cpu_en
+              reset: rst_n
+            div:
+              ratio: 4
+              width: 3
+              reset: rst_n
+            inv:
+            sta_guide:
+              cell: FOUNDRY_GUIDE_BUF
+              in: A
+              out: Y
+              instance: u_pll_cpu_sta
+)";
+
+        QString netlistPath = createTempFile("test_link_sta_guide.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_link_sta_guide.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify the generated content contains processing chain with STA guide */
+        // Should have ICG
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(cpu_en)"));
+
+        // Should have divider
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(3'd4)"));
+
+        // Should have inverter
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
+
+        // Should have STA guide at the end
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "FOUNDRY_GUIDE_BUF"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "u_cpu_clk_pll_800m_sta"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".A("));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".Y("));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
+    }
 };
 
 QStringList Test::messageList;

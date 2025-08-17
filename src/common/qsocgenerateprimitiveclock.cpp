@@ -51,7 +51,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
 {
     ClockControllerConfig config;
 
-    // Parse basic properties (KISS: require explicit values)
+    // Parse basic properties
     if (!clockNode["name"]) {
         qCritical() << "Error: 'name' field is required in clock configuration";
         qCritical() << "Example: clock: { name: my_clk_ctrl, ... }";
@@ -105,7 +105,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 target.freq = QString::fromStdString(it->second["freq"].as<std::string>());
             }
 
-            // Parse target-level ICG (KISS format)
+            // Parse target-level ICG
             if (it->second["icg"] && it->second["icg"].IsMap()) {
                 if (it->second["icg"]["enable"]) {
                     target.icg.enable = QString::fromStdString(
@@ -123,7 +123,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 }
             }
 
-            // Parse target-level divider (KISS format)
+            // Parse target-level divider
             if (it->second["div"] && it->second["div"].IsMap()) {
                 target.div.ratio          = it->second["div"]["ratio"].as<int>(1);
                 target.div.width          = it->second["div"]["width"].as<int>(0);
@@ -160,7 +160,27 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 }
             }
 
-            // Parse target-level inverter (KISS format) - key existence only
+            // Target-level STA guide configuration
+            if (it->second["sta_guide"] && it->second["sta_guide"].IsMap()) {
+                if (it->second["sta_guide"]["cell"]) {
+                    target.sta_guide.cell = QString::fromStdString(
+                        it->second["sta_guide"]["cell"].as<std::string>());
+                }
+                if (it->second["sta_guide"]["in"]) {
+                    target.sta_guide.in = QString::fromStdString(
+                        it->second["sta_guide"]["in"].as<std::string>());
+                }
+                if (it->second["sta_guide"]["out"]) {
+                    target.sta_guide.out = QString::fromStdString(
+                        it->second["sta_guide"]["out"].as<std::string>());
+                }
+                if (it->second["sta_guide"]["instance"]) {
+                    target.sta_guide.instance = QString::fromStdString(
+                        it->second["sta_guide"]["instance"].as<std::string>());
+                }
+            }
+
+            // Parse target-level inverter - key existence only
             target.inv = it->second["inv"] ? true : false;
 
             // Parse links
@@ -170,14 +190,14 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     ClockLink link;
                     link.source = QString::fromStdString(linkIt->first.as<std::string>());
 
-                    // KISS format: link-level inverter flag - key existence only
+                    // Link-level inverter flag - key existence only
                     if (linkIt->second.IsMap() && linkIt->second["inv"]) {
                         link.inv = true;
                     } else {
                         link.inv = false;
                     }
 
-                    // KISS format: link-level ICG configuration
+                    // Link-level ICG configuration
                     if (linkIt->second.IsMap() && linkIt->second["icg"]
                         && linkIt->second["icg"].IsMap()) {
                         if (linkIt->second["icg"]["enable"]) {
@@ -196,7 +216,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                         }
                     }
 
-                    // KISS format: link-level divider configuration
+                    // Link-level divider configuration
                     if (linkIt->second.IsMap() && linkIt->second["div"]
                         && linkIt->second["div"].IsMap()) {
                         link.div.ratio          = linkIt->second["div"]["ratio"].as<int>(1);
@@ -235,6 +255,27 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                         }
                     }
 
+                    // Link-level STA guide configuration
+                    if (linkIt->second.IsMap() && linkIt->second["sta_guide"]
+                        && linkIt->second["sta_guide"].IsMap()) {
+                        if (linkIt->second["sta_guide"]["cell"]) {
+                            link.sta_guide.cell = QString::fromStdString(
+                                linkIt->second["sta_guide"]["cell"].as<std::string>());
+                        }
+                        if (linkIt->second["sta_guide"]["in"]) {
+                            link.sta_guide.in = QString::fromStdString(
+                                linkIt->second["sta_guide"]["in"].as<std::string>());
+                        }
+                        if (linkIt->second["sta_guide"]["out"]) {
+                            link.sta_guide.out = QString::fromStdString(
+                                linkIt->second["sta_guide"]["out"].as<std::string>());
+                        }
+                        if (linkIt->second["sta_guide"]["instance"]) {
+                            link.sta_guide.instance = QString::fromStdString(
+                                linkIt->second["sta_guide"]["instance"].as<std::string>());
+                        }
+                    }
+
                     target.links.append(link);
                 }
             }
@@ -257,7 +298,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                         it->second["test_clock"].as<std::string>());
                 }
 
-                // Auto-select mux type based on reset presence (KISS principle)
+                // Auto-select mux type based on reset presence
                 if (!target.reset.isEmpty()) {
                     target.mux.type = GF_MUX; // Has reset → Glitch-free mux
                 } else {
@@ -636,6 +677,17 @@ void QSocClockPrimitive::generateOutputAssignments(
             currentSignal = invOutput;
         }
 
+        // Target-level STA guide
+        if (!target.sta_guide.cell.isEmpty()) {
+            QString staOutput = QString("%1_sta_out").arg(target.name);
+            out << "    wire " << staOutput << ";\n";
+            out << "    " << target.sta_guide.cell << " " << instanceName << "_sta (\n";
+            out << "        ." << target.sta_guide.in << "(" << currentSignal << "),\n";
+            out << "        ." << target.sta_guide.out << "(" << staOutput << ")\n";
+            out << "    );\n";
+            currentSignal = staOutput;
+        }
+
         // Final assignment
         out << "    assign " << target.name << " = " << currentSignal << ";\n";
     }
@@ -653,7 +705,7 @@ void QSocClockPrimitive::generateClockInstance(
     out << "    /*\n";
     out << "     * Link processing: " << link.source << " -> " << targetName;
 
-    // KISS format: generate chain based on what's specified
+    // Generate chain based on what's specified
     if (!link.icg.enable.isEmpty()) {
         out << " (icg)";
     }
@@ -665,7 +717,7 @@ void QSocClockPrimitive::generateClockInstance(
     }
     out << "\n     */\n";
 
-    // KISS format: generate processing chain
+    // Generate processing chain
     bool hasProcessing = !link.icg.enable.isEmpty() || (link.div.ratio > 1) || link.inv;
 
     if (hasProcessing) {
@@ -746,13 +798,28 @@ void QSocClockPrimitive::generateClockInstance(
 
         // Step 3: Link-level inverter
         if (link.inv) {
+            QString invWire = QString("%1_inv_wire").arg(instanceName);
+            out << "    wire " << invWire << ";\n";
             out << "    qsoc_tc_clk_inv " << instanceName << "_inv (\n";
             out << "        .clk_in(" << currentWire << "),\n";
-            out << "        .clk_out(" << wireName << ")\n";
+            out << "        .clk_out(" << invWire << ")\n";
             out << "    );\n";
-        } else {
-            out << "    assign " << wireName << " = " << currentWire << ";\n";
+            currentWire = invWire;
         }
+
+        // Step 4: Link-level STA guide
+        if (!link.sta_guide.cell.isEmpty()) {
+            QString staWire = QString("%1_sta_wire").arg(instanceName);
+            out << "    wire " << staWire << ";\n";
+            out << "    " << link.sta_guide.cell << " " << instanceName << "_sta (\n";
+            out << "        ." << link.sta_guide.in << "(" << currentWire << "),\n";
+            out << "        ." << link.sta_guide.out << "(" << staWire << ")\n";
+            out << "    );\n";
+            currentWire = staWire;
+        }
+
+        // Final assignment
+        out << "    assign " << wireName << " = " << currentWire << ";\n";
 
     } else {
         // Simple pass-through case
@@ -858,7 +925,7 @@ QSocClockPrimitive::MuxType QSocClockPrimitive::parseMuxType(const QString &type
     if (typeStr == "GF_MUX")
         return GF_MUX;
 
-    // KISS: Validate mux type
+    // Validate mux type
     qCritical() << "Error: Unknown mux type:" << typeStr;
     qCritical() << "Valid types: STD_MUX, GF_MUX";
     return STD_MUX; // Still return something for compilation
