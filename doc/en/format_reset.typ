@@ -25,9 +25,12 @@ reset:
     clock: clk_sys                 # Clock for synchronous reset operations
     test_enable: test_en           # Test enable bypass signal (optional)
     source:                        # Reset source definitions (singular)
-      por_rst_n: low               # Active low reset source
-      i3c_soc_rst: high            # Active high reset source
-      trig_rst: low                # Trigger-based reset (active low)
+      por_rst_n:
+        active: low                # Active low reset source
+      i3c_soc_rst:
+        active: high               # Active high reset source
+      trig_rst:
+        active: low                # Trigger-based reset (active low)
     target:                        # Reset target definitions (singular)
       cpu_rst_n:
         active: low                # Active low target output
@@ -131,7 +134,7 @@ Reset controller properties provide structured configuration:
 
 === Source Properties
 <soc-net-reset-source-properties>
-Reset sources define input reset signals with simple polarity specification:
+Reset sources define input reset signals with structured polarity specification:
 
 #figure(
   align(center)[#table(
@@ -175,10 +178,14 @@ Enable reset reason recording with the simplified configuration format:
 reset:
   - name: my_reset_ctrl
     source:
-      por_rst_n: low              # Root reset (excluded from bit vector)
-      ext_rst_n: low              # bit[0]
-      wdt_rst_n: low              # bit[1]
-      i3c_soc_rst: high           # bit[2]
+      por_rst_n:
+        active: low               # Root reset (excluded from bit vector)
+      ext_rst_n:
+        active: low               # bit[0]
+      wdt_rst_n:
+        active: low               # bit[1]
+      i3c_soc_rst:
+        active: high              # bit[2]
 
     # Simplified reason configuration
     reason:

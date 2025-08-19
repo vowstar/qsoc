@@ -153,7 +153,8 @@ reset:
     clock: clk_sys
     test_enable: test_en
     source:
-      por_rst_n: low
+      por_rst_n:
+        active: low
     target:
       cpu_rst_n:
         active: low
@@ -233,7 +234,8 @@ reset:
     clock: clk_sys
     test_enable: test_en
     source:
-      i3c_soc_rst: high
+      i3c_soc_rst:
+        active: high
     target:
       cpu_rst_n:
         active: low
@@ -304,7 +306,8 @@ reset:
     clock: clk_sys
     test_enable: test_en
     source:
-      por_rst_n: low
+      por_rst_n:
+        active: low
     target:
       cpu_por_rst_n:
         active: low
@@ -385,9 +388,12 @@ reset:
     clock: clk_sys
     test_enable: test_en
     source:
-      por_rst_n: low
-      i3c_soc_rst: high
-      trig_cpu_rst: high
+      por_rst_n:
+        active: low
+      i3c_soc_rst:
+        active: high
+      trig_cpu_rst:
+        active: high
     target:
       cpu_rst_n:
         active: low
@@ -492,7 +498,8 @@ reset:
     clock: clk_sys
     test_enable: test_en
     source:
-      sync_rst_n: low
+      sync_rst_n:
+        active: low
     target:
       peri_rst_n:
         active: low
@@ -565,7 +572,8 @@ reset:
     clock: clk_sys
     test_enable: test_en
     source:
-      trig_rst: low
+      trig_rst:
+        active: low
     target:
       dma_rst_n:
         active: low
@@ -662,10 +670,14 @@ reset:
     test_enable: test_en
     
     source:
-      por_rst_n: low              # POR (auto-detected, not in bit vector)
-      ext_rst_n: low              # bit[0] 
-      wdt_rst_n: low              # bit[1]
-      i3c_soc_rst: high           # bit[2]
+      por_rst_n:
+        active: low               # POR (auto-detected, not in bit vector)
+      ext_rst_n:
+        active: low               # bit[0] 
+      wdt_rst_n:
+        active: low               # bit[1]
+      i3c_soc_rst:
+        active: high              # bit[2]
     
     target:
       sys_rst_n:
@@ -828,9 +840,12 @@ reset:
     clock: clk_sys
     test_enable: test_en
     source:
-      por_rst_n: low
-      ext_rst: high
-      wdt_rst_n: low
+      por_rst_n:
+        active: low
+      ext_rst:
+        active: high
+      wdt_rst_n:
+        active: low
     target:
       cpu_rst_n:
         active: low

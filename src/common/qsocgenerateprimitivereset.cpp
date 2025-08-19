@@ -76,13 +76,11 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
 
             if (it->second.IsMap() && it->second["active"]) {
                 source.active = QString::fromStdString(it->second["active"].as<std::string>());
-            } else if (it->second.IsScalar()) {
-                source.active = QString::fromStdString(it->second.as<std::string>());
             } else {
                 qCritical() << "Error: 'active' field is required for source '" << source.name
                             << "'";
                 qCritical() << "Please specify active level explicitly: 'high' or 'low'";
-                qCritical() << "Example: source: { " << source.name << ": low }";
+                qCritical() << "Example: source: { " << source.name << ": {active: low} }";
                 return config;
             }
 
