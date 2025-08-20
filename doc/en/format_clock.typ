@@ -539,6 +539,28 @@ All templates use pure Verilog 2005 syntax with behavioral models:
 
 Template cells must be replaced with foundry-specific implementations before production use.
 
+== SIGNAL DEDUPLICATION
+<soc-net-clock-signal-dedup>
+Clock generators implement automatic signal deduplication to prevent duplicate port declarations in generated Verilog modules.
+
+=== Deduplication Features
+<soc-net-clock-dedup-features>
+- Port deduplication: Same-name signals appear only once in module ports
+- Output-priority: Output signals take precedence over input signals when conflicts occur
+- QSet-based tracking: Efficient duplicate detection across all signal types
+- Parameter unification: All qsoc_tc_clk_gate instances use CLOCK_DURING_RESET parameter
+- Error detection: Duplicate output target names generate ERROR messages
+
+=== Implementation Details
+<soc-net-clock-dedup-details>
+The deduplication system uses QSet containers to track signal names across:
+- ICG control signals (enable, test_enable, reset)
+- MUX control signals (select, reset, test_enable, test_clock)
+- Divider control signals (division ratio, enable, reset)
+- Clock input signals (skips duplicates with default clock)
+
+When the same signal name is used across multiple targets, only one port declaration is generated in the final Verilog module.
+
 == CODE GENERATION
 <soc-net-clock-generation>
 Clock controllers generate standalone modules that provide clean clock management infrastructure.

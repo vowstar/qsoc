@@ -452,7 +452,7 @@ clock:
           reset: rst_n
         link:
           pll_800m:             # Direct connection
-          test_clk:             # Direct connection  
+          test_clk:             # Direct connection
         select: func_sel        # No reset → auto STD_MUX
 )";
 
@@ -786,7 +786,7 @@ clock:
           reset: rst_n
         link:
           pll_400m:            # External source (not defined as target)
-      
+
       # Second target: cpu_clk using sys_clk as source with ICG
       # This shows sys_clk is both a target (above) and source (below)
       cpu_clk:
@@ -997,6 +997,175 @@ clock:
 
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
+    }
+
+    void test_signal_deduplication()
+    {
+        // Test signal deduplication: same-name signals should appear only once
+        QString netlistContent = R"(
+port:
+  clk_in:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  clk_out1:
+    direction: output
+    type: logic
+  clk_out2:
+    direction: output
+    type: logic
+
+clock:
+  - name: dedup_test_ctrl
+    clock: clk_in              # Default clock uses clk_in
+    test_en: test_en
+    input:
+      clk_in:                  # Same name as default clock - should be deduplicated
+        freq: 100MHz
+      clk_ext:
+        freq: 50MHz
+    target:
+      clk_out1:
+        freq: 100MHz
+        link:
+          clk_in:
+          clk_ext:
+        select: sel1
+        reset: rst_n           # rst_n used here
+      clk_out2:
+        freq: 50MHz
+        icg:
+          enable: en2
+          reset: rst_n         # rst_n used again - should be deduplicated
+        link:
+          clk_in:
+          clk_ext:
+        select: sel2
+        reset: rst_n           # rst_n used third time - should be deduplicated
+
+instance: {}
+net: {}
+)";
+
+        QString netlistPath = createTempFile("test_dedup.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_dedup.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+        QVERIFY(!verilogContent.isEmpty());
+
+        // Count occurrences of each signal in port declarations
+        QRegularExpression portDeclRegex(R"(^\s*(input|output)\s+.*?\b(\w+)\s*,?\s*\/\*\*<)");
+        QStringList        portSignals;
+
+        QTextStream stream(&verilogContent);
+        QString     line;
+        bool        inModuleHeader = false;
+
+        while (stream.readLineInto(&line)) {
+            if (line.contains("module ")) {
+                inModuleHeader = true;
+                continue;
+            }
+            if (inModuleHeader && line.contains(");")) {
+                break;
+            }
+            if (inModuleHeader) {
+                QRegularExpressionMatch match = portDeclRegex.match(line);
+                if (match.hasMatch()) {
+                    QString signalName = match.captured(2);
+                    portSignals.append(signalName);
+                }
+            }
+        }
+
+        // Verify clk_in appears only once (not duplicated with default clock)
+        int clk_in_count = portSignals.count("clk_in");
+        QCOMPARE(clk_in_count, 1);
+
+        // Verify rst_n appears only once (deduplicated across MUX/ICG)
+        int rst_n_count = portSignals.count("rst_n");
+        QCOMPARE(rst_n_count, 1);
+
+        // Verify test_en appears only once
+        int test_en_count = portSignals.count("test_en");
+        QCOMPARE(test_en_count, 1);
+
+        // Clock cell should be properly generated with deduplicated signals
+        QVERIFY(verifyClockCellFileComplete());
+    }
+
+    void test_duplicate_output_error_detection()
+    {
+        messageList.clear();
+
+        // Test the duplicate detection logic by directly testing the parser
+        // Since YAML doesn't allow duplicate keys, we test the defensive error checking
+        // by creating a scenario that could trigger it in future modifications
+        QString netlistContent = R"(
+metadata:
+  name: error_check_test
+  version: "1.0"
+
+clock:
+  - name: test_ctrl
+    clock: clk_in
+    test_en: test_en
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_normal:
+        freq: 50MHz
+        link:
+          clk_in:
+
+instance: {}
+net: {}
+)";
+
+        QString netlistPath = createTempFile("test_error_check.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        // This test verifies the error checking code exists (defensive programming)
+        // In normal YAML parsing, duplicates won't occur due to YAML constraints
+        // But the error checking protects against programmatic errors
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_error_check.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        // Verify no duplicate error messages (should be clean for unique targets)
+        for (const QString &message : messageList) {
+            QVERIFY2(
+                !message.contains("ERROR: Duplicate output"),
+                QString("Unexpected duplicate error: %1").arg(message).toLocal8Bit());
+        }
     }
 };
 

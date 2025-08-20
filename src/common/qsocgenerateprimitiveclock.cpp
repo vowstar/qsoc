@@ -5,6 +5,20 @@
 #include <QDebug>
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
+#include <QSet>
+
+/**
+ * Clock generator with signal deduplication support.
+ *
+ * Features:
+ * - Port deduplication: Same-name signals appear only once in module ports
+ * - Parameter unification: All qsoc_tc_clk_gate use CLOCK_DURING_RESET parameter
+ * - Duplicate target detection: ERROR messages for illegal duplicate outputs
+ * - Output-priority deduplication: Output signals take precedence over inputs
+ *
+ * Implementation uses QSet for efficient duplicate tracking across:
+ * ICG signals, MUX signals, divider controls, and reset signals.
+ */
 
 QSocClockPrimitive::QSocClockPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
@@ -318,6 +332,17 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
         }
     }
 
+    // Check for duplicate target names (output signals)
+    QSet<QString> targetNames;
+    for (const auto &target : config.targets) {
+        if (targetNames.contains(target.name)) {
+            qCritical() << "ERROR: Duplicate output target name:" << target.name;
+            qCritical() << "Each target must have a unique output signal name";
+        } else {
+            targetNames.insert(target.name);
+        }
+    }
+
     return config;
 }
 
@@ -332,8 +357,11 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
         portList << QString("    input  %1     /**< Default synchronous clock */").arg(config.clock);
     }
 
-    // Add input clocks
+    // Add input clocks (skip if already added as default clock)
     for (const auto &input : config.inputs) {
+        if (input.name == config.clock) {
+            continue; // Skip duplicate default clock
+        }
         QString comment = QString("/**< Clock input: %1").arg(input.name);
         if (!input.freq.isEmpty()) {
             comment += QString(" (%1)").arg(input.freq);
@@ -439,39 +467,47 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     }
 
     // Add ICG interface ports (target-level)
+    QSet<QString> addedSignals;
     for (const auto &target : config.targets) {
-        if (!target.icg.enable.isEmpty()) {
+        if (!target.icg.enable.isEmpty() && !addedSignals.contains(target.icg.enable)) {
             portList << QString("    input  wire %1,    /**< ICG enable for %2 */")
                             .arg(target.icg.enable, target.name);
+            addedSignals.insert(target.icg.enable);
         }
-        if (!target.icg.test_enable.isEmpty()) {
+        if (!target.icg.test_enable.isEmpty() && !addedSignals.contains(target.icg.test_enable)) {
             portList << QString("    input  wire %1,    /**< ICG test enable for %2 */")
                             .arg(target.icg.test_enable, target.name);
+            addedSignals.insert(target.icg.test_enable);
         }
-        if (!target.icg.reset.isEmpty()) {
+        if (!target.icg.reset.isEmpty() && !addedSignals.contains(target.icg.reset)) {
             portList << QString("    input  wire %1,    /**< ICG reset for %2 */")
                             .arg(target.icg.reset, target.name);
+            addedSignals.insert(target.icg.reset);
         }
     }
 
     // Add MUX interface ports (target-level)
     for (const auto &target : config.targets) {
         if (target.links.size() >= 2) { // Only for multi-source targets
-            if (!target.select.isEmpty()) {
+            if (!target.select.isEmpty() && !addedSignals.contains(target.select)) {
                 portList << QString("    input  wire %1,    /**< MUX select for %2 */")
                                 .arg(target.select, target.name);
+                addedSignals.insert(target.select);
             }
-            if (!target.reset.isEmpty()) {
+            if (!target.reset.isEmpty() && !addedSignals.contains(target.reset)) {
                 portList << QString("    input  wire %1,    /**< MUX reset for %2 */")
                                 .arg(target.reset, target.name);
+                addedSignals.insert(target.reset);
             }
-            if (!target.test_enable.isEmpty()) {
+            if (!target.test_enable.isEmpty() && !addedSignals.contains(target.test_enable)) {
                 portList << QString("    input  wire %1,    /**< MUX test enable for %2 */")
                                 .arg(target.test_enable, target.name);
+                addedSignals.insert(target.test_enable);
             }
-            if (!target.test_clock.isEmpty()) {
+            if (!target.test_clock.isEmpty() && !addedSignals.contains(target.test_clock)) {
                 portList << QString("    input  wire %1,    /**< MUX test clock for %2 */")
                                 .arg(target.test_clock, target.name);
+                addedSignals.insert(target.test_clock);
             }
         }
     }
@@ -480,20 +516,12 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     QStringList addedResets;
     for (const auto &target : config.targets) {
         if (target.div.ratio > 1 && !target.div.reset.isEmpty()) {
-            if (!addedResets.contains(target.div.reset)) {
-                // Check if not already added by ICG or MUX
-                bool alreadyAdded = false;
-                if (!target.icg.reset.isEmpty() && target.icg.reset == target.div.reset) {
-                    alreadyAdded = true;
-                }
-                if (!target.reset.isEmpty() && target.reset == target.div.reset) {
-                    alreadyAdded = true;
-                }
-                if (!alreadyAdded) {
-                    portList << QString("    input  wire %1,    /**< Division reset for %2 */")
-                                    .arg(target.div.reset, target.name);
-                    addedResets << target.div.reset;
-                }
+            if (!addedResets.contains(target.div.reset)
+                && !addedSignals.contains(target.div.reset)) {
+                portList << QString("    input  wire %1,    /**< Division reset for %2 */")
+                                .arg(target.div.reset, target.name);
+                addedResets << target.div.reset;
+                addedSignals.insert(target.div.reset);
             }
         }
     }
@@ -502,18 +530,20 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     for (const auto &target : config.targets) {
         for (const auto &link : target.links) {
             if (link.div.ratio > 1 && !link.div.reset.isEmpty()) {
-                if (!addedResets.contains(link.div.reset)) {
+                if (!addedResets.contains(link.div.reset)
+                    && !addedSignals.contains(link.div.reset)) {
                     QString linkName = QString("%1_from_%2").arg(target.name, link.source);
                     portList << QString("    input  wire %1,    /**< Link division reset for %2 */")
                                     .arg(link.div.reset, linkName);
                     addedResets << link.div.reset;
+                    addedSignals.insert(link.div.reset);
                 }
             }
         }
     }
 
     // Add test enable if specified
-    if (!config.test_en.isEmpty()) {
+    if (!config.test_en.isEmpty() && !addedSignals.contains(config.test_en)) {
         portList << QString("    input  %1     /**< Test enable signal */").arg(config.test_en);
     }
 
