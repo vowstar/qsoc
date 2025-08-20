@@ -1554,7 +1554,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         return false;
     }
 
-    /* NOTE: FSM, reset, and clock primitive modules are now generated 
+    /* NOTE: FSM, reset, and clock primitive modules are now generated
      * at file level before the top-level module. No inline generation needed. */
 
     /* Close module */

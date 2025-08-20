@@ -522,16 +522,16 @@ module {{ module.name }} (
 
   // Internal signals
   reg ready_reg;
-  
+
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n)
       ready_reg <= 1'b0;
     else
       ready_reg <= 1'b1;
   end
-  
+
   assign ready = ready_reg;
-  
+
 endmodule // {{ module.name }})";
         const QString template2Path    = projectDir.filePath("module_implementation.j2");
         QFile         template2File(template2Path);

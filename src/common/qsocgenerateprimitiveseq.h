@@ -12,7 +12,7 @@ class QSocGenerateManager;
 
 /**
  * @brief Sequential logic primitive generator for QSoC
- * 
+ *
  * This class generates sequential logic Verilog code including:
  * - Clocked always blocks with posedge/negedge support
  * - Asynchronous reset handling

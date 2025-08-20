@@ -668,17 +668,17 @@ reset:
   - name: reason_reset_ctrl_bitvec
     clock: clk_sys
     test_enable: test_en
-    
+
     source:
       por_rst_n:
         active: low               # POR (auto-detected, not in bit vector)
       ext_rst_n:
-        active: low               # bit[0] 
+        active: low               # bit[0]
       wdt_rst_n:
         active: low               # bit[1]
       i3c_soc_rst:
         active: high              # bit[2]
-    
+
     target:
       sys_rst_n:
         active: low
@@ -691,7 +691,7 @@ reset:
             source: wdt_rst_n
           i3c_soc_rst:
             source: i3c_soc_rst
-    
+
     # Simplified reason configuration
     reason:
       clock: clk_32k               # Always-on clock for recording logic

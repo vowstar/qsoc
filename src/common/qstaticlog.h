@@ -75,7 +75,7 @@ public:
 
     /**
      * @brief Install custom message handler to redirect outputs to appropriate streams.
-     * @details Installs a message handler that directs QtInfoMsg to stdout 
+     * @details Installs a message handler that directs QtInfoMsg to stdout
      *          and all other message types to stderr.
      */
     static void installMessageHandler();

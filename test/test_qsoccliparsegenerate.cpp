@@ -2553,7 +2553,7 @@ instance:
       # Test preservation of [21:2] range - should NOT become [21:0]
       biu_pad_arid:
         type: "logic[21:2]"
-      # Test preservation of [15:4] range - should NOT become [15:0]  
+      # Test preservation of [15:4] range - should NOT become [15:0]
       biu_pad_awid:
         type: "logic[15:4]"
 net:

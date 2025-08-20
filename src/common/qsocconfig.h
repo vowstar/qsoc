@@ -12,7 +12,7 @@
 
 /**
  * @brief The QSocConfig class.
- * @details This class is used to manage configuration settings from YAML files 
+ * @details This class is used to manage configuration settings from YAML files
  *          and environment variables. It supports hierarchical configuration loading
  *          from multiple sources with different priorities.
  */
@@ -46,7 +46,7 @@ public:
 public slots:
     /**
      * @brief Set the project manager.
-     * @details Sets the project manager and reloads configuration if a valid 
+     * @details Sets the project manager and reloads configuration if a valid
      *          project manager is provided.
      * @param[in] projectManager Pointer to project manager, can be nullptr.
      */
@@ -125,7 +125,7 @@ private:
 
     /**
      * @brief Load configuration from project YAML file.
-     * @details Loads configuration from project-level YAML file if project 
+     * @details Loads configuration from project-level YAML file if project
      *          manager is available.
      * @param override Whether to override existing values.
      */

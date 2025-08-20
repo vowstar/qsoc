@@ -281,7 +281,7 @@ public slots:
     /**
      * @brief Check if any bus matching the regex pattern exists in busData.
      * @details This function checks if any bus with a name matching the given
-     *          regular expression exists in the busData YAML node. It iterates 
+     *          regular expression exists in the busData YAML node. It iterates
      *          through all bus names and returns true as soon as a match is found.
      * @param busNameRegex Regular expression pattern to match against bus names.
      * @retval true At least one matching bus exists in busData.

@@ -11,7 +11,7 @@ class QSocGenerateManager;
 
 /**
  * @brief FSM primitive generator for QSoC
- * 
+ *
  * This class generates finite state machine Verilog code including:
  * - Table-mode FSM with binary/one-hot encoding
  * - Microcode-mode FSM with field-based control

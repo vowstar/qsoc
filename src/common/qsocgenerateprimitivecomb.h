@@ -12,7 +12,7 @@ class QSocGenerateManager;
 
 /**
  * @brief Combinational logic primitive generator for QSoC
- * 
+ *
  * This class generates combinational logic Verilog code including:
  * - Simple assign statements with expressions
  * - Always blocks with if-else chains

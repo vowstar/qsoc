@@ -12,9 +12,9 @@ class QSocGenerateManager;
 
 /**
  * @brief Reset primitive generator for QSoC
- * 
+ *
  * This class generates reset control logic including:
- * - Reset matrix functionality (source to target mapping)  
+ * - Reset matrix functionality (source to target mapping)
  * - Per-source async bit-flag recording
  * - Various reset modes (async, sync, counter-based)
  * - Test enable bypass support
@@ -152,7 +152,7 @@ private:
 
     /**
      * @brief Generate internal wire declarations
-     * @param config Reset controller configuration  
+     * @param config Reset controller configuration
      * @param out Output text stream
      */
     void generateWireDeclarations(const ResetControllerConfig &config, QTextStream &out);
@@ -172,7 +172,7 @@ private:
     void generateResetReason(const ResetControllerConfig &config, QTextStream &out);
 
     /**
-     * @brief Generate output assignments  
+     * @brief Generate output assignments
      * @param config Reset controller configuration
      * @param out Output text stream
      */
@@ -196,7 +196,7 @@ private:
      * @param targetName Target name for instance naming
      * @param linkIndex Link index for instance naming
      * @param async Async config (if component exists)
-     * @param sync Sync config (if component exists)  
+     * @param sync Sync config (if component exists)
      * @param count Count config (if component exists)
      * @param inv Inverter flag (not used in new architecture)
      * @param inputSignal Input signal name

@@ -9,7 +9,7 @@
 
 /**
  * @brief Utility class for common Verilog code generation functions
- * 
+ *
  * This class provides static helper methods used across different primitive generators
  * to maintain consistency in Verilog code generation.
  */
