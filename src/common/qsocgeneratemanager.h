@@ -298,6 +298,14 @@ public slots:
     QLLMService *getLLMService();
 
     /**
+     * @brief Set force overwrite mode for primitive cell files.
+     * @details When enabled, existing primitive cell files (clock_cell.v, reset_cell.v)
+     *          will be forcefully overwritten during generation.
+     * @param force true to enable force overwrite, false to preserve existing files.
+     */
+    void setForceOverwrite(bool force);
+
+    /**
      * @brief Load netlist file.
      * @details Loads a netlist file and creates an in-memory representation.
      * @param netlistFilePath Path to the netlist file.
@@ -522,6 +530,8 @@ private:
     QSocFSMPrimitive   *fsmPrimitive   = nullptr;
     QSocCombPrimitive  *combPrimitive  = nullptr;
     QSocSeqPrimitive   *seqPrimitive   = nullptr;
+    /** Force overwrite mode for primitive cell files */
+    bool forceOverwrite = false;
     /** Netlist data. */
     YAML::Node netlistData;
 };

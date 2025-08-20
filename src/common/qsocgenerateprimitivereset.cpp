@@ -10,6 +10,11 @@ QSocResetPrimitive::QSocResetPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
 {}
 
+void QSocResetPrimitive::setForceOverwrite(bool force)
+{
+    m_forceOverwrite = force;
+}
+
 bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QTextStream &out)
 {
     if (!resetNode || !resetNode.IsMap()) {

@@ -170,6 +170,12 @@ public:
      */
     ClockControllerConfig parseClockConfig(const YAML::Node &clockNode);
 
+    /**
+     * @brief Set force overwrite mode for clock_cell.v file
+     * @param force true to enable force overwrite, false to preserve existing files
+     */
+    void setForceOverwrite(bool force);
+
 private:
     /**
      * @brief Generate or update clock_cell.v file with template cells
@@ -275,7 +281,8 @@ private:
     QString getInstanceName(const QString &targetName, const QString &sourceName, int linkIndex);
 
 private:
-    QSocGenerateManager *m_parent; // Parent manager for accessing utilities
+    QSocGenerateManager *m_parent;                 // Parent manager for accessing utilities
+    bool                 m_forceOverwrite = false; // Force overwrite mode for clock_cell.v
 };
 
 #endif // QSOCGENERATEPRIMITIVECLOCK_H

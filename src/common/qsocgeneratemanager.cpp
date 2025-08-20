@@ -90,6 +90,19 @@ QLLMService *QSocGenerateManager::getLLMService()
     return llmService;
 }
 
+void QSocGenerateManager::setForceOverwrite(bool force)
+{
+    forceOverwrite = force;
+
+    // Propagate force setting to all primitive generators
+    if (clockPrimitive) {
+        clockPrimitive->setForceOverwrite(force);
+    }
+    if (resetPrimitive) {
+        resetPrimitive->setForceOverwrite(force);
+    }
+}
+
 QString QSocGenerateManager::cleanTypeForWireDeclaration(const QString &typeStr)
 {
     if (typeStr.isEmpty()) {

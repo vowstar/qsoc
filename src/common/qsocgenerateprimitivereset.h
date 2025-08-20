@@ -136,6 +136,12 @@ public:
      */
     ResetControllerConfig parseResetConfig(const YAML::Node &resetNode);
 
+    /**
+     * @brief Set force overwrite mode for reset_cell.v file
+     * @param force true to enable force overwrite, false to preserve existing files
+     */
+    void setForceOverwrite(bool force);
+
 private:
     /**
      * @brief Generate module header and ports
@@ -235,7 +241,8 @@ private:
     QString getNormalizedSource(const QString &sourceName, const ResetControllerConfig &config);
 
 private:
-    QSocGenerateManager *m_parent; // Parent manager for accessing utilities
+    QSocGenerateManager *m_parent;                 // Parent manager for accessing utilities
+    bool                 m_forceOverwrite = false; // Force overwrite mode for reset_cell.v
 };
 
 #endif // QSOCGENERATEPRIMITIVERESET_H

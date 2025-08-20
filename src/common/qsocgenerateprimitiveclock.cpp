@@ -24,6 +24,11 @@ QSocClockPrimitive::QSocClockPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
 {}
 
+void QSocClockPrimitive::setForceOverwrite(bool force)
+{
+    m_forceOverwrite = force;
+}
+
 bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QTextStream &out)
 {
     if (!clockNode || !clockNode.IsMap()) {
@@ -1134,8 +1139,9 @@ bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
     // - If file doesn't exist: create it with header, timescale, and ALL required cells
     // - If file exists but is incomplete: append ONLY missing cells at the end
     // - If file exists and complete: do nothing
+    // - If force mode enabled: always overwrite existing file
 
-    if (!file.exists()) {
+    if (!file.exists() || m_forceOverwrite) {
         if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
             qWarning() << "Cannot open clock_cell.v for writing:" << file.errorString();
             return false;

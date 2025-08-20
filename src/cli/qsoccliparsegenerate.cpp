@@ -72,6 +72,9 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         {{"m", "merge"},
          QCoreApplication::translate(
              "main", "Merge multiple netlist files in order before processing.")},
+        {{"f", "force"},
+         QCoreApplication::translate(
+             "main", "Force overwrite existing primitive cell files (clock_cell.v, reset_cell.v).")},
     });
 
     parser.addPositionalArgument(
@@ -136,6 +139,11 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
 
     /* Check if merge mode is enabled */
     const bool mergeMode = parser.isSet("merge");
+
+    /* Set force overwrite mode if enabled */
+    if (parser.isSet("force")) {
+        generateManager->setForceOverwrite(true);
+    }
 
     if (mergeMode && filePathList.size() > 1) {
         /* Merge mode: combine multiple netlist files */
