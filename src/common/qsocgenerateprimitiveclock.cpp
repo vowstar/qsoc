@@ -139,10 +139,41 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
 
             // Parse target-level divider
             if (it->second["div"] && it->second["div"].IsMap()) {
-                target.div.ratio          = it->second["div"]["ratio"].as<int>(1);
-                target.div.width          = it->second["div"]["width"].as<int>(0);
-                target.div.default_val    = it->second["div"]["default_val"].as<int>(0);
+                // Clean field names only
+                target.div.default_value  = it->second["div"]["default"].as<int>(1);
                 target.div.clock_on_reset = it->second["div"]["clock_on_reset"].as<bool>(false);
+
+                // Check if dynamic mode (has value signal)
+                bool hasDynamicControl = it->second["div"]["value"]
+                                         && !it->second["div"]["value"].as<std::string>().empty();
+
+                if (hasDynamicControl) {
+                    // Dynamic mode: width is required
+                    target.div.width = it->second["div"]["width"].as<int>(0);
+                    if (target.div.width <= 0) {
+                        qWarning() << "ERROR: Dynamic divider for target"
+                                   << QString::fromStdString(it->first.as<std::string>())
+                                   << "requires explicit width specification";
+                        target.div.width = 8; // Default fallback
+                    }
+                    // Verify default value fits in specified width
+                    int maxValue = (1 << target.div.width) - 1;
+                    if (target.div.default_value > maxValue) {
+                        qWarning()
+                            << "ERROR: Default value" << target.div.default_value << "for target"
+                            << QString::fromStdString(it->first.as<std::string>())
+                            << "exceeds maximum value" << maxValue << "for width"
+                            << target.div.width << "bits";
+                    }
+                } else {
+                    // Static mode: calculate width from default value
+                    target.div.width = static_cast<int>(
+                        std::ceil(std::log2(std::max(target.div.default_value + 1, 2))));
+                    // Override if explicitly specified (for manual control)
+                    if (it->second["div"]["width"]) {
+                        target.div.width = it->second["div"]["width"].as<int>(target.div.width);
+                    }
+                }
 
                 if (it->second["div"]["reset"]) {
                     target.div.reset = QString::fromStdString(
@@ -156,17 +187,19 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     target.div.test_enable = QString::fromStdString(
                         it->second["div"]["test_enable"].as<std::string>());
                 }
-                if (it->second["div"]["div_signal"]) {
-                    target.div.div_signal = QString::fromStdString(
-                        it->second["div"]["div_signal"].as<std::string>());
+
+                // Clean field names - no legacy support
+                if (it->second["div"]["value"]) {
+                    target.div.value = QString::fromStdString(
+                        it->second["div"]["value"].as<std::string>());
                 }
-                if (it->second["div"]["div_valid"]) {
-                    target.div.div_valid = QString::fromStdString(
-                        it->second["div"]["div_valid"].as<std::string>());
+                if (it->second["div"]["valid"]) {
+                    target.div.valid = QString::fromStdString(
+                        it->second["div"]["valid"].as<std::string>());
                 }
-                if (it->second["div"]["div_ready"]) {
-                    target.div.div_ready = QString::fromStdString(
-                        it->second["div"]["div_ready"].as<std::string>());
+                if (it->second["div"]["ready"]) {
+                    target.div.ready = QString::fromStdString(
+                        it->second["div"]["ready"].as<std::string>());
                 }
                 if (it->second["div"]["count"]) {
                     target.div.count = QString::fromStdString(
@@ -230,12 +263,49 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                         }
                     }
 
-                    // Link-level divider configuration
+                    // Link-level divider configuration - design only
                     if (linkIt->second.IsMap() && linkIt->second["div"]
                         && linkIt->second["div"].IsMap()) {
-                        link.div.ratio          = linkIt->second["div"]["ratio"].as<int>(1);
-                        link.div.width          = linkIt->second["div"]["width"].as<int>(0);
-                        link.div.default_val    = linkIt->second["div"]["default_val"].as<int>(0);
+                        // Clean field names only
+                        link.div.default_value = linkIt->second["div"]["default"].as<int>(1);
+
+                        // Check if dynamic mode (has value signal)
+                        bool hasDynamicControl
+                            = linkIt->second["div"]["value"]
+                              && !linkIt->second["div"]["value"].as<std::string>().empty();
+
+                        if (hasDynamicControl) {
+                            // Dynamic mode: width is required
+                            link.div.width = linkIt->second["div"]["width"].as<int>(0);
+                            if (link.div.width <= 0) {
+                                qWarning()
+                                    << "ERROR: Dynamic divider for link"
+                                    << QString::fromStdString(it->first.as<std::string>()) << "->"
+                                    << QString::fromStdString(linkIt->first.as<std::string>())
+                                    << "requires explicit width specification";
+                                link.div.width = 8; // Default fallback
+                            }
+                            // Verify default value fits in specified width
+                            int maxValue = (1 << link.div.width) - 1;
+                            if (link.div.default_value > maxValue) {
+                                qWarning()
+                                    << "ERROR: Default value" << link.div.default_value
+                                    << "for link"
+                                    << QString::fromStdString(it->first.as<std::string>()) << "->"
+                                    << QString::fromStdString(linkIt->first.as<std::string>())
+                                    << "exceeds maximum value" << maxValue << "for width"
+                                    << link.div.width << "bits";
+                            }
+                        } else {
+                            // Static mode: calculate width from default value
+                            link.div.width = static_cast<int>(
+                                std::ceil(std::log2(std::max(link.div.default_value + 1, 2))));
+                            // Override if explicitly specified (for manual control)
+                            if (linkIt->second["div"]["width"]) {
+                                link.div.width = linkIt->second["div"]["width"].as<int>(
+                                    link.div.width);
+                            }
+                        }
                         link.div.clock_on_reset = linkIt->second["div"]["clock_on_reset"].as<bool>(
                             false);
 
@@ -251,17 +321,19 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                             link.div.test_enable = QString::fromStdString(
                                 linkIt->second["div"]["test_enable"].as<std::string>());
                         }
-                        if (linkIt->second["div"]["div_signal"]) {
-                            link.div.div_signal = QString::fromStdString(
-                                linkIt->second["div"]["div_signal"].as<std::string>());
+
+                        // Clean field names - no legacy support
+                        if (linkIt->second["div"]["value"]) {
+                            link.div.value = QString::fromStdString(
+                                linkIt->second["div"]["value"].as<std::string>());
                         }
-                        if (linkIt->second["div"]["div_valid"]) {
-                            link.div.div_valid = QString::fromStdString(
-                                linkIt->second["div"]["div_valid"].as<std::string>());
+                        if (linkIt->second["div"]["valid"]) {
+                            link.div.valid = QString::fromStdString(
+                                linkIt->second["div"]["valid"].as<std::string>());
                         }
-                        if (linkIt->second["div"]["div_ready"]) {
-                            link.div.div_ready = QString::fromStdString(
-                                linkIt->second["div"]["div_ready"].as<std::string>());
+                        if (linkIt->second["div"]["ready"]) {
+                            link.div.ready = QString::fromStdString(
+                                linkIt->second["div"]["ready"].as<std::string>());
                         }
                         if (linkIt->second["div"]["count"]) {
                             link.div.count = QString::fromStdString(
@@ -381,30 +453,59 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     }
 
     // Add dynamic divider interface ports (target-level)
+    QSet<QString> divSignalNames;
     for (const auto &target : config.targets) {
-        if (target.div.ratio > 1) {
-            // Add dynamic division ratio input port
-            if (!target.div.div_signal.isEmpty()) {
+        if (target.div.default_value > 1 || !target.div.value.isEmpty()) {
+            // Add dynamic division value input port
+            if (!target.div.value.isEmpty()) {
+                if (divSignalNames.contains(target.div.value)) {
+                    throw std::runtime_error(QString("Duplicate divider value signal name: %1")
+                                                 .arg(target.div.value)
+                                                 .toStdString());
+                }
+                divSignalNames.insert(target.div.value);
+
                 portList
-                    << QString("    input  wire [%1:0] %2,    /**< Dynamic division ratio for %3 */")
+                    << QString("    input  wire [%1:0] %2,    /**< Dynamic division value for %3 */")
                            .arg(target.div.width - 1)
-                           .arg(target.div.div_signal, target.name);
+                           .arg(target.div.value, target.name);
             }
 
             // Add division value valid signal port
-            if (!target.div.div_valid.isEmpty()) {
+            if (!target.div.valid.isEmpty()) {
+                if (divSignalNames.contains(target.div.valid)) {
+                    throw std::runtime_error(QString("Duplicate divider valid signal name: %1")
+                                                 .arg(target.div.valid)
+                                                 .toStdString());
+                }
+                divSignalNames.insert(target.div.valid);
+
                 portList << QString("    input  wire %1,    /**< Division valid signal for %2 */")
-                                .arg(target.div.div_valid, target.name);
+                                .arg(target.div.valid, target.name);
             }
 
             // Add division ready output port
-            if (!target.div.div_ready.isEmpty()) {
+            if (!target.div.ready.isEmpty()) {
+                if (divSignalNames.contains(target.div.ready)) {
+                    throw std::runtime_error(QString("Duplicate divider ready signal name: %1")
+                                                 .arg(target.div.ready)
+                                                 .toStdString());
+                }
+                divSignalNames.insert(target.div.ready);
+
                 portList << QString("    output wire %1,    /**< Division ready signal for %2 */")
-                                .arg(target.div.div_ready, target.name);
+                                .arg(target.div.ready, target.name);
             }
 
             // Add cycle counter output port
             if (!target.div.count.isEmpty()) {
+                if (divSignalNames.contains(target.div.count)) {
+                    throw std::runtime_error(QString("Duplicate divider count signal name: %1")
+                                                 .arg(target.div.count)
+                                                 .toStdString());
+                }
+                divSignalNames.insert(target.div.count);
+
                 portList << QString("    output wire [%1:0] %2,    /**< Cycle counter for %3 */")
                                 .arg(target.div.width - 1)
                                 .arg(target.div.count, target.name);
@@ -421,36 +522,64 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     // Add dynamic divider interface ports (link-level)
     for (const auto &target : config.targets) {
         for (const auto &link : target.links) {
-            if (link.div.ratio > 1) {
+            if (link.div.default_value > 1 || !link.div.value.isEmpty()) {
                 QString linkName = QString("%1_from_%2").arg(target.name, link.source);
 
-                // Add dynamic division ratio input port
-                if (!link.div.div_signal.isEmpty()) {
+                // Add dynamic division value input port
+                if (!link.div.value.isEmpty()) {
+                    if (divSignalNames.contains(link.div.value)) {
+                        throw std::runtime_error(QString("Duplicate divider value signal name: %1")
+                                                     .arg(link.div.value)
+                                                     .toStdString());
+                    }
+                    divSignalNames.insert(link.div.value);
+
                     portList << QString(
-                                    "    input  wire [%1:0] %2,    /**< Dynamic division ratio for "
+                                    "    input  wire [%1:0] %2,    /**< Dynamic division value for "
                                     "link %3 */")
                                     .arg(link.div.width - 1)
-                                    .arg(link.div.div_signal, linkName);
+                                    .arg(link.div.value, linkName);
                 }
 
                 // Add division value valid signal port
-                if (!link.div.div_valid.isEmpty()) {
+                if (!link.div.valid.isEmpty()) {
+                    if (divSignalNames.contains(link.div.valid)) {
+                        throw std::runtime_error(QString("Duplicate divider valid signal name: %1")
+                                                     .arg(link.div.valid)
+                                                     .toStdString());
+                    }
+                    divSignalNames.insert(link.div.valid);
+
                     portList
                         << QString(
                                "    input  wire %1,    /**< Division valid signal for link %2 */")
-                               .arg(link.div.div_valid, linkName);
+                               .arg(link.div.valid, linkName);
                 }
 
                 // Add division ready output port
-                if (!link.div.div_ready.isEmpty()) {
+                if (!link.div.ready.isEmpty()) {
+                    if (divSignalNames.contains(link.div.ready)) {
+                        throw std::runtime_error(QString("Duplicate divider ready signal name: %1")
+                                                     .arg(link.div.ready)
+                                                     .toStdString());
+                    }
+                    divSignalNames.insert(link.div.ready);
+
                     portList
                         << QString(
                                "    output wire %1,    /**< Division ready signal for link %2 */")
-                               .arg(link.div.div_ready, linkName);
+                               .arg(link.div.ready, linkName);
                 }
 
                 // Add cycle counter output port
                 if (!link.div.count.isEmpty()) {
+                    if (divSignalNames.contains(link.div.count)) {
+                        throw std::runtime_error(QString("Duplicate divider count signal name: %1")
+                                                     .arg(link.div.count)
+                                                     .toStdString());
+                    }
+                    divSignalNames.insert(link.div.count);
+
                     portList
                         << QString("    output wire [%1:0] %2,    /**< Cycle counter for link %3 */")
                                .arg(link.div.width - 1)
@@ -490,8 +619,22 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     for (const auto &target : config.targets) {
         if (target.links.size() >= 2) { // Only for multi-source targets
             if (!target.select.isEmpty() && !addedSignals.contains(target.select)) {
+                // Calculate select signal width based on number of inputs
+                int numInputs   = target.links.size();
+                int selectWidth = 1;
+                while ((1 << selectWidth) < numInputs) {
+                    selectWidth++;
+                }
+
+                QString selectDecl;
+                if (selectWidth > 1) {
+                    selectDecl = QString("[%1:0] %2").arg(selectWidth - 1).arg(target.select);
+                } else {
+                    selectDecl = target.select;
+                }
+
                 portList << QString("    input  wire %1,    /**< MUX select for %2 */")
-                                .arg(target.select, target.name);
+                                .arg(selectDecl, target.name);
                 addedSignals.insert(target.select);
             }
             if (!target.reset.isEmpty() && !addedSignals.contains(target.reset)) {
@@ -515,7 +658,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     // Add target-level reset signals for DIV (if not already added via ICG/MUX)
     QStringList addedResets;
     for (const auto &target : config.targets) {
-        if (target.div.ratio > 1 && !target.div.reset.isEmpty()) {
+        if ((target.div.default_value > 1 || !target.div.value.isEmpty())
+            && !target.div.reset.isEmpty()) {
             if (!addedResets.contains(target.div.reset)
                 && !addedSignals.contains(target.div.reset)) {
                 portList << QString("    input  wire %1,    /**< Division reset for %2 */")
@@ -529,7 +673,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     // Add link-level reset signals for DIV (if not already added)
     for (const auto &target : config.targets) {
         for (const auto &link : target.links) {
-            if (link.div.ratio > 1 && !link.div.reset.isEmpty()) {
+            if ((link.div.default_value > 1 || !link.div.value.isEmpty())
+                && !link.div.reset.isEmpty()) {
                 if (!addedResets.contains(link.div.reset)
                     && !addedSignals.contains(link.div.reset)) {
                     QString linkName = QString("%1_from_%2").arg(target.name, link.source);
@@ -641,7 +786,7 @@ void QSocClockPrimitive::generateOutputAssignments(
         }
 
         // Target-level DIV
-        if (target.div.ratio > 1) {
+        if (target.div.default_value > 1 || !target.div.value.isEmpty()) {
             // Validate width parameter
             if (target.div.width <= 0) {
                 throw std::runtime_error(
@@ -654,7 +799,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             out << "    wire " << divOutput << ";\n";
             out << "    qsoc_clk_div #(\n";
             out << "        .WIDTH(" << target.div.width << "),\n";
-            out << "        .DEFAULT_VAL(" << target.div.default_val << "),\n";
+            out << "        .DEFAULT_VAL(" << target.div.default_value << "),\n";
             out << "        .CLOCK_DURING_RESET(" << (target.div.clock_on_reset ? "1'b1" : "1'b0")
                 << ")\n";
             out << "    ) " << instanceName << "_div (\n";
@@ -669,18 +814,21 @@ void QSocClockPrimitive::generateOutputAssignments(
                                  : target.div.test_enable;
             out << "        .test_en(" << testEn << "),\n";
 
-            // Dynamic or static division ratio
-            if (!target.div.div_signal.isEmpty()) {
-                out << "        .div(" << target.div.div_signal << "),\n";
+            // Dynamic or static division value -  design
+            if (!target.div.value.isEmpty()) {
+                // Dynamic mode: connect to value signal
+                out << "        .div(" << target.div.value << "),\n";
             } else {
-                out << "        .div(" << target.div.width << "'d" << target.div.ratio << "),\n";
+                // Static mode: tie to default constant
+                out << "        .div(" << target.div.width << "'d" << target.div.default_value
+                    << "),\n";
             }
 
-            out << "        .div_valid("
-                << (target.div.div_valid.isEmpty() ? "1'b1" : target.div.div_valid) << "),\n";
+            out << "        .div_valid(" << (target.div.valid.isEmpty() ? "1'b1" : target.div.valid)
+                << "),\n";
 
-            if (!target.div.div_ready.isEmpty()) {
-                out << "        .div_ready(" << target.div.div_ready << "),\n";
+            if (!target.div.ready.isEmpty()) {
+                out << "        .div_ready(" << target.div.ready << "),\n";
             } else {
                 out << "        .div_ready(),\n";
             }
@@ -739,8 +887,8 @@ void QSocClockPrimitive::generateClockInstance(
     if (!link.icg.enable.isEmpty()) {
         out << " (icg)";
     }
-    if (link.div.ratio > 1) {
-        out << " (div/" << link.div.ratio << ")";
+    if (link.div.default_value > 1 || !link.div.value.isEmpty()) {
+        out << " (div/" << link.div.default_value << ")";
     }
     if (link.inv) {
         out << " (inv)";
@@ -748,7 +896,8 @@ void QSocClockPrimitive::generateClockInstance(
     out << "\n     */\n";
 
     // Generate processing chain
-    bool hasProcessing = !link.icg.enable.isEmpty() || (link.div.ratio > 1) || link.inv;
+    bool hasProcessing = !link.icg.enable.isEmpty()
+                         || (link.div.default_value > 1 || !link.div.value.isEmpty()) || link.inv;
 
     if (hasProcessing) {
         // Handle link-level processing: ICG → DIV → INV
@@ -773,7 +922,7 @@ void QSocClockPrimitive::generateClockInstance(
         }
 
         // Step 2: Link-level divider
-        if (link.div.ratio > 1) {
+        if (link.div.default_value > 1 || !link.div.value.isEmpty()) {
             // Validate width parameter
             if (link.div.width <= 0) {
                 throw std::runtime_error(
@@ -786,7 +935,7 @@ void QSocClockPrimitive::generateClockInstance(
             out << "    wire " << divWire << ";\n";
             out << "    qsoc_clk_div #(\n";
             out << "        .WIDTH(" << link.div.width << "),\n";
-            out << "        .DEFAULT_VAL(" << link.div.default_val << "),\n";
+            out << "        .DEFAULT_VAL(" << link.div.default_value << "),\n";
             out << "        .CLOCK_DURING_RESET(" << (link.div.clock_on_reset ? "1'b1" : "1'b0")
                 << ")\n";
             out << "    ) " << instanceName << "_div (\n";
@@ -799,18 +948,21 @@ void QSocClockPrimitive::generateClockInstance(
             QString testEn = link.div.test_enable.isEmpty() ? "1'b0" : link.div.test_enable;
             out << "        .test_en(" << testEn << "),\n";
 
-            // Dynamic or static division ratio
-            if (!link.div.div_signal.isEmpty()) {
-                out << "        .div(" << link.div.div_signal << "),\n";
+            // Dynamic or static division value -  design
+            if (!link.div.value.isEmpty()) {
+                // Dynamic mode: connect to value signal
+                out << "        .div(" << link.div.value << "),\n";
             } else {
-                out << "        .div(" << link.div.width << "'d" << link.div.ratio << "),\n";
+                // Static mode: tie to default constant
+                out << "        .div(" << link.div.width << "'d" << link.div.default_value
+                    << "),\n";
             }
 
-            out << "        .div_valid("
-                << (link.div.div_valid.isEmpty() ? "1'b1" : link.div.div_valid) << "),\n";
+            out << "        .div_valid(" << (link.div.valid.isEmpty() ? "1'b1" : link.div.valid)
+                << "),\n";
 
-            if (!link.div.div_ready.isEmpty()) {
-                out << "        .div_ready(" << link.div.div_ready << "),\n";
+            if (!link.div.ready.isEmpty()) {
+                out << "        .div_ready(" << link.div.ready << "),\n";
             } else {
                 out << "        .div_ready(),\n";
             }
@@ -964,10 +1116,9 @@ QSocClockPrimitive::MuxType QSocClockPrimitive::parseMuxType(const QString &type
 QString QSocClockPrimitive::getLinkWireName(
     const QString &targetName, const QString &sourceName, int linkIndex)
 {
-    if (linkIndex == 0) {
-        return QString("clk_%1_from_%2").arg(targetName, sourceName);
-    }
-    return QString("clk_%1_from_%2_%3").arg(targetName, sourceName).arg(linkIndex);
+    // Source names are unique, no need for linkIndex suffix
+    Q_UNUSED(linkIndex);
+    return QString("clk_%1_from_%2").arg(targetName, sourceName);
 }
 
 QString QSocClockPrimitive::getInstanceName(

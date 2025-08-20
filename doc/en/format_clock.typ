@@ -49,8 +49,8 @@ clock:
       # Target-level divider
       uart_clk:
         freq: 200MHz
-        div:                          # Target-level divider
-          ratio: 4
+        div:                          # Target-level divider (static mode)
+          default: 4                  # Default division value (auto width = 3 bits)
           reset: rst_n
         link:
           pll_800m:                   # Direct connection
@@ -60,8 +60,8 @@ clock:
         freq: 12MHz
         link:
           osc_24m:
-            div:                      # Link-level divider
-              ratio: 2
+            div:                      # Link-level divider (static mode)
+              default: 2              # Default division value (auto width = 2 bits)
               reset: rst_n
             inv: true                 # Link-level inverter (boolean)
 
@@ -75,7 +75,8 @@ clock:
       func_clk:
         freq: 100MHz
         div:                          # Target-level divider
-          ratio: 8
+          default: 8                  # Default division value
+          width: 4                    # Required: divider width in bits
           reset: rst_n
         link:
           pll_800m:                   # Direct connection
@@ -142,10 +143,26 @@ target:
   div_clk:
     freq: 200MHz
     div:
-      ratio: 4                      # Division ratio (≥2)
+      default: 4                    # Default division value (required, ≥1)
+      width: 3                      # Divider width in bits (required)
       reset: rst_n                  # Reset signal
+      value: uart_div_value         # Dynamic division control input (optional)
+      valid: uart_div_valid         # Division value valid signal (optional)
+      ready: uart_div_ready         # Division ready output signal (optional)
     link:
       pll_clk:                      # Direct connection
+
+# Static divider (no value signal)
+target:
+  static_clk:
+    freq: 100MHz
+    div:
+      default: 8                    # Static division, tied to constant 8
+      width: 4                      # Divider width in bits (required)
+      reset: rst_n                  # Reset signal
+      # No 'value' signal = static mode
+    link:
+      pll_800m:                     # Direct connection
 
 # Target-level inverter
 target:
@@ -174,7 +191,8 @@ target:
     link:
       pll_clk:
         div:
-          ratio: 16                 # Link-level divider
+          default: 16               # Default division value
+          width: 5                  # Divider width in bits (required)
           reset: rst_n
         inv: true                   # Link-level inverter (boolean)
         sta_guide:                  # Link-level STA guide
@@ -197,14 +215,169 @@ target:
     icg:
       enable: clk_en              # Target-level ICG
     div:
-      ratio: 2                    # Target-level divider
+      default: 2                  # Target-level divider
+      width: 2                    # Required: divider width in bits
       reset: rst_n
     inv: true                     # Target-level inverter
     link:
       pll_clk:
         div:
-          ratio: 16               # Link-level divider first
+          default: 16             # Link-level divider first
+          width: 5                # Required: divider width in bits
           reset: rst_n
+```
+
+== DIVIDER CONFIGURATION
+<soc-net-clock-divider-config>
+Clock dividers support two operational modes: static (constant division) and dynamic (runtime controllable division). The mode is determined by the presence of the `value` signal.
+
+=== Divider Parameters
+<soc-net-clock-divider-params>
+#figure(
+  align(center)[#table(
+    columns: (0.2fr, 0.15fr, 0.65fr),
+    align: (auto, center, left),
+    table.header([Parameter], [Required], [Description]),
+    table.hline(),
+    [default],
+    [✓],
+    [Default division value (≥1), used as reset default and static constant],
+    [width],
+    [◐],
+    [Divider width in bits (required for dynamic mode, auto-calculated for static mode)],
+    [reset],
+    [],
+    [Reset signal name (active-low), divider uses default value during reset],
+    [enable], [], [Enable signal name, disables divider when inactive],
+    [test_enable], [], [Test enable bypass signal],
+    [value], [], [Dynamic division input signal (empty = static mode)],
+    [valid], [], [Division value valid strobe signal],
+    [ready], [], [Division ready output status signal],
+    [count], [], [Division counter output for debugging],
+  )],
+  caption: [DIVIDER CONFIGURATION PARAMETERS],
+  kind: table,
+)
+
+=== Static Mode (Constant Division)
+<soc-net-clock-divider-static>
+When no `value` signal is specified, the divider operates in static mode with constant division:
+
+```yaml
+# Static divider example
+target:
+  uart_clk:
+    freq: 100MHz
+    div:
+      default: 8                    # Constant division by 8
+      width: 4                      # 4-bit divider (max value 15)
+      reset: rst_n                  # Reset to division by 8
+    link:
+      pll_800m:                     # 800MHz / 8 = 100MHz
+```
+
+Generated Verilog ties the division input to the default constant:
+```verilog
+qsoc_clk_div #(
+    .WIDTH(4),
+    .DEFAULT_VAL(8)
+) u_uart_clk_target_div (
+    .clk(source_clock),
+    .rst_n(rst_n),
+    .div(4'd8),                   // Tied to constant
+    .div_valid(1'b1),
+    // ...
+);
+```
+
+=== Dynamic Mode (Runtime Control)
+<soc-net-clock-divider-dynamic>
+When a `value` signal is specified, the divider accepts runtime division control:
+
+```yaml
+# Dynamic divider example
+target:
+  cpu_clk:
+    freq: 400MHz
+    div:
+      default: 2                    # Reset default: 800MHz / 2 = 400MHz
+      width: 8                      # 8-bit divider (max value 255)
+      value: cpu_div_ratio          # Runtime division control
+      valid: cpu_div_valid          # Optional: division update strobe
+      ready: cpu_div_ready          # Optional: division ready status
+      reset: rst_n
+    link:
+      pll_800m:                     # Variable: 800MHz / cpu_div_ratio
+```
+
+Generated Verilog connects the runtime control signals:
+```verilog
+qsoc_clk_div #(
+    .WIDTH(8),
+    .DEFAULT_VAL(2)
+) u_cpu_clk_target_div (
+    .clk(source_clock),
+    .rst_n(rst_n),
+    .div(cpu_div_ratio),          // Connected to runtime input
+    .div_valid(cpu_div_valid),    // Connected to valid signal
+    .div_ready(cpu_div_ready),    // Connected to ready output
+    // ...
+);
+```
+
+=== Mode Selection Rules
+<soc-net-clock-divider-mode-rules>
+- *Static Mode*: `value` parameter absent or empty → division tied to `default` constant
+- *Dynamic Mode*: `value` parameter present → division connected to runtime signal
+- *Reset Behavior*: Both modes use `default` value during reset condition
+- *Bypass Operation*: Division by 1 automatically enables bypass mode in the primitive
+
+=== Width Calculation and Validation
+<soc-net-clock-divider-width-validation>
+The divider configuration enforces different width requirements based on the operational mode:
+
+*Static Mode Width Calculation:*
+- Width is automatically calculated from `default` value: `width = ceil(log2(default + 1))`
+- Manual width specification overrides the calculated value
+- Examples:
+  - `default: 8` → auto width = 4 bits (8 < 2^4 = 16)
+  - `default: 15` → auto width = 4 bits (15 < 2^4 = 16)
+  - `default: 16` → auto width = 5 bits (16 < 2^5 = 32)
+
+*Dynamic Mode Width Requirements:*
+- Width must be explicitly specified (no auto-calculation)
+- System validates that `default` value fits within specified width
+- ERROR generated if `default > (2^width - 1)`
+- Examples:
+  - `default: 100, width: 8` → OK (100 < 255)
+  - `default: 256, width: 8` → ERROR (256 > 255)
+
+```yaml
+# Static mode examples
+target:
+  auto_width_clk:
+    div:
+      default: 8                    # Auto width = 4 bits
+      # No width needed
+
+  manual_width_clk:
+    div:
+      default: 8                    # Manual override
+      width: 6                      # Uses 6 bits instead of auto 4
+
+# Dynamic mode examples
+target:
+  valid_dynamic_clk:
+    div:
+      default: 100                  # Valid: 100 < 255
+      width: 8                      # Required for dynamic mode
+      value: div_control
+
+  invalid_dynamic_clk:
+    div:
+      default: 300                  # ERROR: 300 > 255 for 8-bit width
+      width: 8                      # Width too small
+      value: div_control
 ```
 
 == CLOCK MULTIPLEXING
@@ -308,7 +481,8 @@ Link-level processing uses key existence for operations:
     align: (auto, left),
     table.header([Property], [Description]),
     table.hline(),
-    [div], [Division configuration with ratio and reset (map format)],
+    [div],
+    [Division configuration with default/width/reset and optional dynamic control (map format)],
     [inv], [Clock inversion (key existence enables inversion)],
     [sta_guide], [STA guide buffer configuration with foundry cell details],
   )],
@@ -375,8 +549,8 @@ target:
         icg:
           enable: dsp_enable        # Link-level gating
         div:
-          ratio: 2                  # Link-level division
-          width: 2
+          default: 2                # Link-level division
+          width: 2                  # Required: divider width in bits
           reset: rst_n
         sta_guide:                  # STA guide at end of chain
           cell: FOUNDRY_GUIDE_BUF   # Generic foundry cell
@@ -396,8 +570,8 @@ target:
     link:
       source_clk:
         div:
-          ratio: 4
-          width: 3
+          default: 4                # Default division value
+          width: 3                  # Required: divider width in bits
           reset: rst_n
         sta_guide:                  # Link-level STA guide
           cell: TSMC_CKBUF_X1       # Link buffer
@@ -484,7 +658,7 @@ endmodule
 // Clock divider cell
 module QSOC_CLKDIV_CELL #(
     parameter integer width = 4,
-    parameter integer default_val = 0,
+    parameter integer default_val = 1,
     parameter enable_reset = 1'b0
 ) (
     input  clk,
@@ -605,16 +779,16 @@ module clkctrl (
     assign clk_adc_clk_from_osc_24m = osc_24m;
 
     // pll_800m -> uart_clk: Target-level divider
-    QSOC_CLKDIV_CELL #(
-        .width(8),
-        .default_val(4),
-        .enable_reset(1'b0)
-    ) u_uart_clk_div (
+    qsoc_clk_div #(
+        .WIDTH(8),
+        .DEFAULT_VAL(4),
+        .CLOCK_DURING_RESET(1'b0)
+    ) u_uart_clk_target_div (
         .clk(pll_800m),
         .rst_n(rst_n),
         .en(1'b1),
         .test_en(test_en),
-        .div(8'd4),
+        .div(8'd4),                     // Static mode: tied to constant
         .div_valid(1'b1),
         .div_ready(),
         .clk_out(clk_uart_clk_from_pll_800m),
@@ -634,7 +808,7 @@ Clock format supports two processing levels with distinct syntax patterns:
 
 *Target Level* (key existence determines operation):
 - `icg` - Map format with enable/polarity
-- `div` - Map format with ratio/reset
+- `div` - Map format with default/width/reset and optional dynamic signals
 - `inv` - Key existence enables inversion
 - `sta_guide` - Map format with foundry cell details
 - `select` - String (required for ≥2 links)
@@ -642,7 +816,7 @@ Clock format supports two processing levels with distinct syntax patterns:
 - `test_enable`, `test_clock` - String (GF_MUX DFT signals)
 
 *Link Level* (key existence determines operation):
-- `div` - Map format with ratio/reset
+- `div` - Map format with default/width/reset and optional dynamic signals
 - `inv` - Key existence enables inversion
 - `sta_guide` - Map format with foundry cell details
 - Pass-through: No attributes specified

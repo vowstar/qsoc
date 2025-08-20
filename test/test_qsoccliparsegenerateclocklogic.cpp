@@ -302,7 +302,7 @@ clock:
       uart_clk:
         freq: 200MHz
         div:                   # Target-level divider (KISS format)
-          ratio: 4
+          default: 4
           width: 3             # Required: divider width in bits
           reset: rst_n
         link:
@@ -372,7 +372,7 @@ clock:
         link:
           osc_24m:
             div:
-              ratio: 2
+              default: 2
               width: 2           # Required: divider width in bits
               reset: rst_n
             inv:
@@ -447,7 +447,7 @@ clock:
       func_clk:
         freq: 100MHz
         div:                    # Target-level divider (KISS format)
-          ratio: 8
+          default: 8
           width: 4              # Required: divider width in bits
           reset: rst_n
         link:
@@ -781,7 +781,7 @@ clock:
       sys_clk:
         freq: 40MHz
         div:
-          ratio: 10
+          default: 10
           width: 4              # Required: divider width in bits
           reset: rst_n
         link:
@@ -943,7 +943,7 @@ clock:
               enable: cpu_en
               reset: rst_n
             div:
-              ratio: 4
+              default: 4
               width: 3
               reset: rst_n
             inv:

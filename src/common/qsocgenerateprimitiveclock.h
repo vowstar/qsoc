@@ -61,11 +61,8 @@ public:
     struct ClockDivider
     {
         // Core parameters (required for proper operation)
-        int ratio = 1; // Division ratio (default 1 = no division)
-        int width = 0; // Divider width in bits (0 = error, must be specified)
-
-        // Optional configuration parameters
-        int  default_val    = 0;     // Reset default value (default 0)
+        int  default_value  = 1;     // Default division value (required, >=1)
+        int  width          = 0;     // Divider width in bits (0 = error, must be specified)
         bool clock_on_reset = false; // Enable clock output during reset (default false)
 
         // Control signals (empty string = use safe defaults)
@@ -73,11 +70,11 @@ public:
         QString enable;      // Enable signal name (empty = 1'b1)
         QString test_enable; // Test enable signal (empty = use global or 1'b0)
 
-        // Dynamic configuration interface (empty = not connected)
-        QString div_signal; // Dynamic division ratio input (empty = use static ratio)
-        QString div_valid;  // Division value valid signal (empty = 1'b1)
-        QString div_ready;  // Division ready output signal (empty = unconnected)
-        QString count;      // Cycle counter output (empty = unconnected)
+        // Dynamic configuration interface (empty = static mode)
+        QString value; // Dynamic division value input signal (empty = static mode)
+        QString valid; // Division value valid signal (empty = 1'b1)
+        QString ready; // Division ready output signal (empty = unconnected)
+        QString count; // Cycle counter output (empty = unconnected)
     };
 
     /**
