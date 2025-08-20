@@ -194,6 +194,8 @@ The `generate verilog` command generates Verilog code from netlist files.
     [-d, --directory <path>], [The path to the project directory],
     [-p, --project <name>], [The project name],
     [-m, --merge], [Merge multiple netlist files in order before processing],
+    [-f, --force],
+    [Force overwrite existing primitive cell files (clock_cell.v, reset_cell.v)],
     [files], [The netlist files to be processed],
   )],
   caption: [VERILOG GENERATION OPTIONS],

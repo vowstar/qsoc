@@ -701,6 +701,7 @@ File generation behavior:
 - Creates new file with header and all templates if missing
 - Appends only missing templates to existing file
 - Leaves complete files unchanged
+- Use `--force` option to overwrite existing files completely
 
 All templates use pure Verilog 2005 syntax with behavioral models:
 - No SystemVerilog features (`always @(*)` instead of `always_comb`)

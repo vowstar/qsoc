@@ -353,7 +353,13 @@ When any `reset` primitive is present, QSoC ensures an output file `reset_cell.v
 - `qsoc_rst_pipe` - Synchronous reset pipeline with test enable
 - `qsoc_rst_count` - Counter-based reset release with test enable
 
-The generated file includes proper header comments, timescale directives, and include guards to prevent multiple inclusions. Users should replace these template implementations with their technology-specific standard cell implementations before using in production.
+The generated file includes proper header comments, timescale directives, and include guards to prevent multiple inclusions.
+
+File generation behavior:
+- Always overwrites existing files with complete template set
+- Use `--force` option for explicit overwrite confirmation
+
+Users should replace these template implementations with their technology-specific standard cell implementations before using in production.
 
 Example template structure:
 ```verilog
