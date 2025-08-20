@@ -14,7 +14,7 @@ class QSocGenerateManager;
 
 /**
  * @brief Clock primitive generator for QSoC
- * 
+ *
  * This class generates clock control logic including:
  * - Clock input and target definitions with frequency specifications
  * - Six clock types (PASS_THRU, GATE_ONLY, DIV_ICG, DIV_DFF, GATE_DIV_ICG, GATE_DIV_DFF)
@@ -56,7 +56,7 @@ public:
     };
 
     /**
-     * @brief Clock divider configuration  
+     * @brief Clock divider configuration
      */
     struct ClockDivider
     {
@@ -144,7 +144,6 @@ public:
         QString            moduleName; // Module name
         QString            clock;      // Default synchronous clock
         QString            ref_clock;  // Reference clock for GF_MUX
-        QString            test_en;    // Test enable signal (optional)
         QList<ClockInput>  inputs;     // Clock inputs
         QList<ClockTarget> targets;    // Clock targets
     };
@@ -208,7 +207,7 @@ private:
 
     /**
      * @brief Generate internal wire declarations
-     * @param config Clock controller configuration  
+     * @param config Clock controller configuration
      * @param out Output text stream
      */
     void generateWireDeclarations(const ClockControllerConfig &config, QTextStream &out);
@@ -221,7 +220,7 @@ private:
     void generateClockLogic(const ClockControllerConfig &config, QTextStream &out);
 
     /**
-     * @brief Generate output assignments and multiplexers  
+     * @brief Generate output assignments and multiplexers
      * @param config Clock controller configuration
      * @param out Output text stream
      */
@@ -260,7 +259,7 @@ private:
     /**
      * @brief Get wire name for clock link
      * @param targetName Target clock name
-     * @param sourceName Source clock name  
+     * @param sourceName Source clock name
      * @param linkIndex Link index for multi-link targets
      * @return Generated wire name
      */

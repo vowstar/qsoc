@@ -23,7 +23,6 @@ Clock controllers use direct attribute specification without explicit type enume
 clock:
   - name: soc_clk_ctrl
     clock: clk_sys                    # Default synchronous clock
-    test_en: test_en                  # Test enable bypass signal (optional)
     input:
       osc_24m:
         freq: 24MHz
@@ -438,7 +437,6 @@ Clock controller properties define inputs, processing, and outputs:
     table.hline(),
     [name], [String], [Clock controller instance name - *REQUIRED*],
     [clock], [String], [Default synchronous clock for operations - *REQUIRED*],
-    [test_en], [String], [Test enable bypass signal (optional)],
     [input], [Map], [Clock input definitions with frequency specs (required)],
     [target], [Map], [Clock target definitions with processing (required)],
   )],
@@ -838,7 +836,7 @@ Clock format supports two processing levels with distinct syntax patterns:
 - Specify attributes only when operations are needed
 - Group related clocks in the same controller
 - Reset signals default to active-low polarity
-- Include `test_en` bypass for comprehensive DFT support
+- Include individual `test_enable` signals for comprehensive DFT support
 
 === Design Guidelines
 <soc-net-clock-design-guidelines>

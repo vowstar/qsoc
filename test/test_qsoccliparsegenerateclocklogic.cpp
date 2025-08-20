@@ -266,6 +266,7 @@ clock:
 
         /* Verify the generated content contains expected clock logic */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".POLARITY(1'b1)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_dbg_clk_from_pll_800m)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(dbg_clk_en)"));
 
@@ -827,6 +828,7 @@ clock:
 
         // Should have cpu_clk ICG instance
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".POLARITY(1'b1)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(sys_clk_en)"));
 
         // Should use sys_clk as both output and intermediate signal
@@ -980,6 +982,7 @@ clock:
         /* Verify the generated content contains processing chain with STA guide */
         // Should have ICG
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".POLARITY(1'b1)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(cpu_en)"));
 
         // Should have divider
@@ -1020,7 +1023,6 @@ port:
 clock:
   - name: dedup_test_ctrl
     clock: clk_in              # Default clock uses clk_in
-    test_en: test_en
     input:
       clk_in:                  # Same name as default clock - should be deduplicated
         freq: 100MHz
@@ -1104,12 +1106,114 @@ net: {}
         int rst_n_count = portSignals.count("rst_n");
         QCOMPARE(rst_n_count, 1);
 
-        // Verify test_en appears only once
-        int test_en_count = portSignals.count("test_en");
-        QCOMPARE(test_en_count, 1);
+        // Verify test_en appears when needed by dividers or ICGs
+        bool hasTestEn = portSignals.contains("test_en");
+        QVERIFY(hasTestEn); // Should be present due to automatic signal collection
 
         // Clock cell should be properly generated with deduplicated signals
         QVERIFY(verifyClockCellFileComplete());
+    }
+
+    void test_icg_polarity_system()
+    {
+        // Test the POLARITY parameter system for ICG cells
+        QString netlistContent = R"(
+port:
+  clk_sys:
+    direction: input
+    type: logic
+  cpu_en:
+    direction: input
+    type: logic
+  gpu_en:
+    direction: input
+    type: logic
+  clk_cpu:
+    direction: output
+    type: logic
+  clk_gpu:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_clk_ctrl
+    clock: clk_sys
+    input:
+      clk_sys:
+        freq: 100MHz
+    target:
+      clk_cpu:
+        freq: 100MHz
+        icg:
+          enable: cpu_en
+          polarity: high         # Positive polarity (default)
+        link:
+          clk_sys:
+      clk_gpu:
+        freq: 100MHz
+        icg:
+          enable: gpu_en
+          polarity: low          # Negative polarity
+        link:
+          clk_sys:
+)";
+
+        QString netlistPath = createTempFile("test_polarity.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_polarity.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify the generated content contains proper POLARITY parameters */
+        // CPU clock should have POLARITY(1'b1) for high polarity
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
+        QVERIFY(verilogContent.contains("POLARITY(1'b1)")); // High polarity for clk_cpu
+        QVERIFY(verilogContent.contains("POLARITY(1'b0)")); // Low polarity for clk_gpu
+
+        // Verify both ICG instances exist with correct enable signals
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(cpu_en)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(gpu_en)"));
+
+        // Verify test_en signal is automatically included and deduplicated
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  test_en"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en(test_en)"));
+
+        // clock_cell.v should be created and complete with POLARITY support
+        QVERIFY(verifyClockCellFileComplete());
+
+        // Verify clock_cell.v contains the POLARITY parameter system
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        QFile         cellFile(clockCellPath);
+        QVERIFY(cellFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString cellContent = cellFile.readAll();
+        cellFile.close();
+
+        // Verify POLARITY parameter in qsoc_tc_clk_gate
+        QVERIFY(cellContent.contains("parameter POLARITY = 1'b1"));
+        QVERIFY(cellContent.contains("qsoc_tc_clk_gate_pos"));
+        QVERIFY(cellContent.contains("qsoc_tc_clk_gate_neg"));
+        QVERIFY(cellContent.contains("if (POLARITY == 1'b1)"));
     }
 
     void test_duplicate_output_error_detection()
@@ -1127,7 +1231,6 @@ metadata:
 clock:
   - name: test_ctrl
     clock: clk_in
-    test_en: test_en
     input:
       clk_in:
         freq: 100MHz

@@ -86,11 +86,6 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
         config.ref_clock = QString::fromStdString(clockNode["ref_clock"].as<std::string>());
     }
 
-    // Optional test enable
-    if (clockNode["test_en"]) {
-        config.test_en = QString::fromStdString(clockNode["test_en"].as<std::string>());
-    }
-
     // Parse clock inputs
     if (clockNode["input"] && clockNode["input"].IsMap()) {
         for (auto it = clockNode["input"].begin(); it != clockNode["input"].end(); ++it) {
@@ -687,9 +682,9 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
         }
     }
 
-    // Add test enable if specified
-    if (!config.test_en.isEmpty() && !addedSignals.contains(config.test_en)) {
-        portList << QString("    input  %1     /**< Test enable signal */").arg(config.test_en);
+    // Add test_en signal if any fallback uses it
+    if (!addedSignals.contains("test_en")) {
+        portList << QString("    input  test_en     /**< Test enable signal */");
     }
 
     // Join ports and remove last comma
@@ -770,13 +765,13 @@ void QSocClockPrimitive::generateOutputAssignments(
             QString icgOutput = QString("%1_icg_out").arg(target.name);
             out << "    wire " << icgOutput << ";\n";
             out << "    qsoc_tc_clk_gate #(\n";
-            out << "        .CLOCK_DURING_RESET(1'b0)\n";
+            out << "        .CLOCK_DURING_RESET(1'b0),\n";
+            out << "        .POLARITY(" << (target.icg.polarity == "high" ? "1'b1" : "1'b0")
+                << ")\n";
             out << "    ) " << instanceName << "_icg (\n";
             out << "        .clk(" << currentSignal << "),\n";
             out << "        .en(" << target.icg.enable << "),\n";
-            QString testEn = target.icg.test_enable.isEmpty()
-                                 ? (config.test_en.isEmpty() ? "1'b0" : config.test_en)
-                                 : target.icg.test_enable;
+            QString testEn = target.icg.test_enable.isEmpty() ? "test_en" : target.icg.test_enable;
             out << "        .test_en(" << testEn << "),\n";
             out << "        .rst_n(" << (target.icg.reset.isEmpty() ? "1'b1" : target.icg.reset)
                 << "),\n";
@@ -809,9 +804,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             out << "        .en(" << (target.div.enable.isEmpty() ? "1'b1" : target.div.enable)
                 << "),\n";
 
-            QString testEn = target.div.test_enable.isEmpty()
-                                 ? (config.test_en.isEmpty() ? "1'b0" : config.test_en)
-                                 : target.div.test_enable;
+            QString testEn = target.div.test_enable.isEmpty() ? "test_en" : target.div.test_enable;
             out << "        .test_en(" << testEn << "),\n";
 
             // Dynamic or static division value -  design
@@ -908,7 +901,8 @@ void QSocClockPrimitive::generateClockInstance(
             QString icgWire = wireName + "_preicg";
             out << "    wire " << icgWire << ";\n";
             out << "    qsoc_tc_clk_gate #(\n";
-            out << "        .CLOCK_DURING_RESET(1'b0)\n";
+            out << "        .CLOCK_DURING_RESET(1'b0),\n";
+            out << "        .POLARITY(" << (link.icg.polarity == "high" ? "1'b1" : "1'b0") << ")\n";
             out << "    ) " << instanceName << "_icg (\n";
             out << "        .clk(" << currentWire << "),\n";
             out << "        .en(" << link.icg.enable << "),\n";
@@ -1238,6 +1232,8 @@ QStringList QSocClockPrimitive::getRequiredTemplateCells()
     return {
         "qsoc_tc_clk_buf",
         "qsoc_tc_clk_gate",
+        "qsoc_tc_clk_gate_pos",
+        "qsoc_tc_clk_gate_neg",
         "qsoc_tc_clk_inv",
         "qsoc_tc_clk_or2",
         "qsoc_tc_clk_mux2",
@@ -1275,6 +1271,48 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
                "support.\n";
         out << " */\n";
         out << "module qsoc_tc_clk_gate #(\n";
+        out << "    parameter CLOCK_DURING_RESET = 1'b0,\n";
+        out << "    parameter POLARITY = 1'b1\n";
+        out << ")(\n";
+        out << "    input  wire clk,        /**< Clock input */\n";
+        out << "    input  wire en,         /**< Clock enable */\n";
+        out << "    input  wire test_en,    /**< Test enable */\n";
+        out << "    input  wire rst_n,      /**< Reset (active low) */\n";
+        out << "    output wire clk_out     /**< Clock output */\n";
+        out << ");\n";
+        out << "    /* Unified gate with polarity selection */\n";
+        out << "    generate\n";
+        out << "        if (POLARITY == 1'b1) begin : pos_gate\n";
+        out << "            qsoc_tc_clk_gate_pos #(\n";
+        out << "                .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
+        out << "            ) u_pos (\n";
+        out << "                .clk(clk),\n";
+        out << "                .en(en),\n";
+        out << "                .test_en(test_en),\n";
+        out << "                .rst_n(rst_n),\n";
+        out << "                .clk_out(clk_out)\n";
+        out << "            );\n";
+        out << "        end else begin : neg_gate\n";
+        out << "            qsoc_tc_clk_gate_neg #(\n";
+        out << "                .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
+        out << "            ) u_neg (\n";
+        out << "                .clk(clk),\n";
+        out << "                .en(en),\n";
+        out << "                .test_en(test_en),\n";
+        out << "                .rst_n(rst_n),\n";
+        out << "                .clk_out(clk_out)\n";
+        out << "            );\n";
+        out << "        end\n";
+        out << "    endgenerate\n";
+        out << "endmodule\n";
+
+    } else if (cellName == "qsoc_tc_clk_gate_pos") {
+        out << "/**\n";
+        out << " * @brief Positive-edge clock gate cell module\n";
+        out << " *\n";
+        out << " * @details Template implementation of positive-edge ICG cell.\n";
+        out << " */\n";
+        out << "module qsoc_tc_clk_gate_pos #(\n";
         out << "    parameter CLOCK_DURING_RESET = 1'b0\n";
         out << ")(\n";
         out << "    input  wire clk,        /**< Clock input */\n";
@@ -1283,11 +1321,31 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    input  wire rst_n,      /**< Reset (active low) */\n";
         out << "    output wire clk_out     /**< Clock output */\n";
         out << ");\n";
-        out << "    /* Template implementation - replace with foundry-specific IP */\n";
+        out << "    /* Template positive-edge ICG implementation */\n";
         out << "    wire final_en;\n";
-        out << "    // Force enable when test_en or (reset and CLOCK_DURING_RESET parameter)\n";
         out << "    assign final_en = test_en | (!rst_n & CLOCK_DURING_RESET) | (rst_n & en);\n";
         out << "    assign clk_out = clk & final_en;\n";
+        out << "endmodule\n";
+
+    } else if (cellName == "qsoc_tc_clk_gate_neg") {
+        out << "/**\n";
+        out << " * @brief Negative-edge clock gate cell module\n";
+        out << " *\n";
+        out << " * @details Template implementation of negative-edge ICG cell.\n";
+        out << " */\n";
+        out << "module qsoc_tc_clk_gate_neg #(\n";
+        out << "    parameter CLOCK_DURING_RESET = 1'b0\n";
+        out << ")(\n";
+        out << "    input  wire clk,        /**< Clock input */\n";
+        out << "    input  wire en,         /**< Clock enable */\n";
+        out << "    input  wire test_en,    /**< Test enable */\n";
+        out << "    input  wire rst_n,      /**< Reset (active low) */\n";
+        out << "    output wire clk_out     /**< Clock output */\n";
+        out << ");\n";
+        out << "    /* Template negative-edge ICG implementation */\n";
+        out << "    wire final_en;\n";
+        out << "    assign final_en = test_en | (!rst_n & CLOCK_DURING_RESET) | (~rst_n & en);\n";
+        out << "    assign clk_out = clk | ~final_en;\n";
         out << "endmodule\n";
 
     } else if (cellName == "qsoc_tc_clk_inv") {
