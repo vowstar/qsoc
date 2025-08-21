@@ -1272,10 +1272,10 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
 
     } else if (cellName == "qsoc_tc_clk_gate") {
         out << "/**\n";
-        out << " * @brief Clock gate cell module\n";
+        out << " * @brief Wrapper: polarity select + test/reset bypass via MUX2\n";
         out << " *\n";
-        out << " * @details Template implementation of clock gate cell with test and reset "
-               "support.\n";
+        out << " * @details POLARITY=1 -> LATCH-AND; POLARITY=0 -> LATCH-OR\n";
+        out << " *          bypass_sel = test_en | (~rst_n & CLOCK_DURING_RESET)\n";
         out << " */\n";
         out << "module qsoc_tc_clk_gate #(\n";
         out << "    parameter CLOCK_DURING_RESET = 1'b0,\n";
@@ -1287,72 +1287,78 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    input  wire rst_n,      /**< Reset (active low) */\n";
         out << "    output wire clk_out     /**< Clock output */\n";
         out << ");\n";
-        out << "    /* Unified gate with polarity selection */\n";
+        out << "    wire gated_clk;\n";
+        out << "    \n";
+        out << "    /* Select ICG primitive by polarity */\n";
         out << "    generate\n";
-        out << "        if (POLARITY == 1'b1) begin : pos_gate\n";
-        out << "            qsoc_tc_clk_gate_pos #(\n";
-        out << "                .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
-        out << "            ) u_pos (\n";
-        out << "                .clk(clk),\n";
-        out << "                .en(en),\n";
+        out << "        if (POLARITY == 1'b1) begin : g_pos\n";
+        out << "            qsoc_tc_clk_gate_pos u_pos (\n";
+        out << "                .clk    (clk),\n";
+        out << "                .en     (en),\n";
         out << "                .test_en(test_en),\n";
-        out << "                .rst_n(rst_n),\n";
-        out << "                .clk_out(clk_out)\n";
+        out << "                .clk_out(gated_clk)\n";
         out << "            );\n";
-        out << "        end else begin : neg_gate\n";
-        out << "            qsoc_tc_clk_gate_neg #(\n";
-        out << "                .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
-        out << "            ) u_neg (\n";
-        out << "                .clk(clk),\n";
-        out << "                .en(en),\n";
+        out << "        end else begin : g_neg\n";
+        out << "            qsoc_tc_clk_gate_neg u_neg (\n";
+        out << "                .clk    (clk),\n";
+        out << "                .en     (en),\n";
         out << "                .test_en(test_en),\n";
-        out << "                .rst_n(rst_n),\n";
-        out << "                .clk_out(clk_out)\n";
+        out << "                .clk_out(gated_clk)\n";
         out << "            );\n";
         out << "        end\n";
         out << "    endgenerate\n";
+        out << "    \n";
+        out << "    /* Bypass: immediate pass-through in test mode or during reset */\n";
+        out << "    wire bypass_sel = test_en | (~rst_n & CLOCK_DURING_RESET);\n";
+        out << "    \n";
+        out << "    qsoc_tc_clk_mux2 i_clk_bypass_mux (\n";
+        out << "        .CLK_IN0(gated_clk),\n";
+        out << "        .CLK_IN1(clk),\n";
+        out << "        .CLK_SEL(bypass_sel),\n";
+        out << "        .CLK_OUT(clk_out)\n";
+        out << "    );\n";
         out << "endmodule\n";
 
     } else if (cellName == "qsoc_tc_clk_gate_pos") {
         out << "/**\n";
-        out << " * @brief Positive-edge clock gate cell module\n";
+        out << " * @brief LATCH-AND ICG: Positive-edge style (pre-controlled)\n";
         out << " *\n";
-        out << " * @details Template implementation of positive-edge ICG cell.\n";
+        out << " * @details IQ updates when clk==0: IQ = (test_en | en); Q = IQ & clk\n";
         out << " */\n";
-        out << "module qsoc_tc_clk_gate_pos #(\n";
-        out << "    parameter CLOCK_DURING_RESET = 1'b0\n";
-        out << ")(\n";
+        out << "module qsoc_tc_clk_gate_pos (\n";
         out << "    input  wire clk,        /**< Clock input */\n";
         out << "    input  wire en,         /**< Clock enable */\n";
         out << "    input  wire test_en,    /**< Test enable */\n";
-        out << "    input  wire rst_n,      /**< Reset (active low) */\n";
         out << "    output wire clk_out     /**< Clock output */\n";
         out << ");\n";
-        out << "    /* Template positive-edge ICG implementation */\n";
-        out << "    wire final_en;\n";
-        out << "    assign final_en = test_en | (!rst_n & CLOCK_DURING_RESET) | (rst_n & en);\n";
-        out << "    assign clk_out = clk & final_en;\n";
+        out << "    reg iq;\n";
+        out << "    /* Level-sensitive latch, transparent when clk==0 */\n";
+        out << "    always @* begin\n";
+        out << "        if (!clk) iq <= (test_en | en);  /* Transparent period, hold otherwise "
+               "*/\n";
+        out << "    end\n";
+        out << "    assign clk_out = iq & clk;\n";
         out << "endmodule\n";
 
     } else if (cellName == "qsoc_tc_clk_gate_neg") {
         out << "/**\n";
-        out << " * @brief Negative-edge clock gate cell module\n";
+        out << " * @brief LATCH-OR ICG: Negative-edge style (pre-controlled)\n";
         out << " *\n";
-        out << " * @details Template implementation of negative-edge ICG cell.\n";
+        out << " * @details IQ updates when clk==1: IQ = ~(test_en | en); Q = IQ | clk\n";
         out << " */\n";
-        out << "module qsoc_tc_clk_gate_neg #(\n";
-        out << "    parameter CLOCK_DURING_RESET = 1'b0\n";
-        out << ")(\n";
+        out << "module qsoc_tc_clk_gate_neg (\n";
         out << "    input  wire clk,        /**< Clock input */\n";
         out << "    input  wire en,         /**< Clock enable */\n";
         out << "    input  wire test_en,    /**< Test enable */\n";
-        out << "    input  wire rst_n,      /**< Reset (active low) */\n";
         out << "    output wire clk_out     /**< Clock output */\n";
         out << ");\n";
-        out << "    /* Template negative-edge ICG implementation */\n";
-        out << "    wire final_en;\n";
-        out << "    assign final_en = test_en | (!rst_n & CLOCK_DURING_RESET) | (~rst_n & en);\n";
-        out << "    assign clk_out = clk | ~final_en;\n";
+        out << "    reg iq;\n";
+        out << "    /* Level-sensitive latch, transparent when clk==1 */\n";
+        out << "    always @* begin\n";
+        out << "        if (clk) iq <= ~(test_en | en);  /* Transparent period, hold otherwise "
+               "*/\n";
+        out << "    end\n";
+        out << "    assign clk_out = iq | clk;\n";
         out << "endmodule\n";
 
     } else if (cellName == "qsoc_tc_clk_inv") {
@@ -1559,7 +1565,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    end\n";
         out << "\n";
         out << "    /* State registers */\n";
-        out << "    always @(posedge clk, negedge rst_n) begin\n";
+        out << "    always @(posedge clk or negedge rst_n) begin\n";
         out << "        if (!rst_n) begin\n";
         out << "            use_odd_division_q <= use_odd_division_reset_value;\n";
         out << "            clk_div_bypass_en_q <= clk_div_bypass_en_reset_value;\n";
@@ -1591,7 +1597,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        end\n";
         out << "    end\n";
         out << "\n";
-        out << "    always @(posedge clk, negedge rst_n) begin\n";
+        out << "    always @(posedge clk or negedge rst_n) begin\n";
         out << "        if (!rst_n) begin\n";
         out << "            cycle_cntr_q <= {WIDTH{1'b0}};\n";
         out << "        end else begin\n";
@@ -1601,24 +1607,20 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "\n";
         out << "    assign count = cycle_cntr_q;\n";
         out << "\n";
-        out << "    /* T-Flip-Flops with intentional blocking assignments */\n";
-        out << "    always @(posedge clk, negedge rst_n) begin\n";
+        out << "    /* T-Flip-Flops with non-blocking assignments for synthesis */\n";
+        out << "    always @(posedge clk or negedge rst_n) begin\n";
         out << "        if (!rst_n) begin\n";
-        out << "            t_ff1_q = 1'b0; /* Intentional blocking assignment */\n";
-        out << "        end else begin\n";
-        out << "            if (t_ff1_en) begin\n";
-        out << "                t_ff1_q = t_ff1_d; /* Intentional blocking assignment */\n";
-        out << "            end\n";
+        out << "            t_ff1_q <= 1'b0;\n";
+        out << "        end else if (t_ff1_en) begin\n";
+        out << "            t_ff1_q <= t_ff1_d;\n";
         out << "        end\n";
         out << "    end\n";
         out << "\n";
-        out << "    always @(negedge clk, negedge rst_n) begin\n";
+        out << "    always @(negedge clk or negedge rst_n) begin\n";
         out << "        if (!rst_n) begin\n";
-        out << "            t_ff2_q = 1'b0; /* Intentional blocking assignment */\n";
-        out << "        end else begin\n";
-        out << "            if (t_ff2_en) begin\n";
-        out << "                t_ff2_q = t_ff2_d; /* Intentional blocking assignment */\n";
-        out << "            end\n";
+        out << "            t_ff2_q <= 1'b0;\n";
+        out << "        end else if (t_ff2_en) begin\n";
+        out << "            t_ff2_q <= t_ff2_d;\n";
         out << "        end\n";
         out << "    end\n";
         out << "\n";
@@ -1673,7 +1675,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    );\n";
         out << "\n";
         out << "    /* Clock gate feedback signal */\n";
-        out << "    always @(posedge ungated_output_clock, negedge rst_n) begin\n";
+        out << "    always @(posedge ungated_output_clock or negedge rst_n) begin\n";
         out << "        if (!rst_n) begin\n";
         out << "            gate_is_open_q <= 1'b0;\n";
         out << "        end else begin\n";
@@ -1731,6 +1733,15 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    \n";
         out << "    // Note: NUM_INPUTS must be >= 2 for proper operation\n";
         out << "    \n";
+        out << "    /* Integer alias to avoid signed/unsigned compare warnings */\n";
+        out << "    localparam integer NUM_INPUTS_I = (NUM_INPUTS < 1) ? 1 : NUM_INPUTS;\n";
+        out << "    \n";
+        out << "    /* Vector-form upper bound for async_sel (same width as async_sel) */\n";
+        out << "    localparam [WIDTH-1:0] NUM_INPUTS_M1 = NUM_INPUTS_I - 1;\n";
+        out << "    \n";
+        out << "    /* Safe sync stages constant to avoid negative slice */\n";
+        out << "    localparam integer SYNC_S = (NUM_SYNC_STAGES < 1) ? 1 : NUM_SYNC_STAGES;\n";
+        out << "    \n";
         out << "    // Internal signals for glitch-free switching\n";
         out << "    reg [NUM_INPUTS-1:0]        sel_onehot;\n";
         out << "    wire [NUM_INPUTS*2-1:0]   glitch_filter_d;\n";
@@ -1744,17 +1755,18 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    wire                         output_clock;\n";
         out << "    reg [NUM_INPUTS-1:0]        reset_synced;\n";
         out << "    \n";
-        out << "    // Onehot decoder\n";
+        out << "    /* Onehot decoder */\n";
         out << "    always @(*) begin\n";
         out << "        sel_onehot = {NUM_INPUTS{1'b0}};\n";
-        out << "        if (async_sel < NUM_INPUTS)\n";
+        out << "        /* compare vector vs vector to avoid sign-compare warning */\n";
+        out << "        if (async_sel <= NUM_INPUTS_M1)\n";
         out << "            sel_onehot[async_sel] = 1'b1;\n";
         out << "    end\n";
         out << "    \n";
         out << "    // Generate logic for each input clock\n";
         out << "    genvar i;\n";
         out << "    generate\n";
-        out << "    for (i = 0; i < NUM_INPUTS; i = i + 1) begin : gen_input_stages\n";
+        out << "    for (i = 0; i < NUM_INPUTS_I; i = i + 1) begin : gen_input_stages\n";
         out << "        // Synchronize reset to each clock domain using dedicated reset "
                "generator\n";
         out << "        // Note: For full compatibility, this should be replaced with a proper "
@@ -1772,7 +1784,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        integer j;\n";
         out << "        always @(*) begin\n";
         out << "            gate_enable_unfiltered[i] = 1'b1;\n";
-        out << "            for (j = 0; j < NUM_INPUTS; j = j + 1) begin\n";
+        out << "            for (j = 0; j < NUM_INPUTS_I; j = j + 1) begin\n";
         out << "                if (i == j) begin\n";
         out << "                    gate_enable_unfiltered[i] = gate_enable_unfiltered[i] & "
                "sel_onehot[j];\n";
@@ -1802,20 +1814,19 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        // Synchronizer chain for enable signal (equivalent to sync module)\n";
         out << "        // Note: This implements the same functionality as sync "
                "#(.STAGES(NUM_SYNC_STAGES))\n";
-        out << "        if (NUM_SYNC_STAGES >= 1) begin : gen_sync\n";
-        out << "            reg [NUM_SYNC_STAGES-1:0] sync_chain;\n";
-        out << "            always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
-        out << "                if (!reset_synced[i]) begin\n";
-        out << "                    sync_chain <= {NUM_SYNC_STAGES{1'b0}};\n";
-        out << "                end else begin\n";
-        out << "                    sync_chain <= {sync_chain[NUM_SYNC_STAGES-2:0], "
+        out << "        reg [SYNC_S-1:0] sync_chain;\n";
+        out << "        always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
+        out << "            if (!reset_synced[i]) begin\n";
+        out << "                sync_chain <= {SYNC_S{1'b0}};\n";
+        out << "            end else begin\n";
+        out << "                if (SYNC_S == 1)\n";
+        out << "                    sync_chain <= glitch_filter_output[i];\n";
+        out << "                else\n";
+        out << "                    sync_chain <= {sync_chain[SYNC_S-2:0], "
                "glitch_filter_output[i]};\n";
-        out << "                end\n";
         out << "            end\n";
-        out << "            assign gate_enable_sync[i] = sync_chain[NUM_SYNC_STAGES-1];\n";
-        out << "        end else begin : gen_no_sync\n";
-        out << "            assign gate_enable_sync[i] = glitch_filter_output[i];\n";
         out << "        end\n";
+        out << "        assign gate_enable_sync[i] = sync_chain[SYNC_S-1];\n";
         out << "        \n";
         out << "        // Optional clock during reset bypass\n";
         out << "        if (CLOCK_DURING_RESET) begin : gen_reset_bypass\n";
