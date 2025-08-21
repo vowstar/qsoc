@@ -918,7 +918,7 @@ reset:
 
         /* Verify qsoc_rst_sync module */
         QVERIFY(verifyVerilogContentNormalized(resetCellContent, "module qsoc_rst_sync"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "parameter [31:0] STAGE = 32'h3"));
+        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "parameter integer STAGE = 3"));
         QVERIFY(verifyVerilogContentNormalized(resetCellContent, "input  wire clk"));
         QVERIFY(verifyVerilogContentNormalized(resetCellContent, "input  wire rst_in_n"));
         QVERIFY(verifyVerilogContentNormalized(resetCellContent, "input  wire test_enable"));
@@ -926,11 +926,11 @@ reset:
 
         /* Verify qsoc_rst_pipe module */
         QVERIFY(verifyVerilogContentNormalized(resetCellContent, "module qsoc_rst_pipe"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "parameter [31:0] STAGE = 32'h4"));
+        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "parameter integer STAGE = 4"));
 
         /* Verify qsoc_rst_count module */
         QVERIFY(verifyVerilogContentNormalized(resetCellContent, "module qsoc_rst_count"));
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "parameter [31:0] CYCLE"));
+        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "parameter integer CYCLE"));
 
         /* Verify clean timescale */
         QVERIFY(verifyVerilogContentNormalized(resetCellContent, "`timescale 1ns / 1ps"));
