@@ -310,8 +310,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             /* Add port declaration */
-            ports.append(QString("%1 %2").arg(direction).arg(
-                type.isEmpty() ? portName : type + " " + portName));
+            if (direction == "input" || direction == "output") {
+                ports.append(QString("%1 wire %2")
+                                 .arg(direction)
+                                 .arg(type.isEmpty() ? portName : type + " " + portName));
+            } else {
+                ports.append(QString("%1 %2").arg(direction).arg(
+                    type.isEmpty() ? portName : type + " " + portName));
+            }
         }
     }
 

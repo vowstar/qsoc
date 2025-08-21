@@ -217,14 +217,14 @@ comb:
             verilogContent, "assign y4 = ~(c & d);")); /* From second file */
 
         /* Verify all ports from both files are present */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input a"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input b"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input c"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input d"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output y1"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output y2"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output y3"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output y4"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire a"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire b"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire c"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire d"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire y1"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire y2"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire y3"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire y4"));
     }
 
     void testMergeSeqSections()
@@ -345,15 +345,15 @@ seq:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign reg3 = reg3_reg;"));
 
         /* Verify all ports from both files are present using normalized whitespace */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input clk"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input rst_n"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input enable"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input [7:0] data_in1"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input [7:0] data_in2"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input [15:0] data_in3"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] reg1"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] reg2"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [15:0] reg3"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire clk"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire rst_n"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire enable"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire [7:0] data_in1"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire [7:0] data_in2"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire [15:0] data_in3"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire [7:0] reg1"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire [7:0] reg2"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire [15:0] reg3"));
     }
 
     void testMergeMixedSections()
@@ -481,13 +481,13 @@ seq:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign shift_reg = shift_reg_reg;"));
 
         /* Verify all ports are present */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  [7:0] a"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  [7:0] b"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  [7:0] c"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] mux_out"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] and_out"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] reg_out"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [7:0] shift_reg"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire [7:0] a"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire [7:0] b"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire [7:0] c"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire [7:0] mux_out"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire [7:0] and_out"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire [7:0] reg_out"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire [7:0] shift_reg"));
     }
 
     void testMergeThreeFiles()
@@ -646,8 +646,8 @@ comb: []
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "another_module"));
 
         /* Verify all ports are present using normalized whitespace */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input clk"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input [7:0] data"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire clk"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire [7:0] data"));
     }
 };
 

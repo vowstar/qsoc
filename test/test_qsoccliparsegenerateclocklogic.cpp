@@ -832,8 +832,8 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(sys_clk_en)"));
 
         // Should use sys_clk as both output and intermediate signal
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output sys_clk"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output cpu_clk"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire sys_clk"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire cpu_clk"));
 
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
@@ -1188,15 +1188,17 @@ clock:
         /* Verify the generated content contains proper POLARITY parameters */
         // CPU clock should have POLARITY(1'b1) for high polarity
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
-        QVERIFY(verilogContent.contains("POLARITY(1'b1)")); // High polarity for clk_cpu
-        QVERIFY(verilogContent.contains("POLARITY(1'b0)")); // Low polarity for clk_gpu
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "POLARITY(1'b1)")); // High polarity for clk_cpu
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "POLARITY(1'b0)")); // Low polarity for clk_gpu
 
         // Verify both ICG instances exist with correct enable signals
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(cpu_en)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(gpu_en)"));
 
         // Verify test_en signal is automatically included and deduplicated
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  test_en"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire test_en"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en(test_en)"));
 
         // clock_cell.v should be created and complete with POLARITY support

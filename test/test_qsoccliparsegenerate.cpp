@@ -839,12 +839,12 @@ instance:
         QVERIFY(verifyVerilogContent("port_width_test", "module port_width_test"));
 
         /* Verify port declarations with correct width information */
-        QVERIFY(verifyVerilogContent("port_width_test", "input clk"));
-        QVERIFY(verifyVerilogContent("port_width_test", "input rst_n"));
-        QVERIFY(verifyVerilogContent("port_width_test", "input [31:0] data_in"));
-        QVERIFY(verifyVerilogContent("port_width_test", "input [15:0] addr_in"));
-        QVERIFY(verifyVerilogContent("port_width_test", "output [31:0] data_out"));
-        QVERIFY(verifyVerilogContent("port_width_test", "output ready"));
+        QVERIFY(verifyVerilogContent("port_width_test", "input wire clk"));
+        QVERIFY(verifyVerilogContent("port_width_test", "input wire rst_n"));
+        QVERIFY(verifyVerilogContent("port_width_test", "input wire [31:0] data_in"));
+        QVERIFY(verifyVerilogContent("port_width_test", "input wire [15:0] addr_in"));
+        QVERIFY(verifyVerilogContent("port_width_test", "output wire [31:0] data_out"));
+        QVERIFY(verifyVerilogContent("port_width_test", "output wire ready"));
 
         /* Verify CPU instance */
         QVERIFY(verifyVerilogContent("port_width_test", "c906 cpu0"));
@@ -909,15 +909,15 @@ instance:
         /* Verify example1 module content */
         QVERIFY(verifyVerilogContent("example1", "module example1"));
         QVERIFY(verifyVerilogContent("example1", "c906 cpu0"));
-        QVERIFY(verifyVerilogContent("example1", "input clk"));
-        QVERIFY(verifyVerilogContent("example1", "input rst_n"));
+        QVERIFY(verifyVerilogContent("example1", "input wire clk"));
+        QVERIFY(verifyVerilogContent("example1", "input wire rst_n"));
         QVERIFY(verifyVerilogContent("example1", "endmodule"));
 
         /* Verify example2 module content */
         QVERIFY(verifyVerilogContent("example2", "module example2"));
         QVERIFY(verifyVerilogContent("example2", "c906 cpu0"));
-        QVERIFY(verifyVerilogContent("example2", "input clk"));
-        QVERIFY(verifyVerilogContent("example2", "input rst_n"));
+        QVERIFY(verifyVerilogContent("example2", "input wire clk"));
+        QVERIFY(verifyVerilogContent("example2", "input wire rst_n"));
         QVERIFY(verifyVerilogContent("example2", ".axim_clk_en(1'b0)"));
         QVERIFY(verifyVerilogContent("example2", "endmodule"));
     }

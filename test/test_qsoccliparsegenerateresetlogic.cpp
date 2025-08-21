@@ -797,8 +797,8 @@ reset:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* Clock inputs */"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  wire       reason_clear"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* Reset reason clear */"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output [2:0] reason,"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output       reason_valid,"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire [2:0] reason"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire reason_valid"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* reason_valid register */"));
 
         /* Verify module naming */

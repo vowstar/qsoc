@@ -426,7 +426,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
 
     // Add default clock if specified
     if (!config.clock.isEmpty()) {
-        portList << QString("    input  %1     /**< Default synchronous clock */").arg(config.clock);
+        portList << QString("    input  wire %1,     /**< Default synchronous clock */")
+                        .arg(config.clock);
     }
 
     // Add input clocks (skip if already added as default clock)
@@ -439,7 +440,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
             comment += QString(" (%1)").arg(input.freq);
         }
         comment += " */";
-        portList << QString("    input  %1,    %2").arg(input.name, comment);
+        portList << QString("    input  wire %1,     %2").arg(input.name, comment);
     }
 
     // Add target clocks
@@ -449,7 +450,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
             comment += QString(" (%1)").arg(target.freq);
         }
         comment += " */";
-        portList << QString("    output %1,    %2").arg(target.name, comment);
+        portList << QString("    output wire %1,     %2").arg(target.name, comment);
     }
 
     // Add dynamic divider interface ports (target-level)
@@ -689,11 +690,11 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
 
     // Add test_en signal if any fallback uses it
     if (!addedSignals.contains("test_en")) {
-        portList << QString("    input  test_en     /**< Test enable signal */");
+        portList << QString("    input  wire test_en    /**< Test enable signal */");
     }
 
     // Join ports and remove last comma
-    QString ports = portList.join(",\n");
+    QString ports = portList.join("\n");
     if (ports.endsWith(",")) {
         ports = ports.left(ports.length() - 1);
     }
@@ -1724,7 +1725,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    input  wire                  test_en,       /**< DFT test enable */\n";
         out << "    input  wire                  async_rst_n,   /**< Async reset (active low) */\n";
         out << "    input  wire [WIDTH-1:0]      async_sel,     /**< Async select signal */\n";
-        out << "    output reg                   clk_out        /**< Clock output */\n";
+        out << "    output wire                  clk_out        /**< Clock output */\n";
         out << ");\n";
         out << "    /* Template implementation - replace with foundry-specific IP */\n";
         out << "    \n";
@@ -1732,7 +1733,8 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    \n";
         out << "    // Internal signals for glitch-free switching\n";
         out << "    reg [NUM_INPUTS-1:0]        sel_onehot;\n";
-        out << "    reg [NUM_INPUTS*2-1:0]   glitch_filter_d, glitch_filter_q;\n";
+        out << "    wire [NUM_INPUTS*2-1:0]   glitch_filter_d;\n";
+        out << "    reg [NUM_INPUTS*2-1:0]   glitch_filter_q;\n";
         out << "    reg [NUM_INPUTS-1:0]         gate_enable_unfiltered;\n";
         out << "    wire [NUM_INPUTS-1:0]        glitch_filter_output;\n";
         out << "    wire [NUM_INPUTS-1:0]        gate_enable_sync;\n";
@@ -1750,7 +1752,9 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    end\n";
         out << "    \n";
         out << "    // Generate logic for each input clock\n";
-        out << "    for (genvar i = 0; i < NUM_INPUTS; i++) begin : gen_input_stages\n";
+        out << "    genvar i;\n";
+        out << "    generate\n";
+        out << "    for (i = 0; i < NUM_INPUTS; i = i + 1) begin : gen_input_stages\n";
         out << "        // Synchronize reset to each clock domain using dedicated reset "
                "generator\n";
         out << "        // Note: For full compatibility, this should be replaced with a proper "
@@ -1765,13 +1769,16 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        end\n";
         out << "        \n";
         out << "        // Gate enable generation with mutual exclusion\n";
+        out << "        integer j;\n";
         out << "        always @(*) begin\n";
         out << "            gate_enable_unfiltered[i] = 1'b1;\n";
-        out << "            for (int j = 0; j < NUM_INPUTS; j++) begin\n";
+        out << "            for (j = 0; j < NUM_INPUTS; j = j + 1) begin\n";
         out << "                if (i == j) begin\n";
-        out << "                    gate_enable_unfiltered[i] &= sel_onehot[j];\n";
+        out << "                    gate_enable_unfiltered[i] = gate_enable_unfiltered[i] & "
+               "sel_onehot[j];\n";
         out << "                end else begin\n";
-        out << "                    gate_enable_unfiltered[i] &= clock_disabled_q[j];\n";
+        out << "                    gate_enable_unfiltered[i] = gate_enable_unfiltered[i] & "
+               "clock_disabled_q[j];\n";
         out << "                end\n";
         out << "            end\n";
         out << "        end\n";
@@ -1846,6 +1853,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "            end\n";
         out << "        end\n";
         out << "    end\n";
+        out << "    endgenerate\n";
         out << "    \n";
         out << "    // Output OR gate using dedicated clock OR tree\n";
         out << "    qsoc_clk_or_tree #(\n";
