@@ -333,6 +333,15 @@ public slots:
     bool processNetlist();
 
     /**
+     * @brief Expand bus link references in instance bus sections.
+     * @details Scans all instances for bus sections with link attributes,
+     *          and expands them into the netlist's bus section.
+     * @retval true Bus links expanded successfully.
+     * @retval false Failed to expand bus links.
+     */
+    bool expandBusLink();
+
+    /**
      * @brief Generate Verilog code from the processed netlist.
      * @details Generates Verilog code and saves it to the output directory.
      * @param outputFileName Output file name (without extension).

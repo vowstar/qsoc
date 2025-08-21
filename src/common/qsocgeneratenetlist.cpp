@@ -131,6 +131,12 @@ bool QSocGenerateManager::processNetlist()
             return false;
         }
 
+        /* Expand bus links before processing */
+        if (!expandBusLink()) {
+            qCritical() << "Error: Failed to expand bus links";
+            return false;
+        }
+
         /* Create net section if it doesn't exist */
         if (!netlistData["net"]) {
             netlistData["net"] = YAML::Node(YAML::NodeType::Map);
@@ -508,6 +514,97 @@ bool QSocGenerateManager::processNetlist()
         return false;
     } catch (...) {
         qCritical() << "Unknown exception in processNetlist";
+        return false;
+    }
+}
+
+bool QSocGenerateManager::expandBusLink()
+{
+    try {
+        /* Check if instance section exists */
+        if (!netlistData["instance"] || !netlistData["instance"].IsMap()) {
+            /* No instance section, nothing to expand */
+            return true;
+        }
+
+        /* Create bus section if it doesn't exist */
+        if (!netlistData["bus"]) {
+            netlistData["bus"] = YAML::Node(YAML::NodeType::Map);
+        }
+
+        /* Iterate through all instances */
+        for (auto instancePair : netlistData["instance"]) {
+            if (!instancePair.first.IsScalar()) {
+                continue;
+            }
+
+            const std::string instanceName = instancePair.first.as<std::string>();
+            YAML::Node        instanceNode = instancePair.second;
+
+            /* Check if instance has bus section */
+            if (!instanceNode["bus"] || !instanceNode["bus"].IsMap()) {
+                continue;
+            }
+
+            /* Process each bus in the instance */
+            for (auto busPair : instanceNode["bus"]) {
+                if (!busPair.first.IsScalar()) {
+                    continue;
+                }
+
+                const std::string busPortName = busPair.first.as<std::string>();
+                YAML::Node        busNode     = busPair.second;
+
+                /* Check if bus has link attribute */
+                if (!busNode["link"] || !busNode["link"].IsScalar()) {
+                    continue;
+                }
+
+                const std::string linkName = busNode["link"].as<std::string>();
+                qInfo() << "Expanding bus link:" << instanceName.c_str() << "."
+                        << busPortName.c_str() << " -> " << linkName.c_str();
+
+                /* Create or update the bus in netlist bus section */
+                if (!netlistData["bus"][linkName]) {
+                    netlistData["bus"][linkName] = YAML::Node(YAML::NodeType::Sequence);
+                }
+
+                /* Add connection to the bus */
+                YAML::Node connection;
+                connection["instance"] = instanceName;
+                connection["port"]     = busPortName;
+
+                /* Check if this connection already exists to avoid duplicates */
+                bool exists = false;
+                for (const auto &existingConn : netlistData["bus"][linkName]) {
+                    if (existingConn["instance"] && existingConn["port"]
+                        && existingConn["instance"].as<std::string>() == instanceName
+                        && existingConn["port"].as<std::string>() == busPortName) {
+                        exists = true;
+                        break;
+                    }
+                }
+
+                if (!exists) {
+                    netlistData["bus"][linkName].push_back(connection);
+                }
+
+                /* Remove the link attribute from instance bus node (keep other attributes) */
+                busNode.remove("link");
+            }
+        }
+
+        qInfo() << "Bus link expansion completed successfully";
+        return true;
+
+    } catch (const YAML::Exception &e) {
+        qCritical() << "YAML exception in expandBusLink:" << e.what();
+        return false;
+    } catch (const std::exception &e) {
+        qCritical() << "Standard exception in expandBusLink:" << e.what();
+        return false;
+    } catch (...) {
+        qCritical() << "Unknown exception in expandBusLink";
         return false;
     }
 }

@@ -2619,6 +2619,198 @@ net:
                 "test_bus_width_preservation_unique", "wire [15:0] test_unique_data_signal"),
             "Data signal should NOT be converted to [15:0] format");
     }
+
+    void testBusLinkExpansion()
+    {
+        messageList.clear();
+
+        /* First create module files for testing bus functionality */
+        const QString smurfModuleContent = R"(
+smurf_struct:
+  port:
+    clk_ahb:
+      type: logic
+      direction: in
+    clk_apb:
+      type: logic
+      direction: in
+  bus:
+    axim1:
+      bus: axi_bus
+      direction: master
+      mapping:
+        arvalid: axim1_arvalid
+        arready: axim1_arready
+        rdata: axim1_rdata
+    axim2:
+      bus: axi_bus
+      direction: master
+      mapping:
+        arvalid: axim2_arvalid
+        arready: axim2_arready
+        rdata: axim2_rdata
+)";
+
+        const QString c906BusModuleContent = R"(
+c906_with_bus:
+  port:
+    clk:
+      type: logic
+      direction: in
+  bus:
+    axis1:
+      bus: axi_bus
+      direction: slave
+      mapping:
+        arvalid: axis1_arvalid
+        arready: axis1_arready
+        rdata: axis1_rdata
+    axis2:
+      bus: axi_bus
+      direction: slave
+      mapping:
+        arvalid: axis2_arvalid
+        arready: axis2_arready
+        rdata: axis2_rdata
+)";
+
+        /* Create bus definition */
+        const QString axiBusContent = R"(
+axi_bus:
+  port:
+    arvalid:
+      type: logic
+      direction: out
+    arready:
+      type: logic
+      direction: in
+    rdata:
+      type: logic[127:0]
+      direction: in
+)";
+
+        /* Create module files */
+        const QDir    moduleDir(projectManager.getModulePath());
+        const QString smurfModulePath = moduleDir.filePath("smurf_struct.soc_mod");
+        QFile         smurfModuleFile(smurfModulePath);
+        if (smurfModuleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&smurfModuleFile);
+            stream << smurfModuleContent;
+            smurfModuleFile.close();
+        }
+
+        const QString c906BusModulePath = moduleDir.filePath("c906_with_bus.soc_mod");
+        QFile         c906BusModuleFile(c906BusModulePath);
+        if (c906BusModuleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&c906BusModuleFile);
+            stream << c906BusModuleContent;
+            c906BusModuleFile.close();
+        }
+
+        /* Create bus file */
+        const QDir    busDir(projectManager.getBusPath());
+        const QString axiBusPath = busDir.filePath("axi_bus.soc_bus");
+        QFile         axiBusFile(axiBusPath);
+        if (axiBusFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&axiBusFile);
+            stream << axiBusContent;
+            axiBusFile.close();
+        }
+
+        /* Create netlist content with bus link syntax */
+        const QString netlistContent = R"(
+---
+version: "1.0"
+module: "test_bus_link"
+port:
+  clk:
+    direction: in
+    type: logic
+instance:
+  u_smurf:
+    module: smurf_struct
+    port:
+      clk_ahb:
+        link: clk_ahb
+      clk_apb:
+        link: clk_apb
+    bus:
+      axim1:
+        link: axi_bus1
+      axim2:
+        link: axi_bus2
+  u_t1:
+    module: c906_with_bus
+    port:
+      clk:
+        link: clk
+    bus:
+      axis1:
+        link: axi_bus1
+  u_c906:
+    module: c906_with_bus
+    port:
+      clk:
+        link: clk
+    bus:
+      axis2:
+        link: axi_bus2
+net:
+  clk_ahb:
+    - port: clk
+  clk_apb:
+    - port: clk
+)";
+
+        /* Create the netlist file */
+        const QString filePath = createTempFile("test_bus_link.soc_net", netlistContent);
+
+        /* Clear messageList again right before running the test */
+        messageList.clear();
+
+        /* Run qsoc generate command */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_bus_link"));
+
+        /* Verify that bus signals are properly generated */
+        QVERIFY2(
+            verifyVerilogContent("test_bus_link", "axi_bus1_arvalid"),
+            "Bus signal axi_bus1_arvalid should be generated");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_link", "axi_bus1_arready"),
+            "Bus signal axi_bus1_arready should be generated");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_link", "axi_bus1_rdata"),
+            "Bus signal axi_bus1_rdata should be generated");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_link", "axi_bus2_arvalid"),
+            "Bus signal axi_bus2_arvalid should be generated");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_link", "axi_bus2_arready"),
+            "Bus signal axi_bus2_arready should be generated");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_link", "axi_bus2_rdata"),
+            "Bus signal axi_bus2_rdata should be generated");
+
+        /* Verify instance connections are made */
+        QVERIFY2(
+            verifyVerilogContent("test_bus_link", "u_smurf"), "Instance u_smurf should be present");
+
+        QVERIFY2(verifyVerilogContent("test_bus_link", "u_t1"), "Instance u_t1 should be present");
+
+        QVERIFY2(verifyVerilogContent("test_bus_link", "u_c906"), "Instance u_c906 should be present");
+    }
 };
 
 QStringList Test::messageList;

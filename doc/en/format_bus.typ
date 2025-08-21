@@ -24,6 +24,97 @@ bus:
 
 During netlist processing, bus connections are expanded based on bus interface definitions in the module files, generating individual nets for each bus signal.
 
+=== Bus Link Attribute
+<soc-net-bus-link>
+The `link` attribute in the instance bus section provides a convenient shortcut for defining bus connections without manually maintaining the bus connection list. This eliminates the special case of having to update bus definitions in multiple places.
+
+==== Using Bus Link
+Instead of manually defining bus connections in the `bus` section:
+
+```yaml
+# Traditional approach - manual bus list maintenance
+instance:
+  u_cpu:
+    module: cpu_core
+    bus:
+      axi_m:
+        {}  # Bus interface defined in module
+  u_mem:
+    module: memory
+    bus:
+      axi_s:
+        {}  # Bus interface defined in module
+
+bus:
+  system_bus:
+    - instance: u_cpu
+      port: axi_m
+    - instance: u_mem
+      port: axi_s
+```
+
+You can use the `link` attribute for automatic expansion:
+
+```yaml
+# Simplified approach - automatic bus expansion
+instance:
+  u_cpu:
+    module: cpu_core
+    bus:
+      axi_m:
+        link: system_bus  # Automatically adds to system_bus
+  u_mem:
+    module: memory
+    bus:
+      axi_s:
+        link: system_bus  # Automatically adds to system_bus
+```
+
+==== How It Works
+When QSoC processes the netlist, it:
+1. Scans all instances for bus sections with `link` attributes
+2. Creates or updates the corresponding bus in the `bus` section
+3. Adds the instance and bus port to the connection list
+4. Removes the `link` attribute after expansion
+
+The expanded result is identical to the manual approach:
+
+```yaml
+# After automatic expansion
+bus:
+  system_bus:
+    - instance: u_cpu
+      port: axi_m
+    - instance: u_mem
+      port: axi_s
+```
+
+==== Complex Example
+Bus link works seamlessly with multiple buses and instances:
+
+```yaml
+instance:
+  u_master:
+    module: bus_master
+    bus:
+      axi_m1:
+        link: axi_bus1    # First AXI bus
+      axi_m2:
+        link: axi_bus2    # Second AXI bus
+  u_slave1:
+    module: peripheral
+    bus:
+      axi_s:
+        link: axi_bus1    # Connects to first bus
+  u_slave2:
+    module: peripheral
+    bus:
+      axi_s:
+        link: axi_bus2    # Connects to second bus
+```
+
+This automatically generates the complete bus connection list without manual maintenance.
+
 === Width Information Preservation
 <soc-net-bus-width-preservation>
 When QSoC expands bus connections into individual nets, it preserves the original port width specifications from module definitions. This ensures that signals with specific bit ranges (e.g., `logic[21:2]`) maintain their exact width in the generated Verilog, rather than being converted to a standard `[msb:0]` format.
