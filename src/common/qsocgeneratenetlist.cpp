@@ -137,6 +137,12 @@ bool QSocGenerateManager::processNetlist()
             return false;
         }
 
+        /* Expand bus uplinks before processing */
+        if (!expandBusUplink()) {
+            qCritical() << "Error: Failed to expand bus uplinks";
+            return false;
+        }
+
         /* Create net section if it doesn't exist */
         if (!netlistData["net"]) {
             netlistData["net"] = YAML::Node(YAML::NodeType::Map);
@@ -605,6 +611,166 @@ bool QSocGenerateManager::expandBusLink()
         return false;
     } catch (...) {
         qCritical() << "Unknown exception in expandBusLink";
+        return false;
+    }
+}
+
+bool QSocGenerateManager::expandBusUplink()
+{
+    try {
+        /* Check if instance section exists */
+        if (!netlistData["instance"] || !netlistData["instance"].IsMap()) {
+            /* No instance section, nothing to expand */
+            return true;
+        }
+
+        qInfo() << "Processing bus uplink expansion...";
+
+        /* Iterate through all instances */
+        for (auto instancePair : netlistData["instance"]) {
+            if (!instancePair.first.IsScalar()) {
+                continue;
+            }
+
+            const std::string instanceName = instancePair.first.as<std::string>();
+            YAML::Node        instanceNode = instancePair.second;
+
+            /* Check if instance has bus section */
+            if (!instanceNode["bus"] || !instanceNode["bus"].IsMap()) {
+                continue;
+            }
+
+            /* Get module name for port mapping */
+            if (!instanceNode["module"] || !instanceNode["module"].IsScalar()) {
+                continue;
+            }
+            const std::string moduleName = instanceNode["module"].as<std::string>();
+
+            /* Get module data */
+            if (!moduleManager
+                || !moduleManager->isModuleExist(QString::fromStdString(moduleName))) {
+                continue;
+            }
+
+            YAML::Node moduleData;
+            try {
+                moduleData = moduleManager->getModuleYaml(QString::fromStdString(moduleName));
+            } catch (const YAML::Exception &e) {
+                qWarning() << "Error getting module data for bus uplink:" << e.what();
+                continue;
+            }
+
+            /* Process each bus in the instance */
+            for (auto busPair : instanceNode["bus"]) {
+                if (!busPair.first.IsScalar()) {
+                    continue;
+                }
+
+                const std::string busPortName = busPair.first.as<std::string>();
+                YAML::Node        busNode     = busPair.second;
+
+                /* Check if bus has uplink attribute */
+                if (!busNode["uplink"] || !busNode["uplink"].IsScalar()) {
+                    continue;
+                }
+
+                const std::string uplinkName = busNode["uplink"].as<std::string>();
+                qInfo() << "Expanding bus uplink:" << instanceName.c_str() << "."
+                        << busPortName.c_str() << " -> " << uplinkName.c_str();
+
+                /* Get bus type from module definition */
+                if (!moduleData["bus"] || !moduleData["bus"].IsMap()
+                    || !moduleData["bus"][busPortName]) {
+                    qWarning() << "Warning: Bus port" << busPortName.c_str()
+                               << "not found in module" << moduleName.c_str();
+                    continue;
+                }
+
+                const YAML::Node &moduleBusNode = moduleData["bus"][busPortName];
+                if (!moduleBusNode["bus"] || !moduleBusNode["bus"].IsScalar()) {
+                    qWarning() << "Warning: No bus type for port" << busPortName.c_str();
+                    continue;
+                }
+
+                const std::string busType = moduleBusNode["bus"].as<std::string>();
+
+                /* Get bus definition */
+                if (!busManager || !busManager->isBusExist(QString::fromStdString(busType))) {
+                    qWarning() << "Warning: Bus type" << busType.c_str() << "not found";
+                    continue;
+                }
+
+                YAML::Node busDefinition;
+                try {
+                    busDefinition = busManager->getBusYaml(QString::fromStdString(busType));
+                } catch (const YAML::Exception &e) {
+                    qWarning() << "Error getting bus definition:" << e.what();
+                    continue;
+                }
+
+                if (!busDefinition["port"] || !busDefinition["port"].IsMap()) {
+                    qWarning() << "Warning: Invalid port section in bus definition for"
+                               << busType.c_str();
+                    continue;
+                }
+
+                /* Get mapping from module bus definition */
+                if (!moduleBusNode["mapping"] || !moduleBusNode["mapping"].IsMap()) {
+                    qWarning() << "Warning: No mapping for bus port" << busPortName.c_str();
+                    continue;
+                }
+
+                const YAML::Node &mappingNode = moduleBusNode["mapping"];
+
+                /* Create port uplink for each bus signal */
+                for (const auto &busSignalPair : busDefinition["port"]) {
+                    if (!busSignalPair.first.IsScalar()) {
+                        continue;
+                    }
+
+                    const std::string signalName = busSignalPair.first.as<std::string>();
+
+                    /* Find mapped port name */
+                    if (!mappingNode[signalName] || !mappingNode[signalName].IsScalar()) {
+                        qWarning() << "Warning: No mapping for signal" << signalName.c_str()
+                                   << "in bus port" << busPortName.c_str();
+                        continue;
+                    }
+
+                    const std::string mappedPortName   = mappingNode[signalName].as<std::string>();
+                    const std::string toplevelPortName = uplinkName + "_" + signalName;
+
+                    qInfo() << "Creating port uplink:" << instanceName.c_str() << "."
+                            << mappedPortName.c_str() << " -> " << toplevelPortName.c_str();
+
+                    /* Create or update the port uplink in instance */
+                    if (!instanceNode["port"]) {
+                        instanceNode["port"] = YAML::Node(YAML::NodeType::Map);
+                    }
+
+                    if (!instanceNode["port"][mappedPortName]) {
+                        instanceNode["port"][mappedPortName] = YAML::Node(YAML::NodeType::Map);
+                    }
+
+                    instanceNode["port"][mappedPortName]["uplink"] = toplevelPortName;
+                }
+
+                /* Remove the uplink attribute from instance bus node */
+                busNode.remove("uplink");
+            }
+        }
+
+        qInfo() << "Bus uplink expansion completed successfully";
+        return true;
+
+    } catch (const YAML::Exception &e) {
+        qCritical() << "YAML exception in expandBusUplink:" << e.what();
+        return false;
+    } catch (const std::exception &e) {
+        qCritical() << "Standard exception in expandBusUplink:" << e.what();
+        return false;
+    } catch (...) {
+        qCritical() << "Unknown exception in expandBusUplink";
         return false;
     }
 }

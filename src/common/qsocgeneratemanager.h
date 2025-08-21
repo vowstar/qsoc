@@ -342,6 +342,15 @@ public slots:
     bool expandBusLink();
 
     /**
+     * @brief Expand bus uplink references in instance bus sections.
+     * @details Scans all instances for bus sections with uplink attributes,
+     *          and expands them into port uplink attributes for each bus signal.
+     * @retval true Bus uplinks expanded successfully.
+     * @retval false Failed to expand bus uplinks.
+     */
+    bool expandBusUplink();
+
+    /**
      * @brief Generate Verilog code from the processed netlist.
      * @details Generates Verilog code and saves it to the output directory.
      * @param outputFileName Output file name (without extension).

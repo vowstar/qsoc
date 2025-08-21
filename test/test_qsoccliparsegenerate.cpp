@@ -2811,6 +2811,167 @@ net:
 
         QVERIFY2(verifyVerilogContent("test_bus_link", "u_c906"), "Instance u_c906 should be present");
     }
+
+    void testBusUplinkExpansion()
+    {
+        messageList.clear();
+
+        /* Create module files for testing bus uplink functionality */
+        const QString smurfUplinkModuleContent = R"(
+smurf_uplink_struct:
+  port:
+    clk:
+      type: logic
+      direction: in
+    # These ports will be created automatically by bus uplink expansion
+    axim1_arvalid:
+      type: logic
+      direction: out
+    axim1_arready:
+      type: logic
+      direction: in
+    axim1_rdata:
+      type: logic[127:0]
+      direction: in
+  bus:
+    axim1:
+      bus: axi_bus
+      direction: master
+      mapping:
+        arvalid: axim1_arvalid
+        arready: axim1_arready
+        rdata: axim1_rdata
+)";
+
+        /* Create bus definition */
+        const QString axiBusUplinkContent = R"(
+axi_bus:
+  port:
+    arvalid:
+      type: logic
+      direction: out
+    arready:
+      type: logic
+      direction: in
+    rdata:
+      type: logic[127:0]
+      direction: in
+)";
+
+        /* Create module files */
+        const QDir    moduleDir(projectManager.getModulePath());
+        const QString smurfUplinkModulePath = moduleDir.filePath("smurf_uplink_struct.soc_mod");
+        QFile         smurfUplinkModuleFile(smurfUplinkModulePath);
+        if (smurfUplinkModuleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&smurfUplinkModuleFile);
+            stream << smurfUplinkModuleContent;
+            smurfUplinkModuleFile.close();
+        }
+
+        /* Create bus file */
+        const QDir    busDir(projectManager.getBusPath());
+        const QString axiBusUplinkPath = busDir.filePath("axi_bus.soc_bus");
+        QFile         axiBusUplinkFile(axiBusUplinkPath);
+        if (axiBusUplinkFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&axiBusUplinkFile);
+            stream << axiBusUplinkContent;
+            axiBusUplinkFile.close();
+        }
+
+        /* Create netlist content with bus uplink syntax */
+        const QString netlistContent = R"(
+---
+version: "1.0"
+module: "test_bus_uplink"
+port:
+  clk:
+    direction: in
+    type: logic
+instance:
+  u_smurf:
+    module: smurf_uplink_struct
+    port:
+      clk:
+        link: clk
+    bus:
+      axim1:
+        uplink: axi_bus1
+net:
+  clk:
+    - instance: u_smurf
+      port: clk
+)";
+
+        /* Create the netlist file */
+        const QString filePath = createTempFile("test_bus_uplink.soc_net", netlistContent);
+
+        /* Clear messageList again right before running the test */
+        messageList.clear();
+
+        /* Run qsoc generate command */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_bus_uplink"));
+
+        /* Verify that top-level ports are created with correct naming pattern */
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", "axi_bus1_arvalid"),
+            "Top-level port axi_bus1_arvalid should be created by bus uplink");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", "axi_bus1_arready"),
+            "Top-level port axi_bus1_arready should be created by bus uplink");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", "axi_bus1_rdata"),
+            "Top-level port axi_bus1_rdata should be created by bus uplink");
+
+        /* Verify that instance connections are made to top-level ports */
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", "u_smurf"),
+            "Instance u_smurf should be present");
+
+        /* Check that the ports follow the expected pattern:
+           module_port connected to toplevel_port */
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", ".axim1_arvalid(axi_bus1_arvalid)")
+                || verifyVerilogContent("test_bus_uplink", "axim1_arvalid")
+                       && verifyVerilogContent("test_bus_uplink", "axi_bus1_arvalid"),
+            "Module port axim1_arvalid should be connected to top-level port axi_bus1_arvalid");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", ".axim1_arready(axi_bus1_arready)")
+                || verifyVerilogContent("test_bus_uplink", "axim1_arready")
+                       && verifyVerilogContent("test_bus_uplink", "axi_bus1_arready"),
+            "Module port axim1_arready should be connected to top-level port axi_bus1_arready");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", ".axim1_rdata(axi_bus1_rdata)")
+                || verifyVerilogContent("test_bus_uplink", "axim1_rdata")
+                       && verifyVerilogContent("test_bus_uplink", "axi_bus1_rdata"),
+            "Module port axim1_rdata should be connected to top-level port axi_bus1_rdata");
+
+        /* Verify direction preservation */
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", "output")
+                && verifyVerilogContent("test_bus_uplink", "axi_bus1_arvalid"),
+            "axi_bus1_arvalid should be declared as output");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", "input")
+                && verifyVerilogContent("test_bus_uplink", "axi_bus1_arready"),
+            "axi_bus1_arready should be declared as input");
+
+        QVERIFY2(
+            verifyVerilogContent("test_bus_uplink", "input")
+                && verifyVerilogContent("test_bus_uplink", "axi_bus1_rdata"),
+            "axi_bus1_rdata should be declared as input");
+    }
 };
 
 QStringList Test::messageList;

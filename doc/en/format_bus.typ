@@ -115,6 +115,100 @@ instance:
 
 This automatically generates the complete bus connection list without manual maintenance.
 
+=== Bus Uplink Attribute
+<soc-net-bus-uplink>
+The `uplink` attribute in the instance bus section provides a convenient way to create top-level ports for each bus signal. When applied to a bus, it expands each bus signal into individual port uplinks that create corresponding top-level ports.
+
+==== Using Bus Uplink
+Bus uplink creates top-level ports for all signals in a bus interface:
+
+```yaml
+instance:
+  u_soc:
+    module: soc_core
+    bus:
+      axi_master:
+        uplink: external_axi  # Creates top-level ports for all AXI signals
+```
+
+==== How Bus Uplink Works
+When QSoC processes bus uplink, it:
+1. Scans the bus definition to find all signals
+2. Maps each bus signal to the corresponding module port using the bus mapping
+3. Creates individual port uplinks with the naming pattern `[uplink_name]_[signal_name]`
+4. Removes the bus uplink attribute after expansion
+
+The expansion converts bus uplink into multiple port uplinks:
+
+```yaml
+# Before expansion
+instance:
+  u_soc:
+    module: soc_core
+    bus:
+      axi_master:
+        uplink: external_axi
+
+# After expansion (automatically generated)
+instance:
+  u_soc:
+    module: soc_core
+    port:
+      axi_arvalid:    # Mapped from bus signal 'arvalid'
+        uplink: external_axi_arvalid
+      axi_arready:    # Mapped from bus signal 'arready'
+        uplink: external_axi_arready
+      axi_rdata:      # Mapped from bus signal 'rdata'
+        uplink: external_axi_rdata
+    bus:
+      axi_master:
+        {}  # uplink attribute removed
+```
+
+This creates the corresponding top-level ports:
+
+```yaml
+port:
+  external_axi_arvalid:
+    direction: output
+    type: logic
+  external_axi_arready:
+    direction: input
+    type: logic
+  external_axi_rdata:
+    direction: input
+    type: logic[127:0]
+```
+
+==== Naming Convention
+Bus uplink follows the naming pattern: `[uplink_name]_[bus_signal_name]`
+
+- `uplink_name`: The name specified in the uplink attribute
+- `bus_signal_name`: The signal name from the bus definition
+- Example: `uplink: external_axi` + signal `arvalid` = `external_axi_arvalid`
+
+==== Use Cases
+Bus uplink is particularly useful for:
+
+- *Chip-level I/O*: Exposing internal bus interfaces as chip pins
+- *SoC Integration*: Creating standardized external interfaces
+- *Debug Access*: Providing external access to internal buses
+- *Hierarchical Design*: Passing bus interfaces up the design hierarchy
+
+Example for chip-level integration:
+```yaml
+instance:
+  u_processor:
+    module: cpu_core
+    bus:
+      mem_bus:
+        uplink: ddr_interface    # Creates ddr_interface_* ports
+      debug_bus:
+        uplink: jtag_interface   # Creates jtag_interface_* ports
+```
+
+This automatically creates all necessary top-level ports for external memory and debug interfaces without manual port-by-port definition.
+
 === Width Information Preservation
 <soc-net-bus-width-preservation>
 When QSoC expands bus connections into individual nets, it preserves the original port width specifications from module definitions. This ensures that signals with specific bit ranges (e.g., `logic[21:2]`) maintain their exact width in the generated Verilog, rather than being converted to a standard `[msb:0]` format.
