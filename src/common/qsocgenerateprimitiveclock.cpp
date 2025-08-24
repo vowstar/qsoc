@@ -405,7 +405,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
 {
     out << "\nmodule " << config.moduleName << " (\n";
 
-    QStringList portList;
+    QStringList portDecls;
+    QStringList portComments;
 
     // Add input clocks
     for (const auto &input : config.inputs) {
@@ -414,7 +415,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
             comment += QString(" (%1)").arg(input.freq);
         }
         comment += " */";
-        portList << QString("    input  wire %1,     %2").arg(input.name, comment);
+        portDecls << QString("    input  wire %1").arg(input.name);
+        portComments << comment;
     }
 
     // Add target clocks
@@ -424,7 +426,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
             comment += QString(" (%1)").arg(target.freq);
         }
         comment += " */";
-        portList << QString("    output wire %1,     %2").arg(target.name, comment);
+        portDecls << QString("    output wire %1").arg(target.name);
+        portComments << comment;
     }
 
     // Add dynamic divider interface ports (target-level)
@@ -440,10 +443,10 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                 }
                 divSignalNames.insert(target.div.value);
 
-                portList
-                    << QString("    input  wire [%1:0] %2,    /**< Dynamic division value for %3 */")
-                           .arg(target.div.width - 1)
-                           .arg(target.div.value, target.name);
+                portDecls << QString("    input  wire [%1:0] %2")
+                                 .arg(target.div.width - 1)
+                                 .arg(target.div.value);
+                portComments << QString("/**< Dynamic division value for %1 */").arg(target.name);
             }
 
             // Add division value valid signal port
@@ -455,8 +458,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                 }
                 divSignalNames.insert(target.div.valid);
 
-                portList << QString("    input  wire %1,    /**< Division valid signal for %2 */")
-                                .arg(target.div.valid, target.name);
+                portDecls << QString("    input  wire %1").arg(target.div.valid);
+                portComments << QString("/**< Division valid signal for %1 */").arg(target.name);
             }
 
             // Add division ready output port
@@ -468,8 +471,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                 }
                 divSignalNames.insert(target.div.ready);
 
-                portList << QString("    output wire %1,    /**< Division ready signal for %2 */")
-                                .arg(target.div.ready, target.name);
+                portDecls << QString("    output wire %1").arg(target.div.ready);
+                portComments << QString("/**< Division ready signal for %1 */").arg(target.name);
             }
 
             // Add cycle counter output port
@@ -481,15 +484,16 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                 }
                 divSignalNames.insert(target.div.count);
 
-                portList << QString("    output wire [%1:0] %2,    /**< Cycle counter for %3 */")
-                                .arg(target.div.width - 1)
-                                .arg(target.div.count, target.name);
+                portDecls << QString("    output wire [%1:0] %2")
+                                 .arg(target.div.width - 1)
+                                 .arg(target.div.count);
+                portComments << QString("/**< Cycle counter for %1 */").arg(target.name);
             }
 
             // Add enable signal port
             if (!target.div.enable.isEmpty()) {
-                portList << QString("    input  wire %1,    /**< Division enable for %2 */")
-                                .arg(target.div.enable, target.name);
+                portDecls << QString("    input  wire %1").arg(target.div.enable);
+                portComments << QString("/**< Division enable for %1 */").arg(target.name);
             }
         }
     }
@@ -509,11 +513,11 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                     }
                     divSignalNames.insert(link.div.value);
 
-                    portList << QString(
-                                    "    input  wire [%1:0] %2,    /**< Dynamic division value for "
-                                    "link %3 */")
-                                    .arg(link.div.width - 1)
-                                    .arg(link.div.value, linkName);
+                    portDecls << QString("    input  wire [%1:0] %2")
+                                     .arg(link.div.width - 1)
+                                     .arg(link.div.value);
+                    portComments << QString("/**< Dynamic division value for link %1 */")
+                                        .arg(linkName);
                 }
 
                 // Add division value valid signal port
@@ -525,10 +529,9 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                     }
                     divSignalNames.insert(link.div.valid);
 
-                    portList
-                        << QString(
-                               "    input  wire %1,    /**< Division valid signal for link %2 */")
-                               .arg(link.div.valid, linkName);
+                    portDecls << QString("    input  wire %1").arg(link.div.valid);
+                    portComments << QString("/**< Division valid signal for link %1 */")
+                                        .arg(linkName);
                 }
 
                 // Add division ready output port
@@ -540,10 +543,9 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                     }
                     divSignalNames.insert(link.div.ready);
 
-                    portList
-                        << QString(
-                               "    output wire %1,    /**< Division ready signal for link %2 */")
-                               .arg(link.div.ready, linkName);
+                    portDecls << QString("    output wire %1").arg(link.div.ready);
+                    portComments << QString("/**< Division ready signal for link %1 */")
+                                        .arg(linkName);
                 }
 
                 // Add cycle counter output port
@@ -555,16 +557,16 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                     }
                     divSignalNames.insert(link.div.count);
 
-                    portList
-                        << QString("    output wire [%1:0] %2,    /**< Cycle counter for link %3 */")
-                               .arg(link.div.width - 1)
-                               .arg(link.div.count, linkName);
+                    portDecls << QString("    output wire [%1:0] %2")
+                                     .arg(link.div.width - 1)
+                                     .arg(link.div.count);
+                    portComments << QString("/**< Cycle counter for link %1 */").arg(linkName);
                 }
 
                 // Add enable signal port
                 if (!link.div.enable.isEmpty()) {
-                    portList << QString("    input  wire %1,    /**< Division enable for link %2 */")
-                                    .arg(link.div.enable, linkName);
+                    portDecls << QString("    input  wire %1").arg(link.div.enable);
+                    portComments << QString("/**< Division enable for link %1 */").arg(linkName);
                 }
             }
         }
@@ -573,21 +575,21 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     // Add test enable signal (if specified)
     QSet<QString> addedSignals;
     if (!config.testEnable.isEmpty()) {
-        portList << QString("    input  wire %1,    /**< Test enable signal */")
-                        .arg(config.testEnable);
+        portDecls << QString("    input  wire %1").arg(config.testEnable);
+        portComments << QString("/**< Test enable signal */");
         addedSignals.insert(config.testEnable);
     }
 
     // Add ICG interface ports (target-level)
     for (const auto &target : config.targets) {
         if (!target.icg.enable.isEmpty() && !addedSignals.contains(target.icg.enable)) {
-            portList << QString("    input  wire %1,    /**< ICG enable for %2 */")
-                            .arg(target.icg.enable, target.name);
+            portDecls << QString("    input  wire %1").arg(target.icg.enable);
+            portComments << QString("/**< ICG enable for %1 */").arg(target.name);
             addedSignals.insert(target.icg.enable);
         }
         if (!target.icg.reset.isEmpty() && !addedSignals.contains(target.icg.reset)) {
-            portList << QString("    input  wire %1,    /**< ICG reset for %2 */")
-                            .arg(target.icg.reset, target.name);
+            portDecls << QString("    input  wire %1").arg(target.icg.reset);
+            portComments << QString("/**< ICG reset for %1 */").arg(target.name);
             addedSignals.insert(target.icg.reset);
         }
     }
@@ -610,19 +612,19 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                     selectDecl = target.select;
                 }
 
-                portList << QString("    input  wire %1,    /**< MUX select for %2 */")
-                                .arg(selectDecl, target.name);
+                portDecls << QString("    input  wire %1").arg(selectDecl);
+                portComments << QString("/**< MUX select for %1 */").arg(target.name);
                 addedSignals.insert(target.select);
             }
             if (!target.reset.isEmpty() && !addedSignals.contains(target.reset)) {
-                portList << QString("    input  wire %1,    /**< MUX reset for %2 */")
-                                .arg(target.reset, target.name);
+                portDecls << QString("    input  wire %1").arg(target.reset);
+                portComments << QString("/**< MUX reset for %1 */").arg(target.name);
                 addedSignals.insert(target.reset);
             }
             // Test enable is already added at controller level
             if (!target.test_clock.isEmpty() && !addedSignals.contains(target.test_clock)) {
-                portList << QString("    input  wire %1,    /**< MUX test clock for %2 */")
-                                .arg(target.test_clock, target.name);
+                portDecls << QString("    input  wire %1").arg(target.test_clock);
+                portComments << QString("/**< MUX test clock for %1 */").arg(target.name);
                 addedSignals.insert(target.test_clock);
             }
         }
@@ -635,8 +637,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
             && !target.div.reset.isEmpty()) {
             if (!addedResets.contains(target.div.reset)
                 && !addedSignals.contains(target.div.reset)) {
-                portList << QString("    input  wire %1,    /**< Division reset for %2 */")
-                                .arg(target.div.reset, target.name);
+                portDecls << QString("    input  wire %1").arg(target.div.reset);
+                portComments << QString("/**< Division reset for %1 */").arg(target.name);
                 addedResets << target.div.reset;
                 addedSignals.insert(target.div.reset);
             }
@@ -651,8 +653,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                 if (!addedResets.contains(link.div.reset)
                     && !addedSignals.contains(link.div.reset)) {
                     QString linkName = QString("%1_from_%2").arg(target.name, link.source);
-                    portList << QString("    input  wire %1,    /**< Link division reset for %2 */")
-                                    .arg(link.div.reset, linkName);
+                    portDecls << QString("    input  wire %1").arg(link.div.reset);
+                    portComments << QString("/**< Link division reset for %1 */").arg(linkName);
                     addedResets << link.div.reset;
                     addedSignals.insert(link.div.reset);
                 }
@@ -662,13 +664,13 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
 
     // Test enable is handled at controller level, no need for fallback
 
-    // Join ports and remove last comma
-    QString ports = portList.join("\n");
-    if (ports.endsWith(",")) {
-        ports = ports.left(ports.length() - 1);
+    // Output all ports with unified boundary judgment
+    for (int i = 0; i < portDecls.size(); ++i) {
+        bool    isLast = (i == portDecls.size() - 1);
+        QString comma  = isLast ? "" : ",";
+        out << portDecls[i] << comma << "    " << portComments[i] << "\n";
     }
 
-    out << ports << "\n";
     out << ");\n\n";
 }
 

@@ -332,57 +332,60 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
         }
     }
 
-    // Test enable signal (if specified)
-    QStringList testEnables;
-    if (!config.testEnable.isEmpty()) {
-        testEnables.append(config.testEnable);
-    }
+    // Collect port declarations and comments separately for proper comma placement
+    QStringList portDecls;
+    QStringList portComments;
 
     // Clock inputs
-    out << "    /* Clock inputs */\n";
     for (const auto &clock : clocks) {
-        out << "    input  wire " << clock << ",\n";
+        portDecls << QString("    input  wire %1").arg(clock);
+        portComments << "    /**< Clock inputs */";
     }
 
     // Source inputs
-    out << "    /* Reset sources */\n";
     for (const auto &source : sources) {
-        out << "    input  wire " << source << ",\n";
+        portDecls << QString("    input  wire %1").arg(source);
+        portComments << "    /**< Reset sources */";
     }
 
     // Test enable input (if specified)
-    if (!testEnables.isEmpty()) {
-        out << "    /* Test enable signal */\n";
-        out << "    input  wire " << config.testEnable << ",\n";
+    if (!config.testEnable.isEmpty()) {
+        portDecls << QString("    input  wire %1").arg(config.testEnable);
+        portComments << "    /**< Test enable signal */";
     }
 
     // Reset reason clear signal
     if (config.reason.enabled && !config.reason.clear.isEmpty()) {
-        out << "    /* Reset reason clear */\n";
-        out << "    input  wire " << config.reason.clear << ",\n";
+        portDecls << QString("    input  wire %1").arg(config.reason.clear);
+        portComments << "    /**< Reset reason clear */";
     }
 
     // Reset targets
-    out << "    /* Reset targets */\n";
-    for (int i = 0; i < config.targets.size(); ++i) {
-        const auto &target = config.targets[i];
-        out << "    output wire " << target.name;
-        if (i < config.targets.size() - 1 || config.reason.enabled) {
-            out << ",";
-        }
-        out << "\n";
+    for (const auto &target : config.targets) {
+        portDecls << QString("    output wire %1").arg(target.name);
+        portComments << "    /**< Reset targets */";
     }
 
     // Reset reason outputs
     if (config.reason.enabled) {
-        out << "    /* Reset reason outputs */\n";
         if (config.reason.vectorWidth > 1) {
-            out << "    output wire [" << (config.reason.vectorWidth - 1) << ":0] "
-                << config.reason.output << ",\n";
+            portDecls << QString("    output wire [%1:0] %2")
+                             .arg(config.reason.vectorWidth - 1)
+                             .arg(config.reason.output);
         } else {
-            out << "    output wire " << config.reason.output << ",\n";
+            portDecls << QString("    output wire %1").arg(config.reason.output);
         }
-        out << "    output wire " << config.reason.valid << "\n";
+        portComments << "    /**< Reset reason outputs */";
+
+        portDecls << QString("    output wire %1").arg(config.reason.valid);
+        portComments << "    /**< Reset reason outputs */";
+    }
+
+    // Output all ports with unified boundary judgment
+    for (int i = 0; i < portDecls.size(); ++i) {
+        bool    isLast = (i == portDecls.size() - 1);
+        QString comma  = isLast ? "" : ",";
+        out << portDecls[i] << comma << portComments[i] << "\n";
     }
 
     out << ");\n\n";

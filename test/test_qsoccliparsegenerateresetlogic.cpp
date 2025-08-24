@@ -794,9 +794,9 @@ reset:
 
         /* Verify module interface ports with new unified naming */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  wire       clk_32k,"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* Clock inputs */"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "/**< Clock inputs */"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  wire       reason_clear"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* Reset reason clear */"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "/**< Reset reason clear */"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire [2:0] reason"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire reason_valid"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* reason_valid register */"));
