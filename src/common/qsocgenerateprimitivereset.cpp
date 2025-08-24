@@ -782,7 +782,7 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
     out << "            core_rst_n <= 1'b0;\n";
     out << "        end else if (!core_rst_n) begin\n";
     out << "            if (cnt == C_M1) begin\n";
-    out << "                core_rst_n <= 1'b1;             /* 保持恰好 CYCLE 拍 */\n";
+    out << "                core_rst_n <= 1'b1;             /* Keep exactly CYCLE cycles */\n";
     out << "            end else begin\n";
     out << "                cnt <= cnt + {{(CNT_WIDTH-1){1'b0}}, 1'b1};\n";
     out << "            end\n";
