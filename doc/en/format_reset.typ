@@ -35,17 +35,14 @@ reset:
         active: low                # Active low target output
         link:                      # Link definitions for each source
           por_rst_n:
-            source: por_rst_n
             async:                 # Component: qsoc_rst_sync
               clock: clk_sys       # Clock is required for each component
               stage: 4             # 4-stage synchronizer
-          i3c_soc_rst:
-            source: i3c_soc_rst    # Direct assignment (no components)
+          i3c_soc_rst:             # Direct assignment (no components)
       peri_rst_n:
         active: low
         link:
-          por_rst_n:
-            source: por_rst_n      # Direct assignment (no components)
+          por_rst_n:             # Direct assignment (no components)
 ```
 
 == RESET COMPONENTS

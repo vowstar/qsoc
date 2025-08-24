@@ -160,12 +160,10 @@ reset:
         active: low
         link:
           por_rst_n:
-            source: por_rst_n
       peri_rst_n:
         active: low
         link:
           por_rst_n:
-            source: por_rst_n
 )";
 
         QString netlistPath = createTempFile("test_basic_reset.soc_net", netlistContent);
@@ -241,7 +239,6 @@ reset:
         active: low
         link:
           i3c_soc_rst:
-            source: i3c_soc_rst
             async:
               clock: clk_sys
               stage: 4
@@ -313,7 +310,6 @@ reset:
         active: low
         link:
           por_rst_n:
-            source: por_rst_n
             count:
               clock: clk_sys
               cycle: 255
@@ -399,17 +395,14 @@ reset:
         active: low
         link:
           por_rst_n:
-            source: por_rst_n
             async:
               clock: clk_sys
               stage: 4
           i3c_soc_rst:
-            source: i3c_soc_rst
             async:
               clock: clk_sys
               stage: 4
           trig_cpu_rst:
-            source: trig_cpu_rst
             async:
               clock: clk_sys
               stage: 4
@@ -417,9 +410,7 @@ reset:
         active: low
         link:
           por_rst_n:
-            source: por_rst_n
           i3c_soc_rst:
-            source: i3c_soc_rst
 )";
 
         QString netlistPath = createTempFile("test_multi_reset.soc_net", netlistContent);
@@ -505,7 +496,6 @@ reset:
         active: low
         link:
           sync_rst_n:
-            source: sync_rst_n
             sync:
               clock: clk_sys
               stage: 2
@@ -579,7 +569,6 @@ reset:
         active: low
         link:
           trig_rst:
-            source: trig_rst
             async:
               clock: clk_sys
               stage: 3
@@ -684,13 +673,9 @@ reset:
         active: low
         link:
           por_rst_n:
-            source: por_rst_n
           ext_rst_n:
-            source: ext_rst_n
           wdt_rst_n:
-            source: wdt_rst_n
           i3c_soc_rst:
-            source: i3c_soc_rst
 
     # Simplified reason configuration
     reason:
@@ -851,7 +836,6 @@ reset:
         active: low
         link:
           por_rst_n:
-            source: por_rst_n
             async:
               clock: clk_sys
               stage: 4
@@ -859,7 +843,6 @@ reset:
         active: low
         link:
           wdt_rst_n:
-            source: wdt_rst_n
             count:
               clock: clk_sys
               cycle: 255
@@ -867,7 +850,6 @@ reset:
         active: low
         link:
           ext_rst:
-            source: ext_rst
             sync:
               clock: clk_sys
               stage: 2
@@ -971,7 +953,6 @@ reset:
         active: low
         link:
           por_rst_n:
-            source: por_rst_n
             async:
               clock: clk_sys
               stage: 4
@@ -1031,7 +1012,6 @@ reset:
         active: low
         link:
           por_rst_n:
-            source: por_rst_n
             async:
               clock: clk_sys
               stage: 4

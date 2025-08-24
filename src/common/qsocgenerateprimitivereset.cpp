@@ -158,11 +158,19 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                 for (auto linkIt = tgtNode["link"].begin(); linkIt != tgtNode["link"].end();
                      ++linkIt) {
                     const YAML::Node &linkNode = linkIt->second;
-                    if (!linkNode.IsMap())
-                        continue;
 
                     ResetLink link;
                     link.source = QString::fromStdString(linkIt->first.as<std::string>());
+
+                    // Handle null/empty links (direct connections)
+                    if (!linkNode || linkNode.IsNull()) {
+                        // Direct connection - no components
+                        target.links.append(link);
+                        continue;
+                    }
+
+                    if (!linkNode.IsMap())
+                        continue;
 
                     // Parse link-level components
                     if (linkNode["async"]) {
