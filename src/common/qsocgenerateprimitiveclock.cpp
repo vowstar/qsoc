@@ -829,7 +829,10 @@ void QSocClockPrimitive::generateOutputAssignments(
         if (!target.sta_guide.cell.isEmpty()) {
             QString staOutput = QString("%1_sta_out").arg(target.name);
             out << "    wire " << staOutput << ";\n";
-            out << "    " << target.sta_guide.cell << " " << instanceName << "_sta (\n";
+            QString staInstanceName = target.sta_guide.instance.isEmpty()
+                                          ? instanceName + "_sta"
+                                          : target.sta_guide.instance;
+            out << "    " << target.sta_guide.cell << " " << staInstanceName << " (\n";
             out << "        ." << target.sta_guide.in << "(" << currentSignal << "),\n";
             out << "        ." << target.sta_guide.out << "(" << staOutput << ")\n";
             out << "    );\n";

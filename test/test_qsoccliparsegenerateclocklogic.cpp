@@ -903,7 +903,7 @@ clock:
 
         /* Verify the generated content contains STA guide buffer */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "TSMC_CKBUF_X2"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "u_cpu_clk_target_sta"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "u_cpu_clk_sta_guide"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".I(clk_cpu_clk_from_osc_24m)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".Z(cpu_clk_sta_out)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign cpu_clk = cpu_clk_sta_out"));
@@ -1392,6 +1392,105 @@ net: {}
                 !message.contains("ERROR: Duplicate output"),
                 QString("Unexpected duplicate error: %1").arg(message).toLocal8Bit());
         }
+    }
+
+    void test_sta_guide_instance_naming()
+    {
+        // Test STA guide with explicit instance names and automatic generation
+        QString netlistContent = R"(
+port:
+  clk_in:
+    direction: input
+    type: logic
+  cpu_clk:
+    direction: output
+    type: logic
+  gpu_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: sta_test_ctrl
+    input:
+      clk_in:
+        freq: 800MHz
+    target:
+      # Test explicit instance name (should match user specification)
+      cpu_clk:
+        freq: 800MHz
+        sta_guide:
+          cell: RVTP140G35T9_BUF_S_16
+          in: A
+          out: X
+          instance: u_DONTTOUCH_clk_cpu
+        link:
+          clk_in:
+
+      # Test automatic instance name generation (should be u_gpu_clk_target_sta)
+      gpu_clk:
+        freq: 800MHz
+        sta_guide:
+          cell: RVTP140G35T9_BUF_S_16
+          in: A
+          out: X
+          # No instance specified -> automatic generation
+        link:
+          clk_in:
+)";
+
+        QString netlistPath = createTempFile("test_sta_guide.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_sta_guide.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        // Verify explicit instance name is used (user-specified deterministic name)
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "RVTP140G35T9_BUF_S_16 u_DONTTOUCH_clk_cpu ("));
+        QVERIFY(!verifyVerilogContentNormalized(
+            verilogContent, "RVTP140G35T9_BUF_S_16 u_cpu_clk_target_sta ("));
+
+        // Verify automatic instance name is generated when not specified
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "RVTP140G35T9_BUF_S_16 u_gpu_clk_target_sta ("));
+
+        // Verify both buffers are properly connected
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign cpu_clk = cpu_clk_sta_out;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign gpu_clk = gpu_clk_sta_out;"));
+
+        // Verify wire declarations exist
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire cpu_clk_sta_out;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire gpu_clk_sta_out;"));
+
+        // Verify port connections for both instances (direct connection since no div specified)
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".A(clk_cpu_clk_from_clk_in)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".X(cpu_clk_sta_out)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".A(clk_gpu_clk_from_clk_in)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".X(gpu_clk_sta_out)"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
     }
 };
 

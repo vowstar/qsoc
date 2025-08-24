@@ -516,7 +516,7 @@ STA guide buffer configuration requires four parameters:
     [in], [Input port name of the foundry cell (e.g., "I", "A", "CK")],
     [out], [Output port name of the foundry cell (e.g., "Z", "Y", "Q")],
     [instance],
-    [Instance name for the generated buffer (e.g., "u_cpu_clk_sta")],
+    [Instance name for the generated buffer. If empty, automatically generates `u_{target}_target_sta` for target-level or `u_{target}_{source}_sta` for link-level guides. Explicit names provide deterministic results for tools requiring specific instance references.],
   )],
   caption: [STA GUIDE BUFFER PARAMETERS],
   kind: table,
@@ -525,7 +525,7 @@ STA guide buffer configuration requires four parameters:
 === Configuration Examples
 <soc-net-clock-sta-examples>
 ```yaml
-# Target-level STA guide with TSMC buffer
+# Target-level STA guide with explicit instance name
 target:
   cpu_clk:
     freq: 800MHz
@@ -533,9 +533,21 @@ target:
       cell: TSMC_CKBUF_X2           # TSMC foundry cell
       in: I                         # Input port name
       out: Z                        # Output port name
-      instance: u_cpu_clk_sta_guide # Instance name
+      instance: u_DONTTOUCH_cpu_clk # Explicit deterministic name
     link:
       pll_800m:                     # Source connection
+
+# Target-level STA guide with automatic instance naming
+target:
+  gpu_clk:
+    freq: 600MHz
+    sta_guide:
+      cell: TSMC_CKBUF_X2           # TSMC foundry cell
+      in: I                         # Input port name
+      out: Z                        # Output port name
+      # No instance specified → generates "u_gpu_clk_target_sta"
+    link:
+      pll_600m:                     # Source connection
 
 # Link-level STA guide in processing chain
 target:
@@ -582,13 +594,21 @@ target:
 STA guide buffers generate direct foundry cell instantiations:
 
 ```verilog
-// Target-level STA guide example
+// Target-level STA guide with explicit instance name
 wire cpu_clk_sta_out;
-TSMC_CKBUF_X2 u_cpu_clk_target_sta (
-    .I(intermediate_signal),
+TSMC_CKBUF_X2 u_DONTTOUCH_cpu_clk (
+    .I(cpu_clk_div_out),
     .Z(cpu_clk_sta_out)
 );
 assign cpu_clk = cpu_clk_sta_out;
+
+// Target-level STA guide with automatic instance name
+wire gpu_clk_sta_out;
+TSMC_CKBUF_X2 u_gpu_clk_target_sta (
+    .I(gpu_clk_div_out),
+    .Z(gpu_clk_sta_out)
+);
+assign gpu_clk = gpu_clk_sta_out;
 
 // Link-level STA guide example
 wire u_dsp_clk_pll_800m_sta_wire;
