@@ -62,16 +62,18 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
     ResetControllerConfig config;
 
     // Basic configuration
-    config.name = resetNode["name"] ? QString::fromStdString(resetNode["name"].as<std::string>())
-                                    : "reset_ctrl";
-    config.moduleName = resetNode["module_name"]
-                            ? QString::fromStdString(resetNode["module_name"].as<std::string>())
-                            : config.name;
-    config.clock = resetNode["clock"] ? QString::fromStdString(resetNode["clock"].as<std::string>())
-                                      : "clk_sys";
-    config.testEnable = resetNode["test_enable"]
-                            ? QString::fromStdString(resetNode["test_enable"].as<std::string>())
-                            : "test_en";
+    if (!resetNode["name"]) {
+        qCritical() << "Error: 'name' field is required in reset configuration";
+        qCritical() << "Example: reset: { name: my_reset_ctrl, ... }";
+        return config;
+    }
+    config.name       = QString::fromStdString(resetNode["name"].as<std::string>());
+    config.moduleName = config.name; // Use same name for module
+
+    // Test enable is optional - if not set, tie to 1'b0 internally
+    if (resetNode["test_enable"]) {
+        config.testEnable = QString::fromStdString(resetNode["test_enable"].as<std::string>());
+    }
 
     // Parse sources (source: {name: {polarity: ...}})
     if (resetNode["source"] && resetNode["source"].IsMap()) {
@@ -115,38 +117,40 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             // Parse target-level components
             if (tgtNode["async"]) {
                 const YAML::Node &asyncNode = tgtNode["async"];
-                target.async.clock          = asyncNode["clock"] ? QString::fromStdString(
-                                                              asyncNode["clock"].as<std::string>())
-                                                                 : config.clock;
-                target.async.test_enable    = asyncNode["test_enable"]
-                                                  ? QString::fromStdString(
-                                                     asyncNode["test_enable"].as<std::string>())
-                                                  : config.testEnable;
-                target.async.stage          = asyncNode["stage"] ? asyncNode["stage"].as<int>() : 3;
+                if (!asyncNode["clock"]) {
+                    qCritical()
+                        << "Error: 'clock' field is required for async component in target '"
+                        << target.name << "'";
+                    return config;
+                }
+                target.async.clock = QString::fromStdString(asyncNode["clock"].as<std::string>());
+                target.async.test_enable = config.testEnable; // Use controller-level test_enable
+                target.async.stage       = asyncNode["stage"] ? asyncNode["stage"].as<int>() : 3;
             }
 
             if (tgtNode["sync"]) {
                 const YAML::Node &syncNode = tgtNode["sync"];
-                target.sync.clock          = syncNode["clock"]
-                                                 ? QString::fromStdString(syncNode["clock"].as<std::string>())
-                                                 : config.clock;
-                target.sync.test_enable    = syncNode["test_enable"]
-                                                 ? QString::fromStdString(
-                                                    syncNode["test_enable"].as<std::string>())
-                                                 : config.testEnable;
-                target.sync.stage          = syncNode["stage"] ? syncNode["stage"].as<int>() : 4;
+                if (!syncNode["clock"]) {
+                    qCritical() << "Error: 'clock' field is required for sync component in target '"
+                                << target.name << "'";
+                    return config;
+                }
+                target.sync.clock = QString::fromStdString(syncNode["clock"].as<std::string>());
+                target.sync.test_enable = config.testEnable; // Use controller-level test_enable
+                target.sync.stage       = syncNode["stage"] ? syncNode["stage"].as<int>() : 4;
             }
 
             if (tgtNode["count"]) {
                 const YAML::Node &countNode = tgtNode["count"];
-                target.count.clock          = countNode["clock"] ? QString::fromStdString(
-                                                              countNode["clock"].as<std::string>())
-                                                                 : config.clock;
-                target.count.test_enable    = countNode["test_enable"]
-                                                  ? QString::fromStdString(
-                                                     countNode["test_enable"].as<std::string>())
-                                                  : config.testEnable;
-                target.count.cycle = countNode["cycle"] ? countNode["cycle"].as<int>() : 16;
+                if (!countNode["clock"]) {
+                    qCritical()
+                        << "Error: 'clock' field is required for count component in target '"
+                        << target.name << "'";
+                    return config;
+                }
+                target.count.clock = QString::fromStdString(countNode["clock"].as<std::string>());
+                target.count.test_enable = config.testEnable; // Use controller-level test_enable
+                target.count.cycle       = countNode["cycle"] ? countNode["cycle"].as<int>() : 16;
             }
 
             // Parse links for this target
@@ -163,42 +167,45 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                     // Parse link-level components
                     if (linkNode["async"]) {
                         const YAML::Node &asyncNode = linkNode["async"];
-                        link.async.clock            = asyncNode["clock"]
-                                                          ? QString::fromStdString(
-                                                     asyncNode["clock"].as<std::string>())
-                                                          : config.clock;
+                        if (!asyncNode["clock"]) {
+                            qCritical()
+                                << "Error: 'clock' field is required for async component in link '"
+                                << link.source << "' of target '" << target.name << "'";
+                            return config;
+                        }
+                        link.async.clock = QString::fromStdString(
+                            asyncNode["clock"].as<std::string>());
                         link.async.test_enable
-                            = asyncNode["test_enable"]
-                                  ? QString::fromStdString(
-                                        asyncNode["test_enable"].as<std::string>())
-                                  : config.testEnable;
+                            = config.testEnable; // Use controller-level test_enable
                         link.async.stage = asyncNode["stage"] ? asyncNode["stage"].as<int>() : 3;
                     }
 
                     if (linkNode["sync"]) {
                         const YAML::Node &syncNode = linkNode["sync"];
-                        link.sync.clock            = syncNode["clock"]
-                                                         ? QString::fromStdString(
-                                                    syncNode["clock"].as<std::string>())
-                                                         : config.clock;
-                        link.sync.test_enable      = syncNode["test_enable"]
-                                                         ? QString::fromStdString(
-                                                          syncNode["test_enable"].as<std::string>())
-                                                         : config.testEnable;
+                        if (!syncNode["clock"]) {
+                            qCritical()
+                                << "Error: 'clock' field is required for sync component in link '"
+                                << link.source << "' of target '" << target.name << "'";
+                            return config;
+                        }
+                        link.sync.clock = QString::fromStdString(
+                            syncNode["clock"].as<std::string>());
+                        link.sync.test_enable = config.testEnable; // Use controller-level test_enable
                         link.sync.stage = syncNode["stage"] ? syncNode["stage"].as<int>() : 4;
                     }
 
                     if (linkNode["count"]) {
                         const YAML::Node &countNode = linkNode["count"];
-                        link.count.clock            = countNode["clock"]
-                                                          ? QString::fromStdString(
-                                                     countNode["clock"].as<std::string>())
-                                                          : config.clock;
+                        if (!countNode["clock"]) {
+                            qCritical()
+                                << "Error: 'clock' field is required for count component in link '"
+                                << link.source << "' of target '" << target.name << "'";
+                            return config;
+                        }
+                        link.count.clock = QString::fromStdString(
+                            countNode["clock"].as<std::string>());
                         link.count.test_enable
-                            = countNode["test_enable"]
-                                  ? QString::fromStdString(
-                                        countNode["test_enable"].as<std::string>())
-                                  : config.testEnable;
+                            = config.testEnable; // Use controller-level test_enable
                         link.count.cycle = countNode["cycle"] ? countNode["cycle"].as<int>() : 16;
                     }
 
@@ -292,7 +299,6 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
 
     // Collect all unique clock signals
     QStringList clocks;
-    clocks.append(config.clock);
 
     for (const auto &target : config.targets) {
         for (const auto &link : target.links) {
@@ -326,24 +332,10 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
         }
     }
 
-    // Collect all unique test_enable signals
+    // Test enable signal (if specified)
     QStringList testEnables;
-    testEnables.append(config.testEnable);
-    for (const auto &target : config.targets) {
-        for (const auto &link : target.links) {
-            if (!link.async.test_enable.isEmpty() && !testEnables.contains(link.async.test_enable))
-                testEnables.append(link.async.test_enable);
-            if (!link.sync.test_enable.isEmpty() && !testEnables.contains(link.sync.test_enable))
-                testEnables.append(link.sync.test_enable);
-            if (!link.count.test_enable.isEmpty() && !testEnables.contains(link.count.test_enable))
-                testEnables.append(link.count.test_enable);
-        }
-        if (!target.async.test_enable.isEmpty() && !testEnables.contains(target.async.test_enable))
-            testEnables.append(target.async.test_enable);
-        if (!target.sync.test_enable.isEmpty() && !testEnables.contains(target.sync.test_enable))
-            testEnables.append(target.sync.test_enable);
-        if (!target.count.test_enable.isEmpty() && !testEnables.contains(target.count.test_enable))
-            testEnables.append(target.count.test_enable);
+    if (!config.testEnable.isEmpty()) {
+        testEnables.append(config.testEnable);
     }
 
     // Clock inputs
@@ -358,10 +350,10 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
         out << "    input  wire " << source << ",\n";
     }
 
-    // Test enable inputs
-    out << "    /* Test enable signals */\n";
-    for (const auto &testEn : testEnables) {
-        out << "    input  wire " << testEn << ",\n";
+    // Test enable input (if specified)
+    if (!testEnables.isEmpty()) {
+        out << "    /* Test enable signal */\n";
+        out << "    input  wire " << config.testEnable << ",\n";
     }
 
     // Reset reason clear signal
@@ -843,7 +835,8 @@ void QSocResetPrimitive::generateResetComponentInstance(
         out << "    ) " << instanceName << " (\n";
         out << "        .clk(" << async->clock << "),\n";
         out << "        .rst_in_n(" << inputSignal << "),\n";
-        out << "        .test_enable(" << async->test_enable << "),\n";
+        QString testEn = async->test_enable.isEmpty() ? "1'b0" : async->test_enable;
+        out << "        .test_enable(" << testEn << "),\n";
         out << "        .rst_out_n(" << outputSignal << ")\n";
         out << "    );\n";
     } else if (sync && !sync->clock.isEmpty()) {
@@ -853,7 +846,8 @@ void QSocResetPrimitive::generateResetComponentInstance(
         out << "    ) " << instanceName << " (\n";
         out << "        .clk(" << sync->clock << "),\n";
         out << "        .rst_in_n(" << inputSignal << "),\n";
-        out << "        .test_enable(" << sync->test_enable << "),\n";
+        QString testEn = sync->test_enable.isEmpty() ? "1'b0" : sync->test_enable;
+        out << "        .test_enable(" << testEn << "),\n";
         out << "        .rst_out_n(" << outputSignal << ")\n";
         out << "    );\n";
     } else if (count && !count->clock.isEmpty()) {
@@ -863,7 +857,8 @@ void QSocResetPrimitive::generateResetComponentInstance(
         out << "    ) " << instanceName << " (\n";
         out << "        .clk(" << count->clock << "),\n";
         out << "        .rst_in_n(" << inputSignal << "),\n";
-        out << "        .test_enable(" << count->test_enable << "),\n";
+        QString testEn = count->test_enable.isEmpty() ? "1'b0" : count->test_enable;
+        out << "        .test_enable(" << testEn << "),\n";
         out << "        .rst_out_n(" << outputSignal << ")\n";
         out << "    );\n";
     }

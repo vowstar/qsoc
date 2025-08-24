@@ -79,12 +79,10 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
     config.name       = QString::fromStdString(clockNode["name"].as<std::string>());
     config.moduleName = config.name; // Use same name for module
 
-    if (!clockNode["clock"]) {
-        qCritical() << "Error: 'clock' field is required in clock configuration";
-        qCritical() << "Example: clock: { clock: clk_sys, ... }";
-        return config;
+    // Test enable is optional - if not set, tie to 1'b0 internally
+    if (clockNode["test_enable"]) {
+        config.testEnable = QString::fromStdString(clockNode["test_enable"].as<std::string>());
     }
-    config.clock = QString::fromStdString(clockNode["clock"].as<std::string>());
 
     // Optional ref_clock for GF_MUX
     if (clockNode["ref_clock"]) {
@@ -127,10 +125,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 }
                 target.icg.polarity = QString::fromStdString(
                     it->second["icg"]["polarity"].as<std::string>("high"));
-                if (it->second["icg"]["test_enable"]) {
-                    target.icg.test_enable = QString::fromStdString(
-                        it->second["icg"]["test_enable"].as<std::string>());
-                }
+                target.icg.test_enable = config.testEnable; // Use controller-level test_enable
                 if (it->second["icg"]["reset"]) {
                     target.icg.reset = QString::fromStdString(
                         it->second["icg"]["reset"].as<std::string>());
@@ -183,10 +178,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     target.div.enable = QString::fromStdString(
                         it->second["div"]["enable"].as<std::string>());
                 }
-                if (it->second["div"]["test_enable"]) {
-                    target.div.test_enable = QString::fromStdString(
-                        it->second["div"]["test_enable"].as<std::string>());
-                }
+                target.div.test_enable = config.testEnable; // Use controller-level test_enable
 
                 // Clean field names - no legacy support
                 if (it->second["div"]["value"]) {
@@ -253,10 +245,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                         }
                         link.icg.polarity = QString::fromStdString(
                             linkIt->second["icg"]["polarity"].as<std::string>("high"));
-                        if (linkIt->second["icg"]["test_enable"]) {
-                            link.icg.test_enable = QString::fromStdString(
-                                linkIt->second["icg"]["test_enable"].as<std::string>());
-                        }
+                        link.icg.test_enable = config.testEnable; // Use controller-level test_enable
                         if (linkIt->second["icg"]["reset"]) {
                             link.icg.reset = QString::fromStdString(
                                 linkIt->second["icg"]["reset"].as<std::string>());
@@ -317,10 +306,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                             link.div.enable = QString::fromStdString(
                                 linkIt->second["div"]["enable"].as<std::string>());
                         }
-                        if (linkIt->second["div"]["test_enable"]) {
-                            link.div.test_enable = QString::fromStdString(
-                                linkIt->second["div"]["test_enable"].as<std::string>());
-                        }
+                        link.div.test_enable = config.testEnable; // Use controller-level test_enable
 
                         // Clean field names - no legacy support
                         if (linkIt->second["div"]["value"]) {
@@ -375,10 +361,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 if (it->second["reset"]) {
                     target.reset = QString::fromStdString(it->second["reset"].as<std::string>());
                 }
-                if (it->second["test_enable"]) {
-                    target.test_enable = QString::fromStdString(
-                        it->second["test_enable"].as<std::string>());
-                }
+                target.test_enable = config.testEnable; // Use controller-level test_enable
                 if (it->second["test_clock"]) {
                     target.test_clock = QString::fromStdString(
                         it->second["test_clock"].as<std::string>());
@@ -424,17 +407,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
 
     QStringList portList;
 
-    // Add default clock if specified
-    if (!config.clock.isEmpty()) {
-        portList << QString("    input  wire %1,     /**< Default synchronous clock */")
-                        .arg(config.clock);
-    }
-
-    // Add input clocks (skip if already added as default clock)
+    // Add input clocks
     for (const auto &input : config.inputs) {
-        if (input.name == config.clock) {
-            continue; // Skip duplicate default clock
-        }
         QString comment = QString("/**< Clock input: %1").arg(input.name);
         if (!input.freq.isEmpty()) {
             comment += QString(" (%1)").arg(input.freq);
@@ -596,18 +570,20 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
         }
     }
 
-    // Add ICG interface ports (target-level)
+    // Add test enable signal (if specified)
     QSet<QString> addedSignals;
+    if (!config.testEnable.isEmpty()) {
+        portList << QString("    input  wire %1,    /**< Test enable signal */")
+                        .arg(config.testEnable);
+        addedSignals.insert(config.testEnable);
+    }
+
+    // Add ICG interface ports (target-level)
     for (const auto &target : config.targets) {
         if (!target.icg.enable.isEmpty() && !addedSignals.contains(target.icg.enable)) {
             portList << QString("    input  wire %1,    /**< ICG enable for %2 */")
                             .arg(target.icg.enable, target.name);
             addedSignals.insert(target.icg.enable);
-        }
-        if (!target.icg.test_enable.isEmpty() && !addedSignals.contains(target.icg.test_enable)) {
-            portList << QString("    input  wire %1,    /**< ICG test enable for %2 */")
-                            .arg(target.icg.test_enable, target.name);
-            addedSignals.insert(target.icg.test_enable);
         }
         if (!target.icg.reset.isEmpty() && !addedSignals.contains(target.icg.reset)) {
             portList << QString("    input  wire %1,    /**< ICG reset for %2 */")
@@ -643,11 +619,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                                 .arg(target.reset, target.name);
                 addedSignals.insert(target.reset);
             }
-            if (!target.test_enable.isEmpty() && !addedSignals.contains(target.test_enable)) {
-                portList << QString("    input  wire %1,    /**< MUX test enable for %2 */")
-                                .arg(target.test_enable, target.name);
-                addedSignals.insert(target.test_enable);
-            }
+            // Test enable is already added at controller level
             if (!target.test_clock.isEmpty() && !addedSignals.contains(target.test_clock)) {
                 portList << QString("    input  wire %1,    /**< MUX test clock for %2 */")
                                 .arg(target.test_clock, target.name);
@@ -688,10 +660,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
         }
     }
 
-    // Add test_en signal if any fallback uses it
-    if (!addedSignals.contains("test_en")) {
-        portList << QString("    input  wire test_en    /**< Test enable signal */");
-    }
+    // Test enable is handled at controller level, no need for fallback
 
     // Join ports and remove last comma
     QString ports = portList.join("\n");
@@ -777,7 +746,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             out << "    ) " << instanceName << "_icg (\n";
             out << "        .clk(" << currentSignal << "),\n";
             out << "        .en(" << target.icg.enable << "),\n";
-            QString testEn = target.icg.test_enable.isEmpty() ? "test_en" : target.icg.test_enable;
+            QString testEn = target.icg.test_enable.isEmpty() ? "1'b0" : target.icg.test_enable;
             out << "        .test_en(" << testEn << "),\n";
             out << "        .rst_n(" << (target.icg.reset.isEmpty() ? "1'b1" : target.icg.reset)
                 << "),\n";
@@ -810,7 +779,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             out << "        .en(" << (target.div.enable.isEmpty() ? "1'b1" : target.div.enable)
                 << "),\n";
 
-            QString testEn = target.div.test_enable.isEmpty() ? "test_en" : target.div.test_enable;
+            QString testEn = target.div.test_enable.isEmpty() ? "1'b0" : target.div.test_enable;
             out << "        .test_en(" << testEn << "),\n";
 
             // Dynamic or static division value -  design

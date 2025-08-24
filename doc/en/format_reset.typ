@@ -21,8 +21,7 @@ Reset controllers use a modern structured YAML format that eliminates complex st
 ```yaml
 # Modern component-based reset controller format
 reset:
-  - name: main_reset_ctrl          # Reset controller instance name
-    clock: clk_sys                 # Clock for synchronous reset operations
+  - name: main_reset_ctrl          # Reset controller instance name (required)
     test_enable: test_en           # Test enable bypass signal (optional)
     source:                        # Reset source definitions (singular)
       por_rst_n:
@@ -38,7 +37,7 @@ reset:
           por_rst_n:
             source: por_rst_n
             async:                 # Component: qsoc_rst_sync
-              clock: clk_sys
+              clock: clk_sys       # Clock is required for each component
               stage: 4             # 4-stage synchronizer
           i3c_soc_rst:
             source: i3c_soc_rst    # Direct assignment (no components)
@@ -64,7 +63,7 @@ Provides asynchronous assert, synchronous deassert functionality (active-low):
 Configuration:
 ```yaml
 async:
-  clock: clk_sys
+  clock: clk_sys              # Required: clock for synchronization
   stage: 4                    # Number of synchronizer stages
 ```
 
@@ -78,7 +77,7 @@ Adds synchronous delay to reset release (active-low):
 Configuration:
 ```yaml
 sync:
-  clock: clk_sys
+  clock: clk_sys              # Required: clock for pipeline
   stage: 3                    # Number of pipeline stages
 ```
 
@@ -92,7 +91,7 @@ Provides counter-based reset timing (active-low):
 Configuration:
 ```yaml
 count:
-  clock: clk_sys
+  clock: clk_sys              # Required: clock for counter
   cycle: 255                  # Number of cycles to count
 ```
 

@@ -944,6 +944,125 @@ reset:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_rst_pipe #("));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_rst_count #("));
     }
+
+    void test_optional_test_enable()
+    {
+        // Test 1: No test_enable defined - should use 1'b0 internally
+        QString netlistContent1 = R"(
+port:
+  por_rst_n:
+    direction: input
+    type: logic
+  clk_sys:
+    direction: input
+    type: logic
+  cpu_rst_n:
+    direction: output
+    type: logic
+instance: {}
+net: {}
+reset:
+  - name: test_reset_no_test_en
+    source:
+      por_rst_n:
+        active: low
+    target:
+      cpu_rst_n:
+        active: low
+        link:
+          por_rst_n:
+            source: por_rst_n
+            async:
+              clock: clk_sys
+              stage: 4
+)";
+        QString netlistPath1 = createTempFile("test_reset_no_test_enable.soc_net", netlistContent1);
+        QVERIFY(!netlistPath1.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath1;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath1
+            = QDir(projectManager.getOutputPath()).filePath("test_reset_no_test_enable.v");
+        QVERIFY(QFile::exists(verilogPath1));
+
+        QFile verilogFile1(verilogPath1);
+        QVERIFY(verilogFile1.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent1 = verilogFile1.readAll();
+        verilogFile1.close();
+
+        // Should NOT have test_enable port
+        QVERIFY(!verifyVerilogContentNormalized(verilogContent1, "input wire test_enable"));
+        QVERIFY(!verifyVerilogContentNormalized(verilogContent1, "input wire test_en"));
+        // Should use 1'b0 internally
+        QVERIFY(verifyVerilogContentNormalized(verilogContent1, ".test_enable(1'b0)"));
+
+        // Test 2: test_enable explicitly defined - should use it
+        QString netlistContent2 = R"(
+port:
+  por_rst_n:
+    direction: input
+    type: logic
+  clk_sys:
+    direction: input
+    type: logic
+  my_test_en:
+    direction: input
+    type: logic
+  cpu_rst_n:
+    direction: output
+    type: logic
+instance: {}
+net: {}
+reset:
+  - name: test_reset_with_test_en
+    test_enable: my_test_en
+    source:
+      por_rst_n:
+        active: low
+    target:
+      cpu_rst_n:
+        active: low
+        link:
+          por_rst_n:
+            source: por_rst_n
+            async:
+              clock: clk_sys
+              stage: 4
+)";
+        QString netlistPath2
+            = createTempFile("test_reset_with_test_enable.soc_net", netlistContent2);
+        QVERIFY(!netlistPath2.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath2;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath2
+            = QDir(projectManager.getOutputPath()).filePath("test_reset_with_test_enable.v");
+        QVERIFY(QFile::exists(verilogPath2));
+
+        QFile verilogFile2(verilogPath2);
+        QVERIFY(verilogFile2.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent2 = verilogFile2.readAll();
+        verilogFile2.close();
+
+        // Should have my_test_en port
+        QVERIFY(verifyVerilogContentNormalized(verilogContent2, "input wire my_test_en"));
+        // Should use my_test_en
+        QVERIFY(verifyVerilogContentNormalized(verilogContent2, ".test_enable(my_test_en)"));
+    }
 };
 
 QStringList Test::messageList;

@@ -107,8 +107,7 @@ public:
     {
         QString            name       = "rstctrl"; /**< Controller instance name */
         QString            moduleName = "rstctrl"; /**< Module name */
-        QString            clock;                  /**< Main clock signal */
-        QString            testEnable = "test_en"; /**< Test enable signal */
+        QString            testEnable;             /**< Test enable signal (optional) */
         QList<ResetSource> sources;                /**< Reset sources */
         QList<ResetTarget> targets;                /**< Reset targets */
         ResetReasonConfig  reason;                 /**< Reset reason recording */

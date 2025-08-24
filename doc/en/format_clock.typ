@@ -21,8 +21,8 @@ Clock controllers use direct attribute specification without explicit type enume
 ```yaml
 # Clock controller with two-level processing
 clock:
-  - name: soc_clk_ctrl
-    clock: clk_sys                    # Default synchronous clock
+  - name: soc_clk_ctrl                # Controller instance name (required)
+    test_enable: test_en              # Test enable bypass signal (optional)
     input:
       osc_24m:
         freq: 24MHz
@@ -40,7 +40,7 @@ clock:
       # Target-level ICG
       dbg_clk:
         freq: 800MHz
-        icg:                          # Target-level ICG
+        icg:                          # Target-level ICG (uses controller test_enable)
           enable: dbg_clk_en
         link:
           pll_800m:                   # Direct connection
@@ -90,8 +90,7 @@ clock:
           test_clk:                   # Direct connection
         select: safe_sel
         reset: sys_rst_n              # Has reset → auto GF_MUX
-        test_enable: test_enable      # DFT test enable
-        test_clock: test_clock        # DFT test clock
+        test_clock: test_clock        # DFT test clock (uses controller test_enable)
 ```
 
 == PROCESSING LEVELS
