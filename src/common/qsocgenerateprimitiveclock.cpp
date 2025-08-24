@@ -1303,10 +1303,14 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    output wire clk_out     /**< Clock output */\n";
         out << ");\n";
         out << "    reg iq;\n";
-        out << "    /* Level-sensitive latch, transparent when clk==0 */\n";
-        out << "    always @* begin\n";
-        out << "        if (!clk) iq <= (test_en | en);  /* Transparent period, hold otherwise "
-               "*/\n";
+        out << "`ifndef SYNTHESIS\n";
+        out << "    initial iq = 1'b0;  /* sim-only init to block X fanout */\n";
+        out << "`endif\n";
+        out << "    /* Level-sensitive latch with explicit sensitivity list to avoid delta "
+               "oscillation */\n";
+        out << "    always @(clk or en or test_en) begin\n";
+        out << "        if (!clk) iq <= (test_en | en);  /* Use non-blocking for time-sequence "
+               "consistency */\n";
         out << "    end\n";
         out << "    assign clk_out = iq & clk;\n";
         out << "endmodule\n";
@@ -1324,10 +1328,14 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    output wire clk_out     /**< Clock output */\n";
         out << ");\n";
         out << "    reg iq;\n";
-        out << "    /* Level-sensitive latch, transparent when clk==1 */\n";
-        out << "    always @* begin\n";
-        out << "        if (clk) iq <= ~(test_en | en);  /* Transparent period, hold otherwise "
-               "*/\n";
+        out << "`ifndef SYNTHESIS\n";
+        out << "    initial iq = 1'b0;  /* sim-only init to block X fanout */\n";
+        out << "`endif\n";
+        out << "    /* Level-sensitive latch with explicit sensitivity list to avoid delta "
+               "oscillation */\n";
+        out << "    always @(clk or en or test_en) begin\n";
+        out << "        if (clk) iq <= ~(test_en | en);  /* Use non-blocking for time-sequence "
+               "consistency */\n";
         out << "    end\n";
         out << "    assign clk_out = iq | clk;\n";
         out << "endmodule\n";
