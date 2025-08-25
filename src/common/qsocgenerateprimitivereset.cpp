@@ -305,6 +305,9 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
 {
     out << "\nmodule " << config.moduleName << " (\n";
 
+    // Initialize global port tracking at the beginning of the function
+    QSet<QString> addedSignals;
+
     // Collect all unique clock signals
     QStringList clocks;
 
@@ -331,12 +334,20 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
         clocks.append(config.reason.clock);
     }
 
-    // Collect all unique source signals
+    // Collect all output signals (targets) for "output win" mechanism
+    QSet<QString> outputSignals;
+    for (const auto &target : config.targets) {
+        outputSignals.insert(target.name);
+    }
+
+    // Collect all unique source signals, but exclude those that are also outputs
     QStringList sources;
     for (const auto &target : config.targets) {
         for (const auto &link : target.links) {
-            if (!sources.contains(link.source))
+            // Skip source if it's also an output signal ("output win" mechanism)
+            if (!outputSignals.contains(link.source) && !sources.contains(link.source)) {
                 sources.append(link.source);
+            }
         }
     }
 
@@ -348,30 +359,35 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
     for (const auto &clock : clocks) {
         portDecls << QString("    input  wire %1").arg(clock);
         portComments << "    /**< Clock inputs */";
+        addedSignals.insert(clock);
     }
 
-    // Source inputs
+    // Source inputs (excluding those that are also outputs)
     for (const auto &source : sources) {
         portDecls << QString("    input  wire %1").arg(source);
         portComments << "    /**< Reset sources */";
+        addedSignals.insert(source);
     }
 
     // Test enable input (if specified)
     if (!config.testEnable.isEmpty()) {
         portDecls << QString("    input  wire %1").arg(config.testEnable);
         portComments << "    /**< Test enable signal */";
+        addedSignals.insert(config.testEnable);
     }
 
     // Reset reason clear signal
     if (config.reason.enabled && !config.reason.clear.isEmpty()) {
         portDecls << QString("    input  wire %1").arg(config.reason.clear);
         portComments << "    /**< Reset reason clear */";
+        addedSignals.insert(config.reason.clear);
     }
 
-    // Reset targets
+    // Reset targets (outputs win over inputs)
     for (const auto &target : config.targets) {
         portDecls << QString("    output wire %1").arg(target.name);
         portComments << "    /**< Reset targets */";
+        addedSignals.insert(target.name);
     }
 
     // Reset reason outputs
@@ -384,9 +400,11 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
             portDecls << QString("    output wire %1").arg(config.reason.output);
         }
         portComments << "    /**< Reset reason outputs */";
+        addedSignals.insert(config.reason.output);
 
         portDecls << QString("    output wire %1").arg(config.reason.valid);
         portComments << "    /**< Reset reason outputs */";
+        addedSignals.insert(config.reason.valid);
     }
 
     // Output all ports with unified boundary judgment

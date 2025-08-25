@@ -1043,6 +1043,126 @@ reset:
         // Should use my_test_en
         QVERIFY(verifyVerilogContentNormalized(verilogContent2, ".test_enable(my_test_en)"));
     }
+
+    void test_reset_output_win()
+    {
+        QString netlistContent = R"(
+# Test netlist with reset output win mechanism
+# rst_apb_n is both a source (referenced by uart) and a target (output)
+port:
+  por_rst_n:
+    direction: input
+    type: logic
+  sw_rst_n:
+    direction: input
+    type: logic
+  test_en:
+    direction: input
+    type: logic
+
+instance: {}
+
+net: {}
+
+reset:
+  - name: test_reset_output_win
+    test_enable: test_en
+    source:
+      por_rst_n:
+        active: low
+      sw_rst_n:
+        active: low
+    target:
+      rst_apb_n:
+        active: low
+        link:
+          por_rst_n:
+          sw_rst_n:
+      rst_uart0_n:
+        active: low
+        link:
+          por_rst_n:
+          rst_apb_n:
+)";
+
+        QString netlistPath = createTempFile("test_reset_output_win.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_reset_output_win.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        // Verify "output win" mechanism: rst_apb_n should only appear as output port
+        // Count occurrences of rst_apb_n in port declarations within reset module
+        QRegularExpression      moduleRegex("module\\s+test_reset_output_win\\s*\\([^)]*\\)");
+        QRegularExpressionMatch moduleMatch = moduleRegex.match(verilogContent);
+        QVERIFY(moduleMatch.hasMatch());
+
+        QString            moduleHeader = moduleMatch.captured(0);
+        QRegularExpression portRegex("(input|output)\\s+wire\\s+([\\w\\[\\]:]+\\s+)?rst_apb_n\\b");
+        QRegularExpressionMatchIterator iterator = portRegex.globalMatch(moduleHeader);
+
+        int  portCount     = 0;
+        bool hasInputPort  = false;
+        bool hasOutputPort = false;
+
+        while (iterator.hasNext()) {
+            QRegularExpressionMatch match = iterator.next();
+            portCount++;
+            QString portType = match.captured(1);
+            if (portType == "input")
+                hasInputPort = true;
+            if (portType == "output")
+                hasOutputPort = true;
+        }
+
+        // Should have exactly 1 port declaration for rst_apb_n in reset module
+        QCOMPARE(portCount, 1);
+
+        // Should be output port only (not input)
+        QVERIFY(hasOutputPort);
+        QVERIFY(!hasInputPort);
+
+        // Verify rst_apb_n is used correctly in the logic
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire rst_apb_n"));
+
+        // Verify internal wires are created for rst_apb_n links
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire rst_apb_link0_n"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire rst_apb_link1_n"));
+
+        // Verify rst_apb_n is assigned from combined links
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "rst_apb_n_combined = rst_apb_link0_n & rst_apb_link1_n"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "assign rst_apb_n = rst_apb_n_combined"));
+
+        // Verify uart0 uses rst_apb_n as a source signal
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "assign rst_uart0_link1_n = rst_apb_n"));
+
+        // Verify module header contains correct ports
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module test_reset_output_win"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  wire por_rst_n"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input  wire sw_rst_n"));
+
+        // Should NOT have rst_apb_n as input since it's an output (check only in reset module)
+        QVERIFY(!verifyVerilogContentNormalized(moduleHeader, "input  wire rst_apb_n"));
+    }
 };
 
 QStringList Test::messageList;
