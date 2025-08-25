@@ -1492,6 +1492,108 @@ clock:
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
+
+    void test_test_clock_output_win()
+    {
+        // Test case for test_clock "output win" mechanism
+        // When test_clock name matches an input clock, it should merge and print info message
+        QString netlistContent = R"(
+port:
+  clk_hse:
+    direction: input
+    type: logic
+  clk_ext0:
+    direction: input
+    type: logic
+  clk_out:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_clock_merge
+    test_enable: test_en
+    input:
+      clk_hse:
+        freq: 25MHz
+      clk_ext0:
+        freq: 12MHz
+    target:
+      clk_out:
+        freq: 25MHz
+        link:
+          clk_hse:
+          clk_ext0:
+        select: clk_sel
+        reset: rst_n
+        test_clock: clk_hse  # Same as input clock - should trigger "output win"
+)";
+
+        messageList.clear(); // Clear previous messages to catch the INFO message
+
+        QString netlistPath = createTempFile("test_clock_merge.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        // Check if Verilog file was generated successfully
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_clock_merge.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        // Read generated Verilog content
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        // Verify "output win": clk_hse should appear only once in the test_clock_merge module port declaration
+        // Extract the test_clock_merge module section only
+        QRegularExpression      moduleRegex("module test_clock_merge \\(([^;]+)\\);");
+        QRegularExpressionMatch match = moduleRegex.match(verilogContent);
+        QVERIFY2(match.hasMatch(), "test_clock_merge module not found");
+
+        QString modulePortsSection = match.captured(1);
+        // Count only actual port declarations (not in comments)
+        QRegularExpression portRegex("(input|output)\\s+wire\\s+([\\w\\[\\]:]+\\s+)?clk_hse\\b");
+        QRegularExpressionMatchIterator portMatches     = portRegex.globalMatch(modulePortsSection);
+        int                             clkHsePortCount = 0;
+        while (portMatches.hasNext()) {
+            portMatches.next();
+            clkHsePortCount++;
+        }
+        QCOMPARE(clkHsePortCount, 1); // Should appear exactly once in port list
+
+        // Verify no duplicate port definition errors occurred (file was generated)
+        QVERIFY(!verilogContent.isEmpty());
+        QVERIFY(verilogContent.contains("module test_clock_merge"));
+
+        // Verify that test_clock is properly used in the MUX instance (output win mechanism working)
+        QVERIFY(verilogContent.contains(".test_clk   (clk_hse)"));
+
+        // Verify no errors about port conflicts occurred
+        bool foundPortError = false;
+        for (const QString &message : messageList) {
+            if (message.contains("duplicate") && message.contains("clk_hse")) {
+                foundPortError = true;
+                break;
+            }
+        }
+        QVERIFY2(!foundPortError, "Should not have port duplication errors");
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
+    }
 };
 
 QStringList Test::messageList;

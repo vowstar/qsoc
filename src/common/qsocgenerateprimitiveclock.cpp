@@ -408,6 +408,15 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     QStringList portDecls;
     QStringList portComments;
 
+    // Initialize global port tracking for unified "output win" mechanism
+    QSet<QString> addedSignals;
+
+    // Collect input clock names for "output win" mechanism
+    QSet<QString> inputClocks;
+    for (const auto &input : config.inputs) {
+        inputClocks.insert(input.name);
+    }
+
     // Add input clocks
     for (const auto &input : config.inputs) {
         QString comment = QString("/**< Clock input: %1").arg(input.name);
@@ -417,6 +426,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
         comment += " */";
         portDecls << QString("    input  wire %1").arg(input.name);
         portComments << comment;
+        addedSignals.insert(input.name); // Track input clocks in global set
     }
 
     // Add target clocks
@@ -573,8 +583,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     }
 
     // Add test enable signal (if specified)
-    QSet<QString> addedSignals;
-    if (!config.testEnable.isEmpty()) {
+    if (!config.testEnable.isEmpty() && !addedSignals.contains(config.testEnable)) {
         portDecls << QString("    input  wire %1").arg(config.testEnable);
         portComments << QString("/**< Test enable signal */");
         addedSignals.insert(config.testEnable);
@@ -623,9 +632,16 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
             }
             // Test enable is already added at controller level
             if (!target.test_clock.isEmpty() && !addedSignals.contains(target.test_clock)) {
-                portDecls << QString("    input  wire %1").arg(target.test_clock);
-                portComments << QString("/**< MUX test clock for %1 */").arg(target.name);
-                addedSignals.insert(target.test_clock);
+                // Implement "output win" mechanism: if test_clock matches an input clock, skip it
+                if (inputClocks.contains(target.test_clock)) {
+                    // Port already exists as input clock, just mark as processed
+                    addedSignals.insert(
+                        target.test_clock); // Mark as processed to avoid future conflicts
+                } else {
+                    portDecls << QString("    input  wire %1").arg(target.test_clock);
+                    portComments << QString("/**< MUX test clock for %1 */").arg(target.name);
+                    addedSignals.insert(target.test_clock);
+                }
             }
         }
     }
