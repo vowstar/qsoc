@@ -1581,7 +1581,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     }
 
     /* Format generated Verilog file if verible-verilog-format is available */
-    formatVerilogFile(outputFilePath);
+    QSocGenerateManager::formatVerilogFile(outputFilePath);
 
     return true;
 }

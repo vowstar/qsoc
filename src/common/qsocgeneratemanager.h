@@ -236,6 +236,15 @@ public:
      */
     static bool doBitRangesProvideFullCoverage(const QStringList &ranges, int signalWidth);
 
+    /**
+     * @brief Format generated Verilog file using verible-verilog-format if available
+     * @details This function attempts to format a Verilog file using verible-verilog-format.
+     *          If the tool is not available, it silently returns false without error.
+     * @param filePath Absolute path to the Verilog file to format
+     * @return true if formatting successful, false if tool not found or formatting failed
+     */
+    static bool formatVerilogFile(const QString &filePath);
+
 public slots:
     /**
      * @brief Set the project manager.
@@ -381,16 +390,6 @@ public slots:
         const QStringList &rdlFiles,
         const QStringList &rcsvFiles,
         const QString     &outputFileName);
-
-    /**
-     * @brief Format a Verilog file using the verible-verilog-format tool.
-     * @details This function calls the external verible-verilog-format tool
-     *          to format the generated Verilog file with standardized style settings.
-     * @param filePath Path to the Verilog file to format.
-     * @retval true File formatted successfully.
-     * @retval false Failed to format file or tool not available.
-     */
-    bool formatVerilogFile(const QString &filePath);
 
     /**
      * @brief Generate stub files for selected modules.

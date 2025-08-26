@@ -1217,10 +1217,10 @@ clock:
         cellFile.close();
 
         // Verify POLARITY parameter in qsoc_tc_clk_gate
-        QVERIFY(cellContent.contains("parameter POLARITY = 1'b1"));
-        QVERIFY(cellContent.contains("qsoc_tc_clk_gate_pos"));
-        QVERIFY(cellContent.contains("qsoc_tc_clk_gate_neg"));
-        QVERIFY(cellContent.contains("if (POLARITY == 1'b1)"));
+        QVERIFY(verifyVerilogContentNormalized(cellContent, "parameter POLARITY = 1'b1"));
+        QVERIFY(verifyVerilogContentNormalized(cellContent, "qsoc_tc_clk_gate_pos"));
+        QVERIFY(verifyVerilogContentNormalized(cellContent, "qsoc_tc_clk_gate_neg"));
+        QVERIFY(verifyVerilogContentNormalized(cellContent, "if (POLARITY == 1'b1)"));
     }
 
     void test_optional_test_enable()
