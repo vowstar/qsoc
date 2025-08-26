@@ -1576,10 +1576,10 @@ clock:
 
         // Verify no duplicate port definition errors occurred (file was generated)
         QVERIFY(!verilogContent.isEmpty());
-        QVERIFY(verilogContent.contains("module test_clock_merge"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module test_clock_merge"));
 
         // Verify that test_clock is properly used in the MUX instance (output win mechanism working)
-        QVERIFY(verilogContent.contains(".test_clk   (clk_hse)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_clk   (clk_hse)"));
 
         // Verify no errors about port conflicts occurred
         bool foundPortError = false;
