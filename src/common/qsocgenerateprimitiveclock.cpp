@@ -1379,11 +1379,9 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "`ifndef SYNTHESIS\n";
         out << "    initial iq = 1'b0;  /* sim-only init to block X fanout */\n";
         out << "`endif\n";
-        out << "    /* Level-sensitive latch with explicit sensitivity list to avoid delta "
-               "oscillation */\n";
+        out << "    /* Level-sensitive latch, use blocking '=' here */\n";
         out << "    always @(clk or en or test_en) begin\n";
-        out << "        if (!clk) iq <= (test_en | en);  /* Use non-blocking for time-sequence "
-               "consistency */\n";
+        out << "        if (!clk) iq = (test_en | en);\n";
         out << "    end\n";
         out << "    assign clk_out = iq & clk;\n";
         out << "endmodule\n";
@@ -1404,11 +1402,9 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "`ifndef SYNTHESIS\n";
         out << "    initial iq = 1'b0;  /* sim-only init to block X fanout */\n";
         out << "`endif\n";
-        out << "    /* Level-sensitive latch with explicit sensitivity list to avoid delta "
-               "oscillation */\n";
+        out << "    /* Level-sensitive latch, use blocking '=' here */\n";
         out << "    always @(clk or en or test_en) begin\n";
-        out << "        if (clk) iq <= ~(test_en | en);  /* Use non-blocking for time-sequence "
-               "consistency */\n";
+        out << "        if (clk) iq = ~(test_en | en);\n";
         out << "    end\n";
         out << "    assign clk_out = iq | clk;\n";
         out << "endmodule\n";
