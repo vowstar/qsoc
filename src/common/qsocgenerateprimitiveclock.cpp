@@ -1946,20 +1946,15 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "            end\n";
         out << "        end\n";
         out << "        \n";
-        out << "        // Gate enable generation with mutual exclusion\n";
-        out << "        integer j;\n";
-        out << "        always @(*) begin\n";
-        out << "            gate_enable_unfiltered[i] = 1'b1;\n";
-        out << "            for (j = 0; j < NUM_INPUTS_I; j = j + 1) begin\n";
-        out << "                if (i == j) begin\n";
-        out << "                    gate_enable_unfiltered[i] = gate_enable_unfiltered[i] & "
-               "sel_onehot[j];\n";
-        out << "                end else begin\n";
-        out << "                    gate_enable_unfiltered[i] = gate_enable_unfiltered[i] & "
-               "clock_disabled_q[j];\n";
-        out << "                end\n";
-        out << "            end\n";
-        out << "        end\n";
+        out << "        /* Gate enable generation with mutual exclusion */\n";
+        out << "        /* Generate one-hot mask for current input i (compile-time constant) */\n";
+        out << "        localparam [NUM_INPUTS_I-1:0] ONEHOT_I = ({{(NUM_INPUTS_I-1){1'b0}},1'b1} "
+               "<< i);\n";
+        out << "        \n";
+        out << "        /* Set bit i to 1 to exclude it from constraint, then use reduction AND "
+               "*/\n";
+        out << "        assign gate_enable_unfiltered[i] = sel_onehot[i] & &(clock_disabled_q | "
+               "ONEHOT_I);\n";
         out << "        \n";
         out << "        // Glitch filter (2-stage)\n";
         out << "        assign glitch_filter_d[i*2+0] = gate_enable_unfiltered[i];\n";
