@@ -227,7 +227,7 @@ target:
 
 == DIVIDER CONFIGURATION
 <soc-net-clock-divider-config>
-Clock dividers support two operational modes: static (constant division) and dynamic (runtime controllable division). The mode is determined by the presence of the `value` signal.
+Clock dividers support three operational modes: static (constant division), auto (simplified runtime control), and dynamic (manual handshake control). The mode is determined by the presence of `value` and `valid` signals.
 
 === Divider Parameters
 <soc-net-clock-divider-params>
@@ -242,7 +242,7 @@ Clock dividers support two operational modes: static (constant division) and dyn
     [Default division value (≥1), used as reset default and static constant],
     [width],
     [◐],
-    [Divider width in bits (required for dynamic mode, auto-calculated for static mode)],
+    [Divider width in bits (required for auto/dynamic modes, auto-calculated for static mode)],
     [reset],
     [],
     [Reset signal name (active-low), divider uses default value during reset],
@@ -323,11 +323,44 @@ qsoc_clk_div #(
 );
 ```
 
+=== Auto Mode (Simplified Dynamic Control)
+<soc-net-clock-divider-auto>
+When `value` is specified but `valid` is omitted, the divider automatically uses `qsoc_clk_div_auto` for simplified control:
+
+```yaml
+# Auto mode divider example
+target:
+  gpu_clk:
+    freq: 200MHz
+    div:
+      default: 4                    # Reset default: 800MHz / 4 = 200MHz
+      width: 4                      # 4-bit divider (max value 15)
+      value: gpu_div_ratio          # Runtime division control (auto-sync & self-strobe div_valid)
+      reset: rst_n
+    link:
+      pll_800m:                     # Variable: 800MHz / gpu_div_ratio
+```
+
+Generated Verilog uses the automatic handshake module:
+```verilog
+qsoc_clk_div_auto #(
+    .WIDTH(4),
+    .DEFAULT_VAL(4)
+) u_gpu_clk_target_div (
+    .clk(source_clock),
+    .rst_n(rst_n),
+    .div(gpu_div_ratio),          // Auto-sync & self-strobe div_valid
+    // Note: No div_valid/div_ready ports - handled internally
+    // ...
+);
+```
+
 === Mode Selection Rules
 <soc-net-clock-divider-mode-rules>
-- *Static Mode*: `value` parameter absent or empty → division tied to `default` constant
-- *Dynamic Mode*: `value` parameter present → division connected to runtime signal
-- *Reset Behavior*: Both modes use `default` value during reset condition
+- *Static Mode*: `value` parameter absent or empty → division tied to `default` constant, uses `qsoc_clk_div`
+- *Auto Mode*: `value` present, `valid` absent → automatic handshake control, uses `qsoc_clk_div_auto`
+- *Dynamic Mode*: Both `value` and `valid` parameters present → manual handshake control, uses `qsoc_clk_div`
+- *Reset Behavior*: All modes use `default` value during reset condition
 - *Bypass Operation*: Division by 1 automatically enables bypass mode in the primitive
 
 === Width Calculation and Validation

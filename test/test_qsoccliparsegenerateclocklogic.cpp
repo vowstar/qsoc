@@ -1594,6 +1594,220 @@ clock:
         // clock_cell.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
+
+    void test_static_divider_uses_original_qsoc_clk_div()
+    {
+        // Test static divider (only default value) should use original qsoc_clk_div
+        QString netlistContent = R"(
+port:
+  clk_in:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  clk_static:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: static_div_ctrl
+    clock: clk_sys
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_static:
+        freq: 25MHz
+        div:
+          default: 4
+          width: 3
+        link:
+          clk_in:
+)";
+
+        QString netlistPath = createTempFile("test_static_div.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_static_div.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        // Should use original qsoc_clk_div (not qsoc_clk_div_auto) for static dividers
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
+        QVERIFY(!verilogContent.contains("qsoc_clk_div_auto"));
+        // Static mode: div_valid should be 1'b0 (no dynamic loading needed)
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div_valid(1'b0)"));
+        // Static mode: div value same as DEFAULT_VAL parameter
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(3'd4)"));
+
+        QVERIFY(verifyClockCellFileComplete());
+    }
+
+    void test_dynamic_divider_without_valid_uses_qsoc_clk_div_auto()
+    {
+        // Test dynamic divider without div_valid should use qsoc_clk_div_auto
+        QString netlistContent = R"(
+port:
+  clk_in:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  div_value:
+    direction: input
+    type: logic[3:0]
+  clk_dynamic:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: dynamic_auto_ctrl
+    clock: clk_sys
+    input:
+      clk_in:
+        freq: 200MHz
+    target:
+      clk_dynamic:
+        freq: 50MHz
+        div:
+          default: 4
+          width: 4
+          value: div_value
+        link:
+          clk_in:
+)";
+
+        QString netlistPath = createTempFile("test_dynamic_auto.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_dynamic_auto.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        // Should use qsoc_clk_div_auto for dynamic dividers without explicit div_valid
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div_auto"));
+        QVERIFY(
+            !verilogContent.contains("qsoc_clk_div_auto") || !verilogContent.contains("div_valid"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(div_value)"));
+
+        QVERIFY(verifyClockCellFileComplete());
+    }
+
+    void test_dynamic_divider_with_valid_uses_original_qsoc_clk_div()
+    {
+        // Test dynamic divider with explicit div_valid should use original qsoc_clk_div
+        QString netlistContent = R"(
+port:
+  clk_in:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  div_value:
+    direction: input
+    type: logic[3:0]
+  div_valid:
+    direction: input
+    type: logic
+  div_ready:
+    direction: output
+    type: logic
+  clk_controlled:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: controlled_div_ctrl
+    clock: clk_sys
+    input:
+      clk_in:
+        freq: 400MHz
+    target:
+      clk_controlled:
+        freq: 100MHz
+        div:
+          default: 4
+          width: 4
+          value: div_value
+          valid: div_valid
+          ready: div_ready
+        link:
+          clk_in:
+)";
+
+        QString netlistPath = createTempFile("test_controlled_div.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_controlled_div.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        // Should use original qsoc_clk_div when div_valid is explicitly specified
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
+        QVERIFY(!verilogContent.contains("qsoc_clk_div_auto"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div_valid(div_valid)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div_ready(div_ready)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(div_value)"));
+
+        QVERIFY(verifyClockCellFileComplete());
+    }
 };
 
 QStringList Test::messageList;
