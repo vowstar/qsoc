@@ -1465,8 +1465,8 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    end\n";
         out << "\n";
         out << "    /* Reset value calculation */\n";
-        out << "    localparam [WIDTH-1:0] div_reset_value = (DEFAULT_VAL != 0) ? DEFAULT_VAL : "
-               "1;\n";
+        out << "    localparam [WIDTH-1:0] div_reset_value =\n";
+        out << "        (DEFAULT_VAL != 0) ? DEFAULT_VAL : {{(WIDTH-1){1'b0}}, 1'b1};\n";
         out << "    \n";
         out << "    /* State registers */\n";
         out << "    reg [WIDTH-1:0] div_d, div_q;\n";
@@ -1501,7 +1501,8 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    localparam clk_div_bypass_en_reset_value = (DEFAULT_VAL < 2) ? 1'b1 : 1'b0;\n";
         out << "\n";
         out << "    /* Normalize div input - avoid div=0 issues */\n";
-        out << "    assign div_i_normalized = (div != 0) ? div : 1;\n";
+        out << "    assign div_i_normalized = (div != {WIDTH{1'b0}}) ? div : {{(WIDTH-1){1'b0}}, "
+               "1'b1};\n";
         out << "\n";
         out << "    /* Divider Load FSM */\n";
         out << "    always @(*) begin\n";
@@ -1543,7 +1544,8 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "                    clear_cycle_counter = 1'b1;\n";
         out << "                    clear_toggle_flops = 1'b1;\n";
         out << "                    use_odd_division_d = div_i_normalized[0];\n";
-        out << "                    clk_div_bypass_en_d = (div_i_normalized == 1);\n";
+        out << "                    clk_div_bypass_en_d = (div_i_normalized == {{(WIDTH-1){1'b0}}, "
+               "1'b1});\n";
         out << "                    clk_gate_state_d = WAIT_END_PERIOD;\n";
         out << "                end\n";
         out << "            end\n";
@@ -1551,7 +1553,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "            WAIT_END_PERIOD: begin\n";
         out << "                gate_en_d = 1'b0;\n";
         out << "                toggle_ffs_en = 1'b0;\n";
-        out << "                if (cycle_cntr_q == div_q - 1) begin\n";
+        out << "                if (cycle_cntr_q == (div_q - 1'b1)) begin\n";
         out << "                    clk_gate_state_d = IDLE;\n";
         out << "                end\n";
         out << "            end\n";
@@ -1586,10 +1588,11 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "            cycle_cntr_d = {WIDTH{1'b0}};\n";
         out << "        end else begin\n";
         out << "            if (cycle_counter_en) begin\n";
-        out << "                if (clk_div_bypass_en_q || (cycle_cntr_q == div_q-1)) begin\n";
+        out << "                if (clk_div_bypass_en_q || (cycle_cntr_q == (div_q - 1'b1))) "
+               "begin\n";
         out << "                    cycle_cntr_d = {WIDTH{1'b0}};\n";
         out << "                end else begin\n";
-        out << "                    cycle_cntr_d = cycle_cntr_q + 1;\n";
+        out << "                    cycle_cntr_d = cycle_cntr_q + 1'b1;\n";
         out << "                end\n";
         out << "            end\n";
         out << "        end\n";
@@ -1604,6 +1607,14 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    end\n";
         out << "\n";
         out << "    assign count = cycle_cntr_q;\n";
+        out << "\n";
+        out << "    /* Precompute (div_q + 1)/2 in WIDTH+1 domain, then truncate to WIDTH.\n";
+        out << "     * Do this via named wires to avoid part-select on expressions (slang "
+               "limitation). */\n";
+        out << "    wire [WIDTH:0]   div_ext            = {1'b0, div_q};\n";
+        out << "    wire [WIDTH:0]   div_plus1_ext      = div_ext + {{WIDTH{1'b0}}, 1'b1};\n";
+        out << "    wire [WIDTH:0]   div_plus1_ext_half = div_plus1_ext >> 1;\n";
+        out << "    wire [WIDTH-1:0] div_plus1_half     = div_plus1_ext_half[WIDTH-1:0];\n";
         out << "\n";
         out << "    /* T-Flip-Flops with non-blocking assignments for synthesis */\n";
         out << "    always @(posedge clk or negedge rst_n) begin\n";
@@ -1638,10 +1649,11 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        t_ff2_en = 1'b0;\n";
         out << "        if (!clk_div_bypass_en_q && toggle_ffs_en) begin\n";
         out << "            if (use_odd_division_q) begin\n";
-        out << "                t_ff1_en = (cycle_cntr_q == 0) ? 1'b1 : 1'b0;\n";
-        out << "                t_ff2_en = (cycle_cntr_q == (div_q+1)/2) ? 1'b1 : 1'b0;\n";
+        out << "                t_ff1_en = (cycle_cntr_q == {WIDTH{1'b0}}) ? 1'b1 : 1'b0;\n";
+        out << "                t_ff2_en = (cycle_cntr_q == div_plus1_half) ? 1'b1 : 1'b0;\n";
         out << "            end else begin\n";
-        out << "                t_ff1_en = (cycle_cntr_q == 0 || cycle_cntr_q == div_q/2) ? 1'b1 : "
+        out << "                t_ff1_en = ((cycle_cntr_q == {WIDTH{1'b0}}) || (cycle_cntr_q == "
+               "(div_q >> 1))) ? 1'b1 : "
                "1'b0;\n";
         out << "            end\n";
         out << "        end\n";
@@ -1805,23 +1817,35 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "            end\n";
         out << "        end\n";
         out << "        \n";
-        out << "        assign glitch_filter_output[i] = glitch_filter_q[i*2+1] & \n";
-        out << "                                         glitch_filter_q[i*2+0] & \n";
+        out << "        assign glitch_filter_output[i] = glitch_filter_q[i*2+1] &\n";
+        out << "                                         glitch_filter_q[i*2+0] &\n";
         out << "                                         gate_enable_unfiltered[i];\n";
         out << "        \n";
         out << "        // Synchronizer chain for enable signal (equivalent to sync module)\n";
         out << "        // Note: This implements the same functionality as sync "
                "#(.STAGES(NUM_SYNC_STAGES))\n";
-        out << "        reg [SYNC_S-1:0] sync_chain;\n";
-        out << "        always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
-        out << "            if (!reset_synced[i]) begin\n";
-        out << "                sync_chain <= {SYNC_S{1'b0}};\n";
-        out << "            end else begin\n";
-        out << "                if (SYNC_S == 1)\n";
-        out << "                    sync_chain <= glitch_filter_output[i];\n";
-        out << "                else\n";
+        out << "        /* Synchronizer chain for enable signal. Width-safe for SYNC_S. */\n";
+        out << "        /* Compile-time split to avoid nested generate and SYNC_S-2 when SYNC_S==1 "
+               "*/\n";
+        out << "        reg  [SYNC_S-1:0] sync_chain;\n";
+        out << "        \n";
+        out << "        if (SYNC_S == 1) begin : sync_single\n";
+        out << "            always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
+        out << "                if (!reset_synced[i]) begin\n";
+        out << "                    sync_chain <= {SYNC_S{1'b0}};\n";
+        out << "                end else begin\n";
+        out << "                    // Replicate the single-bit input across the 1-wide vector\n";
+        out << "                    sync_chain <= {SYNC_S{glitch_filter_output[i]}};\n";
+        out << "                end\n";
+        out << "            end\n";
+        out << "        end else begin : sync_multi\n";
+        out << "            always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
+        out << "                if (!reset_synced[i]) begin\n";
+        out << "                    sync_chain <= {SYNC_S{1'b0}};\n";
+        out << "                end else begin\n";
         out << "                    sync_chain <= {sync_chain[SYNC_S-2:0], "
                "glitch_filter_output[i]};\n";
+        out << "                end\n";
         out << "            end\n";
         out << "        end\n";
         out << "        assign gate_enable_sync[i] = sync_chain[SYNC_S-1];\n";
