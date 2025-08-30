@@ -45,14 +45,27 @@ public:
     };
 
     /**
+     * @brief Clock STA guide configuration
+     */
+    struct ClockSTAGuide
+    {
+        QString cell;     // Foundry cell name (e.g., TSMC_CKBUF)
+        QString in;       // Input port name (e.g., I)
+        QString out;      // Output port name (e.g., Z)
+        QString instance; // Instance name (e.g., u_cpu_clk_sta_guide)
+    };
+
+    /**
      * @brief Clock gate configuration
      */
     struct ClockGate
     {
-        QString enable;      // Gate enable signal
-        QString polarity;    // "high" or "low" (default: "high")
-        QString test_enable; // Test enable signal (optional)
-        QString reset;       // Reset signal name (active-low default)
+        bool          configured = false; // YAML icg: block exists
+        QString       enable;             // Gate enable signal (required when configured)
+        QString       polarity;           // "high" or "low" (default: "high")
+        QString       test_enable;        // Test enable signal (optional)
+        QString       reset;              // Reset signal name (active-low default)
+        ClockSTAGuide sta_guide;          // STA guide buffer after ICG (optional)
     };
 
     /**
@@ -60,7 +73,9 @@ public:
      */
     struct ClockDivider
     {
-        // Core parameters (required for proper operation)
+        bool configured = false; // YAML div: block exists
+
+        // Core parameters (required when configured)
         int  default_value  = 1;     // Default division value (required, >=1)
         int  width          = 0;     // Divider width in bits (0 = error, must be specified)
         bool clock_on_reset = false; // Enable clock output during reset (default false)
@@ -75,17 +90,17 @@ public:
         QString valid; // Division value valid signal (empty = 1'b1)
         QString ready; // Division ready output signal (empty = unconnected)
         QString count; // Cycle counter output (empty = unconnected)
+
+        ClockSTAGuide sta_guide; // STA guide buffer after divider (optional)
     };
 
     /**
-     * @brief Clock STA guide configuration
+     * @brief Clock inverter configuration
      */
-    struct ClockSTAGuide
+    struct ClockInverter
     {
-        QString cell;     // Foundry cell name (e.g., TSMC_CKBUF)
-        QString in;       // Input port name (e.g., I)
-        QString out;      // Output port name (e.g., Z)
-        QString instance; // Instance name (e.g., u_cpu_clk_sta_guide)
+        bool          configured = false; // Set true when YAML inv: block exists
+        ClockSTAGuide sta_guide;          // STA guide buffer after inverter (optional)
     };
 
     /**
@@ -94,11 +109,12 @@ public:
      */
     struct ClockMux
     {
-        MuxType type = STD_MUX; // Auto-selected based on reset presence, kept for compatibility
-        QString select;         // DEPRECATED: use target.select
-        QString reset;          // DEPRECATED: use target.reset
-        QString test_enable;    // DEPRECATED: use target.test_enable
-        QString test_clock;     // DEPRECATED: use target.test_clock
+        MuxType type = STD_MUX;  // Auto-selected based on reset presence, kept for compatibility
+        QString select;          // DEPRECATED: use target.select
+        QString reset;           // DEPRECATED: use target.reset
+        QString test_enable;     // DEPRECATED: use target.test_enable
+        QString test_clock;      // DEPRECATED: use target.test_clock
+        ClockSTAGuide sta_guide; // STA guide buffer after mux (optional)
     };
 
     /**
@@ -106,11 +122,10 @@ public:
      */
     struct ClockLink
     {
-        QString       source;      // Source clock name
-        ClockGate     icg;         // ICG configuration
-        ClockDivider  div;         // Divider configuration
-        bool          inv = false; // Inverter flag
-        ClockSTAGuide sta_guide;   // STA guide buffer configuration
+        QString       source; // Source clock name
+        ClockGate     icg;    // ICG configuration
+        ClockDivider  div;    // Divider configuration
+        ClockInverter inv;    // Inverter configuration
     };
 
     /**
@@ -118,15 +133,14 @@ public:
      */
     struct ClockTarget
     {
-        QString          name;        // Target clock signal name
-        QString          freq;        // Target frequency for SDC generation
-        QList<ClockLink> links;       // List of source connections
-        ClockMux         mux;         // Multiplexer configuration (if ≥2 links) - DEPRECATED
-        ClockGate        icg;         // Target-level ICG
-        ClockDivider     div;         // Target-level divider
-        bool             inv = false; // Target-level inverter
-        ClockSTAGuide    sta_guide;   // Target-level STA guide buffer
-        QString          comment;     // Optional comment
+        QString          name;    // Target clock signal name
+        QString          freq;    // Target frequency for SDC generation
+        QList<ClockLink> links;   // List of source connections
+        ClockMux         mux;     // Multiplexer configuration (if ≥2 links) - DEPRECATED
+        ClockGate        icg;     // Target-level ICG
+        ClockDivider     div;     // Target-level divider
+        ClockInverter    inv;     // Target-level inverter
+        QString          comment; // Optional comment
 
         // Target-level MUX signals (new format per documentation)
         QString select;      // MUX select signal (required for ≥2 links)

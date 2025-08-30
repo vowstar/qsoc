@@ -62,7 +62,7 @@ clock:
             div:                      # Link-level divider (static mode)
               default: 2              # Default division value (auto width = 2 bits)
               reset: rst_n
-            inv: true                 # Link-level inverter (boolean)
+            inv: ~                    # Link-level inverter (exists = enabled)
 
       # Alternative link-level inverter syntax
       alt_clk_n:
@@ -115,33 +115,43 @@ Clock controllers operate at two distinct processing levels with defined operati
 
 === Processing Order
 <soc-net-clock-processing-order>
-Signal processing follows a defined order at each level:
+Signal processing follows a defined order at each level, with STA guide buffers insertable after any processing stage:
 
-*Link Level*: `source` → `icg` → `div` → `inv` → `sta_guide` → output to target
+*Link Level*: `source` → `icg` (+ `sta_guide`) → `div` (+ `sta_guide`) → `inv` (+ `sta_guide`) → output to target
 
-*Target Level*: `mux` → `icg` → `div` → `inv` → `sta_guide` → final output
+*Target Level*: `mux` (+ `sta_guide`) → `icg` (+ `sta_guide`) → `div` (+ `sta_guide`) → `inv` (+ `sta_guide`) → final output
+
+Each processing stage can independently include an optional STA guide buffer in serial (not parallel) configuration.
 
 === Operation Examples
 <soc-net-clock-operations>
 Operations are specified through direct attributes without type enumeration:
 
 ```yaml
-# Target-level ICG (clock gating)
+# Target-level ICG (clock gating) with optional STA guide
 target:
   gated_clk:
     freq: 800MHz
     icg:
       enable: clk_enable            # Gate enable signal
+      sta_guide:                    # Optional STA guide after ICG
+        cell: BUF_X2
+        in: I
+        out: Z
       polarity: high                # Enable polarity (default: high)
     link:
       pll_clk:                      # Direct connection
 
-# Target-level divider
+# Target-level divider with optional STA guide
 target:
   div_clk:
     freq: 200MHz
     div:
       default: 4                    # Default division value (required, ≥1)
+      sta_guide:                    # Optional STA guide after DIV
+        cell: BUF_CLK
+        in: CK
+        out: CKO
       width: 3                      # Divider width in bits (required)
       reset: rst_n                  # Reset signal
       value: uart_div_value         # Dynamic division control input (optional)
@@ -162,25 +172,18 @@ target:
     link:
       pll_800m:                     # Direct connection
 
-# Target-level inverter
+# Target-level inverter with optional STA guide
 target:
   inv_clk:
     freq: 100MHz
-    inv: true                       # Clock inversion
+    inv:                            # Inverter configuration (exists = enabled)
+      sta_guide:                    # Optional STA guide after INV
+        cell: BUF_INV
+        in: A
+        out: Y
     link:
       pll_clk:                      # Direct connection
 
-# Target-level STA guide buffer
-target:
-  cpu_clk:
-    freq: 800MHz
-    sta_guide:                      # STA guide for timing constraints
-      cell: TSMC_CKBUF_X2           # Foundry-specific cell name
-      in: I                         # Input port name
-      out: Z                        # Output port name
-      instance: u_cpu_clk_sta       # Instance name
-    link:
-      pll_clk:                      # Direct connection
 
 # Link-level processing (multiple syntax options)
 target:
@@ -192,7 +195,7 @@ target:
           default: 16               # Default division value
           width: 5                  # Divider width in bits (required)
           reset: rst_n
-        inv: true                   # Link-level inverter (boolean)
+        inv: ~                      # Link-level inverter (exists = enabled)
         sta_guide:                  # Link-level STA guide
           cell: FOUNDRY_GUIDE_BUF   # Foundry-specific cell
           in: A                     # Input port
@@ -216,13 +219,27 @@ target:
       default: 2                  # Target-level divider
       width: 2                    # Required: divider width in bits
       reset: rst_n
-    inv: true                     # Target-level inverter
+    inv:                          # Target-level inverter (exists = enabled)
+      sta_guide:                  # STA guide after inverter
+        cell: BUF_INV
+        in: A
+        out: Y
     link:
       pll_clk:
+        icg:
+          enable: clk_en          # Link-level ICG
+          sta_guide:              # STA guide after ICG
+            cell: BUF_ICG
+            in: I
+            out: Z
         div:
           default: 16             # Link-level divider first
           width: 5                # Required: divider width in bits
           reset: rst_n
+          sta_guide:              # STA guide after divider
+            cell: BUF_DIV
+            in: CK
+            out: CKO
 ```
 
 == DIVIDER CONFIGURATION
@@ -489,9 +506,14 @@ Clock targets define output signals with two-level processing:
     [freq], [Target frequency for SDC generation (required)],
     [link], [Map of source connections (required)],
     [icg], [Target-level clock gating configuration (optional)],
+    [icg.sta_guide], [STA guide after ICG (optional)],
     [div], [Target-level division configuration (optional)],
-    [inv], [Target-level inversion flag (optional)],
-    [sta_guide], [Target-level STA guide buffer configuration (optional)],
+    [div.sta_guide], [STA guide after divider (optional)],
+    [inv], [Target-level inversion configuration (optional)],
+    [inv.sta_guide], [STA guide after inverter (optional)],
+    [mux],
+    [Deprecated mux configuration (use select/reset/test_enable instead)],
+    [mux.sta_guide], [STA guide after multiplexer (optional)],
     [select], [Mux select signal (required for ≥2 links)],
     [reset], [Reset signal for GF_MUX auto-selection (optional)],
     [test_enable], [DFT test enable signal (GF_MUX only, optional)],
@@ -511,10 +533,15 @@ Link-level processing uses key existence for operations:
     align: (auto, left),
     table.header([Property], [Description]),
     table.hline(),
+    [icg],
+    [Clock gating configuration with enable/polarity/reset and optional sta_guide (map format)],
+    [icg.sta_guide], [STA guide after link-level ICG (optional)],
     [div],
     [Division configuration with default/width/reset and optional dynamic control (map format)],
-    [inv], [Clock inversion (key existence enables inversion)],
-    [sta_guide], [STA guide buffer configuration with foundry cell details],
+    [div.sta_guide], [STA guide after link-level divider (optional)],
+    [inv],
+    [Clock inversion configuration (map format with enabled flag and optional sta_guide)],
+    [inv.sta_guide], [STA guide after link-level inverter (optional)],
   )],
   caption: [CLOCK LINK PROPERTIES],
   kind: table,
@@ -522,7 +549,7 @@ Link-level processing uses key existence for operations:
 
 == STA GUIDE BUFFERS
 <soc-net-clock-sta-guide>
-STA (Static Timing Analysis) guide buffers are foundry-specific cells inserted at the end of clock processing chains to assist with timing constraints during physical design.
+STA (Static Timing Analysis) guide buffers are foundry-specific cells inserted *serially* in clock processing chains to assist with timing constraints during physical design.
 
 === Purpose and Usage
 <soc-net-clock-sta-purpose>
@@ -532,7 +559,7 @@ STA guide buffers serve several purposes in physical design flows:
 - Allow foundry-specific timing models to be applied at critical clock nodes
 - Enable better correlation between pre-layout and post-layout timing
 
-Guide buffers are inserted as the final element in both target-level and link-level processing chains, ensuring they appear at the ultimate output of clock generation logic.
+*Serial Implementation*: STA guide buffers are inserted *in-line* after each processing stage, becoming part of the main signal path. Each processing stage (MUX, ICG, DIV, INV) can independently include an STA guide buffer. This ensures signal flows through the STA buffer rather than observing it in parallel.
 
 === Configuration Parameters
 <soc-net-clock-sta-config>
@@ -558,29 +585,26 @@ STA guide buffer configuration requires four parameters:
 === Configuration Examples
 <soc-net-clock-sta-examples>
 ```yaml
-# Target-level STA guide with explicit instance name
+# New STA guide architecture - buffers can be placed after each stage
 target:
   cpu_clk:
     freq: 800MHz
-    sta_guide:
-      cell: TSMC_CKBUF_X2           # TSMC foundry cell
-      in: I                         # Input port name
-      out: Z                        # Output port name
-      instance: u_DONTTOUCH_cpu_clk # Explicit deterministic name
+    icg:
+      enable: clk_en
+      sta_guide:                    # STA guide after ICG
+        cell: TSMC_CKBUF_X2
+        in: I
+        out: Z
+        instance: u_cpu_icg_buf
+    div:
+      default: 2
+      width: 2
+      sta_guide:                    # STA guide after divider
+        cell: TSMC_CKBUF_X4
+        in: CK
+        out: CKO
     link:
-      pll_800m:                     # Source connection
-
-# Target-level STA guide with automatic instance naming
-target:
-  gpu_clk:
-    freq: 600MHz
-    sta_guide:
-      cell: TSMC_CKBUF_X2           # TSMC foundry cell
-      in: I                         # Input port name
-      out: Z                        # Output port name
-      # No instance specified → generates "u_gpu_clk_target_sta"
-    link:
-      pll_600m:                     # Source connection
+      pll_800m:
 
 # Link-level STA guide in processing chain
 target:
@@ -604,11 +628,6 @@ target:
 target:
   complex_clk:
     freq: 100MHz
-    sta_guide:                      # Target-level STA guide
-      cell: TSMC_CKBUF_X1           # Target buffer
-      in: I
-      out: Z
-      instance: u_complex_target_sta
     link:
       source_clk:
         div:
@@ -624,33 +643,52 @@ target:
 
 === Generated Verilog
 <soc-net-clock-sta-verilog>
-STA guide buffers generate direct foundry cell instantiations:
+STA guide buffers generate direct foundry cell instantiations in *serial configuration*:
 
 ```verilog
-// Target-level STA guide with explicit instance name
-wire cpu_clk_sta_out;
-TSMC_CKBUF_X2 u_DONTTOUCH_cpu_clk (
-    .I(cpu_clk_div_out),
-    .Z(cpu_clk_sta_out)
+// Serial STA guide architecture - inserted in main signal path
+// ICG with STA guide (serial connection)
+wire cpu_clk_icg_pre_sta;        // Temporary signal: ICG output
+wire cpu_clk_icg_out;            // Final signal: STA guide output
+qsoc_tc_clk_gate u_cpu_clk_icg (
+    .clk(clk_source),
+    .en(clk_en),
+    .clk_out(cpu_clk_icg_pre_sta)   // ICG outputs to temporary signal
 );
-assign cpu_clk = cpu_clk_sta_out;
-
-// Target-level STA guide with automatic instance name
-wire gpu_clk_sta_out;
-TSMC_CKBUF_X2 u_gpu_clk_target_sta (
-    .I(gpu_clk_div_out),
-    .Z(gpu_clk_sta_out)
+TSMC_CKBUF_X2 u_cpu_icg_buf (
+    .I(cpu_clk_icg_pre_sta),        // STA guide inputs from temporary
+    .Z(cpu_clk_icg_out)             // STA guide outputs to final signal
 );
-assign gpu_clk = gpu_clk_sta_out;
 
-// Link-level STA guide example
-wire u_dsp_clk_pll_800m_sta_wire;
+// Divider with STA guide (serial connection)
+wire cpu_clk_div_pre_sta;        // Temporary signal: DIV output
+wire cpu_clk_div_out;            // Final signal: STA guide output
+qsoc_clk_div u_cpu_clk_div (
+    .clk(cpu_clk_icg_out),          // Input from previous stage
+    .clk_out(cpu_clk_div_pre_sta)   // DIV outputs to temporary signal
+);
+TSMC_CKBUF_X4 u_cpu_clk_div_sta (
+    .CK(cpu_clk_div_pre_sta),       // STA guide inputs from temporary
+    .CKO(cpu_clk_div_out)           // STA guide outputs to final signal
+);
+assign cpu_clk = cpu_clk_div_out; // Final output maintains consistent name
+
+// Link-level STA guide example (serial connection)
+wire u_dsp_clk_pll_800m_pre_sta;  // Temporary signal before STA
+wire clk_dsp_clk_from_pll_800m;    // Final signal after STA
+// ... processing stage outputs to pre_sta signal ...
 FOUNDRY_GUIDE_BUF u_dsp_clk_pll_800m_sta (
-    .A(previous_stage_output),
-    .Y(u_dsp_clk_pll_800m_sta_wire)
+    .A(u_dsp_clk_pll_800m_pre_sta), // Input from temporary signal
+    .Y(clk_dsp_clk_from_pll_800m)   // Output to final signal name
 );
-assign clk_dsp_clk_from_pll_800m = u_dsp_clk_pll_800m_sta_wire;
 ```
+
+*Key Differences from Legacy Implementation*:
+- STA guide buffers are inserted *in the main signal path* (serial)
+- Processing stages output to `*_pre_sta` temporary signals when STA guide present
+- STA guide buffers output to the expected final signal name
+- Signal flow: `Processing → *_pre_sta → STA_Guide → *_out`
+- Downstream logic sees consistent signal names regardless of STA guide presence
 
 == TEMPLATE RTL CELLS
 <soc-net-clock-templates>
@@ -858,18 +896,17 @@ endmodule
 Clock format supports two processing levels with distinct syntax patterns:
 
 *Target Level* (key existence determines operation):
-- `icg` - Map format with enable/polarity
-- `div` - Map format with default/width/reset and optional dynamic signals
-- `inv` - Key existence enables inversion
-- `sta_guide` - Map format with foundry cell details
+- `icg` - Map format with enable/polarity/reset and optional sta_guide
+- `div` - Map format with default/width/reset/optional dynamic signals and optional sta_guide
+- `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
 - `select` - String (required for ≥2 links)
 - `reset` - String (auto-selects GF_MUX when present)
 - `test_enable`, `test_clock` - String (GF_MUX DFT signals)
 
 *Link Level* (key existence determines operation):
-- `div` - Map format with default/width/reset and optional dynamic signals
-- `inv` - Key existence enables inversion
-- `sta_guide` - Map format with foundry cell details
+- `icg` - Map format with enable/polarity/reset and optional sta_guide
+- `div` - Map format with default/width/reset/optional dynamic signals and optional sta_guide
+- `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
 - Pass-through: No attributes specified
 
 == BEST PRACTICES

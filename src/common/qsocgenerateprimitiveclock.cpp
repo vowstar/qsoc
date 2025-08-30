@@ -119,6 +119,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
 
             // Parse target-level ICG
             if (it->second["icg"] && it->second["icg"].IsMap()) {
+                target.icg.configured = true; // ICG block exists in YAML
                 if (it->second["icg"]["enable"]) {
                     target.icg.enable = QString::fromStdString(
                         it->second["icg"]["enable"].as<std::string>());
@@ -130,10 +131,30 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     target.icg.reset = QString::fromStdString(
                         it->second["icg"]["reset"].as<std::string>());
                 }
+                // Parse ICG sta_guide
+                if (it->second["icg"]["sta_guide"] && it->second["icg"]["sta_guide"].IsMap()) {
+                    if (it->second["icg"]["sta_guide"]["cell"]) {
+                        target.icg.sta_guide.cell = QString::fromStdString(
+                            it->second["icg"]["sta_guide"]["cell"].as<std::string>());
+                    }
+                    if (it->second["icg"]["sta_guide"]["in"]) {
+                        target.icg.sta_guide.in = QString::fromStdString(
+                            it->second["icg"]["sta_guide"]["in"].as<std::string>());
+                    }
+                    if (it->second["icg"]["sta_guide"]["out"]) {
+                        target.icg.sta_guide.out = QString::fromStdString(
+                            it->second["icg"]["sta_guide"]["out"].as<std::string>());
+                    }
+                    if (it->second["icg"]["sta_guide"]["instance"]) {
+                        target.icg.sta_guide.instance = QString::fromStdString(
+                            it->second["icg"]["sta_guide"]["instance"].as<std::string>());
+                    }
+                }
             }
 
             // Parse target-level divider
             if (it->second["div"] && it->second["div"].IsMap()) {
+                target.div.configured = true; // DIV block exists in YAML
                 // Clean field names only
                 target.div.default_value  = it->second["div"]["default"].as<int>(1);
                 target.div.clock_on_reset = it->second["div"]["clock_on_reset"].as<bool>(false);
@@ -197,30 +218,56 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     target.div.count = QString::fromStdString(
                         it->second["div"]["count"].as<std::string>());
                 }
+                // Parse DIV sta_guide
+                if (it->second["div"]["sta_guide"] && it->second["div"]["sta_guide"].IsMap()) {
+                    if (it->second["div"]["sta_guide"]["cell"]) {
+                        target.div.sta_guide.cell = QString::fromStdString(
+                            it->second["div"]["sta_guide"]["cell"].as<std::string>());
+                    }
+                    if (it->second["div"]["sta_guide"]["in"]) {
+                        target.div.sta_guide.in = QString::fromStdString(
+                            it->second["div"]["sta_guide"]["in"].as<std::string>());
+                    }
+                    if (it->second["div"]["sta_guide"]["out"]) {
+                        target.div.sta_guide.out = QString::fromStdString(
+                            it->second["div"]["sta_guide"]["out"].as<std::string>());
+                    }
+                    if (it->second["div"]["sta_guide"]["instance"]) {
+                        target.div.sta_guide.instance = QString::fromStdString(
+                            it->second["div"]["sta_guide"]["instance"].as<std::string>());
+                    }
+                }
             }
 
-            // Target-level STA guide configuration
-            if (it->second["sta_guide"] && it->second["sta_guide"].IsMap()) {
-                if (it->second["sta_guide"]["cell"]) {
-                    target.sta_guide.cell = QString::fromStdString(
-                        it->second["sta_guide"]["cell"].as<std::string>());
-                }
-                if (it->second["sta_guide"]["in"]) {
-                    target.sta_guide.in = QString::fromStdString(
-                        it->second["sta_guide"]["in"].as<std::string>());
-                }
-                if (it->second["sta_guide"]["out"]) {
-                    target.sta_guide.out = QString::fromStdString(
-                        it->second["sta_guide"]["out"].as<std::string>());
-                }
-                if (it->second["sta_guide"]["instance"]) {
-                    target.sta_guide.instance = QString::fromStdString(
-                        it->second["sta_guide"]["instance"].as<std::string>());
+            // Parse target-level inverter
+            if (it->second["inv"]) {
+                target.inv.configured = true; // INV block exists in YAML
+                // Check if it's the new format (map) or old format (bool)
+                if (it->second["inv"].IsMap()) {
+                    // Parse INV sta_guide
+                    if (it->second["inv"]["sta_guide"] && it->second["inv"]["sta_guide"].IsMap()) {
+                        if (it->second["inv"]["sta_guide"]["cell"]) {
+                            target.inv.sta_guide.cell = QString::fromStdString(
+                                it->second["inv"]["sta_guide"]["cell"].as<std::string>());
+                        }
+                        if (it->second["inv"]["sta_guide"]["in"]) {
+                            target.inv.sta_guide.in = QString::fromStdString(
+                                it->second["inv"]["sta_guide"]["in"].as<std::string>());
+                        }
+                        if (it->second["inv"]["sta_guide"]["out"]) {
+                            target.inv.sta_guide.out = QString::fromStdString(
+                                it->second["inv"]["sta_guide"]["out"].as<std::string>());
+                        }
+                        if (it->second["inv"]["sta_guide"]["instance"]) {
+                            target.inv.sta_guide.instance = QString::fromStdString(
+                                it->second["inv"]["sta_guide"]["instance"].as<std::string>());
+                        }
+                    }
+                } else {
+                    // Old format compatibility: simple boolean (inv: true)
+                    // exists is already set to true above
                 }
             }
-
-            // Parse target-level inverter - key existence only
-            target.inv = it->second["inv"] ? true : false;
 
             // Parse links
             if (it->second["link"] && it->second["link"].IsMap()) {
@@ -229,16 +276,42 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     ClockLink link;
                     link.source = QString::fromStdString(linkIt->first.as<std::string>());
 
-                    // Link-level inverter flag - key existence only
+                    // Link-level inverter
                     if (linkIt->second.IsMap() && linkIt->second["inv"]) {
-                        link.inv = true;
-                    } else {
-                        link.inv = false;
+                        link.inv.configured = true; // INV block exists in YAML
+                        // Check if it's the new format (map) or old format (bool)
+                        if (linkIt->second["inv"].IsMap()) {
+                            // Parse INV sta_guide
+                            if (linkIt->second["inv"]["sta_guide"]
+                                && linkIt->second["inv"]["sta_guide"].IsMap()) {
+                                if (linkIt->second["inv"]["sta_guide"]["cell"]) {
+                                    link.inv.sta_guide.cell = QString::fromStdString(
+                                        linkIt->second["inv"]["sta_guide"]["cell"].as<std::string>());
+                                }
+                                if (linkIt->second["inv"]["sta_guide"]["in"]) {
+                                    link.inv.sta_guide.in = QString::fromStdString(
+                                        linkIt->second["inv"]["sta_guide"]["in"].as<std::string>());
+                                }
+                                if (linkIt->second["inv"]["sta_guide"]["out"]) {
+                                    link.inv.sta_guide.out = QString::fromStdString(
+                                        linkIt->second["inv"]["sta_guide"]["out"].as<std::string>());
+                                }
+                                if (linkIt->second["inv"]["sta_guide"]["instance"]) {
+                                    link.inv.sta_guide.instance = QString::fromStdString(
+                                        linkIt->second["inv"]["sta_guide"]["instance"]
+                                            .as<std::string>());
+                                }
+                            }
+                        } else {
+                            // Old format compatibility: simple boolean (inv: true)
+                            // exists is already set to true above
+                        }
                     }
 
                     // Link-level ICG configuration
                     if (linkIt->second.IsMap() && linkIt->second["icg"]
                         && linkIt->second["icg"].IsMap()) {
+                        link.icg.configured = true; // ICG block exists in YAML
                         if (linkIt->second["icg"]["enable"]) {
                             link.icg.enable = QString::fromStdString(
                                 linkIt->second["icg"]["enable"].as<std::string>());
@@ -250,11 +323,32 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                             link.icg.reset = QString::fromStdString(
                                 linkIt->second["icg"]["reset"].as<std::string>());
                         }
+                        // Parse ICG sta_guide
+                        if (linkIt->second["icg"]["sta_guide"]
+                            && linkIt->second["icg"]["sta_guide"].IsMap()) {
+                            if (linkIt->second["icg"]["sta_guide"]["cell"]) {
+                                link.icg.sta_guide.cell = QString::fromStdString(
+                                    linkIt->second["icg"]["sta_guide"]["cell"].as<std::string>());
+                            }
+                            if (linkIt->second["icg"]["sta_guide"]["in"]) {
+                                link.icg.sta_guide.in = QString::fromStdString(
+                                    linkIt->second["icg"]["sta_guide"]["in"].as<std::string>());
+                            }
+                            if (linkIt->second["icg"]["sta_guide"]["out"]) {
+                                link.icg.sta_guide.out = QString::fromStdString(
+                                    linkIt->second["icg"]["sta_guide"]["out"].as<std::string>());
+                            }
+                            if (linkIt->second["icg"]["sta_guide"]["instance"]) {
+                                link.icg.sta_guide.instance = QString::fromStdString(
+                                    linkIt->second["icg"]["sta_guide"]["instance"].as<std::string>());
+                            }
+                        }
                     }
 
                     // Link-level divider configuration - design only
                     if (linkIt->second.IsMap() && linkIt->second["div"]
                         && linkIt->second["div"].IsMap()) {
+                        link.div.configured = true; // DIV block exists in YAML
                         // Clean field names only
                         link.div.default_value = linkIt->second["div"]["default"].as<int>(1);
 
@@ -325,26 +419,25 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                             link.div.count = QString::fromStdString(
                                 linkIt->second["div"]["count"].as<std::string>());
                         }
-                    }
-
-                    // Link-level STA guide configuration
-                    if (linkIt->second.IsMap() && linkIt->second["sta_guide"]
-                        && linkIt->second["sta_guide"].IsMap()) {
-                        if (linkIt->second["sta_guide"]["cell"]) {
-                            link.sta_guide.cell = QString::fromStdString(
-                                linkIt->second["sta_guide"]["cell"].as<std::string>());
-                        }
-                        if (linkIt->second["sta_guide"]["in"]) {
-                            link.sta_guide.in = QString::fromStdString(
-                                linkIt->second["sta_guide"]["in"].as<std::string>());
-                        }
-                        if (linkIt->second["sta_guide"]["out"]) {
-                            link.sta_guide.out = QString::fromStdString(
-                                linkIt->second["sta_guide"]["out"].as<std::string>());
-                        }
-                        if (linkIt->second["sta_guide"]["instance"]) {
-                            link.sta_guide.instance = QString::fromStdString(
-                                linkIt->second["sta_guide"]["instance"].as<std::string>());
+                        // Parse DIV sta_guide
+                        if (linkIt->second["div"]["sta_guide"]
+                            && linkIt->second["div"]["sta_guide"].IsMap()) {
+                            if (linkIt->second["div"]["sta_guide"]["cell"]) {
+                                link.div.sta_guide.cell = QString::fromStdString(
+                                    linkIt->second["div"]["sta_guide"]["cell"].as<std::string>());
+                            }
+                            if (linkIt->second["div"]["sta_guide"]["in"]) {
+                                link.div.sta_guide.in = QString::fromStdString(
+                                    linkIt->second["div"]["sta_guide"]["in"].as<std::string>());
+                            }
+                            if (linkIt->second["div"]["sta_guide"]["out"]) {
+                                link.div.sta_guide.out = QString::fromStdString(
+                                    linkIt->second["div"]["sta_guide"]["out"].as<std::string>());
+                            }
+                            if (linkIt->second["div"]["sta_guide"]["instance"]) {
+                                link.div.sta_guide.instance = QString::fromStdString(
+                                    linkIt->second["div"]["sta_guide"]["instance"].as<std::string>());
+                            }
                         }
                     }
 
@@ -372,6 +465,29 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     target.mux.type = GF_MUX; // Has reset → Glitch-free mux
                 } else {
                     target.mux.type = STD_MUX; // No reset → Standard mux
+                }
+
+                // Parse MUX sta_guide configuration
+                if (it->second["mux"] && it->second["mux"]["sta_guide"]) {
+                    const YAML::Node muxNode      = it->second["mux"];
+                    const YAML::Node staGuideNode = muxNode["sta_guide"];
+
+                    if (staGuideNode["cell"]) {
+                        target.mux.sta_guide.cell = QString::fromStdString(
+                            staGuideNode["cell"].as<std::string>());
+                    }
+                    if (staGuideNode["in"]) {
+                        target.mux.sta_guide.in = QString::fromStdString(
+                            staGuideNode["in"].as<std::string>());
+                    }
+                    if (staGuideNode["out"]) {
+                        target.mux.sta_guide.out = QString::fromStdString(
+                            staGuideNode["out"].as<std::string>());
+                    }
+                    if (staGuideNode["instance"]) {
+                        target.mux.sta_guide.instance = QString::fromStdString(
+                            staGuideNode["instance"].as<std::string>());
+                    }
                 }
 
                 // Validation: multi-link requires select signal
@@ -736,7 +852,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             currentSignal    = wireName;
 
             // Apply legacy inversion if needed (deprecated)
-            if (target.links[0].inv) {
+            if (target.links[0].inv.configured) {
                 QString invertWire = QString("%1_legacy_inv").arg(target.name);
                 out << "    wire " << invertWire << ";\n";
                 out << "    assign " << invertWire << " = ~" << wireName << ";\n";
@@ -745,18 +861,43 @@ void QSocClockPrimitive::generateOutputAssignments(
         } else if (target.links.size() >= 2) {
             // Multiple sources - generate multiplexer first
             QString muxOutput = QString("%1_mux_out").arg(target.name);
-            out << "    wire " << muxOutput << ";\n";
-            generateMuxInstance(target, config, out, muxOutput);
-            currentSignal = muxOutput;
+
+            // If STA guide exists, use a temporary name for MUX output
+            QString muxTempOutput = !target.mux.sta_guide.cell.isEmpty()
+                                        ? QString("%1_mux_pre_sta").arg(target.name)
+                                        : muxOutput;
+
+            out << "    wire " << muxTempOutput << ";\n";
+            generateMuxInstance(target, config, out, muxTempOutput);
+
+            // MUX sta_guide (if specified) - serial insertion, keeps final signal name consistent
+            if (!target.mux.sta_guide.cell.isEmpty()) {
+                out << "    wire " << muxOutput << ";\n"; // Final output wire
+                QString muxStaInstanceName = target.mux.sta_guide.instance.isEmpty()
+                                                 ? QString("u_%1_mux_sta").arg(target.name)
+                                                 : target.mux.sta_guide.instance;
+                out << "    " << target.mux.sta_guide.cell << " " << muxStaInstanceName << " (\n";
+                out << "        ." << target.mux.sta_guide.in << "(" << muxTempOutput << "),\n";
+                out << "        ." << target.mux.sta_guide.out << "(" << muxOutput << ")\n";
+                out << "    );\n";
+            }
+
+            currentSignal = muxOutput; // Always use the consistent final name
         }
 
         // Step 2: Apply target-level processing chain
         // Order: currentSignal -> ICG -> DIV -> INV -> target.name
 
         // Target-level ICG
-        if (!target.icg.enable.isEmpty()) {
+        if (target.icg.configured) {
             QString icgOutput = QString("%1_icg_out").arg(target.name);
-            out << "    wire " << icgOutput << ";\n";
+
+            // If STA guide exists, use a temporary name for ICG output
+            QString icgTempOutput = !target.icg.sta_guide.cell.isEmpty()
+                                        ? QString("%1_icg_pre_sta").arg(target.name)
+                                        : icgOutput;
+
+            out << "    wire " << icgTempOutput << ";\n";
             out << "    qsoc_tc_clk_gate #(\n";
             out << "        .CLOCK_DURING_RESET(1'b0),\n";
             out << "        .POLARITY(" << (target.icg.polarity == "high" ? "1'b1" : "1'b0")
@@ -768,13 +909,26 @@ void QSocClockPrimitive::generateOutputAssignments(
             out << "        .test_en(" << testEn << "),\n";
             out << "        .rst_n(" << (target.icg.reset.isEmpty() ? "1'b1" : target.icg.reset)
                 << "),\n";
-            out << "        .clk_out(" << icgOutput << ")\n";
+            out << "        .clk_out(" << icgTempOutput << ")\n";
             out << "    );\n";
-            currentSignal = icgOutput;
+
+            // ICG sta_guide (if specified) - serial insertion, keeps final signal name consistent
+            if (!target.icg.sta_guide.cell.isEmpty()) {
+                out << "    wire " << icgOutput << ";\n"; // Final output wire
+                QString icgStaInstanceName = target.icg.sta_guide.instance.isEmpty()
+                                                 ? QString("u_%1_icg_sta").arg(target.name)
+                                                 : target.icg.sta_guide.instance;
+                out << "    " << target.icg.sta_guide.cell << " " << icgStaInstanceName << " (\n";
+                out << "        ." << target.icg.sta_guide.in << "(" << icgTempOutput << "),\n";
+                out << "        ." << target.icg.sta_guide.out << "(" << icgOutput << ")\n";
+                out << "    );\n";
+            }
+
+            currentSignal = icgOutput; // Always use the consistent final name
         }
 
         // Target-level DIV
-        if (target.div.default_value > 1 || !target.div.value.isEmpty()) {
+        if (target.div.configured) {
             // Validate width parameter
             if (target.div.width <= 0) {
                 throw std::runtime_error(
@@ -784,7 +938,13 @@ void QSocClockPrimitive::generateOutputAssignments(
             }
 
             QString divOutput = QString("%1_div_out").arg(target.name);
-            out << "    wire " << divOutput << ";\n";
+
+            // If STA guide exists, use a temporary name for DIV output
+            QString divTempOutput = !target.div.sta_guide.cell.isEmpty()
+                                        ? QString("%1_div_pre_sta").arg(target.name)
+                                        : divOutput;
+
+            out << "    wire " << divTempOutput << ";\n";
 
             // Conditional divider module selection based on dynamic vs static configuration
             if (target.div.valid.isEmpty() && !target.div.value.isEmpty()) {
@@ -814,7 +974,7 @@ void QSocClockPrimitive::generateOutputAssignments(
                         << "),\n";
                 }
 
-                out << "        .clk_out(" << divOutput << "),\n";
+                out << "        .clk_out(" << divTempOutput << "),\n";
 
                 if (!target.div.count.isEmpty()) {
                     out << "        .count(" << target.div.count << ")\n";
@@ -863,7 +1023,7 @@ void QSocClockPrimitive::generateOutputAssignments(
                     out << "        .div_ready(),\n";
                 }
 
-                out << "        .clk_out(" << divOutput << "),\n";
+                out << "        .clk_out(" << divTempOutput << "),\n";
 
                 if (!target.div.count.isEmpty()) {
                     out << "        .count(" << target.div.count << ")\n";
@@ -872,32 +1032,50 @@ void QSocClockPrimitive::generateOutputAssignments(
                 }
                 out << "    );\n";
             }
-            currentSignal = divOutput;
+
+            // DIV sta_guide (if specified) - serial insertion, keeps final signal name consistent
+            if (!target.div.sta_guide.cell.isEmpty()) {
+                out << "    wire " << divOutput << ";\n"; // Final output wire
+                QString divStaInstanceName = target.div.sta_guide.instance.isEmpty()
+                                                 ? QString("u_%1_div_sta").arg(target.name)
+                                                 : target.div.sta_guide.instance;
+                out << "    " << target.div.sta_guide.cell << " " << divStaInstanceName << " (\n";
+                out << "        ." << target.div.sta_guide.in << "(" << divTempOutput << "),\n";
+                out << "        ." << target.div.sta_guide.out << "(" << divOutput << ")\n";
+                out << "    );\n";
+            }
+
+            currentSignal = divOutput; // Always use the consistent final name
         }
 
         // Target-level INV
-        if (target.inv) {
+        if (target.inv.configured) {
             QString invOutput = QString("%1_inv_out").arg(target.name);
-            out << "    wire " << invOutput << ";\n";
+
+            // If STA guide exists, use a temporary name for INV output
+            QString invTempOutput = !target.inv.sta_guide.cell.isEmpty()
+                                        ? QString("%1_inv_pre_sta").arg(target.name)
+                                        : invOutput;
+
+            out << "    wire " << invTempOutput << ";\n";
             out << "    qsoc_tc_clk_inv " << instanceName << "_inv (\n";
             out << "        .clk_in(" << currentSignal << "),\n";
-            out << "        .clk_out(" << invOutput << ")\n";
+            out << "        .clk_out(" << invTempOutput << ")\n";
             out << "    );\n";
-            currentSignal = invOutput;
-        }
 
-        // Target-level STA guide
-        if (!target.sta_guide.cell.isEmpty()) {
-            QString staOutput = QString("%1_sta_out").arg(target.name);
-            out << "    wire " << staOutput << ";\n";
-            QString staInstanceName = target.sta_guide.instance.isEmpty()
-                                          ? instanceName + "_sta"
-                                          : target.sta_guide.instance;
-            out << "    " << target.sta_guide.cell << " " << staInstanceName << " (\n";
-            out << "        ." << target.sta_guide.in << "(" << currentSignal << "),\n";
-            out << "        ." << target.sta_guide.out << "(" << staOutput << ")\n";
-            out << "    );\n";
-            currentSignal = staOutput;
+            // INV sta_guide (if specified) - serial insertion, keeps final signal name consistent
+            if (!target.inv.sta_guide.cell.isEmpty()) {
+                out << "    wire " << invOutput << ";\n"; // Final output wire
+                QString invStaInstanceName = target.inv.sta_guide.instance.isEmpty()
+                                                 ? QString("u_%1_inv_sta").arg(target.name)
+                                                 : target.inv.sta_guide.instance;
+                out << "    " << target.inv.sta_guide.cell << " " << invStaInstanceName << " (\n";
+                out << "        ." << target.inv.sta_guide.in << "(" << invTempOutput << "),\n";
+                out << "        ." << target.inv.sta_guide.out << "(" << invOutput << ")\n";
+                out << "    );\n";
+            }
+
+            currentSignal = invOutput; // Always use the consistent final name
         }
 
         // Final assignment
@@ -924,14 +1102,13 @@ void QSocClockPrimitive::generateClockInstance(
     if (link.div.default_value > 1 || !link.div.value.isEmpty()) {
         out << " (div/" << link.div.default_value << ")";
     }
-    if (link.inv) {
+    if (link.inv.configured) {
         out << " (inv)";
     }
     out << "\n     */\n";
 
     // Generate processing chain
-    bool hasProcessing = !link.icg.enable.isEmpty()
-                         || (link.div.default_value > 1 || !link.div.value.isEmpty()) || link.inv;
+    bool hasProcessing = link.icg.configured || link.div.configured || link.inv.configured;
 
     if (hasProcessing) {
         // Handle link-level processing: ICG → DIV → INV
@@ -940,7 +1117,12 @@ void QSocClockPrimitive::generateClockInstance(
         // Step 1: Link-level ICG
         if (!link.icg.enable.isEmpty()) {
             QString icgWire = wireName + "_preicg";
-            out << "    wire " << icgWire << ";\n";
+
+            // If STA guide exists, use a temporary name for ICG output
+            QString icgTempWire = !link.icg.sta_guide.cell.isEmpty() ? wireName + "_preicg_pre_sta"
+                                                                     : icgWire;
+
+            out << "    wire " << icgTempWire << ";\n";
             out << "    qsoc_tc_clk_gate #(\n";
             out << "        .CLOCK_DURING_RESET(1'b0),\n";
             out << "        .POLARITY(" << (link.icg.polarity == "high" ? "1'b1" : "1'b0") << ")\n";
@@ -951,9 +1133,22 @@ void QSocClockPrimitive::generateClockInstance(
             out << "        .test_en(" << testEn << "),\n";
             out << "        .rst_n(" << (link.icg.reset.isEmpty() ? "1'b1" : link.icg.reset)
                 << "),\n";
-            out << "        .clk_out(" << icgWire << ")\n";
+            out << "        .clk_out(" << icgTempWire << ")\n";
             out << "    );\n";
-            currentWire = icgWire;
+
+            // ICG sta_guide (if specified) - serial insertion, keeps final signal name consistent
+            if (!link.icg.sta_guide.cell.isEmpty()) {
+                out << "    wire " << icgWire << ";\n"; // Final output wire
+                QString icgStaInstanceName = link.icg.sta_guide.instance.isEmpty()
+                                                 ? instanceName + "_icg_sta"
+                                                 : link.icg.sta_guide.instance;
+                out << "    " << link.icg.sta_guide.cell << " " << icgStaInstanceName << " (\n";
+                out << "        ." << link.icg.sta_guide.in << "(" << icgTempWire << "),\n";
+                out << "        ." << link.icg.sta_guide.out << "(" << icgWire << ")\n";
+                out << "    );\n";
+            }
+
+            currentWire = icgWire; // Always use the consistent final name
         }
 
         // Step 2: Link-level divider
@@ -967,7 +1162,12 @@ void QSocClockPrimitive::generateClockInstance(
             }
 
             QString divWire = wireName + "_prediv";
-            out << "    wire " << divWire << ";\n";
+
+            // If STA guide exists, use a temporary name for DIV output
+            QString divTempWire = !link.div.sta_guide.cell.isEmpty() ? wireName + "_prediv_pre_sta"
+                                                                     : divWire;
+
+            out << "    wire " << divTempWire << ";\n";
             out << "    qsoc_clk_div #(\n";
             out << "        .WIDTH(" << link.div.width << "),\n";
             out << "        .DEFAULT_VAL(" << link.div.default_value << "),\n";
@@ -1002,7 +1202,7 @@ void QSocClockPrimitive::generateClockInstance(
                 out << "        .div_ready(),\n";
             }
 
-            out << "        .clk_out(" << divWire << "),\n";
+            out << "        .clk_out(" << divTempWire << "),\n";
 
             if (!link.div.count.isEmpty()) {
                 out << "        .count(" << link.div.count << ")\n";
@@ -1010,29 +1210,50 @@ void QSocClockPrimitive::generateClockInstance(
                 out << "        .count()\n";
             }
             out << "    );\n";
-            currentWire = divWire;
+
+            // DIV sta_guide (if specified) - serial insertion, keeps final signal name consistent
+            if (!link.div.sta_guide.cell.isEmpty()) {
+                out << "    wire " << divWire << ";\n"; // Final output wire
+                QString divStaInstanceName = link.div.sta_guide.instance.isEmpty()
+                                                 ? instanceName + "_div_sta"
+                                                 : link.div.sta_guide.instance;
+                out << "    " << link.div.sta_guide.cell << " " << divStaInstanceName << " (\n";
+                out << "        ." << link.div.sta_guide.in << "(" << divTempWire << "),\n";
+                out << "        ." << link.div.sta_guide.out << "(" << divWire << ")\n";
+                out << "    );\n";
+            }
+
+            currentWire = divWire; // Always use the consistent final name
         }
 
         // Step 3: Link-level inverter
-        if (link.inv) {
+        if (link.inv.configured) {
             QString invWire = QString("%1_inv_wire").arg(instanceName);
-            out << "    wire " << invWire << ";\n";
+
+            // If STA guide exists, use a temporary name for INV output
+            QString invTempWire = !link.inv.sta_guide.cell.isEmpty()
+                                      ? QString("%1_inv_wire_pre_sta").arg(instanceName)
+                                      : invWire;
+
+            out << "    wire " << invTempWire << ";\n";
             out << "    qsoc_tc_clk_inv " << instanceName << "_inv (\n";
             out << "        .clk_in(" << currentWire << "),\n";
-            out << "        .clk_out(" << invWire << ")\n";
+            out << "        .clk_out(" << invTempWire << ")\n";
             out << "    );\n";
-            currentWire = invWire;
-        }
 
-        // Step 4: Link-level STA guide
-        if (!link.sta_guide.cell.isEmpty()) {
-            QString staWire = QString("%1_sta_wire").arg(instanceName);
-            out << "    wire " << staWire << ";\n";
-            out << "    " << link.sta_guide.cell << " " << instanceName << "_sta (\n";
-            out << "        ." << link.sta_guide.in << "(" << currentWire << "),\n";
-            out << "        ." << link.sta_guide.out << "(" << staWire << ")\n";
-            out << "    );\n";
-            currentWire = staWire;
+            // INV sta_guide (if specified) - serial insertion, keeps final signal name consistent
+            if (!link.inv.sta_guide.cell.isEmpty()) {
+                out << "    wire " << invWire << ";\n"; // Final output wire
+                QString invStaInstanceName = link.inv.sta_guide.instance.isEmpty()
+                                                 ? instanceName + "_inv_sta"
+                                                 : link.inv.sta_guide.instance;
+                out << "    " << link.inv.sta_guide.cell << " " << invStaInstanceName << " (\n";
+                out << "        ." << link.inv.sta_guide.in << "(" << invTempWire << "),\n";
+                out << "        ." << link.inv.sta_guide.out << "(" << invWire << ")\n";
+                out << "    );\n";
+            }
+
+            currentWire = invWire; // Always use the consistent final name
         }
 
         // Final assignment
@@ -1061,7 +1282,7 @@ void QSocClockPrimitive::generateMuxInstance(
         const auto &link     = target.links[i];
         QString     wireName = getLinkWireName(target.name, link.source, i);
 
-        if (link.inv) {
+        if (link.inv.configured) {
             QString invertedWire = QString("%1_inv").arg(wireName);
             out << "    wire " << invertedWire << ";\n";
             out << "    assign " << invertedWire << " = ~" << wireName << ";\n";
