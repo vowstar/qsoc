@@ -239,7 +239,27 @@ target:
 
 == DIVIDER CONFIGURATION
 <soc-net-clock-divider-config>
-Clock dividers support three operational modes: static (constant division), auto (simplified runtime control), and dynamic (manual handshake control). The mode is determined by the presence of `value` and `valid` signals.
+Clock dividers support three operational modes determined by the presence of `value` and `valid` signals:
+
+#figure(
+  align(center)[#table(
+    columns: (0.2fr, 0.2fr, 0.2fr, 0.4fr),
+    align: (auto, center, center, left),
+    table.header([Mode], [value], [valid], [Description]),
+    table.hline(),
+    [Static], [absent], [absent], [Constant division tied to `default` value],
+    [Auto],
+    [present],
+    [absent],
+    [Automatic handshake control via `qsoc_clk_div_auto`],
+    [Dynamic],
+    [present],
+    [present],
+    [Manual handshake control via `qsoc_clk_div`],
+  )],
+  caption: [DIVIDER MODE SELECTION],
+  kind: table,
+)
 
 === Divider Parameters
 <soc-net-clock-divider-params>
@@ -369,11 +389,8 @@ qsoc_clk_div_auto #(
 );
 ```
 
-=== Mode Selection Rules
+=== Mode Behaviors
 <soc-net-clock-divider-mode-rules>
-- *Static Mode*: `value` parameter absent or empty → division tied to `default` constant, uses `qsoc_clk_div`
-- *Auto Mode*: `value` present, `valid` absent → automatic handshake control, uses `qsoc_clk_div_auto`
-- *Dynamic Mode*: Both `value` and `valid` parameters present → manual handshake control, uses `qsoc_clk_div`
 - *Reset Behavior*: All modes use `default` value during reset condition
 - *Bypass Operation*: Division by 1 automatically enables bypass mode in the primitive
 
