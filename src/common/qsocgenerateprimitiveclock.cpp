@@ -1193,8 +1193,13 @@ void QSocClockPrimitive::generateClockInstance(
                     << "),\n";
             }
 
-            out << "        .div_valid(" << (link.div.valid.isEmpty() ? "1'b1" : link.div.valid)
-                << "),\n";
+            // Static mode: div_valid = 1'b0 (no dynamic loading)
+            // Dynamic mode: div_valid = specified signal
+            if (link.div.value.isEmpty()) {
+                out << "        .div_valid(1'b0),\n";
+            } else {
+                out << "        .div_valid(" << link.div.valid << "),\n";
+            }
 
             if (!link.div.ready.isEmpty()) {
                 out << "        .div_ready(" << link.div.ready << "),\n";
