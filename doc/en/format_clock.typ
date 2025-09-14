@@ -146,7 +146,7 @@ target:
   div_clk:
     freq: 200MHz
     div:
-      default: 4                    # Default division value (≥1, defaults to 1)
+      default: 4                    # Default division value (≥1)
       sta_guide:                    # Optional STA guide after DIV
         cell: BUF_CLK
         in: CK
@@ -409,9 +409,9 @@ The divider configuration enforces different width requirements based on the ope
 *Dynamic Mode Width Requirements:*
 - Width must be explicitly specified (no auto-calculation)
 - System validates that `default` value fits within specified width
-- ERROR generated if `default > (2^width - 1)`
+- ERROR generated if `default > (2^width - 1)` or `default < 1`
 - Examples:
-  - `default: 100, width: 8` → OK (100 < 255)
+  - `default: 100, width: 8` → OK (1 ≤ 100 ≤ 255)
   - `default: 256, width: 8` → ERROR (256 > 255)
 
 ```yaml
@@ -431,7 +431,7 @@ target:
 target:
   valid_dynamic_clk:
     div:
-      default: 100                  # Valid: 100 < 255
+      default: 100                  # Valid: 1 ≤ 100 ≤ 255
       width: 8                      # Required for dynamic mode
       value: div_control
 
