@@ -75,7 +75,6 @@ clock:
         freq: 100MHz
         div:                          # Target-level divider
           default: 8                  # Default division value
-          width: 4                    # Required: divider width in bits
           reset: rst_n
         link:
           pll_800m:                   # Direct connection
@@ -147,12 +146,12 @@ target:
   div_clk:
     freq: 200MHz
     div:
-      default: 4                    # Default division value (required, ≥1)
+      default: 4                    # Default division value (≥1, defaults to 1)
       sta_guide:                    # Optional STA guide after DIV
         cell: BUF_CLK
         in: CK
         out: CKO
-      width: 3                      # Divider width in bits (required)
+      width: 3                      # Divider width in bits (required for dynamic mode)
       reset: rst_n                  # Reset signal
       value: uart_div_value         # Dynamic division control input (optional)
       valid: uart_div_valid         # Division value valid signal (optional)
@@ -166,7 +165,6 @@ target:
     freq: 100MHz
     div:
       default: 8                    # Static division, tied to constant 8
-      width: 4                      # Divider width in bits (required)
       reset: rst_n                  # Reset signal
       # No 'value' signal = static mode
     link:
@@ -193,7 +191,6 @@ target:
       pll_clk:
         div:
           default: 16               # Default division value
-          width: 5                  # Divider width in bits (required)
           reset: rst_n
         inv: ~                      # Link-level inverter (exists = enabled)
         sta_guide:                  # Link-level STA guide
@@ -217,7 +214,6 @@ target:
       enable: clk_en              # Target-level ICG
     div:
       default: 2                  # Target-level divider
-      width: 2                    # Required: divider width in bits
       reset: rst_n
     inv:                          # Target-level inverter (exists = enabled)
       sta_guide:                  # STA guide after inverter
@@ -234,7 +230,6 @@ target:
             out: Z
         div:
           default: 16             # Link-level divider first
-          width: 5                # Required: divider width in bits
           reset: rst_n
           sta_guide:              # STA guide after divider
             cell: BUF_DIV
@@ -285,7 +280,6 @@ target:
     freq: 100MHz
     div:
       default: 8                    # Constant division by 8
-      width: 4                      # 4-bit divider (max value 15)
       reset: rst_n                  # Reset to division by 8
     link:
       pll_800m:                     # 800MHz / 8 = 100MHz
@@ -616,7 +610,6 @@ target:
           enable: dsp_enable        # Link-level gating
         div:
           default: 2                # Link-level division
-          width: 2                  # Required: divider width in bits
           reset: rst_n
         sta_guide:                  # STA guide at end of chain
           cell: FOUNDRY_GUIDE_BUF   # Generic foundry cell
@@ -632,7 +625,6 @@ target:
       source_clk:
         div:
           default: 4                # Default division value
-          width: 3                  # Required: divider width in bits
           reset: rst_n
         sta_guide:                  # Link-level STA guide
           cell: TSMC_CKBUF_X1       # Link buffer
