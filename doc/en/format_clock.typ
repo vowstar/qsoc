@@ -151,7 +151,7 @@ target:
         cell: BUF_CLK
         in: CK
         out: CKO
-      width: 3                      # Divider width in bits (required for dynamic mode)
+      width: 3                      # Divider width in bits (required for auto/dynamic modes)
       reset: rst_n                  # Reset signal
       value: uart_div_value         # Dynamic division control input (optional)
       valid: uart_div_valid         # Division value valid signal (optional)
@@ -260,8 +260,11 @@ Clock dividers support three operational modes: static (constant division), auto
     [Reset signal name (active-low), divider uses default value during reset],
     [enable], [], [Enable signal name, disables divider when inactive],
     [test_enable], [], [Test enable bypass signal],
+    [clock_on_reset], [], [Enable clock output during reset (default: false)],
     [value], [], [Dynamic division input signal (empty = static mode)],
-    [valid], [], [Division value valid strobe signal],
+    [valid],
+    [],
+    [Division value valid strobe signal (auto-generated for static mode)],
     [ready], [], [Division ready output status signal],
     [count], [], [Division counter output for debugging],
   )],
@@ -281,6 +284,7 @@ target:
     div:
       default: 8                    # Constant division by 8
       reset: rst_n                  # Reset to division by 8
+      clock_on_reset: false         # Clock disabled during reset
     link:
       pll_800m:                     # 800MHz / 8 = 100MHz
 ```
@@ -294,7 +298,6 @@ qsoc_clk_div #(
     .clk(source_clock),
     .rst_n(rst_n),
     .div(4'd8),                   // Tied to constant
-    .div_valid(1'b0),
     // ...
 );
 ```
@@ -464,7 +467,7 @@ target:
       test_clk:                   # Direct connection
     select: safe_sel              # Required for multi-link
     reset: sys_rst_n              # Reset signal → automatic GF_MUX selection
-    test_enable: test_enable      # DFT test enable (optional)
+    test_enable: test_en          # DFT test enable (optional)
     test_clock: test_clock        # DFT test clock (optional)
 ```
 
@@ -800,7 +803,6 @@ module clkctrl (
         .en(1'b1),
         .test_en(test_en),
         .div(8'd4),                     // Static mode: tied to constant
-        .div_valid(1'b1),
         .div_ready(),
         .clk_out(clk_uart_clk_from_pll_800m),
         .count()
