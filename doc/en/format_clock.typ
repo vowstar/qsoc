@@ -102,7 +102,7 @@ Clock controllers operate at two distinct processing levels with defined operati
     align: (auto, center, center, left),
     table.header([Operation], [Target Level], [Link Level], [Description]),
     table.hline(),
-    [ICG], [✓], [✗], [Clock gating with enable signal],
+    [ICG], [✓], [✓], [Clock gating with enable signal],
     [DIV], [✓], [✓], [Clock division with configurable ratio],
     [INV], [✓], [✓], [Clock signal inversion],
     [STA_GUIDE], [✓], [✓], [STA guide buffer for timing constraints],
@@ -447,7 +447,7 @@ target:
   func_clk:
     freq: 100MHz
     div:
-      ratio: 8
+      default: 8
       reset: rst_n
     link:
       pll_800m:                   # Direct connection
@@ -479,7 +479,6 @@ Clock controller properties define inputs, processing, and outputs:
     table.header([Property], [Type], [Description]),
     table.hline(),
     [name], [String], [Clock controller instance name - *REQUIRED*],
-    [clock], [String], [Default synchronous clock for operations - *REQUIRED*],
     [input], [Map], [Clock input definitions with frequency specs (required)],
     [target], [Map], [Clock target definitions with processing (required)],
   )],
@@ -889,7 +888,7 @@ Clock format supports two processing levels with distinct syntax patterns:
 
 *Target Level* (key existence determines operation):
 - `icg` - Map format with enable/polarity/reset and optional sta_guide
-- `div` - Map format with default/width/reset/optional dynamic signals and optional sta_guide
+- `div` - Map format with default/reset (width auto-calculated for static mode) and optional sta_guide
 - `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
 - `select` - String (required for ≥2 links)
 - `reset` - String (auto-selects GF_MUX when present)
@@ -897,7 +896,7 @@ Clock format supports two processing levels with distinct syntax patterns:
 
 *Link Level* (key existence determines operation):
 - `icg` - Map format with enable/polarity/reset and optional sta_guide
-- `div` - Map format with default/width/reset/optional dynamic signals and optional sta_guide
+- `div` - Map format with default/reset (width auto-calculated for static mode) and optional sta_guide
 - `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
 - Pass-through: No attributes specified
 

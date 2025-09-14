@@ -103,7 +103,6 @@ Reset controller properties provide structured configuration:
     table.header([Property], [Type], [Description]),
     table.hline(),
     [name], [String], [Reset controller instance name (required)],
-    [clock], [String], [Clock signal name for sync operations (required)],
     [test_enable], [String], [Test enable bypass signal (optional)],
     [reason], [Map], [Reset reason recording configuration block (optional)],
     [reason.clock],
