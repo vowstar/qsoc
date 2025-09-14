@@ -294,7 +294,7 @@ qsoc_clk_div #(
     .clk(source_clock),
     .rst_n(rst_n),
     .div(4'd8),                   // Tied to constant
-    .div_valid(1'b1),
+    .div_valid(1'b0),
     // ...
 );
 ```
