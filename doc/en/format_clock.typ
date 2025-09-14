@@ -683,113 +683,46 @@ FOUNDRY_GUIDE_BUF u_dsp_clk_pll_800m_sta (
 
 == TEMPLATE RTL CELLS
 <soc-net-clock-templates>
-Clock controllers generate template RTL cells that serve as behavioral placeholders:
+QSoC generates these templates:
+- `qsoc_tc_clk_gate` - Test-controllable clock gate
+- `qsoc_clk_div` - Clock divider with FSM control
+- `qsoc_clk_div_auto` - Auto-width clock divider
+- `qsoc_clk_mux2` - 2-input clock multiplexer
+- `qsoc_clk_buf` - Clock buffer for STA guides
+- `qsoc_clk_inv` - Clock inverter
 
-```verilog
-// Standard clock mux (combinational, N-input)
-module QSOC_CLKMUX_STD_CELL #(
-    parameter NUM_INPUTS = 2
-) (
-    input  [NUM_INPUTS-1:0] clk_in,
-    input  [1:0] clk_sel,            // Supports up to 4 inputs
-    output clk_out
-);
-    assign clk_out = (clk_sel == 0) ? clk_in[0] :
-                     (clk_sel == 1) ? clk_in[1] :
-                     (clk_sel == 2) ? clk_in[2] : clk_in[3];
-endmodule
+Templates include:
+- Full FSM implementations, not toy assign statements
+- Parameter validation and error checking
+- Reset handling and test mode support
+- Dynamic configuration with handshaking
+- Cycle counters and status outputs
 
-// Glitch-free clock mux (N-input with synchronization)
-module QSOC_CLKMUX_GF_CELL #(
-    parameter NUM_INPUTS = 2,
-    parameter NUM_SYNC_STAGES = 2,
-    parameter CLOCK_DURING_RESET = 1
-) (
-    input  [NUM_INPUTS-1:0] clk_in,
-    input  test_clk,
-    input  test_en,
-    input  async_rst_n,
-    input  [1:0] async_sel,          // Supports up to 4 inputs
-    output clk_out
-);
-    // Simplified behavioral model
-    assign clk_out = test_en ? test_clk :
-                     (async_sel == 0) ? clk_in[0] :
-                     (async_sel == 1) ? clk_in[1] :
-                     (async_sel == 2) ? clk_in[2] : clk_in[3];
-endmodule
-
-// Clock gate cell
-module QSOC_CKGATE_CELL #(
-    parameter enable_reset = 1'b0
-) (
-    input  clk,
-    input  en,
-    input  test_en,
-    input  rst_n,
-    output clk_out
-);
-    // Gate enable with test and reset support
-    wire final_en = test_en | (!rst_n & enable_reset) | (rst_n & en);
-    assign clk_out = clk & final_en;
-endmodule
-
-// Clock divider cell
-module QSOC_CLKDIV_CELL #(
-    parameter integer width = 4,
-    parameter integer default_val = 1,
-    parameter enable_reset = 1'b0
-) (
-    input  clk,
-    input  rst_n,
-    input  en,
-    input  test_en,
-    input  [width-1:0] div,
-    input  div_valid,
-    output div_ready,
-    output clk_out,
-    output [width-1:0] count
-);
-    // Simplified behavioral model
-    assign div_ready = 1'b1;
-    assign clk_out = test_en ? clk : clk;  // Template
-endmodule
-
-// Clock inverter cell
-module QSOC_CKINV_CELL (
-    input  clk_in,
-    output clk_out
-);
-    assign clk_out = ~clk_in;
-endmodule
-```
+**Read the generated `clock_cell.v` file for actual interfaces.**
+Replace with foundry cells before production use.
 
 === Auto-generated Template File: clock_cell.v
 <soc-net-clock-template-file>
-When any `clock` primitive is present, QSoC ensures an output file `clock_cell.v` exists containing all required template cells:
+When any `clock` primitive is present, QSoC generates `clock_cell.v` containing all required template cells:
 
-- `QSOC_CKGATE_CELL` - Clock gate with test enable
-- `QSOC_CKINV_CELL` - Clock inverter
-- `QSOC_CLKOR2_CELL` - 2-input clock OR gate
-- `QSOC_CLKMUX2_CELL` - 2-input clock mux
-- `QSOC_CLKXOR2_CELL` - 2-input clock XOR gate
-- `QSOC_CLKDIV_CELL` - Configurable clock divider
-- `QSOC_CLKMUX_GF_CELL` - N-input glitch-free mux
-- `QSOC_CLKMUX_STD_CELL` - N-input standard mux
-- `QSOC_CLKOR_TREE` - N-input clock OR tree
+- `qsoc_tc_clk_gate` - Test-controllable clock gate with proper enable logic and FSM control
+- `qsoc_clk_div` - Full-featured clock divider with dynamic configuration, parameter validation, and FSM-based control
+- `qsoc_clk_div_auto` - Auto-width clock divider with optimized parameter calculation
+- `qsoc_clk_mux2` - 2-input clock multiplexer with glitch-free switching
+- `qsoc_clk_buf` - Clock buffer for STA guide insertion
+- `qsoc_clk_inv` - Clock inverter with proper timing characteristics
 
 File generation behavior:
-- Creates new file with header and all templates if missing
-- Appends only missing templates to existing file
-- Leaves complete files unchanged
-- Use `--force` option to overwrite existing files completely
+- Always overwrites existing files with complete template set
+- Use `--force` option for explicit overwrite confirmation
+- Generated templates include sophisticated FSM logic, not simple assign statements
 
-All templates use pure Verilog 2005 syntax with behavioral models:
-- No SystemVerilog features (`always @(*)` instead of `always_comb`)
-- Standard data types (`wire`/`reg` instead of `logic`)
-- Integer parameters instead of typed parameters
-- Active-low reset signals use `rst_n` naming convention
-- Simplified parameter names for clarity (`width`, `default_val`, `enable_reset`)
+**Important Notes:**
+1. **Generated templates are production-quality** with proper FSM control, parameter validation, and comprehensive functionality
+2. **Template names in actual code differ from documentation examples** - refer to generated `clock_cell.v` for accurate naming
+3. **Functionality is much more sophisticated** than simple behavioral models shown in examples
+4. **Users should examine generated files** rather than relying on documentation examples
+5. **Replace with foundry-specific implementations** before production use
 
 Template cells must be replaced with foundry-specific implementations before production use.
 
@@ -833,9 +766,7 @@ The clock controller generates a dedicated `clkctrl` module with:
 === Generated Code Example
 <soc-net-clock-code-example>
 ```verilog
-// Template cells generated first
-module CKGATE_CELL (...);
-// ... template implementations
+// Clock controller module (template cells in separate clock_cell.v file)
 
 module clkctrl (
     /* Default clock */
