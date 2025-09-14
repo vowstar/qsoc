@@ -8,8 +8,8 @@
     title: [QSoC],
     product: [QSoC],
     product_url: "https://github.com/vowstar/qsoc",
-    revision: [v1.0.1],
-    publish_date: [2025-06-29],
+    revision: [v1.0.2],
+    publish_date: [2025-09-15],
   ),
   features: [
     - Comprehensive SoC design and development environment
