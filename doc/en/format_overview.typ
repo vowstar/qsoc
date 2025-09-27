@@ -27,12 +27,17 @@ module clk_ctrl (...);
   // Clock management logic
 endmodule
 
-/* 3. FSM controller modules (if FSM primitives are defined) */
+/* 3. Power controller modules (if power primitives are defined) */
+module pwr_ctrl (...);
+  // Power domain management logic
+endmodule
+
+/* 4. FSM controller modules (if FSM primitives are defined) */
 module fsm_controller (...);
   // Finite state machine logic
 endmodule
 
-/* 4. Top-level design module (if ports, nets, instances, or comb/seq exist) */
+/* 5. Top-level design module (if ports, nets, instances, or comb/seq exist) */
 module design (...);
   // Port declarations
   // Wire declarations
@@ -66,6 +71,8 @@ A SOC_NET file consists of several key sections:
     [Defines reset controller primitives (generates standalone modules)],
     [clock],
     [Defines clock controller primitives (generates standalone modules)],
+    [power],
+    [Defines power controller primitives (generates standalone modules)],
   )],
   caption: [SOC_NET FILE SECTIONS],
   kind: table,
@@ -112,6 +119,9 @@ reset:
 
 clock:
   # Clock controllers
+
+power:
+  # Power controllers
 ```
 
 The following chapters provide detailed specifications for each section of the SOC_NET format.

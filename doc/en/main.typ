@@ -59,6 +59,8 @@
     #include "format_fsm.typ"
     #include "format_reset.typ"
     #include "format_clock.typ"
+    #include "format_power.typ"
+    #include "format_template.typ"
     #include "format_validation.typ"
     #include "config.typ"
   ],
