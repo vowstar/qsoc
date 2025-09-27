@@ -1,51 +1,61 @@
 = POWER CONTROLLER FORMAT
 <power-format>
-Manages voltage domain sequencing with dependency tracking and auto-healing.
+The power section defines power controller primitives that manage voltage domain sequencing with dependency tracking and automatic fault recovery. Power primitives provide comprehensive power management with support for multiple domain types, hard/soft dependencies, and DFT override capabilities.
 
-== KEY FEATURES
-- Domain type: no `depend` = AO, `depend: []` = root, `depend: [...]` = normal
-- Hard depend timeout → FAULT (block), soft depend timeout → fault flag (proceed)
-- Auto-heal: cooldown then retry when hard depends ready
-- DFT: `test_en=1` forces all domains on
+== POWER OVERVIEW
+<soc-net-power-overview>
+Power controllers manage voltage domain sequencing through a three-domain architecture: AO (always-on), root (controllable without dependencies), and normal (controllable with dependencies). Each domain follows a strict power-up sequence: switch → pgood → reset release → clock enable, with configurable timing and automatic fault recovery.
 
-== YAML STRUCTURE
+Key features include:
+- Three domain types with automatic inference from dependency configuration
+- Hard dependencies (block on timeout) and soft dependencies (warn on timeout)
+- Automatic fault recovery with cooldown and retry mechanisms
+- DFT test mode bypass for all domains (test_en intended for static scan/test operations; deassert only when system is quiescent)
+- FSM-based power sequencing with standardized timing
+- Template RTL cells replaceable with foundry-specific implementations
+
+== POWER STRUCTURE
+<soc-net-power-structure>
+Power controllers use domain-based configuration with automatic type inference based on dependency presence. Each domain specifies timing parameters and dependency relationships without complex type enumeration:
+
 ```yaml
+# Power controller with three domain types
 power:
-  - name: pwr0
-    host_clock: clk_ao
-    host_reset: rst_ao
-    test_enable: test_en         # DFT force-on (optional)
+  - name: soc_pwr_ctrl               # Controller instance name (required)
+    host_clock: clk_ao               # AO host clock (required)
+    host_reset: rst_ao_n             # AO host reset, active-low (required)
+    test_enable: test_en             # Test enable bypass signal (optional)
     domain:
-      # AO: no depend
+      # AO domain: no depend key = always-on type
       - name: ao
-        v_mv: 900
-        pgood: pgood_ao
-        wait_dep: 0
-        settle_on: 0
-        settle_off: 0
-        follow:
+        v_mv: 900                    # Voltage level (informational)
+        pgood: pgood_ao              # Power good input signal (optional)
+        wait_dep: 0                  # Dependency wait cycles
+        settle_on: 0                 # Power-on settle cycles
+        settle_off: 0                # Power-off settle cycles
+        follow:                      # Clock/reset follow lists
           clock: []
           reset: []
 
-      # Root: depend: []
+      # Root domain: depend: [] = controllable root type
       - name: vmem
-        depend: []
+        depend: []                   # Empty dependency list = root domain
         v_mv: 1100
         pgood: pgood_vmem
-        wait_dep: 50
+        wait_dep: 0
         settle_on: 100
         settle_off: 50
         follow:
           clock: []
           reset: []
 
-      # Normal: mixed depends
+      # Normal domain: depend: [...] = dependent type
       - name: gpu
-        depend:
-          - name: ao
-            type: hard           # block on timeout
+        depend:                      # Dependency list = normal domain
+          - name: ao                 # Hard dependency (default)
+            type: hard               # Block on timeout
           - name: vmem
-            type: soft           # warn on timeout
+            type: soft               # Warn on timeout, continue
         v_mv: 900
         pgood: pgood_gpu
         wait_dep: 200
@@ -56,117 +66,121 @@ power:
           reset: [rst_gpu]
 ```
 
-== DOMAIN TYPES
-- No `depend` → AO (no switch, always on)
-- `depend: []` → Root (has switch, no depends)
-- `depend: [...]` → Normal (has switch, depends)
+== POWER DOMAINS
+<soc-net-power-domains>
+Power controllers automatically infer domain types from configuration structure, eliminating the need for explicit type specification:
 
-== FSM STATES
-S_OFF → S_WAIT_DEP → S_TURN_ON → S_ON → S_TURN_OFF → S_OFF
-Fault path: any timeout → S_FAULT → auto-heal after cooldown
+=== AO Domain Type
+<soc-net-power-ao>
+Always-on domains have no dependency key and remain permanently active:
+- No power switch control (HAS_SWITCH=0)
+- Always enabled (ctrl_enable=1'b1)
+- Zero timing parameters (no wait or settle cycles)
+- Used for essential infrastructure like AO power rails
+- If pgood signal absent, generator ties to 1'b1 and relies on settle cycles
+- If pgood is absent, at least one of settle_on/settle_off must be non-zero
 
-== PORTS
-Inputs: `clk_ao`, `rst_ao`, `test_en`, `pgood_<dom>`, `en_<dom>`, `clr_<dom>`
-Outputs: `icg_en_<dom>`, `rst_allow_<dom>`, `sw_<dom>`, `rdy_<dom>`, `flt_<dom>`
+=== Root Domain Type
+<soc-net-power-root>
+Root domains have empty dependency arrays and operate independently:
+- Power switch control enabled (HAS_SWITCH=1)
+- No dependency wait requirements
+- Controllable through enable/clear inputs
+- Used for primary power domains like memory controllers
 
-Domain reset: `rst_<dom>_n = rst_sys_n & rst_allow_<dom>`
+=== Normal Domain Type
+<soc-net-power-normal>
+Normal domains have dependency lists and wait for prerequisite domains:
+- Power switch control enabled (HAS_SWITCH=1)
+- Hard dependencies: timeout causes FAULT state (blocks operation)
+- Soft dependencies: timeout sets fault flag (allows continuation)
+- When wait_dep=0: hard dependency failure enters FAULT immediately, soft dependency failure warns but continues
+- Automatic dependency aggregation with AND gates
+- Used for peripheral domains with power sequencing requirements
 
-== POWER_FSM MODULE
+== POWER FSM OPERATION
+<soc-net-power-fsm>
+Each domain uses a standardized 6-state FSM for power sequencing:
+
+State sequence: S_OFF → S_WAIT_DEP → S_TURN_ON → S_ON → S_TURN_OFF → S_OFF
+Fault handling: any timeout → S_FAULT → auto-heal after cooldown
+
+The power_fsm module provides the core sequencing logic:
 ```verilog
 module power_fsm #(
-    parameter integer HAS_SWITCH        = 1,
-    parameter integer WAIT_DEP_CYCLES   = 100,
-    parameter integer SETTLE_ON_CYCLES  = 100,
-    parameter integer SETTLE_OFF_CYCLES = 50
+    parameter integer HAS_SWITCH        = 1,   /**< Enable power switch control */
+    parameter integer WAIT_DEP_CYCLES   = 100, /**< Dependency wait timeout */
+    parameter integer SETTLE_ON_CYCLES  = 100, /**< Power-on settle time */
+    parameter integer SETTLE_OFF_CYCLES = 50   /**< Power-off settle time */
 ) (
-    input  wire clk,
-    input  wire rst_n,
-    input  wire test_en,
-    input  wire ctrl_enable,
-    input  wire fault_clear,
-    input  wire dep_hard_all,
-    input  wire dep_soft_all,
-    input  wire pgood,
-    output reg  clk_enable,
-    output reg  rst_allow,
-    output reg  pwr_switch,
-    output reg  ready,
-    output reg  valid,
-    output reg  fault
+    input  wire clk,              /**< AO host clock */
+    input  wire rst_n,            /**< AO host reset */
+    input  wire test_en,          /**< DFT test enable */
+    input  wire ctrl_enable,      /**< Target state (1=on, 0=off) */
+    input  wire fault_clear,      /**< Fault clear pulse */
+    input  wire dep_hard_all,     /**< AND of all hard dependencies */
+    input  wire dep_soft_all,     /**< AND of all soft dependencies */
+    input  wire pgood,            /**< Power good input */
+    output reg  clk_enable,       /**< ICG enable output */
+    output reg  rst_allow,        /**< Reset allow output */
+    output reg  pwr_switch,       /**< Power switch output */
+    output reg  ready,            /**< Domain ready output */
+    output reg  valid,            /**< Voltage valid output */
+    output reg  fault             /**< Fault status output */
 );
 ```
 
-Behaviors:
-- Counter: load N-1, zero means no wait
-- Hard timeout → FAULT + cooldown → auto-retry
-- Soft timeout → fault flag, continue
-- `test_en=1` → force all active
+Key behaviors:
+- Counter load: N-1 (zero means no wait)
+- Hard timeout: enter FAULT state, block until auto-heal
+- Soft timeout: set fault flag, continue operation
+- DFT override: test_en=1 forces outputs active (pwr_switch=1, clk_enable=1, rst_allow=1, ready=1, valid=1) while preserving FSM state
+- With test_en=1, ready=1 for all domains, so dep_hard_all/dep_soft_all evaluate to 1 and dependency checks are bypassed
+- Auto-heal works without fault_clear; fault remains sticky until cleared or reset
+- Auto-heal: automatic retry after cooldown when dependencies ready
+- Cooldown source: auto-heal cooldown uses WAIT_DEP_CYCLES
+- All cycle parameters are counted on host_clock (AO clock domain)
 
-== DEPEND AGGREGATION
+== GENERATED INTERFACES
+<soc-net-power-interfaces>
+Power controllers generate standardized interfaces with predictable naming:
+
+Inputs: `clk_ao`, `rst_ao_n`, `test_en`, `pgood_<domain>`, `en_<domain>`, `clr_<domain>`
+
+Note: `clr_<domain>` is optional; when absent tie low and rely on auto-heal
+Outputs: `icg_en_<domain>`, `rst_allow_<domain>`, `sw_<domain>`, `rdy_<domain>`, `flt_<domain>`
+
+Note: `test_en`, `en_<domain>`, `clr_<domain>`, and `pgood_<domain>` must be synchronized into host_clock domain
+
+Signal semantics:
+- `ready`: Asserted when FSM state = S_ON, equivalent to domain fully operational
+- `valid`: Equals 1 in S_ON; equals pgood in S_TURN_ON/S_TURN_OFF; 0 otherwise
+- `rst_allow`: Active-high reset permission, domain reset = `rst_sys_n & rst_allow`
+- Dependency aggregation uses `ready_<dep>` signals exclusively
+
+Domain reset composition: `rst_<domain>_n = rst_sys_n & rst_allow_<domain>`
+
+Dependency aggregation is automatic:
 ```verilog
-wire dep_hard_all_<dom> = rdy_dep1 & rdy_dep2 & ...;  // all hard
-wire dep_soft_all_<dom> = rdy_dep3 & ...;             // all soft
-```
-No depends → tie to 1'b1
-
-== INSTANTIATION EXAMPLE
-```verilog
-/* AO domain */
-power_fsm #(
-    .HAS_SWITCH(0), .WAIT_DEP_CYCLES(0),
-    .SETTLE_ON_CYCLES(0), .SETTLE_OFF_CYCLES(0)
-) u_pwr_ao (
-    .clk(clk_ao), .rst_n(rst_ao), .test_en(test_en),
-    .ctrl_enable(1'b1), .fault_clear(1'b0),
-    .dep_hard_all(1'b1), .dep_soft_all(1'b1),
-    .pgood(pgood_ao),
-    .clk_enable(icg_en_ao), .rst_allow(rst_allow_ao),
-    .pwr_switch(), .ready(rdy_ao), .valid(), .fault()
-);
-
-/* Root domain */
-power_fsm #(
-    .HAS_SWITCH(1), .WAIT_DEP_CYCLES(50),
-    .SETTLE_ON_CYCLES(100), .SETTLE_OFF_CYCLES(50)
-) u_pwr_vmem (
-    .clk(clk_ao), .rst_n(rst_ao), .test_en(test_en),
-    .ctrl_enable(en_vmem), .fault_clear(clr_vmem),
-    .dep_hard_all(1'b1), .dep_soft_all(1'b1),
-    .pgood(pgood_vmem),
-    .clk_enable(icg_en_vmem), .rst_allow(rst_allow_vmem),
-    .pwr_switch(sw_vmem), .ready(rdy_vmem),
-    .valid(), .fault(flt_vmem)
-);
-
-/* Normal domain */
-wire dep_hard_all_gpu = rdy_ao;
-wire dep_soft_all_gpu = rdy_vmem;
-power_fsm #(
-    .HAS_SWITCH(1), .WAIT_DEP_CYCLES(200),
-    .SETTLE_ON_CYCLES(120), .SETTLE_OFF_CYCLES(80)
-) u_pwr_gpu (
-    .clk(clk_ao), .rst_n(rst_ao), .test_en(test_en),
-    .ctrl_enable(en_gpu), .fault_clear(clr_gpu),
-    .dep_hard_all(dep_hard_all_gpu),
-    .dep_soft_all(dep_soft_all_gpu),
-    .pgood(pgood_gpu),
-    .clk_enable(icg_en_gpu), .rst_allow(rst_allow_gpu),
-    .pwr_switch(sw_gpu), .ready(rdy_gpu),
-    .valid(), .fault(flt_gpu)
-);
+/* Generated for normal domains with dependencies */
+wire dep_hard_all_gpu = rdy_ao;              /**< Hard dependencies only */
+wire dep_soft_all_gpu = rdy_vmem;            /**< Soft dependencies only */
+/* No dependencies = tie to 1'b1 */
 ```
 
 == PROPERTIES
+<soc-net-power-properties>
+
 #figure(
   align(center)[#table(
     columns: (auto, auto, auto, auto),
     align: (left, left, left, left),
     table.header([*Property*], [*Type*], [*Required*], [*Description*]),
-    [`name`], [String], [Yes], [Controller name],
-    [`host_clock`], [String], [Yes], [Host clock],
-    [`host_reset`], [String], [Yes], [Host reset],
-    [`test_enable`], [String], [No], [DFT signal],
-    [`domain`], [Array], [Yes], [Domain list],
+    [`name`], [String], [Yes], [Controller instance name],
+    [`host_clock`], [String], [Yes], [AO host clock signal],
+    [`host_reset`], [String], [Yes], [AO host reset signal, active-low],
+    [`test_enable`], [String], [No], [DFT test enable signal],
+    [`domain`], [Array], [Yes], [Power domain definitions],
   )],
   caption: [Power Controller Properties],
 )
@@ -176,14 +190,14 @@ power_fsm #(
     columns: (auto, auto, auto, auto),
     align: (left, left, left, left),
     table.header([*Property*], [*Type*], [*Required*], [*Description*]),
-    [`name`], [String], [Yes], [Domain name],
+    [`name`], [String], [Yes], [Domain instance name],
     [`depend`], [Array], [No], [Absent=AO, []=root, list=normal],
-    [`v_mv`], [Integer], [No], [Voltage mV],
-    [`pgood`], [String], [Yes], [Power good signal],
-    [`wait_dep`], [Integer], [Yes], [Depend wait cycles],
-    [`settle_on`], [Integer], [Yes], [On settle cycles],
-    [`settle_off`], [Integer], [Yes], [Off settle cycles],
-    [`follow`], [Map], [No], [Clock/reset lists],
+    [`v_mv`], [Integer], [No], [Voltage level in millivolts],
+    [`pgood`], [String], [No], [Power good input signal (ties 1'b1 if absent)],
+    [`wait_dep`], [Integer], [Yes], [Dependency wait cycles],
+    [`settle_on`], [Integer], [Yes], [Power-on settle cycles],
+    [`settle_off`], [Integer], [Yes], [Power-off settle cycles],
+    [`follow`], [Map], [No], [Clock/reset follow signal lists],
   )],
   caption: [Domain Properties],
 )
@@ -193,8 +207,8 @@ power_fsm #(
     columns: (auto, auto, auto, auto),
     align: (left, left, left, left),
     table.header([*Property*], [*Type*], [*Required*], [*Description*]),
-    [`name`], [String], [Yes], [Depend domain name],
-    [`type`], [String], [No], [hard or soft (default hard)],
+    [`name`], [String], [Yes], [Dependency domain name],
+    [`type`], [String], [No], [hard or soft (default: hard)],
   )],
-  caption: [Depend Properties],
+  caption: [Dependency Properties],
 )
