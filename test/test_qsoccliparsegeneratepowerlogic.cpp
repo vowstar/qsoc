@@ -112,9 +112,15 @@ private:
         const QString content = file.readAll();
         file.close();
 
-        /* Check for power_fsm module */
-        if (!content.contains("module power_fsm")) {
-            qWarning() << "Missing module in power_cell.v: power_fsm";
+        /* Check for qsoc_power_fsm module */
+        if (!content.contains("module qsoc_power_fsm")) {
+            qWarning() << "Missing module in power_cell.v: qsoc_power_fsm";
+            return false;
+        }
+
+        /* Check for qsoc_rst_pipe module */
+        if (!content.contains("module qsoc_rst_pipe")) {
+            qWarning() << "Missing module in power_cell.v: qsoc_rst_pipe";
             return false;
         }
 
