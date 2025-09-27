@@ -14,6 +14,7 @@
 // Forward declarations for primitives
 class QSocResetPrimitive;
 class QSocClockPrimitive;
+class QSocPowerPrimitive;
 class QSocFSMPrimitive;
 class QSocCombPrimitive;
 class QSocSeqPrimitive;
@@ -526,6 +527,14 @@ private:
     bool generateClockPrimitive(const YAML::Node &clockNode, QTextStream &out);
 
     /**
+     * @brief Generate power control logic using Power primitive
+     * @param powerNode YAML node containing power configuration
+     * @param out Output text stream
+     * @return true if generation successful, false otherwise
+     */
+    bool generatePowerPrimitive(const YAML::Node &powerNode, QTextStream &out);
+
+    /**
      * @brief Generate sequential logic using Seq primitive
      * @param netlistData YAML node containing the full netlist
      * @param out Output text stream for generated Verilog
@@ -544,6 +553,7 @@ private:
     /** Primitive generators. */
     QSocResetPrimitive *resetPrimitive = nullptr;
     QSocClockPrimitive *clockPrimitive = nullptr;
+    QSocPowerPrimitive *powerPrimitive = nullptr;
     QSocFSMPrimitive   *fsmPrimitive   = nullptr;
     QSocCombPrimitive  *combPrimitive  = nullptr;
     QSocSeqPrimitive   *seqPrimitive   = nullptr;

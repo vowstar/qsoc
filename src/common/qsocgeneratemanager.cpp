@@ -5,6 +5,7 @@
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivecomb.h"
 #include "common/qsocgenerateprimitivefsm.h"
+#include "common/qsocgenerateprimitivepower.h"
 #include "common/qsocgenerateprimitivereset.h"
 #include "common/qsocgenerateprimitiveseq.h"
 #include "common/qstaticstringweaver.h"
@@ -34,6 +35,7 @@ QSocGenerateManager::QSocGenerateManager(
     , llmService(llmService)
     , resetPrimitive(new QSocResetPrimitive(this))
     , clockPrimitive(new QSocClockPrimitive(this))
+    , powerPrimitive(new QSocPowerPrimitive(this))
     , fsmPrimitive(new QSocFSMPrimitive(this))
     , combPrimitive(new QSocCombPrimitive(this))
     , seqPrimitive(new QSocSeqPrimitive(this))
@@ -45,6 +47,7 @@ QSocGenerateManager::~QSocGenerateManager()
 {
     delete resetPrimitive;
     delete clockPrimitive;
+    delete powerPrimitive;
     delete fsmPrimitive;
     delete combPrimitive;
     delete seqPrimitive;
@@ -100,6 +103,9 @@ void QSocGenerateManager::setForceOverwrite(bool force)
     }
     if (resetPrimitive) {
         resetPrimitive->setForceOverwrite(force);
+    }
+    if (powerPrimitive) {
+        powerPrimitive->setForceOverwrite(force);
     }
 }
 

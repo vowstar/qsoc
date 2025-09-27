@@ -4,6 +4,7 @@
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivecomb.h"
+#include "common/qsocgenerateprimitivepower.h"
 #include "common/qsocgenerateprimitiveseq.h"
 #include "common/qsocgeneratereportunconnected.h"
 #include "common/qstaticstringweaver.h"
@@ -43,10 +44,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     && netlistData["reset"].size() > 0;
     bool hasClock = netlistData["clock"] && netlistData["clock"].IsSequence()
                     && netlistData["clock"].size() > 0;
+    bool hasPower = netlistData["power"] && netlistData["power"].IsSequence()
+                    && netlistData["power"].size() > 0;
 
-    if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock) {
+    if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock && !hasPower) {
         qCritical() << "Error: Invalid netlist data, no 'instance' section and no 'comb', "
-                       "'seq', 'fsm', 'reset', or 'clock' section found";
+                       "'seq', 'fsm', 'reset', 'clock', or 'power' section found";
         return false;
     }
 
@@ -140,7 +143,30 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         }
     }
 
-    /* Generate FSM primitive controllers third (before top-level module) */
+    /* Generate power primitive controllers third (before top-level module) */
+    if (netlistData["power"] && netlistData["power"].IsSequence()
+        && netlistData["power"].size() > 0) {
+        for (size_t i = 0; i < netlistData["power"].size(); ++i) {
+            const YAML::Node &powerItem = netlistData["power"][i];
+
+            if (!powerItem.IsMap()) {
+                qWarning() << "Skipping invalid power item at index" << i;
+                continue;
+            }
+
+            if (!generatePowerPrimitive(powerItem, out)) {
+                qWarning() << "Failed to generate power primitive at index" << i;
+                continue;
+            }
+
+            /* Add blank line between different power blocks */
+            if (i < netlistData["power"].size() - 1) {
+                out << "\n";
+            }
+        }
+    }
+
+    /* Generate FSM primitive controllers fourth (before top-level module) */
     if (netlistData["fsm"] && netlistData["fsm"].IsSequence() && netlistData["fsm"].size() > 0) {
         for (size_t i = 0; i < netlistData["fsm"].size(); ++i) {
             const YAML::Node &fsmItem = netlistData["fsm"][i];
@@ -1683,6 +1709,16 @@ bool QSocGenerateManager::generateClockPrimitive(const YAML::Node &clockNode, QT
     }
 
     return clockPrimitive->generateClockController(clockNode, out);
+}
+
+bool QSocGenerateManager::generatePowerPrimitive(const YAML::Node &powerNode, QTextStream &out)
+{
+    if (!powerPrimitive) {
+        qWarning() << "Power primitive generator not initialized";
+        return false;
+    }
+
+    return powerPrimitive->generatePowerController(powerNode, out);
 }
 
 bool QSocGenerateManager::generateSeqPrimitive(const YAML::Node &netlistData, QTextStream &out)

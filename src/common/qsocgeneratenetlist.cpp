@@ -51,10 +51,12 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
                         && netlistData["reset"].size() > 0;
         bool hasClock = netlistData["clock"] && netlistData["clock"].IsSequence()
                         && netlistData["clock"].size() > 0;
+        bool hasPower = netlistData["power"] && netlistData["power"].IsSequence()
+                        && netlistData["power"].size() > 0;
 
-        if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock) {
+        if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock && !hasPower) {
             qCritical() << "Error: Invalid netlist format, no 'instance' section and no 'comb', "
-                           "'seq', 'fsm', 'reset', or 'clock' section found";
+                           "'seq', 'fsm', 'reset', 'clock', or 'power' section found";
             return false;
         }
 
