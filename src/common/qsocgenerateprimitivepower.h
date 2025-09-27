@@ -21,8 +21,10 @@ class QSocGenerateManager;
  * This class generates power control logic including:
  * - Power domain management (AO, root, and normal domains)
  * - Hard and soft dependency handling
- * - FSM-based power sequencing (switch -> pgood -> reset -> clock)
- * - Fault detection and recovery
+ * - 8-state FSM power sequencing (switch -> pgood -> clock enable -> reset release)
+ * - Clock-before-reset timing compliance with SYNC_CYCLES parameter
+ * - Fault detection and recovery with auto-heal
+ * - qsoc_rst_pipe reset synchronizer generation
  * - Clock and reset follow signals for domain coordination
  */
 class QSocPowerPrimitive
@@ -138,10 +140,16 @@ private:
     bool isPowerCellFileComplete(const QString &filePath);
 
     /**
-     * @brief Generate power_fsm module definition
+     * @brief Generate qsoc_power_fsm module definition with 8-state FSM
      * @return Module definition string
      */
     QString generatePowerFSMModule();
+
+    /**
+     * @brief Generate qsoc_rst_pipe reset synchronizer module
+     * @return Module definition string
+     */
+    QString generateResetPipeModule();
 
     /**
      * @brief Determine if domain is AO (always-on)

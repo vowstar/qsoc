@@ -277,7 +277,7 @@ void QSocPowerPrimitive::generatePowerLogic(const PowerControllerConfig &config,
         QString hardSig = getHardDependencySignal(domain);
         QString softSig = getSoftDependencySignal(domain);
 
-        out << "    power_fsm #(\n";
+        out << "    qsoc_power_fsm #(\n";
         out << "        .HAS_SWITCH        (" << (isAO ? "0" : "1") << "),\n";
         out << "        .WAIT_DEP_CYCLES   (" << domain.wait_dep << "),\n";
         out << "        .SETTLE_ON_CYCLES  (" << domain.settle_on << "),\n";
@@ -361,6 +361,7 @@ bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
 
     QTextStream out(&file);
     out << generatePowerFSMModule();
+    out << "\n" << generateResetPipeModule();
     file.close();
 
     qInfo() << "Generated power_cell.v at:" << filePath;
@@ -381,8 +382,8 @@ bool QSocPowerPrimitive::isPowerCellFileComplete(const QString &filePath)
     QString content = QTextStream(&file).readAll();
     file.close();
 
-    // Check if power_fsm module exists
-    return content.contains("module power_fsm");
+    // Check if both qsoc_power_fsm and qsoc_rst_pipe modules exist
+    return content.contains("module qsoc_power_fsm") && content.contains("module qsoc_rst_pipe");
 }
 
 QString QSocPowerPrimitive::generatePowerFSMModule()
@@ -391,25 +392,22 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     QTextStream out(&code);
 
     out << "/* power_cell.v\n";
-    out << " * Module: power_fsm\n";
-    out << " * Minimal per-domain power controller (3-block FSM) with DFT force-on\n";
-    out << " * Sequence\n";
-    out << " *   Power-up   : enable switch -> wait pgood+settle -> release reset -> clock on\n";
-    out << " *   Power-down : clock off -> assert reset -> disable switch -> wait drop+settle\n";
-    out << " * Depends\n";
-    out << " *   hard must be ready within wait_dep or go to FAULT (block)\n";
-    out << " *   soft missing at timeout sets fault but proceeds\n";
-    out << " * DFT\n";
-    out << " *   test_en=1 forces power on, clock on, reset released, regardless of state\n";
+    out << " * Module: qsoc_power_fsm\n";
+    out << " * Minimal per-domain power controller with strict power sequencing\n";
+    out << " * Power-up   : enable switch -> wait pgood+settle -> clock on -> release reset\n";
+    out << " * Power-down : assert reset -> clock off -> disable switch -> wait drop+settle\n";
+    out << " * Hard depend blocks on timeout and enters FAULT with auto-heal\n";
+    out << " * Soft depend warns on timeout and proceeds\n";
+    out << " * test_en=1 forces power on, clock on, reset released, while FSM state is preserved\n";
     out << " */\n\n";
 
-    out << "module power_fsm\n";
+    out << "module qsoc_power_fsm\n";
     out << "#(\n";
     out << "    /* Parameters appear before ports as required by Verilog-2005. */\n";
     out << "    parameter integer HAS_SWITCH        = 1,   /**< 1=drive switch              */\n";
     out << "    parameter integer WAIT_DEP_CYCLES   = 100, /**< depend wait window (cycles) */\n";
     out << "    parameter integer SETTLE_ON_CYCLES  = 100, /**< power-on settle (cycles)    */\n";
-    out << "    parameter integer SETTLE_OFF_CYCLES = 50   /**< power-off settle (cycles)   */\n";
+    out << "    parameter integer SETTLE_OFF_CYCLES = 50   /**< power-off settle cycles     */\n";
     out << ")\n";
     out << "(\n";
     out << "    /* AO host clock/reset only */\n";
@@ -435,34 +433,36 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "    /** Return number of bits to hold value n at least 1 */\n";
     out << "    function integer bits_for;\n";
     out << "        input integer n;\n";
-    out << "        integer v, w;\n";
+    out << "        integer val, nbits;\n";
     out << "    begin\n";
-    out << "        v = (n < 1) ? 1 : n;\n";
-    out << "        v = v - 1;\n";
-    out << "        w = 0;\n";
-    out << "        while (v > 0) begin\n";
-    out << "            w = w + 1;\n";
-    out << "            v = v >> 1;\n";
+    out << "        val = (n < 1) ? 1 : n;\n";
+    out << "        val = val - 1;\n";
+    out << "        nbits = 0;\n";
+    out << "        while (val > 0) begin\n";
+    out << "            nbits = nbits + 1;\n";
+    out << "            val = val >> 1;\n";
     out << "        end\n";
-    out << "        if (w < 1) w = 1;\n";
-    out << "        bits_for = w;\n";
+    out << "        if (nbits < 1) nbits = 1;\n";
+    out << "        bits_for = nbits;\n";
     out << "    end\n";
     out << "    endfunction\n\n";
 
-    out << "    /* Width derivation: compare ON/OFF first, then depend. */\n";
     out << "    localparam integer MAX_ONOFF =\n";
-    out << "        (SETTLE_ON_CYCLES > SETTLE_OFF_CYCLES) ?\n";
-    out << "            SETTLE_ON_CYCLES : SETTLE_OFF_CYCLES;\n";
+    out << "        (SETTLE_ON_CYCLES > SETTLE_OFF_CYCLES) ? SETTLE_ON_CYCLES : "
+           "SETTLE_OFF_CYCLES;\n";
     out << "    localparam integer MAX_ALL =\n";
     out << "        (MAX_ONOFF > WAIT_DEP_CYCLES) ? MAX_ONOFF : WAIT_DEP_CYCLES;\n";
     out << "    localparam integer WIDTH = bits_for(MAX_ALL);\n\n";
 
-    out << "    localparam [2:0] S_OFF      = 3'd0;\n";
-    out << "    localparam [2:0] S_WAIT_DEP = 3'd1;\n";
-    out << "    localparam [2:0] S_TURN_ON  = 3'd2;\n";
-    out << "    localparam [2:0] S_ON       = 3'd3;\n";
-    out << "    localparam [2:0] S_TURN_OFF = 3'd4;\n";
-    out << "    localparam [2:0] S_FAULT    = 3'd5;\n\n";
+    out << "    /* add two light-weight states for strict ordering */\n";
+    out << "    localparam [2:0] S_OFF        = 3'd0;\n";
+    out << "    localparam [2:0] S_WAIT_DEP   = 3'd1;\n";
+    out << "    localparam [2:0] S_TURN_ON    = 3'd2;\n";
+    out << "    localparam [2:0] S_ON         = 3'd3;\n";
+    out << "    localparam [2:0] S_TURN_OFF   = 3'd4;\n";
+    out << "    localparam [2:0] S_FAULT      = 3'd5;\n";
+    out << "    localparam [2:0] S_CLK_ON     = 3'd6;  /**< clock on, reset held        */\n";
+    out << "    localparam [2:0] S_RST_ASSERT = 3'd7;  /**< reset asserted, clock on    */\n\n";
 
     out << "    reg [2:0] state, state_n;\n\n";
 
@@ -543,7 +543,7 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "                state_n = S_TURN_OFF;\n";
     out << "                ld_off  = 1'b1;\n";
     out << "            end else if (pgood) begin\n";
-    out << "                if (t_on == 0) state_n = S_ON;\n";
+    out << "                if (t_on == 0) state_n = S_CLK_ON; /* go to clock on state */\n";
     out << "                else           dec_on  = 1'b1;\n";
     out << "            end else begin\n";
     out << "                if (t_on == 0) begin\n";
@@ -556,8 +556,7 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "        end\n\n";
     out << "        S_ON: begin\n";
     out << "            if (!ctrl_enable) begin\n";
-    out << "                state_n = S_TURN_OFF;\n";
-    out << "                ld_off  = 1'b1;\n";
+    out << "                state_n = S_RST_ASSERT; /* assert reset first */\n";
     out << "            end\n";
     out << "        end\n\n";
     out << "        S_TURN_OFF: begin\n";
@@ -583,6 +582,17 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "                if (t_dep != 0) dec_dep = 1'b1;\n";
     out << "                state_n = S_FAULT;\n";
     out << "            end\n";
+    out << "        end\n\n";
+    out << "        /* New states for clock-before-reset sequencing */\n";
+    out << "        S_CLK_ON: begin\n";
+    out << "            /* Single cycle to allow clock stabilization before reset release */\n";
+    out << "            state_n = S_ON;\n";
+    out << "        end\n\n";
+    out << "        S_RST_ASSERT: begin\n";
+    out << "            /* Assert reset first while clock is still on, then proceed to turn off "
+           "*/\n";
+    out << "            state_n = S_TURN_OFF;\n";
+    out << "            ld_off  = 1'b1;\n";
     out << "        end\n\n";
     out << "        default: state_n = S_FAULT;\n";
     out << "        endcase\n";
@@ -617,6 +627,17 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            /* Clock off, reset asserted, waiting for power drop */\n";
     out << "            valid = pgood;\n";
     out << "        end\n";
+    out << "        /* New states for clock-before-reset sequencing */\n";
+    out << "        S_CLK_ON: begin\n";
+    out << "            if (HAS_SWITCH) pwr_switch = 1'b1;\n";
+    out << "            clk_enable = 1'b1;\n";
+    out << "            valid = pgood;\n";
+    out << "        end\n";
+    out << "        S_RST_ASSERT: begin\n";
+    out << "            if (HAS_SWITCH) pwr_switch = 1'b1;\n";
+    out << "            clk_enable = 1'b1;\n";
+    out << "            valid = pgood;\n";
+    out << "        end\n";
     out << "        S_FAULT: begin\n";
     out << "            /* Quarantine: clock off, reset asserted, power off */\n";
     out << "        end\n";
@@ -630,6 +651,33 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            valid      = 1'b1;\n";
     out << "        end\n";
     out << "    end\n\n";
+    out << "endmodule\n";
+
+    return code;
+}
+
+QString QSocPowerPrimitive::generateResetPipeModule()
+{
+    QString     code;
+    QTextStream out(&code);
+
+    out << "/* qsoc_rst_pipe\n";
+    out << " * Async assert, sync deassert reset pipeline for a domain\n";
+    out << " * Assert does not require clock, deassert requires STAGES edges on clk_dom\n";
+    out << " */\n";
+    out << "module qsoc_rst_pipe #(parameter integer STAGES=4)(\n";
+    out << "    input  wire clk_dom,      /**< domain clock source                   */\n";
+    out << "    input  wire rst_gate_n,   /**< async assert, sync deassert           */\n";
+    out << "    input  wire test_en,      /**< DFT force release                     */\n";
+    out << "    output wire rst_dom_n     /**< synchronized domain reset, active-low */\n";
+    out << ");\n";
+    out << "    reg [STAGES-1:0] sh;\n";
+    out << "    wire rst_n_int = test_en ? 1'b1 : rst_gate_n;\n\n";
+    out << "    always @(posedge clk_dom or negedge rst_n_int) begin\n";
+    out << "        if (!rst_n_int) sh <= {STAGES{1'b0}};         /* async assert */\n";
+    out << "        else            sh <= {sh[STAGES-2:0], 1'b1}; /* sync deassert */\n";
+    out << "    end\n\n";
+    out << "    assign rst_dom_n = sh[STAGES-1];\n";
     out << "endmodule\n";
 
     return code;
