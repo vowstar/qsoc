@@ -4,7 +4,7 @@ The power section defines power controller primitives that manage voltage domain
 
 == POWER OVERVIEW
 <soc-net-power-overview>
-Power controllers manage voltage domain sequencing through a three-domain architecture: AO (always-on), root (controllable without dependencies), and normal (controllable with dependencies). Each domain follows a strict power-up sequence: switch → pgood → reset release → clock enable, with configurable timing and automatic fault recovery.
+Power controllers manage voltage domain sequencing through a three-domain architecture: AO (always-on), root (controllable without dependencies), and normal (controllable with dependencies). Each domain follows a strict power-up sequence: switch → pgood → clock enable → reset release, with configurable timing and automatic fault recovery.
 
 Key features include:
 - Three domain types with automatic inference from dependency configuration
@@ -100,33 +100,42 @@ Normal domains have dependency lists and wait for prerequisite domains:
 
 == POWER FSM OPERATION
 <soc-net-power-fsm>
-Each domain uses a standardized 6-state FSM for power sequencing:
+Each domain uses a standardized 8-state FSM for power sequencing:
 
-State sequence: S_OFF → S_WAIT_DEP → S_TURN_ON → S_ON → S_TURN_OFF → S_OFF
+State sequence: S_OFF → S_WAIT_DEP → S_TURN_ON → S_CLK_ON → S_ON → S_RST_ASSERT → S_TURN_OFF → S_OFF
 Fault handling: any timeout → S_FAULT → auto-heal after cooldown
 
-The power_fsm module provides the core sequencing logic:
+Power-up sequence timing: switch → pgood/settle → clock enable → reset release
+Power-down sequence timing: reset assert → clock disable → switch off → pgood drop/settle
+
+The qsoc_power_fsm module provides the core sequencing logic:
 ```verilog
-module power_fsm #(
-    parameter integer HAS_SWITCH        = 1,   /**< Enable power switch control */
-    parameter integer WAIT_DEP_CYCLES   = 100, /**< Dependency wait timeout */
-    parameter integer SETTLE_ON_CYCLES  = 100, /**< Power-on settle time */
-    parameter integer SETTLE_OFF_CYCLES = 50   /**< Power-off settle time */
-) (
-    input  wire clk,              /**< AO host clock */
-    input  wire rst_n,            /**< AO host reset */
-    input  wire test_en,          /**< DFT test enable */
-    input  wire ctrl_enable,      /**< Target state (1=on, 0=off) */
-    input  wire fault_clear,      /**< Fault clear pulse */
-    input  wire dep_hard_all,     /**< AND of all hard dependencies */
-    input  wire dep_soft_all,     /**< AND of all soft dependencies */
-    input  wire pgood,            /**< Power good input */
-    output reg  clk_enable,       /**< ICG enable output */
-    output reg  rst_allow,        /**< Reset allow output */
-    output reg  pwr_switch,       /**< Power switch output */
-    output reg  ready,            /**< Domain ready output */
-    output reg  valid,            /**< Voltage valid output */
-    output reg  fault             /**< Fault status output */
+module qsoc_power_fsm
+#(
+    parameter integer HAS_SWITCH        = 1,   /**< 1=drive power switch        */
+    parameter integer WAIT_DEP_CYCLES   = 100, /**< depend wait window cycles   */
+    parameter integer SETTLE_ON_CYCLES  = 100, /**< power-on settle cycles      */
+    parameter integer SETTLE_OFF_CYCLES = 50   /**< power-off settle cycles     */
+)
+(
+    input  wire clk,              /**< AO host clock                        */
+    input  wire rst_n,            /**< AO host reset, active-low            */
+
+    input  wire test_en,          /**< DFT enable to force on               */
+    input  wire ctrl_enable,      /**< target state 1:on, 0:off             */
+    input  wire fault_clear,      /**< pulse to clear sticky fault          */
+
+    input  wire dep_hard_all,     /**< AND of all hard-depend ready inputs  */
+    input  wire dep_soft_all,     /**< AND of all soft-depend ready inputs  */
+    input  wire pgood,            /**< power good of this domain            */
+
+    output reg  clk_enable,       /**< ICG enable for this domain clock     */
+    output reg  rst_allow,        /**< active-high reset allow for domain   */
+    output reg  pwr_switch,       /**< power switch control                 */
+
+    output reg  ready,            /**< domain usable clock on reset off     */
+    output reg  valid,            /**< voltage stable                       */
+    output reg  fault             /**< sticky fault indicator               */
 );
 ```
 
@@ -134,12 +143,27 @@ Key behaviors:
 - Counter load: N-1 (zero means no wait)
 - Hard timeout: enter FAULT state, block until auto-heal
 - Soft timeout: set fault flag, continue operation
+- Clock-reset sequencing: S_CLK_ON provides one cycle for clock stability before reset release
+- Reset-clock sequencing: S_RST_ASSERT provides one cycle for reset assertion before clock disable
 - DFT override: test_en=1 forces outputs active (pwr_switch=1, clk_enable=1, rst_allow=1, ready=1, valid=1) while preserving FSM state
 - With test_en=1, ready=1 for all domains, so dep_hard_all/dep_soft_all evaluate to 1 and dependency checks are bypassed
 - Auto-heal works without fault_clear; fault remains sticky until cleared or reset
 - Auto-heal: automatic retry after cooldown when dependencies ready
 - Cooldown source: auto-heal cooldown uses WAIT_DEP_CYCLES
 - All cycle parameters are counted on host_clock (AO clock domain)
+- Reset release is synchronized to clock to meet recovery/removal timing requirements
+
+Also included in power_cell.v is qsoc_rst_pipe for domain reset synchronization:
+```verilog
+module qsoc_rst_pipe #(parameter integer STAGES=4)(
+    input  wire clk_dom,      /**< domain clock source                   */
+    input  wire rst_gate_n,   /**< async assert, sync deassert           */
+    input  wire test_en,      /**< DFT force release                     */
+    output wire rst_dom_n     /**< synchronized domain reset, active-low */
+);
+```
+
+qsoc_rst_pipe provides async assert, sync deassert reset synchronization. Assert does not require clock, deassert requires STAGES edges on clk_dom. Default STAGES=4 provides better metastability protection.
 
 == GENERATED INTERFACES
 <soc-net-power-interfaces>
