@@ -718,7 +718,7 @@ Templates include:
 - Dynamic configuration with handshaking
 - Cycle counters and status outputs
 
-**Read the generated `clock_cell.v` file for actual interfaces.**
+*Read the generated `clock_cell.v` file for actual interfaces.*
 Replace with foundry cells before production use.
 
 === Auto-generated Template File: clock_cell.v
@@ -737,12 +737,12 @@ File generation behavior:
 - Use `--force` option for explicit overwrite confirmation
 - Generated templates include sophisticated FSM logic, not simple assign statements
 
-**Important Notes:**
-1. **Generated templates are production-quality** with proper FSM control, parameter validation, and comprehensive functionality
-2. **Template names in actual code differ from documentation examples** - refer to generated `clock_cell.v` for accurate naming
-3. **Functionality is much more sophisticated** than simple behavioral models shown in examples
-4. **Users should examine generated files** rather than relying on documentation examples
-5. **Replace with foundry-specific implementations** before production use
+*Important Notes:*
+1. *Generated templates are production-quality* with proper FSM control, parameter validation, and comprehensive functionality
+2. *Template names in actual code differ from documentation examples* - refer to generated `clock_cell.v` for accurate naming
+3. *Functionality is much more sophisticated* than simple behavioral models shown in examples
+4. *Users should examine generated files* rather than relying on documentation examples
+5. *Replace with foundry-specific implementations* before production use
 
 Template cells must be replaced with foundry-specific implementations before production use.
 
@@ -790,15 +790,15 @@ The clock controller generates a dedicated `clkctrl` module with:
 
 module clkctrl (
     /* Default clock */
-    input  clk_sys,       /**< Default synchronous clock */
+    input  clk_sys,       /* Default synchronous clock */
     /* Clock inputs */
-    input  osc_24m,       /**< Clock input: osc_24m (24MHz) */
-    input  pll_800m,      /**< Clock input: pll_800m (800MHz) */
+    input  osc_24m,       /* Clock input: osc_24m (24MHz) */
+    input  pll_800m,      /* Clock input: pll_800m (800MHz) */
     /* Clock targets */
-    output adc_clk,       /**< Clock target: adc_clk (24MHz) */
-    output uart_clk,      /**< Clock target: uart_clk (200MHz) */
+    output adc_clk,       /* Clock target: adc_clk (24MHz) */
+    output uart_clk,      /* Clock target: uart_clk (200MHz) */
     /* Test enable */
-    input  test_en        /**< Test enable signal */
+    input  test_en        /* Test enable signal */
 );
 
     /* Wire declarations for clock connections */
