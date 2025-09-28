@@ -125,7 +125,8 @@ bool QSocGenerateManager::processNetlist()
         /* Check if netlistData is valid - allow missing instance if primitives exist */
         bool hasInstances  = netlistData["instance"] && netlistData["instance"].IsMap();
         bool hasPrimitives = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"]
-                             || netlistData["reset"] || netlistData["clock"];
+                             || netlistData["reset"] || netlistData["clock"]
+                             || netlistData["power"];
 
         if (!hasInstances && !hasPrimitives) {
             qCritical() << "Error: Invalid netlist data, missing 'instance' section and no "
