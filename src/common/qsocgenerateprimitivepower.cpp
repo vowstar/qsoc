@@ -329,6 +329,14 @@ void QSocPowerPrimitive::generateWireDeclarations(
     const PowerControllerConfig &config, QTextStream &out)
 {
     out << "    /* Internal wires for dependency aggregation */\n";
+    out << "    /* Note: Configure soft dependencies in YAML with type:'soft' */\n";
+    out << "    /* Example YAML soft dependency: */\n";
+    out << "    /*   - name: c906 */\n";
+    out << "    /*     depend: */\n";
+    out << "    /*       - name: sram */\n";
+    out << "    /*         type: soft   # This makes rdy_sram a soft dependency */\n";
+    out << "    /* Generated wire: dep_soft_all_c906 = rdy_sram; */\n";
+    out << "    /* If all dependencies are 'hard' (default), dep_soft_all remains 1'b1 */\n";
 
     for (const auto &domain : config.domains) {
         QString hardSig = getHardDependencySignal(domain);
@@ -338,7 +346,12 @@ void QSocPowerPrimitive::generateWireDeclarations(
             out << "    wire dep_hard_all_" << domain.name << " = " << hardSig << ";\n";
         }
         if (softSig != "1'b1") {
-            out << "    wire dep_soft_all_" << domain.name << " = " << softSig << ";\n";
+            out << "    wire dep_soft_all_" << domain.name << " = " << softSig
+                << "; /* Soft dependencies */\n";
+        } else if (!domain.depends.isEmpty()) {
+            // Has dependencies but none are soft - add comment for clarity
+            out << "    /* " << domain.name
+                << ": no soft dependencies (all hard), dep_soft_all tied to 1'b1 */\n";
         }
     }
 
@@ -512,7 +525,7 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << " * Module: qsoc_power_fsm\n";
     out << " * Minimal per-domain power controller with strict power sequencing\n";
     out << " * Power-up   : enable switch -> wait pgood+settle -> clock on -> release reset\n";
-    out << " * Power-down : assert reset -> clock off -> disable switch -> wait drop+settle\n";
+    out << " * Power-down : assert reset -> clock off and disable switch -> wait drop+settle\n";
     out << " * Hard depend blocks on timeout and enters FAULT with auto-heal\n";
     out << " * Soft depend warns on timeout and proceeds\n";
     out << " * test_en=1 forces power on, clock on, reset released, while FSM state is preserved\n";
@@ -590,6 +603,8 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
 
     out << "    /* One-cycle set for soft-timeout fault */\n";
     out << "    reg set_fault_soft;\n\n";
+    out << "    /* One-cycle pulse for entering S_TURN_OFF state */\n";
+    out << "    reg off_start;\n\n";
 
     out << "    /* 1) Sequential: state, timers, sticky fault */\n";
     out << "    always @(posedge clk or negedge rst_n) begin\n";
@@ -599,8 +614,10 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            t_on  <= {WIDTH{1'b0}};\n";
     out << "            t_off <= {WIDTH{1'b0}};\n";
     out << "            fault <= 1'b0;\n";
+    out << "            off_start <= 1'b0;\n";
     out << "        end else begin\n";
-    out << "            state <= state_n;\n\n";
+    out << "            state <= state_n;\n";
+    out << "            off_start <= (state != S_TURN_OFF) && (state_n == S_TURN_OFF);\n\n";
     out << "            /* Load N-1; zero means no wait */\n";
     out << "            if (ld_dep)\n";
     out << "                t_dep <= (WAIT_DEP_CYCLES == 0) ? {WIDTH{1'b0}}\n";
@@ -656,18 +673,20 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            end\n";
     out << "        end\n\n";
     out << "        S_TURN_ON: begin\n";
+    out << "            /* t_on runs as window until pgood rises; once high, it must remain high "
+           "until t_on==0 */\n";
     out << "            if (!ctrl_enable) begin\n";
     out << "                state_n = S_TURN_OFF;\n";
-    out << "                ld_off  = 1'b1;\n";
     out << "            end else if (pgood) begin\n";
     out << "                if (t_on == 0) state_n = S_CLK_ON; /* go to clock on state */\n";
-    out << "                else           dec_on  = 1'b1;\n";
+    out << "                else           dec_on  = 1'b1;     /* settle countdown only when pgood "
+           "*/\n";
     out << "            end else begin\n";
     out << "                if (t_on == 0) begin\n";
     out << "                    state_n = S_FAULT; /* on-timeout */\n";
     out << "                    ld_dep  = 1'b1;    /* cooldown */\n";
     out << "                end else begin\n";
-    out << "                    dec_on  = 1'b1;\n";
+    out << "                    dec_on  = 1'b1;    /* timeout countdown when !pgood */\n";
     out << "                end\n";
     out << "            end\n";
     out << "        end\n\n";
@@ -677,6 +696,8 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            end\n";
     out << "        end\n\n";
     out << "        S_TURN_OFF: begin\n";
+    out << "            /* Load settle timer when first entering this state */\n";
+    out << "            if (off_start) ld_off = 1'b1;\n\n";
     out << "            if (!pgood) begin\n";
     out << "                if (t_off == 0) state_n = S_OFF;\n";
     out << "                else            dec_off = 1'b1;\n";
@@ -709,7 +730,6 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            /* Assert reset first while clock is still on, then proceed to turn off "
            "*/\n";
     out << "            state_n = S_TURN_OFF;\n";
-    out << "            ld_off  = 1'b1;\n";
     out << "        end\n\n";
     out << "        default: state_n = S_FAULT;\n";
     out << "        endcase\n";
@@ -727,21 +747,24 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            /* Off: clock gated, reset asserted, switch off */\n";
     out << "        end\n";
     out << "        S_WAIT_DEP: begin\n";
-    out << "            /* Waiting depends with power off */\n";
+    out << "            /* Waiting for dependencies with power off */\n";
     out << "        end\n";
     out << "        S_TURN_ON: begin\n";
     out << "            if (HAS_SWITCH) pwr_switch = 1'b1 /* request power */;\n";
     out << "            valid = pgood;\n";
+    out << "            /* t_on counts as window; transition requires pgood==1 when t_on==0 */\n";
     out << "        end\n";
     out << "        S_ON: begin\n";
+    out << "            /* Clock stays on, release reset, domain ready */\n";
     out << "            if (HAS_SWITCH) pwr_switch = 1'b1;\n";
     out << "            valid     = 1'b1;\n";
-    out << "            rst_gate_n = 1'b1  /* release reset after clock is on */;\n";
-    out << "            clk_enable= 1'b1  /* then enable clock */;\n";
+    out << "            rst_gate_n = 1'b1;  /* release reset */\n";
+    out << "            clk_enable= 1'b1;  /* enable clock */\n";
     out << "            ready     = 1'b1;\n";
     out << "        end\n";
     out << "        S_TURN_OFF: begin\n";
-    out << "            /* Clock off, reset asserted, waiting for power drop */\n";
+    out << "            /* Reset asserted, clock gated, switch off, waiting for pgood drop + "
+           "settle */\n";
     out << "            valid = pgood;\n";
     out << "        end\n";
     out << "        /* New states for clock-before-reset sequencing */\n";
@@ -749,13 +772,13 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            if (HAS_SWITCH) pwr_switch = 1'b1;\n";
     out << "            clk_enable = 1'b1;\n";
     out << "            valid = pgood;\n";
-    out << "            rst_gate_n = 1'b0;  /* keep reset asserted until entering S_ON */\n";
+    out << "            rst_gate_n = 1'b0;  /* hold reset for one cycle before release */\n";
     out << "        end\n";
     out << "        S_RST_ASSERT: begin\n";
     out << "            if (HAS_SWITCH) pwr_switch = 1'b1;\n";
     out << "            clk_enable = 1'b1;\n";
     out << "            valid = pgood;\n";
-    out << "            rst_gate_n = 1'b0;  /* assert reset while clock still on */\n";
+    out << "            rst_gate_n = 1'b0;  /* assert reset before clock disable */\n";
     out << "        end\n";
     out << "        S_FAULT: begin\n";
     out << "            /* Quarantine: clock off, reset asserted, power off */\n";
