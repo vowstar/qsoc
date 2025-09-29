@@ -59,7 +59,7 @@ power:
         settle_off: 80
         follow:                      # Reset synchronizer entries
           - clock: clk_gpu           # Domain clock (typically post-ICG)
-            reset: rst_gpu_n         # Synchronized reset output
+            reset: rst_req_gpu_n     # Synchronized reset output (rst_req_*)
             stage: 4                 # Synchronizer stages (optional, default: 4)
 ```
 
@@ -150,9 +150,9 @@ Key behaviors:
 - All cycle parameters are counted on host_clock (AO clock domain)
 - Reset release is synchronized to clock to meet recovery/removal timing requirements
 
-Also included in power_cell.v is qsoc_rst_pipe for domain reset synchronization:
+Also included in power_cell.v is qsoc_power_rst_sync for domain reset synchronization:
 ```verilog
-module qsoc_rst_pipe #(parameter integer STAGES=4)(
+module qsoc_power_rst_sync #(parameter integer STAGE=4)(
     input  wire clk_dom,      /**< domain clock source                   */
     input  wire rst_gate_n,   /**< async assert, sync deassert           */
     input  wire test_en,      /**< DFT force release                     */
@@ -160,7 +160,7 @@ module qsoc_rst_pipe #(parameter integer STAGES=4)(
 );
 ```
 
-qsoc_rst_pipe provides async assert, sync deassert reset synchronization. Assert does not require clock, deassert requires STAGES edges on clk_dom. Default STAGES=4 provides better metastability protection.
+qsoc_power_rst_sync provides async assert, sync deassert reset synchronization. Assert does not require clock, deassert requires STAGE edges on clk_dom. Default STAGE=4 provides better metastability protection.
 
 == GENERATED INTERFACES
 <soc-net-power-interfaces>
@@ -206,7 +206,8 @@ follow:                          # Reset synchronizer array (optional)
 Key characteristics:
 - Direct array format eliminates ambiguous clock/reset pairing from previous versions
 - Each entry becomes one qsoc_power_rst_sync instance with dedicated ports
-- Reset gate signal: `rst_sys_n & rst_allow_domain` (async assert, sync deassert)
+- Reset gate signal: `rst_sys_n & rst_gate_domain_n` (async assert, sync deassert)
+- FSM outputs `rst_gate_n` (internal permission), synchronizer outputs `rst_req_*_n` (final reset)
 - Test enable bypass preserves DFT capability
 - Stage parameter controls synchronizer depth (1-16 stages typical)
 - Empty follow array generates no synchronizers (common for AO/root domains)
@@ -215,9 +216,9 @@ Generated RTL pattern per entry:
 ```verilog
 qsoc_power_rst_sync #(.STAGE(4)) u_rst_sync_gpu_0 (
     .clk_dom     (clk_gpu),
-    .rst_gate_n  (rst_sys_n & rst_allow_gpu),
+    .rst_gate_n  (rst_sys_n & rst_gate_gpu_n),
     .test_en     (test_en),
-    .rst_dom_n   (rst_gpu_n)
+    .rst_dom_n   (rst_req_gpu_n)
 );
 ```
 

@@ -166,9 +166,6 @@ port:
   icg_en_ao:
     direction: output
     type: logic
-  rst_allow_ao:
-    direction: output
-    type: logic
   rdy_ao:
     direction: output
     type: logic
@@ -248,9 +245,6 @@ port:
     direction: input
     type: logic
   icg_en_vmem:
-    direction: output
-    type: logic
-  rst_allow_vmem:
     direction: output
     type: logic
   sw_vmem:
@@ -340,13 +334,10 @@ port:
   icg_en_ao:
     direction: output
     type: logic
-  rst_allow_ao:
+  rst_gate_ao_n:
     direction: output
     type: logic
   icg_en_cpu:
-    direction: output
-    type: logic
-  rst_allow_cpu:
     direction: output
     type: logic
   sw_cpu:
@@ -456,19 +447,13 @@ port:
   icg_en_ao:
     direction: output
     type: logic
-  rst_allow_ao:
+  rst_gate_ao_n:
     direction: output
     type: logic
   icg_en_vmem:
     direction: output
     type: logic
-  rst_allow_vmem:
-    direction: output
-    type: logic
   icg_en_gpu:
-    direction: output
-    type: logic
-  rst_allow_gpu:
     direction: output
     type: logic
   sw_vmem:
@@ -581,9 +566,6 @@ port:
   icg_en_ao:
     direction: output
     type: logic
-  rst_allow_ao:
-    direction: output
-    type: logic
   rdy_ao:
     direction: output
     type: logic
@@ -653,9 +635,6 @@ port:
     direction: input
     type: logic
   icg_en_ao:
-    direction: output
-    type: logic
-  rst_allow_ao:
     direction: output
     type: logic
   rdy_ao:
@@ -745,16 +724,19 @@ port:
   clr_gpu:
     direction: input
     type: logic
-  rst_gpu_n:
+  clk_gpu:
+    direction: input
+    type: logic
+  clk_gpu_dsp:
+    direction: input
+    type: logic
+  rst_req_gpu_n:
     direction: output
     type: logic
-  rst_gpu_dsp_n:
+  rst_req_gpu_dsp_n:
     direction: output
     type: logic
   icg_en_gpu:
-    direction: output
-    type: logic
-  rst_allow_gpu:
     direction: output
     type: logic
   sw_gpu:
@@ -788,10 +770,10 @@ power:
         settle_off: 80
         follow:
           - clock: clk_gpu
-            reset: rst_gpu_n
+            reset: rst_req_gpu_n
             stage: 4
           - clock: clk_gpu_dsp
-            reset: rst_gpu_dsp_n
+            reset: rst_req_gpu_dsp_n
             stage: 6
 )";
 
@@ -822,8 +804,8 @@ power:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire rst_sys_n"));
 
         /* Verify reset output ports from follow entries */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire rst_gpu_n"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire rst_gpu_dsp_n"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire rst_req_gpu_n"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire rst_req_gpu_dsp_n"));
 
         /* Verify qsoc_power_rst_sync instantiation with KISS mapping */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_power_rst_sync #"));
@@ -832,15 +814,15 @@ power:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "u_rst_sync_gpu_0"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "u_rst_sync_gpu_1"));
 
-        /* Verify reset gate signal: rst_sys_n & rst_allow_domain */
-        QVERIFY(
-            verifyVerilogContentNormalized(verilogContent, ".rst_gate_n (rst_sys_n & rst_allow_gpu)"));
+        /* Verify reset gate signal: rst_sys_n & rst_gate_domain_n */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, ".rst_gate_n (rst_sys_n & rst_gate_gpu_n)"));
 
         /* Verify clock and reset connections from follow entries */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_dom (clk_gpu)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_dom (clk_gpu_dsp)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_dom_n (rst_gpu_n)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_dom_n (rst_gpu_dsp_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_dom_n (rst_req_gpu_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_dom_n (rst_req_gpu_dsp_n)"));
 
         /* Verify test_en connection */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en (test_en)"));
