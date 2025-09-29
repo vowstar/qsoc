@@ -139,20 +139,26 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfig(
             domain.settle_on  = domainNode["settle_on"] ? domainNode["settle_on"].as<int>() : 0;
             domain.settle_off = domainNode["settle_off"] ? domainNode["settle_off"].as<int>() : 0;
 
-            // Follow clocks and resets
-            if (domainNode["follow"]) {
-                if (domainNode["follow"]["clock"] && domainNode["follow"]["clock"].IsSequence()) {
-                    for (size_t j = 0; j < domainNode["follow"]["clock"].size(); ++j) {
-                        domain.follow_clocks.append(
-                            QString::fromStdString(
-                                domainNode["follow"]["clock"][j].as<std::string>()));
+            // Follow entries for reset synchronization
+            if (domainNode["follow"] && domainNode["follow"].IsSequence()) {
+                for (size_t j = 0; j < domainNode["follow"].size(); ++j) {
+                    const YAML::Node &followNode = domainNode["follow"][j];
+                    if (!followNode.IsMap())
+                        continue;
+
+                    FollowEntry entry;
+                    if (followNode["clock"]) {
+                        entry.clock = QString::fromStdString(followNode["clock"].as<std::string>());
                     }
-                }
-                if (domainNode["follow"]["reset"] && domainNode["follow"]["reset"].IsSequence()) {
-                    for (size_t j = 0; j < domainNode["follow"]["reset"].size(); ++j) {
-                        domain.follow_resets.append(
-                            QString::fromStdString(
-                                domainNode["follow"]["reset"][j].as<std::string>()));
+                    if (followNode["reset"]) {
+                        entry.reset = QString::fromStdString(followNode["reset"].as<std::string>());
+                    }
+                    entry.stage = followNode["stage"] ? followNode["stage"].as<int>()
+                                                      : 4; // Default to 4 stages
+
+                    // Only add valid entries
+                    if (!entry.clock.isEmpty() && !entry.reset.isEmpty()) {
+                        domain.follow_entries.append(entry);
                     }
                 }
             }
@@ -180,6 +186,9 @@ void QSocPowerPrimitive::generateModuleHeader(const PowerControllerConfig &confi
     if (!config.test_enable.isEmpty()) {
         out << "    input  wire " << config.test_enable << ", /**< DFT test enable */\n";
     }
+
+    // System reset for reset synchronization
+    out << "    input  wire rst_sys_n, /**< System reset for domain sync */\n";
 
     // Power good inputs
     for (const auto &domain : config.domains) {
@@ -218,6 +227,14 @@ void QSocPowerPrimitive::generateModuleHeader(const PowerControllerConfig &confi
         if (!isAODomain(domain, yamlNode)) {
             out << "    output wire sw_" << domain.name << ", /**< Switch for " << domain.name
                 << " */\n";
+        }
+    }
+
+    // Reset synchronizer outputs
+    for (const auto &domain : config.domains) {
+        for (const auto &entry : domain.follow_entries) {
+            out << "    output wire " << entry.reset << ", /**< Synchronized reset for "
+                << domain.name << " */\n";
         }
     }
 
@@ -331,6 +348,26 @@ void QSocPowerPrimitive::generatePowerLogic(const PowerControllerConfig &config,
         out << "        .valid        (), /**< Optional, not exported */\n";
         out << "        .fault        (flt_" << domain.name << ")\n";
         out << "    );\n\n";
+
+        // Generate reset synchronizers for follow entries
+        if (!domain.follow_entries.isEmpty()) {
+            out << "    /* Reset synchronizers for " << domain.name << " domain */\n";
+            for (int i = 0; i < domain.follow_entries.size(); ++i) {
+                const auto &entry = domain.follow_entries[i];
+                out << "    qsoc_power_rst_sync #(\n";
+                out << "        .STAGE (" << entry.stage << ")\n";
+                out << "    ) u_rst_sync_" << domain.name << "_" << i << " (\n";
+                out << "        .clk_dom     (" << entry.clock << "),\n";
+                out << "        .rst_gate_n  (rst_sys_n & rst_allow_" << domain.name << "),\n";
+                if (!config.test_enable.isEmpty()) {
+                    out << "        .test_en     (" << config.test_enable << "),\n";
+                } else {
+                    out << "        .test_en     (1'b0),\n";
+                }
+                out << "        .rst_dom_n   (" << entry.reset << ")\n";
+                out << "    );\n\n";
+            }
+        }
     }
 }
 
@@ -382,8 +419,9 @@ bool QSocPowerPrimitive::isPowerCellFileComplete(const QString &filePath)
     QString content = QTextStream(&file).readAll();
     file.close();
 
-    // Check if both qsoc_power_fsm and qsoc_rst_pipe modules exist
-    return content.contains("module qsoc_power_fsm") && content.contains("module qsoc_rst_pipe");
+    // Check if both qsoc_power_fsm and qsoc_power_rst_sync modules exist
+    return content.contains("module qsoc_power_fsm")
+           && content.contains("module qsoc_power_rst_sync");
 }
 
 QString QSocPowerPrimitive::generatePowerFSMModule()
@@ -661,23 +699,23 @@ QString QSocPowerPrimitive::generateResetPipeModule()
     QString     code;
     QTextStream out(&code);
 
-    out << "/* qsoc_rst_pipe\n";
-    out << " * Async assert, sync deassert reset pipeline for a domain\n";
-    out << " * Assert does not require clock, deassert requires STAGES edges on clk_dom\n";
+    out << "/* qsoc_power_rst_sync\n";
+    out << " * Async assert, sync deassert reset synchronizer for power domains\n";
+    out << " * Assert does not require clock, deassert requires STAGE edges on clk_dom\n";
     out << " */\n";
-    out << "module qsoc_rst_pipe #(parameter integer STAGES=4)(\n";
+    out << "module qsoc_power_rst_sync #(parameter integer STAGE=4)(\n";
     out << "    input  wire clk_dom,      /**< domain clock source                   */\n";
     out << "    input  wire rst_gate_n,   /**< async assert, sync deassert           */\n";
     out << "    input  wire test_en,      /**< DFT force release                     */\n";
     out << "    output wire rst_dom_n     /**< synchronized domain reset, active-low */\n";
     out << ");\n";
-    out << "    reg [STAGES-1:0] sh;\n";
+    out << "    reg [STAGE-1:0] sh;\n";
     out << "    wire rst_n_int = test_en ? 1'b1 : rst_gate_n;\n\n";
     out << "    always @(posedge clk_dom or negedge rst_n_int) begin\n";
-    out << "        if (!rst_n_int) sh <= {STAGES{1'b0}};         /* async assert */\n";
-    out << "        else            sh <= {sh[STAGES-2:0], 1'b1}; /* sync deassert */\n";
+    out << "        if (!rst_n_int) sh <= {STAGE{1'b0}};         /* async assert */\n";
+    out << "        else            sh <= {sh[STAGE-2:0], 1'b1}; /* sync deassert */\n";
     out << "    end\n\n";
-    out << "    assign rst_dom_n = sh[STAGES-1];\n";
+    out << "    assign rst_dom_n = sh[STAGE-1];\n";
     out << "endmodule\n";
 
     return code;

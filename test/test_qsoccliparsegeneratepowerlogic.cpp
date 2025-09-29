@@ -118,9 +118,9 @@ private:
             return false;
         }
 
-        /* Check for qsoc_rst_pipe module */
-        if (!content.contains("module qsoc_rst_pipe")) {
-            qWarning() << "Missing module in power_cell.v: qsoc_rst_pipe";
+        /* Check for qsoc_power_rst_sync module */
+        if (!content.contains("module qsoc_power_rst_sync")) {
+            qWarning() << "Missing module in power_cell.v: qsoc_power_rst_sync";
             return false;
         }
 
@@ -191,9 +191,7 @@ power:
         wait_dep: 0
         settle_on: 0
         settle_off: 0
-        follow:
-          clock: []
-          reset: []
+        follow: []
 )";
 
         QString netlistPath = createTempFile("test_ao_domain.soc_net", netlistContent);
@@ -281,9 +279,7 @@ power:
         wait_dep: 50
         settle_on: 100
         settle_off: 50
-        follow:
-          clock: []
-          reset: []
+        follow: []
 )";
 
         QString netlistPath = createTempFile("test_root_domain.soc_net", netlistContent);
@@ -384,9 +380,7 @@ power:
         wait_dep: 0
         settle_on: 0
         settle_off: 0
-        follow:
-          clock: []
-          reset: []
+        follow: []
       - name: cpu
         depend:
           - name: ao
@@ -396,9 +390,7 @@ power:
         wait_dep: 200
         settle_on: 120
         settle_off: 80
-        follow:
-          clock: []
-          reset: []
+        follow: []
 )";
 
         QString netlistPath = createTempFile("test_hard_dep.soc_net", netlistContent);
@@ -519,9 +511,7 @@ power:
         wait_dep: 0
         settle_on: 0
         settle_off: 0
-        follow:
-          clock: []
-          reset: []
+        follow: []
       - name: vmem
         depend: []
         v_mv: 1100
@@ -529,9 +519,7 @@ power:
         wait_dep: 50
         settle_on: 100
         settle_off: 50
-        follow:
-          clock: []
-          reset: []
+        follow: []
       - name: gpu
         depend:
           - name: ao
@@ -543,9 +531,7 @@ power:
         wait_dep: 200
         settle_on: 120
         settle_off: 80
-        follow:
-          clock: []
-          reset: []
+        follow: []
 )";
 
         QString netlistPath = createTempFile("test_soft_dep.soc_net", netlistContent);
@@ -620,9 +606,7 @@ power:
         wait_dep: 0
         settle_on: 0
         settle_off: 0
-        follow:
-          clock: []
-          reset: []
+        follow: []
 )";
 
         QString netlistPath = createTempFile("test_pgood_signal.soc_net", netlistContent);
@@ -696,9 +680,7 @@ power:
         wait_dep: 0
         settle_on: 0
         settle_off: 0
-        follow:
-          clock: []
-          reset: []
+        follow: []
 )";
 
         QString netlistPath = createTempFile("test_icg_enable.soc_net", netlistContent);
@@ -729,6 +711,139 @@ power:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_enable (icg_en_ao)"));
         /* Verify no ICG instantiation */
         QVERIFY(!verilogContent.contains("qsoc_tc_clk_gate"));
+    }
+
+    void test_follow_entries_generation()
+    {
+        /* Test new follow entries with KISS principle: direct array mapping */
+        QString netlistContent = R"(
+port:
+  clk_ao:
+    direction: input
+    type: logic
+  rst_ao:
+    direction: input
+    type: logic
+  rst_sys_n:
+    direction: input
+    type: logic
+  test_en:
+    direction: input
+    type: logic
+  pgood_gpu:
+    direction: input
+    type: logic
+  clk_gpu:
+    direction: input
+    type: logic
+  clk_gpu_dsp:
+    direction: input
+    type: logic
+  en_gpu:
+    direction: input
+    type: logic
+  clr_gpu:
+    direction: input
+    type: logic
+  rst_gpu_n:
+    direction: output
+    type: logic
+  rst_gpu_dsp_n:
+    direction: output
+    type: logic
+  icg_en_gpu:
+    direction: output
+    type: logic
+  rst_allow_gpu:
+    direction: output
+    type: logic
+  sw_gpu:
+    direction: output
+    type: logic
+  rdy_gpu:
+    direction: output
+    type: logic
+  flt_gpu:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+power:
+  - name: test_follow
+    host_clock: clk_ao
+    host_reset: rst_ao
+    test_enable: test_en
+    domain:
+      - name: gpu
+        depend:
+          - name: ao
+            type: hard
+        v_mv: 900
+        pgood: pgood_gpu
+        wait_dep: 200
+        settle_on: 120
+        settle_off: 80
+        follow:
+          - clock: clk_gpu
+            reset: rst_gpu_n
+            stage: 4
+          - clock: clk_gpu_dsp
+            reset: rst_gpu_dsp_n
+            stage: 6
+)";
+
+        QString netlistPath = createTempFile("test_follow_entries.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_follow_entries.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify rst_sys_n input port added */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire rst_sys_n"));
+
+        /* Verify reset output ports from follow entries */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire rst_gpu_n"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire rst_gpu_dsp_n"));
+
+        /* Verify qsoc_power_rst_sync instantiation with KISS mapping */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_power_rst_sync #"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".STAGE(4)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".STAGE(6)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "u_rst_sync_gpu_0"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "u_rst_sync_gpu_1"));
+
+        /* Verify reset gate signal: rst_sys_n & rst_allow_domain */
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, ".rst_gate_n (rst_sys_n & rst_allow_gpu)"));
+
+        /* Verify clock and reset connections from follow entries */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_dom (clk_gpu)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_dom (clk_gpu_dsp)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_dom_n (rst_gpu_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_dom_n (rst_gpu_dsp_n)"));
+
+        /* Verify test_en connection */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en (test_en)"));
     }
 };
 

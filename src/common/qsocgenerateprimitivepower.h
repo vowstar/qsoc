@@ -40,19 +40,28 @@ public:
     };
 
     /**
+     * @brief Follow entry for reset synchronization
+     */
+    struct FollowEntry
+    {
+        QString clock;     /**< Domain working clock (typically post-ICG) */
+        QString reset;     /**< Output reset signal name */
+        int     stage = 4; /**< Reset synchronizer stages */
+    };
+
+    /**
      * @brief Power domain configuration
      */
     struct PowerDomain
     {
-        QString           name;          /**< Domain name */
-        QList<Dependency> depends;       /**< Dependency list (empty = AO, explicit [] = root) */
-        int               v_mv;          /**< Voltage in millivolts */
-        QString           pgood;         /**< Power good signal name */
-        int               wait_dep;      /**< Dependency wait cycles */
-        int               settle_on;     /**< Power-on settle cycles */
-        int               settle_off;    /**< Power-off settle cycles */
-        QStringList       follow_clocks; /**< Clock signals to follow this domain */
-        QStringList       follow_resets; /**< Reset signals to follow this domain */
+        QString            name;           /**< Domain name */
+        QList<Dependency>  depends;        /**< Dependency list (empty = AO, explicit [] = root) */
+        int                v_mv;           /**< Voltage in millivolts */
+        QString            pgood;          /**< Power good signal name */
+        int                wait_dep;       /**< Dependency wait cycles */
+        int                settle_on;      /**< Power-on settle cycles */
+        int                settle_off;     /**< Power-off settle cycles */
+        QList<FollowEntry> follow_entries; /**< Reset synchronization entries */
     };
 
     /**
