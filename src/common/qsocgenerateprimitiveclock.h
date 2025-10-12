@@ -190,6 +190,14 @@ public:
      */
     void setForceOverwrite(bool force);
 
+    /**
+     * @brief Generate Typst clock tree diagram from configuration
+     * @param config Clock controller configuration
+     * @param outputPath Output path for .typ file
+     * @return true if generation successful, false otherwise
+     */
+    bool generateTypstDiagram(const ClockControllerConfig &config, const QString &outputPath);
+
 private:
     /**
      * @brief Generate or update clock_cell.v file with template cells
@@ -293,6 +301,13 @@ private:
      * @return Generated instance name
      */
     QString getInstanceName(const QString &targetName, const QString &sourceName, int linkIndex);
+
+    // Typst generation helper functions
+    QString typstHeader() const;
+    QString typstLegend() const;
+    QString typstRootStubs(const QList<ClockInput> &inputs, float &bottomY) const;
+    QString typstTarget(const ClockTarget &target, float x, float y, const QString &testEnable) const;
+    QString escapeTypstId(const QString &str) const;
 
 private:
     QSocGenerateManager *m_parent;                 // Parent manager for accessing utilities
