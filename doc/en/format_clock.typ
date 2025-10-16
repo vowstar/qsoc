@@ -832,6 +832,14 @@ module clkctrl (
 endmodule
 ```
 
+=== Diagram Output
+<soc-net-clock-diagram>
+Generates `.typ` circuit diagram alongside Verilog.
+
+*Elements*: Inputs → MUX → ICG/DIV/INV → Outputs (with frequencies/parameters)
+
+*Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
+
 === Syntax Summary
 <soc-net-clock-syntax-summary>
 Clock format supports two processing levels with distinct syntax patterns:

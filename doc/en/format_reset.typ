@@ -386,6 +386,14 @@ endmodule
 // Additional modules: qsoc_rst_pipe, qsoc_rst_count...
 ```
 
+=== Diagram Output
+<soc-net-reset-diagram>
+Generates `.typ` circuit diagram alongside Verilog.
+
+*Elements*: Sources → OR → ASYNC/SYNC/COUNT → Targets (with active levels/parameters)
+
+*Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
+
 == BEST PRACTICES
 <soc-net-reset-practices>
 

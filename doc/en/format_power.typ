@@ -222,6 +222,17 @@ qsoc_power_rst_sync #(.STAGE(4)) u_rst_sync_gpu_0 (
 );
 ```
 
+== CODE GENERATION
+<soc-net-power-generation>
+
+=== Diagram Output
+<soc-net-power-diagram>
+Generates `.typ` circuit diagram alongside Verilog.
+
+*Elements*: Domains → FSM → SYNC → Ready (with dependencies/timing/parameters)
+
+*Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
+
 == PROPERTIES
 <soc-net-power-properties>
 
