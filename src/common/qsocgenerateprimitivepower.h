@@ -105,6 +105,14 @@ public:
      */
     void setForceOverwrite(bool force);
 
+    /**
+     * @brief Generate Typst power tree diagram from configuration
+     * @param config Power controller configuration
+     * @param outputPath Output path for .typ file
+     * @return true if generation successful, false otherwise
+     */
+    bool generateTypstDiagram(const PowerControllerConfig &config, const QString &outputPath);
+
 private:
     /**
      * @brief Generate module header and ports
@@ -189,6 +197,12 @@ private:
      * @return Signal expression (e.g., "rdy_mem" or "1'b1")
      */
     QString getSoftDependencySignal(const PowerDomain &domain);
+
+    // Typst generation helper functions
+    QString typstHeader() const;
+    QString typstLegend() const;
+    QString typstDomain(const PowerDomain &domain, int idx, float x0, float y0, float dy) const;
+    QString escapeTypstId(const QString &str) const;
 
 private:
     QSocGenerateManager      *m_parent;                 // Parent manager for accessing utilities
