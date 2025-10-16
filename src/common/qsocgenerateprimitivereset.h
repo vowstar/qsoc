@@ -141,6 +141,14 @@ public:
      */
     void setForceOverwrite(bool force);
 
+    /**
+     * @brief Generate Typst reset tree diagram from configuration
+     * @param config Reset controller configuration
+     * @param outputPath Output path for .typ file
+     * @return true if generation successful, false otherwise
+     */
+    bool generateTypstDiagram(const ResetControllerConfig &config, const QString &outputPath);
+
 private:
     /**
      * @brief Generate module header and ports
@@ -238,6 +246,13 @@ private:
      * @return Normalized source signal
      */
     QString getNormalizedSource(const QString &sourceName, const ResetControllerConfig &config);
+
+    // Typst generation helper functions
+    QString typstHeader() const;
+    QString typstLegend() const;
+    QString typstRootStubs(const QList<ResetSource> &sources, float &bottomY) const;
+    QString typstTarget(const ResetTarget &target, float x, float y) const;
+    QString escapeTypstId(const QString &str) const;
 
 private:
     QSocGenerateManager *m_parent;                 // Parent manager for accessing utilities
