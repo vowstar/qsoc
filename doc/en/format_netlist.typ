@@ -90,10 +90,62 @@ Instance properties include:
     [module], [Module name (must exist in the module library)],
     [parameter], [Optional module parameters (name-value pairs)],
     [port], [Optional port-specific attributes like tie values],
+    [ifdef],
+    [List of macros that must be defined (AND logic, alphabetically nested)],
+    [ifndef],
+    [List of macros that must be undefined (AND logic, alphabetically nested)],
   )],
   caption: [INSTANCE PROPERTIES],
   kind: table,
 )
+
+=== Conditional Compilation
+<soc-net-instance-ifdef>
+Instances support conditional compilation via `ifdef`/`ifndef` lists:
+
+```yaml
+instance:
+  # Single ifdef
+  u_pad_fpga:
+    module: PAD_OUTER
+    ifdef: [TECH_FPGA]
+
+  # Multiple ifdef (AND + alphabetical nesting)
+  u_pad_min:
+    module: PAD_OUTER
+    ifdef: [TECH_FPGA, USE_MIN_PADS]
+
+  # ifdef + ifndef combination
+  u_pad_asic:
+    module: PAD_OUTER
+    ifdef: [TECH_TSMC28HK_9T]
+    ifndef: [TECH_FPGA]
+```
+
+*Semantics*:
+- All macros in `ifdef` must be defined
+- All macros in `ifndef` must be undefined
+- Cross-list logic: AND (all conditions must hold)
+- Nesting order: `ifdef` (alphabetical) → `ifndef` (alphabetical)
+
+*Generated code*:
+```verilog
+`ifdef TECH_FPGA
+    PAD_OUTER u_pad_fpga ();
+`endif /*  TECH_FPGA */
+
+`ifdef TECH_FPGA
+`ifdef USE_MIN_PADS
+    PAD_OUTER u_pad_min ();
+`endif /*  USE_MIN_PADS */
+`endif /*  TECH_FPGA */
+
+`ifdef TECH_TSMC28HK_9T
+`ifndef TECH_FPGA
+    PAD_OUTER u_pad_asic ();
+`endif /*  !TECH_FPGA */
+`endif /*  TECH_TSMC28HK_9T */
+```
 
 Port attributes within an instance can include:
 

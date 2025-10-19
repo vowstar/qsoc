@@ -542,6 +542,46 @@ private:
      */
     bool generateSeqPrimitive(const YAML::Node &netlistData, QTextStream &out);
 
+    /**
+     * @brief Parse and validate ifdef/ifndef conditions from instance data
+     * @param instanceData YAML node containing instance configuration
+     * @param instanceName Instance name for error messages
+     * @param outIfdef Output list of macros that must be defined (sorted alphabetically)
+     * @param outIfndef Output list of macros that must be undefined (sorted alphabetically)
+     * @return true if validation successful, false if conflict detected
+     */
+    bool parseMacroCondition(
+        const YAML::Node &instanceData,
+        const QString    &instanceName,
+        QStringList      &outIfdef,
+        QStringList      &outIfndef);
+
+    /**
+     * @brief Write ifdef/ifndef directives to output stream
+     * @param out Output text stream
+     * @param ifdef List of macros that must be defined (already sorted)
+     * @param ifndef List of macros that must be undefined (already sorted)
+     * @param indent Indentation string (default: "    ")
+     */
+    void writeIfdefBegin(
+        QTextStream       &out,
+        const QStringList &ifdef,
+        const QStringList &ifndef,
+        const QString     &indent = "    ");
+
+    /**
+     * @brief Write endif directives with proper comments to output stream
+     * @param out Output text stream
+     * @param ifdef List of macros that were defined (already sorted, same order as begin)
+     * @param ifndef List of macros that were undefined (already sorted, same order as begin)
+     * @param indent Indentation string (default: "    ")
+     */
+    void writeIfdefEnd(
+        QTextStream       &out,
+        const QStringList &ifdef,
+        const QStringList &ifndef,
+        const QString     &indent = "    ");
+
     /** Project manager. */
     QSocProjectManager *projectManager = nullptr;
     /** Module manager. */
