@@ -1212,6 +1212,19 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             const QString moduleName = QString::fromStdString(
                 instanceData["module"].as<std::string>());
 
+            /* Parse conditional compilation directives */
+            QStringList ifdefList;
+            QStringList ifndefList;
+            if (!parseMacroCondition(instanceData, instanceName, ifdefList, ifndefList)) {
+                /* Conflict detected, skip this instance */
+                continue;
+            }
+
+            /* Write ifdef/ifndef begin directives if present */
+            if (!ifdefList.isEmpty() || !ifndefList.isEmpty()) {
+                writeIfdefBegin(out, ifdefList, ifndefList);
+            }
+
             /* Generate instance declaration with parameters if any */
             out << "    " << moduleName << " ";
 
@@ -1571,6 +1584,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             out << "    );\n";
+
+            /* Write endif directives if conditional compilation was used */
+            if (!ifdefList.isEmpty() || !ifndefList.isEmpty()) {
+                writeIfdefEnd(out, ifdefList, ifndefList);
+            }
         }
     }
 
@@ -1729,4 +1747,120 @@ bool QSocGenerateManager::generateSeqPrimitive(const YAML::Node &netlistData, QT
     }
 
     return seqPrimitive->generateSeqLogic(netlistData, out);
+}
+
+bool QSocGenerateManager::parseMacroCondition(
+    const YAML::Node &instanceData,
+    const QString    &instanceName,
+    QStringList      &outIfdef,
+    QStringList      &outIfndef)
+{
+    outIfdef.clear();
+    outIfndef.clear();
+
+    /* Verilog identifier regex: start with letter/underscore, then alphanumeric/underscore */
+    static const QRegularExpression idRegex("^[a-zA-Z_][a-zA-Z0-9_]*$");
+
+    /* Parse ifdef list */
+    if (instanceData["ifdef"]) {
+        if (!instanceData["ifdef"].IsSequence()) {
+            qWarning() << "Warning: 'ifdef' field for instance" << instanceName
+                       << "is not a list, ignoring";
+        } else {
+            for (const auto &node : instanceData["ifdef"]) {
+                if (!node.IsScalar()) {
+                    qWarning() << "Warning: Non-scalar macro in 'ifdef' for instance"
+                               << instanceName << ", skipping";
+                    continue;
+                }
+                QString macro = QString::fromStdString(node.as<std::string>()).trimmed();
+                if (macro.isEmpty()) {
+                    qWarning() << "Warning: Empty macro in 'ifdef' for instance" << instanceName
+                               << ", skipping";
+                    continue;
+                }
+                if (!idRegex.match(macro).hasMatch()) {
+                    qWarning() << "Warning: Invalid macro identifier" << macro
+                               << "in 'ifdef' for instance" << instanceName << ", skipping";
+                    continue;
+                }
+                if (!outIfdef.contains(macro)) {
+                    outIfdef.append(macro);
+                }
+            }
+        }
+    }
+
+    /* Parse ifndef list */
+    if (instanceData["ifndef"]) {
+        if (!instanceData["ifndef"].IsSequence()) {
+            qWarning() << "Warning: 'ifndef' field for instance" << instanceName
+                       << "is not a list, ignoring";
+        } else {
+            for (const auto &node : instanceData["ifndef"]) {
+                if (!node.IsScalar()) {
+                    qWarning() << "Warning: Non-scalar macro in 'ifndef' for instance"
+                               << instanceName << ", skipping";
+                    continue;
+                }
+                QString macro = QString::fromStdString(node.as<std::string>()).trimmed();
+                if (macro.isEmpty()) {
+                    qWarning() << "Warning: Empty macro in 'ifndef' for instance" << instanceName
+                               << ", skipping";
+                    continue;
+                }
+                if (!idRegex.match(macro).hasMatch()) {
+                    qWarning() << "Warning: Invalid macro identifier" << macro
+                               << "in 'ifndef' for instance" << instanceName << ", skipping";
+                    continue;
+                }
+                if (!outIfndef.contains(macro)) {
+                    outIfndef.append(macro);
+                }
+            }
+        }
+    }
+
+    /* Check conflict: ifdef ∩ ifndef must be empty */
+    for (const QString &macro : outIfdef) {
+        if (outIfndef.contains(macro)) {
+            qCritical() << "Error: Macro" << macro
+                        << "appears in both 'ifdef' and 'ifndef' for instance" << instanceName
+                        << ", skipping instance";
+            return false;
+        }
+    }
+
+    /* Sort alphabetically for deterministic output */
+    outIfdef.sort(Qt::CaseInsensitive);
+    outIfndef.sort(Qt::CaseInsensitive);
+
+    return true;
+}
+
+void QSocGenerateManager::writeIfdefBegin(
+    QTextStream &out, const QStringList &ifdef, const QStringList &ifndef, const QString &indent)
+{
+    /* Output ifdef directives first (alphabetically nested) */
+    for (const QString &macro : ifdef) {
+        out << indent << "`ifdef " << macro << "\n";
+    }
+
+    /* Output ifndef directives second (alphabetically nested) */
+    for (const QString &macro : ifndef) {
+        out << indent << "`ifndef " << macro << "\n";
+    }
+}
+
+void QSocGenerateManager::writeIfdefEnd(
+    QTextStream &out, const QStringList &ifdef, const QStringList &ifndef, const QString &indent)
+{
+    /* Close in reverse order: ifndef first, then ifdef */
+    for (int i = ifndef.size() - 1; i >= 0; --i) {
+        out << indent << "`endif /*  !" << ifndef[i] << " */\n";
+    }
+
+    for (int i = ifdef.size() - 1; i >= 0; --i) {
+        out << indent << "`endif /*  " << ifdef[i] << " */\n";
+    }
 }

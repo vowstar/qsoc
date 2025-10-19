@@ -2972,6 +2972,218 @@ net:
                 && verifyVerilogContent("test_bus_uplink", "axi_bus1_rdata"),
             "axi_bus1_rdata should be declared as input");
     }
+
+    /* Test conditional compilation: no condition (backward compatibility) */
+    void testConditionalNoCondition()
+    {
+        messageList.clear();
+
+        const QString netlistContent = R"(
+top:
+  port:
+    clk:
+      type: logic
+      direction: in
+instance:
+  u_c906:
+    module: c906
+    connect:
+      - net: clk
+        port: axim_clk_en
+)";
+        const QString filePath       = createTempFile("test_cond_no.soc_net", netlistContent);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        QVERIFY2(verifyVerilogContent("test_cond_no", "c906 u_c906"), "Instance without condition");
+        QVERIFY2(!verifyVerilogContent("test_cond_no", "`ifdef"), "No ifdef directive");
+        QVERIFY2(!verifyVerilogContent("test_cond_no", "`endif"), "No endif directive");
+    }
+
+    /* Test conditional compilation: single ifdef */
+    void testConditionalSingleIfdef()
+    {
+        messageList.clear();
+
+        const QString netlistContent = R"(
+top:
+  port:
+    clk:
+      type: logic
+      direction: in
+instance:
+  u_pad_fpga:
+    module: c906
+    ifdef: [TECH_FPGA]
+    connect:
+      - net: clk
+        port: axim_clk_en
+)";
+        const QString filePath       = createTempFile("test_cond_single.soc_net", netlistContent);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        QVERIFY2(
+            verifyVerilogContent("test_cond_single", "`ifdef TECH_FPGA"), "Single ifdef directive");
+        QVERIFY2(verifyVerilogContent("test_cond_single", "c906 u_pad_fpga"), "Instance inside ifdef");
+        QVERIFY2(
+            verifyVerilogContent("test_cond_single", "`endif /*  TECH_FPGA */"),
+            "Endif with correct comment");
+    }
+
+    /* Test conditional compilation: multiple ifdef (alphabetical nesting) */
+    void testConditionalMultipleIfdef()
+    {
+        messageList.clear();
+
+        const QString netlistContent = R"(
+top:
+  port:
+    clk:
+      type: logic
+      direction: in
+instance:
+  u_pad_multi:
+    module: c906
+    ifdef: [USE_PADS, TECH_FPGA]
+    connect:
+      - net: clk
+        port: axim_clk_en
+)";
+        const QString filePath       = createTempFile("test_cond_multi.soc_net", netlistContent);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Read Verilog file to check ordering */
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_cond_multi.v");
+        QFile   file(verilogPath);
+        QVERIFY2(file.open(QIODevice::ReadOnly | QIODevice::Text), "File should exist");
+        QString content = file.readAll();
+        file.close();
+
+        int posT    = content.indexOf("`ifdef TECH_FPGA");
+        int posU    = content.indexOf("`ifdef USE_PADS");
+        int posInst = content.indexOf("c906 u_pad_multi");
+
+        QVERIFY2(posT >= 0, "TECH_FPGA ifdef present");
+        QVERIFY2(posU >= 0, "USE_PADS ifdef present");
+        QVERIFY2(posT < posU && posU < posInst, "Alphabetical order: TECH_FPGA before USE_PADS");
+        QVERIFY2(
+            verifyVerilogContent("test_cond_multi", "`endif /*  USE_PADS */"), "Endif for USE_PADS");
+        QVERIFY2(
+            verifyVerilogContent("test_cond_multi", "`endif /*  TECH_FPGA */"),
+            "Endif for TECH_FPGA");
+    }
+
+    /* Test conditional compilation: ifdef + ifndef */
+    void testConditionalIfdefAndIfndef()
+    {
+        messageList.clear();
+
+        const QString netlistContent = R"(
+top:
+  port:
+    clk:
+      type: logic
+      direction: in
+instance:
+  u_pad_mixed:
+    module: c906
+    ifdef: [TECH_TSMC28]
+    ifndef: [TECH_FPGA, LEGACY_MODE]
+    connect:
+      - net: clk
+        port: axim_clk_en
+)";
+        const QString filePath       = createTempFile("test_cond_mixed.soc_net", netlistContent);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Read Verilog file to check ordering */
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_cond_mixed.v");
+        QFile   file(verilogPath);
+        QVERIFY2(file.open(QIODevice::ReadOnly | QIODevice::Text), "File should exist");
+        QString content = file.readAll();
+        file.close();
+
+        int posIfdef   = content.indexOf("`ifdef TECH_TSMC28");
+        int posIfndef1 = content.indexOf("`ifndef LEGACY_MODE");
+        int posIfndef2 = content.indexOf("`ifndef TECH_FPGA");
+        int posInst    = content.indexOf("c906 u_pad_mixed");
+
+        QVERIFY2(posIfdef >= 0, "ifdef directive present");
+        QVERIFY2(posIfndef1 >= 0 && posIfndef2 >= 0, "Both ifndef directives present");
+        QVERIFY2(posIfdef < posIfndef1 && posIfndef1 < posInst, "ifdef before ifndef");
+        QVERIFY2(
+            verifyVerilogContent("test_cond_mixed", "`endif /*  !TECH_FPGA */"),
+            "Endif with ! for ifndef");
+        QVERIFY2(
+            verifyVerilogContent("test_cond_mixed", "`endif /*  !LEGACY_MODE */"),
+            "Endif with ! for ifndef");
+        QVERIFY2(
+            verifyVerilogContent("test_cond_mixed", "`endif /*  TECH_TSMC28 */"), "Endif for ifdef");
+    }
+
+    /* Test conditional compilation: conflict detection */
+    void testConditionalConflict()
+    {
+        messageList.clear();
+
+        const QString netlistContent = R"(
+top:
+  port:
+    clk:
+      type: logic
+      direction: in
+instance:
+  u_pad_conflict:
+    module: c906
+    ifdef: [TECH_FPGA]
+    ifndef: [TECH_FPGA, LEGACY_MODE]
+    connect:
+      - net: clk
+        port: axim_clk_en
+)";
+        const QString filePath       = createTempFile("test_cond_conflict.soc_net", netlistContent);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify error message was logged */
+        bool foundConflictError = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("TECH_FPGA") && msg.contains("both")
+                && (msg.contains("ifdef") || msg.contains("ifndef"))) {
+                foundConflictError = true;
+                break;
+            }
+        }
+        QVERIFY2(foundConflictError, "Conflict error message should be logged");
+
+        /* Verify instance was skipped */
+        QVERIFY2(
+            !verifyVerilogContent("test_cond_conflict", "c906 u_pad_conflict"),
+            "Conflicting instance should be skipped");
+    }
 };
 
 QStringList Test::messageList;
