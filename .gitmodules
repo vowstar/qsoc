@@ -18,7 +18,7 @@
 	url = git@github.com:d99kris/rapidcsv.git
 [submodule "external/inja"]
 	path = external/inja
-	url = git@github.com:vowstar/inja.git
+	url = git@github.com:pantor/inja.git
 [submodule "external/antlr4"]
 	path = external/antlr4
 	url = git@github.com:antlr/antlr4.git
