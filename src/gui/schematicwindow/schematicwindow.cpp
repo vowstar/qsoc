@@ -4,17 +4,21 @@
 #include "gui/schematicwindow/schematicwindow.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
+#include "gui/schematicwindow/modulelibrary/customitemfactory.h"
 #include "gui/schematicwindow/modulelibrary/modulewidget.h"
 
 #include "./ui_schematicwindow.h"
 
 #include <qschematic/commands/item_add.hpp>
 #include <qschematic/items/item.hpp>
+#include <qschematic/items/itemfactory.hpp>
 
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QMessageBox>
 #include <QStandardPaths>
+
+#include <functional>
 
 #include <gpds/archiver_xml.hpp>
 #include <gpds/container.hpp>
@@ -32,6 +36,11 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     qDebug() << "SchematicWindow: Setting up UI";
     ui->setupUi(this);
     qDebug() << "SchematicWindow: UI setup completed";
+
+    // Register custom item factory for SocModuleItem
+    auto factoryFunc
+        = std::bind(&ModuleLibrary::CustomItemFactory::from_container, std::placeholders::_1);
+    QSchematic::Items::Factory::instance().setCustomItemsFactory(factoryFunc);
 
     settings.debug               = false;
     settings.showGrid            = true;

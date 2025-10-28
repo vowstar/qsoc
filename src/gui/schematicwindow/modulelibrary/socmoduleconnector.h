@@ -4,6 +4,7 @@
 #ifndef SOCMODULECONNECTOR_H
 #define SOCMODULECONNECTOR_H
 
+#include <gpds/container.hpp>
 #include <qschematic/items/connector.hpp>
 
 namespace ModuleLibrary {
@@ -38,6 +39,18 @@ public:
      * @return Deep copy of this connector
      */
     std::shared_ptr<QSchematic::Items::Item> deepCopy() const override;
+
+    /**
+     * @brief Serialize to container.
+     * @return Serialized container
+     */
+    gpds::container to_container() const override;
+
+    /**
+     * @brief Deserialize from container.
+     * @param[in] container Container with serialized data
+     */
+    void from_container(const gpds::container &container) override;
 
     /**
      * @brief Get the bounding rectangle.

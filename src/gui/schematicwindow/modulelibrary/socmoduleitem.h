@@ -4,10 +4,13 @@
 #ifndef SOCMODULEITEM_H
 #define SOCMODULEITEM_H
 
+#include "itemtypes.h"
+
 #include <qschematic/items/connector.hpp>
 #include <qschematic/items/label.hpp>
 #include <qschematic/items/node.hpp>
 
+#include <gpds/container.hpp>
 #include <yaml-cpp/yaml.h>
 #include <QBrush>
 #include <QColor>
@@ -38,7 +41,7 @@ public:
     explicit SocModuleItem(
         const QString    &moduleName,
         const YAML::Node &moduleYaml,
-        int               type   = QSchematic::Items::Item::NodeType,
+        int               type   = ModuleLibrary::SocModuleItemType,
         QGraphicsItem    *parent = nullptr);
 
     /**
@@ -81,6 +84,20 @@ public:
      * @return Deep copy of this item
      */
     std::shared_ptr<QSchematic::Items::Item> deepCopy() const override;
+
+    /**
+     * @brief Serialize to container.
+     * @details This function serializes the item to a gpds container.
+     * @return Serialized container
+     */
+    gpds::container to_container() const override;
+
+    /**
+     * @brief Deserialize from container.
+     * @details This function deserializes the item from a gpds container.
+     * @param[in] container Container with serialized data
+     */
+    void from_container(const gpds::container &container) override;
 
     /**
      * @brief Paint the item.
