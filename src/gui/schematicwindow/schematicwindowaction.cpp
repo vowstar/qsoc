@@ -5,8 +5,10 @@
 
 #include "./ui_schematicwindow.h"
 
+#include <QCloseEvent>
 #include <QDebug>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QIcon>
 #include <QMessageBox>
 #include <QPrintDialog>
@@ -78,6 +80,17 @@ void SchematicWindow::on_actionPrint_triggered()
 
 void SchematicWindow::on_actionSave_triggered()
 {
+    if (m_currentFilePath.isEmpty()) {
+        // Untitled file - convert to Save As
+        on_actionSaveAs_triggered();
+    } else {
+        // Save to current file path
+        saveToFile(m_currentFilePath);
+    }
+}
+
+void SchematicWindow::on_actionSaveAs_triggered()
+{
     if (!projectManager) {
         QMessageBox::warning(this, tr("Save Error"), tr("No project manager available"));
         return;
@@ -89,7 +102,7 @@ void SchematicWindow::on_actionSave_triggered()
     }
 
     QString fileName = QFileDialog::getSaveFileName(
-        this, tr("Save Schematic"), defaultPath, tr("SOC Schematic Files (*.soc_sch)"));
+        this, tr("Save Schematic As"), defaultPath, tr("SOC Schematic Files (*.soc_sch)"));
 
     if (fileName.isEmpty()) {
         return;
@@ -99,24 +112,16 @@ void SchematicWindow::on_actionSave_triggered()
         fileName += ".soc_sch";
     }
 
-    // Use standard gpds API to serialize Scene directly
-    const std::filesystem::path path = fileName.toStdString();
-    const auto &[success, message]
-        = gpds::to_file<gpds::archiver_yaml>(path, scene, QSchematic::Scene::gpds_name);
-
-    if (!success) {
-        QMessageBox::critical(
-            this,
-            tr("Save Error"),
-            tr("Failed to save schematic: %1").arg(QString::fromStdString(message)));
-        return;
-    }
-
-    QMessageBox::information(this, tr("Save Success"), tr("Schematic saved successfully"));
+    saveToFile(fileName);
 }
 
 void SchematicWindow::on_actionOpen_triggered()
 {
+    // Check if there are unsaved changes
+    if (!checkSaveBeforeClose()) {
+        return;
+    }
+
     if (!projectManager) {
         QMessageBox::warning(this, tr("Open Error"), tr("No project manager available"));
         return;
@@ -134,12 +139,17 @@ void SchematicWindow::on_actionOpen_triggered()
         return;
     }
 
+    openFile(fileName);
+}
+
+void SchematicWindow::openFile(const QString &filePath)
+{
     // Clear existing scene and undo stack
     scene.clear();
     scene.undoStack()->clear();
 
     // Use standard gpds API to deserialize Scene directly
-    const std::filesystem::path path = fileName.toStdString();
+    const std::filesystem::path path = filePath.toStdString();
 
     try {
         const auto &[success, message]
@@ -153,17 +163,92 @@ void SchematicWindow::on_actionOpen_triggered()
             return;
         }
 
-        QMessageBox::information(this, tr("Open Success"), tr("Schematic loaded successfully"));
+        // Successfully loaded
+        m_currentFilePath = filePath;
+        scene.undoStack()->setClean();
+        updateWindowTitle();
+
     } catch (const std::bad_optional_access &e) {
         QMessageBox::critical(
             this,
             tr("Open Error"),
             tr("Incompatible file format. This file was created with an older version.\n"
                "Please create a new schematic file."));
-        return;
     } catch (const std::exception &e) {
         QMessageBox::critical(
             this, tr("Open Error"), tr("Failed to load schematic: %1").arg(e.what()));
+    }
+}
+
+void SchematicWindow::saveToFile(const QString &path)
+{
+    // Use standard gpds API to serialize Scene directly
+    const std::filesystem::path fsPath = path.toStdString();
+    const auto &[success, message]
+        = gpds::to_file<gpds::archiver_yaml>(fsPath, scene, QSchematic::Scene::gpds_name);
+
+    if (!success) {
+        QMessageBox::critical(
+            this,
+            tr("Save Error"),
+            tr("Failed to save schematic: %1").arg(QString::fromStdString(message)));
         return;
     }
+
+    // Successfully saved
+    m_currentFilePath = path;
+    scene.undoStack()->setClean();
+    updateWindowTitle();
+}
+
+void SchematicWindow::updateWindowTitle()
+{
+    QString title;
+    if (m_currentFilePath.isEmpty()) {
+        title = "untitled";
+    } else {
+        title = QFileInfo(m_currentFilePath).fileName();
+    }
+
+    if (!scene.undoStack()->isClean()) {
+        title = "*" + title;
+    }
+
+    setWindowTitle(title);
+}
+
+bool SchematicWindow::checkSaveBeforeClose()
+{
+    if (scene.undoStack()->isClean()) {
+        return true; // No changes, safe to proceed
+    }
+
+    QMessageBox::StandardButton result = QMessageBox::question(
+        this,
+        tr("Save Changes?"),
+        tr("Do you want to save changes to %1?").arg(getCurrentFileName()),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+
+    if (result == QMessageBox::Save) {
+        on_actionSave_triggered();
+        return scene.undoStack()->isClean(); // Return true if save succeeded
+    } else if (result == QMessageBox::Discard) {
+        return true; // Discard changes, safe to proceed
+    } else {
+        return false; // Cancel
+    }
+}
+
+void SchematicWindow::closeEvent(QCloseEvent *event)
+{
+    if (checkSaveBeforeClose()) {
+        event->accept();
+    } else {
+        event->ignore();
+    }
+}
+
+QString SchematicWindow::getCurrentFileName() const
+{
+    return m_currentFilePath.isEmpty() ? "untitled" : QFileInfo(m_currentFilePath).fileName();
 }

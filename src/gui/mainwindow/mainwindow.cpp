@@ -25,6 +25,14 @@ MainWindow::MainWindow(QWidget *parent)
         "    padding: 2px;" /* Visual padding */
         "}");
     ui->treeViewProjectFile->setIconSize(QSize(24, 24));
+    ui->treeViewProjectFile->setEditTriggers(QAbstractItemView::NoEditTriggers);
+
+    /* Connect double-click signal */
+    connect(
+        ui->treeViewProjectFile,
+        &QTreeView::doubleClicked,
+        this,
+        &MainWindow::onTreeItemDoubleClicked);
 
     /* Auto-open project if exactly one exists in current directory */
     autoOpenSingleProject();
