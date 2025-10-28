@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "socmoduleconnector.h"
+#include "itemtypes.h"
 
+#include <gpds/container.hpp>
 #include <qschematic/items/label.hpp>
 
 #include <QPainter>
@@ -31,7 +33,7 @@ SocModuleConnector::SocModuleConnector(
     PortType       portType,
     Position       position,
     QGraphicsItem *parent)
-    : QSchematic::Items::Connector(QSchematic::Items::Item::ConnectorType, gridPoint, text, parent)
+    : QSchematic::Items::Connector(ModuleLibrary::SocModuleConnectorType, gridPoint, text, parent)
     , m_portType(portType)
     , m_position(position)
 {
@@ -45,6 +47,39 @@ std::shared_ptr<QSchematic::Items::Item> SocModuleConnector::deepCopy() const
         gridPos(), text(), m_portType, m_position, parentItem());
     copyAttributes(*clone);
     return clone;
+}
+
+gpds::container SocModuleConnector::to_container() const
+{
+    // Root container
+    gpds::container root;
+    addItemTypeIdToContainer(root);
+
+    // Save base Connector data
+    root.add_value("connector", QSchematic::Items::Connector::to_container());
+
+    // Save SocModuleConnector-specific data
+    root.add_value("port_type", static_cast<int>(m_portType));
+    root.add_value("position", static_cast<int>(m_position));
+
+    return root;
+}
+
+void SocModuleConnector::from_container(const gpds::container &container)
+{
+    // Load base Connector data
+    if (auto connectorContainer = container.get_value<gpds::container *>("connector")) {
+        QSchematic::Items::Connector::from_container(**connectorContainer);
+    }
+
+    // Load SocModuleConnector-specific data
+    if (auto portTypeOpt = container.get_value<int>("port_type")) {
+        m_portType = static_cast<PortType>(*portTypeOpt);
+    }
+
+    if (auto positionOpt = container.get_value<int>("position")) {
+        m_position = static_cast<Position>(*positionOpt);
+    }
 }
 
 QRectF SocModuleConnector::boundingRect() const

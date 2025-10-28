@@ -7,6 +7,9 @@
 #include <qschematic/items/connector.hpp>
 #include <qschematic/items/label.hpp>
 
+#include <gpds/container.hpp>
+#include <yaml-cpp/yaml.h>
+
 #include <QBrush>
 #include <QDebug>
 #include <QFont>
@@ -88,6 +91,77 @@ std::shared_ptr<QSchematic::Items::Item> SocModuleItem::deepCopy() const
     copy->setSize(size());
 
     return copy;
+}
+
+gpds::container SocModuleItem::to_container() const
+{
+    // Root container
+    gpds::container root;
+    addItemTypeIdToContainer(root);
+
+    // Save base Node data
+    root.add_value("node", QSchematic::Items::Node::to_container());
+
+    // Save module-specific data
+    root.add_value("module_name", m_moduleName.toStdString());
+
+    // Save YAML data as string
+    YAML::Emitter emitter;
+    emitter << m_moduleYaml;
+    root.add_value("module_yaml", std::string(emitter.c_str()));
+
+    // Save label data
+    if (m_label) {
+        root.add_value("label", m_label->to_container());
+    }
+
+    return root;
+}
+
+void SocModuleItem::from_container(const gpds::container &container)
+{
+    // Load module name first (needed before Node::from_container)
+    if (auto nameOpt = container.get_value<std::string>("module_name")) {
+        m_moduleName = QString::fromStdString(*nameOpt);
+    }
+
+    // Load YAML data (needed for ports if they don't exist in container)
+    if (auto yamlOpt = container.get_value<std::string>("module_yaml")) {
+        try {
+            m_moduleYaml = YAML::Load(*yamlOpt);
+        } catch (const YAML::Exception &e) {
+            qWarning() << "Failed to parse YAML:" << e.what();
+        }
+    }
+
+    // Load base Node data - this will restore connectors from container
+    if (auto nodeContainer = container.get_value<gpds::container *>("node")) {
+        QSchematic::Items::Node::from_container(**nodeContainer);
+    }
+
+    // Store restored connectors
+    const auto restoredConnectors = connectors();
+    for (const auto &connector : restoredConnectors) {
+        if (auto socConnector = std::dynamic_pointer_cast<ModuleLibrary::SocModuleConnector>(
+                connector)) {
+            m_ports.append(socConnector);
+        }
+    }
+
+    // Only create ports if none were restored (backward compatibility)
+    if (m_ports.isEmpty() && m_moduleYaml) {
+        createPortsFromYaml();
+    }
+
+    // Load label data
+    if (m_label) {
+        if (auto labelContainer = container.get_value<gpds::container *>("label")) {
+            m_label->from_container(**labelContainer);
+        }
+        // Update label text with module name
+        m_label->setText(m_moduleName);
+        updateLabelPosition();
+    }
 }
 
 void SocModuleItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
