@@ -300,9 +300,16 @@ void SocModuleItem::createPortsFromYaml()
         }
     }
 
-    // Calculate required width based on port label lengths
+    // Calculate required width based on port label lengths and module name
     QFont        labelFont;
     QFontMetrics fm(labelFont);
+
+    // Calculate module name width (with bold font used in paint())
+    QFont boldFont;
+    boldFont.setBold(true);
+    boldFont.setPointSize(10);
+    QFontMetrics fmBold(boldFont);
+    const qreal  moduleNameWidth = fmBold.horizontalAdvance(m_moduleName);
 
     // Find longest text on left side
     qreal maxLeftWidth = 0;
@@ -322,13 +329,19 @@ void SocModuleItem::createPortsFromYaml()
         maxRightWidth = qMax(maxRightWidth, static_cast<qreal>(fm.horizontalAdvance(portName)));
     }
 
-    // Calculate required width
-    // Left padding (15) + connector size (~10) + left text + center gap (20) + right text + connector size (~10) + right padding (15)
-    const qreal connectorSpace  = 25; // Space for connector visual
-    const qreal centerGap       = 20; // Minimum gap between left and right text
-    const qreal sidePadding     = 15; // Padding on each side
-    const qreal calculatedWidth = sidePadding + connectorSpace + maxLeftWidth + centerGap
-                                  + maxRightWidth + connectorSpace + sidePadding;
+    // Calculate required width based on ports
+    // Left padding (15) + connector size (25) + left text + center gap (20) + right text + connector size (25) + right padding (15)
+    const qreal connectorSpace = 25; // Space for connector visual
+    const qreal centerGap      = 20; // Minimum gap between left and right text
+    const qreal sidePadding    = 15; // Padding on each side
+    const qreal portBasedWidth = sidePadding + connectorSpace + maxLeftWidth + centerGap
+                                 + maxRightWidth + connectorSpace + sidePadding;
+
+    // Calculate required width based on module name (with padding)
+    const qreal nameBasedWidth = moduleNameWidth + 40; // Add 40px padding for module name
+
+    // Use the maximum of all width requirements
+    const qreal calculatedWidth = qMax(portBasedWidth, nameBasedWidth);
 
     // Calculate required size
     const int   leftSidePorts  = inputPorts.size() + busPorts.size();
@@ -455,6 +468,8 @@ void SocModuleItem::updateLabelPosition()
 {
     if (m_label) {
         QRectF rect = sizeRect();
-        m_label->setPos(rect.center().x() - m_label->boundingRect().width() / 2, 8);
+        // Position label above the module box to avoid overlap with the border
+        // Using negative Y to place it above the module
+        m_label->setPos(rect.center().x() - m_label->boundingRect().width() / 2, -15);
     }
 }
