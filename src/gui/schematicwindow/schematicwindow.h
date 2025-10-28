@@ -62,21 +62,31 @@ public:
     void openFile(const QString &filePath);
 
 private slots:
+    /* Application Actions */
+
+    /**
+     * @brief Quit schematic editor.
+     * @details Closes the schematic editor window.
+     */
+    void on_actionQuit_triggered();
+
+    /* File Actions */
+
     /**
      * @brief Open schematic file.
-     * @details This function will open a schematic file (*.soc_sch).
+     * @details Opens a schematic file (*.soc_sch).
      */
     void on_actionOpen_triggered();
 
     /**
      * @brief Save schematic file.
-     * @details This function will save the schematic file as *.soc_sch.
+     * @details Saves the schematic file as *.soc_sch.
      */
     void on_actionSave_triggered();
 
     /**
      * @brief Save schematic file as.
-     * @details This function will save the schematic file to a new location.
+     * @details Saves the schematic file to a new location.
      */
     void on_actionSaveAs_triggered();
 
@@ -89,47 +99,45 @@ private slots:
 
     /**
      * @brief Print schematic file.
-     * @details This function will print the schematic file.
+     * @details Prints the schematic file.
      */
     void on_actionPrint_triggered();
 
-    /**
-     * @brief Redo Action.
-     * @details This function is triggered to redo the last undone action.
-     */
-    void on_actionRedo_triggered();
+    /* Edit Actions */
 
     /**
-     * @brief Undo Action.
-     * @details This function is triggered to undo the last action performed.
+     * @brief Undo action.
+     * @details Undoes the last action performed.
      */
     void on_actionUndo_triggered();
 
     /**
-     * @brief Add Wire.
-     * @details This function is triggered to add a wire to the schematic.
+     * @brief Redo action.
+     * @details Redoes the last undone action.
      */
-    void on_actionAddWire_triggered();
+    void on_actionRedo_triggered();
+
+    /* View Actions */
 
     /**
-     * @brief Select Item.
-     * @details This function is triggered to select an item within the
-     *          schematic, based on the 'checked' state.
+     * @brief Show grid toggle.
+     * @details Toggles the grid display on the schematic.
+     */
+    void on_actionShowGrid_triggered(bool checked);
+
+    /* Tool Actions */
+
+    /**
+     * @brief Select item tool.
+     * @details Activates the item selection tool.
      */
     void on_actionSelectItem_triggered();
 
     /**
-     * @brief Show Grid.
-     * @details This function toggles the grid display on the schematic, based
-     *          on the 'checked' state.
+     * @brief Add wire tool.
+     * @details Activates the wire drawing tool.
      */
-    void on_actionShowGrid_triggered(bool checked);
-
-    /**
-     * @brief Quit schematic editor.
-     * @details This function is triggered to quit the schematic editor.
-     */
-    void on_actionQuit_triggered();
+    void on_actionAddWire_triggered();
 
 protected:
     /**
@@ -140,18 +148,22 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
+    /* Module Library Management */
+
     /**
      * @brief Initialize the module library.
-     * @details This function initializes the module library.
+     * @details Initializes the module library widget and connects signals.
      */
     void initializeModuleLibrary();
 
     /**
      * @brief Add a module to the schematic.
-     * @details This function adds a module to the schematic.
+     * @details Adds a module to the schematic at the view center.
      * @param[in] item Item to add
      */
     void addModuleToSchematic(const QSchematic::Items::Item *item);
+
+    /* File Management Helpers */
 
     /**
      * @brief Update window title based on file name and modification status.
@@ -183,30 +195,30 @@ private:
     /**
      * @brief Close the current file and reset to untitled state.
      * @details Clears the scene, undo stack, and resets file path to "untitled".
-     *          This method is called when the window is closed or when the user
-     *          selects File → Close to ensure clean state.
      */
     void closeFile();
 
-    /* Main window UI. */
+    /* Member Variables */
+
+    /* Main window UI */
     Ui::SchematicWindow *ui;
 
-    /* Schematic scene. */
+    /* Schematic scene */
     QSchematic::Scene scene;
 
-    /* Schematic settings. */
+    /* Schematic settings */
     QSchematic::Settings settings;
 
-    /* Module library widget. */
+    /* Module library widget */
     ModuleLibrary::ModuleWidget *moduleLibraryWidget;
 
-    /* Module manager. */
+    /* Module manager */
     QSocModuleManager *moduleManager;
 
-    /* Project manager. */
+    /* Project manager */
     QSocProjectManager *projectManager;
 
-    /* Current file path (empty string means untitled). */
+    /* Current file path (empty string means untitled) */
     QString m_currentFilePath;
 };
 #endif // SCHEMATICWINDOW_H
