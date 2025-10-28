@@ -29,6 +29,7 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     , moduleLibraryWidget(nullptr)
     , moduleManager(nullptr)
     , projectManager(projectManager)
+    , m_currentFilePath("")
 {
     qDebug() << "SchematicWindow: Constructor called with projectManager:"
              << (projectManager ? "valid" : "null");
@@ -70,6 +71,7 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     connect(scene.undoStack(), &QUndoStack::canRedoChanged, [this](bool canRedo) {
         ui->actionRedo->setEnabled(canRedo);
     });
+    connect(scene.undoStack(), &QUndoStack::cleanChanged, this, &SchematicWindow::updateWindowTitle);
 
     scene.setParent(ui->schematicView);
     scene.setSettings(settings);
@@ -90,6 +92,9 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     qDebug() << "SchematicWindow: Initializing module library";
     initializeModuleLibrary();
     qDebug() << "SchematicWindow: Module library initialized";
+
+    /* Set initial window title */
+    updateWindowTitle();
 
     qDebug() << "SchematicWindow: Constructor completed successfully";
 }

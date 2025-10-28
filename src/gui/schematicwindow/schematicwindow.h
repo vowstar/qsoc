@@ -53,6 +53,14 @@ public:
      */
     void setProjectManager(QSocProjectManager *projectManager);
 
+    /**
+     * @brief Open a schematic file.
+     * @details Opens and loads a schematic file from the specified path.
+     *          Updates the window title and marks the undo stack as clean.
+     * @param[in] filePath absolute path to the schematic file
+     */
+    void openFile(const QString &filePath);
+
 private slots:
     /**
      * @brief Open schematic file.
@@ -65,6 +73,12 @@ private slots:
      * @details This function will save the schematic file as *.soc_sch.
      */
     void on_actionSave_triggered();
+
+    /**
+     * @brief Save schematic file as.
+     * @details This function will save the schematic file to a new location.
+     */
+    void on_actionSaveAs_triggered();
 
     /**
      * @brief Print schematic file.
@@ -110,6 +124,14 @@ private slots:
      */
     void on_actionQuit_triggered();
 
+protected:
+    /**
+     * @brief Handle window close event.
+     * @details Prompts the user to save changes if the document has been modified.
+     * @param[in] event close event
+     */
+    void closeEvent(QCloseEvent *event) override;
+
 private:
     /**
      * @brief Initialize the module library.
@@ -123,6 +145,33 @@ private:
      * @param[in] item Item to add
      */
     void addModuleToSchematic(const QSchematic::Items::Item *item);
+
+    /**
+     * @brief Update window title based on file name and modification status.
+     * @details Sets the title to "untitled" or the file name, with "*" prefix if modified.
+     */
+    void updateWindowTitle();
+
+    /**
+     * @brief Check if changes should be saved before closing.
+     * @details Prompts user if the document has been modified.
+     * @return true if it's safe to proceed (saved/discarded/no changes), false if cancelled
+     */
+    bool checkSaveBeforeClose();
+
+    /**
+     * @brief Save the schematic to a file.
+     * @details Performs the actual save operation using gpds serialization.
+     * @param[in] path absolute path to save the file
+     */
+    void saveToFile(const QString &path);
+
+    /**
+     * @brief Get the current file name.
+     * @details Returns "untitled" if no file is open, otherwise the file name.
+     * @return current file name
+     */
+    QString getCurrentFileName() const;
 
     /* Main window UI. */
     Ui::SchematicWindow *ui;
@@ -141,5 +190,8 @@ private:
 
     /* Project manager. */
     QSocProjectManager *projectManager;
+
+    /* Current file path (empty string means untitled). */
+    QString m_currentFilePath;
 };
 #endif // SCHEMATICWINDOW_H

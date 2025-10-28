@@ -113,6 +113,14 @@ private slots:
      */
     void on_actionRefresh_triggered();
 
+    /**
+     * @brief Handle double-click on project tree item.
+     * @details Opens the appropriate editor for the double-clicked file.
+     *          For .soc_sch files, opens the schematic editor.
+     * @param[in] index model index of the double-clicked item
+     */
+    void onTreeItemDoubleClicked(const QModelIndex &index);
+
 private:
     /**
      * @brief Close the current project with option for silent mode.

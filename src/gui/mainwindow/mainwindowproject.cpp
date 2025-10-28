@@ -373,3 +373,41 @@ void MainWindow::autoOpenSingleProject()
     }
     /* Silently fail if load fails - user can manually open if needed */
 }
+
+void MainWindow::onTreeItemDoubleClicked(const QModelIndex &index)
+{
+    auto *model = qobject_cast<QStandardItemModel *>(ui->treeViewProjectFile->model());
+    if (!model) {
+        return;
+    }
+
+    QStandardItem *item = model->itemFromIndex(index);
+    if (!item) {
+        return;
+    }
+
+    QString   filePath = item->data(Qt::UserRole).toString();
+    QFileInfo fileInfo(filePath);
+
+    /* Only handle files, not directories */
+    if (!fileInfo.isFile()) {
+        return;
+    }
+
+    /* Open the appropriate editor based on file extension */
+    if (fileInfo.suffix() == "soc_sch") {
+        /* Open Schematic Editor */
+        if (!schematicWindow.close()) {
+            return; /* User cancelled close */
+        }
+
+        schematicWindow.openFile(filePath);
+        schematicWindow.show();
+        schematicWindow.raise();
+        schematicWindow.activateWindow();
+    }
+    /* Future extension points:
+     * else if (fileInfo.suffix() == "soc_mod") { ... }
+     * else if (fileInfo.suffix() == "soc_bus") { ... }
+     */
+}
