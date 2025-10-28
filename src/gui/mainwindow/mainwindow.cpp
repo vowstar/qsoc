@@ -25,6 +25,9 @@ MainWindow::MainWindow(QWidget *parent)
         "    padding: 2px;" /* Visual padding */
         "}");
     ui->treeViewProjectFile->setIconSize(QSize(24, 24));
+
+    /* Auto-open project if exactly one exists in current directory */
+    autoOpenSingleProject();
 }
 
 MainWindow::~MainWindow()
