@@ -300,12 +300,42 @@ void SocModuleItem::createPortsFromYaml()
         }
     }
 
+    // Calculate required width based on port label lengths
+    QFont        labelFont;
+    QFontMetrics fm(labelFont);
+
+    // Find longest text on left side
+    qreal maxLeftWidth = 0;
+    for (const QString &portName : inputPorts) {
+        maxLeftWidth = qMax(maxLeftWidth, static_cast<qreal>(fm.horizontalAdvance(portName)));
+    }
+    for (const QString &portName : busPorts) {
+        maxLeftWidth = qMax(maxLeftWidth, static_cast<qreal>(fm.horizontalAdvance(portName)));
+    }
+
+    // Find longest text on right side
+    qreal maxRightWidth = 0;
+    for (const QString &portName : outputPorts) {
+        maxRightWidth = qMax(maxRightWidth, static_cast<qreal>(fm.horizontalAdvance(portName)));
+    }
+    for (const QString &portName : inoutPorts) {
+        maxRightWidth = qMax(maxRightWidth, static_cast<qreal>(fm.horizontalAdvance(portName)));
+    }
+
+    // Calculate required width
+    // Left padding (15) + connector size (~10) + left text + center gap (20) + right text + connector size (~10) + right padding (15)
+    const qreal connectorSpace  = 25; // Space for connector visual
+    const qreal centerGap       = 20; // Minimum gap between left and right text
+    const qreal sidePadding     = 15; // Padding on each side
+    const qreal calculatedWidth = sidePadding + connectorSpace + maxLeftWidth + centerGap
+                                  + maxRightWidth + connectorSpace + sidePadding;
+
     // Calculate required size
     const int   leftSidePorts  = inputPorts.size() + busPorts.size();
     const int   rightSidePorts = outputPorts.size() + inoutPorts.size();
     const int   maxPorts       = qMax(leftSidePorts, rightSidePorts);
     const qreal requiredHeight = qMax(MIN_HEIGHT, LABEL_HEIGHT + 30 + maxPorts * PORT_SPACING);
-    const qreal requiredWidth  = MIN_WIDTH;
+    const qreal requiredWidth  = qMax(MIN_WIDTH, calculatedWidth);
 
     setSize(requiredWidth, requiredHeight);
 
