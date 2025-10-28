@@ -39,89 +39,67 @@ public:
     ~MainWindow();
 
 private slots:
+    /* Application Actions (Qt Auto-connected) */
+
     /**
      * @brief Quit action.
-     * @details This function triggers the main window's close event when
-     *          the user selects the "Quit" action from the menu or toolbar.
-     *          It uses Qt's standard close() mechanism which will prompt
-     *          for saving any unsaved changes if implemented.
+     * @details Triggers the main window's close event when the user selects
+     *          the "Quit" action from the menu or toolbar.
      */
     void on_actionQuit_triggered();
 
-    /**
-     * @brief Open schematic editor.
-     * @details This function configures and displays the schematic editor window.
-     *          It sets the schematic window's parent to the main window,
-     *          configures it as an independent window using Qt::Window flag,
-     *          and then displays it to the user. The schematic editor allows
-     *          users to create and edit circuit diagrams.
-     */
-    void on_actionSchematicEditor_triggered();
+    /* Project Management Actions (Qt Auto-connected) */
 
     /**
      * @brief New project action.
-     * @details This function manages the complete workflow of creating a new project:
-     *          1. Closes any existing project silently
-     *          2. Shows a save dialog for the user to specify project name and location
-     *          3. Extracts project information from the selected path
-     *          4. Configures the project manager with the new project details
-     *          5. Creates the project directory structure
-     *          6. Handles error conditions with appropriate user feedback
-     *          7. Updates the lastProjectDir for future use
-     *          8. Sets up the project tree view to display the new project structure
+     * @details Creates a new project with user-specified name and location.
      */
     void on_actionNewProject_triggered();
 
     /**
      * @brief Open an existing project.
-     * @details This function handles opening an existing project file,
-     *          loading its configuration, and displaying it in the tree view.
-     *          It performs the following steps:
-     *          1. Closes any existing project silently
-     *          2. Shows an open dialog for the user to select a project file
-     *          3. Extracts project information from the selected file
-     *          4. Configures the project manager and loads the project
-     *          5. Handles error conditions with appropriate user feedback
-     *          6. Updates the lastProjectDir for future use
-     *          7. Displays the project structure in the tree view
+     * @details Opens and loads an existing project file.
      */
     void on_actionOpenProject_triggered();
 
     /**
      * @brief Close the current project.
-     * @details This function calls the private closeProject method with
-     *          silent=false parameter to close the currently open project
-     *          while providing feedback to the user via the status bar.
-     *          It clears the project tree view and resets project manager state.
+     * @details Closes the currently open project with user feedback.
      */
     void on_actionCloseProject_triggered();
 
     /**
      * @brief Open the project in the file explorer.
-     * @details This function triggers the system's file explorer to open
-     *          the directory of the currently loaded project, allowing users
-     *          to easily access project files and folders directly from the
-     *          file system.
+     * @details Opens the project directory in the system's file explorer.
      */
     void on_actionOpenProjectInFileExplorer_triggered();
 
     /**
      * @brief Refresh the project tree view.
-     * @details This function refreshes the project tree view to display
-     *          the latest project structure. It updates the project tree
-     *          view to reflect any changes in the project directory.
+     * @details Refreshes the project tree to reflect file system changes.
      */
     void on_actionRefresh_triggered();
 
+    /* Editor Actions (Qt Auto-connected) */
+
+    /**
+     * @brief Open schematic editor action.
+     * @details Opens the schematic editor with a new untitled file.
+     */
+    void on_actionSchematicEditor_triggered();
+
+    /* Manual Signal Handlers */
+
     /**
      * @brief Handle double-click on project tree item.
-     * @details Opens the appropriate editor for the double-clicked file.
-     *          For .soc_sch files, opens the schematic editor.
+     * @details Dispatches to appropriate editor based on file extension.
+     *          This is a manually connected slot (not Qt Auto-connection).
      * @param[in] index model index of the double-clicked item
      */
-    void onTreeItemDoubleClicked(const QModelIndex &index);
+    void handleTreeDoubleClick(const QModelIndex &index);
 
 private:
+    /* Project Management Helpers */
     /**
      * @brief Close the current project with option for silent mode.
      * @details This function handles clearing the project tree view,
@@ -160,12 +138,25 @@ private:
     void setupProjectTreeView(const QString &projectName);
 
     /**
-     * @brief Auto-open project if exactly one .soc_pro file exists in current directory
+     * @brief Auto-open project if exactly one .soc_pro file exists in current directory.
      * @details Scans current working directory for .soc_pro files. If exactly one
      *          is found, automatically opens it. If zero or multiple files found,
      *          does nothing. This provides convenience for single-project directories.
      */
     void autoOpenSingleProject();
+
+    /* Editor Management */
+
+    /**
+     * @brief Open schematic editor with optional file.
+     * @details Unified method to open schematic editor. Ensures project manager
+     *          is set and module list is loaded. If a file path is provided,
+     *          opens that file; otherwise opens with "untitled".
+     * @param[in] filePath optional path to schematic file (empty = new file)
+     */
+    void openSchematicEditor(const QString &filePath = QString());
+
+    /* Member Variables */
 
     /* Main window UI */
     Ui::MainWindow *ui;

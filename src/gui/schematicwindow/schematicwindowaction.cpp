@@ -242,6 +242,8 @@ bool SchematicWindow::checkSaveBeforeClose()
 void SchematicWindow::closeEvent(QCloseEvent *event)
 {
     if (checkSaveBeforeClose()) {
+        // Clean up before closing window
+        closeFile();
         event->accept();
     } else {
         event->ignore();
@@ -251,4 +253,28 @@ void SchematicWindow::closeEvent(QCloseEvent *event)
 QString SchematicWindow::getCurrentFileName() const
 {
     return m_currentFilePath.isEmpty() ? "untitled" : QFileInfo(m_currentFilePath).fileName();
+}
+
+void SchematicWindow::closeFile()
+{
+    // Clear scene content
+    scene.clear();
+
+    // Clear undo history
+    scene.undoStack()->clear();
+
+    // Reset to untitled state
+    m_currentFilePath = "";
+    updateWindowTitle();
+}
+
+void SchematicWindow::on_actionClose_triggered()
+{
+    // Check for unsaved changes
+    if (!checkSaveBeforeClose()) {
+        return; // User cancelled
+    }
+
+    // Close the file and reset to untitled
+    closeFile();
 }
