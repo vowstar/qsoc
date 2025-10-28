@@ -154,7 +154,7 @@ private:
     /* Main window UI */
     Ui::MainWindow *ui;
     /* Last used project directory */
-    QString lastProjectDir = QDir::homePath();
+    QString lastProjectDir = QDir::currentPath();
     /* Project manager instance (parent-managed) */
     QSocProjectManager *projectManager = nullptr;
     /* Schematic window object */
