@@ -16,6 +16,7 @@
 #include <QFontMetrics>
 #include <QPainter>
 #include <QPen>
+#include <QSet>
 
 using namespace ModuleLibrary;
 
@@ -227,6 +228,24 @@ void SocModuleItem::createPortsFromYaml()
         return;
     }
 
+    // First, collect all ports that are mapped by buses
+    QSet<QString> mappedPorts;
+    if (m_moduleYaml["bus"]) {
+        const YAML::Node &buses = m_moduleYaml["bus"];
+        for (const auto &busPair : buses) {
+            const YAML::Node &busData = busPair.second;
+            if (busData["mapping"]) {
+                const YAML::Node &mapping = busData["mapping"];
+                for (const auto &mapPair : mapping) {
+                    const std::string mappedPortName = mapPair.second.as<std::string>();
+                    if (!mappedPortName.empty()) {
+                        mappedPorts.insert(QString::fromStdString(mappedPortName));
+                    }
+                }
+            }
+        }
+    }
+
     QStringList inputPorts;
     QStringList outputPorts;
     QStringList inoutPorts;
@@ -244,12 +263,27 @@ void SocModuleItem::createPortsFromYaml()
                 const std::string direction  = portData["direction"].as<std::string>();
                 const QString     portNameQt = QString::fromStdString(portName);
 
-                if (direction == "in" || direction == "input") {
-                    inputPorts.append(portNameQt);
-                } else if (direction == "out" || direction == "output") {
-                    outputPorts.append(portNameQt);
-                } else if (direction == "inout") {
-                    inoutPorts.append(portNameQt);
+                // Check if port should be visible
+                bool isVisible = true;
+                if (mappedPorts.contains(portNameQt)) {
+                    // Port is mapped by a bus, check if it has explicit visible: true
+                    if (portData["visible"]) {
+                        isVisible = portData["visible"].as<bool>();
+                    } else {
+                        // No visible attribute, default to hidden for mapped ports
+                        isVisible = false;
+                    }
+                }
+
+                // Only add port if visible
+                if (isVisible) {
+                    if (direction == "in" || direction == "input") {
+                        inputPorts.append(portNameQt);
+                    } else if (direction == "out" || direction == "output") {
+                        outputPorts.append(portNameQt);
+                    } else if (direction == "inout") {
+                        inoutPorts.append(portNameQt);
+                    }
                 }
             }
         }
