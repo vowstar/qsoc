@@ -32,7 +32,7 @@ MainWindow::MainWindow(QWidget *parent)
         ui->treeViewProjectFile,
         &QTreeView::doubleClicked,
         this,
-        &MainWindow::onTreeItemDoubleClicked);
+        &MainWindow::handleTreeDoubleClick);
 
     /* Auto-open project if exactly one exists in current directory */
     autoOpenSingleProject();

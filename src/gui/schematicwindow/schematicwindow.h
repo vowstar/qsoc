@@ -81,6 +81,13 @@ private slots:
     void on_actionSaveAs_triggered();
 
     /**
+     * @brief Close the current file.
+     * @details Closes the current file (with save prompt if modified) and
+     *          resets to "untitled" state. The window remains open.
+     */
+    void on_actionClose_triggered();
+
+    /**
      * @brief Print schematic file.
      * @details This function will print the schematic file.
      */
@@ -172,6 +179,14 @@ private:
      * @return current file name
      */
     QString getCurrentFileName() const;
+
+    /**
+     * @brief Close the current file and reset to untitled state.
+     * @details Clears the scene, undo stack, and resets file path to "untitled".
+     *          This method is called when the window is closed or when the user
+     *          selects File → Close to ensure clean state.
+     */
+    void closeFile();
 
     /* Main window UI. */
     Ui::SchematicWindow *ui;
