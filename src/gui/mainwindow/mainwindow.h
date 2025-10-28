@@ -151,6 +151,14 @@ private:
      */
     void setupProjectTreeView(const QString &projectName);
 
+    /**
+     * @brief Auto-open project if exactly one .soc_pro file exists in current directory
+     * @details Scans current working directory for .soc_pro files. If exactly one
+     *          is found, automatically opens it. If zero or multiple files found,
+     *          does nothing. This provides convenience for single-project directories.
+     */
+    void autoOpenSingleProject();
+
     /* Main window UI */
     Ui::MainWindow *ui;
     /* Last used project directory */

@@ -345,3 +345,31 @@ void MainWindow::on_actionRefresh_triggered()
     /* Show confirmation message */
     statusBar()->showMessage(tr("Project view refreshed"), 2000);
 }
+
+void MainWindow::autoOpenSingleProject()
+{
+    /* Scan current directory for .soc_pro files */
+    QDir        currentDir = QDir::current();
+    QStringList projectFiles
+        = currentDir.entryList(QStringList() << "*.soc_pro", QDir::Files, QDir::Name);
+
+    /* Only auto-open if exactly one project file exists */
+    if (projectFiles.count() != 1) {
+        return;
+    }
+
+    /* Extract project information */
+    const QString   projectFileName = projectFiles.first();
+    const QString   projectFilePath = currentDir.filePath(projectFileName);
+    const QFileInfo fileInfo(projectFilePath);
+    const QString   projectName = fileInfo.baseName();
+    const QString   projectDir  = fileInfo.absolutePath();
+
+    /* Load project silently (no error dialogs on auto-open) */
+    projectManager->setProjectPath(projectDir);
+    if (projectManager->load(projectName)) {
+        /* Setup project tree view on success */
+        setupProjectTreeView(projectName);
+    }
+    /* Silently fail if load fails - user can manually open if needed */
+}
