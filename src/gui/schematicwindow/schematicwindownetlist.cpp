@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
+#include "gui/schematicwindow/modulelibrary/socmoduleconnector.h"
 #include "gui/schematicwindow/modulelibrary/socmoduleitem.h"
 #include "gui/schematicwindow/schematicwindow.h"
 
@@ -180,10 +181,52 @@ void SchematicWindow::autoNameWires()
             continue;
         }
 
-        /* Set label position at wire start before naming */
-        QPointF startPos = getWireStartPos(wireNet.get());
-        if (!startPos.isNull()) {
-            wireNet->label()->setPos(startPos);
+        /* Set label position based on port direction (always horizontal) */
+        ConnectionInfo connInfo = findStartConnection(wireNet.get());
+        QPointF        startPos = getWireStartPos(wireNet.get());
+        if (!startPos.isNull() && wireNet->label()) {
+            auto label = wireNet->label();
+
+            /* Temporarily set the name to calculate label dimensions */
+            label->setText(generatedName);
+            qreal labelWidth  = label->boundingRect().width();
+            qreal labelHeight = label->boundingRect().height();
+
+            QPointF labelPos;
+
+            /* Use Position enum from SocModuleConnector */
+            using Pos    = ModuleLibrary::SocModuleConnector::Position;
+            auto portPos = static_cast<Pos>(connInfo.portPosition);
+
+            /* All directions align to port position (startPos) */
+            switch (portPos) {
+            case Pos::Left:
+                /* Port on left: label to the left, right-aligned, Y aligns with port */
+                labelPos.setX(startPos.x() - labelWidth);
+                labelPos.setY(startPos.y() - labelHeight / 2);
+                break;
+
+            case Pos::Right:
+                /* Port on right: label to the right, left-aligned, Y aligns with port */
+                labelPos.setX(startPos.x());
+                labelPos.setY(startPos.y() - labelHeight / 2);
+                break;
+
+            case Pos::Top:
+                /* Port on top: label above, X aligns with port, Y centered at port */
+                labelPos.setX(startPos.x() - labelWidth / 2);
+                labelPos.setY(startPos.y() - labelHeight / 2);
+                break;
+
+            case Pos::Bottom:
+                /* Port on bottom: label below, X aligns with port, shifted down by labelHeight */
+                labelPos.setX(startPos.x() - labelWidth / 2);
+                labelPos.setY(startPos.y() + labelHeight);
+                break;
+            }
+
+            label->setRotation(0.0);
+            label->setPos(labelPos);
         }
 
         wireNet->set_name(generatedName);
@@ -228,28 +271,35 @@ QSet<QString> SchematicWindow::getExistingWireNames() const
     return existingNames;
 }
 
-QPair<QString, QString> SchematicWindow::findFirstConnection(
+SchematicWindow::ConnectionInfo SchematicWindow::findStartConnection(
     const QSchematic::Items::WireNet *wireNet) const
 {
+    ConnectionInfo info;
     if (!wireNet) {
-        return {};
+        return info;
     }
 
     auto wm = scene.wire_manager();
     if (!wm) {
-        return {};
+        return info;
     }
 
-    /* Collect wires from this wireNet */
-    QList<const QSchematic::Items::Wire *> netWires;
+    /* Get wire start position */
+    QPointF startPos;
     for (const auto &wire : wireNet->wires()) {
         auto qsWire = std::dynamic_pointer_cast<QSchematic::Items::Wire>(wire);
-        if (qsWire) {
-            netWires.append(qsWire.get());
+        if (qsWire && qsWire->points_count() > 0) {
+            startPos = qsWire->scenePos() + qsWire->pointsRelative().first();
+            break;
         }
     }
 
-    /* Find first connected SocModuleItem */
+    if (startPos.isNull()) {
+        return info;
+    }
+
+    /* Find connector at start position */
+    const qreal tolerance = 5.0; // Grid tolerance
     for (const auto &node : scene.nodes()) {
         auto socItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
         if (!socItem) {
@@ -261,23 +311,33 @@ QPair<QString, QString> SchematicWindow::findFirstConnection(
                 continue;
             }
 
-            auto cr = wm->attached_wire(connector.get());
-            if (!cr || !cr->wire) {
-                continue;
-            }
+            /* Check if connector is at wire start position */
+            QPointF connectorPos = connector->scenePos();
+            qreal   distance     = QLineF(connectorPos, startPos).length();
 
-            if (std::find(netWires.begin(), netWires.end(), cr->wire) != netWires.end()) {
-                QString instanceName = socItem->instanceName();
-                QString portName     = connector->text();
-                if (portName.isEmpty() && connector->label()) {
-                    portName = connector->label()->text();
+            if (distance < tolerance) {
+                /* Found the start connector */
+                info.instanceName = socItem->instanceName();
+                info.portName     = connector->text();
+                if (info.portName.isEmpty() && connector->label()) {
+                    info.portName = connector->label()->text();
                 }
-                return {instanceName, portName};
+
+                /* Get port position (Left/Right/Top/Bottom) */
+                auto socConnector = std::dynamic_pointer_cast<ModuleLibrary::SocModuleConnector>(
+                    connector);
+                if (socConnector) {
+                    info.portPosition = static_cast<int>(socConnector->modulePosition());
+                } else {
+                    info.portPosition = static_cast<int>(ModuleLibrary::SocModuleConnector::Right);
+                }
+
+                return info;
             }
         }
     }
 
-    return {};
+    return info;
 }
 
 QString SchematicWindow::autoGenerateWireName(const QSchematic::Items::WireNet *wireNet) const
@@ -286,14 +346,16 @@ QString SchematicWindow::autoGenerateWireName(const QSchematic::Items::WireNet *
         return QString();
     }
 
-    /* Find first connection */
-    auto [instanceName, portName] = findFirstConnection(wireNet);
-    if (instanceName.isEmpty()) {
+    /* Find start connection */
+    ConnectionInfo connInfo = findStartConnection(wireNet);
+    if (connInfo.instanceName.isEmpty()) {
         return QString("unnamed");
     }
 
     /* Generate base name */
-    QString baseName = portName.isEmpty() ? instanceName : instanceName + "_" + portName;
+    QString baseName = connInfo.portName.isEmpty()
+                           ? connInfo.instanceName
+                           : connInfo.instanceName + "_" + connInfo.portName;
 
     /* Make it unique */
     const QSet<QString> existingNames = getExistingWireNames();
