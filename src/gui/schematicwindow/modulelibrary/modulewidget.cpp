@@ -17,41 +17,23 @@ ModuleWidget::ModuleWidget(QWidget *parent, QSocModuleManager *moduleManager)
     , view_(nullptr)
     , scene_(nullptr)
 {
-    qDebug() << "ModuleWidget: Constructor called with moduleManager:"
-             << (moduleManager ? "valid" : "null");
-
     try {
-        qDebug() << "ModuleWidget: Creating ModuleModel";
         model_ = new ModuleModel(this, moduleManager);
-        qDebug() << "ModuleWidget: ModuleModel created successfully";
-
-        qDebug() << "ModuleWidget: Creating ModuleView";
-        view_ = new ModuleView(this);
-        qDebug() << "ModuleWidget: ModuleView created successfully";
+        view_  = new ModuleView(this);
 
         /* Set up view with model */
-        qDebug() << "ModuleWidget: Setting model to view";
         view_->setModel(model_);
-        qDebug() << "ModuleWidget: Model set to view successfully";
 
-        qDebug() << "ModuleWidget: Connecting signals";
         connect(view_, &ModuleView::clicked, this, &ModuleWidget::itemClickedSlot);
-        qDebug() << "ModuleWidget: Signals connected successfully";
 
         /* Main layout */
-        qDebug() << "ModuleWidget: Creating layout";
         auto *layout = new QVBoxLayout(this);
         layout->addWidget(view_);
         layout->setContentsMargins(0, 0, 0, 0);
         setLayout(layout);
-        qDebug() << "ModuleWidget: Layout created and set successfully";
 
         /* Expand all items initially */
-        qDebug() << "ModuleWidget: Expanding all items";
         view_->expandAll();
-        qDebug() << "ModuleWidget: All items expanded successfully";
-
-        qDebug() << "ModuleWidget: Constructor completed successfully";
     } catch (const std::exception &e) {
         qDebug() << "ModuleWidget: Exception in constructor:" << e.what();
         throw;

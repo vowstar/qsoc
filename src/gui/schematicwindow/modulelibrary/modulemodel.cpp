@@ -286,26 +286,19 @@ void ModuleModel::refresh()
 
 void ModuleModel::createModel()
 {
-    qDebug() << "ModuleModel: createModel() called";
-
     // Clear existing model
     while (rootItem_->childCount() > 0) {
         beginRemoveRows(QModelIndex(), 0, 0);
         rootItem_->deleteChild(0);
         endRemoveRows();
     }
-    qDebug() << "ModuleModel: Existing model cleared";
 
     if (!m_moduleManager) {
-        qDebug() << "No module manager available, creating empty model";
         return;
     }
 
-    qDebug() << "ModuleModel: Module manager available, proceeding with load";
-
     // Load all modules from the module manager
     if (!m_moduleManager->load()) {
-        qDebug() << "Failed to load modules from module manager";
         return;
     }
 
@@ -313,11 +306,8 @@ void ModuleModel::createModel()
     QStringList moduleNames = m_moduleManager->listModule();
 
     if (moduleNames.isEmpty()) {
-        qDebug() << "No modules found in module manager";
         return;
     }
-
-    qDebug() << "ModuleModel: Found" << moduleNames.size() << "modules";
 
     // Group modules by library
     QMap<QString, QStringList> modulesByLibrary;
@@ -329,8 +319,6 @@ void ModuleModel::createModel()
         }
         modulesByLibrary[libraryName].append(moduleName);
     }
-
-    qDebug() << "ModuleModel: Creating" << modulesByLibrary.size() << "library categories";
 
     // Create categories for each library
     for (auto it = modulesByLibrary.constBegin(); it != modulesByLibrary.constEnd(); ++it) {

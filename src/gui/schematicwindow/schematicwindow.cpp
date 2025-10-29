@@ -32,12 +32,7 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     , projectManager(projectManager)
     , m_currentFilePath("")
 {
-    qDebug() << "SchematicWindow: Constructor called with projectManager:"
-             << (projectManager ? "valid" : "null");
-
-    qDebug() << "SchematicWindow: Setting up UI";
     ui->setupUi(this);
-    qDebug() << "SchematicWindow: UI setup completed";
 
     // Register custom item factory for SocModuleItem
     auto factoryFunc
@@ -99,9 +94,7 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     }
 
     /* Initialize the module library */
-    qDebug() << "SchematicWindow: Initializing module library";
     initializeModuleLibrary();
-    qDebug() << "SchematicWindow: Module library initialized";
 
     /* Set scene reference for module library (for generating unique names during drag) */
     if (moduleLibraryWidget) {
@@ -110,8 +103,6 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
 
     /* Set initial window title */
     updateWindowTitle();
-
-    qDebug() << "SchematicWindow: Constructor completed successfully";
 }
 
 SchematicWindow::~SchematicWindow()
@@ -121,13 +112,8 @@ SchematicWindow::~SchematicWindow()
 
 void SchematicWindow::initializeModuleLibrary()
 {
-    qDebug() << "SchematicWindow::initializeModuleLibrary: Starting with moduleManager:"
-             << (moduleManager ? "valid" : "null");
-
     /* Create the module library widget */
-    qDebug() << "SchematicWindow::initializeModuleLibrary: Creating ModuleWidget";
     moduleLibraryWidget = new ModuleLibrary::ModuleWidget(this, moduleManager);
-    qDebug() << "SchematicWindow::initializeModuleLibrary: ModuleWidget created successfully";
 
     /* Connect signals/slots for module library */
     connect(
@@ -151,16 +137,13 @@ void SchematicWindow::initializeModuleLibrary()
 
 void SchematicWindow::addModuleToSchematic(const QSchematic::Items::Item *item)
 {
-    qDebug() << "===== addModuleToSchematic called =====";
     if (!item) {
-        qDebug() << "Item is null!";
         return;
     }
 
     /* Create a deep copy of the item */
     const std::shared_ptr<QSchematic::Items::Item> itemCopy = item->deepCopy();
     if (!itemCopy) {
-        qDebug() << "Deep copy failed!";
         return;
     }
 
@@ -168,15 +151,8 @@ void SchematicWindow::addModuleToSchematic(const QSchematic::Items::Item *item)
     auto socModuleItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(itemCopy);
     if (socModuleItem) {
         QString moduleName   = socModuleItem->moduleName();
-        QString instanceName = generateUniqueInstanceName(moduleName);
-        qDebug() << "Setting instance name:" << instanceName << "for module:" << moduleName;
+        QString instanceName = generateUniqueInstanceName(scene, moduleName);
         socModuleItem->setInstanceName(instanceName);
-
-        // Verify it was set
-        QString verifyName = socModuleItem->instanceName();
-        qDebug() << "Verification: instance name is now:" << verifyName;
-    } else {
-        qDebug() << "Not a SocModuleItem";
     }
 
     /* Set item position to view center */
@@ -185,12 +161,10 @@ void SchematicWindow::addModuleToSchematic(const QSchematic::Items::Item *item)
     itemCopy->setPos(viewCenter);
 
     /* Add to scene */
-    qDebug() << "Adding item to scene via undo stack";
     scene.undoStack()->push(new QSchematic::Commands::ItemAdd(&scene, itemCopy));
-    qDebug() << "===== addModuleToSchematic complete =====";
 }
 
-QSet<QString> SchematicWindow::getExistingInstanceNames() const
+QSet<QString> SchematicWindow::getExistingInstanceNames(const QSchematic::Scene &scene)
 {
     QSet<QString> existingNames;
     for (const auto &node : scene.nodes()) {
@@ -202,9 +176,10 @@ QSet<QString> SchematicWindow::getExistingInstanceNames() const
     return existingNames;
 }
 
-QString SchematicWindow::generateUniqueInstanceName(const QString &moduleName)
+QString SchematicWindow::generateUniqueInstanceName(
+    const QSchematic::Scene &scene, const QString &moduleName)
 {
-    const QSet<QString> existingNames = getExistingInstanceNames();
+    const QSet<QString> existingNames = getExistingInstanceNames(scene);
 
     /* Find unique name: u_<modulename>_N */
     int     index = 0;
@@ -218,8 +193,6 @@ QString SchematicWindow::generateUniqueInstanceName(const QString &moduleName)
 
 void SchematicWindow::onItemAdded(std::shared_ptr<QSchematic::Items::Item> item)
 {
-    qDebug() << "===== onItemAdded called =====";
-
     /* Only process SocModuleItems */
     auto socItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(item);
     if (!socItem) {
@@ -228,28 +201,23 @@ void SchematicWindow::onItemAdded(std::shared_ptr<QSchematic::Items::Item> item)
 
     QString moduleName   = socItem->moduleName();
     QString instanceName = socItem->instanceName();
-    qDebug() << "Module:" << moduleName << ", Instance:" << instanceName;
 
     /* Determine if we need a new unique name */
     bool needsUniqueName = (instanceName == moduleName); // Fresh from library
 
     if (!needsUniqueName) {
         /* Check for name conflicts with existing instances */
-        const QSet<QString> existingNames = getExistingInstanceNames();
+        const QSet<QString> existingNames = getExistingInstanceNames(scene);
         if (existingNames.contains(instanceName)) {
             needsUniqueName = true;
-            qDebug() << "Name conflict detected";
         }
     }
 
     /* Generate and assign unique name if needed */
     if (needsUniqueName) {
-        QString uniqueName = generateUniqueInstanceName(moduleName);
-        qDebug() << "Assigning unique name:" << uniqueName;
+        QString uniqueName = generateUniqueInstanceName(scene, moduleName);
         socItem->setInstanceName(uniqueName);
     }
-
-    qDebug() << "===== onItemAdded complete =====";
 }
 
 void SchematicWindow::setProjectManager(QSocProjectManager *projectManager)

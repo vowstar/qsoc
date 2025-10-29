@@ -8,6 +8,8 @@
 #include <qschematic/items/itemmimedata.hpp>
 #include <qschematic/scene.hpp>
 
+#include "gui/schematicwindow/schematicwindow.h"
+
 #include <QDebug>
 #include <QDrag>
 #include <QPainter>
@@ -62,24 +64,9 @@ void ModuleView::startDrag(Qt::DropActions supportedActions)
     auto item    = mimeData->item();
     auto socItem = std::dynamic_pointer_cast<SocModuleItem>(item);
     if (socItem && scene_) {
-        /* Collect existing names */
-        QSet<QString> existingNames;
-        for (const auto &node : scene_->nodes()) {
-            auto other = std::dynamic_pointer_cast<SocModuleItem>(node);
-            if (other) {
-                existingNames.insert(other->instanceName());
-            }
-        }
-
-        /* Generate unique name */
-        QString moduleName = socItem->moduleName();
-        int     index      = 0;
-        QString candidateName;
-        do {
-            candidateName = QString("u_%1_%2").arg(moduleName).arg(index++);
-        } while (existingNames.contains(candidateName));
-
-        socItem->setInstanceName(candidateName);
+        QString uniqueName
+            = SchematicWindow::generateUniqueInstanceName(*scene_, socItem->moduleName());
+        socItem->setInstanceName(uniqueName);
     }
 
     /* Create the drag object */

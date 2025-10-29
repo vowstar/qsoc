@@ -71,16 +71,12 @@ QString SocModuleItem::instanceName() const
 
 void SocModuleItem::setInstanceName(const QString &name)
 {
-    qDebug() << "SocModuleItem::setInstanceName called with:" << name;
     m_instanceName = name;
     if (m_label) {
-        qDebug() << "Label exists, setting text and updating";
         m_label->setText(name);
         m_label->setVisible(true); // Ensure label is visible
         updateLabelPosition();
         m_label->update();
-    } else {
-        qDebug() << "Label is null!";
     }
     update();
 }
@@ -256,7 +252,6 @@ void SocModuleItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
 void SocModuleItem::createPortsFromYaml()
 {
     if (!m_moduleYaml) {
-        qDebug() << "No module YAML data found for" << m_moduleName;
         return;
     }
 

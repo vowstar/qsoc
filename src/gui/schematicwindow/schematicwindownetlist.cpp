@@ -187,7 +187,6 @@ void SchematicWindow::autoNameWires()
         }
 
         wireNet->set_name(generatedName);
-        qDebug() << "Auto-named wire:" << generatedName;
     }
 }
 
@@ -212,16 +211,33 @@ void SchematicWindow::handleWireDoubleClick(QSchematic::Items::WireNet *wireNet)
     }
 }
 
-QString SchematicWindow::autoGenerateWireName(const QSchematic::Items::WireNet *wireNet) const
+QSet<QString> SchematicWindow::getExistingWireNames() const
 {
-    if (!wireNet) {
-        return QString();
+    QSet<QString> existingNames;
+    auto          wm = scene.wire_manager();
+    if (!wm) {
+        return existingNames;
     }
 
-    /* Get wire manager from scene */
+    for (const auto &net : wm->nets()) {
+        auto wireNet = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(net);
+        if (wireNet && !wireNet->name().isEmpty()) {
+            existingNames.insert(wireNet->name());
+        }
+    }
+    return existingNames;
+}
+
+QPair<QString, QString> SchematicWindow::findFirstConnection(
+    const QSchematic::Items::WireNet *wireNet) const
+{
+    if (!wireNet) {
+        return {};
+    }
+
     auto wm = scene.wire_manager();
     if (!wm) {
-        return QString("unnamed");
+        return {};
     }
 
     /* Collect wires from this wireNet */
@@ -233,16 +249,10 @@ QString SchematicWindow::autoGenerateWireName(const QSchematic::Items::WireNet *
         }
     }
 
-    if (netWires.isEmpty()) {
-        return QString("unnamed");
-    }
-
-    /* Find the first connector connected to any wire in this net */
-    QString baseName;
-    bool    found = false;
-
+    /* Find first connected SocModuleItem */
     for (const auto &node : scene.nodes()) {
-        if (!node) {
+        auto socItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+        if (!socItem) {
             continue;
         }
 
@@ -251,63 +261,47 @@ QString SchematicWindow::autoGenerateWireName(const QSchematic::Items::WireNet *
                 continue;
             }
 
-            /* Check if this connector is connected to any wire in our net */
             auto cr = wm->attached_wire(connector.get());
             if (!cr || !cr->wire) {
                 continue;
             }
 
-            /* Check if the attached wire belongs to our net */
             if (std::find(netWires.begin(), netWires.end(), cr->wire) != netWires.end()) {
-                /* Found the first connection! */
-
-                /* Get instance and port names */
-                auto socItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
-                if (!socItem) {
-                    continue; // Skip non-SocModuleItem nodes
-                }
-
                 QString instanceName = socItem->instanceName();
                 QString portName     = connector->text();
                 if (portName.isEmpty() && connector->label()) {
                     portName = connector->label()->text();
                 }
-
-                /* Generate base name: instance_port */
-                baseName = portName.isEmpty() ? instanceName : instanceName + "_" + portName;
-
-                found = true;
-                break;
+                return {instanceName, portName};
             }
-        }
-
-        if (found) {
-            break;
         }
     }
 
-    /* Only generate name if we found at least one connection */
-    if (baseName.isEmpty()) {
+    return {};
+}
+
+QString SchematicWindow::autoGenerateWireName(const QSchematic::Items::WireNet *wireNet) const
+{
+    if (!wireNet) {
+        return QString();
+    }
+
+    /* Find first connection */
+    auto [instanceName, portName] = findFirstConnection(wireNet);
+    if (instanceName.isEmpty()) {
         return QString("unnamed");
     }
 
-    /* Check for name conflicts and add numeric suffix if needed */
-    QString finalName = baseName;
-    int     suffix    = 0;
+    /* Generate base name */
+    QString baseName = portName.isEmpty() ? instanceName : instanceName + "_" + portName;
 
-    /* Collect all existing wire net names */
-    QSet<QString> existingNames;
-    for (const auto &net : scene.wire_manager()->nets()) {
-        auto wireNetPtr = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(net);
-        if (wireNetPtr && !wireNetPtr->name().isEmpty()) {
-            existingNames.insert(wireNetPtr->name());
-        }
-    }
+    /* Make it unique */
+    const QSet<QString> existingNames = getExistingWireNames();
+    QString             finalName     = baseName;
+    int                 suffix        = 0;
 
-    /* Find unique name by adding suffix */
     while (existingNames.contains(finalName)) {
-        suffix++;
-        finalName = QString("%1_%2").arg(baseName).arg(suffix);
+        finalName = QString("%1_%2").arg(baseName).arg(++suffix);
     }
 
     return finalName;
@@ -424,6 +418,5 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
         return false;
     }
 
-    qDebug() << "Netlist exported successfully to:" << filePath;
     return true;
 }
