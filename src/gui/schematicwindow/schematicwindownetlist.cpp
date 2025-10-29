@@ -15,6 +15,7 @@
 #include <QGraphicsItem>
 #include <QGraphicsSceneMouseEvent>
 #include <QInputDialog>
+#include <QKeyEvent>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QSet>
@@ -22,6 +23,7 @@
 
 #include <fstream>
 #include <yaml-cpp/yaml.h>
+#include <qschematic/commands/item_remove.hpp>
 #include <qschematic/items/node.hpp>
 #include <qschematic/items/wire.hpp>
 #include <qschematic/items/wirenet.hpp>
@@ -31,47 +33,94 @@
 
 #include "common/qsocprojectmanager.h"
 
+void SchematicWindow::keyPressEvent(QKeyEvent *event)
+{
+    /* Handle Delete key */
+    if (event->key() == Qt::Key_Delete) {
+        auto selectedItems = scene.selectedItems();
+        if (!selectedItems.empty()) {
+            for (const auto &item : selectedItems) {
+                scene.undoStack()->push(new QSchematic::Commands::ItemRemove(&scene, item));
+            }
+            event->accept();
+            return;
+        }
+    }
+
+    QMainWindow::keyPressEvent(event);
+}
+
 bool SchematicWindow::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == ui->schematicView->viewport() && event->type() == QEvent::MouseButtonDblClick) {
-        auto *mouseEvent = static_cast<QMouseEvent *>(event);
-        if (mouseEvent->button() == Qt::LeftButton) {
-            /* Get item at mouse position */
-            QPointF        scenePos = ui->schematicView->mapToScene(mouseEvent->pos());
-            QGraphicsItem *item     = scene.itemAt(scenePos, ui->schematicView->transform());
+        auto          *mouseEvent = static_cast<QMouseEvent *>(event);
+        QPointF        scenePos   = ui->schematicView->mapToScene(mouseEvent->pos());
+        QGraphicsItem *item       = scene.itemAt(scenePos, ui->schematicView->transform());
 
-            /* Check if it's a SocModuleItem (module body) */
-            auto *socItem = dynamic_cast<ModuleLibrary::SocModuleItem *>(item);
-            if (socItem) {
-                handleLabelDoubleClick(socItem);
-                return true;
-            }
+        if (!item) {
+            return QMainWindow::eventFilter(watched, event);
+        }
 
-            /* Check if it's a label (instance name) */
-            auto *label = qgraphicsitem_cast<QSchematic::Items::Label *>(item);
-            if (label) {
-                /* Find parent SocModuleItem */
-                auto *parent = label->parentItem();
-                while (parent) {
-                    auto *parentSocItem = dynamic_cast<ModuleLibrary::SocModuleItem *>(parent);
-                    if (parentSocItem) {
-                        handleLabelDoubleClick(parentSocItem);
-                        return true;
-                    }
-                    parent = parent->parentItem();
+        /* Check if it's a SocModuleItem */
+        auto *socItem = dynamic_cast<ModuleLibrary::SocModuleItem *>(item);
+        if (socItem) {
+            handleLabelDoubleClick(socItem);
+            return true;
+        }
+
+        /* Check if it's a label */
+        auto *label = qgraphicsitem_cast<QSchematic::Items::Label *>(item);
+        if (label) {
+            auto *parent = label->parentItem();
+
+            /* Search up the parent hierarchy */
+            while (parent) {
+                /* Check if parent is SocModuleItem (most common case) */
+                auto *socModuleItem = dynamic_cast<ModuleLibrary::SocModuleItem *>(parent);
+                if (socModuleItem) {
+                    handleLabelDoubleClick(socModuleItem);
+                    return true;
                 }
-            }
 
-            /* Check if it's a wire */
-            auto *wire = qgraphicsitem_cast<QSchematic::Items::Wire *>(item);
-            if (wire && wire->net()) {
-                auto *wireNet = dynamic_cast<QSchematic::Items::WireNet *>(wire->net().get());
+                /* Check if parent is WireNet */
+                auto *wireNet = dynamic_cast<QSchematic::Items::WireNet *>(parent);
                 if (wireNet) {
                     handleWireDoubleClick(wireNet);
-                    return true; /* Event handled */
+                    return true;
+                }
+
+                /* Check if parent is Wire */
+                auto *wire = qgraphicsitem_cast<QSchematic::Items::Wire *>(parent);
+                if (wire) {
+                    auto net = wire->net();
+                    if (net) {
+                        auto *wireNet = dynamic_cast<QSchematic::Items::WireNet *>(net.get());
+                        if (wireNet) {
+                            handleWireDoubleClick(wireNet);
+                            return true;
+                        }
+                    }
+                }
+
+                parent = parent->parentItem();
+            }
+        }
+
+        /* Check if it's a wire */
+        auto *wire = qgraphicsitem_cast<QSchematic::Items::Wire *>(item);
+        if (wire) {
+            auto net = wire->net();
+            if (net) {
+                auto *wireNet = dynamic_cast<QSchematic::Items::WireNet *>(net.get());
+                if (wireNet) {
+                    handleWireDoubleClick(wireNet);
+                    return true;
                 }
             }
         }
+
+        /* Default: event not handled, but don't crash */
+        return false;
     }
 
     return QMainWindow::eventFilter(watched, event);
