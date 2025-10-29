@@ -24,14 +24,15 @@ SocModuleItem::SocModuleItem(
     const QString &moduleName, const YAML::Node &moduleYaml, int type, QGraphicsItem *parent)
     : QSchematic::Items::Node(type, parent)
     , m_moduleName(moduleName)
+    , m_instanceName(moduleName) // Default to module name, will be set properly when added to scene
     , m_moduleYaml(moduleYaml)
 {
-    // Create module name label
+    // Create instance name label
     m_label = std::make_shared<QSchematic::Items::Label>();
     m_label->setParentItem(this);
     m_label->setVisible(true);
-    m_label->setMovable(true); // Make label draggable
-    m_label->setText(m_moduleName);
+    m_label->setMovable(true);        // Make label draggable
+    m_label->setText(m_instanceName); // Display instance name, not module name
     m_label->setHasConnectionPoint(false);
 
     // Set initial properties
@@ -59,8 +60,27 @@ QString SocModuleItem::moduleName() const
 void SocModuleItem::setModuleName(const QString &name)
 {
     m_moduleName = name;
+    // Note: Don't update label here, label shows instance name
+    update();
+}
+
+QString SocModuleItem::instanceName() const
+{
+    return m_instanceName;
+}
+
+void SocModuleItem::setInstanceName(const QString &name)
+{
+    qDebug() << "SocModuleItem::setInstanceName called with:" << name;
+    m_instanceName = name;
     if (m_label) {
+        qDebug() << "Label exists, setting text and updating";
         m_label->setText(name);
+        m_label->setVisible(true); // Ensure label is visible
+        updateLabelPosition();
+        m_label->update();
+    } else {
+        qDebug() << "Label is null!";
     }
     update();
 }
@@ -87,6 +107,10 @@ void SocModuleItem::setModuleYaml(const YAML::Node &yaml)
 std::shared_ptr<QSchematic::Items::Item> SocModuleItem::deepCopy() const
 {
     auto copy = std::make_shared<SocModuleItem>(m_moduleName, m_moduleYaml, type());
+
+    // Copy instance name (important for maintaining unique names during copy/paste)
+    copy->setInstanceName(m_instanceName);
+
     copy->setPos(pos());
     copy->setRotation(rotation());
     copy->setSize(size());
@@ -105,6 +129,7 @@ gpds::container SocModuleItem::to_container() const
 
     // Save module-specific data
     root.add_value("module_name", m_moduleName.toStdString());
+    root.add_value("instance_name", m_instanceName.toStdString());
 
     // Save YAML data as string
     YAML::Emitter emitter;
@@ -124,6 +149,13 @@ void SocModuleItem::from_container(const gpds::container &container)
     // Load module name first (needed before Node::from_container)
     if (auto nameOpt = container.get_value<std::string>("module_name")) {
         m_moduleName = QString::fromStdString(*nameOpt);
+    }
+
+    // Load instance name (if not present, use module name for backward compatibility)
+    if (auto instNameOpt = container.get_value<std::string>("instance_name")) {
+        m_instanceName = QString::fromStdString(*instNameOpt);
+    } else {
+        m_instanceName = m_moduleName; // Backward compatibility
     }
 
     // Load YAML data (needed for ports if they don't exist in container)
@@ -159,8 +191,8 @@ void SocModuleItem::from_container(const gpds::container &container)
         if (auto labelContainer = container.get_value<gpds::container *>("label")) {
             m_label->from_container(**labelContainer);
         }
-        // Update label text with module name
-        m_label->setText(m_moduleName);
+        // Update label text with instance name
+        m_label->setText(m_instanceName);
         updateLabelPosition();
     }
 }

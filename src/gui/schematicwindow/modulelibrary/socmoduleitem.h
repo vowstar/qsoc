@@ -52,7 +52,7 @@ public:
 
     /**
      * @brief Get the module name.
-     * @details This function returns the name of the module.
+     * @details This function returns the name of the module (e.g., "cpu", "uart").
      * @return Module name
      */
     QString moduleName() const;
@@ -63,6 +63,20 @@ public:
      * @param[in] name Module name
      */
     void setModuleName(const QString &name);
+
+    /**
+     * @brief Get the instance name.
+     * @details This function returns the instance name (e.g., "u_cpu_0").
+     * @return Instance name
+     */
+    QString instanceName() const;
+
+    /**
+     * @brief Set the instance name.
+     * @details This function sets the instance name and updates the label.
+     * @param[in] name Instance name
+     */
+    void setInstanceName(const QString &name);
 
     /**
      * @brief Get the module YAML data.
@@ -134,9 +148,10 @@ private:
      */
     void updateLabelPosition();
 
-    QString                                              m_moduleName; /**< Module name */
-    YAML::Node                                           m_moduleYaml; /**< Module YAML data */
-    std::shared_ptr<QSchematic::Items::Label>            m_label;      /**< Module name label */
+    QString    m_moduleName;   /**< Module type name (e.g., "cpu") */
+    QString    m_instanceName; /**< Instance name (e.g., "u_cpu_0") */
+    YAML::Node m_moduleYaml;   /**< Module YAML data */
+    std::shared_ptr<QSchematic::Items::Label>            m_label; /**< Instance name label */
     QList<std::shared_ptr<QSchematic::Items::Connector>> m_ports; /**< List of port connectors */
 
     static constexpr qreal PORT_SPACING = 30.0;  /**< Spacing between ports */
