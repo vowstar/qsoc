@@ -256,11 +256,21 @@ private:
     QSet<QString> getExistingWireNames() const;
 
     /**
-     * @brief Find first connected SocModuleItem on a wire net.
-     * @param[in] wireNet wire net to search
-     * @return Pair of (instanceName, portName), or empty if not found
+     * @brief Connection information for a wire net.
      */
-    QPair<QString, QString> findFirstConnection(const QSchematic::Items::WireNet *wireNet) const;
+    struct ConnectionInfo
+    {
+        QString instanceName;
+        QString portName;
+        int     portPosition; // ModuleLibrary::SocModuleConnector::Position enum value
+    };
+
+    /**
+     * @brief Find wire start point connection.
+     * @param[in] wireNet wire net to search
+     * @return Connection info at wire start point, or empty if not found
+     */
+    ConnectionInfo findStartConnection(const QSchematic::Items::WireNet *wireNet) const;
 
     /**
      * @brief Handle item added to scene.
