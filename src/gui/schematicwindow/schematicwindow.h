@@ -62,6 +62,26 @@ public:
      */
     void openFile(const QString &filePath);
 
+    /* Instance Name Management - Public Static Utilities */
+
+    /**
+     * @brief Get existing instance names from scene.
+     * @details Collects all instance names currently in use.
+     * @param[in] scene Scene to collect names from
+     * @return Set of existing instance names
+     */
+    static QSet<QString> getExistingInstanceNames(const QSchematic::Scene &scene);
+
+    /**
+     * @brief Generate unique instance name.
+     * @details Generates instance name in format u_<modulename>_N with auto-increment.
+     * @param[in] scene Scene to check for existing names
+     * @param[in] moduleName Module name
+     * @return Unique instance name
+     */
+    static QString generateUniqueInstanceName(
+        const QSchematic::Scene &scene, const QString &moduleName);
+
 private slots:
     /* Application Actions */
 
@@ -214,23 +234,6 @@ private:
      */
     void closeFile();
 
-    /* Instance Management */
-
-    /**
-     * @brief Get existing instance names from scene.
-     * @details Collects all instance names currently in use.
-     * @return Set of existing instance names
-     */
-    QSet<QString> getExistingInstanceNames() const;
-
-    /**
-     * @brief Generate unique instance name.
-     * @details Generates instance name in format u_<modulename>_N with auto-increment.
-     * @param[in] moduleName Module name
-     * @return Unique instance name
-     */
-    QString generateUniqueInstanceName(const QString &moduleName);
-
     /* Netlist Management */
 
     /**
@@ -245,6 +248,19 @@ private:
      * @return Start position of the wire, or null point if not found
      */
     QPointF getWireStartPos(const QSchematic::Items::WireNet *wireNet) const;
+
+    /**
+     * @brief Get existing wire net names from scene.
+     * @return Set of existing wire names
+     */
+    QSet<QString> getExistingWireNames() const;
+
+    /**
+     * @brief Find first connected SocModuleItem on a wire net.
+     * @param[in] wireNet wire net to search
+     * @return Pair of (instanceName, portName), or empty if not found
+     */
+    QPair<QString, QString> findFirstConnection(const QSchematic::Items::WireNet *wireNet) const;
 
     /**
      * @brief Handle item added to scene.

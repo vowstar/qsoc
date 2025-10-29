@@ -27,20 +27,16 @@ void SchematicWindow::on_actionShowGrid_triggered(bool checked)
 
 void SchematicWindow::on_actionSelectItem_triggered()
 {
-    qDebug() << "SchematicWindow: Switching to Normal Mode";
     ui->actionSelectItem->setChecked(true);
     ui->actionAddWire->setChecked(false);
     scene.setMode(QSchematic::Scene::NormalMode);
-    qDebug() << "SchematicWindow: Current mode:" << scene.mode();
 }
 
 void SchematicWindow::on_actionAddWire_triggered()
 {
-    qDebug() << "SchematicWindow: Switching to Wire Mode";
     ui->actionAddWire->setChecked(true);
     ui->actionSelectItem->setChecked(false);
     scene.setMode(QSchematic::Scene::WireMode);
-    qDebug() << "SchematicWindow: Current mode:" << scene.mode();
 }
 
 void SchematicWindow::on_actionUndo_triggered()
