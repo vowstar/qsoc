@@ -6,6 +6,10 @@
 
 #include <QTreeView>
 
+namespace QSchematic {
+class Scene;
+}
+
 namespace ModuleLibrary {
 
 /**
@@ -40,6 +44,12 @@ public slots:
      */
     void setPixmapScale(qreal scale);
 
+    /**
+     * @brief Set the schematic scene for generating unique instance names.
+     * @param[in] scene pointer to the schematic scene
+     */
+    void setScene(QSchematic::Scene *scene);
+
 protected:
     /**
      * @brief Start dragging.
@@ -49,7 +59,8 @@ protected:
     void startDrag(Qt::DropActions supportedActions) override;
 
 private:
-    qreal scale_; /**< Pixmap scale */
+    qreal              scale_; /**< Pixmap scale */
+    QSchematic::Scene *scene_; /**< Schematic scene for unique name generation */
 };
 
 } // namespace ModuleLibrary

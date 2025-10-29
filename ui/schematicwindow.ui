@@ -74,6 +74,7 @@
     <property name="title">
      <string>Tools</string>
     </property>
+    <addaction name="actionExportNetlist"/>
    </widget>
    <widget class="QMenu" name="menuPreferences">
     <property name="title">
@@ -456,6 +457,23 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+A</string>
+   </property>
+  </action>
+  <action name="actionExportNetlist">
+   <property name="icon">
+    <iconset theme="document-export"/>
+   </property>
+   <property name="text">
+    <string>Export Netlist</string>
+   </property>
+   <property name="toolTip">
+    <string>Export Netlist (CTRL+E)</string>
+   </property>
+   <property name="statusTip">
+    <string>Export the current schematic to .soc_net format (CTRL+E)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+E</string>
    </property>
   </action>
  </widget>

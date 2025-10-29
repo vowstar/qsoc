@@ -8,6 +8,10 @@
 
 class QSocModuleManager;
 
+namespace QSchematic {
+class Scene;
+}
+
 namespace QSchematic::Items {
 class Item;
 }
@@ -55,6 +59,12 @@ public:
      */
     void setModuleManager(QSocModuleManager *moduleManager);
 
+    /**
+     * @brief Set the schematic scene for generating unique instance names during drag.
+     * @param[in] scene pointer to the schematic scene
+     */
+    void setScene(QSchematic::Scene *scene);
+
 signals:
     /**
      * @brief Signal emitted when an item is clicked.
@@ -80,8 +90,9 @@ private slots:
     void itemClickedSlot(const QModelIndex &index);
 
 private:
-    ModuleModel *model_; /**< Module library model */
-    ModuleView  *view_;  /**< Module library view */
+    ModuleModel       *model_; /**< Module library model */
+    ModuleView        *view_;  /**< Module library view */
+    QSchematic::Scene *scene_; /**< Schematic scene for unique name generation */
 };
 
 } // namespace ModuleLibrary

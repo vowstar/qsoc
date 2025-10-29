@@ -15,6 +15,7 @@ ModuleWidget::ModuleWidget(QWidget *parent, QSocModuleManager *moduleManager)
     : QWidget(parent)
     , model_(nullptr)
     , view_(nullptr)
+    , scene_(nullptr)
 {
     qDebug() << "ModuleWidget: Constructor called with moduleManager:"
              << (moduleManager ? "valid" : "null");
@@ -81,6 +82,14 @@ void ModuleWidget::setModuleManager(QSocModuleManager *moduleManager)
         if (view_) {
             view_->expandAll();
         }
+    }
+}
+
+void ModuleWidget::setScene(QSchematic::Scene *scene)
+{
+    scene_ = scene;
+    if (view_) {
+        view_->setScene(scene);
     }
 }
 

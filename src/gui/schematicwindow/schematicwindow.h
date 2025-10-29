@@ -15,7 +15,8 @@ class QSocProjectManager;
 
 namespace ModuleLibrary {
 class ModuleWidget;
-}
+class SocModuleItem;
+} // namespace ModuleLibrary
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -139,6 +140,12 @@ private slots:
      */
     void on_actionAddWire_triggered();
 
+    /**
+     * @brief Export netlist.
+     * @details Exports the current schematic to .soc_net format.
+     */
+    void on_actionExportNetlist_triggered();
+
 protected:
     /**
      * @brief Handle window close event.
@@ -146,6 +153,15 @@ protected:
      * @param[in] event close event
      */
     void closeEvent(QCloseEvent *event) override;
+
+    /**
+     * @brief Event filter for view mouse events.
+     * @details Handles wire double-click for renaming.
+     * @param[in] watched watched object
+     * @param[in] event event to filter
+     * @return true if event is handled
+     */
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     /* Module Library Management */
@@ -197,6 +213,75 @@ private:
      * @details Clears the scene, undo stack, and resets file path to "untitled".
      */
     void closeFile();
+
+    /* Instance Management */
+
+    /**
+     * @brief Get existing instance names from scene.
+     * @details Collects all instance names currently in use.
+     * @return Set of existing instance names
+     */
+    QSet<QString> getExistingInstanceNames() const;
+
+    /**
+     * @brief Generate unique instance name.
+     * @details Generates instance name in format u_<modulename>_N with auto-increment.
+     * @param[in] moduleName Module name
+     * @return Unique instance name
+     */
+    QString generateUniqueInstanceName(const QString &moduleName);
+
+    /* Netlist Management */
+
+    /**
+     * @brief Auto-name wires that don't have names.
+     * @details Called when netlist changes to auto-generate wire names.
+     */
+    void autoNameWires();
+
+    /**
+     * @brief Get wire start position for label placement.
+     * @param[in] wireNet wire net to get start position from
+     * @return Start position of the wire, or null point if not found
+     */
+    QPointF getWireStartPos(const QSchematic::Items::WireNet *wireNet) const;
+
+    /**
+     * @brief Handle item added to scene.
+     * @details Auto-generates unique instance names for SocModuleItems added via drag/drop.
+     * @param[in] item pointer to the added item
+     */
+    void onItemAdded(std::shared_ptr<QSchematic::Items::Item> item);
+
+    /**
+     * @brief Handle label double-click for renaming instance.
+     * @details Shows input dialog to rename the instance.
+     * @param[in] socItem pointer to the SocModuleItem object
+     */
+    void handleLabelDoubleClick(ModuleLibrary::SocModuleItem *socItem);
+
+    /**
+     * @brief Handle wire double-click for renaming.
+     * @details Shows input dialog to rename the wire/net.
+     * @param[in] wireNet pointer to the WireNet object
+     */
+    void handleWireDoubleClick(QSchematic::Items::WireNet *wireNet);
+
+    /**
+     * @brief Automatically generate wire name based on connections.
+     * @details Generates name like "instance_port" or "unnamed_N".
+     * @param[in] wireNet pointer to the WireNet object
+     * @return generated name string
+     */
+    QString autoGenerateWireName(const QSchematic::Items::WireNet *wireNet) const;
+
+    /**
+     * @brief Export netlist to .soc_net file.
+     * @details Extracts connectivity and writes YAML format file.
+     * @param[in] filePath path to save the .soc_net file
+     * @return true if export succeeded, false otherwise
+     */
+    bool exportNetlist(const QString &filePath);
 
     /* Member Variables */
 
