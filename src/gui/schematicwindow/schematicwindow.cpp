@@ -11,6 +11,7 @@
 #include "./ui_schematicwindow.h"
 
 #include <qschematic/commands/item_add.hpp>
+#include <qschematic/commands/item_remove.hpp>
 #include <qschematic/items/item.hpp>
 #include <qschematic/items/itemfactory.hpp>
 
@@ -80,13 +81,18 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     ui->schematicView->setSettings(settings);
     ui->schematicView->setScene(&scene);
 
+    /* Ensure view can receive keyboard events */
+    ui->schematicView->setFocusPolicy(Qt::StrongFocus);
+    ui->schematicView->setFocus();
+
     ui->undoViewCommandHistory->setStack(scene.undoStack());
 
     scene.clear();
     scene.setSceneRect(-500, -500, 3000, 3000);
 
-    /* Install event filter for wire double-click */
-    ui->schematicView->viewport()->installEventFilter(this);
+    /* Install event filter for double-click and ShortcutOverride handling */
+    ui->schematicView->installEventFilter(this); // For ShortcutOverride (Delete key fix)
+    ui->schematicView->viewport()->installEventFilter(this); // For double-click events
 
     /* Initialize module manager */
     if (projectManager) {
