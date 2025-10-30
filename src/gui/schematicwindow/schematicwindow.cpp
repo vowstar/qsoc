@@ -4,6 +4,7 @@
 #include "gui/schematicwindow/schematicwindow.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
+#include "gui/schematicwindow/customwire.h"
 #include "gui/schematicwindow/modulelibrary/customitemfactory.h"
 #include "gui/schematicwindow/modulelibrary/modulewidget.h"
 #include "gui/schematicwindow/modulelibrary/socmoduleitem.h"
@@ -39,6 +40,11 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     auto factoryFunc
         = std::bind(&ModuleLibrary::CustomItemFactory::from_container, std::placeholders::_1);
     QSchematic::Items::Factory::instance().setCustomItemsFactory(factoryFunc);
+
+    // Register custom wire factory for bus visualization
+    scene.setWireFactory([]() -> std::shared_ptr<QSchematic::Items::Wire> {
+        return std::make_shared<SchematicCustom::CustomWire>();
+    });
 
     settings.debug               = false;
     settings.showGrid            = true;
