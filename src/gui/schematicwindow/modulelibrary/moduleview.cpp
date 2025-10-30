@@ -60,16 +60,16 @@ void ModuleView::startDrag(Qt::DropActions supportedActions)
         return;
     }
 
-    /* Generate unique instance name for drag preview if we have scene access */
+    /* Generate preview name for drag - onItemAdded will verify on drop */
     auto item    = mimeData->item();
     auto socItem = std::dynamic_pointer_cast<SocModuleItem>(item);
     if (socItem && scene_) {
-        QString uniqueName
+        QString previewName
             = SchematicWindow::generateUniqueInstanceName(*scene_, socItem->moduleName());
-        socItem->setInstanceName(uniqueName);
+        socItem->setInstanceName(previewName);
     }
 
-    /* Create the drag object */
+    /* Create the drag object with preview name */
     auto   *drag = new QDrag(this);
     QPointF hotSpot;
     drag->setMimeData(data);

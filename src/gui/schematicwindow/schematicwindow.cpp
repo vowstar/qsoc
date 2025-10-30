@@ -159,20 +159,12 @@ void SchematicWindow::addModuleToSchematic(const QSchematic::Items::Item *item)
         return;
     }
 
-    /* Generate unique instance name for SocModuleItem */
-    auto socModuleItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(itemCopy);
-    if (socModuleItem) {
-        QString moduleName   = socModuleItem->moduleName();
-        QString instanceName = generateUniqueInstanceName(scene, moduleName);
-        socModuleItem->setInstanceName(instanceName);
-    }
-
     /* Set item position to view center */
     const QPointF viewCenter = ui->schematicView->mapToScene(
         ui->schematicView->viewport()->rect().center());
     itemCopy->setPos(viewCenter);
 
-    /* Add to scene */
+    /* Add to scene - onItemAdded will handle naming */
     scene.undoStack()->push(new QSchematic::Commands::ItemAdd(&scene, itemCopy));
 }
 
@@ -214,16 +206,27 @@ void SchematicWindow::onItemAdded(std::shared_ptr<QSchematic::Items::Item> item)
     QString moduleName   = socItem->moduleName();
     QString instanceName = socItem->instanceName();
 
-    /* Determine if we need a new unique name */
-    bool needsUniqueName = (instanceName == moduleName); // Fresh from library
-
-    if (!needsUniqueName) {
-        /* Check for name conflicts with existing instances */
-        const QSet<QString> existingNames = getExistingInstanceNames(scene);
-        if (existingNames.contains(instanceName)) {
-            needsUniqueName = true;
+    /* Get existing names (excluding this item) */
+    QSet<QString> existingNames;
+    for (const auto &node : scene.nodes()) {
+        auto existingSocItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+        if (existingSocItem && existingSocItem.get() != socItem.get()) {
+            existingNames.insert(existingSocItem->instanceName());
         }
     }
+
+    /* Determine if we need a new unique name */
+    bool needsUniqueName = false;
+
+    /* Case 1: Default name (fresh from library, e.g. instanceName == moduleName) */
+    if (instanceName == moduleName) {
+        needsUniqueName = true;
+    }
+    /* Case 2: Name conflict with existing instance */
+    else if (existingNames.contains(instanceName)) {
+        needsUniqueName = true;
+    }
+    /* Case 3: Valid unique name (from file load, paste, etc.) - keep it */
 
     /* Generate and assign unique name if needed */
     if (needsUniqueName) {
