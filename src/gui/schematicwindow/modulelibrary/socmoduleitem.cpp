@@ -74,8 +74,7 @@ void SocModuleItem::setInstanceName(const QString &name)
     m_instanceName = name;
     if (m_label) {
         m_label->setText(name);
-        m_label->setVisible(true); // Ensure label is visible
-        updateLabelPosition();
+        m_label->setVisible(true);
         m_label->update();
     }
     update();
@@ -189,7 +188,6 @@ void SocModuleItem::from_container(const gpds::container &container)
         }
         // Update label text with instance name
         m_label->setText(m_instanceName);
-        updateLabelPosition();
     }
 }
 
