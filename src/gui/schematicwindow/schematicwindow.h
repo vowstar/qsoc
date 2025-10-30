@@ -175,13 +175,6 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
     /**
-     * @brief Handle key press events.
-     * @details Handles Delete key to remove selected items.
-     * @param[in] event key event
-     */
-    void keyPressEvent(QKeyEvent *event) override;
-
-    /**
      * @brief Event filter for view mouse events.
      * @details Handles double-click events for renaming.
      * @param[in] watched watched object
