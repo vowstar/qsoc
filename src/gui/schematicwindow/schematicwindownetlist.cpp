@@ -24,6 +24,7 @@
 #include <fstream>
 #include <yaml-cpp/yaml.h>
 #include <qschematic/commands/item_remove.hpp>
+#include <qschematic/commands/wirenet_rename.hpp>
 #include <qschematic/items/node.hpp>
 #include <qschematic/items/wire.hpp>
 #include <qschematic/items/wirenet.hpp>
@@ -32,6 +33,7 @@
 #include <qschematic/scene.hpp>
 
 #include "common/qsocprojectmanager.h"
+#include "gui/schematicwindow/commands/instance_rename.h"
 
 bool SchematicWindow::eventFilter(QObject *watched, QEvent *event)
 {
@@ -190,8 +192,16 @@ void SchematicWindow::handleLabelDoubleClick(ModuleLibrary::SocModuleItem *socIt
             }
         }
 
-        socItem->setInstanceName(newName);
-        qDebug() << "Instance renamed to:" << newName;
+        /* Use undo command for renamable operation */
+        /* Find the shared_ptr for this socItem */
+        for (const auto &node : scene.nodes()) {
+            auto socItemShared = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+            if (socItemShared && socItemShared.get() == socItem) {
+                scene.undoStack()->push(
+                    new SchematicCommands::InstanceRename(socItemShared, newName));
+                break;
+            }
+        }
     }
 }
 
@@ -296,9 +306,20 @@ void SchematicWindow::handleWireDoubleClick(QSchematic::Items::WireNet *wireNet)
     QString newName = QInputDialog::getText(
         this, tr("Rename Wire/Net"), tr("Enter net name:"), QLineEdit::Normal, currentName, &ok);
 
-    if (ok && !newName.isEmpty()) {
-        wireNet->set_name(newName);
-        qDebug() << "Wire renamed to:" << newName;
+    if (ok && !newName.isEmpty() && newName != wireNet->name()) {
+        /* Use undo command for renamable operation */
+        auto wm = scene.wire_manager();
+        if (wm) {
+            /* Find the shared_ptr for this wireNet */
+            for (const auto &net : wm->nets()) {
+                auto wireNetShared = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(net);
+                if (wireNetShared && wireNetShared.get() == wireNet) {
+                    scene.undoStack()->push(
+                        new QSchematic::Commands::WirenetRename(wireNetShared, newName));
+                    break;
+                }
+            }
+        }
     }
 }
 
