@@ -447,17 +447,19 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
         return false;
     }
 
-    /* Build instance map: instance_name -> { module_type, ports } */
+    /* Build instance map: instance_name -> { module_type, ports, buses } */
     struct PortConnection
     {
         QString portName;
         QString netName;
+        bool    isBus; // true if this is a bus connection
     };
 
     struct InstanceInfo
     {
         QString               moduleName;
         QList<PortConnection> ports;
+        QList<PortConnection> buses;
     };
 
     QMap<QString, InstanceInfo> instances;
@@ -501,16 +503,29 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
                 continue; /* Skip connectors without port names */
             }
 
+            /* Check if this is a bus connector */
+            bool isBus        = false;
+            auto socConnector = dynamic_cast<ModuleLibrary::SocModuleConnector *>(connector);
+            if (socConnector) {
+                isBus = (socConnector->portType() == ModuleLibrary::SocModuleConnector::Bus);
+            }
+
             /* Add to instances map */
             if (!instances.contains(instanceName)) {
                 instances[instanceName].moduleName = moduleName;
             }
 
-            /* Add port connection */
+            /* Add port or bus connection */
             PortConnection portConn;
             portConn.portName = portName;
             portConn.netName  = netName;
-            instances[instanceName].ports.append(portConn);
+            portConn.isBus    = isBus;
+
+            if (isBus) {
+                instances[instanceName].buses.append(portConn);
+            } else {
+                instances[instanceName].ports.append(portConn);
+            }
         }
     }
 
@@ -530,6 +545,15 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
                 root["instance"][instanceName.toStdString()]["port"]
                     [portConn.portName.toStdString()]["link"]
                     = portConn.netName.toStdString();
+            }
+        }
+
+        /* Add bus connections */
+        if (!info.buses.isEmpty()) {
+            for (const auto &busConn : info.buses) {
+                root["instance"][instanceName.toStdString()]["bus"][busConn.portName.toStdString()]
+                    ["link"]
+                    = busConn.netName.toStdString();
             }
         }
     }
