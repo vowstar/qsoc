@@ -10,7 +10,8 @@ namespace ModuleLibrary {
 
 enum ItemType {
     SocModuleItemType      = QSchematic::Items::Item::QSchematicItemUserType + 1,
-    SocModuleConnectorType = QSchematic::Items::Item::QSchematicItemUserType + 2
+    SocModuleConnectorType = QSchematic::Items::Item::QSchematicItemUserType + 2,
+    CustomWireType         = QSchematic::Items::Item::QSchematicItemUserType + 3
 };
 
 } // namespace ModuleLibrary

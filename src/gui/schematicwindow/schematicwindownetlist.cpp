@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
+#include "gui/schematicwindow/customwire.h"
 #include "gui/schematicwindow/modulelibrary/socmoduleconnector.h"
 #include "gui/schematicwindow/modulelibrary/socmoduleitem.h"
 #include "gui/schematicwindow/schematicwindow.h"
@@ -230,7 +231,70 @@ void SchematicWindow::autoNameWires()
 
     for (const auto &net : wm->nets()) {
         auto wireNet = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(net);
-        if (!wireNet || !wireNet->name().isEmpty()) {
+        if (!wireNet) {
+            continue;
+        }
+
+        /* Update bus flag for all wires in this net */
+        bool        isBusNet  = false;
+        const qreal tolerance = 5.0;
+
+        for (const auto &wire : wireNet->wires()) {
+            auto customWire = std::dynamic_pointer_cast<SchematicCustom::CustomWire>(wire);
+            if (!customWire || customWire->points_count() < 2) {
+                continue;
+            }
+
+            /* Check if any connector attached to this wire is a bus */
+            for (const auto &node : scene.nodes()) {
+                auto socItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+                if (!socItem) {
+                    continue;
+                }
+
+                for (const auto &connector : node->connectors()) {
+                    if (!connector) {
+                        continue;
+                    }
+
+                    auto socConnector
+                        = std::dynamic_pointer_cast<ModuleLibrary::SocModuleConnector>(connector);
+                    if (!socConnector
+                        || socConnector->portType() != ModuleLibrary::SocModuleConnector::Bus) {
+                        continue;
+                    }
+
+                    /* Check if wire connects to this bus connector */
+                    QPointF connectorPos = connector->scenePos();
+                    QPointF wireStart    = customWire->scenePos()
+                                        + customWire->pointsRelative().first();
+                    QPointF wireEnd = customWire->scenePos() + customWire->pointsRelative().last();
+
+                    if (QLineF(connectorPos, wireStart).length() < tolerance
+                        || QLineF(connectorPos, wireEnd).length() < tolerance) {
+                        isBusNet = true;
+                        break;
+                    }
+                }
+                if (isBusNet) {
+                    break;
+                }
+            }
+            if (isBusNet) {
+                break;
+            }
+        }
+
+        /* Set bus flag for all wires in this net */
+        for (const auto &wire : wireNet->wires()) {
+            auto customWire = std::dynamic_pointer_cast<SchematicCustom::CustomWire>(wire);
+            if (customWire) {
+                customWire->setBusWire(isBusNet);
+            }
+        }
+
+        /* Auto-naming logic - only for unnamed nets */
+        if (!wireNet->name().isEmpty()) {
             continue;
         }
 
