@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version='1.0' encoding='UTF-8'?>
 <ui version="4.0">
  <class>MainWindow</class>
  <widget class="QMainWindow" name="MainWindow">
@@ -173,38 +173,38 @@
     <property name="title">
      <string>File</string>
     </property>
-    <addaction name="actionNewProject"/>
-    <addaction name="actionOpenProject"/>
-    <addaction name="separator"/>
-    <addaction name="actionCloseProject"/>
-    <addaction name="separator"/>
-    <addaction name="actionQuit"/>
+    <addaction name="actionNewProject" />
+    <addaction name="actionOpenProject" />
+    <addaction name="separator" />
+    <addaction name="actionCloseProject" />
+    <addaction name="separator" />
+    <addaction name="actionQuit" />
    </widget>
    <widget class="QMenu" name="menuView">
     <property name="title">
      <string>View</string>
     </property>
-    <addaction name="actionRefresh"/>
+    <addaction name="actionRefresh" />
    </widget>
    <widget class="QMenu" name="menuTools">
     <property name="title">
      <string>Tools</string>
     </property>
-    <addaction name="actionBusEditor"/>
-    <addaction name="actionSchematicEditor"/>
-    <addaction name="actionModuleEditor"/>
+    <addaction name="actionBusEditor" />
+    <addaction name="actionSchematicEditor" />
+    <addaction name="actionModuleEditor" />
    </widget>
    <widget class="QMenu" name="menuPreferences">
     <property name="title">
      <string>Preferences</string>
     </property>
    </widget>
-   <addaction name="menuFile"/>
-   <addaction name="menuView"/>
-   <addaction name="menuTools"/>
-   <addaction name="menuPreferences"/>
+   <addaction name="menuFile" />
+   <addaction name="menuView" />
+   <addaction name="menuTools" />
+   <addaction name="menuPreferences" />
   </widget>
-  <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QStatusBar" name="statusbar" />
   <widget class="QDockWidget" name="dockWidgetProjectFile">
    <property name="minimumSize">
     <size>
@@ -224,7 +224,7 @@
    <widget class="QWidget" name="dockWidgetContents">
     <layout class="QGridLayout" name="gridLayout">
      <item row="0" column="0">
-      <widget class="QTreeView" name="treeViewProjectFile"/>
+      <widget class="QTreeView" name="treeViewProjectFile" />
      </item>
     </layout>
    </widget>
@@ -245,22 +245,22 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="actionNewProject"/>
-   <addaction name="actionOpenProject"/>
-   <addaction name="actionCloseProject"/>
-   <addaction name="separator"/>
-   <addaction name="actionRefresh"/>
-   <addaction name="separator"/>
-   <addaction name="actionOpenProjectInFileExplorer"/>
+   <addaction name="actionNewProject" />
+   <addaction name="actionOpenProject" />
+   <addaction name="actionCloseProject" />
+   <addaction name="separator" />
+   <addaction name="actionRefresh" />
+   <addaction name="separator" />
+   <addaction name="actionOpenProjectInFileExplorer" />
   </widget>
   <action name="actionNewProject">
    <property name="icon">
-    <iconset theme="document-new"/>
+    <iconset theme="document-new" />
    </property>
    <property name="text">
     <string>&amp;New Project</string>
    </property>
-   <property name="statusTip">
+   <property name="toolTip">
     <string>Create new blank project (CTRL+N)</string>
    </property>
    <property name="shortcut">
@@ -269,12 +269,12 @@
   </action>
   <action name="actionOpenProject">
    <property name="icon">
-    <iconset theme="document-open"/>
+    <iconset theme="document-open" />
    </property>
    <property name="text">
     <string>&amp;Open Project</string>
    </property>
-   <property name="statusTip">
+   <property name="toolTip">
     <string>Open an existing project (CTRL+O)</string>
    </property>
    <property name="shortcut">
@@ -283,23 +283,23 @@
   </action>
   <action name="actionCloseProject">
    <property name="icon">
-    <iconset theme="document-close"/>
+    <iconset theme="document-close" />
    </property>
    <property name="text">
     <string>Close Project</string>
    </property>
-   <property name="statusTip">
+   <property name="toolTip">
     <string>Close the current project</string>
    </property>
   </action>
   <action name="actionQuit">
    <property name="icon">
-    <iconset theme="window-close"/>
+    <iconset theme="window-close" />
    </property>
    <property name="text">
     <string>&amp;Quit</string>
    </property>
-   <property name="statusTip">
+   <property name="toolTip">
     <string>Quit qsoc (CTRL+Q)</string>
    </property>
    <property name="shortcut">
@@ -308,12 +308,12 @@
   </action>
   <action name="actionRefresh">
    <property name="icon">
-    <iconset theme="view-refresh"/>
+    <iconset theme="view-refresh" />
    </property>
    <property name="text">
     <string>Refresh</string>
    </property>
-   <property name="statusTip">
+   <property name="toolTip">
     <string>Refresh project files (F5)</string>
    </property>
    <property name="shortcut">
@@ -322,7 +322,7 @@
   </action>
   <action name="actionOpenProjectInFileExplorer">
    <property name="icon">
-    <iconset theme="document-open-in-explorer"/>
+    <iconset theme="document-open-in-explorer" />
    </property>
    <property name="text">
     <string>Open In File Explorer</string>
@@ -330,21 +330,18 @@
    <property name="toolTip">
     <string>Open In File Explorer</string>
    </property>
-   <property name="statusTip">
-    <string>Open project directory in file browser</string>
-   </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::TextHeuristicRole</enum>
    </property>
   </action>
   <action name="actionBusEditor">
    <property name="icon">
-    <iconset theme="applications-bus"/>
+    <iconset theme="applications-bus" />
    </property>
    <property name="text">
     <string>&amp;Bus Editor</string>
    </property>
-   <property name="statusTip">
+   <property name="toolTip">
     <string>Edit project bus definitions (CTRL+B)</string>
    </property>
    <property name="shortcut">
@@ -353,12 +350,12 @@
   </action>
   <action name="actionModuleEditor">
    <property name="icon">
-    <iconset theme="applications-module"/>
+    <iconset theme="applications-module" />
    </property>
    <property name="text">
     <string>Symbo&amp;l Editor</string>
    </property>
-   <property name="statusTip">
+   <property name="toolTip">
     <string>Edit schematic modules (CTRL+L)</string>
    </property>
    <property name="shortcut">
@@ -367,12 +364,12 @@
   </action>
   <action name="actionSchematicEditor">
    <property name="icon">
-    <iconset theme="applications-schematic"/>
+    <iconset theme="applications-schematic" />
    </property>
    <property name="text">
     <string>Schematic &amp;Editor</string>
    </property>
-   <property name="statusTip">
+   <property name="toolTip">
     <string>Edit schematic (Ctrl+E)</string>
    </property>
    <property name="shortcut">
@@ -380,6 +377,6 @@
    </property>
   </action>
  </widget>
- <resources/>
- <connections/>
+ <resources />
+ <connections />
 </ui>

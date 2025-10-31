@@ -31,10 +31,18 @@ void MainWindow::closeProject(bool silent)
         projectManager->setProjectName("");
     }
 
+    /* Clear permanent status bar label */
+    if (statusBarPermanentLabel) {
+        statusBarPermanentLabel->clear();
+    }
+
     /* Inform user that project is closed only if not silent mode */
     if (!silent) {
         statusBar()->showMessage(tr("Project closed"), 2000);
     }
+
+    /* Update window title */
+    updateWindowTitle();
 }
 
 /* Private helper function to setup the project tree view */
@@ -163,6 +171,17 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         model->appendRow(projectItem);
         /* Always expand the project item to show directories */
         ui->treeViewProjectFile->expand(model->indexFromItem(projectItem));
+    }
+
+    /* Update window title */
+    updateWindowTitle();
+
+    /* Display project path in permanent status bar label (60 char max) */
+    if (statusBarPermanentLabel) {
+        const QString projectPath = projectManager->getProjectPath() + "/"
+                                    + projectManager->getProjectName() + ".soc_pro";
+        const QString displayPath = truncateMiddle(projectPath, 60);
+        statusBarPermanentLabel->setText(QString("Project: %1").arg(displayPath));
     }
 }
 
