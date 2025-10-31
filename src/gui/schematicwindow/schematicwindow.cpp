@@ -36,6 +36,11 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
 {
     ui->setupUi(this);
 
+    /* Setup permanent status bar label */
+    statusBarPermanentLabel = new QLabel(this);
+    statusBarPermanentLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    statusBar()->addPermanentWidget(statusBarPermanentLabel, 1);
+
     // Register custom item factory for SocModuleItem
     auto factoryFunc
         = std::bind(&ModuleLibrary::CustomItemFactory::from_container, std::placeholders::_1);
@@ -300,4 +305,23 @@ void SchematicWindow::setProjectManager(QSocProjectManager *projectManager)
             moduleLibraryWidget->setModuleManager(moduleManager);
         }
     }
+}
+
+QString SchematicWindow::truncateMiddle(const QString &str, int maxLen)
+{
+    if (str.length() <= maxLen) {
+        return str;
+    }
+
+    /* Minimum 4 chars needed: "a..." */
+    if (maxLen < 4) {
+        return str.left(maxLen);
+    }
+
+    const int ellipsisLen  = 3;
+    const int availableLen = maxLen - ellipsisLen;
+    const int leftLen      = availableLen / 2;
+    const int rightLen     = availableLen - leftLen;
+
+    return str.left(leftLen) + "..." + str.right(rightLen);
 }

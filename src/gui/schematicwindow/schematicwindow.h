@@ -4,6 +4,7 @@
 #ifndef SCHEMATICWINDOW_H
 #define SCHEMATICWINDOW_H
 
+#include <QLabel>
 #include <QMainWindow>
 
 #include <qschematic/scene.hpp>
@@ -331,5 +332,11 @@ private:
 
     /* Current file path (empty string means untitled) */
     QString m_currentFilePath;
+
+    /* Status bar permanent label */
+    QLabel *statusBarPermanentLabel = nullptr;
+
+    /* Truncate middle of string for display */
+    QString truncateMiddle(const QString &str, int maxLen);
 };
 #endif // SCHEMATICWINDOW_H

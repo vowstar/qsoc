@@ -202,23 +202,34 @@ bool SchematicWindow::checkSaveBeforeClose()
 
 QString SchematicWindow::getCurrentFileName() const
 {
-    return m_currentFilePath.isEmpty() ? "untitled" : QFileInfo(m_currentFilePath).fileName();
+    return m_currentFilePath.isEmpty() ? "untitled"
+                                       : QFileInfo(m_currentFilePath).completeBaseName();
 }
 
 void SchematicWindow::updateWindowTitle()
 {
-    QString title;
+    QString filename;
     if (m_currentFilePath.isEmpty()) {
-        title = "untitled";
+        filename = "untitled";
     } else {
-        title = QFileInfo(m_currentFilePath).fileName();
+        filename = QFileInfo(m_currentFilePath).completeBaseName();
     }
 
     if (!scene.undoStack()->isClean()) {
-        title = "*" + title;
+        filename = "*" + filename;
     }
 
-    setWindowTitle(title);
+    setWindowTitle(QString("Schematic Editor - %1").arg(filename));
+
+    /* Update status bar permanent label */
+    if (statusBarPermanentLabel) {
+        if (m_currentFilePath.isEmpty()) {
+            statusBarPermanentLabel->clear();
+        } else {
+            const QString displayPath = truncateMiddle(m_currentFilePath, 60);
+            statusBarPermanentLabel->setText(QString("Schematic: %1").arg(displayPath));
+        }
+    }
 }
 
 void SchematicWindow::closeEvent(QCloseEvent *event)
