@@ -116,7 +116,7 @@ private slots:
 
         /* Check that the message list contains the expected message */
         QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("qsoc " QSOC_VERSION));
+        QVERIFY(messageList.first().contains("QSoC " QSOC_VERSION));
     }
 
     void optionVersion()
@@ -134,7 +134,7 @@ private slots:
 
         /* Check that the message list contains the expected message */
         QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("qsoc " QSOC_VERSION));
+        QVERIFY(messageList.first().contains("QSoC " QSOC_VERSION));
     }
 };
 

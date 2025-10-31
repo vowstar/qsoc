@@ -21,7 +21,7 @@ QSocCliWorker::QSocCliWorker(QObject *parent)
     , generateManager(new QSocGenerateManager(this, projectManager, moduleManager, busManager))
 {
     /* Set up application name and version */
-    QCoreApplication::setApplicationName("qsoc");
+    QCoreApplication::setApplicationName("QSoC");
     QCoreApplication::setApplicationVersion(QSOC_VERSION);
     /* Set up command line parser */
     parser.setApplicationDescription(

@@ -5,6 +5,8 @@
 
 #include "./ui_mainwindow.h"
 
+#include <QCoreApplication>
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
@@ -50,19 +52,18 @@ MainWindow::~MainWindow()
 
 void MainWindow::updateWindowTitle()
 {
+    const QString appName    = QCoreApplication::applicationName();
+    const QString appVersion = QCoreApplication::applicationVersion();
+
     if (!projectManager || projectManager->getProjectName().isEmpty()) {
-        setWindowTitle("QSoC");
+        /* No project open: show application name and version */
+        setWindowTitle(QString("%1 %2").arg(appName).arg(appVersion));
         return;
     }
 
-    /* Build full project file path */
-    const QString projectPath = projectManager->getProjectPath() + "/"
-                                + projectManager->getProjectName() + ".soc_pro";
-
-    /* Truncate if too long */
-    const QString displayPath = truncateMiddle(projectPath, 60);
-
-    setWindowTitle(QString("QSoC - Project: %1").arg(displayPath));
+    /* Project open: show application name, version, and project name */
+    const QString projectName = projectManager->getProjectName();
+    setWindowTitle(QString("%1 %2 - Project: %3").arg(appName).arg(appVersion).arg(projectName));
 }
 
 QString MainWindow::truncateMiddle(const QString &str, int maxLen)
