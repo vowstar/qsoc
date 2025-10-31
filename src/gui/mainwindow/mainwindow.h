@@ -8,6 +8,7 @@
 #include "gui/schematicwindow/schematicwindow.h"
 
 #include <QDir>
+#include <QLabel>
 #include <QMainWindow>
 
 QT_BEGIN_NAMESPACE
@@ -145,6 +146,22 @@ private:
      */
     void autoOpenSingleProject();
 
+    /**
+     * @brief Update window title with project path.
+     * @details Updates the window title to show project file path. If path exceeds
+     *          60 characters, truncates middle portion and replaces with "...".
+     */
+    void updateWindowTitle();
+
+    /**
+     * @brief Truncate string middle with ellipsis.
+     * @details If string exceeds maxLen, keeps beginning and end, replaces middle with "...".
+     * @param str Input string
+     * @param maxLen Maximum length (including ellipsis)
+     * @return Truncated string
+     */
+    static QString truncateMiddle(const QString &str, int maxLen);
+
     /* Editor Management */
 
     /**
@@ -166,6 +183,8 @@ private:
     QSocProjectManager *projectManager = nullptr;
     /* Schematic window object */
     SchematicWindow schematicWindow;
+    /* Permanent status bar label (not affected by clearMessage or menu hover) */
+    QLabel *statusBarPermanentLabel = nullptr;
 };
 
 #endif // MAINWINDOW_H
