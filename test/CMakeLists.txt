@@ -47,7 +47,18 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS
 
 function(QT_ADD_TEST_TARGET TARGET_NAME)
     add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
-    set_tests_properties(${TARGET_NAME} PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+    # GUI tests require offscreen platform plugin
+    if(${TARGET_NAME} MATCHES "^test_qsocgui")
+        set_tests_properties(${TARGET_NAME} PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        )
+    else()
+        set_tests_properties(${TARGET_NAME} PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        )
+    endif()
 
     if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         qt_add_resources(PROJECT_SOURCES "${PROJECT_QRC_FILES}")
@@ -155,3 +166,8 @@ qt_add_test_target("test_qsoccliparsegenerateclocklogic")
 qt_add_test_target("test_qsoccliparsegeneratepowerlogic")
 qt_add_test_target("test_qsoccliparsegeneratetoplevelport")
 qt_add_test_target("test_qsoccliparsegeneratereportunconnected")
+
+# GUI Tests
+if(TARGET Qt${QT_VERSION_MAJOR}::Widgets)
+    qt_add_test_target("test_qsocguischematicwindow")
+endif()
