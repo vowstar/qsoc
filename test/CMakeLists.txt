@@ -146,6 +146,7 @@ if(ENABLE_SPDX_HEADERS)
 endif()
 
 qt_add_test_target("test_qslangdriver")
+qt_add_test_target("test_qsocverilogsignalextractor")
 qt_add_test_target("test_qsoccliparsebus")
 qt_add_test_target("test_qsoccliparsegenerate")
 qt_add_test_target("test_qsoccliparsegenerateclocklogic")
