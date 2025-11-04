@@ -214,12 +214,13 @@ public:
     static QPair<QString, QString> parseSignalBitSelect(const QString &signalName);
 
     /**
-     * @brief Collect output signals from comb/seq/fsm sections
-     * @details Analyzes netlist data and collects all output signals from combinational,
-     *          sequential, and FSM logic blocks, including their bit selection information
-     * @return List of PortDetailInfo for all comb/seq/fsm outputs
+     * @brief Collect all signals (inputs and outputs) from comb/seq/fsm sections
+     * @details Analyzes netlist data and collects all signals referenced by combinational,
+     *          sequential, and FSM logic blocks. This includes both output signals and
+     *          input signals extracted from Verilog expressions using slang parser.
+     * @return List of PortDetailInfo for all comb/seq/fsm signals with direction info
      */
-    QList<PortDetailInfo> collectCombSeqFsmOutputs();
+    QList<PortDetailInfo> collectCombSeqFsmSignals();
 
     /**
      * @brief Check if two bit ranges overlap

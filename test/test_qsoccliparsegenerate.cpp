@@ -3184,6 +3184,138 @@ instance:
             !verifyVerilogContent("test_cond_conflict", "c906 u_pad_conflict"),
             "Conflicting instance should be skipped");
     }
+
+    /* Test comb/seq input signal extraction using slang parser */
+    void testCombSeqFsmInputSignalExtraction()
+    {
+        messageList.clear();
+
+        /* Create a netlist with various comb/seq expressions to test input extraction */
+        const QString content = R"(
+port:
+  # Input signals that should be detected
+  clk:
+    type: logic
+    direction: in
+  rst_n:
+    type: logic
+    direction: in
+  data_in:
+    type: logic[7:0]
+    direction: in
+  enable:
+    type: logic
+    direction: in
+  counter:
+    type: logic[3:0]
+    direction: in
+
+  # Output signals
+  simple_out:
+    type: logic
+    direction: out
+  bit_select_out:
+    type: logic[3:0]
+    direction: out
+  concat_out:
+    type: logic[7:0]
+    direction: out
+  arithmetic_out:
+    type: logic[3:0]
+    direction: out
+  seq_out:
+    type: logic[7:0]
+    direction: out
+
+# Test simple signal reference (like cnvr_test_out[3])
+comb:
+  - out: simple_out
+    expr: "data_in[0]"
+
+  # Test bit selection
+  - out: bit_select_out
+    expr: "data_in[7:4]"
+
+  # Test concatenation/replication expression (like {8{signal}})
+  - out: concat_out
+    expr: "{8{enable}}"
+
+  # Test multi-signal arithmetic expression
+  - out: arithmetic_out
+    expr: "counter + 4'd1"
+
+# Test seq input extraction
+seq:
+  - reg: seq_out
+    clk: clk
+    rst: rst_n
+    next: "data_in"
+
+# Empty instance section (required)
+instance: {}
+)";
+
+        /* Create netlist file */
+        const QString filePath = createTempFile("test_comb_seq_input_extraction.soc_net", content);
+
+        /* Run the command to generate Verilog */
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        /* Verify the output file exists */
+        QVERIFY(verifyVerilogOutputExistence("test_comb_seq_input_extraction"));
+
+        /* Read generated Verilog content */
+        const QString verilogFile = projectManager.getCurrentPath()
+                                    + "/output/test_comb_seq_input_extraction.v";
+        QFile file(verilogFile);
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = file.readAll();
+        file.close();
+
+        /* Verify module structure */
+        QVERIFY(verifyVerilogContent(
+            "test_comb_seq_input_extraction", "module test_comb_seq_input_extraction"));
+
+        /* Verify input signals are declared and used correctly */
+        QVERIFY2(
+            verilogContent.contains("input") && verilogContent.contains("clk"),
+            "Clock signal should be declared as input");
+        QVERIFY2(verilogContent.contains("rst_n"), "Reset signal should be in the module");
+        QVERIFY2(verilogContent.contains("data_in"), "data_in should be declared and used");
+        QVERIFY2(verilogContent.contains("enable"), "enable signal should be declared and used");
+        QVERIFY2(verilogContent.contains("counter"), "counter signal should be declared and used");
+
+        /* Verify comb assignments are generated */
+        QVERIFY(verifyVerilogContent("test_comb_seq_input_extraction", "assign simple_out"));
+        QVERIFY(verifyVerilogContent("test_comb_seq_input_extraction", "assign bit_select_out"));
+        QVERIFY(verifyVerilogContent("test_comb_seq_input_extraction", "assign concat_out"));
+        QVERIFY(verifyVerilogContent("test_comb_seq_input_extraction", "assign arithmetic_out"));
+
+        /* Verify seq logic is generated */
+        QVERIFY(verifyVerilogContent("test_comb_seq_input_extraction", "always"));
+        QVERIFY(verifyVerilogContent("test_comb_seq_input_extraction", "seq_out"));
+
+        /* Verify no undriven warnings for correctly driven signals */
+        QVERIFY2(
+            !verilogContent.contains("FIXME: Net simple_out"),
+            "simple_out should not have undriven warning");
+        QVERIFY2(
+            !verilogContent.contains("FIXME: Net bit_select_out"),
+            "bit_select_out should not have undriven warning");
+        QVERIFY2(
+            !verilogContent.contains("FIXME: Net concat_out"),
+            "concat_out should not have undriven warning");
+        QVERIFY2(
+            !verilogContent.contains("FIXME: Net arithmetic_out"),
+            "arithmetic_out should not have undriven warning");
+        QVERIFY2(
+            !verilogContent.contains("FIXME: Net seq_out"),
+            "seq_out should not have undriven warning");
+    }
 };
 
 QStringList Test::messageList;

@@ -61,10 +61,11 @@ public slots:
      * @brief Parse command line arguments.
      * @details This function will parse command line arguments.
      * @param args command line arguments.
+     * @param silent if true, suppress error logging (for probing/discovery).
      * @retval true Parse successfully.
      * @retval false Parse failed.
      */
-    bool parseArgs(const QString &args);
+    bool parseArgs(const QString &args, bool silent = false);
 
     /**
      * @brief Parse file list.
