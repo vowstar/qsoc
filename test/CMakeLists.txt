@@ -147,6 +147,7 @@ endif()
 
 qt_add_test_target("test_qslangdriver")
 qt_add_test_target("test_qsoccliworker")
+qt_add_test_target("test_qsoccommonqstringutils")
 qt_add_test_target("test_qsoccliparseproject")
 qt_add_test_target("test_qsoccliparsemodule")
 qt_add_test_target("test_qsoccliparsemodulebus")

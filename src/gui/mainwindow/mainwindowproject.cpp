@@ -4,6 +4,7 @@
 #include "gui/mainwindow/mainwindow.h"
 
 #include "./ui_mainwindow.h"
+#include "common/qstringutils.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -180,7 +181,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
     if (statusBarPermanentLabel) {
         const QString projectPath = projectManager->getProjectPath() + "/"
                                     + projectManager->getProjectName() + ".soc_pro";
-        const QString displayPath = truncateMiddle(projectPath, 60);
+        const QString displayPath = QStringUtils::truncateMiddle(projectPath, 60);
         statusBarPermanentLabel->setText(QString("Project: %1").arg(displayPath));
     }
 }

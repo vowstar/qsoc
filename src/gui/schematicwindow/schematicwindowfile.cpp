@@ -4,6 +4,7 @@
 #include "gui/schematicwindow/schematicwindow.h"
 
 #include "./ui_schematicwindow.h"
+#include "common/qstringutils.h"
 
 #include <QCloseEvent>
 #include <QDebug>
@@ -226,7 +227,7 @@ void SchematicWindow::updateWindowTitle()
         if (m_currentFilePath.isEmpty()) {
             statusBarPermanentLabel->clear();
         } else {
-            const QString displayPath = truncateMiddle(m_currentFilePath, 60);
+            const QString displayPath = QStringUtils::truncateMiddle(m_currentFilePath, 60);
             statusBarPermanentLabel->setText(QString("Schematic: %1").arg(displayPath));
         }
     }
