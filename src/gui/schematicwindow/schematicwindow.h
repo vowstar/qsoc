@@ -335,8 +335,5 @@ private:
 
     /* Status bar permanent label */
     QLabel *statusBarPermanentLabel = nullptr;
-
-    /* Truncate middle of string for display */
-    QString truncateMiddle(const QString &str, int maxLen);
 };
 #endif // SCHEMATICWINDOW_H

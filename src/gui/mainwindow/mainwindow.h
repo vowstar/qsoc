@@ -153,15 +153,6 @@ private:
      */
     void updateWindowTitle();
 
-    /**
-     * @brief Truncate string middle with ellipsis.
-     * @details If string exceeds maxLen, keeps beginning and end, replaces middle with "...".
-     * @param str Input string
-     * @param maxLen Maximum length (including ellipsis)
-     * @return Truncated string
-     */
-    static QString truncateMiddle(const QString &str, int maxLen);
-
     /* Editor Management */
 
     /**
