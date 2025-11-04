@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/qslangdriver.h"
 #include "common/qsocgeneratemanager.h"
+#include "common/qstaticlog.h"
 #include "common/qstaticstringweaver.h"
 
 #include <QCoreApplication>
@@ -1291,9 +1293,6 @@ QSocGenerateManager::checkPortDirectionConsistencyWithBitOverlap(
             } else if (direction == "in" || direction == "input") {
                 direction = "output"; /* Top-level input is an output for internal nets */
             }
-        } else if (port.type == PortType::CombSeqFsm) {
-            /* Comb/seq/fsm outputs are always output drivers */
-            direction = "output";
         }
 
         if (direction == "output") {
@@ -2159,12 +2158,13 @@ QPair<QString, QString> QSocGenerateManager::parseSignalBitSelect(const QString 
     return qMakePair(signalName, QString());
 }
 
-QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFsmOutputs()
+QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFsmSignals()
 {
-    QList<PortDetailInfo> outputs;
+    QList<PortDetailInfo> signalList;
+    QSlangDriver          driver; // Create once for all signal extractions
 
     try {
-        // Collect comb outputs
+        // Collect comb outputs and inputs
         if (netlistData["comb"] && netlistData["comb"].IsSequence()) {
             for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
                 const YAML::Node &combItem = netlistData["comb"][i];
@@ -2201,8 +2201,55 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                         }
                     }
 
-                    outputs.append(
+                    signalList.append(
                         PortDetailInfo::createCombSeqFsmPort(baseName, width, "output", bitSelect));
+
+                    /* Extract input signals from expr field */
+                    if (combItem["expr"] && combItem["expr"].IsScalar()) {
+                        const QString expr = QString::fromStdString(
+                            combItem["expr"].as<std::string>());
+
+                        /* Wrap as assignment statement: assign <out> = <expr>; */
+                        QString wrappedExpr = QString("assign %1 = %2;").arg(baseName, expr);
+
+                        /* Use slang to parse and extract input signals */
+                        if (driver.parseVerilogSnippet(wrappedExpr, true)) {
+                            /* Extract all signals referenced in the expression (excluding the output) */
+                            QSet<QString> inputSignals = driver.extractSignalReferences({baseName});
+
+                            /* Add each input signal to the list */
+                            for (const QString &inputSignal : inputSignals) {
+                                /* Find port width for this input */
+                                QString inputWidth = "";
+                                if (netlistData["port"] && netlistData["port"].IsMap()) {
+                                    for (const auto &portEntry : netlistData["port"]) {
+                                        if (portEntry.first.IsScalar()
+                                            && QString::fromStdString(
+                                                   portEntry.first.as<std::string>())
+                                                   == inputSignal) {
+                                            if (portEntry.second.IsMap() && portEntry.second["type"]
+                                                && portEntry.second["type"].IsScalar()) {
+                                                QString portType = QString::fromStdString(
+                                                    portEntry.second["type"].as<std::string>());
+                                                inputWidth = cleanTypeForWireDeclaration(portType);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                /* Add input signal with direction="input" */
+                                signalList.append(
+                                    PortDetailInfo::createCombSeqFsmPort(
+                                        inputSignal, inputWidth, "input", ""));
+                            }
+                        } else {
+                            /* Graceful degradation: log warning but continue */
+                            QStaticLog::logW(
+                                Q_FUNC_INFO,
+                                "Failed to parse comb expr for input extraction: " + expr);
+                        }
+                    }
                 }
             }
         }
@@ -2243,8 +2290,71 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                         }
                     }
 
-                    outputs.append(
+                    signalList.append(
                         PortDetailInfo::createCombSeqFsmPort(baseName, width, "output", bitSelect));
+
+                    /* Extract input signals from next field */
+                    if (seqItem["next"] && seqItem["next"].IsScalar()) {
+                        const QString nextExpr = QString::fromStdString(
+                            seqItem["next"].as<std::string>());
+
+                        /* Wrap as assignment statement: assign <out> = <next_expr>; */
+                        QString wrappedNextExpr = QString("assign %1 = %2;").arg(baseName, nextExpr);
+
+                        /* Use slang to parse and extract input signals */
+                        if (driver.parseVerilogSnippet(wrappedNextExpr, true)) {
+                            /* Extract all signals referenced in next expression (excluding the output reg) */
+                            QSet<QString> inputSignals = driver.extractSignalReferences({baseName});
+
+                            /* Add each input signal to the list */
+                            for (const QString &inputSignal : inputSignals) {
+                                /* Find port width for this input */
+                                QString inputWidth = "";
+                                if (netlistData["port"] && netlistData["port"].IsMap()) {
+                                    for (const auto &portEntry : netlistData["port"]) {
+                                        if (portEntry.first.IsScalar()
+                                            && QString::fromStdString(
+                                                   portEntry.first.as<std::string>())
+                                                   == inputSignal) {
+                                            if (portEntry.second.IsMap() && portEntry.second["type"]
+                                                && portEntry.second["type"].IsScalar()) {
+                                                QString portType = QString::fromStdString(
+                                                    portEntry.second["type"].as<std::string>());
+                                                inputWidth = cleanTypeForWireDeclaration(portType);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                /* Add input signal with direction="input" */
+                                signalList.append(
+                                    PortDetailInfo::createCombSeqFsmPort(
+                                        inputSignal, inputWidth, "input", ""));
+                            }
+                        } else {
+                            /* Graceful degradation: log warning but continue */
+                            QStaticLog::logW(
+                                Q_FUNC_INFO,
+                                "Failed to parse seq next expr for input extraction: " + nextExpr);
+                        }
+                    }
+
+                    /* Extract clock signal */
+                    if (seqItem["clk"] && seqItem["clk"].IsScalar()) {
+                        const QString clkSignal = QString::fromStdString(
+                            seqItem["clk"].as<std::string>());
+                        signalList.append(
+                            PortDetailInfo::createCombSeqFsmPort(clkSignal, "", "input", ""));
+                    }
+
+                    /* Extract reset signal */
+                    if (seqItem["rst"] && seqItem["rst"].IsScalar()) {
+                        const QString rstSignal = QString::fromStdString(
+                            seqItem["rst"].as<std::string>());
+                        signalList.append(
+                            PortDetailInfo::createCombSeqFsmPort(rstSignal, "", "input", ""));
+                    }
                 }
             }
         }
@@ -2293,7 +2403,7 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                             }
                         }
 
-                        outputs.append(
+                        signalList.append(
                             PortDetailInfo::createTopLevelPort(baseName, width, "output", bitSelect));
                     }
                 }
@@ -2301,14 +2411,14 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
         }
 
     } catch (const YAML::Exception &e) {
-        qWarning() << "YAML exception in collectCombSeqFsmOutputs:" << e.what();
+        qWarning() << "YAML exception in collectCombSeqFsmSignals:" << e.what();
     } catch (const std::exception &e) {
-        qWarning() << "Standard exception in collectCombSeqFsmOutputs:" << e.what();
+        qWarning() << "Standard exception in collectCombSeqFsmSignals:" << e.what();
     } catch (...) {
-        qWarning() << "Unknown exception in collectCombSeqFsmOutputs";
+        qWarning() << "Unknown exception in collectCombSeqFsmSignals";
     }
 
-    return outputs;
+    return signalList;
 }
 
 bool QSocGenerateManager::doBitRangesOverlap(const QString &range1, const QString &range2)

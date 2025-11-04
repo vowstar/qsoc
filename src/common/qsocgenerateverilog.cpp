@@ -475,6 +475,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         } else if (netlistData["net"].size() == 0) {
             qWarning() << "Warning: 'net' section is empty, no wire declarations to generate";
         } else {
+            /* Collect comb/seq/fsm signals (inputs and outputs) once before the loop */
+            const QList<PortDetailInfo> combSeqFsmSignals = collectCombSeqFsmSignals();
+
             for (auto netIter = netlistData["net"].begin(); netIter != netlistData["net"].end();
                  ++netIter) {
                 if (!netIter->first.IsScalar()) {
@@ -708,38 +711,37 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     }
                 }
 
-                /* Add comb/seq/fsm outputs as additional drivers for this net */
-                QList<PortDetailInfo> combSeqFsmOutputs = collectCombSeqFsmOutputs();
-                for (const PortDetailInfo &combOutput : combSeqFsmOutputs) {
-                    // Check if this comb/seq/fsm output drives the current net
-                    QString outputBaseName  = combOutput.portName;
-                    QString outputBitSelect = combOutput.bitSelect;
+                /* Add comb/seq/fsm signals that affect this net */
+                for (const PortDetailInfo &combSignal : combSeqFsmSignals) {
+                    // Check if this comb/seq/fsm signal affects the current net
+                    QString signalBaseName  = combSignal.portName;
+                    QString signalBitSelect = combSignal.bitSelect;
 
-                    // If output has bit selection, it affects only part of the signal
-                    // If no bit selection, it affects the full signal
-                    bool drivesThisNet = false;
+                    // If signal has bit selection, it affects only part of the net
+                    // If no bit selection, it affects the full net
+                    bool affectsThisNet = false;
 
-                    if (outputBaseName == netName) {
-                        drivesThisNet = true;
-                    } else if (connectedToTopPort && outputBaseName == connectedPortName) {
-                        drivesThisNet = true;
+                    if (signalBaseName == netName) {
+                        affectsThisNet = true;
+                    } else if (connectedToTopPort && signalBaseName == connectedPortName) {
+                        affectsThisNet = true;
                     }
 
-                    if (drivesThisNet) {
-                        // Add this comb/seq/fsm output as a driver
-                        // Include bit selection in the port name if it exists
-                        QString fullSignalName = outputBaseName;
-                        if (!outputBitSelect.isEmpty()) {
-                            fullSignalName = outputBaseName + outputBitSelect;
+                    if (affectsThisNet) {
+                        // Add this comb/seq/fsm signal to the connection list
+                        // Include bit selection in the signal name if it exists
+                        QString fullSignalName = signalBaseName;
+                        if (!signalBitSelect.isEmpty()) {
+                            fullSignalName = signalBaseName + signalBitSelect;
                         }
                         portConnections.append(PortConnection::createCombSeqFsmPort(fullSignalName));
 
                         portDetails.append(
                             PortDetailInfo::createCombSeqFsmPort(
-                                outputBaseName,
-                                combOutput.width,
-                                "output", // comb/seq/fsm outputs are always output drivers
-                                outputBitSelect));
+                                signalBaseName,
+                                combSignal.width,
+                                combSignal.direction, // Use actual direction from signal
+                                signalBitSelect));
                     }
                 }
 
@@ -873,6 +875,15 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                                 out << "     *   Top-Level Port: " << detail.portName
                                     << ", Direction: " << displayDirection
+                                    << ", Width: " << displayWidth
+                                    << (detail.bitSelect.isEmpty()
+                                            ? ""
+                                            : ", Bit Selection: " + detail.bitSelect)
+                                    << "\n";
+                            } else if (detail.type == PortType::CombSeqFsm) {
+                                /* Comb/Seq/FSM signal */
+                                out << "     *   Comb/Seq/FSM Signal: " << detail.portName
+                                    << ", Direction: " << detail.direction
                                     << ", Width: " << displayWidth
                                     << (detail.bitSelect.isEmpty()
                                             ? ""
