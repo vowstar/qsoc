@@ -12,15 +12,21 @@
 #include <QTemporaryFile>
 #include <QTextStream>
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 
 #include <slang/ast/ASTSerializer.h>
+#include <slang/ast/ASTVisitor.h>
 #include <slang/ast/Compilation.h>
+#include <slang/ast/expressions/MiscExpressions.h>
 #include <slang/ast/symbols/CompilationUnitSymbols.h>
+#include <slang/ast/symbols/ValueSymbol.h>
 #include <slang/diagnostics/TextDiagnosticClient.h>
 #include <slang/driver/Driver.h>
+#include <slang/syntax/AllSyntax.h>
 #include <slang/syntax/SyntaxTree.h>
+#include <slang/syntax/SyntaxVisitor.h>
 #include <slang/text/Json.h>
 #include <slang/util/String.h>
 #include <slang/util/TimeTrace.h>
@@ -328,4 +334,291 @@ QString QSlangDriver::contentValidFile(const QString &content, const QDir &baseD
         }
     }
     return result.join("\n");
+}
+
+QSet<QString> QSlangDriver::extractAllIdentifiers(const QString &verilogCode)
+{
+    QSet<QString> identifiers;
+
+    /* Create a temporary syntax tree */
+    auto tree = slang::syntax::SyntaxTree::fromText(verilogCode.toStdString());
+
+    /* Recursive function to collect all identifiers */
+    std::function<void(const slang::syntax::SyntaxNode &)> traverse =
+        [&](const slang::syntax::SyntaxNode &node) {
+            if (node.kind == slang::syntax::SyntaxKind::IdentifierName) {
+                auto   &idName     = node.as<slang::syntax::IdentifierNameSyntax>();
+                QString signalName = QString::fromStdString(
+                    std::string(idName.identifier.valueText()));
+                identifiers.insert(signalName);
+            }
+
+            /* Recursively visit children */
+            for (uint32_t i = 0; i < node.getChildCount(); i++) {
+                auto child = node.childNode(i);
+                if (child) {
+                    traverse(*child);
+                }
+            }
+        };
+
+    traverse(tree->root());
+    return identifiers;
+}
+
+QMap<QString, int> QSlangDriver::extractBitWidthRequirements(const QString &verilogCode)
+{
+    QMap<QString, int> bitWidths;
+
+    /* Create a temporary syntax tree to analyze bit selections */
+    auto tree = slang::syntax::SyntaxTree::fromText(verilogCode.toStdString());
+
+    /* Helper to extract integer value from literal expressions */
+    std::function<int(slang::syntax::ExpressionSyntax *)> extractConstantValue =
+        [](slang::syntax::ExpressionSyntax *expr) -> int {
+        if (!expr)
+            return -1;
+
+        if (expr->kind == slang::syntax::SyntaxKind::IntegerLiteralExpression) {
+            auto &literal = expr->as<slang::syntax::LiteralExpressionSyntax>();
+            try {
+                std::string valueStr(literal.literal.valueText());
+                return std::stoi(valueStr);
+            } catch (...) {
+                return -1;
+            }
+        }
+
+        return -1;
+    };
+
+    /* Recursive function to traverse syntax tree */
+    std::function<void(const slang::syntax::SyntaxNode &)> traverse =
+        [&](const slang::syntax::SyntaxNode &node) {
+            /* Check if this is range or bit select */
+            if (node.kind == slang::syntax::SyntaxKind::SimpleRangeSelect
+                || node.kind == slang::syntax::SyntaxKind::AscendingRangeSelect
+                || node.kind == slang::syntax::SyntaxKind::DescendingRangeSelect) {
+                auto &rangeSelect = node.as<slang::syntax::RangeSelectSyntax>();
+
+                int leftIdx  = extractConstantValue(rangeSelect.left);
+                int rightIdx = extractConstantValue(rangeSelect.right);
+
+                /* Find the identifier this range applies to */
+                auto parent = node.parent;
+                while (parent) {
+                    if (parent->kind == slang::syntax::SyntaxKind::IdentifierSelectName) {
+                        auto &selectName = parent->as<slang::syntax::IdentifierSelectNameSyntax>();
+                        QString signalName = QString::fromStdString(
+                            std::string(selectName.identifier.valueText()));
+
+                        if (leftIdx >= 0 && rightIdx >= 0) {
+                            int highBit       = std::max(leftIdx, rightIdx);
+                            int requiredWidth = highBit + 1;
+                            if (!bitWidths.contains(signalName)
+                                || bitWidths[signalName] < requiredWidth) {
+                                bitWidths[signalName] = requiredWidth;
+                            }
+                        }
+                        break;
+                    }
+                    parent = parent->parent;
+                }
+            } else if (node.kind == slang::syntax::SyntaxKind::BitSelect) {
+                auto &bitSelect = node.as<slang::syntax::BitSelectSyntax>();
+                int   bitIndex  = extractConstantValue(bitSelect.expr);
+
+                /* Find the identifier this bit select applies to */
+                auto parent = node.parent;
+                while (parent) {
+                    if (parent->kind == slang::syntax::SyntaxKind::IdentifierSelectName) {
+                        auto &selectName = parent->as<slang::syntax::IdentifierSelectNameSyntax>();
+                        QString signalName = QString::fromStdString(
+                            std::string(selectName.identifier.valueText()));
+
+                        if (bitIndex >= 0) {
+                            int requiredWidth = bitIndex + 1;
+                            if (!bitWidths.contains(signalName)
+                                || bitWidths[signalName] < requiredWidth) {
+                                bitWidths[signalName] = requiredWidth;
+                            }
+                        }
+                        break;
+                    }
+                    parent = parent->parent;
+                }
+            }
+
+            /* Recursively visit children */
+            for (uint32_t i = 0; i < node.getChildCount(); i++) {
+                auto child = node.childNode(i);
+                if (child) {
+                    traverse(*child);
+                }
+            }
+        };
+
+    traverse(tree->root());
+
+    return bitWidths;
+}
+
+bool QSlangDriver::parseVerilogSnippet(const QString &verilogCode, bool wrapInModule)
+{
+    /* If no wrapping needed, directly parse */
+    if (!wrapInModule) {
+        QTemporaryFile tempFile("qsoc_snippet_XXXXXX.v");
+        tempFile.setAutoRemove(false);
+        if (!tempFile.open()) {
+            return false;
+        }
+        QTextStream(&tempFile) << verilogCode;
+        tempFile.flush();
+        tempFile.close();
+
+        QString args
+            = QString("slang --single-unit --ignore-unknown-modules %1").arg(tempFile.fileName());
+        bool result = parseArgs(args);
+        tempFile.remove();
+        return result;
+    }
+
+    /* Two-pass approach for wrapped code */
+    /* Pass 1: Try parsing to collect undeclared identifiers */
+    QString wrappedCode = QString("module __qsoc_temp_parse__;\n%1\nendmodule\n").arg(verilogCode);
+
+    QTemporaryFile tempFile1("qsoc_snippet_pass1_XXXXXX.v");
+    tempFile1.setAutoRemove(false);
+    if (!tempFile1.open()) {
+        return false;
+    }
+    QTextStream(&tempFile1) << wrappedCode;
+    tempFile1.flush();
+    tempFile1.close();
+
+    /* Save original stderr content */
+    std::string originalStderr = slang::OS::capturedStderr;
+
+    /* Try first parse - may fail */
+    QString args1
+        = QString("slang --single-unit --ignore-unknown-modules %1").arg(tempFile1.fileName());
+    bool firstPassResult = parseArgs(args1);
+
+    if (firstPassResult) {
+        /* Parsing succeeded, no need for second pass */
+        tempFile1.remove();
+        return true;
+    }
+
+    /* First pass failed, continue to extract undeclared identifiers */
+
+    /* Extract stderr from parseArgs */
+    QString stderrOutput = QString::fromStdString(slang::OS::capturedStderr);
+
+    /* Restore original stderr */
+    slang::OS::capturedStderr = originalStderr;
+
+    /* Extract undeclared identifiers from error messages */
+    QSet<QString>                   undeclaredIds;
+    static const QRegularExpression undefRe(R"(use of undeclared identifier '([^']+)')");
+    QRegularExpressionMatchIterator it = undefRe.globalMatch(stderrOutput);
+    while (it.hasNext()) {
+        undeclaredIds.insert(it.next().captured(1));
+    }
+
+    tempFile1.remove();
+
+    /* Analyze bit width requirements from syntax */
+    QMap<QString, int> bitWidths = extractBitWidthRequirements(verilogCode);
+
+    /* Add all signals with bit selections (they must be valid signal names, not keywords) */
+    for (const QString &signal : bitWidths.keys()) {
+        undeclaredIds.insert(signal);
+    }
+
+    /* Pass 2: Generate declarations with appropriate widths */
+    QStringList declarationList;
+    for (const QString &id : undeclaredIds) {
+        int     width = bitWidths.value(id, 0);
+        QString declaration;
+        if (width > 1) {
+            /* Multi-bit signal: use [N-1:0] format */
+            declaration = QString("    logic [%1:0] %2;").arg(width - 1).arg(id);
+        } else if (width == 1) {
+            /* Single bit accessed with index [0] - must use [0:0] not scalar */
+            declaration = QString("    logic [0:0] %1;").arg(id);
+        } else {
+            /* No bit selection: declare as scalar (1-bit) */
+            declaration = QString("    logic %1;").arg(id);
+        }
+        declarationList.append(declaration);
+    }
+    declarationList.sort();
+    QString declarations = declarationList.join("\n") + "\n";
+
+    QString finalCode
+        = QString("module __qsoc_temp_parse__;\n%1%2\nendmodule\n").arg(declarations, verilogCode);
+
+    QTemporaryFile tempFile2("qsoc_snippet_pass2_XXXXXX.v");
+    tempFile2.setAutoRemove(false);
+    if (!tempFile2.open()) {
+        return false;
+    }
+    QTextStream(&tempFile2) << finalCode;
+    tempFile2.flush();
+    tempFile2.close();
+
+    QString args2
+        = QString("slang --single-unit --ignore-unknown-modules %1").arg(tempFile2.fileName());
+    bool result = parseArgs(args2);
+    tempFile2.remove();
+    return result;
+}
+
+QSet<QString> QSlangDriver::extractSignalReferences(const QSet<QString> &excludeSignals)
+{
+    QSet<QString> signalSet;
+
+    if (!compilation) {
+        QStaticLog::logW(Q_FUNC_INFO, "No compilation available");
+        return signalSet;
+    }
+
+    /* Recursive function to extract identifiers from JSON AST */
+    std::function<void(const json &)> extractFromJson = [&](const json &node) {
+        if (node.is_object()) {
+            /* Check if this node has a "name" field and represents a signal */
+            if (node.contains("kind") && node.contains("name")) {
+                std::string kind = node["kind"];
+
+                /* Extract names from Variable, Net, and expression nodes */
+                if (kind == "Variable" || kind == "Net" || kind == "NamedValue"
+                    || kind == "NamedValueExpression") {
+                    std::string name  = node["name"].get<std::string>();
+                    QString     qname = QString::fromStdString(name);
+
+                    /* Filter internal symbols and excluded signals */
+                    if (!qname.isEmpty() && !qname.startsWith("__")
+                        && !excludeSignals.contains(qname)) {
+                        signalSet.insert(qname);
+                    }
+                }
+            }
+
+            /* Recursively process all object members */
+            for (auto it = node.begin(); it != node.end(); ++it) {
+                extractFromJson(it.value());
+            }
+        } else if (node.is_array()) {
+            /* Recursively process array elements */
+            for (const auto &element : node) {
+                extractFromJson(element);
+            }
+        }
+    };
+
+    /* Extract from JSON AST */
+    extractFromJson(ast);
+
+    return signalSet;
 }

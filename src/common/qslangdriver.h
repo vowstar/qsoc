@@ -109,6 +109,46 @@ public slots:
     const QStringList &getModuleList();
 
     /**
+     * @brief Parse Verilog code snippet
+     * @details This function parses a Verilog code snippet by wrapping it in a
+     *          minimal module structure. Useful for syntax checking code fragments
+     *          from comb/seq primitives.
+     * @param verilogCode Verilog code snippet (can be incomplete module)
+     * @param wrapInModule If true, wrap snippet in a temporary module
+     * @return true if parsing succeeded, false otherwise
+     */
+    bool parseVerilogSnippet(const QString &verilogCode, bool wrapInModule = true);
+
+    /**
+     * @brief Extract signal references from parsed AST
+     * @details Traverses the AST to find all signal references (NamedValueExpression nodes).
+     *          Use after parseVerilogSnippet() or parseFileList() to extract referenced signals.
+     * @param excludeSignals Signals to exclude from the result (e.g., known outputs)
+     * @return Set of signal names referenced in the code
+     * @note Returns empty set if no compilation has been performed yet
+     */
+    QSet<QString> extractSignalReferences(const QSet<QString> &excludeSignals = {});
+
+private:
+    /**
+     * @brief Extract bit width requirements from Verilog code syntax
+     * @details Analyzes syntax tree to find bit selections like signal[N:M] or signal[N]
+     *          and determines minimum required width for each signal
+     * @param verilogCode Verilog code to analyze
+     * @return Map of signal names to minimum required bit width
+     */
+    QMap<QString, int> extractBitWidthRequirements(const QString &verilogCode);
+
+    /**
+     * @brief Extract all identifiers from Verilog code syntax
+     * @details Traverses syntax tree to find all identifier references
+     * @param verilogCode Verilog code to analyze
+     * @return Set of all identifier names found
+     */
+    QSet<QString> extractAllIdentifiers(const QString &verilogCode);
+
+public:
+    /**
      * @brief Removes comments from the content.
      * @details This function strips both single line and multiline comments
      *          from the input string. It normalizes line endings to Unix-style
