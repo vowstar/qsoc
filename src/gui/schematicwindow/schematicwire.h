@@ -1,25 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#ifndef CUSTOMWIRE_H
-#define CUSTOMWIRE_H
+#ifndef SCHEMATICWIRE_H
+#define SCHEMATICWIRE_H
 
-#include "modulelibrary/itemtypes.h"
+#include "schematicitemtypes.h"
 
 #include <qschematic/items/wire.hpp>
-
-namespace SchematicCustom {
 
 /**
  * @brief Custom wire with bus visualization support
  * @details Draws thicker background line for bus connections
  */
-class CustomWire : public QSchematic::Items::Wire
+class SchematicWire : public QSchematic::Items::Wire
 {
     Q_OBJECT
 
 public:
-    explicit CustomWire(int type = ModuleLibrary::CustomWireType, QGraphicsItem *parent = nullptr);
+    explicit SchematicWire(int type = SchematicWireType, QGraphicsItem *parent = nullptr);
 
     bool isBusWire() const;
     void setBusWire(bool isBus);
@@ -34,6 +32,4 @@ private:
     bool m_isBusWire = false;
 };
 
-} // namespace SchematicCustom
-
-#endif // CUSTOMWIRE_H
+#endif // SCHEMATICWIRE_H

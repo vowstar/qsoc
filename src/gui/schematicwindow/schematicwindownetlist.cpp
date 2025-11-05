@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#include "gui/schematicwindow/customwire.h"
-#include "gui/schematicwindow/modulelibrary/socmoduleconnector.h"
-#include "gui/schematicwindow/modulelibrary/socmoduleitem.h"
+#include "gui/schematicwindow/schematicconnector.h"
+#include "gui/schematicwindow/schematicmodule.h"
 #include "gui/schematicwindow/schematicwindow.h"
+#include "gui/schematicwindow/schematicwire.h"
 
 #include "./ui_schematicwindow.h"
 
@@ -34,7 +34,7 @@
 #include <qschematic/scene.hpp>
 
 #include "common/qsocprojectmanager.h"
-#include "gui/schematicwindow/commands/instance_rename.h"
+#include "gui/schematicwindow/schematicrenamecommand.h"
 
 bool SchematicWindow::eventFilter(QObject *watched, QEvent *event)
 {
@@ -62,8 +62,8 @@ bool SchematicWindow::eventFilter(QObject *watched, QEvent *event)
                 return QMainWindow::eventFilter(watched, event);
             }
 
-            /* Check if it's a SocModuleItem */
-            auto *socItem = dynamic_cast<ModuleLibrary::SocModuleItem *>(item);
+            /* Check if it's a SchematicModule */
+            auto *socItem = dynamic_cast<SchematicModule *>(item);
             if (socItem) {
                 handleLabelDoubleClick(socItem);
                 return true;
@@ -76,8 +76,8 @@ bool SchematicWindow::eventFilter(QObject *watched, QEvent *event)
 
                 /* Search up the parent hierarchy */
                 while (parent) {
-                    /* Check if parent is SocModuleItem (most common case) */
-                    auto *socModuleItem = dynamic_cast<ModuleLibrary::SocModuleItem *>(parent);
+                    /* Check if parent is SchematicModule (most common case) */
+                    auto *socModuleItem = dynamic_cast<SchematicModule *>(parent);
                     if (socModuleItem) {
                         handleLabelDoubleClick(socModuleItem);
                         return true;
@@ -170,7 +170,7 @@ void SchematicWindow::on_actionExportNetlist_triggered()
     }
 }
 
-void SchematicWindow::handleLabelDoubleClick(ModuleLibrary::SocModuleItem *socItem)
+void SchematicWindow::handleLabelDoubleClick(SchematicModule *socItem)
 {
     if (!socItem) {
         return;
@@ -185,7 +185,7 @@ void SchematicWindow::handleLabelDoubleClick(ModuleLibrary::SocModuleItem *socIt
     if (ok && !newName.isEmpty() && newName != currentName) {
         /* Check if name already exists */
         for (const auto &node : scene.nodes()) {
-            auto otherItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+            auto otherItem = std::dynamic_pointer_cast<SchematicModule>(node);
             if (otherItem && otherItem.get() != socItem && otherItem->instanceName() == newName) {
                 QMessageBox::warning(
                     this, tr("Rename Error"), tr("Instance name '%1' already exists").arg(newName));
@@ -196,10 +196,9 @@ void SchematicWindow::handleLabelDoubleClick(ModuleLibrary::SocModuleItem *socIt
         /* Use undo command for renamable operation */
         /* Find the shared_ptr for this socItem */
         for (const auto &node : scene.nodes()) {
-            auto socItemShared = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+            auto socItemShared = std::dynamic_pointer_cast<SchematicModule>(node);
             if (socItemShared && socItemShared.get() == socItem) {
-                scene.undoStack()->push(
-                    new SchematicCommands::InstanceRename(socItemShared, newName));
+                scene.undoStack()->push(new SchematicRenameCommand(socItemShared, newName));
                 break;
             }
         }
@@ -240,14 +239,14 @@ void SchematicWindow::autoNameWires()
         const qreal tolerance = 5.0;
 
         for (const auto &wire : wireNet->wires()) {
-            auto customWire = std::dynamic_pointer_cast<SchematicCustom::CustomWire>(wire);
+            auto customWire = std::dynamic_pointer_cast<SchematicWire>(wire);
             if (!customWire || customWire->points_count() < 2) {
                 continue;
             }
 
             /* Check if any connector attached to this wire is a bus */
             for (const auto &node : scene.nodes()) {
-                auto socItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+                auto socItem = std::dynamic_pointer_cast<SchematicModule>(node);
                 if (!socItem) {
                     continue;
                 }
@@ -257,10 +256,8 @@ void SchematicWindow::autoNameWires()
                         continue;
                     }
 
-                    auto socConnector
-                        = std::dynamic_pointer_cast<ModuleLibrary::SocModuleConnector>(connector);
-                    if (!socConnector
-                        || socConnector->portType() != ModuleLibrary::SocModuleConnector::Bus) {
+                    auto socConnector = std::dynamic_pointer_cast<SchematicConnector>(connector);
+                    if (!socConnector || socConnector->portType() != SchematicConnector::Bus) {
                         continue;
                     }
 
@@ -287,7 +284,7 @@ void SchematicWindow::autoNameWires()
 
         /* Set bus flag for all wires in this net */
         for (const auto &wire : wireNet->wires()) {
-            auto customWire = std::dynamic_pointer_cast<SchematicCustom::CustomWire>(wire);
+            auto customWire = std::dynamic_pointer_cast<SchematicWire>(wire);
             if (customWire) {
                 customWire->setBusWire(isBusNet);
             }
@@ -316,8 +313,8 @@ void SchematicWindow::autoNameWires()
 
             QPointF labelPos;
 
-            /* Use Position enum from SocModuleConnector */
-            using Pos    = ModuleLibrary::SocModuleConnector::Position;
+            /* Use Position enum from SchematicConnector */
+            using Pos    = SchematicConnector::Position;
             auto portPos = static_cast<Pos>(connInfo.portPosition);
 
             /* All directions align to port position (startPos) */
@@ -434,7 +431,7 @@ SchematicWindow::ConnectionInfo SchematicWindow::findStartConnection(
     /* Find connector at start position */
     const qreal tolerance = 5.0; // Grid tolerance
     for (const auto &node : scene.nodes()) {
-        auto socItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+        auto socItem = std::dynamic_pointer_cast<SchematicModule>(node);
         if (!socItem) {
             continue;
         }
@@ -457,12 +454,11 @@ SchematicWindow::ConnectionInfo SchematicWindow::findStartConnection(
                 }
 
                 /* Get port position (Left/Right/Top/Bottom) */
-                auto socConnector = std::dynamic_pointer_cast<ModuleLibrary::SocModuleConnector>(
-                    connector);
+                auto socConnector = std::dynamic_pointer_cast<SchematicConnector>(connector);
                 if (socConnector) {
                     info.portPosition = static_cast<int>(socConnector->modulePosition());
                 } else {
-                    info.portPosition = static_cast<int>(ModuleLibrary::SocModuleConnector::Right);
+                    info.portPosition = static_cast<int>(SchematicConnector::Right);
                 }
 
                 return info;
@@ -544,8 +540,8 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
                 continue;
             }
 
-            /* Get real instance name and module name from SocModuleItem */
-            auto    socItem = dynamic_cast<ModuleLibrary::SocModuleItem *>(node);
+            /* Get real instance name and module name from SchematicModule */
+            auto    socItem = dynamic_cast<SchematicModule *>(node);
             QString instanceName;
             QString moduleName;
 
@@ -553,7 +549,7 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
                 instanceName = socItem->instanceName();
                 moduleName   = socItem->moduleName();
             } else {
-                /* Fallback for non-SocModuleItem nodes */
+                /* Fallback for non-SchematicModule nodes */
                 instanceName = QString("node_%1").arg(quintptr(node), 0, 16);
                 moduleName   = QString("unknown");
             }
@@ -569,9 +565,9 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
 
             /* Check if this is a bus connector */
             bool isBus        = false;
-            auto socConnector = dynamic_cast<ModuleLibrary::SocModuleConnector *>(connector);
+            auto socConnector = dynamic_cast<SchematicConnector *>(connector);
             if (socConnector) {
-                isBus = (socConnector->portType() == ModuleLibrary::SocModuleConnector::Bus);
+                isBus = (socConnector->portType() == SchematicConnector::Bus);
             }
 
             /* Add to instances map */

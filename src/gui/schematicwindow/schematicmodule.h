@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#ifndef SOCMODULEITEM_H
-#define SOCMODULEITEM_H
+#ifndef SCHEMATICMODULE_H
+#define SCHEMATICMODULE_H
 
-#include "itemtypes.h"
+#include "schematicitemtypes.h"
 
 #include <qschematic/items/connector.hpp>
 #include <qschematic/items/label.hpp>
@@ -18,37 +18,35 @@
 #include <QPen>
 #include <QString>
 
-namespace ModuleLibrary {
-
 /**
- * @brief The SocModuleItem class.
+ * @brief The SchematicModule class.
  * @details This class represents a SOC module item that can be placed on a schematic.
  *          It displays the module name and creates connectors for each port.
  */
-class SocModuleItem : public QSchematic::Items::Node
+class SchematicModule : public QSchematic::Items::Node
 {
     Q_OBJECT
 
 public:
     /**
-     * @brief Constructor for SocModuleItem.
+     * @brief Constructor for SchematicModule.
      * @details This constructor initializes the SOC module item.
      * @param[in] moduleName Name of the module
      * @param[in] moduleYaml YAML data containing module definition
      * @param[in] type Type identifier for the item
      * @param[in] parent Parent graphics item
      */
-    explicit SocModuleItem(
+    explicit SchematicModule(
         const QString    &moduleName,
         const YAML::Node &moduleYaml,
-        int               type   = ModuleLibrary::SocModuleItemType,
+        int               type   = SchematicModuleType,
         QGraphicsItem    *parent = nullptr);
 
     /**
-     * @brief Destructor for SocModuleItem.
+     * @brief Destructor for SchematicModule.
      * @details This destructor will free the SOC module item.
      */
-    ~SocModuleItem() override = default;
+    ~SchematicModule() override = default;
 
     /**
      * @brief Get the module name.
@@ -160,6 +158,4 @@ private:
     static constexpr qreal LABEL_HEIGHT = 30.0;  /**< Height reserved for label */
 };
 
-} // namespace ModuleLibrary
-
-#endif // SOCMODULEITEM_H
+#endif // SCHEMATICMODULE_H

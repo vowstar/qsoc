@@ -1,40 +1,38 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#include "customwire.h"
+#include "schematicwire.h"
 
 #include <QPainter>
 
-using namespace SchematicCustom;
-
-CustomWire::CustomWire(int type, QGraphicsItem *parent)
+SchematicWire::SchematicWire(int type, QGraphicsItem *parent)
     : QSchematic::Items::Wire(type, parent)
 {}
 
-bool CustomWire::isBusWire() const
+bool SchematicWire::isBusWire() const
 {
     return m_isBusWire;
 }
 
-void CustomWire::setBusWire(bool isBus)
+void SchematicWire::setBusWire(bool isBus)
 {
     m_isBusWire = isBus;
 }
 
-gpds::container CustomWire::to_container() const
+gpds::container SchematicWire::to_container() const
 {
     auto container = Wire::to_container();
     container.add_value("is_bus", m_isBusWire);
     return container;
 }
 
-void CustomWire::from_container(const gpds::container &container)
+void SchematicWire::from_container(const gpds::container &container)
 {
     Wire::from_container(container);
     m_isBusWire = container.get_value<bool>("is_bus").value_or(false);
 }
 
-void CustomWire::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void SchematicWire::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
 {
     /* If this is a bus wire, draw thicker background line first */
     if (isBusWire()) {

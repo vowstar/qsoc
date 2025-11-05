@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#include "moduleview.h"
-#include "socmoduleitem.h"
+#include "schematiclibraryview.h"
+#include "schematicmodule.h"
 
 #include <qschematic/items/item.hpp>
 #include <qschematic/items/itemmimedata.hpp>
@@ -15,9 +15,7 @@
 #include <QPainter>
 #include <QSet>
 
-using namespace ModuleLibrary;
-
-ModuleView::ModuleView(QWidget *parent)
+SchematicLibraryView::SchematicLibraryView(QWidget *parent)
     : QTreeView(parent)
     , scale_(1.0)
     , scene_(nullptr)
@@ -30,17 +28,17 @@ ModuleView::ModuleView(QWidget *parent)
     setIconSize(QSize(28, 28));
 }
 
-void ModuleView::setPixmapScale(qreal scale)
+void SchematicLibraryView::setPixmapScale(qreal scale)
 {
     scale_ = scale;
 }
 
-void ModuleView::setScene(QSchematic::Scene *scene)
+void SchematicLibraryView::setScene(QSchematic::Scene *scene)
 {
     scene_ = scene;
 }
 
-void ModuleView::startDrag(Qt::DropActions supportedActions)
+void SchematicLibraryView::startDrag(Qt::DropActions supportedActions)
 {
     const QModelIndexList indexes = selectedIndexes();
     if (indexes.count() != 1) {
@@ -62,7 +60,7 @@ void ModuleView::startDrag(Qt::DropActions supportedActions)
 
     /* Generate preview name for drag - onItemAdded will verify on drop */
     auto item    = mimeData->item();
-    auto socItem = std::dynamic_pointer_cast<SocModuleItem>(item);
+    auto socItem = std::dynamic_pointer_cast<SchematicModule>(item);
     if (socItem && scene_) {
         QString previewName
             = SchematicWindow::generateUniqueInstanceName(*scene_, socItem->moduleName());

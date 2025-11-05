@@ -13,11 +13,8 @@
 
 class QSocModuleManager;
 class QSocProjectManager;
-
-namespace ModuleLibrary {
-class ModuleWidget;
-class SocModuleItem;
-} // namespace ModuleLibrary
+class SchematicLibraryWidget;
+class SchematicModule;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -263,7 +260,7 @@ private:
     {
         QString instanceName;
         QString portName;
-        int     portPosition; // ModuleLibrary::SocModuleConnector::Position enum value
+        int     portPosition; // SchematicConnector::Position enum value
     };
 
     /**
@@ -275,7 +272,7 @@ private:
 
     /**
      * @brief Handle item added to scene.
-     * @details Auto-generates unique instance names for SocModuleItems added via drag/drop.
+     * @details Auto-generates unique instance names for SchematicModules added via drag/drop.
      * @param[in] item pointer to the added item
      */
     void onItemAdded(std::shared_ptr<QSchematic::Items::Item> item);
@@ -283,9 +280,9 @@ private:
     /**
      * @brief Handle label double-click for renaming instance.
      * @details Shows input dialog to rename the instance.
-     * @param[in] socItem pointer to the SocModuleItem object
+     * @param[in] socItem pointer to the SchematicModule object
      */
-    void handleLabelDoubleClick(ModuleLibrary::SocModuleItem *socItem);
+    void handleLabelDoubleClick(SchematicModule *socItem);
 
     /**
      * @brief Handle wire double-click for renaming.
@@ -322,7 +319,7 @@ private:
     QSchematic::Settings settings;
 
     /* Module library widget */
-    ModuleLibrary::ModuleWidget *moduleLibraryWidget;
+    SchematicLibraryWidget *moduleLibraryWidget;
 
     /* Module manager */
     QSocModuleManager *moduleManager;

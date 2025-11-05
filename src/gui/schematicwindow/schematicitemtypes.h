@@ -1,19 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#ifndef MODULELIBRARY_ITEMTYPES_H
-#define MODULELIBRARY_ITEMTYPES_H
+#ifndef SCHEMATICITEMTYPES_H
+#define SCHEMATICITEMTYPES_H
 
 #include <qschematic/items/item.hpp>
 
-namespace ModuleLibrary {
-
-enum ItemType {
-    SocModuleItemType      = QSchematic::Items::Item::QSchematicItemUserType + 1,
-    SocModuleConnectorType = QSchematic::Items::Item::QSchematicItemUserType + 2,
-    CustomWireType         = QSchematic::Items::Item::QSchematicItemUserType + 3
+enum SchematicItemType {
+    SchematicModuleType    = QSchematic::Items::Item::QSchematicItemUserType + 1,
+    SchematicConnectorType = QSchematic::Items::Item::QSchematicItemUserType + 2,
+    SchematicWireType      = QSchematic::Items::Item::QSchematicItemUserType + 3
 };
 
-} // namespace ModuleLibrary
-
-#endif // MODULELIBRARY_ITEMTYPES_H
+#endif // SCHEMATICITEMTYPES_H

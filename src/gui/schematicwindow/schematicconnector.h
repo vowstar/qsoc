@@ -1,33 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#ifndef SOCMODULECONNECTOR_H
-#define SOCMODULECONNECTOR_H
+#ifndef SCHEMATICCONNECTOR_H
+#define SCHEMATICCONNECTOR_H
 
 #include <gpds/container.hpp>
 #include <qschematic/items/connector.hpp>
 
-namespace ModuleLibrary {
-
 /**
- * @brief The SocModuleConnector class.
+ * @brief The SchematicConnector class.
  * @details Custom connector for SOC modules with better visual appearance.
  */
-class SocModuleConnector : public QSchematic::Items::Connector
+class SchematicConnector : public QSchematic::Items::Connector
 {
 public:
     enum PortType { Input, Output, InOut, Bus };
     enum Position { Left, Right, Top, Bottom };
 
     /**
-     * @brief Constructor for SocModuleConnector.
+     * @brief Constructor for SchematicConnector.
      * @param[in] gridPoint Grid position for the connector
      * @param[in] text Text label for the connector
      * @param[in] portType Type of port (Input/Output/InOut/Bus)
      * @param[in] position Position on module (Left/Right/Top/Bottom)
      * @param[in] parent Parent graphics item
      */
-    explicit SocModuleConnector(
+    explicit SchematicConnector(
         const QPoint  &gridPoint,
         const QString &text,
         PortType       portType = Input,
@@ -124,6 +122,4 @@ private:
     void updatePositionFromLocation();
 };
 
-} // namespace ModuleLibrary
-
-#endif // SOCMODULECONNECTOR_H
+#endif // SCHEMATICCONNECTOR_H

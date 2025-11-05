@@ -1,30 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#include "modulewidget.h"
+#include "schematiclibrarywidget.h"
 #include "common/qsocmodulemanager.h"
-#include "modulemodel.h"
-#include "moduleview.h"
+#include "schematiclibrarymodel.h"
+#include "schematiclibraryview.h"
 
 #include <QBoxLayout>
 #include <QDebug>
 
-using namespace ModuleLibrary;
-
-ModuleWidget::ModuleWidget(QWidget *parent, QSocModuleManager *moduleManager)
+SchematicLibraryWidget::SchematicLibraryWidget(QWidget *parent, QSocModuleManager *moduleManager)
     : QWidget(parent)
     , model_(nullptr)
     , view_(nullptr)
     , scene_(nullptr)
 {
     try {
-        model_ = new ModuleModel(this, moduleManager);
-        view_  = new ModuleView(this);
+        model_ = new SchematicLibraryModel(this, moduleManager);
+        view_  = new SchematicLibraryView(this);
 
         /* Set up view with model */
         view_->setModel(model_);
 
-        connect(view_, &ModuleView::clicked, this, &ModuleWidget::itemClickedSlot);
+        connect(view_, &SchematicLibraryView::clicked, this, &SchematicLibraryWidget::itemClickedSlot);
 
         /* Main layout */
         auto *layout = new QVBoxLayout(this);
@@ -35,29 +33,29 @@ ModuleWidget::ModuleWidget(QWidget *parent, QSocModuleManager *moduleManager)
         /* Expand all items initially */
         view_->expandAll();
     } catch (const std::exception &e) {
-        qDebug() << "ModuleWidget: Exception in constructor:" << e.what();
+        qDebug() << "SchematicLibraryWidget: Exception in constructor:" << e.what();
         throw;
     } catch (...) {
-        qDebug() << "ModuleWidget: Unknown exception in constructor";
+        qDebug() << "SchematicLibraryWidget: Unknown exception in constructor";
         throw;
     }
 }
 
-void ModuleWidget::expandAll()
+void SchematicLibraryWidget::expandAll()
 {
     if (view_) {
         view_->expandAll();
     }
 }
 
-void ModuleWidget::setPixmapScale(qreal scale)
+void SchematicLibraryWidget::setPixmapScale(qreal scale)
 {
     if (view_) {
         view_->setPixmapScale(scale);
     }
 }
 
-void ModuleWidget::setModuleManager(QSocModuleManager *moduleManager)
+void SchematicLibraryWidget::setModuleManager(QSocModuleManager *moduleManager)
 {
     if (model_) {
         model_->setModuleManager(moduleManager);
@@ -67,7 +65,7 @@ void ModuleWidget::setModuleManager(QSocModuleManager *moduleManager)
     }
 }
 
-void ModuleWidget::setScene(QSchematic::Scene *scene)
+void SchematicLibraryWidget::setScene(QSchematic::Scene *scene)
 {
     scene_ = scene;
     if (view_) {
@@ -75,7 +73,7 @@ void ModuleWidget::setScene(QSchematic::Scene *scene)
     }
 }
 
-void ModuleWidget::itemClickedSlot(const QModelIndex &index)
+void SchematicLibraryWidget::itemClickedSlot(const QModelIndex &index)
 {
     /* Sanity check */
     if (!index.isValid()) {

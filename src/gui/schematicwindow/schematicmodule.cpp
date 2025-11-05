@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#include "socmoduleitem.h"
-#include "socmoduleconnector.h"
+#include "schematicmodule.h"
+#include "schematicconnector.h"
 
 #include <qschematic/items/connector.hpp>
 #include <qschematic/items/label.hpp>
@@ -18,9 +18,7 @@
 #include <QPen>
 #include <QSet>
 
-using namespace ModuleLibrary;
-
-SocModuleItem::SocModuleItem(
+SchematicModule::SchematicModule(
     const QString &moduleName, const YAML::Node &moduleYaml, int type, QGraphicsItem *parent)
     : QSchematic::Items::Node(type, parent)
     , m_moduleName(moduleName)
@@ -46,30 +44,30 @@ SocModuleItem::SocModuleItem(
     createPortsFromYaml();
 
     // Connect signals
-    connect(this, &QSchematic::Items::Node::sizeChanged, this, &SocModuleItem::updateLabelPosition);
+    connect(this, &QSchematic::Items::Node::sizeChanged, this, &SchematicModule::updateLabelPosition);
     connect(this, &QSchematic::Items::Item::settingsChanged, [this] {
         m_label->setSettings(_settings);
     });
 }
 
-QString SocModuleItem::moduleName() const
+QString SchematicModule::moduleName() const
 {
     return m_moduleName;
 }
 
-void SocModuleItem::setModuleName(const QString &name)
+void SchematicModule::setModuleName(const QString &name)
 {
     m_moduleName = name;
     // Note: Don't update label here, label shows instance name
     update();
 }
 
-QString SocModuleItem::instanceName() const
+QString SchematicModule::instanceName() const
 {
     return m_instanceName;
 }
 
-void SocModuleItem::setInstanceName(const QString &name)
+void SchematicModule::setInstanceName(const QString &name)
 {
     m_instanceName = name;
     if (m_label) {
@@ -80,12 +78,12 @@ void SocModuleItem::setInstanceName(const QString &name)
     update();
 }
 
-YAML::Node SocModuleItem::moduleYaml() const
+YAML::Node SchematicModule::moduleYaml() const
 {
     return m_moduleYaml;
 }
 
-void SocModuleItem::setModuleYaml(const YAML::Node &yaml)
+void SchematicModule::setModuleYaml(const YAML::Node &yaml)
 {
     m_moduleYaml = yaml;
 
@@ -99,9 +97,9 @@ void SocModuleItem::setModuleYaml(const YAML::Node &yaml)
     createPortsFromYaml();
 }
 
-std::shared_ptr<QSchematic::Items::Item> SocModuleItem::deepCopy() const
+std::shared_ptr<QSchematic::Items::Item> SchematicModule::deepCopy() const
 {
-    auto copy = std::make_shared<SocModuleItem>(m_moduleName, m_moduleYaml, type());
+    auto copy = std::make_shared<SchematicModule>(m_moduleName, m_moduleYaml, type());
 
     // Copy instance name (important for maintaining unique names during copy/paste)
     copy->setInstanceName(m_instanceName);
@@ -113,7 +111,7 @@ std::shared_ptr<QSchematic::Items::Item> SocModuleItem::deepCopy() const
     return copy;
 }
 
-gpds::container SocModuleItem::to_container() const
+gpds::container SchematicModule::to_container() const
 {
     // Root container
     gpds::container root;
@@ -139,7 +137,7 @@ gpds::container SocModuleItem::to_container() const
     return root;
 }
 
-void SocModuleItem::from_container(const gpds::container &container)
+void SchematicModule::from_container(const gpds::container &container)
 {
     // Load module name first (needed before Node::from_container)
     if (auto nameOpt = container.get_value<std::string>("module_name")) {
@@ -170,8 +168,7 @@ void SocModuleItem::from_container(const gpds::container &container)
     // Store restored connectors
     const auto restoredConnectors = connectors();
     for (const auto &connector : restoredConnectors) {
-        if (auto socConnector = std::dynamic_pointer_cast<ModuleLibrary::SocModuleConnector>(
-                connector)) {
+        if (auto socConnector = std::dynamic_pointer_cast<SchematicConnector>(connector)) {
             m_ports.append(socConnector);
         }
     }
@@ -191,7 +188,8 @@ void SocModuleItem::from_container(const gpds::container &container)
     }
 }
 
-void SocModuleItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void SchematicModule::paint(
+    QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
 {
     Q_UNUSED(option)
     Q_UNUSED(widget)
@@ -247,7 +245,7 @@ void SocModuleItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
     }
 }
 
-void SocModuleItem::createPortsFromYaml()
+void SchematicModule::createPortsFromYaml()
 {
     if (!m_moduleYaml) {
         return;
@@ -387,8 +385,8 @@ void SocModuleItem::createPortsFromYaml()
         QPoint      gridPos(
             0,                                  // Left edge
             static_cast<int>(yPos / gridSize)); // Convert to grid coordinates
-        auto connector = std::make_shared<SocModuleConnector>(
-            gridPos, inputPorts[i], SocModuleConnector::Input, SocModuleConnector::Left, this);
+        auto connector = std::make_shared<SchematicConnector>(
+            gridPos, inputPorts[i], SchematicConnector::Input, SchematicConnector::Left, this);
         addConnector(connector);
         m_ports.append(connector);
         leftPortIndex++;
@@ -400,8 +398,8 @@ void SocModuleItem::createPortsFromYaml()
         QPoint      gridPos(
             0,                                  // Left edge
             static_cast<int>(yPos / gridSize)); // Convert to grid coordinates
-        auto connector = std::make_shared<SocModuleConnector>(
-            gridPos, busPorts[i], SocModuleConnector::Bus, SocModuleConnector::Left, this);
+        auto connector = std::make_shared<SchematicConnector>(
+            gridPos, busPorts[i], SchematicConnector::Bus, SchematicConnector::Left, this);
         addConnector(connector);
         m_ports.append(connector);
         leftPortIndex++;
@@ -414,8 +412,8 @@ void SocModuleItem::createPortsFromYaml()
         QPoint      gridPos(
             static_cast<int>(requiredWidth / gridSize), // Right edge
             static_cast<int>(yPos / gridSize));         // Convert to grid coordinates
-        auto connector = std::make_shared<SocModuleConnector>(
-            gridPos, outputPorts[i], SocModuleConnector::Output, SocModuleConnector::Right, this);
+        auto connector = std::make_shared<SchematicConnector>(
+            gridPos, outputPorts[i], SchematicConnector::Output, SchematicConnector::Right, this);
         addConnector(connector);
         m_ports.append(connector);
         rightPortIndex++;
@@ -427,8 +425,8 @@ void SocModuleItem::createPortsFromYaml()
         QPoint      gridPos(
             static_cast<int>(requiredWidth / gridSize), // Right edge
             static_cast<int>(yPos / gridSize));         // Convert to grid coordinates
-        auto connector = std::make_shared<SocModuleConnector>(
-            gridPos, inoutPorts[i], SocModuleConnector::InOut, SocModuleConnector::Right, this);
+        auto connector = std::make_shared<SchematicConnector>(
+            gridPos, inoutPorts[i], SchematicConnector::InOut, SchematicConnector::Right, this);
         addConnector(connector);
         m_ports.append(connector);
         rightPortIndex++;
@@ -437,7 +435,7 @@ void SocModuleItem::createPortsFromYaml()
     updateLabelPosition();
 }
 
-QSizeF SocModuleItem::calculateRequiredSize() const
+QSizeF SchematicModule::calculateRequiredSize() const
 {
     if (!m_moduleYaml) {
         return QSizeF(MIN_WIDTH, MIN_HEIGHT);
@@ -483,13 +481,13 @@ QSizeF SocModuleItem::calculateRequiredSize() const
     return QSizeF(MIN_WIDTH, requiredHeight);
 }
 
-void SocModuleItem::arrangePorts()
+void SchematicModule::arrangePorts()
 {
     // This function is called after ports are created to arrange them properly
     // Implementation is already handled in createPortsFromYaml()
 }
 
-void SocModuleItem::updateLabelPosition()
+void SchematicModule::updateLabelPosition()
 {
     if (m_label) {
         QRectF rect = sizeRect();
