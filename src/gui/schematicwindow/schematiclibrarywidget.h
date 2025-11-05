@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#ifndef MODULELIBRARY_QSOCWIDGET_H
-#define MODULELIBRARY_QSOCWIDGET_H
+#ifndef SCHEMATICLIBRARYWIDGET_H
+#define SCHEMATICLIBRARYWIDGET_H
 
 #include <QWidget>
 
@@ -16,35 +16,34 @@ namespace QSchematic::Items {
 class Item;
 }
 
-namespace ModuleLibrary {
-
-class ModuleModel;
-class ModuleView;
+class SchematicLibraryModel;
+class SchematicLibraryView;
 
 /**
- * @brief The ModuleWidget class.
+ * @brief The SchematicLibraryWidget class.
  * @details This class is the module library widget class for the module
  *          application. It is responsible for displaying the module
  *          library widget.
  */
-class ModuleWidget : public QWidget
+class SchematicLibraryWidget : public QWidget
 {
     Q_OBJECT
 
 public:
     /**
-     * @brief Constructor for ModuleWidget.
+     * @brief Constructor for SchematicLibraryWidget.
      * @details This constructor will initialize the module library widget.
      * @param[in] parent Parent object
      * @param[in] moduleManager QSocModuleManager instance
      */
-    explicit ModuleWidget(QWidget *parent = nullptr, QSocModuleManager *moduleManager = nullptr);
+    explicit SchematicLibraryWidget(
+        QWidget *parent = nullptr, QSocModuleManager *moduleManager = nullptr);
 
     /**
-     * @brief Destructor for ModuleWidget.
+     * @brief Destructor for SchematicLibraryWidget.
      * @details This destructor will free the module library widget.
      */
-    ~ModuleWidget() override = default;
+    ~SchematicLibraryWidget() override = default;
 
     /**
      * @brief Expand all items in the tree view.
@@ -90,11 +89,9 @@ private slots:
     void itemClickedSlot(const QModelIndex &index);
 
 private:
-    ModuleModel       *model_; /**< Module library model */
-    ModuleView        *view_;  /**< Module library view */
-    QSchematic::Scene *scene_; /**< Schematic scene for unique name generation */
+    SchematicLibraryModel *model_; /**< Module library model */
+    SchematicLibraryView  *view_;  /**< Module library view */
+    QSchematic::Scene     *scene_; /**< Schematic scene for unique name generation */
 };
 
-} // namespace ModuleLibrary
-
-#endif // MODULELIBRARY_QSOCWIDGET_H
+#endif // SCHEMATICLIBRARYWIDGET_H

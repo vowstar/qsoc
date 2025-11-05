@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#ifndef MODULELIBRARY_QSOCVIEW_H
-#define MODULELIBRARY_QSOCVIEW_H
+#ifndef SCHEMATICLIBRARYVIEW_H
+#define SCHEMATICLIBRARYVIEW_H
 
 #include <QTreeView>
 
@@ -10,31 +10,29 @@ namespace QSchematic {
 class Scene;
 }
 
-namespace ModuleLibrary {
-
 /**
- * @brief The ModuleView class.
+ * @brief The SchematicLibraryView class.
  * @details This class is the module library view class for the module
  *          application. It is responsible for displaying the module
  *          library.
  */
-class ModuleView : public QTreeView
+class SchematicLibraryView : public QTreeView
 {
     Q_OBJECT
 
 public:
     /**
-     * @brief Constructor for ModuleView.
+     * @brief Constructor for SchematicLibraryView.
      * @details This constructor will initialize the module library view.
      * @param[in] parent Parent object
      */
-    explicit ModuleView(QWidget *parent = nullptr);
+    explicit SchematicLibraryView(QWidget *parent = nullptr);
 
     /**
-     * @brief Destructor for ModuleView.
+     * @brief Destructor for SchematicLibraryView.
      * @details This destructor will free the module library view.
      */
-    ~ModuleView() override = default;
+    ~SchematicLibraryView() override = default;
 
 public slots:
     /**
@@ -63,6 +61,4 @@ private:
     QSchematic::Scene *scene_; /**< Schematic scene for unique name generation */
 };
 
-} // namespace ModuleLibrary
-
-#endif // MODULELIBRARY_QSOCVIEW_H
+#endif // SCHEMATICLIBRARYVIEW_H

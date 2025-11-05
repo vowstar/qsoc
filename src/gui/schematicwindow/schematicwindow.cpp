@@ -4,10 +4,10 @@
 #include "gui/schematicwindow/schematicwindow.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
-#include "gui/schematicwindow/customwire.h"
-#include "gui/schematicwindow/modulelibrary/customitemfactory.h"
-#include "gui/schematicwindow/modulelibrary/modulewidget.h"
-#include "gui/schematicwindow/modulelibrary/socmoduleitem.h"
+#include "gui/schematicwindow/schematicitemfactory.h"
+#include "gui/schematicwindow/schematiclibrarywidget.h"
+#include "gui/schematicwindow/schematicmodule.h"
+#include "gui/schematicwindow/schematicwire.h"
 
 #include "./ui_schematicwindow.h"
 
@@ -41,14 +41,13 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     statusBarPermanentLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     statusBar()->addPermanentWidget(statusBarPermanentLabel, 1);
 
-    // Register custom item factory for SocModuleItem
-    auto factoryFunc
-        = std::bind(&ModuleLibrary::CustomItemFactory::from_container, std::placeholders::_1);
+    // Register custom item factory for SchematicModule
+    auto factoryFunc = std::bind(&SchematicItemFactory::from_container, std::placeholders::_1);
     QSchematic::Items::Factory::instance().setCustomItemsFactory(factoryFunc);
 
     // Register custom wire factory for bus visualization
     scene.setWireFactory([]() -> std::shared_ptr<QSchematic::Items::Wire> {
-        return std::make_shared<SchematicCustom::CustomWire>();
+        return std::make_shared<SchematicWire>();
     });
 
     settings.debug               = false;
@@ -130,19 +129,19 @@ SchematicWindow::~SchematicWindow()
 void SchematicWindow::initializeModuleLibrary()
 {
     /* Create the module library widget */
-    moduleLibraryWidget = new ModuleLibrary::ModuleWidget(this, moduleManager);
+    moduleLibraryWidget = new SchematicLibraryWidget(this, moduleManager);
 
     /* Connect signals/slots for module library */
     connect(
         moduleLibraryWidget,
-        &ModuleLibrary::ModuleWidget::itemClicked,
+        &SchematicLibraryWidget::itemClicked,
         this,
         &SchematicWindow::addModuleToSchematic);
     connect(
         ui->schematicView,
         &QSchematic::View::zoomChanged,
         moduleLibraryWidget,
-        &ModuleLibrary::ModuleWidget::setPixmapScale);
+        &SchematicLibraryWidget::setPixmapScale);
 
     /* Add the module library widget to the dock widget */
     QWidget *dockContents = ui->dockWidgetModuleList->widget();
@@ -177,7 +176,7 @@ QSet<QString> SchematicWindow::getExistingInstanceNames(const QSchematic::Scene 
 {
     QSet<QString> existingNames;
     for (const auto &node : scene.nodes()) {
-        auto socItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+        auto socItem = std::dynamic_pointer_cast<SchematicModule>(node);
         if (socItem) {
             existingNames.insert(socItem->instanceName());
         }
@@ -202,8 +201,8 @@ QString SchematicWindow::generateUniqueInstanceName(
 
 void SchematicWindow::onItemAdded(std::shared_ptr<QSchematic::Items::Item> item)
 {
-    /* Only process SocModuleItems */
-    auto socItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(item);
+    /* Only process SchematicModules */
+    auto socItem = std::dynamic_pointer_cast<SchematicModule>(item);
     if (!socItem) {
         return;
     }
@@ -214,7 +213,7 @@ void SchematicWindow::onItemAdded(std::shared_ptr<QSchematic::Items::Item> item)
     /* Get existing names (excluding this item) */
     QSet<QString> existingNames;
     for (const auto &node : scene.nodes()) {
-        auto existingSocItem = std::dynamic_pointer_cast<ModuleLibrary::SocModuleItem>(node);
+        auto existingSocItem = std::dynamic_pointer_cast<SchematicModule>(node);
         if (existingSocItem && existingSocItem.get() != socItem.get()) {
             existingNames.insert(existingSocItem->instanceName());
         }
@@ -267,7 +266,7 @@ void SchematicWindow::setProjectManager(QSocProjectManager *projectManager)
         }
 
         /* Create new module library widget with module manager */
-        moduleLibraryWidget = new ModuleLibrary::ModuleWidget(this, moduleManager);
+        moduleLibraryWidget = new SchematicLibraryWidget(this, moduleManager);
 
         /* Set scene reference for drag preview */
         moduleLibraryWidget->setScene(&scene);
@@ -275,14 +274,14 @@ void SchematicWindow::setProjectManager(QSocProjectManager *projectManager)
         /* Connect signals/slots for module library */
         connect(
             moduleLibraryWidget,
-            &ModuleLibrary::ModuleWidget::itemClicked,
+            &SchematicLibraryWidget::itemClicked,
             this,
             &SchematicWindow::addModuleToSchematic);
         connect(
             ui->schematicView,
             &QSchematic::View::zoomChanged,
             moduleLibraryWidget,
-            &ModuleLibrary::ModuleWidget::setPixmapScale);
+            &SchematicLibraryWidget::setPixmapScale);
 
         /* Add the module library widget to the dock widget */
         QWidget *dockContents = ui->dockWidgetModuleList->widget();

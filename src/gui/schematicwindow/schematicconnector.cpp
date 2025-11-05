@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-#include "socmoduleconnector.h"
-#include "itemtypes.h"
+#include "schematicconnector.h"
+#include "schematicitemtypes.h"
 
 #include <gpds/container.hpp>
 #include <qschematic/items/label.hpp>
 
 #include <QPainter>
 #include <QStyleOptionGraphicsItem>
-
-using namespace ModuleLibrary;
 
 #define SIZE (_settings.gridSize / 3) // Make ports smaller
 #define RECT (QRectF(-SIZE, -SIZE, 2 * SIZE, 2 * SIZE))
@@ -27,13 +25,13 @@ const QColor BUS_COLOR_BORDER    = QColor(0, 0, 132);
 const qreal  CONNECTOR_PEN_WIDTH = 1.5;
 const qreal  BUS_PEN_WIDTH       = 3.0;
 
-SocModuleConnector::SocModuleConnector(
+SchematicConnector::SchematicConnector(
     const QPoint  &gridPoint,
     const QString &text,
     PortType       portType,
     Position       position,
     QGraphicsItem *parent)
-    : QSchematic::Items::Connector(ModuleLibrary::SocModuleConnectorType, gridPoint, text, parent)
+    : QSchematic::Items::Connector(SchematicConnectorType, gridPoint, text, parent)
     , m_portType(portType)
     , m_position(position)
 {
@@ -41,15 +39,15 @@ SocModuleConnector::SocModuleConnector(
     setForceTextDirection(false);
 }
 
-std::shared_ptr<QSchematic::Items::Item> SocModuleConnector::deepCopy() const
+std::shared_ptr<QSchematic::Items::Item> SchematicConnector::deepCopy() const
 {
-    auto clone = std::make_shared<SocModuleConnector>(
+    auto clone = std::make_shared<SchematicConnector>(
         gridPos(), text(), m_portType, m_position, parentItem());
     copyAttributes(*clone);
     return clone;
 }
 
-gpds::container SocModuleConnector::to_container() const
+gpds::container SchematicConnector::to_container() const
 {
     // Root container
     gpds::container root;
@@ -58,21 +56,21 @@ gpds::container SocModuleConnector::to_container() const
     // Save base Connector data
     root.add_value("connector", QSchematic::Items::Connector::to_container());
 
-    // Save SocModuleConnector-specific data
+    // Save SchematicConnector-specific data
     root.add_value("port_type", static_cast<int>(m_portType));
     root.add_value("position", static_cast<int>(m_position));
 
     return root;
 }
 
-void SocModuleConnector::from_container(const gpds::container &container)
+void SchematicConnector::from_container(const gpds::container &container)
 {
     // Load base Connector data
     if (auto connectorContainer = container.get_value<gpds::container *>("connector")) {
         QSchematic::Items::Connector::from_container(**connectorContainer);
     }
 
-    // Load SocModuleConnector-specific data
+    // Load SchematicConnector-specific data
     if (auto portTypeOpt = container.get_value<int>("port_type")) {
         m_portType = static_cast<PortType>(*portTypeOpt);
     }
@@ -82,13 +80,13 @@ void SocModuleConnector::from_container(const gpds::container &container)
     }
 }
 
-QRectF SocModuleConnector::boundingRect() const
+QRectF SchematicConnector::boundingRect() const
 {
     qreal adj = 1.5;
     return RECT.adjusted(-adj, -adj, adj, adj);
 }
 
-void SocModuleConnector::paint(
+void SchematicConnector::paint(
     QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
 {
     Q_UNUSED(option)
@@ -168,7 +166,7 @@ void SocModuleConnector::paint(
     painter->drawPolygon(shape);
 }
 
-QPolygonF SocModuleConnector::createInputShape() const
+QPolygonF SchematicConnector::createInputShape() const
 {
     QPolygonF shape;
     qreal     tabSize = SIZE * 0.8; // Make triangular tab more prominent
@@ -215,7 +213,7 @@ QPolygonF SocModuleConnector::createInputShape() const
     return shape;
 }
 
-QPolygonF SocModuleConnector::createOutputShape() const
+QPolygonF SchematicConnector::createOutputShape() const
 {
     QPolygonF shape;
     qreal     tabSize = SIZE * 0.8; // Make triangular tab more prominent
@@ -262,7 +260,7 @@ QPolygonF SocModuleConnector::createOutputShape() const
     return shape;
 }
 
-QPolygonF SocModuleConnector::createInOutShape() const
+QPolygonF SchematicConnector::createInOutShape() const
 {
     QPolygonF shape;
     qreal     tabSize = SIZE * 0.8; // Make triangular tabs more prominent
@@ -317,7 +315,7 @@ QPolygonF SocModuleConnector::createInOutShape() const
     return shape;
 }
 
-QPolygonF SocModuleConnector::createBusShape() const
+QPolygonF SchematicConnector::createBusShape() const
 {
     // Simple rectangle for bus ports
     QPolygonF shape;
@@ -329,7 +327,7 @@ QPolygonF SocModuleConnector::createBusShape() const
     return shape;
 }
 
-void SocModuleConnector::updatePositionFromLocation()
+void SchematicConnector::updatePositionFromLocation()
 {
     if (!parentItem()) {
         return;
