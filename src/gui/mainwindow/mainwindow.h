@@ -5,6 +5,7 @@
 #define MAINWINDOW_H
 
 #include "common/qsocprojectmanager.h"
+#include "gui/prcwindow/prcwindow.h"
 #include "gui/schematicwindow/schematicwindow.h"
 
 #include <QDir>
@@ -89,6 +90,18 @@ private slots:
      */
     void on_actionSchematicEditor_triggered();
 
+    /**
+     * @brief Open PRC editor action.
+     * @details Opens the PRC (Power/Reset/Clock) editor with a new untitled file.
+     */
+    void on_actionPRCEditor_triggered();
+
+    /**
+     * @brief Open PRC editor from toolbar button.
+     * @details Opens the PRC editor when toolbar button is clicked.
+     */
+    void on_toolButtonPRCEditor_clicked();
+
     /* Manual Signal Handlers */
 
     /**
@@ -164,6 +177,15 @@ private:
      */
     void openSchematicEditor(const QString &filePath = QString());
 
+    /**
+     * @brief Open PRC editor with optional file.
+     * @details Unified method to open PRC editor. Ensures project manager
+     *          is set. If a file path is provided, opens that file; otherwise
+     *          opens with "untitled".
+     * @param[in] filePath optional path to PRC file (empty = new file)
+     */
+    void openPrcEditor(const QString &filePath = QString());
+
     /* Member Variables */
 
     /* Main window UI */
@@ -174,6 +196,8 @@ private:
     QSocProjectManager *projectManager = nullptr;
     /* Schematic window object */
     SchematicWindow schematicWindow;
+    /* PRC window object */
+    PrcWindow prcWindow;
     /* Permanent status bar label (not affected by clearMessage or menu hover) */
     QLabel *statusBarPermanentLabel = nullptr;
 };

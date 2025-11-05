@@ -25,6 +25,16 @@ void MainWindow::on_actionSchematicEditor_triggered()
     openSchematicEditor(); // No file path = new untitled file
 }
 
+void MainWindow::on_actionPRCEditor_triggered()
+{
+    openPrcEditor(); // No file path = new untitled file
+}
+
+void MainWindow::on_toolButtonPRCEditor_clicked()
+{
+    openPrcEditor(); // No file path = new untitled file
+}
+
 void MainWindow::on_actionNewProject_triggered()
 {
     /* Close current project first (silent mode) */
