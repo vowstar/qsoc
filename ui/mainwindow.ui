@@ -102,6 +102,48 @@
        </layout>
       </item>
       <item>
+       <layout class="QHBoxLayout" name="horizontalLayoutPRCEditor">
+        <item>
+         <widget class="QToolButton" name="toolButtonPRCEditor">
+          <property name="iconSize">
+           <size>
+            <width>50</width>
+            <height>50</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QVBoxLayout" name="verticalLayoutPRCEditor">
+          <item>
+           <widget class="QLabel" name="labelPRCEditor">
+            <property name="font">
+             <font>
+              <bold>true</bold>
+             </font>
+            </property>
+            <property name="text">
+             <string>Power/Reset/Clock Editor</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="labelPRCEditorDetail">
+            <property name="font">
+             <font>
+              <italic>true</italic>
+             </font>
+            </property>
+            <property name="text">
+             <string>Edit power, reset and clock definitions</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </item>
+      <item>
        <layout class="QHBoxLayout" name="horizontalLayoutModuleEditor">
         <item>
          <widget class="QToolButton" name="toolButtonModuleEditor">
@@ -192,6 +234,7 @@
     </property>
     <addaction name="actionBusEditor" />
     <addaction name="actionSchematicEditor" />
+    <addaction name="actionPRCEditor" />
     <addaction name="actionModuleEditor" />
    </widget>
    <widget class="QMenu" name="menuPreferences">
@@ -374,6 +417,20 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+E</string>
+   </property>
+  </action>
+  <action name="actionPRCEditor">
+   <property name="icon">
+    <iconset theme="applications-prc" />
+   </property>
+   <property name="text">
+    <string>&amp;Power/Reset/Clock Editor</string>
+   </property>
+   <property name="toolTip">
+    <string>Edit power, reset and clock definitions (Ctrl+P)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+P</string>
    </property>
   </action>
  </widget>

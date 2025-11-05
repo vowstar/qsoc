@@ -1,0 +1,294 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
+
+#ifndef PRCWINDOW_H
+#define PRCWINDOW_H
+
+#include "prcprimitiveitem.h"
+
+#include <QLabel>
+#include <QMainWindow>
+
+#include <qschematic/scene.hpp>
+#include <qschematic/settings.hpp>
+#include <qschematic/view.hpp>
+
+class QSocProjectManager;
+
+namespace PrcLibrary {
+class PrcLibraryWidget;
+}
+
+QT_BEGIN_NAMESPACE
+namespace Ui {
+class PrcWindow;
+}
+QT_END_NAMESPACE
+
+/**
+ * @brief PRC (Power/Reset/Clock) editor window
+ * @details Provides graphical interface for editing PRC configurations using
+ *          QSchematic-based visual editing. Supports drag-and-drop primitive
+ *          placement, wire routing, and netlist export.
+ */
+class PrcWindow : public QMainWindow
+{
+    Q_OBJECT
+
+public:
+    /**
+     * @brief Construct PRC editor window
+     * @param[in] parent Parent widget
+     * @param[in] projectManager Project manager instance
+     */
+    PrcWindow(QWidget *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+
+    /**
+     * @brief Destructor
+     */
+    ~PrcWindow();
+
+    /**
+     * @brief Set project manager reference
+     * @param[in] projectManager Project manager instance
+     */
+    void setProjectManager(QSocProjectManager *projectManager);
+
+    /**
+     * @brief Open PRC file and load into scene
+     * @param[in] filePath Path to .soc_prc file
+     */
+    void openFile(const QString &filePath);
+
+    /**
+     * @brief Collect all existing PRC controller names from scene
+     * @param[in] scene QSchematic scene to scan
+     * @return Set of existing controller names
+     */
+    static QSet<QString> getExistingControllerNames(const QSchematic::Scene &scene);
+
+    /**
+     * @brief Generate unique controller name with auto-increment suffix
+     * @param[in] scene QSchematic scene to scan
+     * @param[in] prefix Name prefix (e.g., "clk_src_")
+     * @return Unique controller name
+     */
+    static QString generateUniqueControllerName(
+        const QSchematic::Scene &scene, const QString &prefix);
+
+private slots:
+    /* Application Actions */
+
+    /**
+     * @brief Handle quit action
+     */
+    void on_actionQuit_triggered();
+
+    /* File Actions */
+
+    /**
+     * @brief Handle open file action
+     */
+    void on_actionOpen_triggered();
+
+    /**
+     * @brief Handle save file action
+     */
+    void on_actionSave_triggered();
+
+    /**
+     * @brief Handle save as action
+     */
+    void on_actionSaveAs_triggered();
+
+    /**
+     * @brief Handle close file action
+     */
+    void on_actionClose_triggered();
+
+    /**
+     * @brief Handle print action
+     */
+    void on_actionPrint_triggered();
+
+    /* Edit Actions */
+
+    /**
+     * @brief Handle undo action
+     */
+    void on_actionUndo_triggered();
+
+    /**
+     * @brief Handle redo action
+     */
+    void on_actionRedo_triggered();
+
+    /* View Actions */
+
+    /**
+     * @brief Handle show grid toggle
+     * @param[in] checked Grid visibility state
+     */
+    void on_actionShowGrid_triggered(bool checked);
+
+    /* Tool Actions */
+
+    /**
+     * @brief Handle select item tool activation
+     */
+    void on_actionSelectItem_triggered();
+
+    /**
+     * @brief Handle add wire tool activation
+     */
+    void on_actionAddWire_triggered();
+
+    /**
+     * @brief Handle export netlist action
+     */
+    void on_actionExportNetlist_triggered();
+
+protected:
+    /* Event Handlers */
+
+    /**
+     * @brief Handle window close event
+     * @param[in] event Close event
+     */
+    void closeEvent(QCloseEvent *event) override;
+
+    /**
+     * @brief Handle event filtering for double-click and shortcuts
+     * @param[in] watched Object being watched
+     * @param[in] event Event to filter
+     * @retval true Event handled
+     * @retval false Event not handled
+     */
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
+private:
+    /* PRC Library Management */
+
+    /**
+     * @brief Initialize PRC library widget and connect signals
+     */
+    void initializePrcLibrary();
+
+    /**
+     * @brief Handle primitive selection from library
+     * @param[in] primitiveType Type of primitive to create
+     */
+    void onPrimitiveSelected(PrcLibrary::PrimitiveType primitiveType);
+
+    /* File Management Helpers */
+
+    /**
+     * @brief Update window title with file status
+     */
+    void updateWindowTitle();
+
+    /**
+     * @brief Check if save needed before closing
+     * @retval true Continue closing
+     * @retval false User cancelled
+     */
+    bool checkSaveBeforeClose();
+
+    /**
+     * @brief Save schematic to file
+     * @param[in] path File path to save
+     */
+    void saveToFile(const QString &path);
+
+    /**
+     * @brief Get current file name
+     * @return File name or "untitled"
+     */
+    QString getCurrentFileName() const;
+
+    /**
+     * @brief Close current file and clear scene
+     */
+    void closeFile();
+
+    /* Netlist Management */
+
+    /**
+     * @brief Auto-generate names for unnamed wires
+     */
+    void autoNameWires();
+
+    /**
+     * @brief Get wire start position for label placement
+     * @param[in] wireNet Wire net to query
+     * @return Start position
+     */
+    QPointF getWireStartPos(const QSchematic::Items::WireNet *wireNet) const;
+
+    /**
+     * @brief Collect all existing wire names
+     * @return Set of wire names
+     */
+    QSet<QString> getExistingWireNames() const;
+
+    /**
+     * @brief Connection information for wire endpoint
+     */
+    struct ConnectionInfo
+    {
+        QString instanceName; /**< Connected instance name */
+        QString portName;     /**< Connected port name */
+        int     portPosition; /**< Port position enum value */
+    };
+
+    /**
+     * @brief Find connection at wire start point
+     * @param[in] wireNet Wire net to query
+     * @return Connection information
+     */
+    ConnectionInfo findStartConnection(const QSchematic::Items::WireNet *wireNet) const;
+
+    /**
+     * @brief Handle item added to scene
+     * @param[in] item Added item
+     */
+    void onItemAdded(std::shared_ptr<QSchematic::Items::Item> item);
+
+    /**
+     * @brief Handle PRC item double-click
+     * @param[in] prcItem Clicked PRC item
+     */
+    void handlePrcItemDoubleClick(QSchematic::Items::Item *prcItem);
+
+    /**
+     * @brief Handle wire double-click
+     * @param[in] wireNet Clicked wire net
+     */
+    void handleWireDoubleClick(QSchematic::Items::WireNet *wireNet);
+
+    /**
+     * @brief Auto-generate wire name based on connections
+     * @param[in] wireNet Wire net to name
+     * @return Generated name
+     */
+    QString autoGenerateWireName(const QSchematic::Items::WireNet *wireNet) const;
+
+    /**
+     * @brief Export PRC netlist to file
+     * @param[in] filePath Output file path
+     * @retval true Export successful
+     * @retval false Export failed
+     */
+    bool exportNetlist(const QString &filePath);
+
+    /* Member Variables */
+
+    Ui::PrcWindow                *ui;                                /**< Main window UI */
+    QSchematic::Scene             scene;                             /**< PRC scene */
+    QSchematic::Settings          settings;                          /**< Scene settings */
+    PrcLibrary::PrcLibraryWidget *prcLibraryWidget;                  /**< PRC library widget */
+    QSocProjectManager           *projectManager;                    /**< Project manager */
+    QString                       m_currentFilePath;                 /**< Current file path */
+    QLabel                       *statusBarPermanentLabel = nullptr; /**< Status bar label */
+};
+#endif // PRCWINDOW_H
