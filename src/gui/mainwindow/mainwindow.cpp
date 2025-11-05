@@ -15,9 +15,10 @@ MainWindow::MainWindow(QWidget *parent)
     ui->setupUi(this);
 
     /* Configure UI elements */
+    ui->toolButtonModuleEditor->setDefaultAction(ui->actionModuleEditor);
     ui->toolButtonBusEditor->setDefaultAction(ui->actionBusEditor);
     ui->toolButtonSchematicEditor->setDefaultAction(ui->actionSchematicEditor);
-    ui->toolButtonModuleEditor->setDefaultAction(ui->actionModuleEditor);
+    ui->toolButtonPRCEditor->setDefaultAction(ui->actionPRCEditor);
 
     /* Configure project tree view */
     ui->treeViewProjectFile->setHeaderHidden(true);
