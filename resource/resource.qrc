@@ -7,6 +7,7 @@
         <file>icon/dark/scalable/applications-prc.svg</file>
         <file>icon/dark/scalable/applications-schematic.svg</file>
         <file>icon/dark/scalable/applications-soc.svg</file>
+        <file>icon/dark/scalable/applications-verilog.svg</file>
         <file>icon/dark/scalable/document-close.svg</file>
         <file>icon/dark/scalable/document-new.svg</file>
         <file>icon/dark/scalable/document-open-in-explorer.svg</file>
@@ -33,6 +34,7 @@
         <file>icon/light/scalable/applications-prc.svg</file>
         <file>icon/light/scalable/applications-schematic.svg</file>
         <file>icon/light/scalable/applications-soc.svg</file>
+        <file>icon/light/scalable/applications-verilog.svg</file>
         <file>icon/light/scalable/document-close.svg</file>
         <file>icon/light/scalable/document-new.svg</file>
         <file>icon/light/scalable/document-open-in-explorer.svg</file>

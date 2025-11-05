@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   enable-background="new 0 0 24 24"
+   height="24"
+   viewBox="0 0 24 24"
+   width="24"
+   version="1.1"
+   id="svg2"
+   sodipodi:docname="applications-verilog.svg"
+   inkscape:version="1.4.2 (ebf0e940d0, 2025-05-08)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs2" />
+  <sodipodi:namedview
+     id="namedview2"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="32.958333"
+     inkscape:cx="20.723135"
+     inkscape:cy="11.848293"
+     inkscape:window-width="2560"
+     inkscape:window-height="995"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="g2" />
+  <g
+     id="g2">
+    <rect
+       fill="none"
+       height="24"
+       width="24"
+       id="rect1" />
+    <path
+       d="M 6,20 V 4 h 7 v 4 h 5 v 12 z"
+       opacity="0.3"
+       id="path1"
+       sodipodi:nodetypes="ccccccc" />
+    <path
+       d="M 14,2 H 6 C 4.9,2 4,2.9 4,4 v 16 c 0,1.1 0.9,2 2,2 h 12 c 1.1,0 2,-0.9 2,-2 V 8 Z M 6,20 V 4 h 7 v 4 h 5 v 12 z"
+       id="path2"
+       sodipodi:nodetypes="cssssssccccccccc" />
+    <path
+       style="font-weight:bold;font-size:12px;line-height:0;font-family:Univers;-inkscape-font-specification:'Univers Bold';text-align:center;letter-spacing:0px;word-spacing:0px;text-anchor:middle;stroke-width:0.786527"
+       d="m 7.6805849,10.443716 v 0 h 0.9257813 0.9257812 v 0 l 2.2499996,6.404297 v 0 0 l 2.25586,-6.404297 v 0 h 0.84375 0.84375 v 0 l -3.123047,8.255859 h -0.902344 -0.902344 z"
+       id="text2"
+       transform="scale(1.0220678,0.97840868)"
+       aria-label="V" />
+  </g>
+</svg>
