@@ -147,11 +147,11 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
             outputDirItem->appendRow(outputFileItem);
         }
 
-        /* Add .v (Verilog) files */
-        outputDir.setNameFilters(QStringList() << "*.v");
+        /* Add Verilog/SystemVerilog files */
+        outputDir.setNameFilters(QStringList() << "*.v" << "*.sv" << "*.vh" << "*.svh");
         foreach (const QString outputFileName, outputDir.entryList(QDir::Files)) {
             auto *outputFileItem = new QStandardItem(outputFileName);
-            outputFileItem->setIcon(QIcon::fromTheme("document-open"));
+            outputFileItem->setIcon(QIcon::fromTheme("applications-verilog"));
             outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
             outputDirItem->appendRow(outputFileItem);
         }
