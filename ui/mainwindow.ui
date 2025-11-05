@@ -18,6 +18,48 @@
     <item row="0" column="0">
      <layout class="QVBoxLayout" name="verticalLayoutToolList">
       <item>
+       <layout class="QHBoxLayout" name="horizontalLayoutModuleEditor">
+        <item>
+         <widget class="QToolButton" name="toolButtonModuleEditor">
+          <property name="iconSize">
+           <size>
+            <width>50</width>
+            <height>50</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QVBoxLayout" name="verticalLayoutModuleEditor">
+          <item>
+           <widget class="QLabel" name="labelModuleEditor">
+            <property name="font">
+             <font>
+              <bold>true</bold>
+             </font>
+            </property>
+            <property name="text">
+             <string>Module Editor</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="labelModuleEditorDetail">
+            <property name="font">
+             <font>
+              <italic>true</italic>
+             </font>
+            </property>
+            <property name="text">
+             <string>Edit golbal and/or project schematic modules</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </item>
+      <item>
        <layout class="QHBoxLayout" name="horizontalLayoutBusEditor">
         <item>
          <widget class="QToolButton" name="toolButtonBusEditor">
@@ -144,48 +186,6 @@
        </layout>
       </item>
       <item>
-       <layout class="QHBoxLayout" name="horizontalLayoutModuleEditor">
-        <item>
-         <widget class="QToolButton" name="toolButtonModuleEditor">
-          <property name="iconSize">
-           <size>
-            <width>50</width>
-            <height>50</height>
-           </size>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <layout class="QVBoxLayout" name="verticalLayoutModuleEditor">
-          <item>
-           <widget class="QLabel" name="labelModuleEditor">
-            <property name="font">
-             <font>
-              <bold>true</bold>
-             </font>
-            </property>
-            <property name="text">
-             <string>Module Editor</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QLabel" name="labelModuleEditorDetail">
-            <property name="font">
-             <font>
-              <italic>true</italic>
-             </font>
-            </property>
-            <property name="text">
-             <string>Edit golbal and/or project schematic modules</string>
-            </property>
-           </widget>
-          </item>
-         </layout>
-        </item>
-       </layout>
-      </item>
-      <item>
        <spacer name="verticalSpacerToolList">
         <property name="orientation">
          <enum>Qt::Orientation::Vertical</enum>
@@ -232,10 +232,10 @@
     <property name="title">
      <string>Tools</string>
     </property>
+    <addaction name="actionModuleEditor" />
     <addaction name="actionBusEditor" />
     <addaction name="actionSchematicEditor" />
     <addaction name="actionPRCEditor" />
-    <addaction name="actionModuleEditor" />
    </widget>
    <widget class="QMenu" name="menuPreferences">
     <property name="title">
@@ -396,7 +396,7 @@
     <iconset theme="applications-module" />
    </property>
    <property name="text">
-    <string>Symbo&amp;l Editor</string>
+    <string>&amp;Module Editor</string>
    </property>
    <property name="toolTip">
     <string>Edit schematic modules (CTRL+L)</string>
