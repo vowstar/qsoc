@@ -6,12 +6,12 @@
 
 #include "prcprimitiveitem.h"
 
+#include <QCheckBox>
 #include <QDialog>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QLineEdit>
-#include <QMap>
-#include <QString>
-#include <QVariant>
+#include <QSpinBox>
 
 namespace PrcLibrary {
 
@@ -19,6 +19,7 @@ namespace PrcLibrary {
  * @brief Dialog for configuring PRC primitive properties
  * @details Provides a form-based interface to edit primitive-specific configuration
  *          parameters such as clock frequencies, reset levels, and power domains.
+ *          Uses type-appropriate widgets (QSpinBox for integers, QCheckBox for booleans).
  */
 class PrcConfigDialog : public QDialog
 {
@@ -33,21 +34,36 @@ public:
     explicit PrcConfigDialog(PrcPrimitiveItem *item, QWidget *parent = nullptr);
 
     /**
-     * @brief Retrieve all configured field values
-     * @return Map of field names to configured values
+     * @brief Apply configured values to the item
      */
-    QMap<QString, QVariant> getConfiguration() const;
+    void applyConfiguration();
 
 private:
     /**
      * @brief Populate form with type-specific configuration fields
-     * @param[in] type The primitive type determining which fields to create
      */
-    void createFieldsForType(PrimitiveType type);
+    void createClockSourceFields();
+    void createClockTargetFields();
+    void createResetSourceFields();
+    void createResetTargetFields();
+    void createPowerDomainFields();
 
-    PrcPrimitiveItem          *item_;       /**< The primitive item being configured */
-    QFormLayout               *formLayout_; /**< Form layout for configuration fields */
-    QMap<QString, QLineEdit *> fields_;     /**< Map of field names to input widgets */
+    PrcPrimitiveItem *item_;       /**< The primitive item being configured */
+    QFormLayout      *formLayout_; /**< Form layout for configuration fields */
+    QLineEdit        *nameEdit_;   /**< Primitive name editor */
+
+    /* Type-specific widgets */
+    QDoubleSpinBox *freqSpin_;
+    QDoubleSpinBox *phaseSpin_;
+    QSpinBox       *dividerSpin_;
+    QCheckBox      *enableGateCheck_;
+    QCheckBox      *activeLowCheck_;
+    QDoubleSpinBox *durationSpin_;
+    QCheckBox      *synchronousCheck_;
+    QSpinBox       *stagesSpin_;
+    QDoubleSpinBox *voltageSpin_;
+    QCheckBox      *isolationCheck_;
+    QCheckBox      *retentionCheck_;
 };
 
 } // namespace PrcLibrary

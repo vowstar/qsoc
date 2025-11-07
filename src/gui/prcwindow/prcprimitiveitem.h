@@ -4,7 +4,8 @@
 #ifndef PRCPRIMITIVEITEM_H
 #define PRCPRIMITIVEITEM_H
 
-#include <qschematic/items/connector.hpp>
+#include "prcconnector.h"
+
 #include <qschematic/items/label.hpp>
 #include <qschematic/items/node.hpp>
 
@@ -12,10 +13,10 @@
 #include <QBrush>
 #include <QColor>
 #include <QGraphicsItem>
-#include <QMap>
 #include <QPen>
 #include <QString>
-#include <QVariant>
+
+#include <variant>
 
 namespace PrcLibrary {
 
@@ -29,6 +30,62 @@ enum PrimitiveType {
     ResetTarget = 3, /**< Reset signal target with optional synchronization */
     PowerDomain = 4  /**< Power domain with enable/ready/fault signals */
 };
+
+/**
+ * @brief Clock source configuration
+ */
+struct ClockSourceParams
+{
+    double frequency_mhz = 100.0; /**< Frequency in MHz */
+    double phase_deg     = 0.0;   /**< Phase offset in degrees */
+};
+
+/**
+ * @brief Clock target configuration
+ */
+struct ClockTargetParams
+{
+    int  divider     = 1;     /**< Clock divider ratio */
+    bool enable_gate = false; /**< Enable clock gating */
+};
+
+/**
+ * @brief Reset source configuration
+ */
+struct ResetSourceParams
+{
+    bool   active_low  = true; /**< Active low reset signal */
+    double duration_us = 10.0; /**< Reset duration in microseconds */
+};
+
+/**
+ * @brief Reset target configuration
+ */
+struct ResetTargetParams
+{
+    bool synchronous = true; /**< Synchronous reset */
+    int  stages      = 2;    /**< Synchronizer stages */
+};
+
+/**
+ * @brief Power domain configuration
+ */
+struct PowerDomainParams
+{
+    double voltage   = 1.0;   /**< Operating voltage */
+    bool   isolation = true;  /**< Enable isolation */
+    bool   retention = false; /**< Enable retention */
+};
+
+/**
+ * @brief Type-safe union for primitive parameters
+ */
+using PrcParams = std::variant<
+    ClockSourceParams,
+    ClockTargetParams,
+    ResetSourceParams,
+    ResetTargetParams,
+    PowerDomainParams>;
 
 /**
  * @brief PRC primitive item for schematic editor
@@ -77,31 +134,16 @@ public:
     void setPrimitiveName(const QString &name);
 
     /**
-     * @brief Get configuration value
-     * @param[in] key Configuration key
-     * @param[in] defaultValue Default value if key not found
-     * @return Configuration value or default
+     * @brief Get primitive parameters (type-safe)
+     * @return Reference to parameter variant
      */
-    QVariant config(const QString &key, const QVariant &defaultValue = QVariant()) const;
+    const PrcParams &params() const;
 
     /**
-     * @brief Set configuration value
-     * @param[in] key Configuration key
-     * @param[in] value Configuration value
+     * @brief Set primitive parameters (type-safe)
+     * @param[in] params Parameter variant
      */
-    void setConfig(const QString &key, const QVariant &value);
-
-    /**
-     * @brief Get all configuration values
-     * @return Map of all configuration key-value pairs
-     */
-    QMap<QString, QVariant> configuration() const;
-
-    /**
-     * @brief Set all configuration values
-     * @param[in] config Map of configuration key-value pairs
-     */
-    void setConfiguration(const QMap<QString, QVariant> &config);
+    void setParams(const PrcParams &params);
 
     /**
      * @brief Create a deep copy of this item
@@ -140,17 +182,11 @@ private:
      */
     void updateLabelPosition();
 
-    /**
-     * @brief Get color based on primitive type
-     * @return Color for this primitive type
-     */
-    QColor getTypeColor() const;
-
-    PrimitiveType                                        m_primitiveType; /**< Primitive type */
-    QString                                              m_primitiveName; /**< Display name */
-    QMap<QString, QVariant>                              m_config;        /**< Configuration map */
-    std::shared_ptr<QSchematic::Items::Label>            m_label;         /**< Name label */
-    QList<std::shared_ptr<QSchematic::Items::Connector>> m_connectors;    /**< Connector list */
+    PrimitiveType                             m_primitiveType; /**< Primitive type */
+    QString                                   m_primitiveName; /**< Display name */
+    PrcParams                                 m_params;        /**< Type-safe parameters */
+    std::shared_ptr<QSchematic::Items::Label> m_label;         /**< Name label */
+    QList<std::shared_ptr<PrcConnector>>      m_connectors;    /**< Connector list */
 
     static constexpr qreal WIDTH        = 120.0; /**< Primitive width */
     static constexpr qreal HEIGHT       = 80.0;  /**< Primitive height */
