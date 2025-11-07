@@ -14,6 +14,18 @@ PrcConfigDialog::PrcConfigDialog(PrcPrimitiveItem *item, QWidget *parent)
     : QDialog(parent)
     , item_(item)
     , formLayout_(nullptr)
+    , nameEdit_(nullptr)
+    , freqSpin_(nullptr)
+    , phaseSpin_(nullptr)
+    , dividerSpin_(nullptr)
+    , enableGateCheck_(nullptr)
+    , activeLowCheck_(nullptr)
+    , durationSpin_(nullptr)
+    , synchronousCheck_(nullptr)
+    , stagesSpin_(nullptr)
+    , voltageSpin_(nullptr)
+    , isolationCheck_(nullptr)
+    , retentionCheck_(nullptr)
 {
     setWindowTitle(QString("Configure %1").arg(item->primitiveTypeName()));
     setMinimumWidth(400);
@@ -24,9 +36,8 @@ PrcConfigDialog::PrcConfigDialog(PrcPrimitiveItem *item, QWidget *parent)
     auto *infoGroup  = new QGroupBox(tr("Basic Information"), this);
     auto *infoLayout = new QFormLayout(infoGroup);
 
-    auto *nameEdit  = new QLineEdit(item->primitiveName(), this);
-    fields_["name"] = nameEdit;
-    infoLayout->addRow(tr("Name:"), nameEdit);
+    nameEdit_ = new QLineEdit(item->primitiveName(), this);
+    infoLayout->addRow(tr("Name:"), nameEdit_);
 
     auto *typeLabel = new QLabel(item->primitiveTypeName(), this);
     infoLayout->addRow(tr("Type:"), typeLabel);
@@ -37,94 +48,162 @@ PrcConfigDialog::PrcConfigDialog(PrcPrimitiveItem *item, QWidget *parent)
     auto *configGroup = new QGroupBox(tr("Configuration"), this);
     formLayout_       = new QFormLayout(configGroup);
 
-    createFieldsForType(item->primitiveType());
+    switch (item->primitiveType()) {
+    case ClockSource:
+        createClockSourceFields();
+        break;
+    case ClockTarget:
+        createClockTargetFields();
+        break;
+    case ResetSource:
+        createResetSourceFields();
+        break;
+    case ResetTarget:
+        createResetTargetFields();
+        break;
+    case PowerDomain:
+        createPowerDomainFields();
+        break;
+    }
 
     mainLayout->addWidget(configGroup);
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::accepted, this, [this]() {
+        applyConfiguration();
+        accept();
+    });
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     mainLayout->addWidget(buttonBox);
 
     setLayout(mainLayout);
 }
 
-void PrcConfigDialog::createFieldsForType(PrimitiveType type)
+void PrcConfigDialog::createClockSourceFields()
 {
-    switch (type) {
-    case ClockSource: {
-        auto *freqEdit       = new QLineEdit(item_->config("frequency", "100MHz").toString(), this);
-        fields_["frequency"] = freqEdit;
-        formLayout_->addRow(tr("Frequency:"), freqEdit);
+    const auto &params = std::get<ClockSourceParams>(item_->params());
 
-        auto *phaseEdit  = new QLineEdit(item_->config("phase", "0").toString(), this);
-        fields_["phase"] = phaseEdit;
-        formLayout_->addRow(tr("Phase (degrees):"), phaseEdit);
+    freqSpin_ = new QDoubleSpinBox(this);
+    freqSpin_->setRange(0.001, 10000.0);
+    freqSpin_->setDecimals(3);
+    freqSpin_->setSuffix(" MHz");
+    freqSpin_->setValue(params.frequency_mhz);
+    formLayout_->addRow(tr("Frequency:"), freqSpin_);
 
-        break;
-    }
-
-    case ClockTarget: {
-        auto *divEdit      = new QLineEdit(item_->config("divider", "1").toString(), this);
-        fields_["divider"] = divEdit;
-        formLayout_->addRow(tr("Divider:"), divEdit);
-
-        auto *gateEdit = new QLineEdit(item_->config("enable_gate", "false").toString(), this);
-        fields_["enable_gate"] = gateEdit;
-        formLayout_->addRow(tr("Enable Gate:"), gateEdit);
-
-        break;
-    }
-
-    case ResetSource: {
-        auto *levelEdit = new QLineEdit(item_->config("active_level", "low").toString(), this);
-        fields_["active_level"] = levelEdit;
-        formLayout_->addRow(tr("Active Level:"), levelEdit);
-
-        auto *durationEdit  = new QLineEdit(item_->config("duration", "10us").toString(), this);
-        fields_["duration"] = durationEdit;
-        formLayout_->addRow(tr("Duration:"), durationEdit);
-
-        break;
-    }
-
-    case ResetTarget: {
-        auto *syncEdit = new QLineEdit(item_->config("synchronous", "true").toString(), this);
-        fields_["synchronous"] = syncEdit;
-        formLayout_->addRow(tr("Synchronous:"), syncEdit);
-
-        auto *stagesEdit  = new QLineEdit(item_->config("stages", "2").toString(), this);
-        fields_["stages"] = stagesEdit;
-        formLayout_->addRow(tr("Sync Stages:"), stagesEdit);
-
-        break;
-    }
-
-    case PowerDomain: {
-        auto *voltageEdit  = new QLineEdit(item_->config("voltage", "1.0V").toString(), this);
-        fields_["voltage"] = voltageEdit;
-        formLayout_->addRow(tr("Voltage:"), voltageEdit);
-
-        auto *isoEdit        = new QLineEdit(item_->config("isolation", "true").toString(), this);
-        fields_["isolation"] = isoEdit;
-        formLayout_->addRow(tr("Isolation:"), isoEdit);
-
-        auto *retEdit        = new QLineEdit(item_->config("retention", "false").toString(), this);
-        fields_["retention"] = retEdit;
-        formLayout_->addRow(tr("Retention:"), retEdit);
-
-        break;
-    }
-    }
+    phaseSpin_ = new QDoubleSpinBox(this);
+    phaseSpin_->setRange(-360.0, 360.0);
+    phaseSpin_->setDecimals(2);
+    phaseSpin_->setSuffix(" deg");
+    phaseSpin_->setValue(params.phase_deg);
+    formLayout_->addRow(tr("Phase:"), phaseSpin_);
 }
 
-QMap<QString, QVariant> PrcConfigDialog::getConfiguration() const
+void PrcConfigDialog::createClockTargetFields()
 {
-    QMap<QString, QVariant> config;
+    const auto &params = std::get<ClockTargetParams>(item_->params());
 
-    for (auto it = fields_.constBegin(); it != fields_.constEnd(); ++it) {
-        config[it.key()] = it.value()->text();
+    dividerSpin_ = new QSpinBox(this);
+    dividerSpin_->setRange(1, 1024);
+    dividerSpin_->setValue(params.divider);
+    formLayout_->addRow(tr("Divider:"), dividerSpin_);
+
+    enableGateCheck_ = new QCheckBox(tr("Enable clock gating"), this);
+    enableGateCheck_->setChecked(params.enable_gate);
+    formLayout_->addRow(tr("Gating:"), enableGateCheck_);
+}
+
+void PrcConfigDialog::createResetSourceFields()
+{
+    const auto &params = std::get<ResetSourceParams>(item_->params());
+
+    activeLowCheck_ = new QCheckBox(tr("Active low reset signal"), this);
+    activeLowCheck_->setChecked(params.active_low);
+    formLayout_->addRow(tr("Polarity:"), activeLowCheck_);
+
+    durationSpin_ = new QDoubleSpinBox(this);
+    durationSpin_->setRange(0.1, 10000.0);
+    durationSpin_->setDecimals(2);
+    durationSpin_->setSuffix(" us");
+    durationSpin_->setValue(params.duration_us);
+    formLayout_->addRow(tr("Duration:"), durationSpin_);
+}
+
+void PrcConfigDialog::createResetTargetFields()
+{
+    const auto &params = std::get<ResetTargetParams>(item_->params());
+
+    synchronousCheck_ = new QCheckBox(tr("Synchronous reset"), this);
+    synchronousCheck_->setChecked(params.synchronous);
+    formLayout_->addRow(tr("Type:"), synchronousCheck_);
+
+    stagesSpin_ = new QSpinBox(this);
+    stagesSpin_->setRange(1, 10);
+    stagesSpin_->setValue(params.stages);
+    formLayout_->addRow(tr("Sync Stages:"), stagesSpin_);
+}
+
+void PrcConfigDialog::createPowerDomainFields()
+{
+    const auto &params = std::get<PowerDomainParams>(item_->params());
+
+    voltageSpin_ = new QDoubleSpinBox(this);
+    voltageSpin_->setRange(0.1, 5.0);
+    voltageSpin_->setDecimals(2);
+    voltageSpin_->setSuffix(" V");
+    voltageSpin_->setValue(params.voltage);
+    formLayout_->addRow(tr("Voltage:"), voltageSpin_);
+
+    isolationCheck_ = new QCheckBox(tr("Enable isolation"), this);
+    isolationCheck_->setChecked(params.isolation);
+    formLayout_->addRow(tr("Isolation:"), isolationCheck_);
+
+    retentionCheck_ = new QCheckBox(tr("Enable retention"), this);
+    retentionCheck_->setChecked(params.retention);
+    formLayout_->addRow(tr("Retention:"), retentionCheck_);
+}
+
+void PrcConfigDialog::applyConfiguration()
+{
+    /* Update primitive name */
+    item_->setPrimitiveName(nameEdit_->text());
+
+    /* Update type-specific parameters */
+    switch (item_->primitiveType()) {
+    case ClockSource: {
+        ClockSourceParams params;
+        params.frequency_mhz = freqSpin_->value();
+        params.phase_deg     = phaseSpin_->value();
+        item_->setParams(params);
+        break;
     }
-
-    return config;
+    case ClockTarget: {
+        ClockTargetParams params;
+        params.divider     = dividerSpin_->value();
+        params.enable_gate = enableGateCheck_->isChecked();
+        item_->setParams(params);
+        break;
+    }
+    case ResetSource: {
+        ResetSourceParams params;
+        params.active_low  = activeLowCheck_->isChecked();
+        params.duration_us = durationSpin_->value();
+        item_->setParams(params);
+        break;
+    }
+    case ResetTarget: {
+        ResetTargetParams params;
+        params.synchronous = synchronousCheck_->isChecked();
+        params.stages      = stagesSpin_->value();
+        item_->setParams(params);
+        break;
+    }
+    case PowerDomain: {
+        PowerDomainParams params;
+        params.voltage   = voltageSpin_->value();
+        params.isolation = isolationCheck_->isChecked();
+        params.retention = retentionCheck_->isChecked();
+        item_->setParams(params);
+        break;
+    }
+    }
 }

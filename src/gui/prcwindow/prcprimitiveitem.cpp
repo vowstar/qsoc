@@ -16,9 +16,31 @@ PrcPrimitiveItem::PrcPrimitiveItem(
     , m_primitiveType(primitiveType)
     , m_primitiveName(name.isEmpty() ? primitiveTypeName() : name)
 {
+    /* Initialize type-specific default parameters */
+    switch (primitiveType) {
+    case ClockSource:
+        m_params = ClockSourceParams{};
+        break;
+    case ClockTarget:
+        m_params = ClockTargetParams{};
+        break;
+    case ResetSource:
+        m_params = ResetSourceParams{};
+        break;
+    case ResetTarget:
+        m_params = ResetTargetParams{};
+        break;
+    case PowerDomain:
+        m_params = PowerDomainParams{};
+        break;
+    }
+
     setSize(WIDTH, HEIGHT);
-    setConnectorsMovable(false);
-    setConnectorsSnapPolicy(QSchematic::Items::Connector::NodeSizerect);
+    setAllowMouseResize(true);
+    setAllowMouseRotate(true);
+    setConnectorsMovable(true);
+    setConnectorsSnapPolicy(QSchematic::Items::Connector::NodeSizerectOutline);
+    setConnectorsSnapToGrid(true);
 
     m_label = std::make_shared<QSchematic::Items::Label>(QSchematic::Items::Item::LabelType, this);
     m_label->setText(m_primitiveName);
@@ -66,30 +88,21 @@ void PrcPrimitiveItem::setPrimitiveName(const QString &name)
     }
 }
 
-QVariant PrcPrimitiveItem::config(const QString &key, const QVariant &defaultValue) const
+const PrcParams &PrcPrimitiveItem::params() const
 {
-    return m_config.value(key, defaultValue);
+    return m_params;
 }
 
-void PrcPrimitiveItem::setConfig(const QString &key, const QVariant &value)
+void PrcPrimitiveItem::setParams(const PrcParams &params)
 {
-    m_config[key] = value;
-}
-
-QMap<QString, QVariant> PrcPrimitiveItem::configuration() const
-{
-    return m_config;
-}
-
-void PrcPrimitiveItem::setConfiguration(const QMap<QString, QVariant> &config)
-{
-    m_config = config;
+    m_params = params;
+    update();
 }
 
 std::shared_ptr<QSchematic::Items::Item> PrcPrimitiveItem::deepCopy() const
 {
     auto copy = std::make_shared<PrcPrimitiveItem>(m_primitiveType, m_primitiveName);
-    copy->setConfiguration(m_config);
+    copy->setParams(m_params);
     copy->setPos(pos());
     copy->setRotation(rotation());
     return copy;
@@ -102,58 +115,99 @@ gpds::container PrcPrimitiveItem::to_container() const
     c.add_value("primitive_type", static_cast<int>(m_primitiveType));
     c.add_value("primitive_name", m_primitiveName.toStdString());
 
-    /* Serialize configuration map with "config_" prefix */
-    for (auto it = m_config.constBegin(); it != m_config.constEnd(); ++it) {
-        std::string key = "config_" + it.key().toStdString();
-        c.add_value(key, it.value().toString().toStdString());
-    }
+    /* Serialize type-specific parameters */
+    std::visit(
+        [&c](auto &&params) {
+            using T = std::decay_t<decltype(params)>;
+            if constexpr (std::is_same_v<T, ClockSourceParams>) {
+                c.add_value("param_frequency_mhz", params.frequency_mhz);
+                c.add_value("param_phase_deg", params.phase_deg);
+            } else if constexpr (std::is_same_v<T, ClockTargetParams>) {
+                c.add_value("param_divider", params.divider);
+                c.add_value("param_enable_gate", params.enable_gate);
+            } else if constexpr (std::is_same_v<T, ResetSourceParams>) {
+                c.add_value("param_active_low", params.active_low);
+                c.add_value("param_duration_us", params.duration_us);
+            } else if constexpr (std::is_same_v<T, ResetTargetParams>) {
+                c.add_value("param_synchronous", params.synchronous);
+                c.add_value("param_stages", params.stages);
+            } else if constexpr (std::is_same_v<T, PowerDomainParams>) {
+                c.add_value("param_voltage", params.voltage);
+                c.add_value("param_isolation", params.isolation);
+                c.add_value("param_retention", params.retention);
+            }
+        },
+        m_params);
 
     return c;
 }
 
 void PrcPrimitiveItem::from_container(const gpds::container &container)
 {
-    QSchematic::Items::Node::from_container(container);
-
     m_primitiveType = static_cast<PrimitiveType>(
         container.get_value<int>("primitive_type").value_or(0));
     m_primitiveName = QString::fromStdString(
         container.get_value<std::string>("primitive_name").value_or(""));
 
-    /* Deserialize type-specific configuration */
-    m_config.clear();
-
-    QStringList configKeys;
+    /* Deserialize type-specific parameters */
     switch (m_primitiveType) {
-    case ClockSource:
-        configKeys << "frequency" << "phase";
-        break;
-    case ClockTarget:
-        configKeys << "divider" << "enable_gate";
-        break;
-    case ResetSource:
-        configKeys << "active_level" << "duration";
-        break;
-    case ResetTarget:
-        configKeys << "synchronous" << "stages";
-        break;
-    case PowerDomain:
-        configKeys << "voltage" << "isolation" << "retention";
+    case ClockSource: {
+        ClockSourceParams params;
+        params.frequency_mhz = container.get_value<double>("param_frequency_mhz").value_or(100.0);
+        params.phase_deg     = container.get_value<double>("param_phase_deg").value_or(0.0);
+        m_params             = params;
         break;
     }
+    case ClockTarget: {
+        ClockTargetParams params;
+        params.divider     = container.get_value<int>("param_divider").value_or(1);
+        params.enable_gate = container.get_value<bool>("param_enable_gate").value_or(false);
+        m_params           = params;
+        break;
+    }
+    case ResetSource: {
+        ResetSourceParams params;
+        params.active_low  = container.get_value<bool>("param_active_low").value_or(true);
+        params.duration_us = container.get_value<double>("param_duration_us").value_or(10.0);
+        m_params           = params;
+        break;
+    }
+    case ResetTarget: {
+        ResetTargetParams params;
+        params.synchronous = container.get_value<bool>("param_synchronous").value_or(true);
+        params.stages      = container.get_value<int>("param_stages").value_or(2);
+        m_params           = params;
+        break;
+    }
+    case PowerDomain: {
+        PowerDomainParams params;
+        params.voltage   = container.get_value<double>("param_voltage").value_or(1.0);
+        params.isolation = container.get_value<bool>("param_isolation").value_or(true);
+        params.retention = container.get_value<bool>("param_retention").value_or(false);
+        m_params         = params;
+        break;
+    }
+    }
 
-    for (const QString &key : configKeys) {
-        std::string gpdsKey = "config_" + key.toStdString();
-        if (auto value = container.get_value<std::string>(gpdsKey)) {
-            m_config[key] = QString::fromStdString(*value);
+    /* Load base Node data - this will restore connectors from container */
+    QSchematic::Items::Node::from_container(container);
+
+    /* Store restored connectors (matching schematicwindow pattern) */
+    const auto restoredConnectors = connectors();
+    for (const auto &connector : restoredConnectors) {
+        if (auto prcConnector = std::dynamic_pointer_cast<PrcConnector>(connector)) {
+            m_connectors.append(prcConnector);
         }
+    }
+
+    /* Only create connectors if none were restored (backward compatibility) */
+    if (m_connectors.isEmpty()) {
+        createConnectors();
     }
 
     if (m_label) {
         m_label->setText(m_primitiveName);
     }
-
-    createConnectors();
 }
 
 void PrcPrimitiveItem::paint(
@@ -162,24 +216,38 @@ void PrcPrimitiveItem::paint(
     Q_UNUSED(option)
     Q_UNUSED(widget)
 
-    QColor color = getTypeColor();
+    /* Draw the bounding rect if debug mode is enabled */
+    if (_settings.debug) {
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QBrush(Qt::red));
+        painter->drawRect(boundingRect());
+    }
 
-    QPen pen(Qt::black, 2.0);
-    painter->setPen(pen);
-    painter->setBrush(QBrush(color));
-    painter->drawRect(0, 0, WIDTH, HEIGHT);
+    QRectF rect = QRectF(0, 0, WIDTH, HEIGHT);
 
+    /* Unified color scheme matching schematicwindow */
+    QPen   bodyPen(QColor(132, 0, 0), 1.5);  // Deep red border
+    QBrush bodyBrush(QColor(255, 255, 194)); // Light yellow background
+
+    painter->setPen(bodyPen);
+    painter->setBrush(bodyBrush);
+    painter->drawRect(rect);
+
+    /* Draw type name with cyan text */
     QFont font = painter->font();
     font.setPointSize(8);
     painter->setFont(font);
-    painter->setPen(Qt::black);
+    painter->setPen(QColor(0, 132, 132)); // Cyan text
     painter->drawText(QRectF(0, 5, WIDTH, 15), Qt::AlignCenter, primitiveTypeName());
 
-    if (isSelected()) {
-        QPen selectionPen(Qt::blue, 2.0, Qt::DashLine);
-        painter->setPen(selectionPen);
-        painter->setBrush(Qt::NoBrush);
-        painter->drawRect(0, 0, WIDTH, HEIGHT);
+    /* Resize handles (matching schematicwindow) */
+    if (isSelected() && allowMouseResize()) {
+        paintResizeHandles(*painter);
+    }
+
+    /* Rotate handle (matching schematicwindow) */
+    if (isSelected() && allowMouseRotate()) {
+        paintRotateHandle(*painter);
     }
 }
 
@@ -190,39 +258,65 @@ void PrcPrimitiveItem::createConnectors()
     }
     m_connectors.clear();
 
+    /* Get grid size for proper positioning (matching schematicwindow) */
+    const int gridSize = _settings.gridSize > 0 ? _settings.gridSize : 20;
+
+    /* Calculate right edge grid position (slightly inside to avoid overflow) */
+    const int rightEdgeGrid = static_cast<int>((WIDTH - gridSize * 0.5) / gridSize);
+
     switch (m_primitiveType) {
     case ClockSource: {
-        auto output = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, QPoint(WIDTH, HEIGHT / 2), "out", this);
+        /* Output on right edge, middle */
+        QPoint gridPos(
+            rightEdgeGrid,                              // Right edge
+            static_cast<int>((HEIGHT / 2) / gridSize)); // Middle
+        auto output = std::make_shared<PrcConnector>(
+            gridPos, "out", PrcConnector::Clock, PrcConnector::Right, this);
         addConnector(output);
         m_connectors.append(output);
         break;
     }
 
     case ClockTarget: {
-        auto input = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, QPoint(0, HEIGHT / 2), "in", this);
+        /* Input on left edge, middle */
+        QPoint gridPosIn(
+            0,                                          // Left edge
+            static_cast<int>((HEIGHT / 2) / gridSize)); // Middle
+        auto input = std::make_shared<PrcConnector>(
+            gridPosIn, "in", PrcConnector::Clock, PrcConnector::Left, this);
         addConnector(input);
         m_connectors.append(input);
 
-        auto output = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, QPoint(WIDTH, HEIGHT / 2), "out", this);
+        /* Output on right edge, middle */
+        QPoint gridPosOut(
+            rightEdgeGrid,                              // Right edge
+            static_cast<int>((HEIGHT / 2) / gridSize)); // Middle
+        auto output = std::make_shared<PrcConnector>(
+            gridPosOut, "out", PrcConnector::Clock, PrcConnector::Right, this);
         addConnector(output);
         m_connectors.append(output);
         break;
     }
 
     case ResetSource: {
-        auto output = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, QPoint(WIDTH, HEIGHT / 2), "rst", this);
+        /* Output on right edge, middle */
+        QPoint gridPos(
+            rightEdgeGrid,                              // Right edge
+            static_cast<int>((HEIGHT / 2) / gridSize)); // Middle
+        auto output = std::make_shared<PrcConnector>(
+            gridPos, "rst", PrcConnector::Reset, PrcConnector::Right, this);
         addConnector(output);
         m_connectors.append(output);
         break;
     }
 
     case ResetTarget: {
-        auto input = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, QPoint(0, HEIGHT / 2), "rst", this);
+        /* Input on left edge, middle */
+        QPoint gridPos(
+            0,                                          // Left edge
+            static_cast<int>((HEIGHT / 2) / gridSize)); // Middle
+        auto input = std::make_shared<PrcConnector>(
+            gridPos, "rst", PrcConnector::Reset, PrcConnector::Left, this);
         addConnector(input);
         m_connectors.append(input);
         break;
@@ -230,25 +324,39 @@ void PrcPrimitiveItem::createConnectors()
 
     case PowerDomain: {
         /* Power domain: inputs (enable, clear) + outputs (ready, fault) */
-        int y = HEIGHT / 4;
-
-        auto enable = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, QPoint(0, y), "en", this);
+        /* Enable input: left edge, upper quarter */
+        QPoint gridPosEn(
+            0,                                          // Left edge
+            static_cast<int>((HEIGHT / 4) / gridSize)); // Upper quarter
+        auto enable = std::make_shared<PrcConnector>(
+            gridPosEn, "en", PrcConnector::Power, PrcConnector::Left, this);
         addConnector(enable);
         m_connectors.append(enable);
 
-        auto clear = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, QPoint(0, y * 3), "clr", this);
+        /* Clear input: left edge, lower quarter */
+        QPoint gridPosClr(
+            0,                                              // Left edge
+            static_cast<int>((HEIGHT * 3 / 4) / gridSize)); // Lower quarter
+        auto clear = std::make_shared<PrcConnector>(
+            gridPosClr, "clr", PrcConnector::Power, PrcConnector::Left, this);
         addConnector(clear);
         m_connectors.append(clear);
 
-        auto ready = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, QPoint(WIDTH, y), "rdy", this);
+        /* Ready output: right edge, upper quarter */
+        QPoint gridPosRdy(
+            rightEdgeGrid,                              // Right edge
+            static_cast<int>((HEIGHT / 4) / gridSize)); // Upper quarter
+        auto ready = std::make_shared<PrcConnector>(
+            gridPosRdy, "rdy", PrcConnector::Power, PrcConnector::Right, this);
         addConnector(ready);
         m_connectors.append(ready);
 
-        auto fault = std::make_shared<QSchematic::Items::Connector>(
-            QSchematic::Items::Item::ConnectorType, QPoint(WIDTH, y * 3), "flt", this);
+        /* Fault output: right edge, lower quarter */
+        QPoint gridPosFlt(
+            rightEdgeGrid,                                  // Right edge
+            static_cast<int>((HEIGHT * 3 / 4) / gridSize)); // Lower quarter
+        auto fault = std::make_shared<PrcConnector>(
+            gridPosFlt, "flt", PrcConnector::Power, PrcConnector::Right, this);
         addConnector(fault);
         m_connectors.append(fault);
         break;
@@ -261,23 +369,5 @@ void PrcPrimitiveItem::updateLabelPosition()
     if (m_label) {
         qreal labelWidth = m_label->boundingRect().width();
         m_label->setPos((WIDTH - labelWidth) / 2, HEIGHT - LABEL_HEIGHT);
-    }
-}
-
-QColor PrcPrimitiveItem::getTypeColor() const
-{
-    switch (m_primitiveType) {
-    case ClockSource:
-        return QColor(173, 216, 230);
-    case ClockTarget:
-        return QColor(135, 206, 250);
-    case ResetSource:
-        return QColor(255, 182, 193);
-    case ResetTarget:
-        return QColor(255, 160, 160);
-    case PowerDomain:
-        return QColor(144, 238, 144);
-    default:
-        return QColor(220, 220, 220);
     }
 }

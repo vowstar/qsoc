@@ -143,18 +143,7 @@ void PrcWindow::handlePrcItemDoubleClick(QSchematic::Items::Item *item)
     /* Show configuration dialog and apply changes if accepted */
     PrcLibrary::PrcConfigDialog dialog(prcItem, this);
     if (dialog.exec() == QDialog::Accepted) {
-        QMap<QString, QVariant> config = dialog.getConfiguration();
-
-        /* Update primitive name if changed */
-        if (config.contains("name")) {
-            QString newName = config["name"].toString();
-            if (!newName.isEmpty() && newName != prcItem->primitiveName()) {
-                prcItem->setPrimitiveName(newName);
-            }
-            config.remove("name");
-        }
-
-        prcItem->setConfiguration(config);
+        /* Dialog applies configuration automatically via applyConfiguration() */
 
         /* Mark as modified */
         scene.undoStack()->resetClean();
@@ -255,12 +244,11 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         for (const auto &node : scene.nodes()) {
             auto prcItem = std::dynamic_pointer_cast<PrcLibrary::PrcPrimitiveItem>(node);
             if (prcItem && prcItem->primitiveType() == PrcLibrary::ClockSource) {
+                const auto &params = std::get<PrcLibrary::ClockSourceParams>(prcItem->params());
                 out << YAML::BeginMap;
                 out << YAML::Key << "name" << YAML::Value << prcItem->primitiveName().toStdString();
-                out << YAML::Key << "frequency" << YAML::Value
-                    << prcItem->config("frequency", "100MHz").toString().toStdString();
-                out << YAML::Key << "phase" << YAML::Value
-                    << prcItem->config("phase", "0").toString().toStdString();
+                out << YAML::Key << "frequency_mhz" << YAML::Value << params.frequency_mhz;
+                out << YAML::Key << "phase_deg" << YAML::Value << params.phase_deg;
                 out << YAML::EndMap;
             }
         }
@@ -271,12 +259,11 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         for (const auto &node : scene.nodes()) {
             auto prcItem = std::dynamic_pointer_cast<PrcLibrary::PrcPrimitiveItem>(node);
             if (prcItem && prcItem->primitiveType() == PrcLibrary::ClockTarget) {
+                const auto &params = std::get<PrcLibrary::ClockTargetParams>(prcItem->params());
                 out << YAML::BeginMap;
                 out << YAML::Key << "name" << YAML::Value << prcItem->primitiveName().toStdString();
-                out << YAML::Key << "divider" << YAML::Value
-                    << prcItem->config("divider", "1").toString().toStdString();
-                out << YAML::Key << "enable_gate" << YAML::Value
-                    << prcItem->config("enable_gate", "false").toString().toStdString();
+                out << YAML::Key << "divider" << YAML::Value << params.divider;
+                out << YAML::Key << "enable_gate" << YAML::Value << params.enable_gate;
                 out << YAML::EndMap;
             }
         }
@@ -287,12 +274,11 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         for (const auto &node : scene.nodes()) {
             auto prcItem = std::dynamic_pointer_cast<PrcLibrary::PrcPrimitiveItem>(node);
             if (prcItem && prcItem->primitiveType() == PrcLibrary::ResetSource) {
+                const auto &params = std::get<PrcLibrary::ResetSourceParams>(prcItem->params());
                 out << YAML::BeginMap;
                 out << YAML::Key << "name" << YAML::Value << prcItem->primitiveName().toStdString();
-                out << YAML::Key << "active_level" << YAML::Value
-                    << prcItem->config("active_level", "low").toString().toStdString();
-                out << YAML::Key << "duration" << YAML::Value
-                    << prcItem->config("duration", "10us").toString().toStdString();
+                out << YAML::Key << "active_low" << YAML::Value << params.active_low;
+                out << YAML::Key << "duration_us" << YAML::Value << params.duration_us;
                 out << YAML::EndMap;
             }
         }
@@ -303,12 +289,11 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         for (const auto &node : scene.nodes()) {
             auto prcItem = std::dynamic_pointer_cast<PrcLibrary::PrcPrimitiveItem>(node);
             if (prcItem && prcItem->primitiveType() == PrcLibrary::ResetTarget) {
+                const auto &params = std::get<PrcLibrary::ResetTargetParams>(prcItem->params());
                 out << YAML::BeginMap;
                 out << YAML::Key << "name" << YAML::Value << prcItem->primitiveName().toStdString();
-                out << YAML::Key << "synchronous" << YAML::Value
-                    << prcItem->config("synchronous", "true").toString().toStdString();
-                out << YAML::Key << "stages" << YAML::Value
-                    << prcItem->config("stages", "2").toString().toStdString();
+                out << YAML::Key << "synchronous" << YAML::Value << params.synchronous;
+                out << YAML::Key << "stages" << YAML::Value << params.stages;
                 out << YAML::EndMap;
             }
         }
@@ -319,14 +304,12 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         for (const auto &node : scene.nodes()) {
             auto prcItem = std::dynamic_pointer_cast<PrcLibrary::PrcPrimitiveItem>(node);
             if (prcItem && prcItem->primitiveType() == PrcLibrary::PowerDomain) {
+                const auto &params = std::get<PrcLibrary::PowerDomainParams>(prcItem->params());
                 out << YAML::BeginMap;
                 out << YAML::Key << "name" << YAML::Value << prcItem->primitiveName().toStdString();
-                out << YAML::Key << "voltage" << YAML::Value
-                    << prcItem->config("voltage", "1.0V").toString().toStdString();
-                out << YAML::Key << "isolation" << YAML::Value
-                    << prcItem->config("isolation", "true").toString().toStdString();
-                out << YAML::Key << "retention" << YAML::Value
-                    << prcItem->config("retention", "false").toString().toStdString();
+                out << YAML::Key << "voltage" << YAML::Value << params.voltage;
+                out << YAML::Key << "isolation" << YAML::Value << params.isolation;
+                out << YAML::Key << "retention" << YAML::Value << params.retention;
                 out << YAML::EndMap;
             }
         }
