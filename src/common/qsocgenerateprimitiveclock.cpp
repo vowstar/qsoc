@@ -2487,7 +2487,8 @@ QString QSocClockPrimitive::typstLegend() const
 {
     const float y  = -1.5f;
     const float x  = 0.0f;
-    const float sp = 3.5f;
+    const float w  = 1.6f; // Wider blocks to fit text
+    const float sp = 4.0f; // Spacing between legend items
 
     QString     result;
     QTextStream s(&result);
@@ -2501,23 +2502,32 @@ QString QSocClockPrimitive::typstLegend() const
       << "id: \"legend_mux\", fill: util.colors.orange, entries: 2)\n";
     s << "  draw.content((" << (x + 0.4) << ", " << (y - 0.8) << "), [MUX/TEST_MUX])\n";
 
-    // STA_GUIDE - Blue
-    s << "  element.block(x: " << (x + sp) << ", y: " << (y + 0.3) << ", w: 1.0, h: 0.8, "
-      << "id: \"legend_sta\", name: \"STA\", fill: util.colors.blue, "
-      << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + sp + 0.5) << ", " << (y - 0.8) << "), [STA_GUIDE])\n";
-
     // ICG - Pink
-    s << "  element.block(x: " << (x + sp * 2) << ", y: " << (y + 0.3) << ", w: 1.0, h: 0.8, "
+    s << "  element.block(x: " << (x + sp) << ", y: " << (y + 0.3) << ", w: " << w << ", h: 0.8, "
       << "id: \"legend_icg\", name: \"ICG\", fill: util.colors.pink, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + sp * 2 + 0.5) << ", " << (y - 0.8) << "), [ICG])\n";
+    s << "  draw.content((" << (x + sp + w / 2) << ", " << (y - 0.8) << "), [ICG])\n";
 
     // DIV - Yellow
-    s << "  element.block(x: " << (x + sp * 3) << ", y: " << (y + 0.3) << ", w: 1.0, h: 0.8, "
+    s << "  element.block(x: " << (x + sp * 2) << ", y: " << (y + 0.3) << ", w: " << w
+      << ", h: 0.8, "
       << "id: \"legend_div\", name: \"÷N\", fill: util.colors.yellow, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + sp * 3 + 0.5) << ", " << (y - 0.8) << "), [DIVIDER])\n\n";
+    s << "  draw.content((" << (x + sp * 2 + w / 2) << ", " << (y - 0.8) << "), [DIVIDER])\n";
+
+    // INV - Purple
+    s << "  element.block(x: " << (x + sp * 3) << ", y: " << (y + 0.3) << ", w: " << w
+      << ", h: 0.8, "
+      << "id: \"legend_inv\", name: \"INV\", fill: util.colors.purple, "
+      << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
+    s << "  draw.content((" << (x + sp * 3 + w / 2) << ", " << (y - 0.8) << "), [INVERTER])\n";
+
+    // STA marker indicator - small blue triangle
+    float staX = x + sp * 4;
+    s << "  draw.line((" << staX << ", " << (y + 0.3) << "), (" << (staX + 0.3) << ", " << (y + 0.3)
+      << "), (" << (staX + 0.15) << ", " << (y + 0.6) << "), close: true, "
+      << "fill: util.colors.blue, stroke: none)\n";
+    s << "  draw.content((" << (staX + 0.15) << ", " << (y - 0.8) << "), [STA marker])\n\n";
 
     return result;
 }
@@ -2529,41 +2539,61 @@ QString QSocClockPrimitive::typstRootStubs(const QList<ClockInput> &inputs, floa
         return QString();
     }
 
-    const int   perRow = 3;
-    const float y0     = -5.0f;
-    const float x0     = 0.0f;
-    const float dx     = 5.0f;
-    const float dy     = 2.5f;
-
     QString     result;
     QTextStream s(&result);
     s.setRealNumberPrecision(2);
     s.setRealNumberNotation(QTextStream::FixedNotation);
 
-    s << "  // === Root clock sources ===\n";
+    // Use Typst table for clean two-column layout
+    // End the circuit block temporarily to insert table
+    s << "})\n\n";
 
-    int numRows = (inputs.size() + perRow - 1) / perRow;
-    bottomY     = y0 - (numRows - 1) * dy - 3.5f;
+    s << "#v(0.3cm)\n";
+    s << "#align(center)[\n";
+    s << "  #text(weight: \"bold\", size: 10pt)[Clock Sources]\n";
+    s << "]\n";
+    s << "#v(0.2cm)\n";
 
-    for (int idx = 0; idx < inputs.size(); ++idx) {
-        const ClockInput &inp = inputs[idx];
-        int               row = idx / perRow;
-        int               col = idx % perRow;
-        float             x   = x0 + col * dx;
-        float             y   = y0 - row * dy;
-        QString           bid = escapeTypstId(QStringLiteral("ROOT_") + inp.name);
+    // Two-column table with source name and frequency
+    s << "#align(center)[\n";
+    s << "#table(\n";
+    s << "  columns: (auto, auto, auto, auto),\n";
+    s << "  align: (left, center, left, center),\n";
+    s << "  stroke: 0.5pt + gray,\n";
+    s << "  inset: 5pt,\n";
+    s << "  fill: (col, row) => if row == 0 { rgb(\"#e0e0e0\") },\n";
+    s << "  [*Source*], [*Freq*], [*Source*], [*Freq*],\n";
 
-        QString label = inp.name;
-        if (!inp.freq.isEmpty())
-            label += QStringLiteral(" ") + inp.freq;
+    // Fill table rows - two sources per row
+    int numSources = inputs.size();
+    for (int i = 0; i < numSources; i += 2) {
+        const ClockInput &src1  = inputs[i];
+        QString           freq1 = src1.freq.isEmpty() ? "-" : src1.freq;
 
-        s << "  element.block(x: " << x << ", y: " << y << ", w: .1, h: .1, "
-          << "id: \"" << bid << "\", "
-          << "ports: (north: ((id: \"N\"),)))\n";
-        s << "  wire.stub(\"" << bid << "-port-N\", \"north\", name: \"" << label << "\")\n";
+        s << "  [" << src1.name << "], ";
+        s << "[" << freq1 << "], ";
+
+        if (i + 1 < numSources) {
+            const ClockInput &src2  = inputs[i + 1];
+            QString           freq2 = src2.freq.isEmpty() ? "-" : src2.freq;
+            s << "[" << src2.name << "], ";
+            s << "[" << freq2 << "],\n";
+        } else {
+            s << "[], [],\n"; // Empty cells for odd number of sources
+        }
     }
 
-    s << "\n";
+    s << ")\n";
+    s << "]\n\n";
+
+    // Resume circuit block for targets
+    s << "#v(0.3cm)\n";
+    s << "#circuit({\n";
+
+    // Calculate bottomY for target positioning
+    int numRows = (numSources + 1) / 2; // Two sources per row
+    bottomY     = -3.0f - numRows * 0.8f;
+
     return result;
 }
 
@@ -2582,133 +2612,384 @@ QString QSocClockPrimitive::typstTarget(
 
     s << "  // ---- " << title << " ----\n";
 
-    // Build source list
-    QStringList sources;
-    for (const ClockLink &link : target.links)
-        sources << link.source;
+    int numSources = target.links.size();
 
-    bool    needMux = (sources.size() > 1) || (!target.select.isEmpty() && !sources.isEmpty());
-    QString prev;
+    // Analyze link-level components (per-link ICG/DIV/INV, before MUX)
+    QVector<bool> linkHasComp(numSources, false);
+    bool          anyLinkHasComp = false;
+
+    for (int i = 0; i < numSources; ++i) {
+        const ClockLink &link = target.links[i];
+        if (link.icg.configured || link.div.configured || link.inv.configured) {
+            linkHasComp[i] = true;
+            anyLinkHasComp = true;
+        }
+    }
+
+    // Analyze target-level components (Post-MUX ICG/DIV/INV)
+    bool hasTargetIcg = target.icg.configured;
+    bool hasTargetDiv = target.div.configured;
+    bool hasTargetInv = target.inv.configured;
+
+    // Layout calculation
+    float linkCompX = x;                               // Link components start position
+    float muxX      = anyLinkHasComp ? (x + 4.0f) : x; // MUX X position
+    // Post-MUX components start position
+    // Add extra gap when no target-level components to avoid MUX-to-MUX text overlap
+    bool  hasAnyTargetComp = hasTargetIcg || hasTargetDiv || hasTargetInv;
+    float postMuxX = muxX + (hasAnyTargetComp ? 2.0f : 3.5f); // Extra space if no components
+    float currentX = postMuxX;
+
+    // Calculate final output X based on target-level components
+    if (hasTargetIcg)
+        currentX += 2.5f;
+    if (hasTargetDiv)
+        currentX += 2.5f;
+    if (hasTargetInv)
+        currentX += 2.5f;
+    if (!target.test_clock.isEmpty())
+        currentX += 3.0f; // Extra space for test MUX stub labels
+    float outX = currentX + 1.0f;
+
+    // Calculate MUX height - use fixed per-port spacing for consistent layout
+    const float portSpacing = 1.5f; // Spacing per MUX port
+    const float compHeight  = 0.9f; // Link component block height
+    float       muxHeight   = qMax(2.0f, portSpacing * numSources);
+    float       muxBottomY  = y; // MUX bottom at y
+    float       muxCenterY  = y + muxHeight / 2;
+
+    // Store MUX input connection points
+    QVector<QString> muxInputPorts(numSources);
+
+    // Calculate Y positions for each link to align with MUX auto-distributed ports
+    // Circuiteria MUX ports are top-to-bottom: port-in[i] at y + h * (1 - (i + 0.5) / n)
+    QVector<float> linkPortY(numSources);
+    for (int i = 0; i < numSources; ++i) {
+        // MUX port center Y (top-to-bottom distribution)
+        float muxPortY = muxBottomY + muxHeight * (1.0f - (float(i) + 0.5f) / float(numSources));
+        // Link component should align with this port
+        linkPortY[i] = muxPortY - compHeight / 2; // Block bottom-left Y
+    }
+
+    // Step 1: Draw link-level components (before MUX)
+    for (int i = 0; i < numSources; ++i) {
+        const ClockLink &link  = target.links[i];
+        float            compY = linkPortY[i];
+        float            compX = linkCompX;
+        QString          prevPort;
+
+        if (linkHasComp[i]) {
+            // Helper lambda to draw STA marker (small blue triangle inside top-right corner)
+            auto drawStaMarker = [&s](float bx, float by, float bw, float bh) {
+                float tx = bx + bw - 0.25f;
+                float ty = by + bh - 0.30f; // Inside the block (triangle height is 0.2)
+                s << "  draw.line((" << tx << ", " << ty << "), (" << (tx + 0.2f) << ", " << ty
+                  << "), (" << (tx + 0.1f) << ", " << (ty + 0.2f)
+                  << "), close: true, fill: util.colors.blue, stroke: none)\n";
+            };
+
+            // Draw ICG if configured
+            if (link.icg.configured) {
+                QString icgId = escapeTypstId(
+                    tid + QStringLiteral("_L") + QString::number(i) + QStringLiteral("_ICG"));
+                s << "  element.block(\n";
+                s << "    x: " << compX << ", y: " << compY << ", w: 1.0, h: 0.9,\n";
+                s << "    id: \"" << icgId << "\", name: \"ICG\", fill: util.colors.pink,\n";
+                s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
+                s << "  )\n";
+
+                // STA marker if sta_guide configured
+                if (!link.icg.sta_guide.cell.isEmpty()) {
+                    drawStaMarker(compX, compY, 1.0f, 0.9f);
+                }
+
+                // Show enable signal above ICG
+                if (!link.icg.enable.isEmpty()) {
+                    s << "  draw.content((" << (compX + 0.5f) << ", " << (compY + 0.9f + 0.2f)
+                      << "), text(size: 7pt)[" << link.icg.enable << "])\n";
+                }
+
+                if (prevPort.isEmpty()) {
+                    s << "  wire.stub(\"" << icgId << "-port-in\", \"west\", name: \""
+                      << link.source << "\")\n";
+                } else {
+                    s << "  wire.wire(\"w_" << tid << "_l" << i << "_to_icg\", (\n";
+                    s << "    \"" << prevPort << "\", \"" << icgId << "-port-in\"\n";
+                    s << "  ))\n";
+                }
+                prevPort = icgId + QStringLiteral("-port-out");
+                compX += 1.3f;
+            }
+
+            // Draw DIV if configured
+            if (link.div.configured) {
+                QString divId = escapeTypstId(
+                    tid + QStringLiteral("_L") + QString::number(i) + QStringLiteral("_DIV"));
+                s << "  element.block(\n";
+                s << "    x: " << compX << ", y: " << compY << ", w: 1.0, h: 0.9,\n";
+                s << "    id: \"" << divId << "\", name: \"÷N\", fill: util.colors.yellow,\n";
+                s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
+                s << "  )\n";
+
+                // STA marker if sta_guide configured
+                if (!link.div.sta_guide.cell.isEmpty()) {
+                    drawStaMarker(compX, compY, 1.0f, 0.9f);
+                }
+
+                // Show range annotation above DIV (offset 0.5 to avoid overlap with block text)
+                if (link.div.width > 0) {
+                    int maxVal = (1 << link.div.width) - 1;
+                    s << "  draw.content((" << (compX + 0.5f) << ", " << (compY + 0.9f + 0.5f)
+                      << "), text(size: 7pt)[N∈\\[0," << maxVal << "\\]])\n";
+                } else {
+                    s << "  draw.content((" << (compX + 0.5f) << ", " << (compY + 0.9f + 0.5f)
+                      << "), text(size: 7pt)[N=" << link.div.default_value << "])\n";
+                }
+
+                if (prevPort.isEmpty()) {
+                    s << "  wire.stub(\"" << divId << "-port-in\", \"west\", name: \""
+                      << link.source << "\")\n";
+                } else {
+                    s << "  wire.wire(\"w_" << tid << "_l" << i << "_to_div\", (\n";
+                    s << "    \"" << prevPort << "\", \"" << divId << "-port-in\"\n";
+                    s << "  ))\n";
+                }
+                prevPort = divId + QStringLiteral("-port-out");
+                compX += 1.3f;
+            }
+
+            // Draw INV if configured
+            if (link.inv.configured) {
+                QString invId = escapeTypstId(
+                    tid + QStringLiteral("_L") + QString::number(i) + QStringLiteral("_INV"));
+                s << "  element.block(\n";
+                s << "    x: " << compX << ", y: " << compY << ", w: 1.0, h: 0.9,\n";
+                s << "    id: \"" << invId << "\", name: \"INV\", fill: util.colors.purple,\n";
+                s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
+                s << "  )\n";
+
+                // STA marker if sta_guide configured
+                if (!link.inv.sta_guide.cell.isEmpty()) {
+                    drawStaMarker(compX, compY, 1.0f, 0.9f);
+                }
+
+                if (prevPort.isEmpty()) {
+                    s << "  wire.stub(\"" << invId << "-port-in\", \"west\", name: \""
+                      << link.source << "\")\n";
+                } else {
+                    s << "  wire.wire(\"w_" << tid << "_l" << i << "_to_inv\", (\n";
+                    s << "    \"" << prevPort << "\", \"" << invId << "-port-in\"\n";
+                    s << "  ))\n";
+                }
+                prevPort = invId + QStringLiteral("-port-out");
+            }
+
+            muxInputPorts[i] = prevPort;
+        } else {
+            // No link component - will connect directly to MUX with stub
+            muxInputPorts[i] = QString();
+        }
+    }
+
+    // Step 2: Draw MUX or single source block
+    bool    needMux = (numSources > 1) || (!target.select.isEmpty() && numSources > 0);
+    QString muxOutputPort;
 
     if (needMux) {
-        // Generate MUX
         QString muxId   = escapeTypstId(tid + QStringLiteral("_MUX"));
-        int     entries = qMax(2, sources.size());
-        s << "  element.multiplexer(\n"
-          << "    x: " << x << ", y: " << (y - 1.0) << ", w: 1.0, h: 4.0,\n"
-          << "    id: \"" << muxId << "\", fill: util.colors.orange, entries: " << entries << "\n"
-          << "  )\n";
+        int     entries = qMax(2, numSources);
+        s << "  element.multiplexer(\n";
+        s << "    x: " << muxX << ", y: " << muxBottomY << ", w: 1.0, h: " << muxHeight << ",\n";
+        s << "    id: \"" << muxId << "\", fill: util.colors.orange, entries: " << entries << "\n";
+        s << "  )\n";
+
         if (!target.select.isEmpty())
-            s << "  draw.content((" << (x + 0.5) << ", " << (y + 3.3) << "), text(size: 8pt)["
-              << target.select << "])\n";
+            s << "  draw.content((" << (muxX + 0.5f) << ", " << (muxBottomY + muxHeight + 0.3f)
+              << "), text(size: 8pt)[" << target.select << "])\n";
 
-        // Stubs for MUX inputs
-        for (int i = 0; i < sources.size(); ++i)
-            s << "  wire.stub(\"" << muxId << "-port-in" << i << "\", \"west\", name: \""
-              << sources[i] << "\")\n";
+        // STA marker if mux.sta_guide configured (inside top-right corner)
+        if (!target.mux.sta_guide.cell.isEmpty()) {
+            float mtx = muxX + 1.0f - 0.35f;            // Right edge - margin
+            float mty = muxBottomY + muxHeight - 0.35f; // Top edge - margin
+            s << "  draw.line((" << mtx << ", " << mty << "), (" << (mtx + 0.25f) << ", " << mty
+              << "), (" << (mtx + 0.125f) << ", " << (mty + 0.25f)
+              << "), close: true, fill: util.colors.blue, stroke: none)\n";
+        }
 
-        prev = muxId + QStringLiteral("-port-out");
-    } else if (!sources.isEmpty()) {
-        // Single source stub
-        QString sid = escapeTypstId(tid + QStringLiteral("_SRC"));
-        s << "  element.block(x: " << x << ", y: " << (y + 0.6) << ", w: .8, h: .6, "
-          << "id: \"" << sid << "\", name: \"\", "
-          << "ports: (east: ((id: \"out\"),)))\n";
-        s << "  wire.stub(\"" << sid << "-port-out\", \"west\", name: \"" << sources[0] << "\")\n";
-        prev = sid + QStringLiteral("-port-out");
+        // Connect inputs to MUX
+        for (int i = 0; i < numSources; ++i) {
+            QString muxInPort = muxId + QStringLiteral("-port-in") + QString::number(i);
+            if (muxInputPorts[i].isEmpty()) {
+                // Direct connection - draw stub
+                s << "  wire.stub(\"" << muxInPort << "\", \"west\", name: \""
+                  << target.links[i].source << "\")\n";
+            } else {
+                // Connect from link component output
+                s << "  wire.wire(\"w_" << tid << "_l" << i << "_to_mux\", (\n";
+                s << "    \"" << muxInputPorts[i] << "\", \"" << muxInPort << "\"\n";
+                s << "  ))\n";
+            }
+        }
+
+        muxOutputPort = muxId + QStringLiteral("-port-out");
+    } else if (numSources > 0) {
+        // Single source
+        if (muxInputPorts[0].isEmpty()) {
+            QString sid = escapeTypstId(tid + QStringLiteral("_SRC"));
+            s << "  element.block(x: " << muxX << ", y: " << (y + 0.6f) << ", w: .8, h: .6, ";
+            s << "id: \"" << sid << "\", name: \"\", ";
+            s << "ports: (east: ((id: \"out\"),)))\n";
+            s << "  wire.stub(\"" << sid << "-port-out\", \"west\", name: \""
+              << target.links[0].source << "\")\n";
+            muxOutputPort = sid + QStringLiteral("-port-out");
+        } else {
+            muxOutputPort = muxInputPorts[0];
+        }
     } else {
         // No connection
         QString sid = escapeTypstId(tid + QStringLiteral("_SRC"));
-        s << "  element.block(x: " << x << ", y: " << (y + 0.6) << ", w: .8, h: .6, "
-          << "id: \"" << sid << "\", name: \"\", "
-          << "ports: (east: ((id: \"out\"),)))\n";
+        s << "  element.block(x: " << muxX << ", y: " << (y + 0.6f) << ", w: .8, h: .6, ";
+        s << "id: \"" << sid << "\", name: \"\", ";
+        s << "ports: (east: ((id: \"out\"),)))\n";
         s << "  wire.stub(\"" << sid << "-port-out\", \"west\", name: \"NC\")\n";
-        prev = sid + QStringLiteral("-port-out");
+        muxOutputPort = sid + QStringLiteral("-port-out");
     }
 
-    // STA guide buffer (check target-level or mux-level)
-    QString staInst;
-    if (!target.icg.sta_guide.instance.isEmpty())
-        staInst = target.icg.sta_guide.instance;
-    else if (!target.mux.sta_guide.instance.isEmpty())
-        staInst = target.mux.sta_guide.instance;
+    QString prev = muxOutputPort;
+    currentX     = postMuxX;
 
-    if (!staInst.isEmpty()) {
-        QString sid = escapeTypstId(tid + QStringLiteral("_STA0"));
-        s << "  element.block(\n"
-          << "    x: " << (x + 2.5) << ", y: " << (y + 0.3) << ", w: 1.2, h: 1.2,\n"
-          << "    id: \"" << sid << "\", name: \"STA\", fill: util.colors.blue,\n"
-          << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n"
-          << "  )\n";
-        s << "  draw.content((" << (x + 2.5 + 0.6) << ", " << (y - 0.3) << "), text(size: 6pt)["
-          << staInst << "])\n";
-        s << "  wire.wire(\"w_" << tid << "_mux_sta\", (\n"
-          << "    \"" << prev << "\", \"" << sid << "-port-in\"\n"
-          << "  ))\n";
-        prev = sid + QStringLiteral("-port-out");
-    }
+    // Step 3: Draw target-level components (Post-MUX)
 
-    // ICG block
-    if (target.icg.configured) {
+    // Target-level components - all ports should align at muxCenterY
+    // For block with height h, port is at center (y + h/2), so y = muxCenterY - h/2
+    const float targetCompH = 1.2f;
+    const float targetCompY = muxCenterY - targetCompH / 2; // Port aligns at muxCenterY
+
+    // Helper lambda for STA marker on target-level components (inside top-right corner)
+    auto drawStaMarkerTarget = [&s](float bx, float by, float bw, float bh) {
+        float tx = bx + bw - 0.35f;
+        float ty = by + bh - 0.35f; // Inside the block (triangle height is 0.25)
+        s << "  draw.line((" << tx << ", " << ty << "), (" << (tx + 0.25f) << ", " << ty << "), ("
+          << (tx + 0.125f) << ", " << (ty + 0.25f)
+          << "), close: true, fill: util.colors.blue, stroke: none)\n";
+    };
+
+    // Target-level ICG
+    if (hasTargetIcg) {
         QString iid = escapeTypstId(tid + QStringLiteral("_ICG"));
-        s << "  element.block(\n"
-          << "    x: " << (x + 5.0) << ", y: " << (y + 0.3) << ", w: 1.2, h: 1.2,\n"
-          << "    id: \"" << iid << "\", name: \"ICG\", fill: util.colors.pink,\n"
-          << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n"
-          << "  )\n";
-        s << "  wire.wire(\"w_" << tid << "_prev_icg\", (\n"
-          << "    \"" << prev << "\", \"" << iid << "-port-in\"\n"
-          << "  ))\n";
+        s << "  element.block(\n";
+        s << "    x: " << currentX << ", y: " << targetCompY << ", w: 1.2, h: " << targetCompH
+          << ",\n";
+        s << "    id: \"" << iid << "\", name: \"ICG\", fill: util.colors.pink,\n";
+        s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
+        s << "  )\n";
+
+        // STA marker if sta_guide configured
+        if (!target.icg.sta_guide.cell.isEmpty()) {
+            drawStaMarkerTarget(currentX, targetCompY, 1.2f, targetCompH);
+        }
+
+        // Show enable signal above ICG
+        if (!target.icg.enable.isEmpty()) {
+            s << "  draw.content((" << (currentX + 0.6f) << ", "
+              << (targetCompY + targetCompH + 0.2f) << "), text(size: 7pt)[" << target.icg.enable
+              << "])\n";
+        }
+
+        s << "  wire.wire(\"w_" << tid << "_to_icg\", (\n";
+        s << "    \"" << prev << "\", \"" << iid << "-port-in\"\n";
+        s << "  ))\n";
         prev = iid + QStringLiteral("-port-out");
+        currentX += 2.5f;
     }
 
-    // DIV block
-    if (target.div.configured) {
+    // Target-level DIV
+    if (hasTargetDiv) {
         QString did = escapeTypstId(tid + QStringLiteral("_DIV"));
-        QString label;
+        s << "  element.block(\n";
+        s << "    x: " << currentX << ", y: " << targetCompY << ", w: 1.2, h: " << targetCompH
+          << ",\n";
+        s << "    id: \"" << did << "\", name: \"÷N\", fill: util.colors.yellow,\n";
+        s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
+        s << "  )\n";
+
+        // STA marker if sta_guide configured
+        if (!target.div.sta_guide.cell.isEmpty()) {
+            drawStaMarkerTarget(currentX, targetCompY, 1.2f, targetCompH);
+        }
+
+        // Show range annotation above DIV (offset 0.5 to avoid overlap with block text)
         if (target.div.width > 0) {
             int maxVal = (1 << target.div.width) - 1;
-            label      = QStringLiteral("÷[1,%1]").arg(maxVal);
+            s << "  draw.content((" << (currentX + 0.6f) << ", "
+              << (targetCompY + targetCompH + 0.5f) << "), text(size: 7pt)[N∈\\[0," << maxVal
+              << "\\]])\n";
         } else {
-            label = QStringLiteral("÷%1").arg(target.div.default_value);
+            s << "  draw.content((" << (currentX + 0.6f) << ", "
+              << (targetCompY + targetCompH + 0.5f)
+              << "), text(size: 7pt)[N=" << target.div.default_value << "])\n";
         }
-        s << "  element.block(\n"
-          << "    x: " << (x + 7.5) << ", y: " << (y + 0.3) << ", w: 1.2, h: 1.2,\n"
-          << "    id: \"" << did << "\", name: \"" << label << "\", fill: util.colors.yellow,\n"
-          << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n"
-          << "  )\n";
-        s << "  wire.wire(\"w_" << tid << "_prev_div\", (\n"
-          << "    \"" << prev << "\", \"" << did << "-port-in\"\n"
-          << "  ))\n";
+
+        s << "  wire.wire(\"w_" << tid << "_to_div\", (\n";
+        s << "    \"" << prev << "\", \"" << did << "-port-in\"\n";
+        s << "  ))\n";
         prev = did + QStringLiteral("-port-out");
+        currentX += 2.5f;
+    }
+
+    // Target-level INV
+    if (hasTargetInv) {
+        QString invId = escapeTypstId(tid + QStringLiteral("_INV"));
+        s << "  element.block(\n";
+        s << "    x: " << currentX << ", y: " << targetCompY << ", w: 1.2, h: " << targetCompH
+          << ",\n";
+        s << "    id: \"" << invId << "\", name: \"INV\", fill: util.colors.purple,\n";
+        s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
+        s << "  )\n";
+
+        // STA marker if sta_guide configured
+        if (!target.inv.sta_guide.cell.isEmpty()) {
+            drawStaMarkerTarget(currentX, targetCompY, 1.2f, targetCompH);
+        }
+
+        s << "  wire.wire(\"w_" << tid << "_to_inv\", (\n";
+        s << "    \"" << prev << "\", \"" << invId << "-port-in\"\n";
+        s << "  ))\n";
+        prev = invId + QStringLiteral("-port-out");
+        currentX += 2.5f;
     }
 
     // Test clock multiplexer
+    // Circuiteria MUX ports are top-to-bottom: port-in0 at y + 3h/4, port-in1 at y + h/4
+    // To align port-in0 at muxCenterY: y = muxCenterY - 3h/4
+    // Output port is at MUX center: y + h/2
+    float finalOutY = muxCenterY; // Default output Y is muxCenterY
     if (!target.test_clock.isEmpty()) {
-        QString tmId = escapeTypstId(tid + QStringLiteral("_TM"));
-        QString te   = testEnable.isEmpty() ? QStringLiteral("test_en") : testEnable;
-        s << "  element.multiplexer(\n"
-          << "    x: " << (x + 10.0) << ", y: " << (y - 0.6) << ", w: 1.0, h: 2.0,\n"
-          << "    id: \"" << tmId << "\", fill: util.colors.orange, entries: 2\n"
-          << "  )\n";
+        QString     tmId = escapeTypstId(tid + QStringLiteral("_TM"));
+        QString     te   = testEnable.isEmpty() ? QStringLiteral("test_en") : testEnable;
+        const float tmH  = 2.0f;
+        const float tmY  = muxCenterY - 3.0f * tmH / 4.0f; // port-in0 aligns at muxCenterY
+        finalOutY        = tmY + tmH / 2.0f;               // test MUX output at its center
+        s << "  element.multiplexer(\n";
+        s << "    x: " << currentX << ", y: " << tmY << ", w: 1.0, h: " << tmH << ",\n";
+        s << "    id: \"" << tmId << "\", fill: util.colors.orange, entries: 2\n";
+        s << "  )\n";
         s << "  wire.stub(\"" << tmId << ".north\", \"north\", name: \"" << te << "\")\n";
         s << "  wire.stub(\"" << tmId << "-port-in1\", \"west\", name: \"" << target.test_clock
           << "\")\n";
-        s << "  wire.wire(\"w_" << tid << "_prev_tm\", (\n"
-          << "    \"" << prev << "\", \"" << tmId << "-port-in0\"\n"
-          << "  ))\n";
+        s << "  wire.wire(\"w_" << tid << "_to_tm\", (\n";
+        s << "    \"" << prev << "\", \"" << tmId << "-port-in0\"\n";
+        s << "  ))\n";
         prev = tmId + QStringLiteral("-port-out");
+        currentX += 2.5f;
     }
 
-    // Final output
-    QString oid = escapeTypstId(tid + QStringLiteral("_OUT"));
-    s << "  element.block(x: " << (x + 12.0) << ", y: " << (y + 0.6) << ", w: .8, h: .6, "
-      << "id: \"" << oid << "\", name: \"\", "
-      << "ports: (east: ((id: \"E\"),)))\n";
-    s << "  wire.wire(\"w_" << tid << "_to_out\", (\n"
-      << "    \"" << prev << "\", \"" << oid << "-port-E\"\n"
-      << "  ))\n";
-    s << "  wire.stub(\"" << oid << "-port-E\", \"east\", name: \"" << target.name << "\")\n\n";
+    // Step 4: Final output - arrow with label (align with last component output)
+    float arrowEndX = currentX + 2.5f;
+    s << "  draw.line(\"" << prev << "\", (" << arrowEndX << ", " << finalOutY
+      << "), mark: (end: \">\", fill: black))\n";
+    s << "  draw.content((" << (arrowEndX + 0.3f) << ", " << finalOutY << "), anchor: \"west\", ["
+      << target.name << "])\n\n";
 
     return result;
 }
@@ -2735,15 +3016,29 @@ bool QSocClockPrimitive::generateTypstDiagram(
     float bottomY = -5.0f;
     out << typstRootStubs(config.inputs, bottomY);
 
-    // Generate targets (vertical stacking)
-    const float x0 = 0.0f;
-    const float y0 = bottomY - 2.5f;
-    const float dy = 5.0f; // Vertical spacing
+    // Generate targets (vertical stacking with dynamic spacing)
+    // Key insight: MUX extends UPWARD from y to y+muxHeight
+    // So we position MUX TOP at currentY by setting y = currentY - muxHeight
+    const float x0          = 0.0f;
+    const float portSpacing = 1.5f; // Match typstTarget portSpacing
+    const float extraMargin = 2.5f; // Extra margin between targets
+
+    float currentY = bottomY - 3.0f;
 
     for (int idx = 0; idx < config.targets.size(); ++idx) {
-        const ClockTarget &target = config.targets[idx];
-        float              y      = y0 - idx * dy;
-        out << typstTarget(target, x0, y, config.testEnable);
+        const ClockTarget &target     = config.targets[idx];
+        int                numSources = target.links.size();
+
+        // Calculate target height - same as typstTarget
+        float muxHeight = qMax(2.0f, portSpacing * numSources);
+
+        // Position target so MUX TOP is at currentY
+        // typstTarget uses y as MUX bottom, so y = currentY - muxHeight
+        float targetY = currentY - muxHeight;
+        out << typstTarget(target, x0, targetY, config.testEnable);
+
+        // Move to next target position (MUX bottom is at targetY)
+        currentY = targetY - extraMargin;
     }
 
     // Close circuit
