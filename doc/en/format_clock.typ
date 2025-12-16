@@ -138,6 +138,8 @@ target:
         in: I
         out: Z
       polarity: high                # Enable polarity (default: high)
+      reset: rst_n                  # Reset signal (optional)
+      clock_on_reset: false         # Clock disabled during reset (default)
     link:
       pll_clk:                      # Direct connection
 
@@ -212,6 +214,7 @@ target:
     freq: 25MHz
     icg:
       enable: clk_en              # Target-level ICG
+      clock_on_reset: true        # Clock enabled during reset
     div:
       default: 2                  # Target-level divider
       reset: rst_n
@@ -224,6 +227,7 @@ target:
       pll_clk:
         icg:
           enable: clk_en          # Link-level ICG
+          clock_on_reset: false   # Clock disabled during reset (default)
           sta_guide:              # STA guide after ICG
             cell: BUF_ICG
             in: I
@@ -235,6 +239,73 @@ target:
             cell: BUF_DIV
             in: CK
             out: CKO
+```
+
+== ICG CONFIGURATION
+<soc-net-clock-icg-config>
+Clock gating cells (ICG) control clock distribution by enabling or disabling clock output based on enable signals. The ICG primitive supports both target-level and link-level configurations.
+
+=== ICG Parameters
+<soc-net-clock-icg-params>
+#figure(
+  align(center)[#table(
+    columns: (0.25fr, 0.15fr, 0.6fr),
+    align: (auto, center, left),
+    table.header([Parameter], [Required], [Description]),
+    table.hline(),
+    [enable], [✓], [Gate enable signal name],
+    [polarity], [], [Enable polarity: "high" (default) or "low"],
+    [test_enable],
+    [],
+    [Test enable bypass signal (uses controller-level if not specified)],
+    [reset], [], [Reset signal name (active-low)],
+    [clock_on_reset], [], [Enable clock output during reset (default: false)],
+    [sta_guide], [], [STA guide buffer configuration after ICG (optional)],
+  )],
+  caption: [ICG CONFIGURATION PARAMETERS],
+  kind: table,
+)
+
+=== ICG with Clock During Reset
+<soc-net-clock-icg-clock-during-reset>
+The `clock_on_reset` parameter controls whether the ICG outputs clock during reset. When enabled, the clock passes through during reset regardless of the enable signal state:
+
+```yaml
+# ICG with clock enabled during reset
+target:
+  boot_clk:
+    freq: 24MHz
+    icg:
+      enable: boot_clk_en
+      reset: rst_n
+      clock_on_reset: true          # Clock output enabled during reset
+    link:
+      osc_24m:
+
+# ICG with clock disabled during reset (default behavior)
+target:
+  cpu_clk:
+    freq: 800MHz
+    icg:
+      enable: cpu_clk_en
+      reset: rst_n
+      clock_on_reset: false         # Clock output disabled during reset (default)
+    link:
+      pll_800m:
+```
+
+Generated Verilog uses the `CLOCK_DURING_RESET` parameter:
+```verilog
+qsoc_tc_clk_gate #(
+    .CLOCK_DURING_RESET(1'b1),      // Clock enabled during reset
+    .POLARITY(1'b1)
+) u_boot_clk_target_icg (
+    .clk(osc_24m),
+    .en(boot_clk_en),
+    .test_en(test_en),
+    .rst_n(rst_n),
+    .clk_out(boot_clk_icg_out)
+);
 ```
 
 == DIVIDER CONFIGURATION
@@ -845,16 +916,16 @@ Generates `.typ` circuit diagram alongside Verilog.
 Clock format supports two processing levels with distinct syntax patterns:
 
 *Target Level* (key existence determines operation):
-- `icg` - Map format with enable/polarity/reset and optional sta_guide
-- `div` - Map format with default/reset (width auto-calculated for static mode) and optional sta_guide
+- `icg` - Map format with enable/polarity/reset/clock_on_reset and optional sta_guide
+- `div` - Map format with default/reset/clock_on_reset (width auto-calculated for static mode) and optional sta_guide
 - `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
 - `select` - String (required for ≥2 links)
 - `reset` - String (auto-selects GF_MUX when present)
 - `test_enable`, `test_clock` - String (GF_MUX DFT signals)
 
 *Link Level* (key existence determines operation):
-- `icg` - Map format with enable/polarity/reset and optional sta_guide
-- `div` - Map format with default/reset (width auto-calculated for static mode) and optional sta_guide
+- `icg` - Map format with enable/polarity/reset/clock_on_reset and optional sta_guide
+- `div` - Map format with default/reset/clock_on_reset (width auto-calculated for static mode) and optional sta_guide
 - `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
 - Pass-through: No attributes specified
 

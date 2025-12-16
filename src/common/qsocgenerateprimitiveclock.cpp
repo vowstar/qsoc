@@ -141,6 +141,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     target.icg.reset = QString::fromStdString(
                         it->second["icg"]["reset"].as<std::string>());
                 }
+                target.icg.clock_on_reset = it->second["icg"]["clock_on_reset"].as<bool>(false);
                 // Parse ICG sta_guide
                 if (it->second["icg"]["sta_guide"] && it->second["icg"]["sta_guide"].IsMap()) {
                     if (it->second["icg"]["sta_guide"]["cell"]) {
@@ -333,6 +334,8 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                             link.icg.reset = QString::fromStdString(
                                 linkIt->second["icg"]["reset"].as<std::string>());
                         }
+                        link.icg.clock_on_reset = linkIt->second["icg"]["clock_on_reset"].as<bool>(
+                            false);
                         // Parse ICG sta_guide
                         if (linkIt->second["icg"]["sta_guide"]
                             && linkIt->second["icg"]["sta_guide"].IsMap()) {
@@ -909,7 +912,8 @@ void QSocClockPrimitive::generateOutputAssignments(
 
             out << "    wire " << icgTempOutput << ";\n";
             out << "    qsoc_tc_clk_gate #(\n";
-            out << "        .CLOCK_DURING_RESET(1'b0),\n";
+            out << "        .CLOCK_DURING_RESET(" << (target.icg.clock_on_reset ? "1'b1" : "1'b0")
+                << "),\n";
             out << "        .POLARITY(" << (target.icg.polarity == "high" ? "1'b1" : "1'b0")
                 << ")\n";
             out << "    ) " << instanceName << "_icg (\n";
@@ -1134,7 +1138,8 @@ void QSocClockPrimitive::generateClockInstance(
 
             out << "    wire " << icgTempWire << ";\n";
             out << "    qsoc_tc_clk_gate #(\n";
-            out << "        .CLOCK_DURING_RESET(1'b0),\n";
+            out << "        .CLOCK_DURING_RESET(" << (link.icg.clock_on_reset ? "1'b1" : "1'b0")
+                << "),\n";
             out << "        .POLARITY(" << (link.icg.polarity == "high" ? "1'b1" : "1'b0") << ")\n";
             out << "    ) " << instanceName << "_icg (\n";
             out << "        .clk(" << currentWire << "),\n";
