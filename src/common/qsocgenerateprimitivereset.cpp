@@ -980,7 +980,8 @@ QString QSocResetPrimitive::typstLegend() const
 {
     const float y  = -1.5f;
     const float x  = 0.0f;
-    const float sp = 3.5f;
+    const float w  = 1.6f; // Wider blocks to fit text
+    const float sp = 4.0f; // Increased spacing for wider blocks
 
     QString     result;
     QTextStream s(&result);
@@ -989,75 +990,107 @@ QString QSocResetPrimitive::typstLegend() const
 
     s << "  // === Legend ===\n";
 
-    // OR - Green
-    s << "  element.block(x: " << x << ", y: " << (y + 0.3) << ", w: 1.0, h: 0.8, "
-      << "id: \"legend_or\", name: \"OR\", fill: util.colors.green, "
+    // AND - Green (active-low reset signals use AND logic)
+    s << "  element.block(x: " << x << ", y: " << (y + 0.3) << ", w: " << w << ", h: 0.8, "
+      << "id: \"legend_and\", name: \"AND\", fill: util.colors.green, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + 0.5) << ", " << (y - 0.8) << "), [OR])\n";
+    s << "  draw.content((" << (x + w / 2) << ", " << (y - 0.8) << "), [AND])\n";
 
     // ASYNC - Blue
-    s << "  element.block(x: " << (x + sp) << ", y: " << (y + 0.3) << ", w: 1.0, h: 0.8, "
+    s << "  element.block(x: " << (x + sp) << ", y: " << (y + 0.3) << ", w: " << w << ", h: 0.8, "
       << "id: \"legend_async\", name: \"ASYNC\", fill: util.colors.blue, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + sp + 0.5) << ", " << (y - 0.8) << "), [ASYNC])\n";
+    s << "  draw.content((" << (x + sp + w / 2) << ", " << (y - 0.8) << "), [ASYNC])\n";
 
     // SYNC - Yellow
-    s << "  element.block(x: " << (x + sp * 2) << ", y: " << (y + 0.3) << ", w: 1.0, h: 0.8, "
+    s << "  element.block(x: " << (x + sp * 2) << ", y: " << (y + 0.3) << ", w: " << w
+      << ", h: 0.8, "
       << "id: \"legend_sync\", name: \"SYNC\", fill: util.colors.yellow, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + sp * 2 + 0.5) << ", " << (y - 0.8) << "), [SYNC])\n";
+    s << "  draw.content((" << (x + sp * 2 + w / 2) << ", " << (y - 0.8) << "), [SYNC])\n";
 
     // COUNT - Orange
-    s << "  element.block(x: " << (x + sp * 3) << ", y: " << (y + 0.3) << ", w: 1.0, h: 0.8, "
+    s << "  element.block(x: " << (x + sp * 3) << ", y: " << (y + 0.3) << ", w: " << w
+      << ", h: 0.8, "
       << "id: \"legend_count\", name: \"COUNT\", fill: util.colors.orange, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + sp * 3 + 0.5) << ", " << (y - 0.8) << "), [COUNT])\n\n";
+    s << "  draw.content((" << (x + sp * 3 + w / 2) << ", " << (y - 0.8) << "), [COUNT])\n\n";
 
     return result;
 }
 
-QString QSocResetPrimitive::typstRootStubs(const QList<ResetSource> &sources, float &bottomY) const
+QString QSocResetPrimitive::typstSourceTable(
+    const QList<ResetSource> &sources, float x, float &bottomY) const
 {
     if (sources.isEmpty()) {
         bottomY = -5.0f;
         return QString();
     }
 
-    const int   perRow = 4;
-    const float y0     = -5.0f;
-    const float x0     = 0.0f;
-    const float dx     = 4.0f;
-    const float dy     = 2.5f;
-
     QString     result;
     QTextStream s(&result);
     s.setRealNumberPrecision(2);
     s.setRealNumberNotation(QTextStream::FixedNotation);
 
-    s << "  // === Reset sources ===\n";
+    // Use Typst table for clean two-column layout
+    // End the circuit block temporarily to insert table
+    s << "})\n\n";
 
-    int numRows = (sources.size() + perRow - 1) / perRow;
-    bottomY     = y0 - (numRows - 1) * dy - 3.5f;
+    s << "#v(0.3cm)\n";
+    s << "#align(center)[\n";
+    s << "  #text(weight: \"bold\", size: 10pt)[Reset Sources]\n";
+    s << "]\n";
+    s << "#v(0.2cm)\n";
 
-    for (int idx = 0; idx < sources.size(); ++idx) {
-        const ResetSource &src = sources[idx];
-        int                row = idx / perRow;
-        int                col = idx % perRow;
-        float              x   = x0 + col * dx;
-        float              y   = y0 - row * dy;
-        QString            bid = escapeTypstId(QStringLiteral("SRC_") + src.name);
+    // Two-column table with source name and active level
+    s << "#align(center)[\n";
+    s << "#table(\n";
+    s << "  columns: (auto, auto, auto, auto),\n";
+    s << "  align: (left, center, left, center),\n";
+    s << "  stroke: 0.5pt + gray,\n";
+    s << "  inset: 5pt,\n";
+    s << "  fill: (col, row) => if row == 0 { rgb(\"#e0e0e0\") },\n";
+    s << "  [*Source*], [*Active*], [*Source*], [*Active*],\n";
 
-        s << "  element.block(x: " << x << ", y: " << y << ", w: .1, h: .1, "
-          << "id: \"" << bid << "\", "
-          << "ports: (north: ((id: \"N\"),)))\n";
-        s << "  wire.stub(\"" << bid << "-port-N\", \"north\", name: \"" << src.name << "\")\n";
+    // Fill table rows - two sources per row
+    int numSources = sources.size();
+    for (int i = 0; i < numSources; i += 2) {
+        const ResetSource &src1    = sources[i];
+        QString            active1 = (src1.active == QStringLiteral("high")) ? "H" : "L";
+        QString srcColor1          = (src1.active == QStringLiteral("high")) ? QStringLiteral("red")
+                                                                             : QStringLiteral("blue");
+
+        s << "  [#text(fill: " << srcColor1 << ")[" << src1.name << "]], ";
+        s << "[#text(fill: " << srcColor1 << ")[" << active1 << "]], ";
+
+        if (i + 1 < numSources) {
+            const ResetSource &src2    = sources[i + 1];
+            QString            active2 = (src2.active == QStringLiteral("high")) ? "H" : "L";
+            QString srcColor2 = (src2.active == QStringLiteral("high")) ? QStringLiteral("red")
+                                                                        : QStringLiteral("blue");
+            s << "[#text(fill: " << srcColor2 << ")[" << src2.name << "]], ";
+            s << "[#text(fill: " << srcColor2 << ")[" << active2 << "]],\n";
+        } else {
+            s << "[], [],\n"; // Empty cells for odd number of sources
+        }
     }
 
-    s << "\n";
+    s << ")\n";
+    s << "]\n\n";
+
+    // Resume circuit block for targets
+    s << "#v(0.3cm)\n";
+    s << "#circuit({\n";
+
+    // Calculate bottomY for target positioning
+    int numRows = (numSources + 1) / 2; // Two sources per row
+    bottomY     = -3.0f - numRows * 0.8f;
+
     return result;
 }
 
-QString QSocResetPrimitive::typstTarget(const ResetTarget &target, float x, float y) const
+QString QSocResetPrimitive::typstTarget(
+    const ResetTarget &target, const QMap<QString, bool> &sourceIsHighActive, float x, float y) const
 {
     QString     result;
     QTextStream s(&result);
@@ -1073,181 +1106,329 @@ QString QSocResetPrimitive::typstTarget(const ResetTarget &target, float x, floa
         return result;
     }
 
-    // Analyze if all links share common component configuration
-    bool        hasCommonComp = false;
-    QString     compType; // "async", "sync", "count"
-    AsyncConfig commonAsync;
-    SyncConfig  commonSync;
-    CountConfig commonCount;
+    int numSources = target.links.size();
 
-    if (!target.links.isEmpty()) {
-        bool    allSame = true;
-        QString firstType;
-        bool    firstHasComp = false;
+    // Analyze link-level components (per-link ARSR, before AND gate)
+    QVector<bool>    linkHasComp(numSources, false);
+    QVector<QString> linkCompType(numSources);
+    bool             anyLinkHasComp = false;
 
-        for (int i = 0; i < target.links.size(); ++i) {
-            const ResetLink &link = target.links[i];
-            QString          currentType;
-            bool             currentHasComp = false;
-
-            if (!link.async.clock.isEmpty()) {
-                currentType    = QStringLiteral("async");
-                currentHasComp = true;
-                if (i == 0) {
-                    commonAsync = link.async;
-                } else if (link.async.clock != commonAsync.clock || link.async.stage != commonAsync.stage) {
-                    allSame = false;
-                    break;
-                }
-            } else if (!link.sync.clock.isEmpty()) {
-                currentType    = QStringLiteral("sync");
-                currentHasComp = true;
-                if (i == 0) {
-                    commonSync = link.sync;
-                } else if (link.sync.clock != commonSync.clock || link.sync.stage != commonSync.stage) {
-                    allSame = false;
-                    break;
-                }
-            } else if (!link.count.clock.isEmpty()) {
-                currentType    = QStringLiteral("count");
-                currentHasComp = true;
-                if (i == 0) {
-                    commonCount = link.count;
-                } else if (link.count.clock != commonCount.clock || link.count.cycle != commonCount.cycle) {
-                    allSame = false;
-                    break;
-                }
-            }
-
-            if (i == 0) {
-                firstType    = currentType;
-                firstHasComp = currentHasComp;
-            } else if (currentType != firstType || currentHasComp != firstHasComp) {
-                allSame = false;
-                break;
-            }
-        }
-
-        if (allSame && firstHasComp) {
-            hasCommonComp = true;
-            compType      = firstType;
+    for (int i = 0; i < numSources; ++i) {
+        const ResetLink &link = target.links[i];
+        if (!link.async.clock.isEmpty()) {
+            linkHasComp[i]  = true;
+            linkCompType[i] = QStringLiteral("async");
+            anyLinkHasComp  = true;
+        } else if (!link.sync.clock.isEmpty()) {
+            linkHasComp[i]  = true;
+            linkCompType[i] = QStringLiteral("sync");
+            anyLinkHasComp  = true;
+        } else if (!link.count.clock.isEmpty()) {
+            linkHasComp[i]  = true;
+            linkCompType[i] = QStringLiteral("count");
+            anyLinkHasComp  = true;
         }
     }
 
-    // Build source list
-    QStringList sources;
-    for (const ResetLink &link : target.links)
-        sources << link.source;
+    // Check which sources are high-active (need inversion bubble at AND input)
+    QVector<bool> linkNeedsInvert(numSources, false);
+    for (int i = 0; i < numSources; ++i) {
+        const QString &srcName = target.links[i].source;
+        if (sourceIsHighActive.contains(srcName) && sourceIsHighActive[srcName]) {
+            linkNeedsInvert[i] = true;
+        }
+    }
 
-    int numSources = sources.size();
+    // Analyze target-level component (Post-AND ARSR, after AND gate)
+    bool    hasTargetComp = false;
+    QString targetCompType;
+    if (!target.async.clock.isEmpty()) {
+        hasTargetComp  = true;
+        targetCompType = QStringLiteral("async");
+    } else if (!target.sync.clock.isEmpty()) {
+        hasTargetComp  = true;
+        targetCompType = QStringLiteral("sync");
+    } else if (!target.count.clock.isEmpty()) {
+        hasTargetComp  = true;
+        targetCompType = QStringLiteral("count");
+    }
 
-    float   orHeight = qMax(1.5f, 0.6f * numSources);
-    QString prev;
+    // Layout calculation - NEW MODEL
+    // Key insight from user: align BLOCK center to AND port, text hangs below
+    // The NEXT port must clear the text from above
+    //
+    // Element sizes:
+    const float blockHeight     = 1.0f; // ASYNC/SYNC/COUNT block height
+    const float blockTopPad     = 0.3f; // Padding above block
+    const float textHang        = 1.2f; // Text hangs below block (increased for better clearance)
+    const float stubHeight      = 0.5f; // Visual height for stub label
+    const float compGap         = 1.5f; // Larger gap for compound rows (with ASYNC/SYNC/COUNT)
+    const float stubGap         = 0.8f; // Gap for simple stub rows
+    const float targetCompH     = 1.2f; // Target component height
+    const float targetTextBelow = 0.8f; // Space for text below target component
 
-    if (numSources == 1 && !hasCommonComp) {
-        // Single source, direct connection
+    // Calculate Y positions for each link port using bottom-up accumulation
+    // Each element needs: its own height + clearance from element above
+    QVector<float> linkPortY(numSources);
+    QVector<float> slotHeight(numSources);
+
+    // First pass: calculate slot heights (each slot clears text from above if needed)
+    for (int i = 0; i < numSources; ++i) {
+        float gap = linkHasComp[i] ? compGap : stubGap;
+        if (linkHasComp[i]) {
+            // Compound: block + top padding
+            // If previous was compound, need extra space to clear its hanging text
+            float extraTop = (i > 0 && linkHasComp[i - 1]) ? textHang : 0.0f;
+            slotHeight[i]  = blockTopPad + blockHeight + extraTop + gap;
+        } else {
+            // Simple: stub + clearance from above
+            float extraTop = (i > 0 && linkHasComp[i - 1]) ? textHang : 0.0f;
+            slotHeight[i]  = stubHeight + extraTop + gap;
+        }
+    }
+    // Last slot's hanging text (if compound) needs space at bottom
+    float bottomExtra = linkHasComp[numSources - 1] ? textHang : 0.0f;
+    float bottomGap   = linkHasComp[numSources - 1] ? compGap : stubGap;
+
+    // Calculate total AND height
+    float andHeight = bottomExtra + bottomGap;
+    for (int i = 0; i < numSources; ++i) {
+        andHeight += slotHeight[i];
+    }
+    andHeight = qMax(1.5f, andHeight);
+
+    // y parameter is the CENTER of allocated space
+    float andCenterY = y;
+    float andBottomY = y - andHeight / 2;
+    float andTopY    = y + andHeight / 2;
+
+    // Second pass: position ports from top down
+    // Port Y = block/stub center
+    float currentY = andTopY;
+    for (int i = 0; i < numSources; ++i) {
+        float gap = linkHasComp[i] ? compGap : stubGap;
+        currentY -= gap; // Gap at top of slot
+
+        // Clear text from previous compound row
+        if (i > 0 && linkHasComp[i - 1]) {
+            currentY -= textHang;
+        }
+
+        if (linkHasComp[i]) {
+            currentY -= blockTopPad;     // Top padding
+            currentY -= blockHeight / 2; // To block center
+            linkPortY[i] = currentY;
+            currentY -= blockHeight
+                        / 2; // To block bottom (text hangs below, handled by next iteration)
+        } else {
+            currentY -= stubHeight / 2; // To stub center
+            linkPortY[i] = currentY;
+            currentY -= stubHeight / 2; // To stub bottom
+        }
+    }
+
+    // X positions
+    float linkCompX   = x;                               // Link components start position
+    float andX        = anyLinkHasComp ? (x + 2.5f) : x; // AND gate X position
+    float targetCompX = andX + 2.0f;                     // Target component X position
+    float outX        = hasTargetComp ? (targetCompX + 2.5f) : (andX + 2.5f); // Output X position
+
+    // Store AND gate input connection points
+    QVector<QString> andInputPorts(numSources);
+
+    // Step 1: Draw link-level components (before AND gate)
+    // Link component Y-center aligns with AND port Y
+    for (int i = 0; i < numSources; ++i) {
+        const ResetLink &link    = target.links[i];
+        float            portY   = linkPortY[i];            // Y center for this link
+        float            compY   = portY - blockHeight / 2; // Block bottom-left Y
+        QString          srcName = link.source;
+
+        if (linkHasComp[i]) {
+            QString compId, clock, label2;
+            QString fillColor;
+
+            if (linkCompType[i] == QStringLiteral("async")) {
+                compId = escapeTypstId(
+                    tid + QStringLiteral("_L") + QString::number(i) + QStringLiteral("_ASYNC"));
+                clock     = link.async.clock;
+                label2    = QStringLiteral("stage:%1").arg(link.async.stage);
+                fillColor = QStringLiteral("util.colors.blue");
+            } else if (linkCompType[i] == QStringLiteral("sync")) {
+                compId = escapeTypstId(
+                    tid + QStringLiteral("_L") + QString::number(i) + QStringLiteral("_SYNC"));
+                clock     = link.sync.clock;
+                label2    = QStringLiteral("stage:%1").arg(link.sync.stage);
+                fillColor = QStringLiteral("util.colors.yellow");
+            } else if (linkCompType[i] == QStringLiteral("count")) {
+                compId = escapeTypstId(
+                    tid + QStringLiteral("_L") + QString::number(i) + QStringLiteral("_COUNT"));
+                clock     = link.count.clock;
+                label2    = QStringLiteral("cycle:%1").arg(link.count.cycle);
+                fillColor = QStringLiteral("util.colors.orange");
+            }
+
+            // Draw component block (Y is bottom-left corner in circuiteria)
+            s << "  element.block(\n";
+            s << "    x: " << linkCompX << ", y: " << compY << ", w: 1.5, h: " << blockHeight
+              << ",\n";
+            s << "    id: \"" << compId << "\", name: \"" << linkCompType[i].toUpper()
+              << "\", fill: " << fillColor << ",\n";
+            s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
+            s << "  )\n";
+
+            // Draw labels below component
+            s << "  draw.content((" << (linkCompX + 0.75f) << ", " << (compY - 0.25f)
+              << "), text(size: 5pt)[" << clock << "])\n";
+            s << "  draw.content((" << (linkCompX + 0.75f) << ", " << (compY - 0.55f)
+              << "), text(size: 5pt)[" << label2 << "])\n";
+
+            // Draw input stub to component
+            s << "  wire.stub(\"" << compId << "-port-in\", \"west\", name: \"" << srcName
+              << "\")\n";
+
+            // Store output port as AND input
+            andInputPorts[i] = compId + QStringLiteral("-port-out");
+        } else {
+            // No link component - will connect directly to AND gate with stub
+            andInputPorts[i] = QString(); // Mark as direct connection
+        }
+    }
+
+    // Step 2: Draw AND gate (or direct connection for single source without components)
+    // Note: It's AND gate because all reset signals are active-low (assert all to reset)
+    QString andOutputPort;
+
+    if (numSources == 1 && !anyLinkHasComp && !hasTargetComp) {
+        // Single source, no components - direct connection
+        // Center the small block at andCenterY
         QString sid = escapeTypstId(tid + QStringLiteral("_SRC"));
-        s << "  element.block(x: " << x << ", y: " << (y + 0.6) << ", w: .8, h: .6, "
+        s << "  element.block(x: " << andX << ", y: " << (andCenterY - 0.3f) << ", w: .8, h: .6, "
           << "id: \"" << sid << "\", name: \"\", "
           << "ports: (east: ((id: \"out\"),)))\n";
-        s << "  wire.stub(\"" << sid << "-port-out\", \"west\", name: \"" << sources[0] << "\")\n";
-        prev = sid + QStringLiteral("-port-out");
+        s << "  wire.stub(\"" << sid << "-port-out\", \"west\", name: \"" << target.links[0].source
+          << "\")\n";
+        andOutputPort = sid + QStringLiteral("-port-out");
     } else {
-        // Multiple sources or has component - use OR
-        QString orId = escapeTypstId(tid + QStringLiteral("_OR"));
+        // Use AND gate - height accommodates all link components
+        // AND gate bottom at andBottomY, so it's centered at andCenterY
+        QString andId = escapeTypstId(tid + QStringLiteral("_AND"));
         s << "  element.block(\n";
-        s << "    x: " << x << ", y: " << (y + 0.3) << ", w: 1.2, h: " << orHeight << ",\n";
-        s << "    id: \"" << orId << "\", name: \"OR\", fill: util.colors.green,\n";
+        s << "    x: " << andX << ", y: " << andBottomY << ", w: 1.2, h: " << andHeight << ",\n";
+        s << "    id: \"" << andId << "\", name: \"AND\", fill: util.colors.green,\n";
+
+        // Define ports with explicit positions to align with link components
         s << "    ports: (west: (";
         for (int i = 0; i < numSources; ++i) {
             if (i > 0)
                 s << ", ";
-            s << "(id: \"in" << i << "\")";
+            // Calculate port position as ratio within AND gate height (from bottom)
+            float portRatio = (linkPortY[i] - andBottomY) / andHeight;
+            s << "(id: \"in" << i << "\", pos: " << portRatio << ")";
         }
         s << ",), east: ((id: \"out\"),))\n";
         s << "  )\n";
 
-        // Input stubs
+        // Connect inputs to AND gate (with inversion bubble for high-active sources)
         for (int i = 0; i < numSources; ++i) {
-            s << "  wire.stub(\"" << orId << "-port-in" << i << "\", \"west\", name: \""
-              << sources[i] << "\")\n";
+            QString andInPort = andId + QStringLiteral("-port-in") + QString::number(i);
+            float   portY     = linkPortY[i];
+
+            // Draw inversion bubble at AND input for high-active sources
+            if (linkNeedsInvert[i]) {
+                float bubbleX = andX - 0.15f; // Just before AND gate west edge
+                s << "  draw.circle((" << bubbleX << ", " << portY << "), radius: 0.1, "
+                  << "stroke: black, fill: white)\n";
+            }
+
+            if (andInputPorts[i].isEmpty()) {
+                // Direct connection - draw stub
+                s << "  wire.stub(\"" << andInPort << "\", \"west\", name: \""
+                  << target.links[i].source << "\")\n";
+            } else {
+                // Connect from link component output to AND input
+                // If bubble exists, wire ends at bubble, otherwise at AND port
+                if (linkNeedsInvert[i]) {
+                    float bubbleX = andX - 0.15f;
+                    s << "  draw.line(\"" << andInputPorts[i] << "\", (" << (bubbleX - 0.1f) << ", "
+                      << portY << "))\n";
+                } else {
+                    s << "  wire.wire(\"w_" << tid << "_l" << i << "_to_and\", (\n";
+                    s << "    \"" << andInputPorts[i] << "\", \"" << andInPort << "\"\n";
+                    s << "  ))\n";
+                }
+            }
         }
 
-        prev = orId + QStringLiteral("-port-out");
+        andOutputPort = andId + QStringLiteral("-port-out");
     }
 
-    // Add common component if exists
-    if (hasCommonComp) {
-        float compY = y + orHeight / 2 - 0.6f;
+    // Step 3: Draw target-level component (Post-AND ARSR, after AND gate)
+    // Target component Y-center aligns with output port Y (which is andCenterY)
+    QString finalOutputPort = andOutputPort;
 
-        QString compId, compIn, compOut;
-        QString clock;
-        QString label1, label2;
+    if (hasTargetComp) {
+        float   compY = andCenterY - targetCompH / 2; // Center-aligned with output
+        QString compId, clock, label2;
+        QString fillColor;
 
-        if (compType == QStringLiteral("async")) {
-            compId  = escapeTypstId(tid + QStringLiteral("_ASYNC"));
-            clock   = commonAsync.clock;
-            label1  = clock;
-            label2  = QStringLiteral("stage:%1").arg(commonAsync.stage);
-            compIn  = compId + QStringLiteral("-port-in");
-            compOut = compId + QStringLiteral("-port-out");
-
-            s << "  element.block(\n";
-            s << "    x: " << (x + 2.5) << ", y: " << (compY + 0.3) << ", w: 1.5, h: 1.2,\n";
-            s << "    id: \"" << compId << "\", name: \"ASYNC\", fill: util.colors.blue,\n";
-            s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
-            s << "  )\n";
-        } else if (compType == QStringLiteral("sync")) {
-            compId  = escapeTypstId(tid + QStringLiteral("_SYNC"));
-            clock   = commonSync.clock;
-            label1  = clock;
-            label2  = QStringLiteral("stage:%1").arg(commonSync.stage);
-            compIn  = compId + QStringLiteral("-port-in");
-            compOut = compId + QStringLiteral("-port-out");
-
-            s << "  element.block(\n";
-            s << "    x: " << (x + 2.5) << ", y: " << (compY + 0.3) << ", w: 1.5, h: 1.2,\n";
-            s << "    id: \"" << compId << "\", name: \"SYNC\", fill: util.colors.yellow,\n";
-            s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
-            s << "  )\n";
-        } else if (compType == QStringLiteral("count")) {
-            compId  = escapeTypstId(tid + QStringLiteral("_COUNT"));
-            clock   = commonCount.clock;
-            label1  = clock;
-            label2  = QStringLiteral("cycle:%1").arg(commonCount.cycle);
-            compIn  = compId + QStringLiteral("-port-in");
-            compOut = compId + QStringLiteral("-port-out");
-
-            s << "  element.block(\n";
-            s << "    x: " << (x + 2.5) << ", y: " << (compY + 0.3) << ", w: 1.5, h: 1.2,\n";
-            s << "    id: \"" << compId << "\", name: \"COUNT\", fill: util.colors.orange,\n";
-            s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
-            s << "  )\n";
+        if (targetCompType == QStringLiteral("async")) {
+            compId    = escapeTypstId(tid + QStringLiteral("_ASYNC"));
+            clock     = target.async.clock;
+            label2    = QStringLiteral("stage:%1").arg(target.async.stage);
+            fillColor = QStringLiteral("util.colors.blue");
+        } else if (targetCompType == QStringLiteral("sync")) {
+            compId    = escapeTypstId(tid + QStringLiteral("_SYNC"));
+            clock     = target.sync.clock;
+            label2    = QStringLiteral("stage:%1").arg(target.sync.stage);
+            fillColor = QStringLiteral("util.colors.yellow");
+        } else if (targetCompType == QStringLiteral("count")) {
+            compId    = escapeTypstId(tid + QStringLiteral("_COUNT"));
+            clock     = target.count.clock;
+            label2    = QStringLiteral("cycle:%1").arg(target.count.cycle);
+            fillColor = QStringLiteral("util.colors.orange");
         }
 
-        // Add labels
-        s << "  draw.content((" << (x + 3.25) << ", " << (compY - 0.3) << "), text(size: 6pt)["
-          << label1 << "])\n";
-        s << "  draw.content((" << (x + 3.25) << ", " << (compY - 0.7) << "), text(size: 6pt)["
-          << label2 << "])\n";
+        // Draw component block
+        s << "  element.block(\n";
+        s << "    x: " << targetCompX << ", y: " << compY << ", w: 1.5, h: " << targetCompH
+          << ",\n";
+        s << "    id: \"" << compId << "\", name: \"" << targetCompType.toUpper()
+          << "\", fill: " << fillColor << ",\n";
+        s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
+        s << "  )\n";
 
-        // Wire from OR/SRC to component
-        s << "  wire.wire(\"w_" << tid << "_or_comp\", (\n";
-        s << "    \"" << prev << "\", \"" << compIn << "\"\n";
+        // Draw labels below component
+        s << "  draw.content((" << (targetCompX + 0.75f) << ", " << (compY - 0.3f)
+          << "), text(size: 6pt)[" << clock << "])\n";
+        s << "  draw.content((" << (targetCompX + 0.75f) << ", " << (compY - 0.7f)
+          << "), text(size: 6pt)[" << label2 << "])\n";
+
+        // Wire from AND to target component
+        s << "  wire.wire(\"w_" << tid << "_and_to_comp\", (\n";
+        s << "    \"" << andOutputPort << "\", \"" << compId << "-port-in\"\n";
         s << "  ))\n";
-        prev = compOut;
+
+        finalOutputPort = compId + QStringLiteral("-port-out");
     }
 
-    // Final output stub - align with OR center
-    QString oid  = escapeTypstId(tid + QStringLiteral("_OUT"));
-    float   outY = y + orHeight / 2;
-    s << "  element.block(x: " << (x + 5.5) << ", y: " << outY << ", w: .8, h: .6, "
-      << "id: \"" << oid << "\", name: \"\", "
-      << "ports: (east: ((id: \"E\"),)))\n";
-    s << "  wire.wire(\"w_" << tid << "_to_out\", (\n";
-    s << "    \"" << prev << "\", \"" << oid << "-port-E\"\n";
-    s << "  ))\n";
-    s << "  wire.stub(\"" << oid << "-port-E\", \"east\", name: \"" << target.name << "\")\n\n";
+    // Step 4: Draw output port as arrow with label
+    // Output port Y-center aligns with POST ASYNC Y-center (both at andCenterY)
+    float arrowStartX = outX - 0.3f;
+    float arrowEndX   = outX + 0.3f;
+
+    // Draw arrow line from component to arrow tip
+    s << "  draw.line(";
+    if (hasTargetComp) {
+        s << "\"" << finalOutputPort << "\", ";
+    } else {
+        s << "\"" << andOutputPort << "\", ";
+    }
+    s << "(" << arrowEndX << ", " << andCenterY << "), mark: (end: \">\", fill: black))\n";
+
+    // Draw label to the right of arrow
+    s << "  draw.content((" << (arrowEndX + 0.3f) << ", " << andCenterY << "), "
+      << "anchor: \"west\", [" << target.name << "])\n\n";
 
     return result;
 }
@@ -1264,25 +1445,77 @@ bool QSocResetPrimitive::generateTypstDiagram(
     QTextStream out(&file);
     out.setEncoding(QStringConverter::Utf8);
 
+    // Build sourceIsHighActive map for polarity indication
+    QMap<QString, bool> sourceIsHighActive;
+    for (const ResetSource &src : config.sources) {
+        sourceIsHighActive[src.name] = (src.active == QStringLiteral("high"));
+    }
+
     // Generate header
     out << typstHeader();
 
     // Generate legend
     out << typstLegend();
 
-    // Generate root reset source stubs
+    // Generate reset source table (two-column layout)
     float bottomY = -5.0f;
-    out << typstRootStubs(config.sources, bottomY);
+    out << typstSourceTable(config.sources, 0.0f, bottomY);
 
-    // Generate targets (vertical stacking)
-    const float x0 = 0.0f;
-    const float y0 = bottomY - 2.5f;
-    const float dy = 5.0f; // Vertical spacing
+    // Generate targets (vertical stacking with dynamic spacing)
+    // Use same height calculation as typstTarget to determine spacing
+    const float x0          = 0.0f;
+    const float blockHeight = 1.0f;
+    const float blockTopPad = 0.3f;
+    const float textHang    = 1.2f; // Match typstTarget
+    const float stubHeight  = 0.5f;
+    const float compGap     = 1.5f; // Match typstTarget
+    const float stubGap     = 0.8f; // Match typstTarget
+    const float extraMargin = 2.0f; // Extra margin between targets
+
+    float currentY = bottomY - 3.0f;
 
     for (int idx = 0; idx < config.targets.size(); ++idx) {
         const ResetTarget &target = config.targets[idx];
-        float              y      = y0 - idx * dy;
-        out << typstTarget(target, x0, y);
+
+        // Calculate this target's AND height using same logic as typstTarget
+        int  numLinks       = target.links.size();
+        bool hasTargetAsync = !target.async.clock.isEmpty() || !target.sync.clock.isEmpty()
+                              || !target.count.clock.isEmpty();
+
+        // Analyze which links have components
+        QVector<bool> linkHasComp(numLinks, false);
+        for (int i = 0; i < numLinks; ++i) {
+            const ResetLink &link = target.links[i];
+            if (!link.async.clock.isEmpty() || !link.sync.clock.isEmpty()
+                || !link.count.clock.isEmpty()) {
+                linkHasComp[i] = true;
+            }
+        }
+
+        // Calculate slot heights with appropriate gaps
+        float firstGap     = (numLinks > 0 && linkHasComp[0]) ? compGap : stubGap;
+        float targetHeight = firstGap; // Top margin
+        for (int i = 0; i < numLinks; ++i) {
+            float gap      = linkHasComp[i] ? compGap : stubGap;
+            float extraTop = (i > 0 && linkHasComp[i - 1]) ? textHang : 0.0f;
+            if (linkHasComp[i]) {
+                targetHeight += blockTopPad + blockHeight + extraTop + gap;
+            } else {
+                targetHeight += stubHeight + extraTop + gap;
+            }
+        }
+        // Bottom extra for last compound
+        if (numLinks > 0 && linkHasComp[numLinks - 1]) {
+            targetHeight += textHang;
+        }
+        targetHeight = qMax(1.5f, targetHeight);
+
+        // Position target center, then move down for next target
+        float targetCenterY = currentY - targetHeight / 2;
+        out << typstTarget(target, sourceIsHighActive, x0, targetCenterY);
+
+        // Move to next target position
+        currentY = targetCenterY - targetHeight / 2 - extraMargin;
     }
 
     // Close circuit

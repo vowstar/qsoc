@@ -250,8 +250,12 @@ private:
     // Typst generation helper functions
     QString typstHeader() const;
     QString typstLegend() const;
-    QString typstRootStubs(const QList<ResetSource> &sources, float &bottomY) const;
-    QString typstTarget(const ResetTarget &target, float x, float y) const;
+    QString typstSourceTable(const QList<ResetSource> &sources, float x, float &bottomY) const;
+    QString typstTarget(
+        const ResetTarget         &target,
+        const QMap<QString, bool> &sourceIsHighActive,
+        float                      x,
+        float                      y) const;
     QString escapeTypstId(const QString &str) const;
 
 private:
