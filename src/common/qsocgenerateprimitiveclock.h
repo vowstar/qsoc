@@ -60,12 +60,13 @@ public:
      */
     struct ClockGate
     {
-        bool          configured = false; // YAML icg: block exists
-        QString       enable;             // Gate enable signal (required when configured)
-        QString       polarity;           // "high" or "low" (default: "high")
-        QString       test_enable;        // Test enable signal (optional)
-        QString       reset;              // Reset signal name (active-low default)
-        ClockSTAGuide sta_guide;          // STA guide buffer after ICG (optional)
+        bool          configured = false;     // YAML icg: block exists
+        QString       enable;                 // Gate enable signal (required when configured)
+        QString       polarity;               // "high" or "low" (default: "high")
+        QString       test_enable;            // Test enable signal (optional)
+        QString       reset;                  // Reset signal name (active-low default)
+        bool          clock_on_reset = false; // Enable clock output during reset (default false)
+        ClockSTAGuide sta_guide;              // STA guide buffer after ICG (optional)
     };
 
     /**

@@ -1211,6 +1211,229 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(cellContent, "if (POLARITY == 1'b1)"));
     }
 
+    void test_icg_clock_on_reset()
+    {
+        // Test the CLOCK_DURING_RESET parameter for ICG cells
+        QString netlistContent = R"(
+port:
+  clk_sys:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  boot_en:
+    direction: input
+    type: logic
+  cpu_en:
+    direction: input
+    type: logic
+  link_en:
+    direction: input
+    type: logic
+  boot_clk:
+    direction: output
+    type: logic
+  cpu_clk:
+    direction: output
+    type: logic
+  link_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_clk_ctrl
+    clock: clk_sys
+    input:
+      clk_sys:
+        freq: 100MHz
+    target:
+      boot_clk:
+        freq: 100MHz
+        icg:
+          enable: boot_en
+          reset: rst_n
+          clock_on_reset: true    # Clock enabled during reset
+        link:
+          clk_sys:
+      cpu_clk:
+        freq: 100MHz
+        icg:
+          enable: cpu_en
+          reset: rst_n
+          clock_on_reset: false   # Clock disabled during reset (default)
+        link:
+          clk_sys:
+      link_clk:
+        freq: 100MHz
+        link:
+          clk_sys:
+            icg:
+              enable: link_en
+              reset: rst_n
+              clock_on_reset: true  # Link-level ICG with clock during reset
+)";
+
+        QString netlistPath = createTempFile("test_icg_clock_on_reset.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_icg_clock_on_reset.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify the generated content contains proper CLOCK_DURING_RESET parameters */
+        // Should have both 1'b1 and 1'b0 values for CLOCK_DURING_RESET
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CLOCK_DURING_RESET(1'b1)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CLOCK_DURING_RESET(1'b0)"));
+
+        // Verify all ICG instances exist with correct enable signals
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(boot_en)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(cpu_en)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(link_en)"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
+
+        // Verify clock_cell.v contains the CLOCK_DURING_RESET parameter
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        QFile         cellFile(clockCellPath);
+        QVERIFY(cellFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString cellContent = cellFile.readAll();
+        cellFile.close();
+
+        // Verify CLOCK_DURING_RESET parameter in qsoc_tc_clk_gate
+        QVERIFY(verifyVerilogContentNormalized(cellContent, "parameter CLOCK_DURING_RESET = 1'b0"));
+        QVERIFY(verifyVerilogContentNormalized(cellContent, "CLOCK_DURING_RESET"));
+    }
+
+    void test_div_clock_on_reset()
+    {
+        // Test the CLOCK_DURING_RESET parameter for divider cells
+        QString netlistContent = R"(
+port:
+  clk_sys:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  boot_clk:
+    direction: output
+    type: logic
+  cpu_clk:
+    direction: output
+    type: logic
+  link_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_clk_ctrl
+    clock: clk_sys
+    input:
+      clk_sys:
+        freq: 100MHz
+    target:
+      boot_clk:
+        freq: 50MHz
+        div:
+          default: 2
+          reset: rst_n
+          clock_on_reset: true    # Clock enabled during reset
+        link:
+          clk_sys:
+      cpu_clk:
+        freq: 25MHz
+        div:
+          default: 4
+          reset: rst_n
+          clock_on_reset: false   # Clock disabled during reset (default)
+        link:
+          clk_sys:
+      link_clk:
+        freq: 10MHz
+        link:
+          clk_sys:
+            div:
+              default: 10
+              reset: rst_n
+              clock_on_reset: true  # Link-level divider with clock during reset
+)";
+
+        QString netlistPath = createTempFile("test_div_clock_on_reset.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        /* Check if Verilog file was generated */
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_div_clock_on_reset.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* Read generated Verilog content */
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Verify the generated content contains proper CLOCK_DURING_RESET parameters */
+        // Should have both 1'b1 and 1'b0 values for CLOCK_DURING_RESET
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CLOCK_DURING_RESET(1'b1)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "CLOCK_DURING_RESET(1'b0)"));
+
+        // Verify divider instances exist with correct default values
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "DEFAULT_VAL(2)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "DEFAULT_VAL(4)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "DEFAULT_VAL(10)"));
+
+        // clock_cell.v should be created and complete
+        QVERIFY(verifyClockCellFileComplete());
+
+        // Verify clock_cell.v contains the CLOCK_DURING_RESET parameter for divider
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        QFile         cellFile(clockCellPath);
+        QVERIFY(cellFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString cellContent = cellFile.readAll();
+        cellFile.close();
+
+        // Verify CLOCK_DURING_RESET parameter in qsoc_clk_div
+        QVERIFY(verifyVerilogContentNormalized(cellContent, "CLOCK_DURING_RESET"));
+    }
+
     void test_optional_test_enable()
     {
         // Test 1: No test_enable defined - should use 1'b0 internally

@@ -16,9 +16,9 @@ development workflows and automation scenarios.
 <disclaimer>
 Information in this document, including URL references, is subject to change
 without notice. *This document is provided as is with no warranties whatsoever,
-  including any warranty of merchantability, non-infringement, fitness for any
-  particular purpose, or any warranty otherwise arising out of any proposal,
-  specification or sample.*
+including any warranty of merchantability, non-infringement, fitness for any
+particular purpose, or any warranty otherwise arising out of any proposal,
+specification or sample.*
 
 All liability, including liability for infringement of any proprietary rights,
 relating to use of information in this document is disclaimed. No licenses
