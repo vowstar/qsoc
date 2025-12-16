@@ -933,9 +933,10 @@ QString QSocPowerPrimitive::typstHeader() const
 
 QString QSocPowerPrimitive::typstLegend() const
 {
-    const float y       = -1.5f;
-    const float x       = 0.0f;
-    const float spacing = 3.5f;
+    const float y  = -1.5f;
+    const float x  = 0.0f;
+    const float w  = 1.6f; // Wider blocks to fit text
+    const float sp = 4.0f; // Increased spacing for wider blocks
     QTextStream s;
     QString     result;
 
@@ -944,36 +945,37 @@ QString QSocPowerPrimitive::typstLegend() const
     s << "  // === Legend ===\n";
 
     // AO Domain - Gray
-    s << "  element.block(x: " << x << ", y: " << (y + 0.3f) << ", w: 1.0, h: 0.8, "
+    s << "  element.block(x: " << x << ", y: " << (y + 0.3f) << ", w: " << w << ", h: 0.8, "
       << "id: \"legend_ao\", name: \"AO\", fill: gray, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + 0.5f) << ", " << (y - 0.8f) << "), [AO])\n";
+    s << "  draw.content((" << (x + w / 2) << ", " << (y - 0.8f) << "), [AO])\n";
 
     // Root Domain - Green
-    s << "  element.block(x: " << (x + spacing) << ", y: " << (y + 0.3f) << ", w: 1.0, h: 0.8, "
+    s << "  element.block(x: " << (x + sp) << ", y: " << (y + 0.3f) << ", w: " << w << ", h: 0.8, "
       << "id: \"legend_root\", name: \"ROOT\", fill: util.colors.green, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + spacing + 0.5f) << ", " << (y - 0.8f) << "), [ROOT])\n";
+    s << "  draw.content((" << (x + sp + w / 2) << ", " << (y - 0.8f) << "), [ROOT])\n";
 
     // Normal Domain - Blue
-    s << "  element.block(x: " << (x + spacing * 2) << ", y: " << (y + 0.3f) << ", w: 1.0, h: 0.8, "
+    s << "  element.block(x: " << (x + sp * 2) << ", y: " << (y + 0.3f) << ", w: " << w
+      << ", h: 0.8, "
       << "id: \"legend_normal\", name: \"NORM\", fill: util.colors.blue, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + spacing * 2 + 0.5f) << ", " << (y - 0.8f) << "), [NORMAL])\n";
+    s << "  draw.content((" << (x + sp * 2 + w / 2) << ", " << (y - 0.8f) << "), [NORMAL])\n";
 
     // FSM - Orange
-    s << "  element.block(x: " << (x + spacing * 3) << ", y: " << (y + 0.3f) << ", w: 1.0, h: 0.8, "
+    s << "  element.block(x: " << (x + sp * 3) << ", y: " << (y + 0.3f) << ", w: " << w
+      << ", h: 0.8, "
       << "id: \"legend_fsm\", name: \"FSM\", fill: util.colors.orange, "
       << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + spacing * 3 + 0.5f) << ", " << (y - 0.8f) << "), [FSM])\n";
+    s << "  draw.content((" << (x + sp * 3 + w / 2) << ", " << (y - 0.8f) << "), [FSM])\n";
 
     s << "\n";
 
     return result;
 }
 
-QString QSocPowerPrimitive::typstDomain(
-    const PowerDomain &domain, int idx, float x0, float y0, float dy) const
+QString QSocPowerPrimitive::typstDomain(const PowerDomain &domain, float x, float y) const
 {
     QTextStream s;
     QString     result;
@@ -982,8 +984,8 @@ QString QSocPowerPrimitive::typstDomain(
     const QString domainName = domain.name;
     const QString did        = escapeTypstId(domainName);
 
-    const float gx = x0;
-    const float gy = y0 - idx * dy;
+    const float gx = x;
+    const float gy = y;
 
     // Infer domain type from dependencies
     QString domainType;
@@ -1134,20 +1136,16 @@ QString QSocPowerPrimitive::typstDomain(
         prevAnchor = QString("%1-port-out").arg(syncId);
     }
 
-    // Final output stub
-    const QString oid    = escapeTypstId(QString("%1_OUT").arg(did));
-    const float   finalX = (numSync > 0) ? (gx + 5.5f + numSync * 1.8f + 2.0f) : (gx + 5.5f);
-    const float   outY   = gy + domHeight / 2.0f;
+    // Final output - arrow with label
+    // Arrow Y should match FSM/SYNC port Y (center of 1.2 height block at fsmY + 0.3)
+    const float finalX   = (numSync > 0) ? (gx + 5.5f + numSync * 1.8f + 2.0f) : (gx + 5.5f);
+    const float arrowEnd = finalX + 2.0f;
+    const float outY     = fsmY + 0.3f + 0.6f; // FSM/SYNC port center Y
 
-    s << "  element.block(x: " << finalX << ", y: " << outY << ", w: .8, h: .6, "
-      << "id: \"" << oid << "\", name: \"\", "
-      << "ports: (east: ((id: \"E\"),)))\n";
-
-    s << "  wire.wire(\"" << escapeTypstId(QString("w_%1_to_out").arg(did)) << "\", (\n";
-    s << "    \"" << prevAnchor << "\", \"" << oid << "-port-E\"\n";
-    s << "  ))\n";
-
-    s << "  wire.stub(\"" << oid << "-port-E\", \"east\", name: \"rdy_" << domainName << "\")\n";
+    s << "  draw.line(\"" << prevAnchor << "\", (" << arrowEnd << ", " << outY
+      << "), mark: (end: \">\", fill: black))\n";
+    s << "  draw.content((" << (arrowEnd + 0.3f) << ", " << outY << "), anchor: \"west\", [rdy_"
+      << domainName << "])\n";
     s << "\n";
 
     return result;
@@ -1169,15 +1167,30 @@ bool QSocPowerPrimitive::generateTypstDiagram(
     out << typstHeader();
     out << typstLegend();
 
-    // Layout parameters - vertical stacking
-    const float x0 = 0.0f;
-    const float y0 = -5.0f;                // Start below legend
-    const float dy = (2.5f + 0.8f) * 2.0f; // Vertical spacing between cards (doubled)
+    // Layout parameters - vertical stacking with dynamic spacing
+    const float x0          = 0.0f;
+    const float extraMargin = 2.0f; // Extra margin between domains
 
-    // Generate each domain
+    float currentY = -5.0f; // Start below legend
+
+    // Generate each domain with dynamic spacing
     for (int idx = 0; idx < config.domains.size(); ++idx) {
         const auto &domain = config.domains[idx];
-        out << typstDomain(domain, idx, x0, y0, dy);
+
+        // Calculate domain height based on dependencies
+        int numDeps = 0;
+        for (const auto &dep : domain.depends) {
+            if (!dep.name.isEmpty()) {
+                numDeps++;
+            }
+        }
+        float domHeight = (numDeps > 0) ? qMax(1.5f, 0.6f * numDeps) : 1.2f;
+
+        // Position domain at currentY
+        out << typstDomain(domain, x0, currentY);
+
+        // Move to next domain position
+        currentY -= domHeight + extraMargin + 2.0f; // Extra padding for labels
     }
 
     // Close circuit
