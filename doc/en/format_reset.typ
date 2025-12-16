@@ -45,6 +45,84 @@ reset:
           por_rst_n:             # Direct assignment (no components)
 ```
 
+== PROCESSING LEVELS
+<soc-net-reset-levels>
+Reset controllers operate at two distinct processing levels with defined component support:
+
+#figure(
+  align(center)[#table(
+    columns: (0.2fr, 0.2fr, 0.2fr, 0.4fr),
+    align: (auto, center, center, left),
+    table.header([Component], [Target Level], [Link Level], [Description]),
+    table.hline(),
+    [async], [✓], [✓], [Asynchronous reset synchronizer (qsoc_rst_sync)],
+    [sync], [✓], [✓], [Synchronous reset pipeline (qsoc_rst_pipe)],
+    [count], [✓], [✓], [Counter-based reset release (qsoc_rst_count)],
+  )],
+  caption: [PROCESSING LEVEL SUPPORT],
+  kind: table,
+)
+
+=== Processing Order
+<soc-net-reset-processing-order>
+Signal processing follows a defined order at each level:
+
+*Link Level*: `source` → `[async|sync|count]` → output wire
+
+*Target Level*: `[AND of all link outputs]` → `[async|sync|count]` → final output
+
+=== Architecture Comparison
+<soc-net-reset-architecture-comparison>
+Two architectures are supported for multi-source reset targets:
+
+*Per-link Processing* (component on each link):
+```
+src_a ──→ [ARSR] ─┐
+src_b ──→ [ARSR] ─┼──→ [AND] ──→ target_rst_n
+src_c ──→ [ARSR] ─┘
+```
+- Each source independently synchronized
+- Higher area cost (N synchronizers)
+- Use when sources have different clock domain requirements
+
+*Post-AND Processing* (component after AND):
+```
+src_a ──────────┐
+src_b ──────────┼──→ [AND] ──→ [ARSR] ──→ target_rst_n
+src_c ──────────┘
+```
+- Single synchronizer after combining
+- Lower area cost (1 synchronizer)
+- Functionally equivalent for reset behavior
+- Recommended for most use cases
+
+=== Configuration Examples
+<soc-net-reset-config-examples>
+```yaml
+# Per-link processing: each source has its own synchronizer
+rst_cpu_n:
+  active: low
+  link:
+    rst_por_n:
+      async:                    # Link-level async
+        clock: clk_cpu
+        stage: 4
+    rst_wdt_n:
+      async:                    # Link-level async
+        clock: clk_cpu
+        stage: 4
+
+# Post-AND processing: single synchronizer after AND (recommended)
+rst_cpu_n:
+  active: low
+  async:                        # Target-level async (Post-AND ARSR)
+    clock: clk_cpu
+    stage: 4
+  link:
+    rst_por_n:                  # Direct connection
+    rst_wdt_n:                  # Direct connection
+```
+
 == RESET COMPONENTS
 <soc-net-reset-components>
 Reset controllers use component-based architecture with three standard reset processing modules. Each link can specify different processing attributes, automatically selecting the appropriate component:
@@ -146,7 +224,7 @@ Reset sources define input reset signals with structured polarity specification:
 
 === Target Properties
 <soc-net-reset-target-properties>
-Reset targets define output reset signals with structured link definitions:
+Reset targets define output reset signals with optional target-level processing and link definitions:
 
 #figure(
   align(center)[#table(
@@ -156,9 +234,54 @@ Reset targets define output reset signals with structured link definitions:
     table.hline(),
     [active],
     [Target signal polarity: `low` (active low) or `high` (active high) - *REQUIRED*],
-    [link], [Map of source connections with component attributes],
+    [async],
+    [Target-level async reset synchronizer (Post-AND ARSR). Applied after all links are combined.],
+    [async.clock],
+    [Clock for synchronization - *REQUIRED* when async specified],
+    [async.stage],
+    [Number of synchronizer stages (default: 3, recommended: ≥2)],
+    [sync],
+    [Target-level sync reset pipeline. Applied after all links are combined.],
+    [sync.clock], [Clock for pipeline - *REQUIRED* when sync specified],
+    [sync.stage], [Number of pipeline stages (default: 4)],
+    [count],
+    [Target-level counter-based reset release. Applied after all links are combined.],
+    [count.clock], [Clock for counter - *REQUIRED* when count specified],
+    [count.cycle], [Number of cycles before release (default: 16)],
+    [link],
+    [Map of source connections with optional link-level component attributes],
   )],
   caption: [RESET TARGET PROPERTIES],
+  kind: table,
+)
+
+=== Link Properties
+<soc-net-reset-link-properties>
+Link-level processing uses key existence for component selection:
+
+#figure(
+  align(center)[#table(
+    columns: (0.3fr, 0.7fr),
+    align: (auto, left),
+    table.header([Property], [Description]),
+    table.hline(),
+    [async],
+    [Link-level async reset synchronizer configuration (map format)],
+    [async.clock],
+    [Clock for synchronization - *REQUIRED* when async specified],
+    [async.stage], [Number of synchronizer stages (default: 3)],
+    [sync],
+    [Link-level sync reset pipeline configuration (map format)],
+    [sync.clock], [Clock for pipeline - *REQUIRED* when sync specified],
+    [sync.stage], [Number of pipeline stages (default: 4)],
+    [count],
+    [Link-level counter-based reset release configuration (map format)],
+    [count.clock], [Clock for counter - *REQUIRED* when count specified],
+    [count.cycle], [Number of cycles before release (default: 16)],
+    [(empty)],
+    [Direct connection - no processing, source passes through to target AND],
+  )],
+  caption: [RESET LINK PROPERTIES],
   kind: table,
 )
 
@@ -390,15 +513,60 @@ endmodule
 <soc-net-reset-diagram>
 Generates `.typ` circuit diagram alongside Verilog.
 
-*Elements*: Sources → OR → ASYNC/SYNC/COUNT → Targets (with active levels/parameters)
+*Elements*: Sources → AND → ASYNC/SYNC/COUNT → Targets (with active levels/parameters)
+
+*Note*: AND logic is used because reset signals are active-low. When any source asserts (goes low), the AND output goes low, asserting the target reset. This is equivalent to OR logic for the reset assertion semantic.
 
 *Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
 
 == BEST PRACTICES
 <soc-net-reset-practices>
 
+=== Processing Level Selection
+<soc-net-reset-level-selection>
+Choose between target-level and link-level processing based on requirements:
+
+*Use Target-level Processing (Post-AND) when:*
+- All reset sources synchronize to the same clock domain
+- Area optimization is important (single synchronizer vs N synchronizers)
+- Simplified STA constraints are preferred (one async path instead of N)
+- Sources are functionally equivalent for reset behavior
+
+*Use Link-level Processing (Per-link) when:*
+- Different sources require different clock domains
+- Sources need different synchronizer stages
+- Mixed component types needed (e.g., some async, some count)
+- Independent timing control per source is required
+
+```yaml
+# Recommended: Target-level for same-clock-domain sources
+rst_peripheral_n:
+  active: low
+  async:                        # Single Post-AND synchronizer
+    clock: clk_apb
+    stage: 4
+  link:
+    rst_por_n:                  # All sources combined before sync
+    rst_n:
+    rst_sw_n:
+
+# When needed: Link-level for different requirements
+rst_mixed_n:
+  active: low
+  link:
+    rst_por_n:
+      async:                    # POR needs 4 stages
+        clock: clk_sys
+        stage: 4
+    rst_wdt_n:
+      count:                    # WDT needs delayed release
+        clock: clk_sys
+        cycle: 255
+```
+
 === Design Guidelines
 <soc-net-reset-design-guidelines>
+- Prefer target-level `async` for multi-source resets to reduce area
 - Use `async` component for most digital logic requiring synchronized reset release
 - Use direct assignment only for simple pass-through or clock-independent paths
 - Implement power-on-reset with `count` component for reliable startup timing
