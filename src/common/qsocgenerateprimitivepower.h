@@ -201,7 +201,7 @@ private:
     // Typst generation helper functions
     QString typstHeader() const;
     QString typstLegend() const;
-    QString typstDomain(const PowerDomain &domain, int idx, float x0, float y0, float dy) const;
+    QString typstDomain(const PowerDomain &domain, float x, float y) const;
     QString escapeTypstId(const QString &str) const;
 
 private:
