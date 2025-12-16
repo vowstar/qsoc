@@ -7,7 +7,7 @@ The clock section defines clock controller primitives using a simplified format 
 Clock controllers manage clock distribution with two processing levels: link-level and target-level. Each level supports specific operations in a defined order, providing clear signal flow without explicit type enumeration.
 
 Key features include:
-- Two-level processing: link-level (div→inv) and target-level (mux→icg→div→inv)
+- Two-level processing: link-level (icg→div→inv) and target-level (mux→icg→div→inv)
 - Automatic mux type selection based on reset signal presence
 - Direct attribute specification without complex type parsing
 - ETH Zurich glitch-free mux implementation with DFT support
