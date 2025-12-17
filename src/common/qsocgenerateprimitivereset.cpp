@@ -1300,14 +1300,23 @@ QString QSocResetPrimitive::typstTarget(
     QString andOutputPort;
 
     if (numSources == 1 && !anyLinkHasComp && !hasTargetComp) {
-        // Single source, no components - direct connection
-        // Center the small block at andCenterY
         QString sid = escapeTypstId(tid + QStringLiteral("_SRC"));
-        s << "  element.block(x: " << andX << ", y: " << (andCenterY - 0.3f) << ", w: .8, h: .6, "
-          << "id: \"" << sid << "\", name: \"\", "
-          << "ports: (east: ((id: \"out\"),)))\n";
-        s << "  wire.stub(\"" << sid << "-port-out\", \"west\", name: \"" << target.links[0].source
-          << "\")\n";
+        // Right-pointing triangle (42° tip angle), sized to match output arrow
+        float triWidth = 0.38f;
+        float triHalfH = 0.16f;
+        float triBaseX = andX;
+        float triTipX  = triBaseX + triWidth;
+        float triY     = andCenterY;
+        s << "  draw.line((" << triBaseX << ", " << (triY + triHalfH) << "), (" << triTipX << ", "
+          << triY << "), (" << triBaseX << ", " << (triY - triHalfH)
+          << "), close: true, fill: black, stroke: none)\n";
+        s << "  draw.content((" << (triBaseX - 0.1f) << ", " << triY
+          << "), anchor: \"east\", text(size: 8pt)[" << target.links[0].source << "])\n";
+        // Tiny invisible anchor: position so east port aligns with triangle tip
+        float anchorS = 0.01f;
+        s << "  element.block(x: " << (triTipX - anchorS) << ", y: " << (triY - anchorS / 2)
+          << ", w: " << anchorS << ", h: " << anchorS << ", id: \"" << sid
+          << "\", name: \"\", stroke: none, fill: none, ports: (east: ((id: \"out\"),)))\n";
         andOutputPort = sid + QStringLiteral("-port-out");
     } else {
         // Use AND gate - height accommodates all link components
