@@ -301,8 +301,15 @@ void deserializeResetSync(const gpds::container &c, ResetSyncParams &p, const st
 /* Serialization */
 gpds::container PrcPrimitiveItem::to_container() const
 {
-    gpds::container c = QSchematic::Items::Node::to_container();
+    /* Root container with our type id */
+    gpds::container root;
+    addItemTypeIdToContainer(root);
 
+    /* Save base Node data as nested container */
+    root.add_value("node", QSchematic::Items::Node::to_container());
+
+    /* Save primitive-specific data */
+    gpds::container c;
     c.add_value("primitive_type", static_cast<int>(m_primitiveType));
     c.add_value("primitive_name", m_primitiveName.toStdString());
 
@@ -368,108 +375,128 @@ gpds::container PrcPrimitiveItem::to_container() const
         },
         m_params);
 
-    return c;
+    /* Add primitive data to root */
+    root.add_value("primitive", c);
+
+    return root;
 }
 
 void PrcPrimitiveItem::from_container(const gpds::container &container)
 {
+    /* Clear connectors created by constructor before loading */
+    for (const auto &conn : m_connectors) {
+        removeConnector(conn);
+    }
+    m_connectors.clear();
+
+    /* Load base Node data from nested container */
+    if (auto nodeContainer = container.get_value<gpds::container *>("node")) {
+        QSchematic::Items::Node::from_container(**nodeContainer);
+    }
+
+    /* Get primitive data container */
+    const gpds::container *primContainer = &container;
+    if (auto pc = container.get_value<gpds::container *>("primitive")) {
+        primContainer = *pc;
+    }
+
     m_primitiveType = static_cast<PrimitiveType>(
-        container.get_value<int>("primitive_type").value_or(0));
+        primContainer->get_value<int>("primitive_type").value_or(0));
     m_primitiveName = QString::fromStdString(
-        container.get_value<std::string>("primitive_name").value_or(""));
+        primContainer->get_value<std::string>("primitive_name").value_or(""));
 
     /* Deserialize type-specific parameters */
     switch (m_primitiveType) {
     case ClockInput: {
         ClockInputParams params;
         params.name = QString::fromStdString(
-            container.get_value<std::string>("input_name").value_or(""));
+            primContainer->get_value<std::string>("input_name").value_or(""));
         params.freq = QString::fromStdString(
-            container.get_value<std::string>("input_freq").value_or(""));
+            primContainer->get_value<std::string>("input_freq").value_or(""));
         params.controller = QString::fromStdString(
-            container.get_value<std::string>("input_controller").value_or(""));
+            primContainer->get_value<std::string>("input_controller").value_or(""));
         m_params = params;
         break;
     }
     case ClockTarget: {
         ClockTargetParams params;
         params.name = QString::fromStdString(
-            container.get_value<std::string>("target_name").value_or(""));
+            primContainer->get_value<std::string>("target_name").value_or(""));
         params.freq = QString::fromStdString(
-            container.get_value<std::string>("target_freq").value_or(""));
+            primContainer->get_value<std::string>("target_freq").value_or(""));
         params.controller = QString::fromStdString(
-            container.get_value<std::string>("target_controller").value_or(""));
-        deserializeMUX(container, params.mux, "target_mux");
-        deserializeICG(container, params.icg, "target_icg");
-        deserializeDIV(container, params.div, "target_div");
-        deserializeINV(container, params.inv, "target_inv");
+            primContainer->get_value<std::string>("target_controller").value_or(""));
+        deserializeMUX(*primContainer, params.mux, "target_mux");
+        deserializeICG(*primContainer, params.icg, "target_icg");
+        deserializeDIV(*primContainer, params.div, "target_div");
+        deserializeINV(*primContainer, params.inv, "target_inv");
         params.select = QString::fromStdString(
-            container.get_value<std::string>("target_select").value_or(""));
+            primContainer->get_value<std::string>("target_select").value_or(""));
         params.reset = QString::fromStdString(
-            container.get_value<std::string>("target_reset").value_or(""));
+            primContainer->get_value<std::string>("target_reset").value_or(""));
         params.test_clock = QString::fromStdString(
-            container.get_value<std::string>("target_test_clock").value_or(""));
+            primContainer->get_value<std::string>("target_test_clock").value_or(""));
         m_params = params;
         break;
     }
     case ResetSource: {
         ResetSourceParams params;
         params.name = QString::fromStdString(
-            container.get_value<std::string>("rst_src_name").value_or(""));
+            primContainer->get_value<std::string>("rst_src_name").value_or(""));
         params.active = QString::fromStdString(
-            container.get_value<std::string>("rst_src_active").value_or("low"));
+            primContainer->get_value<std::string>("rst_src_active").value_or("low"));
         params.controller = QString::fromStdString(
-            container.get_value<std::string>("rst_src_controller").value_or(""));
+            primContainer->get_value<std::string>("rst_src_controller").value_or(""));
         m_params = params;
         break;
     }
     case ResetTarget: {
         ResetTargetParams params;
         params.name = QString::fromStdString(
-            container.get_value<std::string>("rst_tgt_name").value_or(""));
+            primContainer->get_value<std::string>("rst_tgt_name").value_or(""));
         params.active = QString::fromStdString(
-            container.get_value<std::string>("rst_tgt_active").value_or("low"));
+            primContainer->get_value<std::string>("rst_tgt_active").value_or("low"));
         params.controller = QString::fromStdString(
-            container.get_value<std::string>("rst_tgt_controller").value_or(""));
-        deserializeResetSync(container, params.sync, "rst_tgt_sync");
+            primContainer->get_value<std::string>("rst_tgt_controller").value_or(""));
+        deserializeResetSync(*primContainer, params.sync, "rst_tgt_sync");
         m_params = params;
         break;
     }
     case PowerDomain: {
         PowerDomainParams params;
         params.name = QString::fromStdString(
-            container.get_value<std::string>("pwr_dom_name").value_or(""));
+            primContainer->get_value<std::string>("pwr_dom_name").value_or(""));
         params.controller = QString::fromStdString(
-            container.get_value<std::string>("pwr_dom_controller").value_or(""));
-        params.v_mv  = container.get_value<int>("pwr_dom_v_mv").value_or(900);
+            primContainer->get_value<std::string>("pwr_dom_controller").value_or(""));
+        params.v_mv  = primContainer->get_value<int>("pwr_dom_v_mv").value_or(900);
         params.pgood = QString::fromStdString(
-            container.get_value<std::string>("pwr_dom_pgood").value_or(""));
-        params.wait_dep   = container.get_value<int>("pwr_dom_wait_dep").value_or(0);
-        params.settle_on  = container.get_value<int>("pwr_dom_settle_on").value_or(0);
-        params.settle_off = container.get_value<int>("pwr_dom_settle_off").value_or(0);
+            primContainer->get_value<std::string>("pwr_dom_pgood").value_or(""));
+        params.wait_dep   = primContainer->get_value<int>("pwr_dom_wait_dep").value_or(0);
+        params.settle_on  = primContainer->get_value<int>("pwr_dom_settle_on").value_or(0);
+        params.settle_off = primContainer->get_value<int>("pwr_dom_settle_off").value_or(0);
         /* Deserialize dependencies */
-        int depCount = container.get_value<int>("pwr_dom_depend_count").value_or(0);
+        int depCount = primContainer->get_value<int>("pwr_dom_depend_count").value_or(0);
         for (int i = 0; i < depCount; ++i) {
             PowerDependency dep;
             dep.name = QString::fromStdString(
-                container.get_value<std::string>("pwr_dom_dep_" + std::to_string(i) + "_name")
+                primContainer->get_value<std::string>("pwr_dom_dep_" + std::to_string(i) + "_name")
                     .value_or(""));
             dep.type = QString::fromStdString(
-                container.get_value<std::string>("pwr_dom_dep_" + std::to_string(i) + "_type")
+                primContainer->get_value<std::string>("pwr_dom_dep_" + std::to_string(i) + "_type")
                     .value_or("hard"));
             params.depend.append(dep);
         }
         /* Deserialize follow entries */
-        int folCount = container.get_value<int>("pwr_dom_follow_count").value_or(0);
+        int folCount = primContainer->get_value<int>("pwr_dom_follow_count").value_or(0);
         for (int i = 0; i < folCount; ++i) {
             PowerFollow fol;
             fol.clock = QString::fromStdString(
-                container.get_value<std::string>("pwr_dom_fol_" + std::to_string(i) + "_clock")
+                primContainer->get_value<std::string>("pwr_dom_fol_" + std::to_string(i) + "_clock")
                     .value_or(""));
             fol.reset = QString::fromStdString(
-                container.get_value<std::string>("pwr_dom_fol_" + std::to_string(i) + "_reset")
+                primContainer->get_value<std::string>("pwr_dom_fol_" + std::to_string(i) + "_reset")
                     .value_or(""));
-            fol.stage = container.get_value<int>("pwr_dom_fol_" + std::to_string(i) + "_stage")
+            fol.stage = primContainer->get_value<int>("pwr_dom_fol_" + std::to_string(i) + "_stage")
                             .value_or(4);
             params.follow.append(fol);
         }
@@ -477,9 +504,6 @@ void PrcPrimitiveItem::from_container(const gpds::container &container)
         break;
     }
     }
-
-    /* Load base Node data - this will restore connectors from container */
-    QSchematic::Items::Node::from_container(container);
 
     /* Store restored connectors */
     const auto restoredConnectors = connectors();
