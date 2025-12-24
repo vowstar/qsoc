@@ -3,6 +3,7 @@
 
 #include "gui/prcwindow/prcwindow.h"
 #include "common/qsocprojectmanager.h"
+#include "gui/prcwindow/prcitemfactory.h"
 #include "gui/prcwindow/prclibrarywidget.h"
 #include "gui/prcwindow/prcprimitiveitem.h"
 
@@ -41,6 +42,10 @@ PrcWindow::PrcWindow(QWidget *parent, QSocProjectManager *projectManager)
     statusBarPermanentLabel = new QLabel(this);
     statusBarPermanentLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     statusBar()->addPermanentWidget(statusBarPermanentLabel, 1);
+
+    /* Register custom item factory for PRC items */
+    auto factoryFunc = std::bind(&PrcLibrary::PrcItemFactory::from_container, std::placeholders::_1);
+    QSchematic::Items::Factory::instance().setCustomItemsFactory(factoryFunc);
 
     settings.debug               = false;
     settings.showGrid            = true;
