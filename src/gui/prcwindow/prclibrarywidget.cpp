@@ -48,11 +48,25 @@ void PrcLibraryWidget::initializeLibrary()
     };
 
     const QList<PrimitiveInfo> primitives = {
-        {ClockSource, "Clock Source", "Clock input/generator", QColor(173, 216, 230)},
-        {ClockTarget, "Clock Target", "Clock processing element", QColor(135, 206, 250)},
-        {ResetSource, "Reset Source", "Reset generator", QColor(255, 182, 193)},
-        {ResetTarget, "Reset Target", "Reset consumer", QColor(255, 160, 160)},
-        {PowerDomain, "Power Domain", "Power domain controller", QColor(144, 238, 144)},
+        /* Clock Domain */
+        {ClockInput, "Clock Input", "Clock input source (input:)", QColor(173, 216, 230)},
+        {ClockTarget,
+         "Clock Target",
+         "Clock target with MUX/ICG/DIV (target:)",
+         QColor(144, 238, 144)},
+
+        /* Reset Domain */
+        {ResetSource, "Reset Source", "Reset source signal (source:)", QColor(255, 182, 193)},
+        {ResetTarget,
+         "Reset Target",
+         "Reset target with synchronizer (target:)",
+         QColor(255, 160, 160)},
+
+        /* Power Domain */
+        {PowerDomain,
+         "Power Domain",
+         "Power domain with dependencies (domain:)",
+         QColor(144, 238, 144)},
     };
 
     for (const auto &prim : primitives) {
