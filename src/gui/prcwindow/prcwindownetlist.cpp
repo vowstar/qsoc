@@ -164,8 +164,17 @@ void PrcWindow::handlePrcItemDoubleClick(QSchematic::Items::Item *item)
         return;
     }
 
+    /* Get connected sources for target primitives */
+    QStringList connectedSources;
+    if (prcItem->primitiveType() == PrcLibrary::ClockTarget
+        || prcItem->primitiveType() == PrcLibrary::ResetTarget) {
+        QSet<QString> sources = getConnectedSources(prcItem->primitiveName());
+        connectedSources      = sources.values();
+        connectedSources.sort();
+    }
+
     /* Show configuration dialog and apply changes if accepted */
-    PrcLibrary::PrcConfigDialog dialog(prcItem, &scene, this);
+    PrcLibrary::PrcConfigDialog dialog(prcItem, &scene, connectedSources, this);
     if (dialog.exec() == QDialog::Accepted) {
         /* Dialog applies configuration automatically via applyConfiguration() */
 
