@@ -13,10 +13,12 @@
 
 using namespace PrcLibrary;
 
-PrcConfigDialog::PrcConfigDialog(PrcPrimitiveItem *item, PrcScene *scene, QWidget *parent)
+PrcConfigDialog::PrcConfigDialog(
+    PrcPrimitiveItem *item, PrcScene *scene, const QStringList &connectedSources, QWidget *parent)
     : QDialog(parent)
     , item_(item)
     , scene_(scene)
+    , connectedSources_(connectedSources)
     , mainLayout_(nullptr)
     , nameEdit_(nullptr)
     , controllerCombo_(nullptr)
@@ -142,13 +144,44 @@ void PrcConfigDialog::createClockTargetForm()
 
     mainLayout_->addWidget(basicGroup);
 
-    /* MUX settings */
-    auto *muxGroup  = new QGroupBox(tr("MUX (auto when multiple sources)"), this);
+    /* MUX settings - read-only, auto-determined by connections */
+    int  sourceCount = connectedSources_.size();
+    bool muxEnabled  = sourceCount >= 2;
+
+    QString muxTitle;
+    if (sourceCount == 0) {
+        muxTitle = tr("MUX (no sources connected)");
+    } else if (sourceCount == 1) {
+        muxTitle = tr("MUX (1 source - not needed)");
+    } else {
+        muxTitle = tr("MUX (%1 sources - enabled)").arg(sourceCount);
+    }
+
+    auto *muxGroup  = new QGroupBox(muxTitle, this);
     auto *muxLayout = new QFormLayout(muxGroup);
     muxGroup->setCheckable(true);
-    muxGroup->setChecked(params.mux.configured);
+    muxGroup->setChecked(muxEnabled);
+
+    /* Make checkbox read-only by blocking toggle */
+    connect(muxGroup, &QGroupBox::toggled, [muxGroup, muxEnabled](bool) {
+        muxGroup->blockSignals(true);
+        muxGroup->setChecked(muxEnabled);
+        muxGroup->blockSignals(false);
+    });
+
+    /* Display connected sources */
+    if (!connectedSources_.isEmpty()) {
+        auto *linksLabel = new QLabel(connectedSources_.join(", "), this);
+        linksLabel->setWordWrap(true);
+        linksLabel->setStyleSheet("color: #666; font-style: italic;");
+        muxLayout->addRow(tr("Connected:"), linksLabel);
+    } else {
+        auto *noLinksLabel = new QLabel(tr("(connect clock inputs to enable)"), this);
+        noLinksLabel->setStyleSheet("color: #999; font-style: italic;");
+        muxLayout->addRow(noLinksLabel);
+    }
+
     targetMuxCheck_ = nullptr; /* Use group checkbox */
-    connect(muxGroup, &QGroupBox::toggled, [this](bool checked) { Q_UNUSED(checked); });
     mainLayout_->addWidget(muxGroup);
 
     /* ICG settings */
@@ -570,9 +603,8 @@ void PrcConfigDialog::applyConfiguration()
         params.reset      = targetResetEdit_->text();
         params.test_clock = targetTestClockEdit_->text();
 
-        /* MUX */
-        auto *muxGroup        = reinterpret_cast<QGroupBox *>(targetMuxCheck_);
-        params.mux.configured = muxGroup ? muxGroup->isChecked() : false;
+        /* MUX - auto-determined by connection count */
+        params.mux.configured = connectedSources_.size() >= 2;
 
         /* ICG */
         auto *icgGroup        = reinterpret_cast<QGroupBox *>(targetIcgCheck_);

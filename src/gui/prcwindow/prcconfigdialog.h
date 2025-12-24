@@ -34,9 +34,14 @@ public:
      * @brief Construct a configuration dialog for the given primitive
      * @param[in] item The primitive item to configure
      * @param[in] scene The PRC scene (for controller management)
+     * @param[in] connectedSources List of source names connected to this target (for targets)
      * @param[in] parent Parent widget
      */
-    explicit PrcConfigDialog(PrcPrimitiveItem *item, PrcScene *scene, QWidget *parent = nullptr);
+    explicit PrcConfigDialog(
+        PrcPrimitiveItem  *item,
+        PrcScene          *scene,
+        const QStringList &connectedSources = QStringList(),
+        QWidget           *parent           = nullptr);
 
     /**
      * @brief Apply configured values to the item
@@ -73,10 +78,11 @@ private:
      */
     void populateControllerCombo();
 
-    PrcPrimitiveItem *item_;       /**< The primitive item being configured */
-    PrcScene         *scene_;      /**< PRC scene for controller management */
-    QVBoxLayout      *mainLayout_; /**< Main dialog layout */
-    QLineEdit        *nameEdit_;   /**< Primitive name editor */
+    PrcPrimitiveItem *item_;             /**< The primitive item being configured */
+    PrcScene         *scene_;            /**< PRC scene for controller management */
+    QStringList       connectedSources_; /**< Connected source names (for targets) */
+    QVBoxLayout      *mainLayout_;       /**< Main dialog layout */
+    QLineEdit        *nameEdit_;         /**< Primitive name editor */
 
     /* Controller selection widgets */
     QComboBox   *controllerCombo_;   /**< Controller selection combo */
