@@ -61,8 +61,9 @@ PrcWindow::PrcWindow(QWidget *parent, QSocProjectManager *projectManager)
         }
     });
 
-    /* Auto-name wires when netlist changes */
+    /* Auto-name wires and update dynamic ports when netlist changes */
     connect(&scene, &QSchematic::Scene::netlistChanged, this, &PrcWindow::autoNameWires);
+    connect(&scene, &QSchematic::Scene::netlistChanged, this, &PrcWindow::updateAllDynamicPorts);
 
     /* Auto-generate instance names when items are added (drag/drop, paste, etc.) */
     connect(&scene, &QSchematic::Scene::itemAdded, this, &PrcWindow::onItemAdded);
@@ -153,20 +154,25 @@ void PrcWindow::onPrimitiveSelected(PrcLibrary::PrimitiveType primitiveType)
     /* Create unique name for the primitive */
     QString prefix;
     switch (primitiveType) {
-    case PrcLibrary::ClockSource:
-        prefix = "clk_src_";
+    /* Clock Domain */
+    case PrcLibrary::ClockInput:
+        prefix = "clk_";
         break;
     case PrcLibrary::ClockTarget:
-        prefix = "clk_tgt_";
+        prefix = "clk_";
         break;
+
+    /* Reset Domain */
     case PrcLibrary::ResetSource:
-        prefix = "rst_src_";
+        prefix = "rst_";
         break;
     case PrcLibrary::ResetTarget:
-        prefix = "rst_tgt_";
+        prefix = "rst_";
         break;
+
+    /* Power Domain */
     case PrcLibrary::PowerDomain:
-        prefix = "pwr_dom_";
+        prefix = "pd_";
         break;
     }
 
@@ -242,4 +248,22 @@ void PrcWindow::setProjectManager(QSocProjectManager *projectManager)
     }
 
     this->projectManager = projectManager;
+}
+
+/**
+ * @brief Get access to the PRC scene
+ * @return Reference to PrcScene
+ */
+PrcLibrary::PrcScene &PrcWindow::prcScene()
+{
+    return scene;
+}
+
+/**
+ * @brief Get read-only access to the PRC scene
+ * @return Const reference to PrcScene
+ */
+const PrcLibrary::PrcScene &PrcWindow::prcScene() const
+{
+    return scene;
 }

@@ -8,8 +8,6 @@
 #include <QDebug>
 #include <QIcon>
 
-#include <qschematic/scene.hpp>
-
 void PrcWindow::on_actionQuit_triggered()
 {
     close();

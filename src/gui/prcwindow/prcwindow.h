@@ -5,11 +5,12 @@
 #define PRCWINDOW_H
 
 #include "prcprimitiveitem.h"
+#include "prcscene.h"
 
 #include <QLabel>
 #include <QMainWindow>
+#include <QMap>
 
-#include <qschematic/scene.hpp>
 #include <qschematic/settings.hpp>
 #include <qschematic/view.hpp>
 
@@ -61,17 +62,29 @@ public:
     void openFile(const QString &filePath);
 
     /**
-     * @brief Collect all existing PRC controller names from scene
+     * @brief Get access to the PRC scene
+     * @return Reference to PrcScene
+     */
+    PrcLibrary::PrcScene &prcScene();
+
+    /**
+     * @brief Get read-only access to the PRC scene
+     * @return Const reference to PrcScene
+     */
+    const PrcLibrary::PrcScene &prcScene() const;
+
+    /**
+     * @brief Collect all existing PRC element names from scene
      * @param[in] scene QSchematic scene to scan
-     * @return Set of existing controller names
+     * @return Set of existing element names
      */
     static QSet<QString> getExistingControllerNames(const QSchematic::Scene &scene);
 
     /**
-     * @brief Generate unique controller name with auto-increment suffix
+     * @brief Generate unique element name with auto-increment suffix
      * @param[in] scene QSchematic scene to scan
-     * @param[in] prefix Name prefix (e.g., "clk_src_")
-     * @return Unique controller name
+     * @param[in] prefix Name prefix (e.g., "clk_")
+     * @return Unique element name
      */
     static QString generateUniqueControllerName(
         const QSchematic::Scene &scene, const QString &prefix);
@@ -274,6 +287,13 @@ private:
     QString autoGenerateWireName(const QSchematic::Items::WireNet *wireNet) const;
 
     /**
+     * @brief Update dynamic ports on all target primitives
+     * @details Called when netlist changes to ensure each target has
+     *          at least one available input port.
+     */
+    void updateAllDynamicPorts();
+
+    /**
      * @brief Export PRC netlist to file
      * @param[in] filePath Output file path
      * @retval true Export successful
@@ -281,14 +301,85 @@ private:
      */
     bool exportNetlist(const QString &filePath);
 
+    /* Link Parameter Management */
+
+    /**
+     * @brief Get link parameters for a wire net
+     * @param[in] wireNetName Wire net name (source->target format)
+     * @return Link parameters (default if not found)
+     */
+    PrcLibrary::ClockLinkParams getLinkParams(const QString &wireNetName) const;
+
+    /**
+     * @brief Set link parameters for a wire net
+     * @param[in] wireNetName Wire net name (source->target format)
+     * @param[in] params Link parameters to set
+     */
+    void setLinkParams(const QString &wireNetName, const PrcLibrary::ClockLinkParams &params);
+
+    /**
+     * @brief Check if wire net has link parameters configured
+     * @param[in] wireNetName Wire net name
+     * @return true if configured
+     */
+    bool hasLinkParams(const QString &wireNetName) const;
+
+    /**
+     * @brief Remove link parameters for a wire net
+     * @param[in] wireNetName Wire net name
+     */
+    void removeLinkParams(const QString &wireNetName);
+
+    /**
+     * @brief Get all link parameters keyed by target name then source name
+     * @return Map of target->source->ClockLinkParams
+     */
+    QMap<QString, QMap<QString, PrcLibrary::ClockLinkParams>> getAllLinkParamsByTarget() const;
+
+    /**
+     * @brief Wire connection info from analysis
+     */
+    struct WireConnectionInfo
+    {
+        QString sourceName;  /**< Source primitive name (ClockInput/ResetSource) */
+        QString targetName;  /**< Target primitive name (ClockTarget/ResetTarget) */
+        QString wireNetName; /**< Wire net name */
+    };
+
+    /**
+     * @brief Analyze actual wire connections from scene
+     * @details Traverses wire manager to find all source->target connections.
+     *          Only considers connections between compatible types:
+     *          - ClockInput -> ClockTarget
+     *          - ResetSource -> ResetTarget
+     *          - PowerDomain -> PowerDomain
+     * @return List of wire connections
+     */
+    QList<WireConnectionInfo> analyzeWireConnections() const;
+
+    /**
+     * @brief Get set of source names connected to a specific target via wires
+     * @param[in] targetName Target primitive name
+     * @return Set of connected source names
+     */
+    QSet<QString> getConnectedSources(const QString &targetName) const;
+
     /* Member Variables */
 
     Ui::PrcWindow                *ui;                                /**< Main window UI */
-    QSchematic::Scene             scene;                             /**< PRC scene */
+    PrcLibrary::PrcScene          scene;                             /**< PRC scene */
     QSchematic::Settings          settings;                          /**< Scene settings */
     PrcLibrary::PrcLibraryWidget *prcLibraryWidget;                  /**< PRC library widget */
     QSocProjectManager           *projectManager;                    /**< Project manager */
     QString                       m_currentFilePath;                 /**< Current file path */
     QLabel                       *statusBarPermanentLabel = nullptr; /**< Status bar label */
+
+    /**
+     * @brief Link parameters storage
+     * @details Maps wire net name to link-level clock parameters.
+     *          This stores ICG/DIV/INV/STA_GUIDE operations for each wire.
+     *          Wire names use "source->target" format.
+     */
+    QMap<QString, PrcLibrary::ClockLinkParams> m_linkParams;
 };
 #endif // PRCWINDOW_H

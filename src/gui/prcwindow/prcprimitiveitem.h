@@ -20,77 +20,237 @@
 
 namespace PrcLibrary {
 
-/**
- * @brief Power/Reset/Clock primitive types
- */
+/* Primitive Types */
 enum PrimitiveType {
-    ClockSource = 0, /**< Clock signal source */
-    ClockTarget = 1, /**< Clock signal target with optional gating */
-    ResetSource = 2, /**< Reset signal source */
-    ResetTarget = 3, /**< Reset signal target with optional synchronization */
-    PowerDomain = 4  /**< Power domain with enable/ready/fault signals */
+    ClockInput  = 1,  /**< Clock input source */
+    ClockTarget = 2,  /**< Clock target with operations */
+    ResetSource = 11, /**< Reset source */
+    ResetTarget = 12, /**< Reset target */
+    PowerDomain = 21, /**< Power domain */
 };
 
-/**
- * @brief Clock source configuration
- */
-struct ClockSourceParams
+/* Controller Definition (stored at Scene level, referenced by primitives) */
+struct ClockControllerDef
 {
-    double frequency_mhz = 100.0; /**< Frequency in MHz */
-    double phase_deg     = 0.0;   /**< Phase offset in degrees */
+    QString name = "clock_ctrl"; /**< Controller instance name */
+    QString test_enable;         /**< Test enable bypass signal */
+};
+
+struct ResetControllerDef
+{
+    QString name = "reset_ctrl"; /**< Controller instance name */
+    QString test_enable;         /**< Test enable bypass signal */
+};
+
+struct PowerControllerDef
+{
+    QString name = "power_ctrl"; /**< Controller instance name */
+    QString host_clock;          /**< AO host clock */
+    QString host_reset;          /**< AO host reset */
+    QString test_enable;         /**< Test enable bypass signal */
+};
+
+/* Shared Parameter Structures */
+struct STAGuideParams
+{
+    bool    configured = false;
+    QString cell;     /**< Buffer cell name (e.g., "BUF_X2") */
+    QString in;       /**< Input pin name (e.g., "I") */
+    QString out;      /**< Output pin name (e.g., "Z") */
+    QString instance; /**< Instance name (e.g., "u_DONTTOUCH_xxx") */
 };
 
 /**
- * @brief Clock target configuration
+ * @brief ICG (Integrated Clock Gating) configuration
  */
+struct ICGParams
+{
+    bool           configured = false;
+    QString        enable;                 /**< Gate enable signal */
+    QString        polarity;               /**< Enable polarity: "high" or "low" */
+    QString        test_enable;            /**< Test enable signal (optional) */
+    QString        reset;                  /**< Reset signal (optional) */
+    bool           clock_on_reset = false; /**< Clock enabled during reset */
+    STAGuideParams sta_guide;
+};
+
+/**
+ * @brief DIV (Clock Divider) configuration
+ */
+struct DIVParams
+{
+    bool           configured    = false;
+    int            default_value = 1;      /**< Default division value */
+    QString        value;                  /**< Runtime divider control signal (optional) */
+    int            width = 0;              /**< Divider bit width (0 = auto) */
+    QString        reset;                  /**< Reset signal */
+    bool           clock_on_reset = false; /**< Clock enabled during reset */
+    STAGuideParams sta_guide;
+};
+
+/**
+ * @brief MUX configuration
+ */
+struct MUXParams
+{
+    bool           configured = false;
+    STAGuideParams sta_guide;
+};
+
+/**
+ * @brief INV (Clock Inverter) configuration
+ */
+struct INVParams
+{
+    bool           configured = false;
+    STAGuideParams sta_guide;
+};
+
+/* Link-level Parameters (for wires connecting inputs to targets) */
+/**
+ * @brief Link-level clock operations (applied per wire/connection)
+ * @details In soc_net format, each link from input to target can have
+ *          its own ICG, DIV, INV, and STA guide operations.
+ *          Processing order: source -> icg -> div -> inv -> sta_guide -> target
+ */
+struct ClockLinkParams
+{
+    QString        sourceName; /**< Source input name this link connects from */
+    ICGParams      icg;        /**< Link-level ICG */
+    DIVParams      div;        /**< Link-level DIV */
+    INVParams      inv;        /**< Link-level INV */
+    STAGuideParams sta_guide;  /**< Link-level STA guide (at end of chain) */
+};
+
+/**
+ * @brief Link-level reset operations (applied per wire/connection)
+ */
+struct ResetLinkParams
+{
+    QString sourceName; /**< Source name this link connects from */
+};
+
+/* Clock Domain Parameters */
+struct ClockInputParams
+{
+    QString name;       /**< Input name (e.g., "clk_hse") */
+    QString freq;       /**< Frequency string (e.g., "25MHz") */
+    QString controller; /**< Controller name this belongs to */
+};
+
 struct ClockTargetParams
 {
-    int  divider     = 1;     /**< Clock divider ratio */
-    bool enable_gate = false; /**< Enable clock gating */
+    QString name;       /**< Target name (e.g., "clk_noc") */
+    QString freq;       /**< Target frequency (e.g., "400MHz") */
+    QString controller; /**< Controller name this belongs to */
+
+    /* Target-level operations */
+    MUXParams mux; /**< Target-level MUX (auto when >1 link) */
+    ICGParams icg; /**< Target-level ICG */
+    DIVParams div; /**< Target-level DIV */
+    INVParams inv; /**< Target-level INV */
+
+    /* Selection and control */
+    QString select;     /**< MUX select signal */
+    QString reset;      /**< MUX reset signal (GF_MUX when present) */
+    QString test_clock; /**< DFT test clock */
 };
 
+/* Reset Domain Parameters */
+
 /**
- * @brief Reset source configuration
+ * @brief Reset source parameters
  */
 struct ResetSourceParams
 {
-    bool   active_low  = true; /**< Active low reset signal */
-    double duration_us = 10.0; /**< Reset duration in microseconds */
+    QString name;       /**< Source name (e.g., "por_rst_n") */
+    QString active;     /**< Active level: "high" or "low" */
+    QString controller; /**< Controller name this belongs to */
 };
 
 /**
- * @brief Reset target configuration
+ * @brief Reset synchronizer configuration
+ */
+struct ResetSyncParams
+{
+    /* Async synchronizer (qsoc_rst_sync) */
+    bool    async_configured = false;
+    QString async_clock;
+    int     async_stage = 4;
+
+    /* Sync pipeline (qsoc_rst_pipe) */
+    bool    sync_configured = false;
+    QString sync_clock;
+    int     sync_stage = 2;
+
+    /* Counter-based release (qsoc_rst_count) */
+    bool    count_configured = false;
+    QString count_clock;
+    int     count_value = 16;
+};
+
+/**
+ * @brief Reset target parameters
  */
 struct ResetTargetParams
 {
-    bool synchronous = true; /**< Synchronous reset */
-    int  stages      = 2;    /**< Synchronizer stages */
+    QString         name;       /**< Target name (e.g., "cpu_rst_n") */
+    QString         active;     /**< Active level: "high" or "low" */
+    QString         controller; /**< Controller name this belongs to */
+    ResetSyncParams sync;       /**< Target-level synchronizer */
+};
+
+/* Power Domain Parameters */
+
+/**
+ * @brief Power domain dependency
+ */
+struct PowerDependency
+{
+    QString name; /**< Dependency domain name */
+    QString type; /**< "hard" or "soft" */
 };
 
 /**
- * @brief Power domain configuration
+ * @brief Power domain follow entry (reset synchronizer)
+ */
+struct PowerFollow
+{
+    QString clock;     /**< Domain clock */
+    QString reset;     /**< Synchronized reset output */
+    int     stage = 4; /**< Synchronizer stages */
+};
+
+/**
+ * @brief Power domain parameters
  */
 struct PowerDomainParams
 {
-    double voltage   = 1.0;   /**< Operating voltage */
-    bool   isolation = true;  /**< Enable isolation */
-    bool   retention = false; /**< Enable retention */
+    QString                name;           /**< Domain name (e.g., "ao", "gpu") */
+    QString                controller;     /**< Controller name this belongs to */
+    int                    v_mv = 900;     /**< Voltage level in mV */
+    QString                pgood;          /**< Power good input signal (optional) */
+    int                    wait_dep   = 0; /**< Dependency wait cycles */
+    int                    settle_on  = 0; /**< Power-on settle cycles */
+    int                    settle_off = 0; /**< Power-off settle cycles */
+    QList<PowerDependency> depend;         /**< Dependencies (empty = AO, [] = root) */
+    QList<PowerFollow>     follow;         /**< Reset synchronizer entries */
 };
 
+/* Parameter Variant */
+
 /**
- * @brief Type-safe union for primitive parameters
+ * @brief Type-safe union for all primitive parameters
  */
-using PrcParams = std::variant<
-    ClockSourceParams,
-    ClockTargetParams,
-    ResetSourceParams,
-    ResetTargetParams,
-    PowerDomainParams>;
+using PrcParams = std::
+    variant<ClockInputParams, ClockTargetParams, ResetSourceParams, ResetTargetParams, PowerDomainParams>;
+
+/* Primitive Item Class */
 
 /**
  * @brief PRC primitive item for schematic editor
- * @details Represents clock/reset/power domain nodes with type-specific connectors.
- *          Each primitive type has its own connector layout and configuration options.
+ * @details Represents clock/reset/power primitives matching soc_net format.
+ *          Controllers act as containers, inputs/targets connect via wires.
  */
 class PrcPrimitiveItem : public QSchematic::Items::Node
 {
@@ -102,7 +262,7 @@ public:
 
     /**
      * @brief Construct a PRC primitive item
-     * @param[in] primitiveType Type of the primitive (clock/reset/power)
+     * @param[in] primitiveType Type of the primitive
      * @param[in] name Display name, defaults to type name if empty
      * @param[in] parent Parent graphics item
      */
@@ -116,8 +276,14 @@ public:
     PrimitiveType primitiveType() const;
 
     /**
+     * @brief Check if this primitive is a controller (container)
+     * @return true if controller type
+     */
+    bool isController() const;
+
+    /**
      * @brief Get human-readable type name
-     * @return Type name string (e.g., "Clock Source")
+     * @return Type name string (e.g., "Clock Controller")
      */
     QString primitiveTypeName() const;
 
@@ -140,6 +306,12 @@ public:
     const PrcParams &params() const;
 
     /**
+     * @brief Get mutable primitive parameters
+     * @return Reference to parameter variant
+     */
+    PrcParams &params();
+
+    /**
      * @brief Set primitive parameters (type-safe)
      * @param[in] params Parameter variant
      */
@@ -150,6 +322,25 @@ public:
      * @return Shared pointer to the copied item
      */
     std::shared_ptr<QSchematic::Items::Item> deepCopy() const override;
+
+    /**
+     * @brief Update dynamic input ports based on connection state
+     * @details For ClockTarget/ResetTarget, ensures there's always one
+     *          available (unconnected) input port. Called when netlist changes.
+     */
+    void updateDynamicPorts();
+
+    /**
+     * @brief Get the number of input ports
+     * @return Number of input connectors
+     */
+    int inputPortCount() const;
+
+    /**
+     * @brief Get the number of connected input ports
+     * @return Number of input connectors with wire connections
+     */
+    int connectedInputPortCount() const;
 
     /**
      * @brief Serialize item to GPDS container
@@ -182,14 +373,29 @@ private:
      */
     void updateLabelPosition();
 
+    /**
+     * @brief Get background color for primitive type
+     * @return Background color
+     */
+    QColor getBackgroundColor() const;
+
+    /**
+     * @brief Get border color for primitive type
+     * @return Border color
+     */
+    QColor getBorderColor() const;
+
     PrimitiveType                             m_primitiveType; /**< Primitive type */
     QString                                   m_primitiveName; /**< Display name */
     PrcParams                                 m_params;        /**< Type-safe parameters */
     std::shared_ptr<QSchematic::Items::Label> m_label;         /**< Name label */
     QList<std::shared_ptr<PrcConnector>>      m_connectors;    /**< Connector list */
 
-    static constexpr qreal WIDTH        = 120.0; /**< Primitive width */
-    static constexpr qreal HEIGHT       = 80.0;  /**< Primitive height */
+    /* Dimension constants */
+    static constexpr qreal CTRL_WIDTH   = 200.0; /**< Controller width */
+    static constexpr qreal CTRL_HEIGHT  = 150.0; /**< Controller height */
+    static constexpr qreal ITEM_WIDTH   = 100.0; /**< Input/target width */
+    static constexpr qreal ITEM_HEIGHT  = 60.0;  /**< Input/target height */
     static constexpr qreal LABEL_HEIGHT = 20.0;  /**< Label area height */
 };
 

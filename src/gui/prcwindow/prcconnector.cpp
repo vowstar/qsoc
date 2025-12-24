@@ -9,10 +9,12 @@
 #define SIZE (_settings.gridSize / 3) // Make connectors smaller
 #define RECT (QRectF(-SIZE, -SIZE, 2 * SIZE, 2 * SIZE))
 
-// Unified color scheme matching schematicwindow
-const QColor CONNECTOR_COLOR_FILL   = QColor(132, 0, 0); // Deep red fill
-const QColor CONNECTOR_COLOR_BORDER = QColor(132, 0, 0); // Deep red border
-const qreal  CONNECTOR_PEN_WIDTH    = 1.5;
+/* Unified color scheme matching schematicwindow */
+const QColor CONNECTOR_COLOR_FILL       = QColor(132, 0, 0);     /* Deep red fill */
+const QColor CONNECTOR_COLOR_BORDER     = QColor(132, 0, 0);     /* Deep red border */
+const QColor CONNECTOR_COLOR_AVAILABLE  = QColor(180, 180, 180); /* Gray for available */
+const qreal  CONNECTOR_PEN_WIDTH        = 1.5;
+const qreal  CONNECTOR_PEN_WIDTH_DASHED = 1.0;
 
 using namespace PrcLibrary;
 
@@ -82,37 +84,59 @@ void PrcConnector::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
     Q_UNUSED(option)
     Q_UNUSED(widget)
 
-    // Update position based on current location before painting
+    /* Update position based on current location before painting */
     updatePositionFromLocation();
 
-    // Draw the bounding rect if debug mode is enabled
+    /* Draw the bounding rect if debug mode is enabled */
     if (_settings.debug) {
         painter->setPen(Qt::NoPen);
         painter->setBrush(QBrush(Qt::red));
         painter->drawRect(boundingRect());
     }
 
-    // Unified colors for all PRC connectors
-    QColor fillColor   = CONNECTOR_COLOR_FILL;
-    QColor borderColor = CONNECTOR_COLOR_BORDER;
-    qreal  penWidth    = CONNECTOR_PEN_WIDTH;
+    /* Check if this connector has a wire connected */
+    bool connected = hasConnection();
 
-    // Body pen
+    /* Choose colors and style based on connection state */
+    QColor       fillColor;
+    QColor       borderColor;
+    qreal        penWidth;
+    Qt::PenStyle penStyle;
+
+    if (connected) {
+        /* Connected: solid fill, solid border */
+        fillColor   = CONNECTOR_COLOR_FILL;
+        borderColor = CONNECTOR_COLOR_BORDER;
+        penWidth    = CONNECTOR_PEN_WIDTH;
+        penStyle    = Qt::SolidLine;
+    } else {
+        /* Available: no fill, dashed border (gray) */
+        fillColor   = Qt::transparent;
+        borderColor = CONNECTOR_COLOR_AVAILABLE;
+        penWidth    = CONNECTOR_PEN_WIDTH_DASHED;
+        penStyle    = Qt::DashLine;
+    }
+
+    /* Body pen */
     QPen bodyPen;
     bodyPen.setWidthF(penWidth);
-    bodyPen.setStyle(Qt::SolidLine);
+    bodyPen.setStyle(penStyle);
     bodyPen.setColor(borderColor);
 
-    // Body brush
+    /* Body brush */
     QBrush bodyBrush;
-    bodyBrush.setStyle(Qt::SolidPattern);
-    bodyBrush.setColor(fillColor);
+    if (connected) {
+        bodyBrush.setStyle(Qt::SolidPattern);
+        bodyBrush.setColor(fillColor);
+    } else {
+        bodyBrush.setStyle(Qt::NoBrush);
+    }
 
-    // Draw the connector
+    /* Draw the connector */
     painter->setPen(bodyPen);
     painter->setBrush(bodyBrush);
 
-    // Create shape (simple circle for all PRC connectors)
+    /* Create shape (simple rectangle for all PRC connectors) */
     QPolygonF shape = createShape();
     painter->drawPolygon(shape);
 }

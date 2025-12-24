@@ -5,21 +5,25 @@
 #define PRCCONFIGDIALOG_H
 
 #include "prcprimitiveitem.h"
+#include "prcscene.h"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QSpinBox>
+#include <QTabWidget>
 
 namespace PrcLibrary {
 
 /**
  * @brief Dialog for configuring PRC primitive properties
- * @details Provides a form-based interface to edit primitive-specific configuration
- *          parameters such as clock frequencies, reset levels, and power domains.
- *          Uses type-appropriate widgets (QSpinBox for integers, QCheckBox for booleans).
+ * @details Provides dynamic form-based interface to edit primitive-specific
+ *          configuration parameters matching soc_net format.
  */
 class PrcConfigDialog : public QDialog
 {
@@ -29,41 +33,177 @@ public:
     /**
      * @brief Construct a configuration dialog for the given primitive
      * @param[in] item The primitive item to configure
+     * @param[in] scene The PRC scene (for controller management)
      * @param[in] parent Parent widget
      */
-    explicit PrcConfigDialog(PrcPrimitiveItem *item, QWidget *parent = nullptr);
+    explicit PrcConfigDialog(PrcPrimitiveItem *item, PrcScene *scene, QWidget *parent = nullptr);
 
     /**
      * @brief Apply configured values to the item
      */
     void applyConfiguration();
 
-private:
+private slots:
     /**
-     * @brief Populate form with type-specific configuration fields
+     * @brief Handle controller combo box selection change
+     * @param[in] index Selected index
      */
-    void createClockSourceFields();
-    void createClockTargetFields();
-    void createResetSourceFields();
-    void createResetTargetFields();
-    void createPowerDomainFields();
+    void onControllerChanged(int index);
+
+    /**
+     * @brief Handle "Edit Controller..." button click
+     */
+    void onEditControllerClicked();
+
+private:
+    /* Form creation methods */
+    void createClockInputForm();
+    void createClockTargetForm();
+    void createResetSourceForm();
+    void createResetTargetForm();
+    void createPowerDomainForm();
+
+    /**
+     * @brief Create controller selection group
+     */
+    void createControllerGroup();
+
+    /**
+     * @brief Populate controller combo box with existing controllers
+     */
+    void populateControllerCombo();
 
     PrcPrimitiveItem *item_;       /**< The primitive item being configured */
-    QFormLayout      *formLayout_; /**< Form layout for configuration fields */
+    PrcScene         *scene_;      /**< PRC scene for controller management */
+    QVBoxLayout      *mainLayout_; /**< Main dialog layout */
     QLineEdit        *nameEdit_;   /**< Primitive name editor */
 
-    /* Type-specific widgets */
-    QDoubleSpinBox *freqSpin_;
-    QDoubleSpinBox *phaseSpin_;
-    QSpinBox       *dividerSpin_;
-    QCheckBox      *enableGateCheck_;
-    QCheckBox      *activeLowCheck_;
-    QDoubleSpinBox *durationSpin_;
-    QCheckBox      *synchronousCheck_;
-    QSpinBox       *stagesSpin_;
-    QDoubleSpinBox *voltageSpin_;
-    QCheckBox      *isolationCheck_;
-    QCheckBox      *retentionCheck_;
+    /* Controller selection widgets */
+    QComboBox   *controllerCombo_;   /**< Controller selection combo */
+    QPushButton *editControllerBtn_; /**< Edit controller button */
+
+    /* Clock Input widgets */
+    QLineEdit *inputFreqEdit_;
+
+    /* Clock Target widgets */
+    QLineEdit *targetFreqEdit_;
+    QCheckBox *targetMuxCheck_;
+    QLineEdit *targetSelectEdit_;
+    QLineEdit *targetResetEdit_;
+    QLineEdit *targetTestClockEdit_;
+    QCheckBox *targetIcgCheck_;
+    QLineEdit *targetIcgEnableEdit_;
+    QComboBox *targetIcgPolarityCombo_;
+    QCheckBox *targetIcgClockOnResetCheck_;
+    QCheckBox *targetDivCheck_;
+    QSpinBox  *targetDivDefaultSpin_;
+    QLineEdit *targetDivValueEdit_;
+    QSpinBox  *targetDivWidthSpin_;
+    QLineEdit *targetDivResetEdit_;
+    QCheckBox *targetDivClockOnResetCheck_;
+    QCheckBox *targetInvCheck_;
+
+    /* Reset Source widgets */
+    QComboBox *rstSrcActiveCombo_;
+
+    /* Reset Target widgets */
+    QComboBox *rstTgtActiveCombo_;
+    QCheckBox *rstTgtAsyncCheck_;
+    QLineEdit *rstTgtAsyncClockEdit_;
+    QSpinBox  *rstTgtAsyncStageSpin_;
+
+    /* Power Domain widgets */
+    QSpinBox  *pwrDomVoltageSpin_;
+    QLineEdit *pwrDomPgoodEdit_;
+    QSpinBox  *pwrDomWaitDepSpin_;
+    QSpinBox  *pwrDomSettleOnSpin_;
+    QSpinBox  *pwrDomSettleOffSpin_;
+};
+
+/**
+ * @brief Dialog for configuring clock link (wire) operations
+ * @details Provides form-based interface to edit link-level ICG, DIV, INV,
+ *          and STA guide parameters for connections between inputs and targets.
+ */
+class PrcLinkConfigDialog : public QDialog
+{
+    Q_OBJECT
+
+public:
+    /**
+     * @brief Construct a link configuration dialog
+     * @param[in] sourceName Name of the source (input) this link connects from
+     * @param[in] targetName Name of the target this link connects to
+     * @param[in] linkParams Current link parameters
+     * @param[in] parent Parent widget
+     */
+    explicit PrcLinkConfigDialog(
+        const QString         &sourceName,
+        const QString         &targetName,
+        const ClockLinkParams &linkParams,
+        QWidget               *parent = nullptr);
+
+    /**
+     * @brief Get configured link parameters
+     * @return Configured ClockLinkParams
+     */
+    ClockLinkParams getLinkParams() const;
+
+private:
+    /* Form creation */
+    void createForm();
+
+    /* Helper methods */
+    QGroupBox *createSTAGuideGroup(const QString &title, bool *configured);
+    QGroupBox *createICGGroup();
+    QGroupBox *createDIVGroup();
+    QGroupBox *createINVGroup();
+
+    QString         sourceName_; /**< Source input name */
+    QString         targetName_; /**< Target output name */
+    ClockLinkParams linkParams_; /**< Link parameters being edited */
+    QVBoxLayout    *mainLayout_; /**< Main dialog layout */
+
+    /* ICG widgets */
+    QGroupBox *icgGroup_;
+    QLineEdit *icgEnableEdit_;
+    QComboBox *icgPolarityCombo_;
+    QLineEdit *icgTestEnableEdit_;
+    QLineEdit *icgResetEdit_;
+    QCheckBox *icgClockOnResetCheck_;
+    QGroupBox *icgStaGuideGroup_;
+    QLineEdit *icgStaCellEdit_;
+    QLineEdit *icgStaInEdit_;
+    QLineEdit *icgStaOutEdit_;
+    QLineEdit *icgStaInstanceEdit_;
+
+    /* DIV widgets */
+    QGroupBox *divGroup_;
+    QSpinBox  *divDefaultSpin_;
+    QLineEdit *divValueEdit_;
+    QSpinBox  *divWidthSpin_;
+    QLineEdit *divResetEdit_;
+    QCheckBox *divClockOnResetCheck_;
+    QGroupBox *divStaGuideGroup_;
+    QLineEdit *divStaCellEdit_;
+    QLineEdit *divStaInEdit_;
+    QLineEdit *divStaOutEdit_;
+    QLineEdit *divStaInstanceEdit_;
+
+    /* INV widgets */
+    QGroupBox *invGroup_;
+    QGroupBox *invStaGuideGroup_;
+    QLineEdit *invStaCellEdit_;
+    QLineEdit *invStaInEdit_;
+    QLineEdit *invStaOutEdit_;
+    QLineEdit *invStaInstanceEdit_;
+
+    /* Link-level STA guide widgets */
+    QGroupBox *linkStaGuideGroup_;
+    QLineEdit *linkStaCellEdit_;
+    QLineEdit *linkStaInEdit_;
+    QLineEdit *linkStaOutEdit_;
+    QLineEdit *linkStaInstanceEdit_;
 };
 
 } // namespace PrcLibrary
