@@ -29,6 +29,7 @@ PrcConnector::PrcConnector(
     , m_position(position)
 {
     label()->setVisible(true);
+    label()->setOpacity(0.4); /* Default: unconnected (faded) */
     setForceTextDirection(false);
 }
 
@@ -195,6 +196,12 @@ void PrcConnector::setConnected(bool connected)
 {
     if (m_isConnected != connected) {
         m_isConnected = connected;
+
+        /* Fade label for unconnected ports */
+        if (label()) {
+            label()->setOpacity(connected ? 1.0 : 0.4);
+        }
+
         update();
     }
 }
