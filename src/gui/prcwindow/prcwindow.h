@@ -187,12 +187,6 @@ private:
      */
     void initializePrcLibrary();
 
-    /**
-     * @brief Handle primitive selection from library
-     * @param[in] primitiveType Type of primitive to create
-     */
-    void onPrimitiveSelected(PrcLibrary::PrimitiveType primitiveType);
-
     /* File Management Helpers */
 
     /**

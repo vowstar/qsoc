@@ -130,13 +130,6 @@ void PrcWindow::initializePrcLibrary()
     /* Create the PRC library widget */
     prcLibraryWidget = new PrcLibrary::PrcLibraryWidget(this);
 
-    /* Connect signals */
-    connect(
-        prcLibraryWidget,
-        &PrcLibrary::PrcLibraryWidget::primitiveSelected,
-        this,
-        &PrcWindow::onPrimitiveSelected);
-
     /* Add the PRC library widget to the dock widget */
     QWidget *dockContents = ui->dockWidgetPrcList->widget();
     if (!dockContents) {
@@ -148,53 +141,6 @@ void PrcWindow::initializePrcLibrary()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(prcLibraryWidget);
     dockContents->setLayout(layout);
-}
-
-/**
- * @brief Handle primitive selection from library
- * @param[in] primitiveType Type of primitive to create
- */
-void PrcWindow::onPrimitiveSelected(PrcLibrary::PrimitiveType primitiveType)
-{
-    /* Create unique name for the primitive */
-    QString prefix;
-    switch (primitiveType) {
-    /* Clock Domain */
-    case PrcLibrary::ClockInput:
-        prefix = "clk_";
-        break;
-    case PrcLibrary::ClockTarget:
-        prefix = "clk_";
-        break;
-
-    /* Reset Domain */
-    case PrcLibrary::ResetSource:
-        prefix = "rst_";
-        break;
-    case PrcLibrary::ResetTarget:
-        prefix = "rst_";
-        break;
-
-    /* Power Domain */
-    case PrcLibrary::PowerDomain:
-        prefix = "pd_";
-        break;
-    }
-
-    QString uniqueName = generateUniqueControllerName(scene, prefix);
-
-    /* Create the primitive item */
-    auto item = std::make_shared<PrcLibrary::PrcPrimitiveItem>(primitiveType, uniqueName);
-
-    /* Place at center of current view */
-    QPointF viewCenter = ui->prcView->mapToScene(ui->prcView->viewport()->rect().center());
-    item->setPos(viewCenter);
-
-    /* Add to scene using undo command */
-    scene.undoStack()->push(new QSchematic::Commands::ItemAdd(&scene, item));
-
-    /* Show configuration dialog */
-    handlePrcItemDoubleClick(item.get());
 }
 
 /**
@@ -234,12 +180,18 @@ QString PrcWindow::generateUniqueControllerName(const QSchematic::Scene &scene, 
 }
 
 /**
- * @brief Handle item added to scene
+ * @brief Handle item added to scene (drag-drop from library)
  * @param[in] item Added item
  */
 void PrcWindow::onItemAdded(std::shared_ptr<QSchematic::Items::Item> item)
 {
-    Q_UNUSED(item);
+    /* Check if it's a new PrcPrimitiveItem that needs configuration */
+    auto prcItem = std::dynamic_pointer_cast<PrcLibrary::PrcPrimitiveItem>(item);
+    if (prcItem && prcItem->needsConfiguration()) {
+        /* Clear the flag and show configuration dialog */
+        prcItem->setNeedsConfiguration(false);
+        handlePrcItemDoubleClick(prcItem.get());
+    }
 }
 
 /**

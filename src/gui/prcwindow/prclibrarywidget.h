@@ -16,10 +16,38 @@ class Scene;
 namespace PrcLibrary {
 
 /**
+ * @brief Custom list widget with drag-and-drop support for PRC primitives
+ */
+class PrcLibraryListWidget : public QListWidget
+{
+    Q_OBJECT
+
+public:
+    explicit PrcLibraryListWidget(QWidget *parent = nullptr);
+    ~PrcLibraryListWidget() override = default;
+
+    /**
+     * @brief Set schematic scene for unique name generation
+     * @param[in] scene Target schematic scene
+     */
+    void setScene(QSchematic::Scene *scene);
+
+protected:
+    /**
+     * @brief Start drag operation with PrcPrimitiveItem preview
+     * @param[in] supportedActions Supported drop actions
+     */
+    void startDrag(Qt::DropActions supportedActions) override;
+
+private:
+    QSchematic::Scene *scene_; /**< Target schematic scene */
+};
+
+/**
  * @brief Library widget for PRC primitives with drag-and-drop support
  *
  * @details Provides a list view of available primitive types that can be
- *          selected and placed onto the schematic scene.
+ *          dragged and dropped onto the schematic scene.
  */
 class PrcLibraryWidget : public QWidget
 {
@@ -35,28 +63,14 @@ public:
      */
     void setScene(QSchematic::Scene *scene);
 
-signals:
-    /**
-     * @brief Emitted when primitive type selected for placement
-     * @param primitiveType Selected primitive type
-     */
-    void primitiveSelected(PrimitiveType primitiveType);
-
-private slots:
-    /**
-     * @brief Handle list item click
-     * @param[in] item Clicked list widget item
-     */
-    void onItemClicked(QListWidgetItem *item);
-
 private:
     /**
      * @brief Initialize library with primitive types
      */
     void initializeLibrary();
 
-    QListWidget       *listWidget_; /**< Primitive list view */
-    QSchematic::Scene *scene_;      /**< Target schematic scene */
+    PrcLibraryListWidget *listWidget_; /**< Primitive list view */
+    QSchematic::Scene    *scene_;      /**< Target schematic scene */
 };
 
 } // namespace PrcLibrary
