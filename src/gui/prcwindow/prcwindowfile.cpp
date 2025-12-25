@@ -15,6 +15,7 @@
 #include <QPrintDialog>
 #include <QPrinter>
 #include <QStandardPaths>
+#include <QTimer>
 
 #include <gpds/archiver_yaml.hpp>
 #include <gpds/serialize.hpp>
@@ -132,6 +133,9 @@ void PrcWindow::openFile(const QString &filePath)
         m_currentFilePath = filePath;
         scene.undoStack()->setClean();
         updateWindowTitle();
+
+        // Update connector states based on wire connections
+        updateAllDynamicPorts();
 
     } catch (const std::bad_optional_access &e) {
         QMessageBox::critical(
