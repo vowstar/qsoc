@@ -324,6 +324,18 @@ public:
     std::shared_ptr<QSchematic::Items::Item> deepCopy() const override;
 
     /**
+     * @brief Check if item needs initial configuration dialog
+     * @return true if newly created via drag-drop and not yet configured
+     */
+    bool needsConfiguration() const;
+
+    /**
+     * @brief Set whether item needs initial configuration
+     * @param[in] needs true if needs configuration dialog
+     */
+    void setNeedsConfiguration(bool needs);
+
+    /**
      * @brief Update dynamic input ports based on connection state
      * @details For ClockTarget/ResetTarget, ensures there's always one
      *          available (unconnected) input port. Called when netlist changes.
@@ -385,11 +397,12 @@ private:
      */
     QColor getBorderColor() const;
 
-    PrimitiveType                             m_primitiveType; /**< Primitive type */
-    QString                                   m_primitiveName; /**< Display name */
-    PrcParams                                 m_params;        /**< Type-safe parameters */
-    std::shared_ptr<QSchematic::Items::Label> m_label;         /**< Name label */
-    QList<std::shared_ptr<PrcConnector>>      m_connectors;    /**< Connector list */
+    PrimitiveType                             m_primitiveType;        /**< Primitive type */
+    QString                                   m_primitiveName;        /**< Display name */
+    PrcParams                                 m_params;               /**< Type-safe parameters */
+    std::shared_ptr<QSchematic::Items::Label> m_label;                /**< Name label */
+    QList<std::shared_ptr<PrcConnector>>      m_connectors;           /**< Connector list */
+    bool                                      m_needsConfiguration{}; /**< Needs config dialog */
 
     /* Dimension constants */
     static constexpr qreal CTRL_WIDTH   = 200.0; /**< Controller width */

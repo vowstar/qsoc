@@ -133,6 +133,16 @@ void PrcPrimitiveItem::setParams(const PrcParams &params)
     update();
 }
 
+bool PrcPrimitiveItem::needsConfiguration() const
+{
+    return m_needsConfiguration;
+}
+
+void PrcPrimitiveItem::setNeedsConfiguration(bool needs)
+{
+    m_needsConfiguration = needs;
+}
+
 /* Deep Copy */
 std::shared_ptr<QSchematic::Items::Item> PrcPrimitiveItem::deepCopy() const
 {
@@ -140,6 +150,7 @@ std::shared_ptr<QSchematic::Items::Item> PrcPrimitiveItem::deepCopy() const
     copy->setParams(m_params);
     copy->setPos(pos());
     copy->setRotation(rotation());
+    copy->setNeedsConfiguration(m_needsConfiguration);
     return copy;
 }
 
