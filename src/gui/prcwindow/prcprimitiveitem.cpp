@@ -57,7 +57,7 @@ PrcPrimitiveItem::PrcPrimitiveItem(
 
     setSize(ITEM_WIDTH, ITEM_HEIGHT);
 
-    setAllowMouseResize(false);
+    setAllowMouseResize(true);
     setAllowMouseRotate(false);
     setConnectorsMovable(true);
     setConnectorsSnapPolicy(QSchematic::Items::Connector::NodeSizerectOutline);
@@ -66,6 +66,9 @@ PrcPrimitiveItem::PrcPrimitiveItem(
     m_label = std::make_shared<QSchematic::Items::Label>(QSchematic::Items::Item::LabelType, this);
     m_label->setText(m_primitiveName);
     updateLabelPosition();
+
+    /* Connect size change signal to update label position */
+    connect(this, &QSchematic::Items::Node::sizeChanged, this, &PrcPrimitiveItem::updateLabelPosition);
 
     createConnectors();
 }
@@ -582,7 +585,7 @@ void PrcPrimitiveItem::paint(
         painter->drawRect(boundingRect());
     }
 
-    QRectF rect = QRectF(0, 0, ITEM_WIDTH, ITEM_HEIGHT);
+    QRectF rect = QRectF(0, 0, size().width(), size().height());
 
     /* Draw body */
     QPen   bodyPen(getBorderColor(), 1.5);
@@ -597,7 +600,12 @@ void PrcPrimitiveItem::paint(
     font.setPointSize(8);
     painter->setFont(font);
     painter->setPen(getBorderColor().darker(120));
-    painter->drawText(QRectF(0, 5, ITEM_WIDTH, 15), Qt::AlignCenter, primitiveTypeName());
+    painter->drawText(QRectF(0, 5, size().width(), 15), Qt::AlignCenter, primitiveTypeName());
+
+    /* Resize handles when selected */
+    if (isSelected() && allowMouseResize()) {
+        paintResizeHandles(*painter);
+    }
 }
 
 /* Connectors */
@@ -685,7 +693,7 @@ void PrcPrimitiveItem::updateLabelPosition()
 {
     if (m_label) {
         qreal labelWidth = m_label->boundingRect().width();
-        m_label->setPos((ITEM_WIDTH - labelWidth) / 2, ITEM_HEIGHT - LABEL_HEIGHT);
+        m_label->setPos((size().width() - labelWidth) / 2, size().height() - LABEL_HEIGHT);
     }
 }
 
@@ -733,7 +741,14 @@ void PrcPrimitiveItem::updateDynamicPorts()
     /* Ensure there's always at least one available (unconnected) input port */
     if (connectedCount >= totalInputs && totalInputs > 0) {
         /* All input ports are connected - add a new one */
-        int    newIndex   = totalInputs;
+        int newIndex = totalInputs;
+
+        /* Calculate required height for all ports */
+        qreal requiredHeight = ITEM_HEIGHT + newIndex * gridSize;
+        if (requiredHeight > size().height()) {
+            setSize(size().width(), requiredHeight);
+        }
+
         int    yOffset    = newIndex * gridSize; /* Stacked vertically */
         QPoint gridPosNew = QPoint(0, static_cast<int>((ITEM_HEIGHT / 2 + yOffset) / gridSize));
 
@@ -768,5 +783,16 @@ void PrcPrimitiveItem::updateDynamicPorts()
         }
     }
 
+    /* Shrink height if ports were removed, but keep minimum height */
+    qreal minRequiredHeight = ITEM_HEIGHT + (totalInputs - 1) * gridSize;
+    if (minRequiredHeight < ITEM_HEIGHT) {
+        minRequiredHeight = ITEM_HEIGHT;
+    }
+    if (size().height() > minRequiredHeight + gridSize) {
+        setSize(size().width(), minRequiredHeight);
+    }
+
+    /* Update label position after size change */
+    updateLabelPosition();
     update();
 }
