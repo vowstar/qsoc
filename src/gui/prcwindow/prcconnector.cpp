@@ -94,8 +94,8 @@ void PrcConnector::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
         painter->drawRect(boundingRect());
     }
 
-    /* Check if this connector has a wire connected */
-    bool connected = hasConnection();
+    /* Use self-maintained connection state (more reliable than hasConnection after file load) */
+    bool connected = m_isConnected;
 
     /* Choose colors and style based on connection state */
     QColor       fillColor;
@@ -189,4 +189,17 @@ QPolygonF PrcConnector::createShape() const
           << QPointF(-SIZE, SIZE); // Bottom left
 
     return shape;
+}
+
+void PrcConnector::setConnected(bool connected)
+{
+    if (m_isConnected != connected) {
+        m_isConnected = connected;
+        update();
+    }
+}
+
+bool PrcConnector::isConnected() const
+{
+    return m_isConnected;
 }

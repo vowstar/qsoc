@@ -717,7 +717,7 @@ int PrcPrimitiveItem::connectedInputPortCount() const
     for (const auto &conn : m_connectors) {
         QString connText = conn->text();
         if (connText == "in" || connText.startsWith("in_") || connText == "dep") {
-            if (conn->hasConnection()) {
+            if (conn->isConnected()) {
                 ++count;
             }
         }
@@ -769,7 +769,7 @@ void PrcPrimitiveItem::updateDynamicPorts()
         for (int i = m_connectors.size() - 1; i >= 0; --i) {
             auto   &conn     = m_connectors[i];
             QString connText = conn->text();
-            if ((connText == "in" || connText.startsWith("in_")) && !conn->hasConnection()) {
+            if ((connText == "in" || connText.startsWith("in_")) && !conn->isConnected()) {
                 /* Check if this leaves at least one available port */
                 int availableAfterRemoval = (totalInputs - connectedCount) - 1;
                 if (availableAfterRemoval >= 1) {

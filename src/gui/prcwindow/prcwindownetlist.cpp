@@ -927,6 +927,52 @@ QSet<QString> PrcWindow::getConnectedSources(const QString &targetName) const
 /* Dynamic Port Update */
 void PrcWindow::updateAllDynamicPorts()
 {
+    /* Build set of connected connector positions from wire analysis */
+    QSet<QPair<QString, QString>> connectedPorts; /* (primitiveName, portName) */
+
+    /* Analyze all wire connections using net points (scene coordinates) */
+    for (const auto &net : scene.wire_manager()->nets()) {
+        if (!net) {
+            continue;
+        }
+
+        /* Get all points in this net (scene coordinates) */
+        for (const auto &point : net->points()) {
+            QPointF scenePoint = point.toPointF();
+
+            /* Find connector at this point */
+            for (const auto &node : scene.nodes()) {
+                auto prcItem = std::dynamic_pointer_cast<PrcLibrary::PrcPrimitiveItem>(node);
+                if (!prcItem) {
+                    continue;
+                }
+                for (const auto &conn : prcItem->connectors()) {
+                    QPointF connPos = conn->scenePos();
+                    if (qAbs(connPos.x() - scenePoint.x()) < 5
+                        && qAbs(connPos.y() - scenePoint.y()) < 5) {
+                        connectedPorts.insert({prcItem->primitiveName(), conn->text()});
+                    }
+                }
+            }
+        }
+    }
+
+    /* First pass: set connection state for all existing connectors */
+    for (const auto &node : scene.nodes()) {
+        auto prcItem = std::dynamic_pointer_cast<PrcLibrary::PrcPrimitiveItem>(node);
+        if (prcItem) {
+            for (const auto &conn : prcItem->connectors()) {
+                auto *prcConn = dynamic_cast<PrcLibrary::PrcConnector *>(conn.get());
+                if (prcConn) {
+                    bool isConnected = connectedPorts.contains(
+                        {prcItem->primitiveName(), conn->text()});
+                    prcConn->setConnected(isConnected);
+                }
+            }
+        }
+    }
+
+    /* Second pass: update dynamic ports (needs connection state set first) */
     for (const auto &node : scene.nodes()) {
         auto prcItem = std::dynamic_pointer_cast<PrcLibrary::PrcPrimitiveItem>(node);
         if (prcItem) {

@@ -89,6 +89,18 @@ public:
      */
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
 
+    /**
+     * @brief Set connection state (for visual rendering)
+     * @param[in] connected true if wire is connected
+     */
+    void setConnected(bool connected);
+
+    /**
+     * @brief Check if connector is marked as connected
+     * @return true if connected
+     */
+    bool isConnected() const;
+
 private:
     /**
      * @brief Update position from current location
@@ -101,8 +113,9 @@ private:
      */
     QPolygonF createShape() const;
 
-    PortType m_portType; /**< Port type */
-    Position m_position; /**< Connector position */
+    PortType m_portType;      /**< Port type */
+    Position m_position;      /**< Connector position */
+    bool     m_isConnected{}; /**< Connection state for rendering */
 };
 
 } // namespace PrcLibrary
