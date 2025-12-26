@@ -17,7 +17,7 @@ using namespace PrcLibrary;
 
 PrcLibraryListWidget::PrcLibraryListWidget(QWidget *parent)
     : QListWidget(parent)
-    , scene_(nullptr)
+    , scene(nullptr)
 {
     setDragDropMode(QAbstractItemView::DragOnly);
     setDragEnabled(true);
@@ -26,7 +26,7 @@ PrcLibraryListWidget::PrcLibraryListWidget(QWidget *parent)
 
 void PrcLibraryListWidget::setScene(QSchematic::Scene *scene)
 {
-    scene_ = scene;
+    this->scene = scene;
 }
 
 void PrcLibraryListWidget::startDrag(Qt::DropActions supportedActions)
@@ -58,9 +58,9 @@ void PrcLibraryListWidget::startDrag(Qt::DropActions supportedActions)
 
     /* Generate unique name if scene is available */
     QString uniqueName = prefix + "0";
-    if (scene_) {
+    if (scene) {
         QSet<QString> existingNames;
-        for (const auto &node : scene_->nodes()) {
+        for (const auto &node : scene->nodes()) {
             auto prcItem = std::dynamic_pointer_cast<PrcPrimitiveItem>(node);
             if (prcItem) {
                 existingNames.insert(prcItem->primitiveName());
@@ -95,18 +95,18 @@ void PrcLibraryListWidget::startDrag(Qt::DropActions supportedActions)
 
 PrcLibraryWidget::PrcLibraryWidget(QWidget *parent)
     : QWidget(parent)
-    , listWidget_(nullptr)
-    , scene_(nullptr)
+    , listWidget(nullptr)
+    , scene(nullptr)
 {
-    listWidget_ = new PrcLibraryListWidget(this);
-    listWidget_->setViewMode(QListView::ListMode);
-    listWidget_->setResizeMode(QListView::Adjust);
-    listWidget_->setIconSize(QSize(32, 32));
-    listWidget_->setSpacing(2);
+    listWidget = new PrcLibraryListWidget(this);
+    listWidget->setViewMode(QListView::ListMode);
+    listWidget->setResizeMode(QListView::Adjust);
+    listWidget->setIconSize(QSize(32, 32));
+    listWidget->setSpacing(2);
 
     /* Layout */
     auto *layout = new QVBoxLayout(this);
-    layout->addWidget(listWidget_);
+    layout->addWidget(listWidget);
     layout->setContentsMargins(0, 0, 0, 0);
     setLayout(layout);
 
@@ -115,8 +115,8 @@ PrcLibraryWidget::PrcLibraryWidget(QWidget *parent)
 
 void PrcLibraryWidget::setScene(QSchematic::Scene *scene)
 {
-    scene_ = scene;
-    listWidget_->setScene(scene);
+    this->scene = scene;
+    listWidget->setScene(scene);
 }
 
 void PrcLibraryWidget::initializeLibrary()
@@ -160,6 +160,6 @@ void PrcLibraryWidget::initializeLibrary()
         pixmap.fill(prim.color);
         item->setIcon(QIcon(pixmap));
 
-        listWidget_->addItem(item);
+        listWidget->addItem(item);
     }
 }

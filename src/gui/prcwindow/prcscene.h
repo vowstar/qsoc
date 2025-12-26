@@ -159,7 +159,7 @@ public:
      * @brief Get last used STA Guide cell name (session-level)
      * @return Last used cell name, empty if not set
      */
-    QString lastStaGuideCell() const;
+    QString getLastStaGuideCell() const;
 
     /**
      * @brief Set last used STA Guide cell name (session-level)
@@ -235,12 +235,12 @@ private:
         QPainter *painter, const QRectF &bounds, const QString &name, const QColor &color) const;
 
     /* Controller definition storage */
-    QMap<QString, ClockControllerDef> clockControllers_;
-    QMap<QString, ResetControllerDef> resetControllers_;
-    QMap<QString, PowerControllerDef> powerControllers_;
+    QMap<QString, ClockControllerDef> clockControllers;
+    QMap<QString, ResetControllerDef> resetControllers;
+    QMap<QString, PowerControllerDef> powerControllers;
 
     /* Session-level memory (not serialized) */
-    QString lastStaGuideCell_;
+    QString lastStaGuideCell;
 
     /* Drawing constants */
     static constexpr qreal FRAME_PADDING = 20.0; /**< Padding around elements */

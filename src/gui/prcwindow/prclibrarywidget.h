@@ -40,7 +40,7 @@ protected:
     void startDrag(Qt::DropActions supportedActions) override;
 
 private:
-    QSchematic::Scene *scene_; /**< Target schematic scene */
+    QSchematic::Scene *scene; /**< Target schematic scene */
 };
 
 /**
@@ -69,8 +69,8 @@ private:
      */
     void initializeLibrary();
 
-    PrcLibraryListWidget *listWidget_; /**< Primitive list view */
-    QSchematic::Scene    *scene_;      /**< Target schematic scene */
+    PrcLibraryListWidget *listWidget; /**< Primitive list view */
+    QSchematic::Scene    *scene;      /**< Target schematic scene */
 };
 
 } // namespace PrcLibrary

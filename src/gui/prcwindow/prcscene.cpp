@@ -20,100 +20,100 @@ PrcScene::PrcScene(QObject *parent)
 
 void PrcScene::setClockController(const QString &name, const ClockControllerDef &def)
 {
-    clockControllers_[name] = def;
+    clockControllers[name] = def;
     update();
 }
 
 ClockControllerDef PrcScene::clockController(const QString &name) const
 {
-    return clockControllers_.value(name, ClockControllerDef{name});
+    return clockControllers.value(name, ClockControllerDef{name});
 }
 
 bool PrcScene::hasClockController(const QString &name) const
 {
-    return clockControllers_.contains(name);
+    return clockControllers.contains(name);
 }
 
 void PrcScene::removeClockController(const QString &name)
 {
-    clockControllers_.remove(name);
+    clockControllers.remove(name);
     update();
 }
 
 QStringList PrcScene::clockControllerNames() const
 {
-    return clockControllers_.keys();
+    return clockControllers.keys();
 }
 
 /* Reset Controller Management */
 
 void PrcScene::setResetController(const QString &name, const ResetControllerDef &def)
 {
-    resetControllers_[name] = def;
+    resetControllers[name] = def;
     update();
 }
 
 ResetControllerDef PrcScene::resetController(const QString &name) const
 {
-    return resetControllers_.value(name, ResetControllerDef{name});
+    return resetControllers.value(name, ResetControllerDef{name});
 }
 
 bool PrcScene::hasResetController(const QString &name) const
 {
-    return resetControllers_.contains(name);
+    return resetControllers.contains(name);
 }
 
 void PrcScene::removeResetController(const QString &name)
 {
-    resetControllers_.remove(name);
+    resetControllers.remove(name);
     update();
 }
 
 QStringList PrcScene::resetControllerNames() const
 {
-    return resetControllers_.keys();
+    return resetControllers.keys();
 }
 
 /* Power Controller Management */
 
 void PrcScene::setPowerController(const QString &name, const PowerControllerDef &def)
 {
-    powerControllers_[name] = def;
+    powerControllers[name] = def;
     update();
 }
 
 PowerControllerDef PrcScene::powerController(const QString &name) const
 {
-    return powerControllers_.value(name, PowerControllerDef{name});
+    return powerControllers.value(name, PowerControllerDef{name});
 }
 
 bool PrcScene::hasPowerController(const QString &name) const
 {
-    return powerControllers_.contains(name);
+    return powerControllers.contains(name);
 }
 
 void PrcScene::removePowerController(const QString &name)
 {
-    powerControllers_.remove(name);
+    powerControllers.remove(name);
     update();
 }
 
 QStringList PrcScene::powerControllerNames() const
 {
-    return powerControllers_.keys();
+    return powerControllers.keys();
 }
 
 /* Session-level STA Guide Cell memory */
 
-QString PrcScene::lastStaGuideCell() const
+QString PrcScene::getLastStaGuideCell() const
 {
-    return lastStaGuideCell_;
+    return lastStaGuideCell;
 }
 
 void PrcScene::setLastStaGuideCell(const QString &cell)
 {
     if (!cell.isEmpty()) {
-        lastStaGuideCell_ = cell;
+        lastStaGuideCell = cell;
     }
 }
 
@@ -124,27 +124,27 @@ gpds::container PrcScene::to_container() const
     gpds::container c = QSchematic::Scene::to_container();
 
     /* Serialize clock controllers */
-    c.add_value("clock_ctrl_count", static_cast<int>(clockControllers_.size()));
+    c.add_value("clock_ctrl_count", static_cast<int>(clockControllers.size()));
     int idx = 0;
-    for (auto it = clockControllers_.begin(); it != clockControllers_.end(); ++it, ++idx) {
+    for (auto it = clockControllers.begin(); it != clockControllers.end(); ++it, ++idx) {
         std::string prefix = "clock_ctrl_" + std::to_string(idx);
         c.add_value(prefix + "_name", it->name.toStdString());
         c.add_value(prefix + "_test_enable", it->test_enable.toStdString());
     }
 
     /* Serialize reset controllers */
-    c.add_value("reset_ctrl_count", static_cast<int>(resetControllers_.size()));
+    c.add_value("reset_ctrl_count", static_cast<int>(resetControllers.size()));
     idx = 0;
-    for (auto it = resetControllers_.begin(); it != resetControllers_.end(); ++it, ++idx) {
+    for (auto it = resetControllers.begin(); it != resetControllers.end(); ++it, ++idx) {
         std::string prefix = "reset_ctrl_" + std::to_string(idx);
         c.add_value(prefix + "_name", it->name.toStdString());
         c.add_value(prefix + "_test_enable", it->test_enable.toStdString());
     }
 
     /* Serialize power controllers */
-    c.add_value("power_ctrl_count", static_cast<int>(powerControllers_.size()));
+    c.add_value("power_ctrl_count", static_cast<int>(powerControllers.size()));
     idx = 0;
-    for (auto it = powerControllers_.begin(); it != powerControllers_.end(); ++it, ++idx) {
+    for (auto it = powerControllers.begin(); it != powerControllers.end(); ++it, ++idx) {
         std::string prefix = "power_ctrl_" + std::to_string(idx);
         c.add_value(prefix + "_name", it->name.toStdString());
         c.add_value(prefix + "_host_clock", it->host_clock.toStdString());
@@ -160,9 +160,9 @@ void PrcScene::from_container(const gpds::container &container)
     QSchematic::Scene::from_container(container);
 
     /* Clear existing controllers */
-    clockControllers_.clear();
-    resetControllers_.clear();
-    powerControllers_.clear();
+    clockControllers.clear();
+    resetControllers.clear();
+    powerControllers.clear();
 
     /* Deserialize clock controllers */
     int clockCount = container.get_value<int>("clock_ctrl_count").value_or(0);
@@ -174,7 +174,7 @@ void PrcScene::from_container(const gpds::container &container)
         def.test_enable = QString::fromStdString(
             container.get_value<std::string>(prefix + "_test_enable").value_or(""));
         if (!def.name.isEmpty()) {
-            clockControllers_[def.name] = def;
+            clockControllers[def.name] = def;
         }
     }
 
@@ -188,7 +188,7 @@ void PrcScene::from_container(const gpds::container &container)
         def.test_enable = QString::fromStdString(
             container.get_value<std::string>(prefix + "_test_enable").value_or(""));
         if (!def.name.isEmpty()) {
-            resetControllers_[def.name] = def;
+            resetControllers[def.name] = def;
         }
     }
 
@@ -206,7 +206,7 @@ void PrcScene::from_container(const gpds::container &container)
         def.test_enable = QString::fromStdString(
             container.get_value<std::string>(prefix + "_test_enable").value_or(""));
         if (!def.name.isEmpty()) {
-            powerControllers_[def.name] = def;
+            powerControllers[def.name] = def;
         }
     }
 }
@@ -398,7 +398,7 @@ bool PrcScene::findControllerAtPos(const QPointF &pos, ControllerType &type, QSt
 {
     /* Check clock controllers */
     QSet<int> clockTypes = {ClockInput, ClockTarget};
-    for (const QString &ctrlName : clockControllers_.keys()) {
+    for (const QString &ctrlName : clockControllers.keys()) {
         QRectF bounds = calculateControllerBounds(ctrlName, clockTypes);
         if (!bounds.isNull() && bounds.contains(pos)) {
             type = ClockCtrl;
@@ -409,7 +409,7 @@ bool PrcScene::findControllerAtPos(const QPointF &pos, ControllerType &type, QSt
 
     /* Check reset controllers */
     QSet<int> resetTypes = {ResetSource, ResetTarget};
-    for (const QString &ctrlName : resetControllers_.keys()) {
+    for (const QString &ctrlName : resetControllers.keys()) {
         QRectF bounds = calculateControllerBounds(ctrlName, resetTypes);
         if (!bounds.isNull() && bounds.contains(pos)) {
             type = ResetCtrl;
@@ -420,7 +420,7 @@ bool PrcScene::findControllerAtPos(const QPointF &pos, ControllerType &type, QSt
 
     /* Check power controllers */
     QSet<int> powerTypes = {PowerDomain};
-    for (const QString &ctrlName : powerControllers_.keys()) {
+    for (const QString &ctrlName : powerControllers.keys()) {
         QRectF bounds = calculateControllerBounds(ctrlName, powerTypes);
         if (!bounds.isNull() && bounds.contains(pos)) {
             type = PowerCtrl;

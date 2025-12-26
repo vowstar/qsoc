@@ -99,74 +99,74 @@ private:
      */
     void updateCellPlaceholders();
 
-    PrcPrimitiveItem *item_;             /**< The primitive item being configured */
-    PrcScene         *scene_;            /**< PRC scene for controller management */
-    QStringList       connectedSources_; /**< Connected source names (for targets) */
-    QVBoxLayout      *mainLayout_;       /**< Main dialog layout */
-    QLineEdit        *nameEdit_;         /**< Primitive name editor */
+    PrcPrimitiveItem *item;             /**< The primitive item being configured */
+    PrcScene         *scene;            /**< PRC scene for controller management */
+    QStringList       connectedSources; /**< Connected source names (for targets) */
+    QVBoxLayout      *mainLayout;       /**< Main dialog layout */
+    QLineEdit        *nameEdit;         /**< Primitive name editor */
 
     /* Controller selection widgets */
-    QComboBox   *controllerCombo_;   /**< Controller selection combo */
-    QPushButton *editControllerBtn_; /**< Edit controller button */
+    QComboBox   *controllerCombo;   /**< Controller selection combo */
+    QPushButton *editControllerBtn; /**< Edit controller button */
 
     /* Clock Input widgets */
-    QLineEdit *inputFreqEdit_;
+    QLineEdit *inputFreqEdit;
 
     /* Clock Target widgets */
-    QLineEdit *targetFreqEdit_;
-    QCheckBox *targetMuxCheck_;
-    QLineEdit *targetSelectEdit_;
-    QLineEdit *targetResetEdit_;
-    QLineEdit *targetTestClockEdit_;
-    QCheckBox *targetIcgCheck_;
-    QLineEdit *targetIcgEnableEdit_;
-    QComboBox *targetIcgPolarityCombo_;
-    QCheckBox *targetIcgClockOnResetCheck_;
-    QCheckBox *targetDivCheck_;
-    QSpinBox  *targetDivDefaultSpin_;
-    QLineEdit *targetDivValueEdit_;
-    QSpinBox  *targetDivWidthSpin_;
-    QLineEdit *targetDivResetEdit_;
-    QCheckBox *targetDivClockOnResetCheck_;
-    QCheckBox *targetInvCheck_;
+    QLineEdit *targetFreqEdit;
+    QCheckBox *targetMuxCheck;
+    QLineEdit *targetSelectEdit;
+    QLineEdit *targetResetEdit;
+    QLineEdit *targetTestClockEdit;
+    QCheckBox *targetIcgCheck;
+    QLineEdit *targetIcgEnableEdit;
+    QComboBox *targetIcgPolarityCombo;
+    QCheckBox *targetIcgClockOnResetCheck;
+    QCheckBox *targetDivCheck;
+    QSpinBox  *targetDivDefaultSpin;
+    QLineEdit *targetDivValueEdit;
+    QSpinBox  *targetDivWidthSpin;
+    QLineEdit *targetDivResetEdit;
+    QCheckBox *targetDivClockOnResetCheck;
+    QCheckBox *targetInvCheck;
 
     /* Clock Target STA Guide widgets */
-    QGroupBox *targetMuxStaGroup_;
-    QLineEdit *targetMuxStaCellEdit_;
-    QLineEdit *targetMuxStaInEdit_;
-    QLineEdit *targetMuxStaOutEdit_;
-    QLineEdit *targetMuxStaInstanceEdit_;
-    QGroupBox *targetIcgStaGroup_;
-    QLineEdit *targetIcgStaCellEdit_;
-    QLineEdit *targetIcgStaInEdit_;
-    QLineEdit *targetIcgStaOutEdit_;
-    QLineEdit *targetIcgStaInstanceEdit_;
-    QGroupBox *targetDivStaGroup_;
-    QLineEdit *targetDivStaCellEdit_;
-    QLineEdit *targetDivStaInEdit_;
-    QLineEdit *targetDivStaOutEdit_;
-    QLineEdit *targetDivStaInstanceEdit_;
-    QGroupBox *targetInvStaGroup_;
-    QLineEdit *targetInvStaCellEdit_;
-    QLineEdit *targetInvStaInEdit_;
-    QLineEdit *targetInvStaOutEdit_;
-    QLineEdit *targetInvStaInstanceEdit_;
+    QGroupBox *targetMuxStaGroup;
+    QLineEdit *targetMuxStaCellEdit;
+    QLineEdit *targetMuxStaInEdit;
+    QLineEdit *targetMuxStaOutEdit;
+    QLineEdit *targetMuxStaInstanceEdit;
+    QGroupBox *targetIcgStaGroup;
+    QLineEdit *targetIcgStaCellEdit;
+    QLineEdit *targetIcgStaInEdit;
+    QLineEdit *targetIcgStaOutEdit;
+    QLineEdit *targetIcgStaInstanceEdit;
+    QGroupBox *targetDivStaGroup;
+    QLineEdit *targetDivStaCellEdit;
+    QLineEdit *targetDivStaInEdit;
+    QLineEdit *targetDivStaOutEdit;
+    QLineEdit *targetDivStaInstanceEdit;
+    QGroupBox *targetInvStaGroup;
+    QLineEdit *targetInvStaCellEdit;
+    QLineEdit *targetInvStaInEdit;
+    QLineEdit *targetInvStaOutEdit;
+    QLineEdit *targetInvStaInstanceEdit;
 
     /* Reset Source widgets */
-    QComboBox *rstSrcActiveCombo_;
+    QComboBox *rstSrcActiveCombo;
 
     /* Reset Target widgets */
-    QComboBox *rstTgtActiveCombo_;
-    QCheckBox *rstTgtAsyncCheck_;
-    QLineEdit *rstTgtAsyncClockEdit_;
-    QSpinBox  *rstTgtAsyncStageSpin_;
+    QComboBox *rstTgtActiveCombo;
+    QCheckBox *rstTgtAsyncCheck;
+    QLineEdit *rstTgtAsyncClockEdit;
+    QSpinBox  *rstTgtAsyncStageSpin;
 
     /* Power Domain widgets */
-    QSpinBox  *pwrDomVoltageSpin_;
-    QLineEdit *pwrDomPgoodEdit_;
-    QSpinBox  *pwrDomWaitDepSpin_;
-    QSpinBox  *pwrDomSettleOnSpin_;
-    QSpinBox  *pwrDomSettleOffSpin_;
+    QSpinBox  *pwrDomVoltageSpin;
+    QLineEdit *pwrDomPgoodEdit;
+    QSpinBox  *pwrDomWaitDepSpin;
+    QSpinBox  *pwrDomSettleOnSpin;
+    QSpinBox  *pwrDomSettleOffSpin;
 };
 
 /**
@@ -235,16 +235,16 @@ private:
      */
     void populateElementsList();
 
-    ControllerType type_;           /**< Controller type */
-    QString        name_;           /**< Controller name */
-    PrcScene      *scene_;          /**< PRC scene reference */
-    QVBoxLayout   *mainLayout_;     /**< Main dialog layout */
-    QLineEdit     *nameEdit_;       /**< Name editor (read-only) */
-    QLineEdit     *testEnableEdit_; /**< Test enable signal editor */
-    QLineEdit     *hostClockEdit_;  /**< Host clock editor (power only) */
-    QLineEdit     *hostResetEdit_;  /**< Host reset editor (power only) */
-    QListWidget   *elementsList_;   /**< Assigned elements list */
-    QPushButton   *deleteBtn_;      /**< Delete button */
+    ControllerType type;           /**< Controller type */
+    QString        name;           /**< Controller name */
+    PrcScene      *scene;          /**< PRC scene reference */
+    QVBoxLayout   *mainLayout;     /**< Main dialog layout */
+    QLineEdit     *nameEdit;       /**< Name editor (read-only) */
+    QLineEdit     *testEnableEdit; /**< Test enable signal editor */
+    QLineEdit     *hostClockEdit;  /**< Host clock editor (power only) */
+    QLineEdit     *hostResetEdit;  /**< Host reset editor (power only) */
+    QListWidget   *elementsList;   /**< Assigned elements list */
+    QPushButton   *deleteBtn;      /**< Delete button */
 };
 
 /**
@@ -309,52 +309,52 @@ private:
      */
     void updateCellPlaceholders();
 
-    QString         sourceName_; /**< Source input name */
-    QString         targetName_; /**< Target output name */
-    ClockLinkParams linkParams_; /**< Link parameters being edited */
-    PrcScene       *scene_;      /**< PRC scene for session memory */
-    QVBoxLayout    *mainLayout_; /**< Main dialog layout */
+    QString         sourceName; /**< Source input name */
+    QString         targetName; /**< Target output name */
+    ClockLinkParams linkParams; /**< Link parameters being edited */
+    PrcScene       *scene;      /**< PRC scene for session memory */
+    QVBoxLayout    *mainLayout; /**< Main dialog layout */
 
     /* ICG widgets */
-    QGroupBox *icgGroup_;
-    QLineEdit *icgEnableEdit_;
-    QComboBox *icgPolarityCombo_;
-    QLineEdit *icgTestEnableEdit_;
-    QLineEdit *icgResetEdit_;
-    QCheckBox *icgClockOnResetCheck_;
-    QGroupBox *icgStaGuideGroup_;
-    QLineEdit *icgStaCellEdit_;
-    QLineEdit *icgStaInEdit_;
-    QLineEdit *icgStaOutEdit_;
-    QLineEdit *icgStaInstanceEdit_;
+    QGroupBox *icgGroup;
+    QLineEdit *icgEnableEdit;
+    QComboBox *icgPolarityCombo;
+    QLineEdit *icgTestEnableEdit;
+    QLineEdit *icgResetEdit;
+    QCheckBox *icgClockOnResetCheck;
+    QGroupBox *icgStaGuideGroup;
+    QLineEdit *icgStaCellEdit;
+    QLineEdit *icgStaInEdit;
+    QLineEdit *icgStaOutEdit;
+    QLineEdit *icgStaInstanceEdit;
 
     /* DIV widgets */
-    QGroupBox *divGroup_;
-    QSpinBox  *divDefaultSpin_;
-    QLineEdit *divValueEdit_;
-    QSpinBox  *divWidthSpin_;
-    QLineEdit *divResetEdit_;
-    QCheckBox *divClockOnResetCheck_;
-    QGroupBox *divStaGuideGroup_;
-    QLineEdit *divStaCellEdit_;
-    QLineEdit *divStaInEdit_;
-    QLineEdit *divStaOutEdit_;
-    QLineEdit *divStaInstanceEdit_;
+    QGroupBox *divGroup;
+    QSpinBox  *divDefaultSpin;
+    QLineEdit *divValueEdit;
+    QSpinBox  *divWidthSpin;
+    QLineEdit *divResetEdit;
+    QCheckBox *divClockOnResetCheck;
+    QGroupBox *divStaGuideGroup;
+    QLineEdit *divStaCellEdit;
+    QLineEdit *divStaInEdit;
+    QLineEdit *divStaOutEdit;
+    QLineEdit *divStaInstanceEdit;
 
     /* INV widgets */
-    QGroupBox *invGroup_;
-    QGroupBox *invStaGuideGroup_;
-    QLineEdit *invStaCellEdit_;
-    QLineEdit *invStaInEdit_;
-    QLineEdit *invStaOutEdit_;
-    QLineEdit *invStaInstanceEdit_;
+    QGroupBox *invGroup;
+    QGroupBox *invStaGuideGroup;
+    QLineEdit *invStaCellEdit;
+    QLineEdit *invStaInEdit;
+    QLineEdit *invStaOutEdit;
+    QLineEdit *invStaInstanceEdit;
 
     /* Link-level STA guide widgets */
-    QGroupBox *linkStaGuideGroup_;
-    QLineEdit *linkStaCellEdit_;
-    QLineEdit *linkStaInEdit_;
-    QLineEdit *linkStaOutEdit_;
-    QLineEdit *linkStaInstanceEdit_;
+    QGroupBox *linkStaGuideGroup;
+    QLineEdit *linkStaCellEdit;
+    QLineEdit *linkStaInEdit;
+    QLineEdit *linkStaOutEdit;
+    QLineEdit *linkStaInstanceEdit;
 };
 
 } // namespace PrcLibrary
