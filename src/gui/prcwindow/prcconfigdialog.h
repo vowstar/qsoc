@@ -79,6 +79,21 @@ private:
      */
     void populateControllerCombo();
 
+    /**
+     * @brief Create a QLineEdit with an Auto button
+     * @param[in] initialValue Initial text value
+     * @param[in] placeholder Placeholder text
+     * @param[in] autoValue Value to fill when Auto is clicked
+     * @param[in] parent Parent widget
+     * @return Pair of QLineEdit and container widget
+     */
+    QWidget *createAutoLineEdit(
+        QLineEdit    **lineEdit,
+        const QString &initialValue,
+        const QString &placeholder,
+        const QString &autoValue,
+        QWidget       *parent);
+
     PrcPrimitiveItem *item_;             /**< The primitive item being configured */
     PrcScene         *scene_;            /**< PRC scene for controller management */
     QStringList       connectedSources_; /**< Connected source names (for targets) */
@@ -109,6 +124,28 @@ private:
     QLineEdit *targetDivResetEdit_;
     QCheckBox *targetDivClockOnResetCheck_;
     QCheckBox *targetInvCheck_;
+
+    /* Clock Target STA Guide widgets */
+    QGroupBox *targetMuxStaGroup_;
+    QLineEdit *targetMuxStaCellEdit_;
+    QLineEdit *targetMuxStaInEdit_;
+    QLineEdit *targetMuxStaOutEdit_;
+    QLineEdit *targetMuxStaInstanceEdit_;
+    QGroupBox *targetIcgStaGroup_;
+    QLineEdit *targetIcgStaCellEdit_;
+    QLineEdit *targetIcgStaInEdit_;
+    QLineEdit *targetIcgStaOutEdit_;
+    QLineEdit *targetIcgStaInstanceEdit_;
+    QGroupBox *targetDivStaGroup_;
+    QLineEdit *targetDivStaCellEdit_;
+    QLineEdit *targetDivStaInEdit_;
+    QLineEdit *targetDivStaOutEdit_;
+    QLineEdit *targetDivStaInstanceEdit_;
+    QGroupBox *targetInvStaGroup_;
+    QLineEdit *targetInvStaCellEdit_;
+    QLineEdit *targetInvStaInEdit_;
+    QLineEdit *targetInvStaOutEdit_;
+    QLineEdit *targetInvStaInstanceEdit_;
 
     /* Reset Source widgets */
     QComboBox *rstSrcActiveCombo_;
@@ -243,6 +280,22 @@ private:
     QGroupBox *createICGGroup();
     QGroupBox *createDIVGroup();
     QGroupBox *createINVGroup();
+
+    /**
+     * @brief Create a QLineEdit with an Auto button
+     * @param[out] lineEdit Pointer to store the created QLineEdit
+     * @param[in] initialValue Initial text value
+     * @param[in] placeholder Placeholder text
+     * @param[in] autoValue Value to fill when Auto is clicked
+     * @param[in] parent Parent widget
+     * @return Container widget with QLineEdit and Auto button
+     */
+    QWidget *createAutoLineEdit(
+        QLineEdit    **lineEdit,
+        const QString &initialValue,
+        const QString &placeholder,
+        const QString &autoValue,
+        QWidget       *parent);
 
     QString         sourceName_; /**< Source input name */
     QString         targetName_; /**< Target output name */
