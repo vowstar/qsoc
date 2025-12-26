@@ -63,43 +63,29 @@ bool PrcWindow::eventFilter(QObject *watched, QEvent *event)
             parent = parent->parentItem();
         }
 
-        /* Open rename dialog for wire */
-        auto *wire = qgraphicsitem_cast<QSchematic::Items::Wire *>(item);
-        if (wire) {
-            auto net = wire->net();
-            if (net) {
-                auto *wireNet = dynamic_cast<QSchematic::Items::WireNet *>(net.get());
-                if (wireNet) {
-                    handleWireDoubleClick(wireNet);
-                    return true;
+        /* Find wire net containing this item (wire or label) via wire_manager */
+        auto wm = scene.wire_manager();
+        if (wm) {
+            for (const auto &net : wm->nets()) {
+                auto wireNet = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(net);
+                if (!wireNet) {
+                    continue;
                 }
-            }
-        }
 
-        /* Handle label attached to wire */
-        auto *label = qgraphicsitem_cast<QSchematic::Items::Label *>(item);
-        if (label) {
-            auto *parent = label->parentItem();
-            while (parent) {
-                auto *wireNet = dynamic_cast<QSchematic::Items::WireNet *>(parent);
-                if (wireNet) {
-                    handleWireDoubleClick(wireNet);
+                /* Check if clicked item is this net's label */
+                if (wireNet->label().get() == item) {
+                    handleWireDoubleClick(wireNet.get());
                     return true;
                 }
 
-                auto *wire = qgraphicsitem_cast<QSchematic::Items::Wire *>(parent);
-                if (wire) {
-                    auto net = wire->net();
-                    if (net) {
-                        auto *wireNet = dynamic_cast<QSchematic::Items::WireNet *>(net.get());
-                        if (wireNet) {
-                            handleWireDoubleClick(wireNet);
-                            return true;
-                        }
+                /* Check if clicked item is one of this net's wires */
+                for (const auto &wire : wireNet->wires()) {
+                    auto qsWire = std::dynamic_pointer_cast<QSchematic::Items::Wire>(wire);
+                    if (qsWire && qsWire.get() == item) {
+                        handleWireDoubleClick(wireNet.get());
+                        return true;
                     }
                 }
-
-                parent = parent->parentItem();
             }
         }
 
