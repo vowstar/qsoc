@@ -161,6 +161,15 @@ private slots:
      */
     void on_actionExportNetlist_triggered();
 
+    /* Manual Signal Handlers */
+
+    /**
+     * @brief Handle controller edit request from context menu
+     * @param[in] type Controller type (ClockCtrl/ResetCtrl/PowerCtrl)
+     * @param[in] name Controller name
+     */
+    void handleEditController(int type, const QString &name);
+
 protected:
     /* Event Handlers */
 

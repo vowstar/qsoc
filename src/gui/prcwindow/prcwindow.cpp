@@ -3,6 +3,7 @@
 
 #include "gui/prcwindow/prcwindow.h"
 #include "common/qsocprojectmanager.h"
+#include "gui/prcwindow/prcconfigdialog.h"
 #include "gui/prcwindow/prcitemfactory.h"
 #include "gui/prcwindow/prclibrarywidget.h"
 #include "gui/prcwindow/prcprimitiveitem.h"
@@ -72,6 +73,13 @@ PrcWindow::PrcWindow(QWidget *parent, QSocProjectManager *projectManager)
 
     /* Auto-generate instance names when items are added (drag/drop, paste, etc.) */
     connect(&scene, &QSchematic::Scene::itemAdded, this, &PrcWindow::onItemAdded);
+
+    /* Handle controller edit request from context menu */
+    connect(
+        &scene,
+        &PrcLibrary::PrcScene::editControllerRequested,
+        this,
+        &PrcWindow::handleEditController);
 
     ui->actionUndo->setEnabled(scene.undoStack()->canUndo());
     ui->actionRedo->setEnabled(scene.undoStack()->canRedo());
@@ -223,4 +231,61 @@ PrcLibrary::PrcScene &PrcWindow::prcScene()
 const PrcLibrary::PrcScene &PrcWindow::prcScene() const
 {
     return scene;
+}
+
+/**
+ * @brief Handle controller edit request from context menu
+ * @param[in] type Controller type (ClockCtrl/ResetCtrl/PowerCtrl)
+ * @param[in] name Controller name
+ */
+void PrcWindow::handleEditController(int type, const QString &name)
+{
+    /* Convert scene type to dialog type */
+    PrcLibrary::PrcControllerDialog::ControllerType ctrlType;
+    switch (static_cast<PrcLibrary::PrcScene::ControllerType>(type)) {
+    case PrcLibrary::PrcScene::ClockCtrl:
+        ctrlType = PrcLibrary::PrcControllerDialog::ClockController;
+        break;
+    case PrcLibrary::PrcScene::ResetCtrl:
+        ctrlType = PrcLibrary::PrcControllerDialog::ResetController;
+        break;
+    case PrcLibrary::PrcScene::PowerCtrl:
+        ctrlType = PrcLibrary::PrcControllerDialog::PowerController;
+        break;
+    default:
+        return;
+    }
+
+    /* Show controller dialog */
+    PrcLibrary::PrcControllerDialog dialog(ctrlType, name, &scene, this);
+
+    /* Handle delete request */
+    connect(&dialog, &PrcLibrary::PrcControllerDialog::deleteRequested, [this, name, type]() {
+        switch (static_cast<PrcLibrary::PrcScene::ControllerType>(type)) {
+        case PrcLibrary::PrcScene::ClockCtrl:
+            scene.removeClockController(name);
+            break;
+        case PrcLibrary::PrcScene::ResetCtrl:
+            scene.removeResetController(name);
+            break;
+        case PrcLibrary::PrcScene::PowerCtrl:
+            scene.removePowerController(name);
+            break;
+        }
+    });
+
+    if (dialog.exec() == QDialog::Accepted) {
+        /* Apply controller changes */
+        switch (ctrlType) {
+        case PrcLibrary::PrcControllerDialog::ClockController:
+            scene.setClockController(name, dialog.getClockControllerDef());
+            break;
+        case PrcLibrary::PrcControllerDialog::ResetController:
+            scene.setResetController(name, dialog.getResetControllerDef());
+            break;
+        case PrcLibrary::PrcControllerDialog::PowerController:
+            scene.setPowerController(name, dialog.getPowerControllerDef());
+            break;
+        }
+    }
 }

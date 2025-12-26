@@ -561,12 +561,57 @@ void PrcConfigDialog::onEditControllerClicked()
         return;
     }
 
-    /* Show controller edit dialog - for now just show a message */
-    /* TODO: Implement PrcControllerDialog */
-    QMessageBox::information(
-        this,
-        tr("Edit Controller"),
-        tr("Controller: %1\n\nController settings dialog not implemented yet.").arg(controllerName));
+    /* Determine controller type based on primitive type */
+    PrcControllerDialog::ControllerType ctrlType;
+    switch (item_->primitiveType()) {
+    case ClockInput:
+    case ClockTarget:
+        ctrlType = PrcControllerDialog::ClockController;
+        break;
+    case ResetSource:
+    case ResetTarget:
+        ctrlType = PrcControllerDialog::ResetController;
+        break;
+    case PowerDomain:
+        ctrlType = PrcControllerDialog::PowerController;
+        break;
+    default:
+        return;
+    }
+
+    /* Show controller dialog */
+    PrcControllerDialog dialog(ctrlType, controllerName, scene_, this);
+
+    /* Handle delete request */
+    connect(&dialog, &PrcControllerDialog::deleteRequested, [this, controllerName, ctrlType]() {
+        switch (ctrlType) {
+        case PrcControllerDialog::ClockController:
+            scene_->removeClockController(controllerName);
+            break;
+        case PrcControllerDialog::ResetController:
+            scene_->removeResetController(controllerName);
+            break;
+        case PrcControllerDialog::PowerController:
+            scene_->removePowerController(controllerName);
+            break;
+        }
+        populateControllerCombo();
+    });
+
+    if (dialog.exec() == QDialog::Accepted) {
+        /* Apply controller changes */
+        switch (ctrlType) {
+        case PrcControllerDialog::ClockController:
+            scene_->setClockController(controllerName, dialog.getClockControllerDef());
+            break;
+        case PrcControllerDialog::ResetController:
+            scene_->setResetController(controllerName, dialog.getResetControllerDef());
+            break;
+        case PrcControllerDialog::PowerController:
+            scene_->setPowerController(controllerName, dialog.getPowerControllerDef());
+            break;
+        }
+    }
 }
 
 /* Apply Configuration */
@@ -994,4 +1039,279 @@ ClockLinkParams PrcLinkConfigDialog::getLinkParams() const
     }
 
     return params;
+}
+
+/* Controller Dialog Implementation */
+
+PrcControllerDialog::PrcControllerDialog(
+    ControllerType type, const QString &name, PrcScene *scene, QWidget *parent)
+    : QDialog(parent)
+    , type_(type)
+    , name_(name)
+    , scene_(scene)
+    , mainLayout_(nullptr)
+    , nameEdit_(nullptr)
+    , testEnableEdit_(nullptr)
+    , hostClockEdit_(nullptr)
+    , hostResetEdit_(nullptr)
+    , elementsList_(nullptr)
+    , deleteBtn_(nullptr)
+{
+    /* Set window title based on type */
+    QString typeStr;
+    switch (type_) {
+    case ClockController:
+        typeStr = tr("Clock");
+        break;
+    case ResetController:
+        typeStr = tr("Reset");
+        break;
+    case PowerController:
+        typeStr = tr("Power");
+        break;
+    }
+    setWindowTitle(QString(tr("Configure %1 Controller")).arg(typeStr));
+    setMinimumWidth(400);
+
+    mainLayout_ = new QVBoxLayout(this);
+
+    createForm();
+
+    /* Dialog buttons */
+    auto *buttonLayout = new QHBoxLayout();
+
+    deleteBtn_ = new QPushButton(tr("Delete Controller"), this);
+    deleteBtn_->setStyleSheet("color: #c00;");
+    connect(deleteBtn_, &QPushButton::clicked, this, &PrcControllerDialog::onDeleteClicked);
+    buttonLayout->addWidget(deleteBtn_);
+
+    buttonLayout->addStretch();
+
+    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    buttonLayout->addWidget(buttonBox);
+
+    mainLayout_->addLayout(buttonLayout);
+
+    setLayout(mainLayout_);
+}
+
+void PrcControllerDialog::createForm()
+{
+    /* Basic Information Group */
+    auto *basicGroup  = new QGroupBox(tr("Basic Information"), this);
+    auto *basicLayout = new QFormLayout(basicGroup);
+
+    nameEdit_ = new QLineEdit(name_, this);
+    nameEdit_->setReadOnly(true);
+    nameEdit_->setStyleSheet("background-color: #f0f0f0;");
+    basicLayout->addRow(tr("Name:"), nameEdit_);
+
+    mainLayout_->addWidget(basicGroup);
+
+    /* DFT Settings Group */
+    auto *dftGroup  = new QGroupBox(tr("DFT Settings"), this);
+    auto *dftLayout = new QFormLayout(dftGroup);
+
+    testEnableEdit_ = new QLineEdit(this);
+    testEnableEdit_->setPlaceholderText("test_en");
+
+    /* Load existing value */
+    if (scene_) {
+        switch (type_) {
+        case ClockController:
+            if (scene_->hasClockController(name_)) {
+                testEnableEdit_->setText(scene_->clockController(name_).test_enable);
+            }
+            break;
+        case ResetController:
+            if (scene_->hasResetController(name_)) {
+                testEnableEdit_->setText(scene_->resetController(name_).test_enable);
+            }
+            break;
+        case PowerController:
+            if (scene_->hasPowerController(name_)) {
+                testEnableEdit_->setText(scene_->powerController(name_).test_enable);
+            }
+            break;
+        }
+    }
+
+    dftLayout->addRow(tr("Test Enable:"), testEnableEdit_);
+
+    auto *dftHint = new QLabel(tr("DFT bypass signal for scan testing"), this);
+    dftHint->setStyleSheet("color: #666; font-style: italic;");
+    dftLayout->addRow(dftHint);
+
+    mainLayout_->addWidget(dftGroup);
+
+    /* AO Domain Settings (Power Controller only) */
+    if (type_ == PowerController) {
+        auto *aoGroup  = new QGroupBox(tr("AO Domain Settings"), this);
+        auto *aoLayout = new QFormLayout(aoGroup);
+
+        hostClockEdit_ = new QLineEdit(this);
+        hostClockEdit_->setPlaceholderText("ao_clk");
+
+        hostResetEdit_ = new QLineEdit(this);
+        hostResetEdit_->setPlaceholderText("ao_rst_n");
+
+        /* Load existing values */
+        if (scene_ && scene_->hasPowerController(name_)) {
+            auto def = scene_->powerController(name_);
+            hostClockEdit_->setText(def.host_clock);
+            hostResetEdit_->setText(def.host_reset);
+        }
+
+        aoLayout->addRow(tr("Host Clock:"), hostClockEdit_);
+        aoLayout->addRow(tr("Host Reset:"), hostResetEdit_);
+
+        auto *aoHint = new QLabel(tr("Always-on domain clock and reset signals"), this);
+        aoHint->setStyleSheet("color: #666; font-style: italic;");
+        aoLayout->addRow(aoHint);
+
+        mainLayout_->addWidget(aoGroup);
+    }
+
+    /* Assigned Elements Group */
+    auto *elemGroup  = new QGroupBox(tr("Assigned Elements"), this);
+    auto *elemLayout = new QVBoxLayout(elemGroup);
+
+    elementsList_ = new QListWidget(this);
+    elementsList_->setMaximumHeight(120);
+    elementsList_->setSelectionMode(QAbstractItemView::NoSelection);
+    populateElementsList();
+
+    elemLayout->addWidget(elementsList_);
+
+    auto *elemHint = new QLabel(tr("Elements using this controller (read-only)"), this);
+    elemHint->setStyleSheet("color: #666; font-style: italic;");
+    elemLayout->addWidget(elemHint);
+
+    mainLayout_->addWidget(elemGroup);
+}
+
+void PrcControllerDialog::populateElementsList()
+{
+    if (!scene_ || !elementsList_) {
+        return;
+    }
+
+    elementsList_->clear();
+
+    /* Find all elements assigned to this controller */
+    for (const auto &node : scene_->nodes()) {
+        auto prcItem = std::dynamic_pointer_cast<PrcPrimitiveItem>(node);
+        if (!prcItem) {
+            continue;
+        }
+
+        QString     itemController;
+        QString     itemName;
+        QString     itemType;
+        const auto &params = prcItem->params();
+
+        switch (type_) {
+        case ClockController:
+            if (std::holds_alternative<ClockInputParams>(params)) {
+                const auto &p  = std::get<ClockInputParams>(params);
+                itemController = p.controller;
+                itemName       = p.name;
+                itemType       = tr("Input");
+            } else if (std::holds_alternative<ClockTargetParams>(params)) {
+                const auto &p  = std::get<ClockTargetParams>(params);
+                itemController = p.controller;
+                itemName       = p.name;
+                itemType       = tr("Target");
+            }
+            break;
+        case ResetController:
+            if (std::holds_alternative<ResetSourceParams>(params)) {
+                const auto &p  = std::get<ResetSourceParams>(params);
+                itemController = p.controller;
+                itemName       = p.name;
+                itemType       = tr("Source");
+            } else if (std::holds_alternative<ResetTargetParams>(params)) {
+                const auto &p  = std::get<ResetTargetParams>(params);
+                itemController = p.controller;
+                itemName       = p.name;
+                itemType       = tr("Target");
+            }
+            break;
+        case PowerController:
+            if (std::holds_alternative<PowerDomainParams>(params)) {
+                const auto &p  = std::get<PowerDomainParams>(params);
+                itemController = p.controller;
+                itemName       = p.name;
+                itemType       = tr("Domain");
+            }
+            break;
+        }
+
+        if (itemController == name_ && !itemName.isEmpty()) {
+            auto *item = new QListWidgetItem(QString("%1 (%2)").arg(itemName, itemType));
+            elementsList_->addItem(item);
+        }
+    }
+
+    if (elementsList_->count() == 0) {
+        auto *item = new QListWidgetItem(tr("(no elements assigned)"));
+        item->setForeground(Qt::gray);
+        elementsList_->addItem(item);
+    }
+}
+
+void PrcControllerDialog::onDeleteClicked()
+{
+    /* Check if controller has assigned elements */
+    if (elementsList_ && elementsList_->count() > 0) {
+        auto *firstItem = elementsList_->item(0);
+        if (firstItem && !firstItem->text().startsWith("(")) {
+            QMessageBox::warning(
+                this,
+                tr("Cannot Delete"),
+                tr("This controller has assigned elements.\n"
+                   "Please reassign or remove all elements before deleting."));
+            return;
+        }
+    }
+
+    /* Confirm deletion */
+    auto result = QMessageBox::question(
+        this,
+        tr("Delete Controller"),
+        tr("Are you sure you want to delete controller '%1'?").arg(name_),
+        QMessageBox::Yes | QMessageBox::No);
+
+    if (result == QMessageBox::Yes) {
+        emit deleteRequested();
+        reject();
+    }
+}
+
+ClockControllerDef PrcControllerDialog::getClockControllerDef() const
+{
+    ClockControllerDef def;
+    def.name        = name_;
+    def.test_enable = testEnableEdit_ ? testEnableEdit_->text() : QString();
+    return def;
+}
+
+ResetControllerDef PrcControllerDialog::getResetControllerDef() const
+{
+    ResetControllerDef def;
+    def.name        = name_;
+    def.test_enable = testEnableEdit_ ? testEnableEdit_->text() : QString();
+    return def;
+}
+
+PowerControllerDef PrcControllerDialog::getPowerControllerDef() const
+{
+    PowerControllerDef def;
+    def.name        = name_;
+    def.test_enable = testEnableEdit_ ? testEnableEdit_->text() : QString();
+    def.host_clock  = hostClockEdit_ ? hostClockEdit_->text() : QString();
+    def.host_reset  = hostResetEdit_ ? hostResetEdit_->text() : QString();
+    return def;
 }

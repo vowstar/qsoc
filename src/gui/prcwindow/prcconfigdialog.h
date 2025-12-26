@@ -14,6 +14,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTabWidget>
@@ -124,6 +125,84 @@ private:
     QSpinBox  *pwrDomWaitDepSpin_;
     QSpinBox  *pwrDomSettleOnSpin_;
     QSpinBox  *pwrDomSettleOffSpin_;
+};
+
+/**
+ * @brief Dialog for configuring controller properties
+ * @details Provides form-based interface to edit controller-level settings
+ *          including test_enable (all types) and host_clock/host_reset (power).
+ */
+class PrcControllerDialog : public QDialog
+{
+    Q_OBJECT
+
+public:
+    /**
+     * @brief Controller type enumeration
+     */
+    enum ControllerType { ClockController, ResetController, PowerController };
+
+    /**
+     * @brief Construct a controller configuration dialog
+     * @param[in] type Controller type (Clock/Reset/Power)
+     * @param[in] name Controller name
+     * @param[in] scene PRC scene for element lookup
+     * @param[in] parent Parent widget
+     */
+    explicit PrcControllerDialog(
+        ControllerType type, const QString &name, PrcScene *scene, QWidget *parent = nullptr);
+
+    /**
+     * @brief Get configured clock controller definition
+     * @return Clock controller definition
+     */
+    ClockControllerDef getClockControllerDef() const;
+
+    /**
+     * @brief Get configured reset controller definition
+     * @return Reset controller definition
+     */
+    ResetControllerDef getResetControllerDef() const;
+
+    /**
+     * @brief Get configured power controller definition
+     * @return Power controller definition
+     */
+    PowerControllerDef getPowerControllerDef() const;
+
+signals:
+    /**
+     * @brief Signal emitted when delete is requested
+     */
+    void deleteRequested();
+
+private slots:
+    /**
+     * @brief Handle delete button click
+     */
+    void onDeleteClicked();
+
+private:
+    /**
+     * @brief Create form widgets based on controller type
+     */
+    void createForm();
+
+    /**
+     * @brief Populate elements list with assigned primitives
+     */
+    void populateElementsList();
+
+    ControllerType type_;           /**< Controller type */
+    QString        name_;           /**< Controller name */
+    PrcScene      *scene_;          /**< PRC scene reference */
+    QVBoxLayout   *mainLayout_;     /**< Main dialog layout */
+    QLineEdit     *nameEdit_;       /**< Name editor (read-only) */
+    QLineEdit     *testEnableEdit_; /**< Test enable signal editor */
+    QLineEdit     *hostClockEdit_;  /**< Host clock editor (power only) */
+    QLineEdit     *hostResetEdit_;  /**< Host reset editor (power only) */
+    QListWidget   *elementsList_;   /**< Assigned elements list */
+    QPushButton   *deleteBtn_;      /**< Delete button */
 };
 
 /**
