@@ -94,6 +94,11 @@ private:
         const QString &autoValue,
         QWidget       *parent);
 
+    /**
+     * @brief Update all Cell field placeholders from scene's lastStaGuideCell
+     */
+    void updateCellPlaceholders();
+
     PrcPrimitiveItem *item_;             /**< The primitive item being configured */
     PrcScene         *scene_;            /**< PRC scene for controller management */
     QStringList       connectedSources_; /**< Connected source names (for targets) */
@@ -257,12 +262,14 @@ public:
      * @param[in] sourceName Name of the source (input) this link connects from
      * @param[in] targetName Name of the target this link connects to
      * @param[in] linkParams Current link parameters
+     * @param[in] scene PRC scene for session-level memory
      * @param[in] parent Parent widget
      */
     explicit PrcLinkConfigDialog(
         const QString         &sourceName,
         const QString         &targetName,
         const ClockLinkParams &linkParams,
+        PrcScene              *scene  = nullptr,
         QWidget               *parent = nullptr);
 
     /**
@@ -297,9 +304,15 @@ private:
         const QString &autoValue,
         QWidget       *parent);
 
+    /**
+     * @brief Update all Cell field placeholders from scene's lastStaGuideCell
+     */
+    void updateCellPlaceholders();
+
     QString         sourceName_; /**< Source input name */
     QString         targetName_; /**< Target output name */
     ClockLinkParams linkParams_; /**< Link parameters being edited */
+    PrcScene       *scene_;      /**< PRC scene for session memory */
     QVBoxLayout    *mainLayout_; /**< Main dialog layout */
 
     /* ICG widgets */
