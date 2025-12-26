@@ -13,6 +13,41 @@
 
 using namespace PrcLibrary;
 
+/**
+ * @brief Create a QLineEdit with an Auto button
+ */
+QWidget *PrcConfigDialog::createAutoLineEdit(
+    QLineEdit    **lineEdit,
+    const QString &initialValue,
+    const QString &placeholder,
+    const QString &autoValue,
+    QWidget       *parent)
+{
+    auto *container = new QWidget(parent);
+    auto *layout    = new QHBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+
+    *lineEdit = new QLineEdit(initialValue, container);
+    (*lineEdit)->setPlaceholderText(placeholder);
+    layout->addWidget(*lineEdit, 1);
+
+    auto *autoBtn = new QPushButton(tr("Auto"), container);
+    autoBtn->setFixedWidth(50);
+    autoBtn->setToolTip(tr("Auto-fill: %1").arg(autoValue.isEmpty() ? tr("(empty)") : autoValue));
+    layout->addWidget(autoBtn);
+
+    /* Only fill if empty */
+    QLineEdit *edit = *lineEdit;
+    QObject::connect(autoBtn, &QPushButton::clicked, [edit, autoValue]() {
+        if (edit->text().isEmpty()) {
+            edit->setText(autoValue);
+        }
+    });
+
+    return container;
+}
+
 PrcConfigDialog::PrcConfigDialog(
     PrcPrimitiveItem *item, PrcScene *scene, const QStringList &connectedSources, QWidget *parent)
     : QDialog(parent)
@@ -40,6 +75,26 @@ PrcConfigDialog::PrcConfigDialog(
     , targetDivResetEdit_(nullptr)
     , targetDivClockOnResetCheck_(nullptr)
     , targetInvCheck_(nullptr)
+    , targetMuxStaGroup_(nullptr)
+    , targetMuxStaCellEdit_(nullptr)
+    , targetMuxStaInEdit_(nullptr)
+    , targetMuxStaOutEdit_(nullptr)
+    , targetMuxStaInstanceEdit_(nullptr)
+    , targetIcgStaGroup_(nullptr)
+    , targetIcgStaCellEdit_(nullptr)
+    , targetIcgStaInEdit_(nullptr)
+    , targetIcgStaOutEdit_(nullptr)
+    , targetIcgStaInstanceEdit_(nullptr)
+    , targetDivStaGroup_(nullptr)
+    , targetDivStaCellEdit_(nullptr)
+    , targetDivStaInEdit_(nullptr)
+    , targetDivStaOutEdit_(nullptr)
+    , targetDivStaInstanceEdit_(nullptr)
+    , targetInvStaGroup_(nullptr)
+    , targetInvStaCellEdit_(nullptr)
+    , targetInvStaInEdit_(nullptr)
+    , targetInvStaOutEdit_(nullptr)
+    , targetInvStaInstanceEdit_(nullptr)
     , rstSrcActiveCombo_(nullptr)
     , rstTgtActiveCombo_(nullptr)
     , rstTgtAsyncCheck_(nullptr)
@@ -122,7 +177,24 @@ void PrcConfigDialog::createClockTargetForm()
 {
     const auto &params = std::get<ClockTargetParams>(item_->params());
 
-    /* Basic target settings */
+    /* Derive auto values from target name */
+    QString baseName = params.name;
+    if (baseName.startsWith("clk_")) {
+        baseName = baseName.mid(4);
+    }
+    QString autoSelect     = params.name + "_sel";
+    QString autoReset      = "rst_" + baseName + "_n";
+    QString autoTestClock  = "clk_hse";
+    QString autoIcgEnable  = params.name + "_en";
+    QString autoDivValue   = params.name + "_div";
+    QString autoMuxStaInst = "u_DONTTOUCH_" + params.name + "_mux";
+    QString autoIcgStaInst = "u_DONTTOUCH_" + params.name + "_icg";
+    QString autoDivStaInst = "u_DONTTOUCH_" + params.name;
+    QString autoInvStaInst = "u_DONTTOUCH_" + params.name + "_inv";
+    int     sourceCount    = connectedSources_.size();
+    bool    muxEnabled     = sourceCount >= 2;
+
+    /* Basic target settings (full width) */
     auto *basicGroup  = new QGroupBox(tr("Target Settings"), this);
     auto *basicLayout = new QFormLayout(basicGroup);
 
@@ -130,142 +202,245 @@ void PrcConfigDialog::createClockTargetForm()
     targetFreqEdit_->setPlaceholderText("400MHz");
     basicLayout->addRow(tr("Frequency:"), targetFreqEdit_);
 
-    targetSelectEdit_ = new QLineEdit(params.select, this);
-    targetSelectEdit_->setPlaceholderText("clk_sel");
-    basicLayout->addRow(tr("Select Signal:"), targetSelectEdit_);
+    basicLayout->addRow(
+        tr("Select:"),
+        createAutoLineEdit(&targetSelectEdit_, params.select, autoSelect, autoSelect, this));
 
-    targetResetEdit_ = new QLineEdit(params.reset, this);
-    targetResetEdit_->setPlaceholderText("rst_n (for GF_MUX)");
-    basicLayout->addRow(tr("Reset Signal:"), targetResetEdit_);
+    basicLayout->addRow(
+        tr("Reset:"),
+        createAutoLineEdit(&targetResetEdit_, params.reset, autoReset, autoReset, this));
 
-    targetTestClockEdit_ = new QLineEdit(params.test_clock, this);
-    targetTestClockEdit_->setPlaceholderText("test_clk");
-    basicLayout->addRow(tr("Test Clock:"), targetTestClockEdit_);
+    basicLayout->addRow(
+        tr("Test Clock:"),
+        createAutoLineEdit(
+            &targetTestClockEdit_, params.test_clock, autoTestClock, autoTestClock, this));
 
     mainLayout_->addWidget(basicGroup);
 
-    /* MUX settings - read-only, auto-determined by connections */
-    int  sourceCount = connectedSources_.size();
-    bool muxEnabled  = sourceCount >= 2;
+    /* Two-column layout for MUX/ICG (left) and DIV/INV (right) */
+    auto *columnsWidget = new QWidget(this);
+    auto *columnsLayout = new QHBoxLayout(columnsWidget);
+    columnsLayout->setContentsMargins(0, 0, 0, 0);
+    columnsLayout->setSpacing(8);
 
+    auto *leftColumn = new QWidget(columnsWidget);
+    auto *leftLayout = new QVBoxLayout(leftColumn);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto *rightColumn = new QWidget(columnsWidget);
+    auto *rightLayout = new QVBoxLayout(rightColumn);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+
+    /* MUX Group (left column) */
     QString muxTitle;
     if (sourceCount == 0) {
-        muxTitle = tr("MUX (no sources connected)");
+        muxTitle = tr("MUX (no sources)");
     } else if (sourceCount == 1) {
-        muxTitle = tr("MUX (1 source - not needed)");
+        muxTitle = tr("MUX (1 source)");
     } else {
-        muxTitle = tr("MUX (%1 sources - enabled)").arg(sourceCount);
+        muxTitle = tr("MUX (%1 sources)").arg(sourceCount);
     }
 
-    auto *muxGroup  = new QGroupBox(muxTitle, this);
+    auto *muxGroup  = new QGroupBox(muxTitle, leftColumn);
     auto *muxLayout = new QFormLayout(muxGroup);
     muxGroup->setCheckable(true);
     muxGroup->setChecked(muxEnabled);
 
-    /* Make checkbox read-only by blocking toggle */
     connect(muxGroup, &QGroupBox::toggled, [muxGroup, muxEnabled](bool) {
         muxGroup->blockSignals(true);
         muxGroup->setChecked(muxEnabled);
         muxGroup->blockSignals(false);
     });
 
-    /* Display connected sources */
     if (!connectedSources_.isEmpty()) {
-        auto *linksLabel = new QLabel(connectedSources_.join(", "), this);
+        auto *linksLabel = new QLabel(connectedSources_.join(", "), muxGroup);
         linksLabel->setWordWrap(true);
         linksLabel->setStyleSheet("color: #666; font-style: italic;");
         muxLayout->addRow(tr("Connected:"), linksLabel);
     } else {
-        auto *noLinksLabel = new QLabel(tr("(connect clock inputs to enable)"), this);
+        auto *noLinksLabel = new QLabel(tr("(connect inputs)"), muxGroup);
         noLinksLabel->setStyleSheet("color: #999; font-style: italic;");
         muxLayout->addRow(noLinksLabel);
     }
 
-    targetMuxCheck_ = nullptr; /* Use group checkbox */
-    mainLayout_->addWidget(muxGroup);
+    targetMuxStaGroup_ = new QGroupBox(tr("STA Guide"), muxGroup);
+    targetMuxStaGroup_->setCheckable(true);
+    targetMuxStaGroup_->setChecked(params.mux.sta_guide.configured);
+    auto *muxStaLayout = new QFormLayout(targetMuxStaGroup_);
 
-    /* ICG settings */
-    auto *icgGroup  = new QGroupBox(tr("ICG (Clock Gating)"), this);
+    targetMuxStaCellEdit_ = new QLineEdit(params.mux.sta_guide.cell, targetMuxStaGroup_);
+    targetMuxStaCellEdit_->setPlaceholderText("");
+    muxStaLayout->addRow(tr("Cell:"), targetMuxStaCellEdit_);
+
+    targetMuxStaInEdit_ = new QLineEdit(params.mux.sta_guide.in, targetMuxStaGroup_);
+    targetMuxStaInEdit_->setPlaceholderText("A");
+    muxStaLayout->addRow(tr("In:"), targetMuxStaInEdit_);
+
+    targetMuxStaOutEdit_ = new QLineEdit(params.mux.sta_guide.out, targetMuxStaGroup_);
+    targetMuxStaOutEdit_->setPlaceholderText("X");
+    muxStaLayout->addRow(tr("Out:"), targetMuxStaOutEdit_);
+
+    muxStaLayout->addRow(
+        tr("Instance:"),
+        createAutoLineEdit(
+            &targetMuxStaInstanceEdit_,
+            params.mux.sta_guide.instance,
+            autoMuxStaInst,
+            autoMuxStaInst,
+            targetMuxStaGroup_));
+
+    muxLayout->addRow(targetMuxStaGroup_);
+    leftLayout->addWidget(muxGroup);
+
+    /* ICG Group (left column) */
+    auto *icgGroup  = new QGroupBox(tr("ICG (Clock Gating)"), leftColumn);
     auto *icgLayout = new QFormLayout(icgGroup);
     icgGroup->setCheckable(true);
     icgGroup->setChecked(params.icg.configured);
 
-    targetIcgEnableEdit_ = new QLineEdit(params.icg.enable, this);
-    targetIcgEnableEdit_->setPlaceholderText("clk_en");
-    icgLayout->addRow(tr("Enable Signal:"), targetIcgEnableEdit_);
+    icgLayout->addRow(
+        tr("Enable:"),
+        createAutoLineEdit(
+            &targetIcgEnableEdit_, params.icg.enable, autoIcgEnable, autoIcgEnable, icgGroup));
 
-    targetIcgPolarityCombo_ = new QComboBox(this);
+    targetIcgPolarityCombo_ = new QComboBox(icgGroup);
     targetIcgPolarityCombo_->addItems({"high", "low"});
     targetIcgPolarityCombo_->setCurrentText(
         params.icg.polarity.isEmpty() ? "high" : params.icg.polarity);
     icgLayout->addRow(tr("Polarity:"), targetIcgPolarityCombo_);
 
-    targetIcgClockOnResetCheck_ = new QCheckBox(tr("Enable clock during reset"), this);
+    targetIcgClockOnResetCheck_ = new QCheckBox(tr("Clock on reset"), icgGroup);
     targetIcgClockOnResetCheck_->setChecked(params.icg.clock_on_reset);
-    icgLayout->addRow(tr("Clock on Reset:"), targetIcgClockOnResetCheck_);
+    icgLayout->addRow(targetIcgClockOnResetCheck_);
 
-    targetIcgCheck_ = nullptr; /* Use group checkbox */
-    connect(icgGroup, &QGroupBox::toggled, [this, icgLayout](bool checked) {
-        for (int i = 0; i < icgLayout->count(); ++i) {
-            if (auto *widget = icgLayout->itemAt(i)->widget()) {
-                widget->setEnabled(checked);
-            }
-        }
-    });
-    icgGroup->toggled(params.icg.configured);
+    targetIcgStaGroup_ = new QGroupBox(tr("STA Guide"), icgGroup);
+    targetIcgStaGroup_->setCheckable(true);
+    targetIcgStaGroup_->setChecked(params.icg.sta_guide.configured);
+    auto *icgStaLayout = new QFormLayout(targetIcgStaGroup_);
 
-    mainLayout_->addWidget(icgGroup);
+    targetIcgStaCellEdit_ = new QLineEdit(params.icg.sta_guide.cell, targetIcgStaGroup_);
+    targetIcgStaCellEdit_->setPlaceholderText("");
+    icgStaLayout->addRow(tr("Cell:"), targetIcgStaCellEdit_);
 
-    /* DIV settings */
-    auto *divGroup  = new QGroupBox(tr("DIV (Clock Divider)"), this);
+    targetIcgStaInEdit_ = new QLineEdit(params.icg.sta_guide.in, targetIcgStaGroup_);
+    targetIcgStaInEdit_->setPlaceholderText("A");
+    icgStaLayout->addRow(tr("In:"), targetIcgStaInEdit_);
+
+    targetIcgStaOutEdit_ = new QLineEdit(params.icg.sta_guide.out, targetIcgStaGroup_);
+    targetIcgStaOutEdit_->setPlaceholderText("X");
+    icgStaLayout->addRow(tr("Out:"), targetIcgStaOutEdit_);
+
+    icgStaLayout->addRow(
+        tr("Instance:"),
+        createAutoLineEdit(
+            &targetIcgStaInstanceEdit_,
+            params.icg.sta_guide.instance,
+            autoIcgStaInst,
+            autoIcgStaInst,
+            targetIcgStaGroup_));
+
+    icgLayout->addRow(targetIcgStaGroup_);
+    leftLayout->addWidget(icgGroup);
+    leftLayout->addStretch();
+
+    /* DIV Group (right column) */
+    auto *divGroup  = new QGroupBox(tr("DIV (Clock Divider)"), rightColumn);
     auto *divLayout = new QFormLayout(divGroup);
     divGroup->setCheckable(true);
     divGroup->setChecked(params.div.configured);
 
-    targetDivDefaultSpin_ = new QSpinBox(this);
+    targetDivDefaultSpin_ = new QSpinBox(divGroup);
     targetDivDefaultSpin_->setRange(1, 65535);
     targetDivDefaultSpin_->setValue(params.div.default_value);
-    divLayout->addRow(tr("Default Value:"), targetDivDefaultSpin_);
+    divLayout->addRow(tr("Default:"), targetDivDefaultSpin_);
 
-    targetDivValueEdit_ = new QLineEdit(params.div.value, this);
-    targetDivValueEdit_->setPlaceholderText("clk_div (runtime control)");
-    divLayout->addRow(tr("Value Signal:"), targetDivValueEdit_);
+    divLayout->addRow(
+        tr("Value:"),
+        createAutoLineEdit(
+            &targetDivValueEdit_, params.div.value, autoDivValue, autoDivValue, divGroup));
 
-    targetDivWidthSpin_ = new QSpinBox(this);
+    targetDivWidthSpin_ = new QSpinBox(divGroup);
     targetDivWidthSpin_->setRange(0, 32);
     targetDivWidthSpin_->setValue(params.div.width);
     targetDivWidthSpin_->setSpecialValueText("auto");
-    divLayout->addRow(tr("Bit Width:"), targetDivWidthSpin_);
+    divLayout->addRow(tr("Width:"), targetDivWidthSpin_);
 
-    targetDivResetEdit_ = new QLineEdit(params.div.reset, this);
-    targetDivResetEdit_->setPlaceholderText("rst_n");
-    divLayout->addRow(tr("Reset Signal:"), targetDivResetEdit_);
+    divLayout->addRow(
+        tr("Reset:"),
+        createAutoLineEdit(&targetDivResetEdit_, params.div.reset, autoReset, autoReset, divGroup));
 
-    targetDivClockOnResetCheck_ = new QCheckBox(tr("Enable clock during reset"), this);
+    targetDivClockOnResetCheck_ = new QCheckBox(tr("Clock on reset"), divGroup);
     targetDivClockOnResetCheck_->setChecked(params.div.clock_on_reset);
-    divLayout->addRow(tr("Clock on Reset:"), targetDivClockOnResetCheck_);
+    divLayout->addRow(targetDivClockOnResetCheck_);
 
-    targetDivCheck_ = nullptr; /* Use group checkbox */
-    connect(divGroup, &QGroupBox::toggled, [this, divLayout](bool checked) {
-        for (int i = 0; i < divLayout->count(); ++i) {
-            if (auto *widget = divLayout->itemAt(i)->widget()) {
-                widget->setEnabled(checked);
-            }
-        }
-    });
-    divGroup->toggled(params.div.configured);
+    targetDivStaGroup_ = new QGroupBox(tr("STA Guide"), divGroup);
+    targetDivStaGroup_->setCheckable(true);
+    targetDivStaGroup_->setChecked(params.div.sta_guide.configured);
+    auto *divStaLayout = new QFormLayout(targetDivStaGroup_);
 
-    mainLayout_->addWidget(divGroup);
+    targetDivStaCellEdit_ = new QLineEdit(params.div.sta_guide.cell, targetDivStaGroup_);
+    targetDivStaCellEdit_->setPlaceholderText("");
+    divStaLayout->addRow(tr("Cell:"), targetDivStaCellEdit_);
 
-    /* INV settings */
-    auto *invGroup  = new QGroupBox(tr("INV (Clock Inverter)"), this);
+    targetDivStaInEdit_ = new QLineEdit(params.div.sta_guide.in, targetDivStaGroup_);
+    targetDivStaInEdit_->setPlaceholderText("A");
+    divStaLayout->addRow(tr("In:"), targetDivStaInEdit_);
+
+    targetDivStaOutEdit_ = new QLineEdit(params.div.sta_guide.out, targetDivStaGroup_);
+    targetDivStaOutEdit_->setPlaceholderText("X");
+    divStaLayout->addRow(tr("Out:"), targetDivStaOutEdit_);
+
+    divStaLayout->addRow(
+        tr("Instance:"),
+        createAutoLineEdit(
+            &targetDivStaInstanceEdit_,
+            params.div.sta_guide.instance,
+            autoDivStaInst,
+            autoDivStaInst,
+            targetDivStaGroup_));
+
+    divLayout->addRow(targetDivStaGroup_);
+    rightLayout->addWidget(divGroup);
+
+    /* INV Group (right column) */
+    auto *invGroup  = new QGroupBox(tr("INV (Clock Inverter)"), rightColumn);
     auto *invLayout = new QFormLayout(invGroup);
     invGroup->setCheckable(true);
     invGroup->setChecked(params.inv.configured);
 
-    targetInvCheck_ = nullptr; /* Use group checkbox */
+    targetInvStaGroup_ = new QGroupBox(tr("STA Guide"), invGroup);
+    targetInvStaGroup_->setCheckable(true);
+    targetInvStaGroup_->setChecked(params.inv.sta_guide.configured);
+    auto *invStaLayout = new QFormLayout(targetInvStaGroup_);
 
-    mainLayout_->addWidget(invGroup);
+    targetInvStaCellEdit_ = new QLineEdit(params.inv.sta_guide.cell, targetInvStaGroup_);
+    targetInvStaCellEdit_->setPlaceholderText("");
+    invStaLayout->addRow(tr("Cell:"), targetInvStaCellEdit_);
+
+    targetInvStaInEdit_ = new QLineEdit(params.inv.sta_guide.in, targetInvStaGroup_);
+    targetInvStaInEdit_->setPlaceholderText("A");
+    invStaLayout->addRow(tr("In:"), targetInvStaInEdit_);
+
+    targetInvStaOutEdit_ = new QLineEdit(params.inv.sta_guide.out, targetInvStaGroup_);
+    targetInvStaOutEdit_->setPlaceholderText("X");
+    invStaLayout->addRow(tr("Out:"), targetInvStaOutEdit_);
+
+    invStaLayout->addRow(
+        tr("Instance:"),
+        createAutoLineEdit(
+            &targetInvStaInstanceEdit_,
+            params.inv.sta_guide.instance,
+            autoInvStaInst,
+            autoInvStaInst,
+            targetInvStaGroup_));
+
+    invLayout->addRow(targetInvStaGroup_);
+    rightLayout->addWidget(invGroup);
+    rightLayout->addStretch();
+
+    columnsLayout->addWidget(leftColumn);
+    columnsLayout->addWidget(rightColumn);
+    mainLayout_->addWidget(columnsWidget);
 
     /* Store group pointers for apply */
     targetMuxCheck_ = reinterpret_cast<QCheckBox *>(muxGroup);
@@ -650,6 +825,15 @@ void PrcConfigDialog::applyConfiguration()
 
         /* MUX - auto-determined by connection count */
         params.mux.configured = connectedSources_.size() >= 2;
+        if (targetMuxStaGroup_) {
+            params.mux.sta_guide.configured = targetMuxStaGroup_->isChecked();
+            if (params.mux.sta_guide.configured) {
+                params.mux.sta_guide.cell     = targetMuxStaCellEdit_->text();
+                params.mux.sta_guide.in       = targetMuxStaInEdit_->text();
+                params.mux.sta_guide.out      = targetMuxStaOutEdit_->text();
+                params.mux.sta_guide.instance = targetMuxStaInstanceEdit_->text();
+            }
+        }
 
         /* ICG */
         auto *icgGroup        = reinterpret_cast<QGroupBox *>(targetIcgCheck_);
@@ -658,6 +842,15 @@ void PrcConfigDialog::applyConfiguration()
             params.icg.enable         = targetIcgEnableEdit_->text();
             params.icg.polarity       = targetIcgPolarityCombo_->currentText();
             params.icg.clock_on_reset = targetIcgClockOnResetCheck_->isChecked();
+        }
+        if (targetIcgStaGroup_) {
+            params.icg.sta_guide.configured = targetIcgStaGroup_->isChecked();
+            if (params.icg.sta_guide.configured) {
+                params.icg.sta_guide.cell     = targetIcgStaCellEdit_->text();
+                params.icg.sta_guide.in       = targetIcgStaInEdit_->text();
+                params.icg.sta_guide.out      = targetIcgStaOutEdit_->text();
+                params.icg.sta_guide.instance = targetIcgStaInstanceEdit_->text();
+            }
         }
 
         /* DIV */
@@ -670,10 +863,28 @@ void PrcConfigDialog::applyConfiguration()
             params.div.reset          = targetDivResetEdit_->text();
             params.div.clock_on_reset = targetDivClockOnResetCheck_->isChecked();
         }
+        if (targetDivStaGroup_) {
+            params.div.sta_guide.configured = targetDivStaGroup_->isChecked();
+            if (params.div.sta_guide.configured) {
+                params.div.sta_guide.cell     = targetDivStaCellEdit_->text();
+                params.div.sta_guide.in       = targetDivStaInEdit_->text();
+                params.div.sta_guide.out      = targetDivStaOutEdit_->text();
+                params.div.sta_guide.instance = targetDivStaInstanceEdit_->text();
+            }
+        }
 
         /* INV */
         auto *invGroup        = reinterpret_cast<QGroupBox *>(targetInvCheck_);
         params.inv.configured = invGroup ? invGroup->isChecked() : false;
+        if (targetInvStaGroup_) {
+            params.inv.sta_guide.configured = targetInvStaGroup_->isChecked();
+            if (params.inv.sta_guide.configured) {
+                params.inv.sta_guide.cell     = targetInvStaCellEdit_->text();
+                params.inv.sta_guide.in       = targetInvStaInEdit_->text();
+                params.inv.sta_guide.out      = targetInvStaOutEdit_->text();
+                params.inv.sta_guide.instance = targetInvStaInstanceEdit_->text();
+            }
+        }
 
         item_->setParams(params);
         break;
@@ -792,26 +1003,83 @@ PrcLinkConfigDialog::PrcLinkConfigDialog(
     setLayout(mainLayout_);
 }
 
+/**
+ * @brief Create a QLineEdit with an Auto button for PrcLinkConfigDialog
+ */
+QWidget *PrcLinkConfigDialog::createAutoLineEdit(
+    QLineEdit    **lineEdit,
+    const QString &initialValue,
+    const QString &placeholder,
+    const QString &autoValue,
+    QWidget       *parent)
+{
+    auto *container = new QWidget(parent);
+    auto *layout    = new QHBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+
+    *lineEdit = new QLineEdit(initialValue, container);
+    (*lineEdit)->setPlaceholderText(placeholder);
+    layout->addWidget(*lineEdit, 1);
+
+    auto *autoBtn = new QPushButton(tr("Auto"), container);
+    autoBtn->setFixedWidth(50);
+    autoBtn->setToolTip(tr("Auto-fill: %1").arg(autoValue.isEmpty() ? tr("(empty)") : autoValue));
+    layout->addWidget(autoBtn);
+
+    /* Only fill if empty */
+    QLineEdit *edit = *lineEdit;
+    QObject::connect(autoBtn, &QPushButton::clicked, [edit, autoValue]() {
+        if (edit->text().isEmpty()) {
+            edit->setText(autoValue);
+        }
+    });
+
+    return container;
+}
+
 void PrcLinkConfigDialog::createForm()
 {
-    /* Scroll area for long forms */
-    auto *scrollArea = new QScrollArea(this);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setFrameShape(QFrame::NoFrame);
+    /* Derive auto values from target name */
+    QString baseName = targetName_;
+    if (baseName.startsWith("clk_")) {
+        baseName = baseName.mid(4);
+    }
+    QString autoIcgEnable      = targetName_ + "_en";
+    QString autoReset          = "rst_" + baseName + "_n";
+    QString autoDivValue       = targetName_ + "_div";
+    QString autoIcgStaInstance = "u_DONTTOUCH_" + targetName_ + "_icg";
+    QString autoDivStaInstance = "u_DONTTOUCH_" + targetName_;
+    QString autoInvStaInstance = "u_DONTTOUCH_" + targetName_ + "_inv";
+    QString autoLinkInstance   = "u_DONTTOUCH_" + targetName_ + "_link";
 
-    auto *scrollWidget = new QWidget(scrollArea);
-    auto *scrollLayout = new QVBoxLayout(scrollWidget);
+    /* Two-column layout */
+    auto *columnsWidget = new QWidget(this);
+    auto *columnsLayout = new QHBoxLayout(columnsWidget);
+    columnsLayout->setContentsMargins(0, 0, 0, 0);
+    columnsLayout->setSpacing(8);
+
+    /* Left column: ICG + DIV */
+    auto *leftColumn = new QWidget(columnsWidget);
+    auto *leftLayout = new QVBoxLayout(leftColumn);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+
+    /* Right column: INV + Link STA */
+    auto *rightColumn = new QWidget(columnsWidget);
+    auto *rightLayout = new QVBoxLayout(rightColumn);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
 
     /* ICG Group */
-    icgGroup_ = new QGroupBox(tr("ICG (Link-level Clock Gating)"), scrollWidget);
+    icgGroup_ = new QGroupBox(tr("ICG (Clock Gating)"), leftColumn);
     icgGroup_->setCheckable(true);
     icgGroup_->setChecked(linkParams_.icg.configured);
 
     auto *icgLayout = new QFormLayout(icgGroup_);
 
-    icgEnableEdit_ = new QLineEdit(linkParams_.icg.enable, icgGroup_);
-    icgEnableEdit_->setPlaceholderText("clk_en");
-    icgLayout->addRow(tr("Enable Signal:"), icgEnableEdit_);
+    icgLayout->addRow(
+        tr("Enable:"),
+        createAutoLineEdit(
+            &icgEnableEdit_, linkParams_.icg.enable, autoIcgEnable, autoIcgEnable, icgGroup_));
 
     icgPolarityCombo_ = new QComboBox(icgGroup_);
     icgPolarityCombo_->addItems({"high", "low"});
@@ -823,42 +1091,46 @@ void PrcLinkConfigDialog::createForm()
     icgTestEnableEdit_->setPlaceholderText("test_en");
     icgLayout->addRow(tr("Test Enable:"), icgTestEnableEdit_);
 
-    icgResetEdit_ = new QLineEdit(linkParams_.icg.reset, icgGroup_);
-    icgResetEdit_->setPlaceholderText("rst_n");
-    icgLayout->addRow(tr("Reset Signal:"), icgResetEdit_);
+    icgLayout->addRow(
+        tr("Reset:"),
+        createAutoLineEdit(&icgResetEdit_, linkParams_.icg.reset, autoReset, autoReset, icgGroup_));
 
-    icgClockOnResetCheck_ = new QCheckBox(tr("Enable clock during reset"), icgGroup_);
+    icgClockOnResetCheck_ = new QCheckBox(tr("Clock on reset"), icgGroup_);
     icgClockOnResetCheck_->setChecked(linkParams_.icg.clock_on_reset);
     icgLayout->addRow(icgClockOnResetCheck_);
 
     /* ICG STA Guide */
-    icgStaGuideGroup_ = new QGroupBox(tr("ICG STA Guide"), icgGroup_);
+    icgStaGuideGroup_ = new QGroupBox(tr("STA Guide"), icgGroup_);
     icgStaGuideGroup_->setCheckable(true);
     icgStaGuideGroup_->setChecked(linkParams_.icg.sta_guide.configured);
 
     auto *icgStaLayout = new QFormLayout(icgStaGuideGroup_);
     icgStaCellEdit_    = new QLineEdit(linkParams_.icg.sta_guide.cell, icgStaGuideGroup_);
-    icgStaCellEdit_->setPlaceholderText("BUF_X2");
+    icgStaCellEdit_->setPlaceholderText("");
     icgStaLayout->addRow(tr("Cell:"), icgStaCellEdit_);
 
     icgStaInEdit_ = new QLineEdit(linkParams_.icg.sta_guide.in, icgStaGuideGroup_);
-    icgStaInEdit_->setPlaceholderText("I");
-    icgStaLayout->addRow(tr("In Pin:"), icgStaInEdit_);
+    icgStaInEdit_->setPlaceholderText("A");
+    icgStaLayout->addRow(tr("In:"), icgStaInEdit_);
 
     icgStaOutEdit_ = new QLineEdit(linkParams_.icg.sta_guide.out, icgStaGuideGroup_);
-    icgStaOutEdit_->setPlaceholderText("Z");
-    icgStaLayout->addRow(tr("Out Pin:"), icgStaOutEdit_);
+    icgStaOutEdit_->setPlaceholderText("X");
+    icgStaLayout->addRow(tr("Out:"), icgStaOutEdit_);
 
-    icgStaInstanceEdit_ = new QLineEdit(linkParams_.icg.sta_guide.instance, icgStaGuideGroup_);
-    icgStaInstanceEdit_->setPlaceholderText("u_icg_sta");
-    icgStaLayout->addRow(tr("Instance:"), icgStaInstanceEdit_);
+    icgStaLayout->addRow(
+        tr("Instance:"),
+        createAutoLineEdit(
+            &icgStaInstanceEdit_,
+            linkParams_.icg.sta_guide.instance,
+            autoIcgStaInstance,
+            autoIcgStaInstance,
+            icgStaGuideGroup_));
 
     icgLayout->addRow(icgStaGuideGroup_);
-
-    scrollLayout->addWidget(icgGroup_);
+    leftLayout->addWidget(icgGroup_);
 
     /* DIV Group */
-    divGroup_ = new QGroupBox(tr("DIV (Link-level Clock Divider)"), scrollWidget);
+    divGroup_ = new QGroupBox(tr("DIV (Clock Divider)"), leftColumn);
     divGroup_->setCheckable(true);
     divGroup_->setChecked(linkParams_.div.configured);
 
@@ -867,113 +1139,128 @@ void PrcLinkConfigDialog::createForm()
     divDefaultSpin_ = new QSpinBox(divGroup_);
     divDefaultSpin_->setRange(1, 65535);
     divDefaultSpin_->setValue(linkParams_.div.default_value);
-    divLayout->addRow(tr("Default Value:"), divDefaultSpin_);
+    divLayout->addRow(tr("Default:"), divDefaultSpin_);
 
-    divValueEdit_ = new QLineEdit(linkParams_.div.value, divGroup_);
-    divValueEdit_->setPlaceholderText("div_ratio (runtime control)");
-    divLayout->addRow(tr("Value Signal:"), divValueEdit_);
+    divLayout->addRow(
+        tr("Value:"),
+        createAutoLineEdit(
+            &divValueEdit_, linkParams_.div.value, autoDivValue, autoDivValue, divGroup_));
 
     divWidthSpin_ = new QSpinBox(divGroup_);
     divWidthSpin_->setRange(0, 32);
     divWidthSpin_->setValue(linkParams_.div.width);
     divWidthSpin_->setSpecialValueText("auto");
-    divLayout->addRow(tr("Bit Width:"), divWidthSpin_);
+    divLayout->addRow(tr("Width:"), divWidthSpin_);
 
-    divResetEdit_ = new QLineEdit(linkParams_.div.reset, divGroup_);
-    divResetEdit_->setPlaceholderText("rst_n");
-    divLayout->addRow(tr("Reset Signal:"), divResetEdit_);
+    divLayout->addRow(
+        tr("Reset:"),
+        createAutoLineEdit(&divResetEdit_, linkParams_.div.reset, autoReset, autoReset, divGroup_));
 
-    divClockOnResetCheck_ = new QCheckBox(tr("Enable clock during reset"), divGroup_);
+    divClockOnResetCheck_ = new QCheckBox(tr("Clock on reset"), divGroup_);
     divClockOnResetCheck_->setChecked(linkParams_.div.clock_on_reset);
     divLayout->addRow(divClockOnResetCheck_);
 
     /* DIV STA Guide */
-    divStaGuideGroup_ = new QGroupBox(tr("DIV STA Guide"), divGroup_);
+    divStaGuideGroup_ = new QGroupBox(tr("STA Guide"), divGroup_);
     divStaGuideGroup_->setCheckable(true);
     divStaGuideGroup_->setChecked(linkParams_.div.sta_guide.configured);
 
     auto *divStaLayout = new QFormLayout(divStaGuideGroup_);
     divStaCellEdit_    = new QLineEdit(linkParams_.div.sta_guide.cell, divStaGuideGroup_);
-    divStaCellEdit_->setPlaceholderText("BUF_X2");
+    divStaCellEdit_->setPlaceholderText("");
     divStaLayout->addRow(tr("Cell:"), divStaCellEdit_);
 
     divStaInEdit_ = new QLineEdit(linkParams_.div.sta_guide.in, divStaGuideGroup_);
-    divStaInEdit_->setPlaceholderText("I");
-    divStaLayout->addRow(tr("In Pin:"), divStaInEdit_);
+    divStaInEdit_->setPlaceholderText("A");
+    divStaLayout->addRow(tr("In:"), divStaInEdit_);
 
     divStaOutEdit_ = new QLineEdit(linkParams_.div.sta_guide.out, divStaGuideGroup_);
-    divStaOutEdit_->setPlaceholderText("Z");
-    divStaLayout->addRow(tr("Out Pin:"), divStaOutEdit_);
+    divStaOutEdit_->setPlaceholderText("X");
+    divStaLayout->addRow(tr("Out:"), divStaOutEdit_);
 
-    divStaInstanceEdit_ = new QLineEdit(linkParams_.div.sta_guide.instance, divStaGuideGroup_);
-    divStaInstanceEdit_->setPlaceholderText("u_div_sta");
-    divStaLayout->addRow(tr("Instance:"), divStaInstanceEdit_);
+    divStaLayout->addRow(
+        tr("Instance:"),
+        createAutoLineEdit(
+            &divStaInstanceEdit_,
+            linkParams_.div.sta_guide.instance,
+            autoDivStaInstance,
+            autoDivStaInstance,
+            divStaGuideGroup_));
 
     divLayout->addRow(divStaGuideGroup_);
-
-    scrollLayout->addWidget(divGroup_);
+    leftLayout->addWidget(divGroup_);
+    leftLayout->addStretch();
 
     /* INV Group */
-    invGroup_ = new QGroupBox(tr("INV (Link-level Clock Inverter)"), scrollWidget);
+    invGroup_ = new QGroupBox(tr("INV (Clock Inverter)"), rightColumn);
     invGroup_->setCheckable(true);
     invGroup_->setChecked(linkParams_.inv.configured);
 
     auto *invLayout = new QFormLayout(invGroup_);
 
     /* INV STA Guide */
-    invStaGuideGroup_ = new QGroupBox(tr("INV STA Guide"), invGroup_);
+    invStaGuideGroup_ = new QGroupBox(tr("STA Guide"), invGroup_);
     invStaGuideGroup_->setCheckable(true);
     invStaGuideGroup_->setChecked(linkParams_.inv.sta_guide.configured);
 
     auto *invStaLayout = new QFormLayout(invStaGuideGroup_);
     invStaCellEdit_    = new QLineEdit(linkParams_.inv.sta_guide.cell, invStaGuideGroup_);
-    invStaCellEdit_->setPlaceholderText("BUF_X2");
+    invStaCellEdit_->setPlaceholderText("");
     invStaLayout->addRow(tr("Cell:"), invStaCellEdit_);
 
     invStaInEdit_ = new QLineEdit(linkParams_.inv.sta_guide.in, invStaGuideGroup_);
-    invStaInEdit_->setPlaceholderText("I");
-    invStaLayout->addRow(tr("In Pin:"), invStaInEdit_);
+    invStaInEdit_->setPlaceholderText("A");
+    invStaLayout->addRow(tr("In:"), invStaInEdit_);
 
     invStaOutEdit_ = new QLineEdit(linkParams_.inv.sta_guide.out, invStaGuideGroup_);
-    invStaOutEdit_->setPlaceholderText("Z");
-    invStaLayout->addRow(tr("Out Pin:"), invStaOutEdit_);
+    invStaOutEdit_->setPlaceholderText("X");
+    invStaLayout->addRow(tr("Out:"), invStaOutEdit_);
 
-    invStaInstanceEdit_ = new QLineEdit(linkParams_.inv.sta_guide.instance, invStaGuideGroup_);
-    invStaInstanceEdit_->setPlaceholderText("u_inv_sta");
-    invStaLayout->addRow(tr("Instance:"), invStaInstanceEdit_);
+    invStaLayout->addRow(
+        tr("Instance:"),
+        createAutoLineEdit(
+            &invStaInstanceEdit_,
+            linkParams_.inv.sta_guide.instance,
+            autoInvStaInstance,
+            autoInvStaInstance,
+            invStaGuideGroup_));
 
     invLayout->addRow(invStaGuideGroup_);
+    rightLayout->addWidget(invGroup_);
 
-    scrollLayout->addWidget(invGroup_);
-
-    /* Link-level STA Guide (at end of chain) */
-    linkStaGuideGroup_ = new QGroupBox(tr("Link STA Guide (end of processing chain)"), scrollWidget);
+    /* Link-level STA Guide */
+    linkStaGuideGroup_ = new QGroupBox(tr("Link STA Guide"), rightColumn);
     linkStaGuideGroup_->setCheckable(true);
     linkStaGuideGroup_->setChecked(linkParams_.sta_guide.configured);
 
     auto *linkStaLayout = new QFormLayout(linkStaGuideGroup_);
     linkStaCellEdit_    = new QLineEdit(linkParams_.sta_guide.cell, linkStaGuideGroup_);
-    linkStaCellEdit_->setPlaceholderText("FOUNDRY_GUIDE_BUF");
+    linkStaCellEdit_->setPlaceholderText("");
     linkStaLayout->addRow(tr("Cell:"), linkStaCellEdit_);
 
     linkStaInEdit_ = new QLineEdit(linkParams_.sta_guide.in, linkStaGuideGroup_);
     linkStaInEdit_->setPlaceholderText("A");
-    linkStaLayout->addRow(tr("In Pin:"), linkStaInEdit_);
+    linkStaLayout->addRow(tr("In:"), linkStaInEdit_);
 
     linkStaOutEdit_ = new QLineEdit(linkParams_.sta_guide.out, linkStaGuideGroup_);
-    linkStaOutEdit_->setPlaceholderText("Y");
-    linkStaLayout->addRow(tr("Out Pin:"), linkStaOutEdit_);
+    linkStaOutEdit_->setPlaceholderText("X");
+    linkStaLayout->addRow(tr("Out:"), linkStaOutEdit_);
 
-    linkStaInstanceEdit_ = new QLineEdit(linkParams_.sta_guide.instance, linkStaGuideGroup_);
-    linkStaInstanceEdit_->setPlaceholderText("u_link_sta");
-    linkStaLayout->addRow(tr("Instance:"), linkStaInstanceEdit_);
+    linkStaLayout->addRow(
+        tr("Instance:"),
+        createAutoLineEdit(
+            &linkStaInstanceEdit_,
+            linkParams_.sta_guide.instance,
+            autoLinkInstance,
+            autoLinkInstance,
+            linkStaGuideGroup_));
 
-    scrollLayout->addWidget(linkStaGuideGroup_);
+    rightLayout->addWidget(linkStaGuideGroup_);
+    rightLayout->addStretch();
 
-    scrollLayout->addStretch();
-
-    scrollArea->setWidget(scrollWidget);
-    mainLayout_->addWidget(scrollArea);
+    columnsLayout->addWidget(leftColumn);
+    columnsLayout->addWidget(rightColumn);
+    mainLayout_->addWidget(columnsWidget);
 }
 
 ClockLinkParams PrcLinkConfigDialog::getLinkParams() const
@@ -1114,8 +1401,27 @@ void PrcControllerDialog::createForm()
     auto *dftGroup  = new QGroupBox(tr("DFT Settings"), this);
     auto *dftLayout = new QFormLayout(dftGroup);
 
+    /* Create test_enable field with Auto button */
+    auto   *testEnableContainer = new QWidget(this);
+    auto   *testEnableLayout    = new QHBoxLayout(testEnableContainer);
+    QString autoTestEnable      = "test_en";
+    testEnableLayout->setContentsMargins(0, 0, 0, 0);
+    testEnableLayout->setSpacing(4);
+
     testEnableEdit_ = new QLineEdit(this);
-    testEnableEdit_->setPlaceholderText("test_en");
+    testEnableEdit_->setPlaceholderText(autoTestEnable);
+    testEnableLayout->addWidget(testEnableEdit_, 1);
+
+    auto *testEnableAutoBtn = new QPushButton(tr("Auto"), this);
+    testEnableAutoBtn->setFixedWidth(50);
+    testEnableAutoBtn->setToolTip(tr("Auto-fill: %1").arg(autoTestEnable));
+    testEnableLayout->addWidget(testEnableAutoBtn);
+
+    connect(testEnableAutoBtn, &QPushButton::clicked, [this, autoTestEnable]() {
+        if (testEnableEdit_->text().isEmpty()) {
+            testEnableEdit_->setText(autoTestEnable);
+        }
+    });
 
     /* Load existing value */
     if (scene_) {
@@ -1138,7 +1444,7 @@ void PrcControllerDialog::createForm()
         }
     }
 
-    dftLayout->addRow(tr("Test Enable:"), testEnableEdit_);
+    dftLayout->addRow(tr("Test Enable:"), testEnableContainer);
 
     auto *dftHint = new QLabel(tr("DFT bypass signal for scan testing"), this);
     dftHint->setStyleSheet("color: #666; font-style: italic;");
@@ -1151,11 +1457,49 @@ void PrcControllerDialog::createForm()
         auto *aoGroup  = new QGroupBox(tr("AO Domain Settings"), this);
         auto *aoLayout = new QFormLayout(aoGroup);
 
+        /* Create host_clock field with Auto button */
+        auto   *hostClockContainer = new QWidget(this);
+        auto   *hostClockLayout    = new QHBoxLayout(hostClockContainer);
+        QString autoHostClock      = "ao_clk";
+        hostClockLayout->setContentsMargins(0, 0, 0, 0);
+        hostClockLayout->setSpacing(4);
+
         hostClockEdit_ = new QLineEdit(this);
-        hostClockEdit_->setPlaceholderText("ao_clk");
+        hostClockEdit_->setPlaceholderText(autoHostClock);
+        hostClockLayout->addWidget(hostClockEdit_, 1);
+
+        auto *hostClockAutoBtn = new QPushButton(tr("Auto"), this);
+        hostClockAutoBtn->setFixedWidth(50);
+        hostClockAutoBtn->setToolTip(tr("Auto-fill: %1").arg(autoHostClock));
+        hostClockLayout->addWidget(hostClockAutoBtn);
+
+        connect(hostClockAutoBtn, &QPushButton::clicked, [this, autoHostClock]() {
+            if (hostClockEdit_->text().isEmpty()) {
+                hostClockEdit_->setText(autoHostClock);
+            }
+        });
+
+        /* Create host_reset field with Auto button */
+        auto   *hostResetContainer = new QWidget(this);
+        auto   *hostResetLayout    = new QHBoxLayout(hostResetContainer);
+        QString autoHostReset      = "ao_rst_n";
+        hostResetLayout->setContentsMargins(0, 0, 0, 0);
+        hostResetLayout->setSpacing(4);
 
         hostResetEdit_ = new QLineEdit(this);
-        hostResetEdit_->setPlaceholderText("ao_rst_n");
+        hostResetEdit_->setPlaceholderText(autoHostReset);
+        hostResetLayout->addWidget(hostResetEdit_, 1);
+
+        auto *hostResetAutoBtn = new QPushButton(tr("Auto"), this);
+        hostResetAutoBtn->setFixedWidth(50);
+        hostResetAutoBtn->setToolTip(tr("Auto-fill: %1").arg(autoHostReset));
+        hostResetLayout->addWidget(hostResetAutoBtn);
+
+        connect(hostResetAutoBtn, &QPushButton::clicked, [this, autoHostReset]() {
+            if (hostResetEdit_->text().isEmpty()) {
+                hostResetEdit_->setText(autoHostReset);
+            }
+        });
 
         /* Load existing values */
         if (scene_ && scene_->hasPowerController(name_)) {
@@ -1164,8 +1508,8 @@ void PrcControllerDialog::createForm()
             hostResetEdit_->setText(def.host_reset);
         }
 
-        aoLayout->addRow(tr("Host Clock:"), hostClockEdit_);
-        aoLayout->addRow(tr("Host Reset:"), hostResetEdit_);
+        aoLayout->addRow(tr("Host Clock:"), hostClockContainer);
+        aoLayout->addRow(tr("Host Reset:"), hostResetContainer);
 
         auto *aoHint = new QLabel(tr("Always-on domain clock and reset signals"), this);
         aoHint->setStyleSheet("color: #666; font-style: italic;");
