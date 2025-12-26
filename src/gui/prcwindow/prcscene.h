@@ -27,6 +27,11 @@ class PrcScene : public QSchematic::Scene
 
 public:
     /**
+     * @brief Controller type for context menu
+     */
+    enum ControllerType { ClockCtrl, ResetCtrl, PowerCtrl };
+
+    /**
      * @brief Construct PRC scene
      * @param[in] parent Parent QObject
      */
@@ -34,6 +39,15 @@ public:
 
     ~PrcScene() override = default;
 
+signals:
+    /**
+     * @brief Signal emitted when user requests to edit a controller
+     * @param[in] type Controller type
+     * @param[in] name Controller name
+     */
+    void editControllerRequested(int type, const QString &name);
+
+public:
     /* Clock Controller Management */
 
     /**
@@ -161,6 +175,12 @@ protected:
      */
     void drawForeground(QPainter *painter, const QRectF &rect) override;
 
+    /**
+     * @brief Handle context menu event for controller frames
+     * @param[in] event Context menu event
+     */
+    void contextMenuEvent(QGraphicsSceneContextMenuEvent *event) override;
+
 private:
     /**
      * @brief Calculate bounding rect for elements with given controller
@@ -170,6 +190,15 @@ private:
      */
     QRectF calculateControllerBounds(
         const QString &controllerName, const QSet<int> &primitiveTypes) const;
+
+    /**
+     * @brief Find controller at scene position
+     * @param[in] pos Scene position
+     * @param[out] type Controller type
+     * @param[out] name Controller name
+     * @return true if controller found at position
+     */
+    bool findControllerAtPos(const QPointF &pos, ControllerType &type, QString &name) const;
 
     /**
      * @brief Get controller color by type

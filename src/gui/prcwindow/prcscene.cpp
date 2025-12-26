@@ -6,6 +6,8 @@
 #include <qschematic/items/node.hpp>
 
 #include <QFont>
+#include <QGraphicsSceneContextMenuEvent>
+#include <QMenu>
 #include <QPen>
 
 using namespace PrcLibrary;
@@ -376,4 +378,86 @@ void PrcScene::drawControllerFrame(
     /* Draw label text */
     painter->setPen(color.darker(150));
     painter->drawText(labelRect.adjusted(4, 2, -4, -2), Qt::AlignLeft | Qt::AlignVCenter, name);
+}
+
+bool PrcScene::findControllerAtPos(const QPointF &pos, ControllerType &type, QString &name) const
+{
+    /* Check clock controllers */
+    QSet<int> clockTypes = {ClockInput, ClockTarget};
+    for (const QString &ctrlName : clockControllers_.keys()) {
+        QRectF bounds = calculateControllerBounds(ctrlName, clockTypes);
+        if (!bounds.isNull() && bounds.contains(pos)) {
+            type = ClockCtrl;
+            name = ctrlName;
+            return true;
+        }
+    }
+
+    /* Check reset controllers */
+    QSet<int> resetTypes = {ResetSource, ResetTarget};
+    for (const QString &ctrlName : resetControllers_.keys()) {
+        QRectF bounds = calculateControllerBounds(ctrlName, resetTypes);
+        if (!bounds.isNull() && bounds.contains(pos)) {
+            type = ResetCtrl;
+            name = ctrlName;
+            return true;
+        }
+    }
+
+    /* Check power controllers */
+    QSet<int> powerTypes = {PowerDomain};
+    for (const QString &ctrlName : powerControllers_.keys()) {
+        QRectF bounds = calculateControllerBounds(ctrlName, powerTypes);
+        if (!bounds.isNull() && bounds.contains(pos)) {
+            type = PowerCtrl;
+            name = ctrlName;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void PrcScene::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
+{
+    /* Check if click is on a controller frame (not on an item) */
+    QGraphicsItem *itemUnderMouse = itemAt(event->scenePos(), QTransform());
+
+    /* If there's an item under mouse, let default handling proceed */
+    if (itemUnderMouse) {
+        QSchematic::Scene::contextMenuEvent(event);
+        return;
+    }
+
+    /* Check if we're in a controller frame */
+    ControllerType type;
+    QString        name;
+    if (findControllerAtPos(event->scenePos(), type, name)) {
+        QMenu menu;
+
+        QString typeStr;
+        switch (type) {
+        case ClockCtrl:
+            typeStr = tr("Clock");
+            break;
+        case ResetCtrl:
+            typeStr = tr("Reset");
+            break;
+        case PowerCtrl:
+            typeStr = tr("Power");
+            break;
+        }
+
+        auto *editAction = menu.addAction(tr("Edit %1 Controller '%2'...").arg(typeStr, name));
+        connect(editAction, &QAction::triggered, [this, type, name]() {
+            emit editControllerRequested(static_cast<int>(type), name);
+        });
+
+        menu.exec(event->screenPos());
+        event->accept();
+        return;
+    }
+
+    /* Let default handling proceed */
+    QSchematic::Scene::contextMenuEvent(event);
 }
