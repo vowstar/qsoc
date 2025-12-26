@@ -153,6 +153,20 @@ public:
      */
     QStringList powerControllerNames() const;
 
+    /* Session-level STA Guide Cell memory */
+
+    /**
+     * @brief Get last used STA Guide cell name (session-level)
+     * @return Last used cell name, empty if not set
+     */
+    QString lastStaGuideCell() const;
+
+    /**
+     * @brief Set last used STA Guide cell name (session-level)
+     * @param[in] cell Cell name to remember
+     */
+    void setLastStaGuideCell(const QString &cell);
+
     /* Serialization */
 
     /**
@@ -224,6 +238,9 @@ private:
     QMap<QString, ClockControllerDef> clockControllers_;
     QMap<QString, ResetControllerDef> resetControllers_;
     QMap<QString, PowerControllerDef> powerControllers_;
+
+    /* Session-level memory (not serialized) */
+    QString lastStaGuideCell_;
 
     /* Drawing constants */
     static constexpr qreal FRAME_PADDING = 20.0; /**< Padding around elements */

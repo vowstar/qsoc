@@ -103,6 +103,20 @@ QStringList PrcScene::powerControllerNames() const
     return powerControllers_.keys();
 }
 
+/* Session-level STA Guide Cell memory */
+
+QString PrcScene::lastStaGuideCell() const
+{
+    return lastStaGuideCell_;
+}
+
+void PrcScene::setLastStaGuideCell(const QString &cell)
+{
+    if (!cell.isEmpty()) {
+        lastStaGuideCell_ = cell;
+    }
+}
+
 /* Serialization */
 
 gpds::container PrcScene::to_container() const

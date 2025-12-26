@@ -191,6 +191,7 @@ void PrcConfigDialog::createClockTargetForm()
     QString autoIcgStaInst = "u_DONTTOUCH_" + params.name + "_icg";
     QString autoDivStaInst = "u_DONTTOUCH_" + params.name;
     QString autoInvStaInst = "u_DONTTOUCH_" + params.name + "_inv";
+    QString autoStaCell    = scene_ ? scene_->lastStaGuideCell() : QString();
     int     sourceCount    = connectedSources_.size();
     bool    muxEnabled     = sourceCount >= 2;
 
@@ -268,9 +269,27 @@ void PrcConfigDialog::createClockTargetForm()
     targetMuxStaGroup_->setChecked(params.mux.sta_guide.configured);
     auto *muxStaLayout = new QFormLayout(targetMuxStaGroup_);
 
-    targetMuxStaCellEdit_ = new QLineEdit(params.mux.sta_guide.cell, targetMuxStaGroup_);
-    targetMuxStaCellEdit_->setPlaceholderText("");
-    muxStaLayout->addRow(tr("Cell:"), targetMuxStaCellEdit_);
+    auto *muxCellContainer = createAutoLineEdit(
+        &targetMuxStaCellEdit_,
+        params.mux.sta_guide.cell,
+        autoStaCell,
+        autoStaCell,
+        targetMuxStaGroup_);
+    muxStaLayout->addRow(tr("Cell:"), muxCellContainer);
+    connect(targetMuxStaCellEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (scene_ && !targetMuxStaCellEdit_->text().isEmpty()) {
+            scene_->setLastStaGuideCell(targetMuxStaCellEdit_->text());
+            updateCellPlaceholders();
+        }
+    });
+    if (auto *btn = muxCellContainer->findChild<QPushButton *>()) {
+        disconnect(btn, &QPushButton::clicked, nullptr, nullptr);
+        connect(btn, &QPushButton::clicked, this, [this]() {
+            if (targetMuxStaCellEdit_->text().isEmpty() && scene_) {
+                targetMuxStaCellEdit_->setText(scene_->lastStaGuideCell());
+            }
+        });
+    }
 
     targetMuxStaInEdit_ = new QLineEdit(params.mux.sta_guide.in, targetMuxStaGroup_);
     targetMuxStaInEdit_->setPlaceholderText("A");
@@ -318,9 +337,27 @@ void PrcConfigDialog::createClockTargetForm()
     targetIcgStaGroup_->setChecked(params.icg.sta_guide.configured);
     auto *icgStaLayout = new QFormLayout(targetIcgStaGroup_);
 
-    targetIcgStaCellEdit_ = new QLineEdit(params.icg.sta_guide.cell, targetIcgStaGroup_);
-    targetIcgStaCellEdit_->setPlaceholderText("");
-    icgStaLayout->addRow(tr("Cell:"), targetIcgStaCellEdit_);
+    auto *icgCellContainer = createAutoLineEdit(
+        &targetIcgStaCellEdit_,
+        params.icg.sta_guide.cell,
+        autoStaCell,
+        autoStaCell,
+        targetIcgStaGroup_);
+    icgStaLayout->addRow(tr("Cell:"), icgCellContainer);
+    connect(targetIcgStaCellEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (scene_ && !targetIcgStaCellEdit_->text().isEmpty()) {
+            scene_->setLastStaGuideCell(targetIcgStaCellEdit_->text());
+            updateCellPlaceholders();
+        }
+    });
+    if (auto *btn = icgCellContainer->findChild<QPushButton *>()) {
+        disconnect(btn, &QPushButton::clicked, nullptr, nullptr);
+        connect(btn, &QPushButton::clicked, this, [this]() {
+            if (targetIcgStaCellEdit_->text().isEmpty() && scene_) {
+                targetIcgStaCellEdit_->setText(scene_->lastStaGuideCell());
+            }
+        });
+    }
 
     targetIcgStaInEdit_ = new QLineEdit(params.icg.sta_guide.in, targetIcgStaGroup_);
     targetIcgStaInEdit_->setPlaceholderText("A");
@@ -378,9 +415,27 @@ void PrcConfigDialog::createClockTargetForm()
     targetDivStaGroup_->setChecked(params.div.sta_guide.configured);
     auto *divStaLayout = new QFormLayout(targetDivStaGroup_);
 
-    targetDivStaCellEdit_ = new QLineEdit(params.div.sta_guide.cell, targetDivStaGroup_);
-    targetDivStaCellEdit_->setPlaceholderText("");
-    divStaLayout->addRow(tr("Cell:"), targetDivStaCellEdit_);
+    auto *divCellContainer = createAutoLineEdit(
+        &targetDivStaCellEdit_,
+        params.div.sta_guide.cell,
+        autoStaCell,
+        autoStaCell,
+        targetDivStaGroup_);
+    divStaLayout->addRow(tr("Cell:"), divCellContainer);
+    connect(targetDivStaCellEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (scene_ && !targetDivStaCellEdit_->text().isEmpty()) {
+            scene_->setLastStaGuideCell(targetDivStaCellEdit_->text());
+            updateCellPlaceholders();
+        }
+    });
+    if (auto *btn = divCellContainer->findChild<QPushButton *>()) {
+        disconnect(btn, &QPushButton::clicked, nullptr, nullptr);
+        connect(btn, &QPushButton::clicked, this, [this]() {
+            if (targetDivStaCellEdit_->text().isEmpty() && scene_) {
+                targetDivStaCellEdit_->setText(scene_->lastStaGuideCell());
+            }
+        });
+    }
 
     targetDivStaInEdit_ = new QLineEdit(params.div.sta_guide.in, targetDivStaGroup_);
     targetDivStaInEdit_->setPlaceholderText("A");
@@ -413,9 +468,27 @@ void PrcConfigDialog::createClockTargetForm()
     targetInvStaGroup_->setChecked(params.inv.sta_guide.configured);
     auto *invStaLayout = new QFormLayout(targetInvStaGroup_);
 
-    targetInvStaCellEdit_ = new QLineEdit(params.inv.sta_guide.cell, targetInvStaGroup_);
-    targetInvStaCellEdit_->setPlaceholderText("");
-    invStaLayout->addRow(tr("Cell:"), targetInvStaCellEdit_);
+    auto *invCellContainer = createAutoLineEdit(
+        &targetInvStaCellEdit_,
+        params.inv.sta_guide.cell,
+        autoStaCell,
+        autoStaCell,
+        targetInvStaGroup_);
+    invStaLayout->addRow(tr("Cell:"), invCellContainer);
+    connect(targetInvStaCellEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (scene_ && !targetInvStaCellEdit_->text().isEmpty()) {
+            scene_->setLastStaGuideCell(targetInvStaCellEdit_->text());
+            updateCellPlaceholders();
+        }
+    });
+    if (auto *btn = invCellContainer->findChild<QPushButton *>()) {
+        disconnect(btn, &QPushButton::clicked, nullptr, nullptr);
+        connect(btn, &QPushButton::clicked, this, [this]() {
+            if (targetInvStaCellEdit_->text().isEmpty() && scene_) {
+                targetInvStaCellEdit_->setText(scene_->lastStaGuideCell());
+            }
+        });
+    }
 
     targetInvStaInEdit_ = new QLineEdit(params.inv.sta_guide.in, targetInvStaGroup_);
     targetInvStaInEdit_->setPlaceholderText("A");
@@ -789,6 +862,24 @@ void PrcConfigDialog::onEditControllerClicked()
     }
 }
 
+/* Update Cell Placeholders */
+void PrcConfigDialog::updateCellPlaceholders()
+{
+    QString cell = scene_ ? scene_->lastStaGuideCell() : QString();
+    if (targetMuxStaCellEdit_) {
+        targetMuxStaCellEdit_->setPlaceholderText(cell);
+    }
+    if (targetIcgStaCellEdit_) {
+        targetIcgStaCellEdit_->setPlaceholderText(cell);
+    }
+    if (targetDivStaCellEdit_) {
+        targetDivStaCellEdit_->setPlaceholderText(cell);
+    }
+    if (targetInvStaCellEdit_) {
+        targetInvStaCellEdit_->setPlaceholderText(cell);
+    }
+}
+
 /* Apply Configuration */
 void PrcConfigDialog::applyConfiguration()
 {
@@ -887,6 +978,26 @@ void PrcConfigDialog::applyConfiguration()
         }
 
         item_->setParams(params);
+
+        /* Save last non-empty STA Guide Cell to scene for session memory */
+        if (scene_) {
+            QString lastCell;
+            if (params.mux.sta_guide.configured && !params.mux.sta_guide.cell.isEmpty()) {
+                lastCell = params.mux.sta_guide.cell;
+            }
+            if (params.icg.sta_guide.configured && !params.icg.sta_guide.cell.isEmpty()) {
+                lastCell = params.icg.sta_guide.cell;
+            }
+            if (params.div.sta_guide.configured && !params.div.sta_guide.cell.isEmpty()) {
+                lastCell = params.div.sta_guide.cell;
+            }
+            if (params.inv.sta_guide.configured && !params.inv.sta_guide.cell.isEmpty()) {
+                lastCell = params.inv.sta_guide.cell;
+            }
+            if (!lastCell.isEmpty()) {
+                scene_->setLastStaGuideCell(lastCell);
+            }
+        }
         break;
     }
     case ResetSource: {
@@ -934,11 +1045,13 @@ PrcLinkConfigDialog::PrcLinkConfigDialog(
     const QString         &sourceName,
     const QString         &targetName,
     const ClockLinkParams &linkParams,
+    PrcScene              *scene,
     QWidget               *parent)
     : QDialog(parent)
     , sourceName_(sourceName)
     , targetName_(targetName)
     , linkParams_(linkParams)
+    , scene_(scene)
     , mainLayout_(nullptr)
     , icgGroup_(nullptr)
     , icgEnableEdit_(nullptr)
@@ -1052,6 +1165,7 @@ void PrcLinkConfigDialog::createForm()
     QString autoDivStaInstance = "u_DONTTOUCH_" + targetName_;
     QString autoInvStaInstance = "u_DONTTOUCH_" + targetName_ + "_inv";
     QString autoLinkInstance   = "u_DONTTOUCH_" + targetName_ + "_link";
+    QString autoStaCell        = scene_ ? scene_->lastStaGuideCell() : QString();
 
     /* Two-column layout */
     auto *columnsWidget = new QWidget(this);
@@ -1105,9 +1219,28 @@ void PrcLinkConfigDialog::createForm()
     icgStaGuideGroup_->setChecked(linkParams_.icg.sta_guide.configured);
 
     auto *icgStaLayout = new QFormLayout(icgStaGuideGroup_);
-    icgStaCellEdit_    = new QLineEdit(linkParams_.icg.sta_guide.cell, icgStaGuideGroup_);
-    icgStaCellEdit_->setPlaceholderText("");
-    icgStaLayout->addRow(tr("Cell:"), icgStaCellEdit_);
+
+    auto *icgCellContainer = createAutoLineEdit(
+        &icgStaCellEdit_,
+        linkParams_.icg.sta_guide.cell,
+        autoStaCell,
+        autoStaCell,
+        icgStaGuideGroup_);
+    icgStaLayout->addRow(tr("Cell:"), icgCellContainer);
+    connect(icgStaCellEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (scene_ && !icgStaCellEdit_->text().isEmpty()) {
+            scene_->setLastStaGuideCell(icgStaCellEdit_->text());
+            updateCellPlaceholders();
+        }
+    });
+    if (auto *btn = icgCellContainer->findChild<QPushButton *>()) {
+        disconnect(btn, &QPushButton::clicked, nullptr, nullptr);
+        connect(btn, &QPushButton::clicked, this, [this]() {
+            if (icgStaCellEdit_->text().isEmpty() && scene_) {
+                icgStaCellEdit_->setText(scene_->lastStaGuideCell());
+            }
+        });
+    }
 
     icgStaInEdit_ = new QLineEdit(linkParams_.icg.sta_guide.in, icgStaGuideGroup_);
     icgStaInEdit_->setPlaceholderText("A");
@@ -1166,9 +1299,28 @@ void PrcLinkConfigDialog::createForm()
     divStaGuideGroup_->setChecked(linkParams_.div.sta_guide.configured);
 
     auto *divStaLayout = new QFormLayout(divStaGuideGroup_);
-    divStaCellEdit_    = new QLineEdit(linkParams_.div.sta_guide.cell, divStaGuideGroup_);
-    divStaCellEdit_->setPlaceholderText("");
-    divStaLayout->addRow(tr("Cell:"), divStaCellEdit_);
+
+    auto *divCellContainer = createAutoLineEdit(
+        &divStaCellEdit_,
+        linkParams_.div.sta_guide.cell,
+        autoStaCell,
+        autoStaCell,
+        divStaGuideGroup_);
+    divStaLayout->addRow(tr("Cell:"), divCellContainer);
+    connect(divStaCellEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (scene_ && !divStaCellEdit_->text().isEmpty()) {
+            scene_->setLastStaGuideCell(divStaCellEdit_->text());
+            updateCellPlaceholders();
+        }
+    });
+    if (auto *btn = divCellContainer->findChild<QPushButton *>()) {
+        disconnect(btn, &QPushButton::clicked, nullptr, nullptr);
+        connect(btn, &QPushButton::clicked, this, [this]() {
+            if (divStaCellEdit_->text().isEmpty() && scene_) {
+                divStaCellEdit_->setText(scene_->lastStaGuideCell());
+            }
+        });
+    }
 
     divStaInEdit_ = new QLineEdit(linkParams_.div.sta_guide.in, divStaGuideGroup_);
     divStaInEdit_->setPlaceholderText("A");
@@ -1204,9 +1356,28 @@ void PrcLinkConfigDialog::createForm()
     invStaGuideGroup_->setChecked(linkParams_.inv.sta_guide.configured);
 
     auto *invStaLayout = new QFormLayout(invStaGuideGroup_);
-    invStaCellEdit_    = new QLineEdit(linkParams_.inv.sta_guide.cell, invStaGuideGroup_);
-    invStaCellEdit_->setPlaceholderText("");
-    invStaLayout->addRow(tr("Cell:"), invStaCellEdit_);
+
+    auto *invCellContainer = createAutoLineEdit(
+        &invStaCellEdit_,
+        linkParams_.inv.sta_guide.cell,
+        autoStaCell,
+        autoStaCell,
+        invStaGuideGroup_);
+    invStaLayout->addRow(tr("Cell:"), invCellContainer);
+    connect(invStaCellEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (scene_ && !invStaCellEdit_->text().isEmpty()) {
+            scene_->setLastStaGuideCell(invStaCellEdit_->text());
+            updateCellPlaceholders();
+        }
+    });
+    if (auto *btn = invCellContainer->findChild<QPushButton *>()) {
+        disconnect(btn, &QPushButton::clicked, nullptr, nullptr);
+        connect(btn, &QPushButton::clicked, this, [this]() {
+            if (invStaCellEdit_->text().isEmpty() && scene_) {
+                invStaCellEdit_->setText(scene_->lastStaGuideCell());
+            }
+        });
+    }
 
     invStaInEdit_ = new QLineEdit(linkParams_.inv.sta_guide.in, invStaGuideGroup_);
     invStaInEdit_->setPlaceholderText("A");
@@ -1233,10 +1404,24 @@ void PrcLinkConfigDialog::createForm()
     linkStaGuideGroup_->setCheckable(true);
     linkStaGuideGroup_->setChecked(linkParams_.sta_guide.configured);
 
-    auto *linkStaLayout = new QFormLayout(linkStaGuideGroup_);
-    linkStaCellEdit_    = new QLineEdit(linkParams_.sta_guide.cell, linkStaGuideGroup_);
-    linkStaCellEdit_->setPlaceholderText("");
-    linkStaLayout->addRow(tr("Cell:"), linkStaCellEdit_);
+    auto *linkStaLayout     = new QFormLayout(linkStaGuideGroup_);
+    auto *linkCellContainer = createAutoLineEdit(
+        &linkStaCellEdit_, linkParams_.sta_guide.cell, autoStaCell, autoStaCell, linkStaGuideGroup_);
+    linkStaLayout->addRow(tr("Cell:"), linkCellContainer);
+    connect(linkStaCellEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (scene_ && !linkStaCellEdit_->text().isEmpty()) {
+            scene_->setLastStaGuideCell(linkStaCellEdit_->text());
+            updateCellPlaceholders();
+        }
+    });
+    if (auto *btn = linkCellContainer->findChild<QPushButton *>()) {
+        disconnect(btn, &QPushButton::clicked, nullptr, nullptr);
+        connect(btn, &QPushButton::clicked, this, [this]() {
+            if (linkStaCellEdit_->text().isEmpty() && scene_) {
+                linkStaCellEdit_->setText(scene_->lastStaGuideCell());
+            }
+        });
+    }
 
     linkStaInEdit_ = new QLineEdit(linkParams_.sta_guide.in, linkStaGuideGroup_);
     linkStaInEdit_->setPlaceholderText("A");
@@ -1261,6 +1446,24 @@ void PrcLinkConfigDialog::createForm()
     columnsLayout->addWidget(leftColumn);
     columnsLayout->addWidget(rightColumn);
     mainLayout_->addWidget(columnsWidget);
+}
+
+/* Update Cell Placeholders */
+void PrcLinkConfigDialog::updateCellPlaceholders()
+{
+    QString cell = scene_ ? scene_->lastStaGuideCell() : QString();
+    if (icgStaCellEdit_) {
+        icgStaCellEdit_->setPlaceholderText(cell);
+    }
+    if (divStaCellEdit_) {
+        divStaCellEdit_->setPlaceholderText(cell);
+    }
+    if (invStaCellEdit_) {
+        invStaCellEdit_->setPlaceholderText(cell);
+    }
+    if (linkStaCellEdit_) {
+        linkStaCellEdit_->setPlaceholderText(cell);
+    }
 }
 
 ClockLinkParams PrcLinkConfigDialog::getLinkParams() const
@@ -1323,6 +1526,26 @@ ClockLinkParams PrcLinkConfigDialog::getLinkParams() const
         params.sta_guide.in       = linkStaInEdit_->text();
         params.sta_guide.out      = linkStaOutEdit_->text();
         params.sta_guide.instance = linkStaInstanceEdit_->text();
+    }
+
+    /* Save last non-empty STA Guide Cell to scene for session memory */
+    if (scene_) {
+        QString lastCell;
+        if (params.icg.sta_guide.configured && !params.icg.sta_guide.cell.isEmpty()) {
+            lastCell = params.icg.sta_guide.cell;
+        }
+        if (params.div.sta_guide.configured && !params.div.sta_guide.cell.isEmpty()) {
+            lastCell = params.div.sta_guide.cell;
+        }
+        if (params.inv.sta_guide.configured && !params.inv.sta_guide.cell.isEmpty()) {
+            lastCell = params.inv.sta_guide.cell;
+        }
+        if (params.sta_guide.configured && !params.sta_guide.cell.isEmpty()) {
+            lastCell = params.sta_guide.cell;
+        }
+        if (!lastCell.isEmpty()) {
+            const_cast<PrcScene *>(scene_)->setLastStaGuideCell(lastCell);
+        }
     }
 
     return params;

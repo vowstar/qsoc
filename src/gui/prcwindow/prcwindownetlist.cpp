@@ -203,7 +203,7 @@ void PrcWindow::handleWireDoubleClick(QSchematic::Items::WireNet *wireNet)
     linkParams.sourceName                  = sourceName;
 
     /* Show link configuration dialog */
-    PrcLibrary::PrcLinkConfigDialog dialog(sourceName, targetName, linkParams, this);
+    PrcLibrary::PrcLinkConfigDialog dialog(sourceName, targetName, linkParams, &prcScene(), this);
     if (dialog.exec() == QDialog::Accepted) {
         /* Get configured parameters and store them */
         PrcLibrary::ClockLinkParams newParams = dialog.getLinkParams();
