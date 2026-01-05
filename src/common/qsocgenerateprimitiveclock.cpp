@@ -1978,7 +1978,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    /* Clock gate feedback signal */\n";
         out << "    always @(posedge ungated_output_clock or negedge rst_n) begin\n";
         out << "        if (!rst_n) begin\n";
-        out << "            gate_is_open_q <= 1'b0;\n";
+        out << "            gate_is_open_q <= CLOCK_DURING_RESET;\n";
         out << "        end else begin\n";
         out << "            gate_is_open_q <= gate_en_q & en;\n";
         out << "        end\n";
@@ -1989,7 +1989,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
         out << "    ) i_clk_gate (\n";
         out << "        .clk(ungated_output_clock),\n";
-        out << "        .en(gate_en_q & en),\n";
+        out << "        .en(gate_is_open_q),\n";
         out << "        .test_en(test_en),\n";
         out << "        .rst_n(rst_n),\n";
         out << "        .clk_out(clk_out)\n";
