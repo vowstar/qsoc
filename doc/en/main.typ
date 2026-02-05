@@ -52,6 +52,7 @@
     #include "about.typ"
     #include "overview.typ"
     #include "command.typ"
+    #include "agent.typ"
     #include "format_overview.typ"
     #include "format_netlist.typ"
     #include "format_bus.typ"

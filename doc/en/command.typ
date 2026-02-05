@@ -37,6 +37,7 @@ commands and subcommands are available:
     [Generate files from Jinja2 templates using various data sources],
     [], [stub], [Generate Verilog and Liberty stub files for selected modules],
     [gui], [], [Start the software in GUI mode],
+    [agent], [], [Start interactive AI agent for SoC design automation],
   )],
   caption: [COMMAND LINE INTERFACE],
   kind: table,
