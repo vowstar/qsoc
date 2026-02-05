@@ -160,6 +160,19 @@ public slots:
      */
     static QMap<QString, QString> extractMappingsFromResponse(const LLMResponse &response);
 
+    /**
+     * @brief Send chat completion with tool definitions (Agent mode)
+     * @details Sends a request using the OpenAI Chat Completions format with
+     *          tool/function calling support. Returns the full JSON response
+     *          which may contain tool_calls that need to be processed.
+     * @param messages Conversation history in OpenAI format
+     * @param tools Tool definitions in OpenAI format (optional)
+     * @param temperature Temperature parameter (0.0-1.0)
+     * @return Full JSON response from the LLM (may contain tool_calls)
+     */
+    json sendChatCompletion(
+        const json &messages, const json &tools = json::array(), double temperature = 0.2);
+
 private:
     QNetworkAccessManager *networkManager_ = nullptr;
     QSocConfig            *config_         = nullptr;
