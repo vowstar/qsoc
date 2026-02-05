@@ -12,12 +12,26 @@
 #include <QNetworkReply>
 #include <QObject>
 #include <QString>
+#include <QUrl>
 
 using json = nlohmann::json;
 
 /**
- * @brief The LLMResponse struct.
- * @details This struct holds the result of an LLM request.
+ * @brief LLM endpoint configuration
+ * @details Holds configuration for a single LLM API endpoint
+ */
+struct LLMEndpoint
+{
+    QString name;            /* Endpoint name for identification */
+    QUrl    url;             /* API endpoint URL */
+    QString key;             /* API key (optional for local services) */
+    QString model;           /* Model name to use */
+    int     timeout = 30000; /* Request timeout in milliseconds */
+};
+
+/**
+ * @brief The LLMResponse struct
+ * @details This struct holds the result of an LLM request
  */
 struct LLMResponse
 {
@@ -28,26 +42,26 @@ struct LLMResponse
 };
 
 /**
- * @brief The QLLMService class provides a general interface for LLM API services
- * @details This class handles API communication with various LLM providers
+ * @brief Fallback strategy for multiple endpoints
+ */
+enum class LLMFallbackStrategy : std::uint8_t {
+    Sequential, /* Try endpoints in order */
+    Random,     /* Try endpoints in random order */
+    RoundRobin  /* Rotate through endpoints */
+};
+
+/**
+ * @brief The QLLMService class provides a unified interface for LLM API services
+ * @details This class handles API communication using OpenAI Chat Completions format.
+ *          All providers (OpenAI, DeepSeek, Groq, Claude, Ollama) support this format.
  */
 class QLLMService : public QObject
 {
     Q_OBJECT
 
 public:
-    enum Provider : std::uint8_t {
-        DEEPSEEK, /* Default provider */
-        OPENAI,
-        GROQ,
-        CLAUDE,
-        OLLAMA
-        /* More providers can be added */
-    };
-
     /**
      * @brief Constructor for QLLMService
-     * @details This constructor will initialize the resources.
      * @param parent Parent object
      * @param config Configuration manager, can be nullptr
      */
@@ -55,75 +69,54 @@ public:
 
     /**
      * @brief Destructor for QLLMService
-     * @details This destructor will free all the allocated resources.
      */
     ~QLLMService() override;
 
 public slots:
-    /* Configuration related methods */
+    /* Configuration */
 
     /**
      * @brief Set the configuration manager
-     * @details Sets the configuration manager and reloads API keys.
      * @param config Configuration manager, can be nullptr
      */
     void setConfig(QSocConfig *config);
 
     /**
      * @brief Get the configuration manager
-     * @details Retrieves the currently assigned configuration manager.
-     * @return QSocConfig* Pointer to the current configuration manager.
+     * @return Pointer to the current configuration manager
      */
     QSocConfig *getConfig();
 
-    /* Provider related methods */
+    /* Endpoint management */
 
     /**
-     * @brief Set the provider to use for API requests
-     * @param provider Provider to use
+     * @brief Add an endpoint to the service
+     * @param endpoint Endpoint configuration to add
      */
-    void setProvider(Provider provider);
+    void addEndpoint(const LLMEndpoint &endpoint);
 
     /**
-     * @brief Get the current provider used for API requests
-     * @return Current provider
+     * @brief Clear all endpoints
      */
-    Provider getProvider() const;
+    void clearEndpoints();
 
     /**
-     * @brief Get provider name as string
-     * @param provider LLM provider
-     * @return Provider name as string
+     * @brief Get the number of configured endpoints
+     * @return Number of endpoints
      */
-    QString getProviderName(Provider provider) const;
-
-    /* API key related methods */
+    int endpointCount() const;
 
     /**
-     * @brief Check if an API key is configured
-     * @return Whether the API key is configured
+     * @brief Check if at least one endpoint is configured
+     * @return True if at least one endpoint is available
      */
-    bool isApiKeyConfigured() const;
+    bool hasEndpoint() const;
 
     /**
-     * @brief Get the API key
-     * @return API key for the current provider
+     * @brief Set the fallback strategy
+     * @param strategy Strategy to use when an endpoint fails
      */
-    QString getApiKey() const;
-
-    /**
-     * @brief Manually set an API key
-     * @param value API key to set
-     */
-    void setApiKey(const QString &value);
-
-    /* API endpoint related methods */
-
-    /**
-     * @brief Get the API endpoint URL
-     * @return API endpoint URL for the current provider
-     */
-    QUrl getApiEndpoint() const;
+    void setFallbackStrategy(LLMFallbackStrategy strategy);
 
     /* LLM request methods */
 
@@ -168,62 +161,78 @@ public slots:
     static QMap<QString, QString> extractMappingsFromResponse(const LLMResponse &response);
 
 private:
-    QNetworkAccessManager *networkManager = nullptr;
-    QSocConfig            *config         = nullptr;
-    Provider               provider       = DEEPSEEK;
-    QString                apiKey;
-    QUrl                   apiUrl;
-    QString                aiModel;
+    QNetworkAccessManager *networkManager_ = nullptr;
+    QSocConfig            *config_         = nullptr;
+    QList<LLMEndpoint>     endpoints_;
+    int                    currentEndpoint_  = 0;
+    LLMFallbackStrategy    fallbackStrategy_ = LLMFallbackStrategy::Sequential;
 
     /**
      * @brief Load configuration settings from config
-     * @details Loads provider, apiKey, apiUrl, aiModel according to priority rules
      */
     void loadConfigSettings();
 
     /**
      * @brief Set up network proxy based on configuration settings
-     * @details Configures the network proxy for the networkManager based on
-     *          settings from the configuration (proxy_type, proxy_host, etc.)
      */
     void setupNetworkProxy();
 
     /**
-     * @brief Get the default API endpoint URL for a provider
-     * @param provider LLM provider
-     * @return Default API endpoint URL
+     * @brief Select an endpoint based on fallback strategy
+     * @return Selected endpoint, or empty endpoint if none available
      */
-    QUrl getDefaultApiEndpoint(Provider provider) const;
+    LLMEndpoint selectEndpoint();
 
     /**
-     * @brief Get current provider from configuration
-     * @return Provider to use
+     * @brief Advance to next endpoint for fallback
      */
-    Provider getCurrentProvider() const;
+    void advanceEndpoint();
 
     /**
-     * @brief Prepare network request for the current provider
+     * @brief Prepare network request for an endpoint
+     * @param endpoint Endpoint to prepare request for
      * @return Configured network request
      */
-    QNetworkRequest prepareRequest() const;
+    QNetworkRequest prepareRequest(const LLMEndpoint &endpoint) const;
 
     /**
-     * @brief Build the request payload
+     * @brief Build the request payload (OpenAI Chat Completions format)
      * @param prompt User prompt content
      * @param systemPrompt System prompt content
      * @param temperature Temperature parameter
      * @param jsonMode Whether to request JSON format output
-     * @return JSON document for the request payload
+     * @param model Model name to use
+     * @return JSON payload for the request
      */
     json buildRequestPayload(
-        const QString &prompt, const QString &systemPrompt, double temperature, bool jsonMode) const;
+        const QString &prompt,
+        const QString &systemPrompt,
+        double         temperature,
+        bool           jsonMode,
+        const QString &model) const;
 
     /**
-     * @brief Parse the API response
+     * @brief Parse the API response (OpenAI Chat Completions format)
      * @param reply Network response
      * @return Parsed LLM response struct
      */
     LLMResponse parseResponse(QNetworkReply *reply) const;
+
+    /**
+     * @brief Send request to a specific endpoint
+     * @param endpoint Endpoint to use
+     * @param prompt User prompt
+     * @param systemPrompt System prompt
+     * @param temperature Temperature
+     * @param jsonMode JSON mode flag
+     * @return Response from the endpoint
+     */
+    LLMResponse sendRequestToEndpoint(
+        const LLMEndpoint &endpoint,
+        const QString     &prompt,
+        const QString     &systemPrompt,
+        double             temperature,
+        bool               jsonMode);
 };
 
 #endif // QLLMSERVICE_H

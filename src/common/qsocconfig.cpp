@@ -214,86 +214,36 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     QTextStream out(&file);
 
     out << "# QSoc Configuration File\n";
-    out << "# This file contains configuration settings for the QSoc application.\n";
     out << "# Uncomment and modify the settings below as needed.\n\n";
 
-    out << "# Configuration Priority Order\n";
-    out << "# ---------------------------\n";
-    out << "# Settings are applied in the following order of precedence (highest to\n";
-    out << "# lowest):\n";
-    out << "# 1. Environment variables (QSOC_API_KEY, QSOC_AI_PROVIDER,\n";
-    out << "#    QSOC_AI_MODEL, QSOC_API_URL)\n";
-    out << "# 2. Global settings in this file\n";
-    out << "# 3. Provider-specific settings in this file\n\n";
+    out << "# =============================================================================\n";
+    out << "# LLM Configuration\n";
+    out << "# =============================================================================\n";
+    out << "# All LLM providers use OpenAI Chat Completions format.\n";
+    out << "# Configure URL, key (if needed), and model name.\n\n";
 
-    out << "# Global Configuration\n";
-    out << "# -------------------\n";
-    out << "# Global settings have MEDIUM priority (overridden by environment variables\n";
-    out << "# but override provider-specific settings).\n";
+    out << "# llm:\n";
+    out << "#   url: https://api.deepseek.com/v1/chat/completions\n";
+    out << "#   key: sk-xxx\n";
+    out << "#   model: deepseek-chat\n";
+    out << "#   timeout: 30000\n\n";
 
-    out << "# Choose your AI provider by uncommenting one of the following:\n";
-    out << "# ai_provider: deepseek   # DeepSeek AI\n";
-    out << "# ai_provider: openai     # OpenAI\n";
-    out << "# ai_provider: groq       # Groq\n";
-    out << "# ai_provider: claude     # Anthropic Claude\n";
-    out << "# ai_provider: ollama     # Ollama (local)\n\n";
+    out << "# Common endpoints:\n";
+    out << "# - DeepSeek:  https://api.deepseek.com/v1/chat/completions\n";
+    out << "# - OpenAI:    https://api.openai.com/v1/chat/completions\n";
+    out << "# - Groq:      https://api.groq.com/openai/v1/chat/completions\n";
+    out << "# - Ollama:    http://localhost:11434/v1/chat/completions\n\n";
 
-    out << "# Global API key (used if provider-specific key is not set)\n";
-    out << "# api_key: your_api_key_here\n\n";
-
-    out << "# Global model selection (used if provider-specific model is not set)\n";
-    out << "# ai_model: gpt-4o-mini\n\n";
-
-    out << "# Global API URL (used if provider-specific URL is not set)\n";
-    out << "# api_url: https://custom-api-endpoint.example.com/v1/chat/completions\n\n";
-
-    out << "# Provider-specific Configuration\n";
-    out << "# ------------------------------\n";
-    out << "# You can specify settings for each provider separately using nested format.\n";
-    out << "# Note: Provider-specific settings have the LOWEST priority and will\n";
-    out << "# be overridden by global settings and environment variables.\n\n";
-
-    out << "# DeepSeek configuration\n";
-    out << "# deepseek:\n";
-    out << "#   api_key: your_deepseek_api_key_here\n";
-    out << "#   api_url: https://api.deepseek.com/v1/chat/completions\n";
-    out << "#   ai_model: deepseek-chat\n\n";
-
-    out << "# OpenAI configuration\n";
-    out << "# openai:\n";
-    out << "#   api_key: your_openai_api_key_here\n";
-    out << "#   api_url: https://api.openai.com/v1/chat/completions\n";
-    out << "#   ai_model: gpt-4o-mini\n\n";
-
-    out << "# Groq configuration\n";
-    out << "# groq:\n";
-    out << "#   api_key: your_groq_api_key_here\n";
-    out << "#   api_url: https://api.groq.com/openai/v1/chat/completions\n";
-    out << "#   ai_model: mixtral-8x7b-32768\n\n";
-
-    out << "# Claude configuration\n";
-    out << "# claude:\n";
-    out << "#   api_key: your_claude_api_key_here\n";
-    out << "#   api_url: https://api.anthropic.com/v1/messages\n";
-    out << "#   ai_model: claude-3-5-sonnet-20241022\n\n";
-
-    out << "# Ollama configuration\n";
-    out << "# ollama:\n";
-    out << "#   api_url: http://localhost:11434/api/generate\n";
-    out << "#   ai_model: llama3\n\n";
-
-    /* Add network proxy configuration section */
+    out << "# =============================================================================\n";
     out << "# Network Proxy Configuration\n";
-    out << "# -------------------------\n";
-    out << "# proxy_type: system     # Use system proxy settings (default)\n";
-    out << "# proxy_type: none       # No proxy\n";
-    out << "# proxy_type: default    # Use application proxy\n";
-    out << "# proxy_type: socks5     # Use SOCKS5 proxy\n";
-    out << "# proxy_type: http       # Use HTTP proxy\n";
-    out << "# proxy_host: 127.0.0.1  # Proxy server hostname or IP\n";
-    out << "# proxy_port: 1080       # Proxy server port\n";
-    out << "# proxy_user: username   # Username for proxy authentication (if required)\n";
-    out << "# proxy_password: pass   # Password for proxy authentication (if required)\n";
+    out << "# =============================================================================\n\n";
+
+    out << "# proxy:\n";
+    out << "#   type: system       # system | none | http | socks5\n";
+    out << "#   host: 127.0.0.1\n";
+    out << "#   port: 7890\n";
+    out << "#   user: optional\n";
+    out << "#   password: optional\n";
 
     file.close();
 
