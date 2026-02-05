@@ -449,6 +449,211 @@ LLMResponse QLLMService::sendRequestToEndpoint(
     return response;
 }
 
+void QLLMService::sendChatCompletionStream(
+    const json &messages, const json &tools, double temperature)
+{
+    if (!hasEndpoint()) {
+        emit streamError("No LLM endpoint configured");
+        return;
+    }
+
+    LLMEndpoint     endpoint = selectEndpoint();
+    QNetworkRequest request  = prepareRequest(endpoint);
+
+    /* Build payload with streaming enabled */
+    json payload;
+    payload["messages"]    = messages;
+    payload["temperature"] = temperature;
+    payload["stream"]      = true;
+
+    if (!endpoint.model.isEmpty()) {
+        payload["model"] = endpoint.model.toStdString();
+    }
+
+    if (!tools.empty()) {
+        payload["tools"] = tools;
+    }
+
+    /* Reset streaming state */
+    streamBuffer_.clear();
+    streamAccumulatedContent_.clear();
+    streamAccumulatedToolCalls_.clear();
+
+    currentStreamReply_ = networkManager_->post(request, QByteArray::fromStdString(payload.dump()));
+
+    /* Set timeout */
+    auto *timer = new QTimer(this);
+    timer->setSingleShot(true);
+    connect(timer, &QTimer::timeout, this, [this, timer]() {
+        timer->deleteLater();
+        if (currentStreamReply_) {
+            currentStreamReply_->abort();
+            emit streamError("Request timeout");
+        }
+    });
+    timer->start(endpoint.timeout);
+
+    /* Handle incoming data */
+    connect(currentStreamReply_, &QNetworkReply::readyRead, this, [this]() {
+        if (!currentStreamReply_) {
+            return;
+        }
+
+        streamBuffer_ += QString::fromUtf8(currentStreamReply_->readAll());
+
+        /* Process complete SSE lines */
+        while (true) {
+            int lineEnd = streamBuffer_.indexOf('\n');
+            if (lineEnd == -1) {
+                break;
+            }
+
+            QString line  = streamBuffer_.left(lineEnd).trimmed();
+            streamBuffer_ = streamBuffer_.mid(lineEnd + 1);
+
+            /* Skip empty lines */
+            if (line.isEmpty()) {
+                continue;
+            }
+
+            /* Parse SSE data lines */
+            if (line.startsWith("data: ")) {
+                QString data = line.mid(6);
+
+                bool isDone
+                    = parseStreamLine(data, streamAccumulatedContent_, streamAccumulatedToolCalls_);
+
+                if (isDone) {
+                    json response
+                        = buildStreamResponse(streamAccumulatedContent_, streamAccumulatedToolCalls_);
+                    emit streamComplete(response);
+                }
+            }
+        }
+    });
+
+    /* Handle completion */
+    connect(currentStreamReply_, &QNetworkReply::finished, this, [this, timer]() {
+        timer->stop();
+        timer->deleteLater();
+
+        if (!currentStreamReply_) {
+            return;
+        }
+
+        if (currentStreamReply_->error() != QNetworkReply::NoError
+            && currentStreamReply_->error() != QNetworkReply::OperationCanceledError) {
+            emit streamError(currentStreamReply_->errorString());
+        }
+
+        currentStreamReply_->deleteLater();
+        currentStreamReply_ = nullptr;
+    });
+}
+
+bool QLLMService::parseStreamLine(
+    const QString &line, QString &accumulatedContent, QMap<int, json> &accumulatedToolCalls)
+{
+    /* Check for stream end */
+    if (line == "[DONE]") {
+        return true;
+    }
+
+    /* Parse JSON */
+    try {
+        json chunk = json::parse(line.toStdString());
+
+        if (!chunk.contains("choices") || chunk["choices"].empty()) {
+            return false;
+        }
+
+        auto delta = chunk["choices"][0]["delta"];
+
+        /* Handle content chunks */
+        if (delta.contains("content") && delta["content"].is_string()) {
+            QString content = QString::fromStdString(delta["content"].get<std::string>());
+            accumulatedContent += content;
+            emit streamChunk(content);
+        }
+
+        /* Handle tool calls */
+        if (delta.contains("tool_calls")) {
+            for (const auto &toolCall : delta["tool_calls"]) {
+                int index = toolCall.value("index", 0);
+
+                /* Initialize tool call entry if needed */
+                if (!accumulatedToolCalls.contains(index)) {
+                    accumulatedToolCalls[index]
+                        = {{"id", ""},
+                           {"type", "function"},
+                           {"function", {{"name", ""}, {"arguments", ""}}}};
+                }
+
+                /* Update ID if present */
+                if (toolCall.contains("id")) {
+                    accumulatedToolCalls[index]["id"] = toolCall["id"];
+                }
+
+                /* Update function info */
+                if (toolCall.contains("function")) {
+                    auto &accFunc = accumulatedToolCalls[index]["function"];
+
+                    if (toolCall["function"].contains("name")) {
+                        accFunc["name"] = toolCall["function"]["name"];
+                    }
+
+                    if (toolCall["function"].contains("arguments")) {
+                        std::string args = accFunc["arguments"].get<std::string>();
+                        args += toolCall["function"]["arguments"].get<std::string>();
+                        accFunc["arguments"] = args;
+                    }
+                }
+
+                /* Emit signal with current state */
+                QString toolId = QString::fromStdString(
+                    accumulatedToolCalls[index]["id"].get<std::string>());
+                QString funcName = QString::fromStdString(
+                    accumulatedToolCalls[index]["function"]["name"].get<std::string>());
+                QString funcArgs = QString::fromStdString(
+                    accumulatedToolCalls[index]["function"]["arguments"].get<std::string>());
+
+                emit streamToolCall(toolId, funcName, funcArgs);
+            }
+        }
+
+        /* Check for finish reason */
+        if (chunk["choices"][0].contains("finish_reason")
+            && !chunk["choices"][0]["finish_reason"].is_null()) {
+            return true;
+        }
+
+    } catch (const json::parse_error &err) {
+        qWarning() << "Failed to parse stream chunk:" << err.what();
+    }
+
+    return false;
+}
+
+json QLLMService::buildStreamResponse(const QString &content, const QMap<int, json> &toolCalls) const
+{
+    json message;
+    message["role"] = "assistant";
+
+    if (!content.isEmpty()) {
+        message["content"] = content.toStdString();
+    }
+
+    if (!toolCalls.isEmpty()) {
+        json toolCallsArray = json::array();
+        for (auto iter = toolCalls.constBegin(); iter != toolCalls.constEnd(); ++iter) {
+            toolCallsArray.push_back(iter.value());
+        }
+        message["tool_calls"] = toolCallsArray;
+    }
+
+    return {{"choices", json::array({{{"message", message}}})}};
+}
+
 json QLLMService::sendChatCompletion(const json &messages, const json &tools, double temperature)
 {
     if (!hasEndpoint()) {

@@ -28,3 +28,6 @@
 [submodule "external/fmt"]
 	path = external/fmt
 	url = git@github.com:fmtlib/fmt.git
+[submodule "external/replxx"]
+	path = external/replxx
+	url = https://github.com/AmokHuginnsson/replxx.git

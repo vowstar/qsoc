@@ -173,6 +173,44 @@ public slots:
     json sendChatCompletion(
         const json &messages, const json &tools = json::array(), double temperature = 0.2);
 
+    /**
+     * @brief Send streaming chat completion with tool definitions (Agent mode)
+     * @details Sends a request using SSE streaming. Emits signals for each chunk.
+     *          Connect to streamChunk, streamToolCall, streamComplete, streamError signals.
+     * @param messages Conversation history in OpenAI format
+     * @param tools Tool definitions in OpenAI format (optional)
+     * @param temperature Temperature parameter (0.0-1.0)
+     */
+    void sendChatCompletionStream(
+        const json &messages, const json &tools = json::array(), double temperature = 0.2);
+
+signals:
+    /**
+     * @brief Signal emitted when a text chunk is received during streaming
+     * @param chunk The text content chunk
+     */
+    void streamChunk(const QString &chunk);
+
+    /**
+     * @brief Signal emitted when a tool call is detected during streaming
+     * @param id Tool call ID
+     * @param name Function name
+     * @param arguments JSON arguments (may be partial during streaming)
+     */
+    void streamToolCall(const QString &id, const QString &name, const QString &arguments);
+
+    /**
+     * @brief Signal emitted when streaming is complete
+     * @param response The complete response JSON
+     */
+    void streamComplete(const json &response);
+
+    /**
+     * @brief Signal emitted when an error occurs during streaming
+     * @param error Error message
+     */
+    void streamError(const QString &error);
+
 private:
     QNetworkAccessManager *networkManager_ = nullptr;
     QSocConfig            *config_         = nullptr;
@@ -246,6 +284,30 @@ private:
         const QString     &systemPrompt,
         double             temperature,
         bool               jsonMode);
+
+    /**
+     * @brief Parse SSE data line and extract JSON
+     * @param line SSE data line (without "data: " prefix)
+     * @param accumulatedContent Accumulated content for building complete response
+     * @param accumulatedToolCalls Accumulated tool calls (indexed by tool call index)
+     * @return True if stream is complete ([DONE] received)
+     */
+    bool parseStreamLine(
+        const QString &line, QString &accumulatedContent, QMap<int, json> &accumulatedToolCalls);
+
+    /**
+     * @brief Build complete response from accumulated streaming data
+     * @param content Accumulated content
+     * @param toolCalls Accumulated tool calls
+     * @return Complete response in standard format
+     */
+    json buildStreamResponse(const QString &content, const QMap<int, json> &toolCalls) const;
+
+    /* Current streaming state */
+    QNetworkReply  *currentStreamReply_ = nullptr;
+    QString         streamBuffer_;
+    QString         streamAccumulatedContent_;
+    QMap<int, json> streamAccumulatedToolCalls_;
 };
 
 #endif // QLLMSERVICE_H
