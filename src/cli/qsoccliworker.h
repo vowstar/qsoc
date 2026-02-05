@@ -17,6 +17,8 @@
 #include <QObject>
 #include <QStringList>
 
+class QSocAgent;
+
 /**
  * @brief The QSocCliWorker class.
  * @details This class is the main worker class for the qsoc application.
@@ -359,6 +361,25 @@ private:
      * @retval false Parse failed.
      */
     bool parseGenerateStub(const QStringList &appArguments);
+
+    /**
+     * @brief Parse the agent command line arguments.
+     * @details This function will parse the agent command line arguments
+     *          to run the AI agent mode for interactive SoC design.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseAgent(const QStringList &appArguments);
+
+    /**
+     * @brief Run the agent interactive loop.
+     * @details This function runs the interactive REPL loop for the agent.
+     * @param agent The agent to run.
+     * @retval true Run successfully.
+     * @retval false Run failed.
+     */
+    bool runAgentLoop(QSocAgent *agent);
 
     /**
      * @brief Show application name and version and emit exit with exitCode.

@@ -448,3 +448,68 @@ LLMResponse QLLMService::sendRequestToEndpoint(
 
     return response;
 }
+
+json QLLMService::sendChatCompletion(const json &messages, const json &tools, double temperature)
+{
+    if (!hasEndpoint()) {
+        return {{"error", "No LLM endpoint configured"}};
+    }
+
+    /* Try endpoints with fallback */
+    const int maxAttempts = static_cast<int>(endpoints_.size());
+    for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+        LLMEndpoint endpoint = selectEndpoint();
+
+        QNetworkRequest request = prepareRequest(endpoint);
+
+        /* Build payload with messages and tools */
+        json payload;
+        payload["messages"]    = messages;
+        payload["temperature"] = temperature;
+        payload["stream"]      = false;
+
+        if (!endpoint.model.isEmpty()) {
+            payload["model"] = endpoint.model.toStdString();
+        }
+
+        /* Add tools if provided */
+        if (!tools.empty()) {
+            payload["tools"] = tools;
+        }
+
+        QEventLoop     loop;
+        QNetworkReply *reply
+            = networkManager_->post(request, QByteArray::fromStdString(payload.dump()));
+
+        /* Set timeout */
+        QTimer timer;
+        timer.setSingleShot(true);
+        connect(&timer, &QTimer::timeout, reply, &QNetworkReply::abort);
+        timer.start(endpoint.timeout);
+
+        connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
+        loop.exec();
+
+        timer.stop();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning() << "Endpoint" << endpoint.name << "failed:" << reply->errorString();
+            reply->deleteLater();
+            advanceEndpoint();
+            continue;
+        }
+
+        const QByteArray responseData = reply->readAll();
+        reply->deleteLater();
+
+        try {
+            return json::parse(responseData.toStdString());
+        } catch (const json::parse_error &e) {
+            qWarning() << "JSON parse error:" << e.what();
+            advanceEndpoint();
+            continue;
+        }
+    }
+
+    return {{"error", "All LLM endpoints failed"}};
+}

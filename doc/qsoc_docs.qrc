@@ -1,0 +1,21 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/docs">
+        <file>en/about.typ</file>
+        <file>en/command.typ</file>
+        <file>en/config.typ</file>
+        <file>en/datasheet.typ</file>
+        <file>en/format_bus.typ</file>
+        <file>en/format_clock.typ</file>
+        <file>en/format_fsm.typ</file>
+        <file>en/format_logic.typ</file>
+        <file>en/format_netlist.typ</file>
+        <file>en/format_overview.typ</file>
+        <file>en/format_power.typ</file>
+        <file>en/format_reset.typ</file>
+        <file>en/format_template.typ</file>
+        <file>en/format_validation.typ</file>
+        <file>en/overview.typ</file>
+        <file>en/main.typ</file>
+    </qresource>
+</RCC>

@@ -137,7 +137,8 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
             "module      Import, update of module.\n"
             "bus         Import, update of bus.\n"
             "schematic   Processing of Schematic.\n"
-            "generate    Generate rtl, such as verilog, etc.\n"),
+            "generate    Generate rtl, such as verilog, etc.\n"
+            "agent       Run interactive AI agent mode.\n"),
         "<command> [command options]");
     parser.parse(appArguments);
     /* Set verbosity level as early as possible */
@@ -187,6 +188,11 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
     } else if (command == "generate") {
         nextArguments.removeOne(command);
         if (!parseGenerate(nextArguments)) {
+            return false;
+        }
+    } else if (command == "agent") {
+        nextArguments.removeOne(command);
+        if (!parseAgent(nextArguments)) {
             return false;
         }
     } else {
