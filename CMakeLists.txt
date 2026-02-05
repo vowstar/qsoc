@@ -289,6 +289,21 @@ else()
     message(STATUS "Use local systemrdl library: ${SYSTEMRDL_LIBRARIES} ${SYSTEMRDL_INCLUDE_DIRS}")
 endif()
 
+# REPLXX
+pkg_check_modules(REPLXX IMPORTED_TARGET replxx>=0.0.4)
+if (REPLXX_FOUND)
+    message(STATUS "Use system replxx library: ${REPLXX_LIBRARIES} ${REPLXX_VERSION}")
+else()
+    set(REPLXX_BUILD_EXAMPLES OFF CACHE BOOL "disable replxx examples")
+    set(REPLXX_BUILD_PACKAGE OFF CACHE BOOL "disable replxx package")
+    add_subdirectory(external/replxx)
+    set(REPLXX_INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/replxx/include"
+    )
+    set(REPLXX_LIBRARIES replxx::replxx)
+    message(STATUS "Use local replxx library: ${REPLXX_LIBRARIES} ${REPLXX_INCLUDE_DIRS}")
+endif()
+
 # FMT
 # Check if fmt target already exists (to avoid conflicts with FetchContent or other mechanisms)
 if(NOT TARGET fmt::fmt)
@@ -383,6 +398,7 @@ target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     "${ANTLR4_INCLUDE_DIRS}"
     "${SYSTEMRDL_INCLUDE_DIRS}"
     "${FMT_INCLUDE_DIRS}"
+    "${REPLXX_INCLUDE_DIRS}"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -406,6 +422,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${ANTLR4_LIBRARIES}
     ${SYSTEMRDL_LIBRARIES}
     ${FMT_LIBRARIES}
+    ${REPLXX_LIBRARIES}
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

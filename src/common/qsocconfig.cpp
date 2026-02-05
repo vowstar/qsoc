@@ -79,7 +79,7 @@ void QSocConfig::loadFromEnvironment()
     /* Load from environment variables (highest priority) */
     const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
 
-    /* List of supported environment variables */
+    /* List of supported environment variables with direct key mapping */
     const QStringList envVars
         = {"QSOC_AI_PROVIDER", "QSOC_API_KEY", "QSOC_AI_MODEL", "QSOC_API_URL"};
 
@@ -89,6 +89,19 @@ void QSocConfig::loadFromEnvironment()
             /* Convert to lowercase key for consistency */
             const QString key = var.mid(5).toLower(); /* Remove "QSOC_" prefix */
             setValue(key, env.value(var));
+        }
+    }
+
+    /* Agent-specific environment variables with compound keys */
+    const QMap<QString, QString> agentEnvVars
+        = {{"QSOC_AGENT_TEMPERATURE", "agent.temperature"},
+           {"QSOC_AGENT_MAX_TOKENS", "agent.max_tokens"},
+           {"QSOC_AGENT_MAX_ITERATIONS", "agent.max_iterations"},
+           {"QSOC_AGENT_SYSTEM_PROMPT", "agent.system_prompt"}};
+
+    for (auto iter = agentEnvVars.constBegin(); iter != agentEnvVars.constEnd(); ++iter) {
+        if (env.contains(iter.key())) {
+            setValue(iter.value(), env.value(iter.key()));
         }
     }
 }
@@ -243,7 +256,18 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "#   host: 127.0.0.1\n";
     out << "#   port: 7890\n";
     out << "#   user: optional\n";
-    out << "#   password: optional\n";
+    out << "#   password: optional\n\n";
+
+    out << "# =============================================================================\n";
+    out << "# Agent Configuration\n";
+    out << "# =============================================================================\n\n";
+
+    out << "# agent:\n";
+    out << "#   temperature: 0.2          # LLM temperature (0.0-1.0)\n";
+    out << "#   max_tokens: 128000        # Maximum context tokens\n";
+    out << "#   max_iterations: 100       # Safety limit for iterations\n";
+    out << "#   system_prompt: |          # Custom system prompt\n";
+    out << "#     You are a helpful assistant.\n";
 
     file.close();
 

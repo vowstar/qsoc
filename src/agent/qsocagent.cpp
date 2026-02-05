@@ -14,7 +14,13 @@ QSocAgent::QSocAgent(
     , messages_(json::array())
 {}
 
-QSocAgent::~QSocAgent() = default;
+QSocAgent::~QSocAgent()
+{
+    /* Disconnect streaming signals */
+    if (llmService_) {
+        disconnect(llmService_, nullptr, this, nullptr);
+    }
+}
 
 QString QSocAgent::run(const QString &userQuery)
 {
@@ -59,6 +65,157 @@ QString QSocAgent::run(const QString &userQuery)
     }
 
     return QString("[Agent safety limit reached (%1 iterations)]").arg(config_.maxIterations);
+}
+
+void QSocAgent::runStream(const QString &userQuery)
+{
+    if (!llmService_ || !toolRegistry_) {
+        emit runError("LLM service or tool registry not configured");
+        return;
+    }
+
+    /* Add user message to history */
+    addMessage("user", userQuery);
+
+    /* Setup streaming */
+    isStreaming_     = true;
+    streamIteration_ = 0;
+    streamFinalContent_.clear();
+
+    /* Connect to LLM streaming signals */
+    connect(
+        llmService_,
+        &QLLMService::streamChunk,
+        this,
+        [this](const QString &chunk) { emit contentChunk(chunk); },
+        Qt::UniqueConnection);
+
+    connect(
+        llmService_,
+        &QLLMService::streamComplete,
+        this,
+        &QSocAgent::handleStreamComplete,
+        Qt::UniqueConnection);
+
+    connect(
+        llmService_,
+        &QLLMService::streamError,
+        this,
+        [this](const QString &error) {
+            isStreaming_ = false;
+            emit runError(error);
+        },
+        Qt::UniqueConnection);
+
+    /* Start first iteration */
+    processStreamIteration();
+}
+
+void QSocAgent::processStreamIteration()
+{
+    if (!isStreaming_) {
+        return;
+    }
+
+    streamIteration_++;
+
+    if (streamIteration_ > config_.maxIterations) {
+        isStreaming_ = false;
+        emit runError(
+            QString("[Agent safety limit reached (%1 iterations)]").arg(config_.maxIterations));
+        return;
+    }
+
+    /* Check and compress history if needed */
+    compressHistoryIfNeeded();
+
+    if (config_.verbose) {
+        int     currentTokens = estimateMessagesTokens();
+        QString info          = QString("[Iteration %1 | Tokens: %2/%3 (%4%) | Messages: %5]")
+                           .arg(streamIteration_)
+                           .arg(currentTokens)
+                           .arg(config_.maxContextTokens)
+                           .arg(100.0 * currentTokens / config_.maxContextTokens, 0, 'f', 1)
+                           .arg(messages_.size());
+        emit verboseOutput(info);
+    }
+
+    /* Build messages with system prompt */
+    json messagesWithSystem = json::array();
+
+    if (!config_.systemPrompt.isEmpty()) {
+        messagesWithSystem.push_back(
+            {{"role", "system"}, {"content", config_.systemPrompt.toStdString()}});
+    }
+
+    for (const auto &msg : messages_) {
+        messagesWithSystem.push_back(msg);
+    }
+
+    /* Get tool definitions */
+    json tools = toolRegistry_->getToolDefinitions();
+
+    /* Send streaming request */
+    llmService_->sendChatCompletionStream(messagesWithSystem, tools, config_.temperature);
+}
+
+void QSocAgent::handleStreamComplete(const json &response)
+{
+    if (!isStreaming_) {
+        return;
+    }
+
+    /* Check for errors */
+    if (response.contains("error")) {
+        QString errorMsg = QString::fromStdString(response["error"].get<std::string>());
+        isStreaming_     = false;
+        emit runError(errorMsg);
+        return;
+    }
+
+    /* Extract assistant message */
+    if (!response.contains("choices") || response["choices"].empty()) {
+        isStreaming_ = false;
+        emit runError("Invalid response from LLM");
+        return;
+    }
+
+    auto message = response["choices"][0]["message"];
+
+    /* Check for tool calls */
+    if (message.contains("tool_calls") && !message["tool_calls"].empty()) {
+        /* Add assistant message with tool calls to history */
+        messages_.push_back(message);
+
+        if (config_.verbose) {
+            emit verboseOutput("[Assistant requesting tool calls]");
+        }
+
+        /* Handle tool calls synchronously */
+        handleToolCalls(message["tool_calls"]);
+
+        /* Continue with next iteration */
+        processStreamIteration();
+        return;
+    }
+
+    /* Regular response without tool calls - we're done */
+    isStreaming_ = false;
+
+    if (message.contains("content") && message["content"].is_string()) {
+        QString content = QString::fromStdString(message["content"].get<std::string>());
+
+        if (config_.verbose) {
+            emit verboseOutput(QString("[Assistant]: %1").arg(content));
+        }
+
+        /* Add to history */
+        addMessage("assistant", content);
+        emit runComplete(content);
+    } else {
+        addMessage("assistant", "");
+        emit runComplete("");
+    }
 }
 
 bool QSocAgent::processIteration()

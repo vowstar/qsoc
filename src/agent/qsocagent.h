@@ -51,6 +51,14 @@ public:
     QString run(const QString &userQuery);
 
     /**
+     * @brief Run the agent with streaming output
+     * @details Connects to LLM streaming and emits contentChunk for real-time output.
+     *          Returns after the agent completes (may involve multiple tool calls).
+     * @param userQuery The user's input query
+     */
+    void runStream(const QString &userQuery);
+
+    /**
      * @brief Clear the conversation history
      */
     void clearHistory();
@@ -106,11 +114,34 @@ signals:
      */
     void verboseOutput(const QString &message);
 
+    /**
+     * @brief Signal emitted for each content chunk during streaming
+     * @param chunk The content chunk
+     */
+    void contentChunk(const QString &chunk);
+
+    /**
+     * @brief Signal emitted when streaming run is complete
+     * @param response The complete response
+     */
+    void runComplete(const QString &response);
+
+    /**
+     * @brief Signal emitted when an error occurs during streaming
+     * @param error Error message
+     */
+    void runError(const QString &error);
+
 private:
     QLLMService      *llmService_   = nullptr;
     QSocToolRegistry *toolRegistry_ = nullptr;
     QSocAgentConfig   config_;
     json              messages_;
+
+    /* Streaming state */
+    bool    isStreaming_     = false;
+    int     streamIteration_ = 0;
+    QString streamFinalContent_;
 
     /**
      * @brief Process a single iteration of the agent loop
@@ -142,6 +173,18 @@ private:
      * @brief Compress history if needed based on token count
      */
     void compressHistoryIfNeeded();
+
+    /**
+     * @brief Process streaming iteration
+     * @details Initiates one streaming request to LLM, handles response via signals
+     */
+    void processStreamIteration();
+
+    /**
+     * @brief Handle streaming complete response
+     * @param response Complete response from LLM
+     */
+    void handleStreamComplete(const json &response);
 
     /**
      * @brief Estimate the number of tokens in a text
