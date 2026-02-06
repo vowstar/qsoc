@@ -2,6 +2,7 @@
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <cmath>
+#include <vector>
 #include <QDebug>
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
@@ -164,13 +165,24 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             }
 
             // Parse links for this target
-            if (tgtNode["link"] && tgtNode["link"].IsMap()) {
-                for (auto linkIt = tgtNode["link"].begin(); linkIt != tgtNode["link"].end();
-                     ++linkIt) {
-                    const YAML::Node &linkNode = linkIt->second;
+            // Note: Use a copy of the link map to avoid yaml-cpp iterator corruption
+            // when map contains null values
+            YAML::Node linkMap = tgtNode["link"];
+            if (linkMap && linkMap.IsMap()) {
+                // First collect all keys to avoid iterator issues
+                std::vector<std::string> linkKeys;
+                for (auto it = linkMap.begin(); it != linkMap.end(); ++it) {
+                    if (it->first.IsDefined()) {
+                        linkKeys.push_back(it->first.as<std::string>());
+                    }
+                }
+
+                // Now iterate using collected keys
+                for (const auto &key : linkKeys) {
+                    YAML::Node linkNode = linkMap[key];
 
                     ResetLink link;
-                    link.source = QString::fromStdString(linkIt->first.as<std::string>());
+                    link.source = QString::fromStdString(key);
 
                     // Handle null/empty links (direct connections)
                     if (!linkNode || linkNode.IsNull()) {

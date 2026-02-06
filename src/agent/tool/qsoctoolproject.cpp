@@ -11,7 +11,7 @@
 
 QSocToolProjectList::QSocToolProjectList(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
-    , projectManager_(projectManager)
+    , projectManager(projectManager)
 {}
 
 QSocToolProjectList::~QSocToolProjectList() = default;
@@ -45,13 +45,13 @@ json QSocToolProjectList::getParametersSchema() const
 
 QString QSocToolProjectList::execute(const json &arguments)
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return "Error: Project manager not configured";
     }
 
     /* Set directory if provided */
     if (arguments.contains("directory") && arguments["directory"].is_string()) {
-        projectManager_->setProjectPath(
+        projectManager->setProjectPath(
             QString::fromStdString(arguments["directory"].get<std::string>()));
     }
 
@@ -66,7 +66,7 @@ QString QSocToolProjectList::execute(const json &arguments)
         return QString("Error: Invalid regex pattern: %1").arg(regex.errorString());
     }
 
-    QStringList projects = projectManager_->list(regex);
+    QStringList projects = projectManager->list(regex);
 
     if (projects.isEmpty()) {
         return "No projects found.";
@@ -77,14 +77,14 @@ QString QSocToolProjectList::execute(const json &arguments)
 
 void QSocToolProjectList::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager_ = projectManager;
+    projectManager = projectManager;
 }
 
 /* QSocToolProjectShow Implementation */
 
 QSocToolProjectShow::QSocToolProjectShow(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
-    , projectManager_(projectManager)
+    , projectManager(projectManager)
 {}
 
 QSocToolProjectShow::~QSocToolProjectShow() = default;
@@ -116,7 +116,7 @@ json QSocToolProjectShow::getParametersSchema() const
 
 QString QSocToolProjectShow::execute(const json &arguments)
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return "Error: Project manager not configured";
     }
 
@@ -128,40 +128,40 @@ QString QSocToolProjectShow::execute(const json &arguments)
 
     /* Set directory if provided */
     if (arguments.contains("directory") && arguments["directory"].is_string()) {
-        projectManager_->setProjectPath(
+        projectManager->setProjectPath(
             QString::fromStdString(arguments["directory"].get<std::string>()));
     }
 
     /* Load project */
-    if (!projectManager_->load(projectName)) {
+    if (!projectManager->load(projectName)) {
         return QString("Error: Failed to load project '%1'").arg(projectName);
     }
 
     /* Format project info */
     QString result = QString("Project: %1\n").arg(projectName);
-    result += QString("Project Path: %1\n").arg(projectManager_->getProjectPath());
-    result += QString("Bus Path: %1\n").arg(projectManager_->getBusPath());
-    result += QString("Module Path: %1\n").arg(projectManager_->getModulePath());
-    result += QString("Schematic Path: %1\n").arg(projectManager_->getSchematicPath());
-    result += QString("Output Path: %1\n").arg(projectManager_->getOutputPath());
+    result += QString("Project Path: %1\n").arg(projectManager->getProjectPath());
+    result += QString("Bus Path: %1\n").arg(projectManager->getBusPath());
+    result += QString("Module Path: %1\n").arg(projectManager->getModulePath());
+    result += QString("Schematic Path: %1\n").arg(projectManager->getSchematicPath());
+    result += QString("Output Path: %1\n").arg(projectManager->getOutputPath());
 
     /* Add YAML representation */
     result += "\nFull configuration:\n";
-    result += QStaticDataSedes::serializeYaml(projectManager_->getProjectYaml());
+    result += QStaticDataSedes::serializeYaml(projectManager->getProjectYaml());
 
     return result;
 }
 
 void QSocToolProjectShow::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager_ = projectManager;
+    projectManager = projectManager;
 }
 
 /* QSocToolProjectCreate Implementation */
 
 QSocToolProjectCreate::QSocToolProjectCreate(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
-    , projectManager_(projectManager)
+    , projectManager(projectManager)
 {}
 
 QSocToolProjectCreate::~QSocToolProjectCreate() = default;
@@ -198,7 +198,7 @@ json QSocToolProjectCreate::getParametersSchema() const
 
 QString QSocToolProjectCreate::execute(const json &arguments)
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return "Error: Project manager not configured";
     }
 
@@ -210,28 +210,27 @@ QString QSocToolProjectCreate::execute(const json &arguments)
 
     /* Set paths if provided */
     if (arguments.contains("directory") && arguments["directory"].is_string()) {
-        projectManager_->setProjectPath(
+        projectManager->setProjectPath(
             QString::fromStdString(arguments["directory"].get<std::string>()));
     }
     if (arguments.contains("bus_path") && arguments["bus_path"].is_string()) {
-        projectManager_->setBusPath(
-            QString::fromStdString(arguments["bus_path"].get<std::string>()));
+        projectManager->setBusPath(QString::fromStdString(arguments["bus_path"].get<std::string>()));
     }
     if (arguments.contains("module_path") && arguments["module_path"].is_string()) {
-        projectManager_->setModulePath(
+        projectManager->setModulePath(
             QString::fromStdString(arguments["module_path"].get<std::string>()));
     }
     if (arguments.contains("schematic_path") && arguments["schematic_path"].is_string()) {
-        projectManager_->setSchematicPath(
+        projectManager->setSchematicPath(
             QString::fromStdString(arguments["schematic_path"].get<std::string>()));
     }
     if (arguments.contains("output_path") && arguments["output_path"].is_string()) {
-        projectManager_->setOutputPath(
+        projectManager->setOutputPath(
             QString::fromStdString(arguments["output_path"].get<std::string>()));
     }
 
     /* Save project */
-    if (!projectManager_->save(projectName)) {
+    if (!projectManager->save(projectName)) {
         return QString("Error: Failed to create project '%1'").arg(projectName);
     }
 
@@ -240,5 +239,5 @@ QString QSocToolProjectCreate::execute(const json &arguments)
 
 void QSocToolProjectCreate::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager_ = projectManager;
+    projectManager = projectManager;
 }

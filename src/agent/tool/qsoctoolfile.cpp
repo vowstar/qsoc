@@ -14,7 +14,7 @@
 
 QSocToolFileRead::QSocToolFileRead(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
-    , projectManager_(projectManager)
+    , projectManager(projectManager)
 {}
 
 QSocToolFileRead::~QSocToolFileRead() = default;
@@ -48,11 +48,11 @@ json QSocToolFileRead::getParametersSchema() const
 
 bool QSocToolFileRead::isPathAllowed(const QString &filePath) const
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return false;
     }
 
-    QString projectPath = projectManager_->getProjectPath();
+    QString projectPath = projectManager->getProjectPath();
     if (projectPath.isEmpty()) {
         /* Allow current directory if no project */
         projectPath = QDir::currentPath();
@@ -78,7 +78,7 @@ bool QSocToolFileRead::isPathAllowed(const QString &filePath) const
 
 QString QSocToolFileRead::execute(const json &arguments)
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return "Error: Project manager not configured";
     }
 
@@ -91,7 +91,7 @@ QString QSocToolFileRead::execute(const json &arguments)
     /* Make path absolute if relative */
     QFileInfo fileInfo(filePath);
     if (!fileInfo.isAbsolute()) {
-        QString projectPath = projectManager_->getProjectPath();
+        QString projectPath = projectManager->getProjectPath();
         if (projectPath.isEmpty()) {
             projectPath = QDir::currentPath();
         }
@@ -162,14 +162,14 @@ QString QSocToolFileRead::execute(const json &arguments)
 
 void QSocToolFileRead::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager_ = projectManager;
+    projectManager = projectManager;
 }
 
 /* QSocToolFileList Implementation */
 
 QSocToolFileList::QSocToolFileList(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
-    , projectManager_(projectManager)
+    , projectManager(projectManager)
 {}
 
 QSocToolFileList::~QSocToolFileList() = default;
@@ -206,11 +206,11 @@ json QSocToolFileList::getParametersSchema() const
 
 bool QSocToolFileList::isPathAllowed(const QString &dirPath) const
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return false;
     }
 
-    QString projectPath = projectManager_->getProjectPath();
+    QString projectPath = projectManager->getProjectPath();
     if (projectPath.isEmpty()) {
         projectPath = QDir::currentPath();
     }
@@ -230,7 +230,7 @@ bool QSocToolFileList::isPathAllowed(const QString &dirPath) const
 
 QString QSocToolFileList::execute(const json &arguments)
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return "Error: Project manager not configured";
     }
 
@@ -242,14 +242,14 @@ QString QSocToolFileList::execute(const json &arguments)
 
     /* Make path absolute if relative or empty */
     if (dirPath.isEmpty()) {
-        dirPath = projectManager_->getProjectPath();
+        dirPath = projectManager->getProjectPath();
         if (dirPath.isEmpty()) {
             dirPath = QDir::currentPath();
         }
     } else {
         QFileInfo dirInfo(dirPath);
         if (!dirInfo.isAbsolute()) {
-            QString projectPath = projectManager_->getProjectPath();
+            QString projectPath = projectManager->getProjectPath();
             if (projectPath.isEmpty()) {
                 projectPath = QDir::currentPath();
             }
@@ -322,14 +322,14 @@ QString QSocToolFileList::execute(const json &arguments)
 
 void QSocToolFileList::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager_ = projectManager;
+    projectManager = projectManager;
 }
 
 /* QSocToolFileWrite Implementation */
 
 QSocToolFileWrite::QSocToolFileWrite(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
-    , projectManager_(projectManager)
+    , projectManager(projectManager)
 {}
 
 QSocToolFileWrite::~QSocToolFileWrite() = default;
@@ -359,11 +359,11 @@ json QSocToolFileWrite::getParametersSchema() const
 
 bool QSocToolFileWrite::isPathAllowed(const QString &filePath) const
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return false;
     }
 
-    QString projectPath = projectManager_->getProjectPath();
+    QString projectPath = projectManager->getProjectPath();
     if (projectPath.isEmpty()) {
         projectPath = QDir::currentPath();
     }
@@ -388,7 +388,7 @@ bool QSocToolFileWrite::isPathAllowed(const QString &filePath) const
 
 QString QSocToolFileWrite::execute(const json &arguments)
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return "Error: Project manager not configured";
     }
 
@@ -406,7 +406,7 @@ QString QSocToolFileWrite::execute(const json &arguments)
     /* Make path absolute if relative */
     QFileInfo fileInfo(filePath);
     if (!fileInfo.isAbsolute()) {
-        QString projectPath = projectManager_->getProjectPath();
+        QString projectPath = projectManager->getProjectPath();
         if (projectPath.isEmpty()) {
             projectPath = QDir::currentPath();
         }
@@ -442,14 +442,14 @@ QString QSocToolFileWrite::execute(const json &arguments)
 
 void QSocToolFileWrite::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager_ = projectManager;
+    projectManager = projectManager;
 }
 
 /* QSocToolFileEdit Implementation */
 
 QSocToolFileEdit::QSocToolFileEdit(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
-    , projectManager_(projectManager)
+    , projectManager(projectManager)
 {}
 
 QSocToolFileEdit::~QSocToolFileEdit() = default;
@@ -483,11 +483,11 @@ json QSocToolFileEdit::getParametersSchema() const
 
 bool QSocToolFileEdit::isPathAllowed(const QString &filePath) const
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return false;
     }
 
-    QString projectPath = projectManager_->getProjectPath();
+    QString projectPath = projectManager->getProjectPath();
     if (projectPath.isEmpty()) {
         projectPath = QDir::currentPath();
     }
@@ -507,7 +507,7 @@ bool QSocToolFileEdit::isPathAllowed(const QString &filePath) const
 
 QString QSocToolFileEdit::execute(const json &arguments)
 {
-    if (!projectManager_) {
+    if (!projectManager) {
         return "Error: Project manager not configured";
     }
 
@@ -535,7 +535,7 @@ QString QSocToolFileEdit::execute(const json &arguments)
     /* Make path absolute if relative */
     QFileInfo fileInfo(filePath);
     if (!fileInfo.isAbsolute()) {
-        QString projectPath = projectManager_->getProjectPath();
+        QString projectPath = projectManager->getProjectPath();
         if (projectPath.isEmpty()) {
             projectPath = QDir::currentPath();
         }
@@ -601,5 +601,5 @@ QString QSocToolFileEdit::execute(const json &arguments)
 
 void QSocToolFileEdit::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager_ = projectManager;
+    projectManager = projectManager;
 }

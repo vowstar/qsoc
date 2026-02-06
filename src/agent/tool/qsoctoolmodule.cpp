@@ -11,7 +11,7 @@
 
 QSocToolModuleList::QSocToolModuleList(QObject *parent, QSocModuleManager *moduleManager)
     : QSocTool(parent)
-    , moduleManager_(moduleManager)
+    , moduleManager(moduleManager)
 {}
 
 QSocToolModuleList::~QSocToolModuleList() = default;
@@ -47,7 +47,7 @@ json QSocToolModuleList::getParametersSchema() const
 
 QString QSocToolModuleList::execute(const json &arguments)
 {
-    if (!moduleManager_) {
+    if (!moduleManager) {
         return "Error: Module manager not configured";
     }
 
@@ -62,7 +62,7 @@ QString QSocToolModuleList::execute(const json &arguments)
         return QString("Error: Invalid library regex pattern: %1").arg(libraryRegex.errorString());
     }
 
-    if (!moduleManager_->load(libraryRegex)) {
+    if (!moduleManager->load(libraryRegex)) {
         return "Warning: No libraries found or failed to load some libraries.";
     }
 
@@ -77,7 +77,7 @@ QString QSocToolModuleList::execute(const json &arguments)
         return QString("Error: Invalid module regex pattern: %1").arg(moduleRegex.errorString());
     }
 
-    QStringList modules = moduleManager_->listModule(moduleRegex);
+    QStringList modules = moduleManager->listModule(moduleRegex);
 
     if (modules.isEmpty()) {
         return "No modules found.";
@@ -88,14 +88,14 @@ QString QSocToolModuleList::execute(const json &arguments)
 
 void QSocToolModuleList::setModuleManager(QSocModuleManager *moduleManager)
 {
-    moduleManager_ = moduleManager;
+    moduleManager = moduleManager;
 }
 
 /* QSocToolModuleShow Implementation */
 
 QSocToolModuleShow::QSocToolModuleShow(QObject *parent, QSocModuleManager *moduleManager)
     : QSocTool(parent)
-    , moduleManager_(moduleManager)
+    , moduleManager(moduleManager)
 {}
 
 QSocToolModuleShow::~QSocToolModuleShow() = default;
@@ -127,7 +127,7 @@ json QSocToolModuleShow::getParametersSchema() const
 
 QString QSocToolModuleShow::execute(const json &arguments)
 {
-    if (!moduleManager_) {
+    if (!moduleManager) {
         return "Error: Module manager not configured";
     }
 
@@ -144,24 +144,24 @@ QString QSocToolModuleShow::execute(const json &arguments)
     }
 
     QRegularExpression libraryRegex(libraryPattern);
-    if (!moduleManager_->load(libraryRegex)) {
+    if (!moduleManager->load(libraryRegex)) {
         return "Warning: Failed to load some libraries.";
     }
 
     /* Check if module exists */
-    if (!moduleManager_->isModuleExist(moduleName)) {
+    if (!moduleManager->isModuleExist(moduleName)) {
         return QString("Error: Module '%1' not found").arg(moduleName);
     }
 
     /* Get module YAML */
-    YAML::Node moduleYaml = moduleManager_->getModuleYaml(moduleName);
+    YAML::Node moduleYaml = moduleManager->getModuleYaml(moduleName);
     if (!moduleYaml.IsDefined() || moduleYaml.IsNull()) {
         return QString("Error: Failed to get module '%1' data").arg(moduleName);
     }
 
     /* Format output */
     QString result = QString("Module: %1\n").arg(moduleName);
-    result += QString("Library: %1\n\n").arg(moduleManager_->getModuleLibrary(moduleName));
+    result += QString("Library: %1\n\n").arg(moduleManager->getModuleLibrary(moduleName));
     result += "Configuration:\n";
     result += QStaticDataSedes::serializeYaml(moduleYaml);
 
@@ -170,14 +170,14 @@ QString QSocToolModuleShow::execute(const json &arguments)
 
 void QSocToolModuleShow::setModuleManager(QSocModuleManager *moduleManager)
 {
-    moduleManager_ = moduleManager;
+    moduleManager = moduleManager;
 }
 
 /* QSocToolModuleImport Implementation */
 
 QSocToolModuleImport::QSocToolModuleImport(QObject *parent, QSocModuleManager *moduleManager)
     : QSocTool(parent)
-    , moduleManager_(moduleManager)
+    , moduleManager(moduleManager)
 {}
 
 QSocToolModuleImport::~QSocToolModuleImport() = default;
@@ -189,9 +189,11 @@ QString QSocToolModuleImport::getName() const
 
 QString QSocToolModuleImport::getDescription() const
 {
-    return "Import a Verilog/SystemVerilog module from file(s). "
-           "Parses the Verilog file and creates a module library entry with port and parameter "
-           "information.";
+    return "Import Verilog/SystemVerilog module(s) from file(s). "
+           "Parses files and creates module library entries. "
+           "Example: {\"files\": [\"/path/to/adder.v\"], \"library_name\": \"my_lib\"} "
+           "The module_regex defaults to '.*' (import all modules). "
+           "Returns success message or error details.";
 }
 
 json QSocToolModuleImport::getParametersSchema() const
@@ -216,7 +218,7 @@ json QSocToolModuleImport::getParametersSchema() const
 
 QString QSocToolModuleImport::execute(const json &arguments)
 {
-    if (!moduleManager_) {
+    if (!moduleManager) {
         return "Error: Module manager not configured";
     }
 
@@ -243,18 +245,21 @@ QString QSocToolModuleImport::execute(const json &arguments)
         libraryName = QString::fromStdString(arguments["library_name"].get<std::string>());
     }
 
-    /* Get module regex */
-    QRegularExpression moduleRegex;
+    /* Get module regex - default to ".*" (match all modules) */
+    QString regexStr = ".*";
     if (arguments.contains("module_regex") && arguments["module_regex"].is_string()) {
-        QString regexStr = QString::fromStdString(arguments["module_regex"].get<std::string>());
-        moduleRegex      = QRegularExpression(regexStr);
-        if (!moduleRegex.isValid()) {
-            return QString("Error: Invalid module regex: %1").arg(moduleRegex.errorString());
+        QString providedRegex = QString::fromStdString(arguments["module_regex"].get<std::string>());
+        if (!providedRegex.isEmpty()) {
+            regexStr = providedRegex;
         }
+    }
+    QRegularExpression moduleRegex(regexStr);
+    if (!moduleRegex.isValid()) {
+        return QString("Error: Invalid module regex: %1").arg(moduleRegex.errorString());
     }
 
     /* Import from file list */
-    if (!moduleManager_->importFromFileList(libraryName, moduleRegex, QString(), filePaths)) {
+    if (!moduleManager->importFromFileList(libraryName, moduleRegex, QString(), filePaths)) {
         return "Error: Failed to import module(s) from file(s)";
     }
 
@@ -263,14 +268,14 @@ QString QSocToolModuleImport::execute(const json &arguments)
 
 void QSocToolModuleImport::setModuleManager(QSocModuleManager *moduleManager)
 {
-    moduleManager_ = moduleManager;
+    moduleManager = moduleManager;
 }
 
 /* QSocToolModuleBusAdd Implementation */
 
 QSocToolModuleBusAdd::QSocToolModuleBusAdd(QObject *parent, QSocModuleManager *moduleManager)
     : QSocTool(parent)
-    , moduleManager_(moduleManager)
+    , moduleManager(moduleManager)
 {}
 
 QSocToolModuleBusAdd::~QSocToolModuleBusAdd() = default;
@@ -307,7 +312,7 @@ json QSocToolModuleBusAdd::getParametersSchema() const
 
 QString QSocToolModuleBusAdd::execute(const json &arguments)
 {
-    if (!moduleManager_) {
+    if (!moduleManager) {
         return "Error: Module manager not configured";
     }
 
@@ -332,10 +337,10 @@ QString QSocToolModuleBusAdd::execute(const json &arguments)
 
     /* Load all libraries first */
     QRegularExpression allLibraries(".*");
-    moduleManager_->load(allLibraries);
+    moduleManager->load(allLibraries);
 
     /* Check if module exists */
-    if (!moduleManager_->isModuleExist(moduleName)) {
+    if (!moduleManager->isModuleExist(moduleName)) {
         return QString("Error: Module '%1' not found").arg(moduleName);
     }
 
@@ -347,9 +352,9 @@ QString QSocToolModuleBusAdd::execute(const json &arguments)
 
     bool success = false;
     if (useLLM) {
-        success = moduleManager_->addModuleBusWithLLM(moduleName, busName, busMode, busInterface);
+        success = moduleManager->addModuleBusWithLLM(moduleName, busName, busMode, busInterface);
     } else {
-        success = moduleManager_->addModuleBus(moduleName, busName, busMode, busInterface);
+        success = moduleManager->addModuleBus(moduleName, busName, busMode, busInterface);
     }
 
     if (!success) {
@@ -363,5 +368,5 @@ QString QSocToolModuleBusAdd::execute(const json &arguments)
 
 void QSocToolModuleBusAdd::setModuleManager(QSocModuleManager *moduleManager)
 {
-    moduleManager_ = moduleManager;
+    moduleManager = moduleManager;
 }

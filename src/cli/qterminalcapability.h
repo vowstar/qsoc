@@ -74,13 +74,13 @@ public:
     QString termType() const;
 
 private:
-    bool    stdinIsatty_;
-    bool    stdoutIsatty_;
-    bool    colorSupport_;
-    bool    unicodeSupport_;
-    int     columns_;
-    int     rows_;
-    QString termType_;
+    bool    stdinIsatty    = false;
+    bool    stdoutIsatty   = false;
+    bool    colorSupport   = false;
+    bool    unicodeSupport = false;
+    int     termColumns    = 80;
+    int     termRows       = 24;
+    QString terminalType;
 
     /**
      * @brief Detect all terminal capabilities

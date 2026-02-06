@@ -8,7 +8,7 @@
 
 QSocToolShellBash::QSocToolShellBash(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
-    , projectManager_(projectManager)
+    , projectManager(projectManager)
 {}
 
 QSocToolShellBash::~QSocToolShellBash() = default;
@@ -65,8 +65,8 @@ QString QSocToolShellBash::execute(const json &arguments)
         workingDir = QString::fromStdString(arguments["working_directory"].get<std::string>());
     }
 
-    if (workingDir.isEmpty() && projectManager_) {
-        workingDir = projectManager_->getProjectPath();
+    if (workingDir.isEmpty() && projectManager) {
+        workingDir = projectManager->getProjectPath();
     }
 
     if (workingDir.isEmpty()) {
@@ -107,5 +107,5 @@ QString QSocToolShellBash::execute(const json &arguments)
 
 void QSocToolShellBash::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager_ = projectManager;
+    projectManager = projectManager;
 }

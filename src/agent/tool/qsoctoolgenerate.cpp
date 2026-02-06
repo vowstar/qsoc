@@ -10,7 +10,7 @@
 QSocToolGenerateVerilog::QSocToolGenerateVerilog(
     QObject *parent, QSocGenerateManager *generateManager)
     : QSocTool(parent)
-    , generateManager_(generateManager)
+    , generateManager(generateManager)
 {}
 
 QSocToolGenerateVerilog::~QSocToolGenerateVerilog() = default;
@@ -44,7 +44,7 @@ json QSocToolGenerateVerilog::getParametersSchema() const
 
 QString QSocToolGenerateVerilog::execute(const json &arguments)
 {
-    if (!generateManager_) {
+    if (!generateManager) {
         return "Error: Generate manager not configured";
     }
 
@@ -67,21 +67,21 @@ QString QSocToolGenerateVerilog::execute(const json &arguments)
 
     /* Set force overwrite if specified */
     if (arguments.contains("force") && arguments["force"].is_boolean()) {
-        generateManager_->setForceOverwrite(arguments["force"].get<bool>());
+        generateManager->setForceOverwrite(arguments["force"].get<bool>());
     }
 
     /* Load netlist */
-    if (!generateManager_->loadNetlist(netlistFile)) {
+    if (!generateManager->loadNetlist(netlistFile)) {
         return QString("Error: Failed to load netlist file: %1").arg(netlistFile);
     }
 
     /* Process netlist */
-    if (!generateManager_->processNetlist()) {
+    if (!generateManager->processNetlist()) {
         return "Error: Failed to process netlist";
     }
 
     /* Generate Verilog */
-    if (!generateManager_->generateVerilog(outputName)) {
+    if (!generateManager->generateVerilog(outputName)) {
         return QString("Error: Failed to generate Verilog for: %1").arg(outputName);
     }
 
@@ -90,7 +90,7 @@ QString QSocToolGenerateVerilog::execute(const json &arguments)
 
 void QSocToolGenerateVerilog::setGenerateManager(QSocGenerateManager *generateManager)
 {
-    generateManager_ = generateManager;
+    generateManager = generateManager;
 }
 
 /* QSocToolGenerateTemplate Implementation */
@@ -98,7 +98,7 @@ void QSocToolGenerateVerilog::setGenerateManager(QSocGenerateManager *generateMa
 QSocToolGenerateTemplate::QSocToolGenerateTemplate(
     QObject *parent, QSocGenerateManager *generateManager)
     : QSocTool(parent)
-    , generateManager_(generateManager)
+    , generateManager(generateManager)
 {}
 
 QSocToolGenerateTemplate::~QSocToolGenerateTemplate() = default;
@@ -148,7 +148,7 @@ json QSocToolGenerateTemplate::getParametersSchema() const
 
 QString QSocToolGenerateTemplate::execute(const json &arguments)
 {
-    if (!generateManager_) {
+    if (!generateManager) {
         return "Error: Generate manager not configured";
     }
 
@@ -217,7 +217,7 @@ QString QSocToolGenerateTemplate::execute(const json &arguments)
     }
 
     /* Render template */
-    if (!generateManager_->renderTemplate(
+    if (!generateManager->renderTemplate(
             templateFile, csvFiles, yamlFiles, jsonFiles, rdlFiles, rcsvFiles, outputName)) {
         return QString("Error: Failed to render template: %1").arg(templateFile);
     }
@@ -227,5 +227,5 @@ QString QSocToolGenerateTemplate::execute(const json &arguments)
 
 void QSocToolGenerateTemplate::setGenerateManager(QSocGenerateManager *generateManager)
 {
-    generateManager_ = generateManager;
+    generateManager = generateManager;
 }

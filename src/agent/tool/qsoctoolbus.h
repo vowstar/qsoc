@@ -26,7 +26,7 @@ public:
     void setBusManager(QSocBusManager *busManager);
 
 private:
-    QSocBusManager *busManager_ = nullptr;
+    QSocBusManager *busManager = nullptr;
 };
 
 /**
@@ -48,7 +48,7 @@ public:
     void setBusManager(QSocBusManager *busManager);
 
 private:
-    QSocBusManager *busManager_ = nullptr;
+    QSocBusManager *busManager = nullptr;
 };
 
 /**
@@ -70,7 +70,7 @@ public:
     void setBusManager(QSocBusManager *busManager);
 
 private:
-    QSocBusManager *busManager_ = nullptr;
+    QSocBusManager *busManager = nullptr;
 };
 
 #endif // QSOCTOOLBUS_H

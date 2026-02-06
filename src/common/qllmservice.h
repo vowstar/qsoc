@@ -212,11 +212,11 @@ signals:
     void streamError(const QString &error);
 
 private:
-    QNetworkAccessManager *networkManager_ = nullptr;
-    QSocConfig            *config_         = nullptr;
-    QList<LLMEndpoint>     endpoints_;
-    int                    currentEndpoint_  = 0;
-    LLMFallbackStrategy    fallbackStrategy_ = LLMFallbackStrategy::Sequential;
+    QNetworkAccessManager *networkManager = nullptr;
+    QSocConfig            *config         = nullptr;
+    QList<LLMEndpoint>     endpoints;
+    int                    currentEndpoint  = 0;
+    LLMFallbackStrategy    fallbackStrategy = LLMFallbackStrategy::Sequential;
 
     /**
      * @brief Load configuration settings from config
@@ -304,10 +304,10 @@ private:
     json buildStreamResponse(const QString &content, const QMap<int, json> &toolCalls) const;
 
     /* Current streaming state */
-    QNetworkReply  *currentStreamReply_ = nullptr;
-    QString         streamBuffer_;
-    QString         streamAccumulatedContent_;
-    QMap<int, json> streamAccumulatedToolCalls_;
+    QNetworkReply  *currentStreamReply = nullptr;
+    QString         streamBuffer;
+    QString         streamAccumulatedContent;
+    QMap<int, json> streamAccumulatedToolCalls;
 };
 
 #endif // QLLMSERVICE_H
