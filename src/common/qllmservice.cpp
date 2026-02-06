@@ -515,10 +515,13 @@ void QLLMService::sendChatCompletionStream(
     timer->start(endpoint.timeout);
 
     /* Handle incoming data */
-    connect(currentStreamReply, &QNetworkReply::readyRead, this, [this]() {
+    connect(currentStreamReply, &QNetworkReply::readyRead, this, [this, timer]() {
         if (!currentStreamReply) {
             return;
         }
+
+        /* Reset timeout timer on each data received */
+        timer->start();
 
         streamBuffer += QString::fromUtf8(currentStreamReply->readAll());
 
@@ -586,14 +589,9 @@ void QLLMService::sendChatCompletionStream(
             /* If we have accumulated content or tool calls but didn't get [DONE],
                still emit streamComplete to avoid hanging */
             if (!streamAccumulatedContent.isEmpty() || !streamAccumulatedToolCalls.isEmpty()) {
-                /* Check if streamComplete was already emitted by checking if buffer is cleared */
-                if (!streamBuffer.isEmpty()
-                    || (!streamAccumulatedContent.isEmpty()
-                        && streamAccumulatedToolCalls.isEmpty())) {
-                    json response
-                        = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
-                    emit streamComplete(response);
-                }
+                json response
+                    = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
+                emit streamComplete(response);
             }
         }
 
