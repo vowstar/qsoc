@@ -27,7 +27,7 @@ public:
     void setProjectManager(QSocProjectManager *projectManager);
 
 private:
-    QSocProjectManager *projectManager_ = nullptr;
+    QSocProjectManager *projectManager = nullptr;
 };
 
 /**
@@ -50,7 +50,7 @@ public:
     void setProjectManager(QSocProjectManager *projectManager);
 
 private:
-    QSocProjectManager *projectManager_ = nullptr;
+    QSocProjectManager *projectManager = nullptr;
 };
 
 /**
@@ -73,7 +73,7 @@ public:
     void setProjectManager(QSocProjectManager *projectManager);
 
 private:
-    QSocProjectManager *projectManager_ = nullptr;
+    QSocProjectManager *projectManager = nullptr;
 };
 
 #endif // QSOCTOOLPROJECT_H

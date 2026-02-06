@@ -27,7 +27,7 @@ public:
     void setGenerateManager(QSocGenerateManager *generateManager);
 
 private:
-    QSocGenerateManager *generateManager_ = nullptr;
+    QSocGenerateManager *generateManager = nullptr;
 };
 
 /**
@@ -50,7 +50,7 @@ public:
     void setGenerateManager(QSocGenerateManager *generateManager);
 
 private:
-    QSocGenerateManager *generateManager_ = nullptr;
+    QSocGenerateManager *generateManager = nullptr;
 };
 
 #endif // QSOCTOOLGENERATE_H

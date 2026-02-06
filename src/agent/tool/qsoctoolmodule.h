@@ -27,7 +27,7 @@ public:
     void setModuleManager(QSocModuleManager *moduleManager);
 
 private:
-    QSocModuleManager *moduleManager_ = nullptr;
+    QSocModuleManager *moduleManager = nullptr;
 };
 
 /**
@@ -50,7 +50,7 @@ public:
     void setModuleManager(QSocModuleManager *moduleManager);
 
 private:
-    QSocModuleManager *moduleManager_ = nullptr;
+    QSocModuleManager *moduleManager = nullptr;
 };
 
 /**
@@ -73,7 +73,7 @@ public:
     void setModuleManager(QSocModuleManager *moduleManager);
 
 private:
-    QSocModuleManager *moduleManager_ = nullptr;
+    QSocModuleManager *moduleManager = nullptr;
 };
 
 /**
@@ -96,7 +96,7 @@ public:
     void setModuleManager(QSocModuleManager *moduleManager);
 
 private:
-    QSocModuleManager *moduleManager_ = nullptr;
+    QSocModuleManager *moduleManager = nullptr;
 };
 
 #endif // QSOCTOOLMODULE_H

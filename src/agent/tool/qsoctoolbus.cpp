@@ -11,7 +11,7 @@
 
 QSocToolBusList::QSocToolBusList(QObject *parent, QSocBusManager *busManager)
     : QSocTool(parent)
-    , busManager_(busManager)
+    , busManager(busManager)
 {}
 
 QSocToolBusList::~QSocToolBusList() = default;
@@ -47,7 +47,7 @@ json QSocToolBusList::getParametersSchema() const
 
 QString QSocToolBusList::execute(const json &arguments)
 {
-    if (!busManager_) {
+    if (!busManager) {
         return "Error: Bus manager not configured";
     }
 
@@ -62,7 +62,7 @@ QString QSocToolBusList::execute(const json &arguments)
         return QString("Error: Invalid library regex pattern: %1").arg(libraryRegex.errorString());
     }
 
-    if (!busManager_->load(libraryRegex)) {
+    if (!busManager->load(libraryRegex)) {
         return "Warning: No libraries found or failed to load some libraries.";
     }
 
@@ -77,7 +77,7 @@ QString QSocToolBusList::execute(const json &arguments)
         return QString("Error: Invalid bus regex pattern: %1").arg(busRegex.errorString());
     }
 
-    QStringList buses = busManager_->listBus(busRegex);
+    QStringList buses = busManager->listBus(busRegex);
 
     if (buses.isEmpty()) {
         return "No bus definitions found.";
@@ -88,14 +88,14 @@ QString QSocToolBusList::execute(const json &arguments)
 
 void QSocToolBusList::setBusManager(QSocBusManager *busManager)
 {
-    busManager_ = busManager;
+    busManager = busManager;
 }
 
 /* QSocToolBusShow Implementation */
 
 QSocToolBusShow::QSocToolBusShow(QObject *parent, QSocBusManager *busManager)
     : QSocTool(parent)
-    , busManager_(busManager)
+    , busManager(busManager)
 {}
 
 QSocToolBusShow::~QSocToolBusShow() = default;
@@ -128,7 +128,7 @@ json QSocToolBusShow::getParametersSchema() const
 
 QString QSocToolBusShow::execute(const json &arguments)
 {
-    if (!busManager_) {
+    if (!busManager) {
         return "Error: Bus manager not configured";
     }
 
@@ -145,24 +145,24 @@ QString QSocToolBusShow::execute(const json &arguments)
     }
 
     QRegularExpression libraryRegex(libraryPattern);
-    if (!busManager_->load(libraryRegex)) {
+    if (!busManager->load(libraryRegex)) {
         return "Warning: Failed to load some libraries.";
     }
 
     /* Check if bus exists */
-    if (!busManager_->isBusExist(busName)) {
+    if (!busManager->isBusExist(busName)) {
         return QString("Error: Bus '%1' not found").arg(busName);
     }
 
     /* Get bus YAML */
-    YAML::Node busYaml = busManager_->getBusYaml(busName);
+    YAML::Node busYaml = busManager->getBusYaml(busName);
     if (!busYaml.IsDefined() || busYaml.IsNull()) {
         return QString("Error: Failed to get bus '%1' data").arg(busName);
     }
 
     /* Format output */
     QString result = QString("Bus: %1\n").arg(busName);
-    result += QString("Library: %1\n\n").arg(busManager_->getBusLibrary(busName));
+    result += QString("Library: %1\n\n").arg(busManager->getBusLibrary(busName));
     result += "Definition:\n";
     result += QStaticDataSedes::serializeYaml(busYaml);
 
@@ -171,14 +171,14 @@ QString QSocToolBusShow::execute(const json &arguments)
 
 void QSocToolBusShow::setBusManager(QSocBusManager *busManager)
 {
-    busManager_ = busManager;
+    busManager = busManager;
 }
 
 /* QSocToolBusImport Implementation */
 
 QSocToolBusImport::QSocToolBusImport(QObject *parent, QSocBusManager *busManager)
     : QSocTool(parent)
-    , busManager_(busManager)
+    , busManager(busManager)
 {}
 
 QSocToolBusImport::~QSocToolBusImport() = default;
@@ -213,7 +213,7 @@ json QSocToolBusImport::getParametersSchema() const
 
 QString QSocToolBusImport::execute(const json &arguments)
 {
-    if (!busManager_) {
+    if (!busManager) {
         return "Error: Bus manager not configured";
     }
 
@@ -246,12 +246,12 @@ QString QSocToolBusImport::execute(const json &arguments)
     QString busName     = QString::fromStdString(arguments["bus_name"].get<std::string>());
 
     /* Import from file list */
-    if (!busManager_->importFromFileList(libraryName, busName, filePaths)) {
+    if (!busManager->importFromFileList(libraryName, busName, filePaths)) {
         return QString("Error: Failed to import bus '%1' from file(s)").arg(busName);
     }
 
     /* Save the library */
-    if (!busManager_->save(libraryName)) {
+    if (!busManager->save(libraryName)) {
         return QString("Warning: Imported bus '%1' but failed to save library '%2'")
             .arg(busName, libraryName);
     }
@@ -263,5 +263,5 @@ QString QSocToolBusImport::execute(const json &arguments)
 
 void QSocToolBusImport::setBusManager(QSocBusManager *busManager)
 {
-    busManager_ = busManager;
+    busManager = busManager;
 }

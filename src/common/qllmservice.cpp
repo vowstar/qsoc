@@ -16,8 +16,8 @@
 
 QLLMService::QLLMService(QObject *parent, QSocConfig *config)
     : QObject(parent)
-    , networkManager_(new QNetworkAccessManager(this))
-    , config_(config)
+    , networkManager(new QNetworkAccessManager(this))
+    , config(config)
 {
     loadConfigSettings();
     setupNetworkProxy();
@@ -29,42 +29,42 @@ QLLMService::~QLLMService() = default;
 
 void QLLMService::setConfig(QSocConfig *config)
 {
-    config_ = config;
+    this->config = config;
     loadConfigSettings();
     setupNetworkProxy();
 }
 
 QSocConfig *QLLMService::getConfig()
 {
-    return config_;
+    return config;
 }
 
 /* Endpoint management */
 
 void QLLMService::addEndpoint(const LLMEndpoint &endpoint)
 {
-    endpoints_.append(endpoint);
+    endpoints.append(endpoint);
 }
 
 void QLLMService::clearEndpoints()
 {
-    endpoints_.clear();
-    currentEndpoint_ = 0;
+    endpoints.clear();
+    currentEndpoint = 0;
 }
 
 int QLLMService::endpointCount() const
 {
-    return static_cast<int>(endpoints_.size());
+    return static_cast<int>(endpoints.size());
 }
 
 bool QLLMService::hasEndpoint() const
 {
-    return !endpoints_.isEmpty();
+    return !endpoints.isEmpty();
 }
 
 void QLLMService::setFallbackStrategy(LLMFallbackStrategy strategy)
 {
-    fallbackStrategy_ = strategy;
+    fallbackStrategy = strategy;
 }
 
 /* LLM request methods */
@@ -80,7 +80,7 @@ LLMResponse QLLMService::sendRequest(
     }
 
     /* Try endpoints with fallback */
-    const int maxAttempts = static_cast<int>(endpoints_.size());
+    const int maxAttempts = static_cast<int>(endpoints.size());
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
         LLMEndpoint endpoint = selectEndpoint();
 
@@ -121,7 +121,7 @@ void QLLMService::sendRequestAsync(
     QNetworkRequest request = prepareRequest(endpoint);
     json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint.model);
 
-    QNetworkReply *reply = networkManager_->post(request, QByteArray::fromStdString(payload.dump()));
+    QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
 
     /* Set timeout */
     auto *timer = new QTimer(this);
@@ -208,17 +208,17 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
 
 void QLLMService::loadConfigSettings()
 {
-    endpoints_.clear();
-    currentEndpoint_ = 0;
+    endpoints.clear();
+    currentEndpoint = 0;
 
-    if (!config_) {
+    if (!config) {
         return;
     }
 
     /* Load from llm.url, llm.key, llm.model */
-    QString url   = config_->getValue("llm.url");
-    QString key   = config_->getValue("llm.key");
-    QString model = config_->getValue("llm.model");
+    QString url   = config->getValue("llm.url");
+    QString key   = config->getValue("llm.key");
+    QString model = config->getValue("llm.model");
 
     /* Add endpoint if URL is available */
     if (!url.isEmpty()) {
@@ -229,89 +229,101 @@ void QLLMService::loadConfigSettings()
         endpoint.model = model;
 
         /* Get timeout if configured */
-        QString timeoutStr = config_->getValue("llm.timeout");
+        QString timeoutStr = config->getValue("llm.timeout");
         if (!timeoutStr.isEmpty()) {
             endpoint.timeout = timeoutStr.toInt();
         }
 
-        endpoints_.append(endpoint);
+        endpoints.append(endpoint);
     }
 
     /* Load fallback strategy */
-    QString fallbackStr = config_->getValue("llm.fallback", "sequential").toLower();
+    QString fallbackStr = config->getValue("llm.fallback", "sequential").toLower();
     if (fallbackStr == "random") {
-        fallbackStrategy_ = LLMFallbackStrategy::Random;
+        fallbackStrategy = LLMFallbackStrategy::Random;
     } else if (fallbackStr == "round-robin" || fallbackStr == "roundrobin") {
-        fallbackStrategy_ = LLMFallbackStrategy::RoundRobin;
+        fallbackStrategy = LLMFallbackStrategy::RoundRobin;
     } else {
-        fallbackStrategy_ = LLMFallbackStrategy::Sequential;
+        fallbackStrategy = LLMFallbackStrategy::Sequential;
     }
 }
 
 void QLLMService::setupNetworkProxy()
 {
-    if (!config_ || !networkManager_) {
+    if (!networkManager) {
         return;
     }
 
-    QString proxyType = config_->getValue("proxy.type", "system").toLower();
+    if (!config) {
+        /* No config, respect environment variables (system proxy) */
+        QNetworkProxyFactory::setUseSystemConfiguration(true);
+        networkManager->setProxy(QNetworkProxy::DefaultProxy);
+        return;
+    }
+
+    /* Get proxy type - default to "system" to respect environment variables */
+    QString proxyType = config->getValue("proxy.type", "system").toLower();
 
     QNetworkProxy proxy;
 
     if (proxyType == "none") {
+        /* Explicitly disable all proxies including environment variables */
+        QNetworkProxyFactory::setUseSystemConfiguration(false);
         proxy.setType(QNetworkProxy::NoProxy);
     } else if (proxyType == "socks5") {
+        QNetworkProxyFactory::setUseSystemConfiguration(false);
         proxy.setType(QNetworkProxy::Socks5Proxy);
-        proxy.setHostName(config_->getValue("proxy.host", "127.0.0.1"));
-        proxy.setPort(config_->getValue("proxy.port", "1080").toUInt());
+        proxy.setHostName(config->getValue("proxy.host", "127.0.0.1"));
+        proxy.setPort(config->getValue("proxy.port", "1080").toUInt());
 
-        QString user = config_->getValue("proxy.user");
+        QString user = config->getValue("proxy.user");
         if (!user.isEmpty()) {
             proxy.setUser(user);
-            proxy.setPassword(config_->getValue("proxy.password"));
+            proxy.setPassword(config->getValue("proxy.password"));
         }
     } else if (proxyType == "http") {
+        QNetworkProxyFactory::setUseSystemConfiguration(false);
         proxy.setType(QNetworkProxy::HttpProxy);
-        proxy.setHostName(config_->getValue("proxy.host", "127.0.0.1"));
-        proxy.setPort(config_->getValue("proxy.port", "8080").toUInt());
+        proxy.setHostName(config->getValue("proxy.host", "127.0.0.1"));
+        proxy.setPort(config->getValue("proxy.port", "8080").toUInt());
 
-        QString user = config_->getValue("proxy.user");
+        QString user = config->getValue("proxy.user");
         if (!user.isEmpty()) {
             proxy.setUser(user);
-            proxy.setPassword(config_->getValue("proxy.password"));
+            proxy.setPassword(config->getValue("proxy.password"));
         }
     } else {
-        /* Default to system proxy settings */
+        /* "system" or unrecognized: respect environment variables */
         QNetworkProxyFactory::setUseSystemConfiguration(true);
-        networkManager_->setProxy(QNetworkProxy::DefaultProxy);
+        networkManager->setProxy(QNetworkProxy::DefaultProxy);
         return;
     }
 
-    networkManager_->setProxy(proxy);
+    networkManager->setProxy(proxy);
 }
 
 LLMEndpoint QLLMService::selectEndpoint()
 {
-    if (endpoints_.isEmpty()) {
+    if (endpoints.isEmpty()) {
         return {};
     }
 
-    switch (fallbackStrategy_) {
+    switch (fallbackStrategy) {
     case LLMFallbackStrategy::Random: {
-        auto index = QRandomGenerator::global()->bounded(endpoints_.size());
-        return endpoints_.at(index);
+        auto index = QRandomGenerator::global()->bounded(endpoints.size());
+        return endpoints.at(index);
     }
     case LLMFallbackStrategy::RoundRobin:
     case LLMFallbackStrategy::Sequential:
     default:
-        return endpoints_.at(currentEndpoint_ % endpoints_.size());
+        return endpoints.at(currentEndpoint % endpoints.size());
     }
 }
 
 void QLLMService::advanceEndpoint()
 {
-    if (!endpoints_.isEmpty()) {
-        currentEndpoint_ = (currentEndpoint_ + 1) % static_cast<int>(endpoints_.size());
+    if (!endpoints.isEmpty()) {
+        currentEndpoint = (currentEndpoint + 1) % static_cast<int>(endpoints.size());
     }
 }
 
@@ -429,8 +441,8 @@ LLMResponse QLLMService::sendRequestToEndpoint(
     QNetworkRequest request = prepareRequest(endpoint);
     json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint.model);
 
-    QEventLoop loop;
-    QNetworkReply *reply = networkManager_->post(request, QByteArray::fromStdString(payload.dump()));
+    QEventLoop     loop;
+    QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
 
     /* Set timeout */
     QTimer timer;
@@ -457,6 +469,15 @@ void QLLMService::sendChatCompletionStream(
         return;
     }
 
+    /* Abort any existing stream request before starting a new one */
+    if (currentStreamReply) {
+        /* Disconnect all signals first to prevent callbacks during cleanup */
+        disconnect(currentStreamReply, nullptr, this, nullptr);
+        currentStreamReply->abort();
+        currentStreamReply->deleteLater();
+        currentStreamReply = nullptr;
+    }
+
     LLMEndpoint     endpoint = selectEndpoint();
     QNetworkRequest request  = prepareRequest(endpoint);
 
@@ -475,41 +496,41 @@ void QLLMService::sendChatCompletionStream(
     }
 
     /* Reset streaming state */
-    streamBuffer_.clear();
-    streamAccumulatedContent_.clear();
-    streamAccumulatedToolCalls_.clear();
+    streamBuffer.clear();
+    streamAccumulatedContent.clear();
+    streamAccumulatedToolCalls.clear();
 
-    currentStreamReply_ = networkManager_->post(request, QByteArray::fromStdString(payload.dump()));
+    currentStreamReply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
 
     /* Set timeout */
     auto *timer = new QTimer(this);
     timer->setSingleShot(true);
     connect(timer, &QTimer::timeout, this, [this, timer]() {
         timer->deleteLater();
-        if (currentStreamReply_) {
-            currentStreamReply_->abort();
+        if (currentStreamReply) {
+            currentStreamReply->abort();
             emit streamError("Request timeout");
         }
     });
     timer->start(endpoint.timeout);
 
     /* Handle incoming data */
-    connect(currentStreamReply_, &QNetworkReply::readyRead, this, [this]() {
-        if (!currentStreamReply_) {
+    connect(currentStreamReply, &QNetworkReply::readyRead, this, [this]() {
+        if (!currentStreamReply) {
             return;
         }
 
-        streamBuffer_ += QString::fromUtf8(currentStreamReply_->readAll());
+        streamBuffer += QString::fromUtf8(currentStreamReply->readAll());
 
         /* Process complete SSE lines */
         while (true) {
-            int lineEnd = streamBuffer_.indexOf('\n');
+            int lineEnd = streamBuffer.indexOf('\n');
             if (lineEnd == -1) {
                 break;
             }
 
-            QString line  = streamBuffer_.left(lineEnd).trimmed();
-            streamBuffer_ = streamBuffer_.mid(lineEnd + 1);
+            QString line = streamBuffer.left(lineEnd).trimmed();
+            streamBuffer = streamBuffer.mid(lineEnd + 1);
 
             /* Skip empty lines */
             if (line.isEmpty()) {
@@ -521,11 +542,11 @@ void QLLMService::sendChatCompletionStream(
                 QString data = line.mid(6);
 
                 bool isDone
-                    = parseStreamLine(data, streamAccumulatedContent_, streamAccumulatedToolCalls_);
+                    = parseStreamLine(data, streamAccumulatedContent, streamAccumulatedToolCalls);
 
                 if (isDone) {
                     json response
-                        = buildStreamResponse(streamAccumulatedContent_, streamAccumulatedToolCalls_);
+                        = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
                     emit streamComplete(response);
                 }
             }
@@ -533,21 +554,51 @@ void QLLMService::sendChatCompletionStream(
     });
 
     /* Handle completion */
-    connect(currentStreamReply_, &QNetworkReply::finished, this, [this, timer]() {
+    connect(currentStreamReply, &QNetworkReply::finished, this, [this, timer]() {
         timer->stop();
         timer->deleteLater();
 
-        if (!currentStreamReply_) {
+        if (!currentStreamReply) {
             return;
         }
 
-        if (currentStreamReply_->error() != QNetworkReply::NoError
-            && currentStreamReply_->error() != QNetworkReply::OperationCanceledError) {
-            emit streamError(currentStreamReply_->errorString());
+        bool hasError = currentStreamReply->error() != QNetworkReply::NoError
+                        && currentStreamReply->error() != QNetworkReply::OperationCanceledError;
+
+        if (hasError) {
+            emit streamError(currentStreamReply->errorString());
+        } else {
+            /* Process any remaining data in buffer */
+            QString remaining = streamBuffer.trimmed();
+            if (!remaining.isEmpty()) {
+                if (remaining.startsWith("data: ")) {
+                    QString data = remaining.mid(6);
+                    bool    isDone
+                        = parseStreamLine(data, streamAccumulatedContent, streamAccumulatedToolCalls);
+                    if (isDone) {
+                        json response = buildStreamResponse(
+                            streamAccumulatedContent, streamAccumulatedToolCalls);
+                        emit streamComplete(response);
+                    }
+                }
+            }
+
+            /* If we have accumulated content or tool calls but didn't get [DONE],
+               still emit streamComplete to avoid hanging */
+            if (!streamAccumulatedContent.isEmpty() || !streamAccumulatedToolCalls.isEmpty()) {
+                /* Check if streamComplete was already emitted by checking if buffer is cleared */
+                if (!streamBuffer.isEmpty()
+                    || (!streamAccumulatedContent.isEmpty()
+                        && streamAccumulatedToolCalls.isEmpty())) {
+                    json response
+                        = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
+                    emit streamComplete(response);
+                }
+            }
         }
 
-        currentStreamReply_->deleteLater();
-        currentStreamReply_ = nullptr;
+        currentStreamReply->deleteLater();
+        currentStreamReply = nullptr;
     });
 }
 
@@ -661,7 +712,7 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
     }
 
     /* Try endpoints with fallback */
-    const int maxAttempts = static_cast<int>(endpoints_.size());
+    const int maxAttempts = static_cast<int>(endpoints.size());
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
         LLMEndpoint endpoint = selectEndpoint();
 
@@ -684,7 +735,7 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
 
         QEventLoop     loop;
         QNetworkReply *reply
-            = networkManager_->post(request, QByteArray::fromStdString(payload.dump()));
+            = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
 
         /* Set timeout */
         QTimer timer;

@@ -159,12 +159,12 @@ public:
     const QTerminalCapability &terminalCapability() const;
 
 private:
-    std::unique_ptr<replxx::Replxx> replxx_;
-    QTerminalCapability             termCap_;
-    QString                         historyFile_;
-    bool                            eof_ = false;
-    CompletionCallback              completionCallback_;
-    HintCallback                    hintCallback_;
+    std::unique_ptr<replxx::Replxx> replxxInstance;
+    QTerminalCapability             termCap;
+    QString                         historyFilePath;
+    bool                            eofFlag = false;
+    CompletionCallback              completionCallback;
+    HintCallback                    hintCallback;
 
     /**
      * @brief Initialize replxx with default settings

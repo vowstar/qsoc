@@ -17,12 +17,6 @@
 #endif
 
 QTerminalCapability::QTerminalCapability()
-    : stdinIsatty_(false)
-    , stdoutIsatty_(false)
-    , colorSupport_(false)
-    , unicodeSupport_(false)
-    , columns_(80)
-    , rows_(24)
 {
     detect();
 }
@@ -30,16 +24,16 @@ QTerminalCapability::QTerminalCapability()
 void QTerminalCapability::detect()
 {
     /* Check if file descriptors are TTY */
-    stdinIsatty_  = isatty(STDIN_FILENO) != 0;
-    stdoutIsatty_ = isatty(STDOUT_FILENO) != 0;
+    stdinIsatty  = isatty(STDIN_FILENO) != 0;
+    stdoutIsatty = isatty(STDOUT_FILENO) != 0;
 
     /* Get TERM environment variable */
     const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    termType_                     = env.value("TERM", "");
+    terminalType                  = env.value("TERM", "");
 
     /* Detect capabilities */
-    colorSupport_   = checkColorSupport();
-    unicodeSupport_ = checkUnicodeSupport();
+    colorSupport   = checkColorSupport();
+    unicodeSupport = checkUnicodeSupport();
 
     /* Detect terminal size */
     detectSize();
@@ -47,20 +41,20 @@ void QTerminalCapability::detect()
 
 void QTerminalCapability::detectSize()
 {
-    columns_ = 80;
-    rows_    = 24;
+    termColumns = 80;
+    termRows    = 24;
 
 #ifdef Q_OS_WIN
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
-        columns_ = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-        rows_    = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+        termColumns = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        termRows    = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
     }
 #else
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
-        columns_ = ws.ws_col;
-        rows_    = ws.ws_row;
+        termColumns = ws.ws_col;
+        termRows    = ws.ws_row;
     } else {
         /* Fallback to environment variables */
         const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
@@ -68,12 +62,12 @@ void QTerminalCapability::detectSize()
 
         int cols = env.value("COLUMNS", "80").toInt(&ok);
         if (ok && cols > 0) {
-            columns_ = cols;
+            termColumns = cols;
         }
 
         int lines = env.value("LINES", "24").toInt(&ok);
         if (ok && lines > 0) {
-            rows_ = lines;
+            termRows = lines;
         }
     }
 #endif
@@ -82,12 +76,12 @@ void QTerminalCapability::detectSize()
 bool QTerminalCapability::checkColorSupport() const
 {
     /* No color support if not a TTY */
-    if (!stdoutIsatty_) {
+    if (!stdoutIsatty) {
         return false;
     }
 
     /* Check TERM for color capability */
-    if (termType_.isEmpty()) {
+    if (terminalType.isEmpty()) {
         return false;
     }
 
@@ -101,14 +95,14 @@ bool QTerminalCapability::checkColorSupport() const
 
     /* Check for exact match or prefix match */
     for (const QString &term : colorTerms) {
-        if (termType_ == term || termType_.startsWith(term + "-")) {
+        if (terminalType == term || terminalType.startsWith(term + "-")) {
             return true;
         }
     }
 
     /* Check for common patterns */
-    if (termType_.contains("256color") || termType_.contains("color")
-        || termType_.contains("ansi")) {
+    if (terminalType.contains("256color") || terminalType.contains("color")
+        || terminalType.contains("ansi")) {
         return true;
     }
 
@@ -149,38 +143,38 @@ bool QTerminalCapability::checkUnicodeSupport() const
 
 bool QTerminalCapability::isInteractive() const
 {
-    return stdinIsatty_;
+    return stdinIsatty;
 }
 
 bool QTerminalCapability::isOutputInteractive() const
 {
-    return stdoutIsatty_;
+    return stdoutIsatty;
 }
 
 bool QTerminalCapability::supportsColor() const
 {
-    return colorSupport_;
+    return colorSupport;
 }
 
 bool QTerminalCapability::supportsUnicode() const
 {
-    return unicodeSupport_;
+    return unicodeSupport;
 }
 
 int QTerminalCapability::columns() const
 {
-    return columns_;
+    return termColumns;
 }
 
 int QTerminalCapability::rows() const
 {
-    return rows_;
+    return termRows;
 }
 
 bool QTerminalCapability::useEnhancedMode() const
 {
     /* Enhanced mode only when both stdin and stdout are TTY */
-    return stdinIsatty_ && stdoutIsatty_;
+    return stdinIsatty && stdoutIsatty;
 }
 
 void QTerminalCapability::refreshSize()
@@ -190,5 +184,5 @@ void QTerminalCapability::refreshSize()
 
 QString QTerminalCapability::termType() const
 {
-    return termType_;
+    return terminalType;
 }

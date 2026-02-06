@@ -1,23 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
-#ifndef QSOCTOOLFILE_H
-#define QSOCTOOLFILE_H
+#ifndef QSOCTOOLTODO_H
+#define QSOCTOOLTODO_H
 
 #include "agent/qsoctool.h"
 #include "common/qsocprojectmanager.h"
 
+#include <QList>
+
 /**
- * @brief Tool to read files (restricted to project directory)
+ * @brief Structure representing a single todo item
  */
-class QSocToolFileRead : public QSocTool
+struct QSocTodoItem
+{
+    int     id = 0;
+    QString title;
+    QString description;
+    QString priority = "medium";  /* high, medium, low */
+    QString status   = "pending"; /* pending, in_progress, done */
+};
+
+/**
+ * @brief Tool to list all todo items
+ */
+class QSocToolTodoList : public QSocTool
 {
     Q_OBJECT
 
 public:
-    explicit QSocToolFileRead(
+    explicit QSocToolTodoList(
         QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
-    ~QSocToolFileRead() override;
+    ~QSocToolTodoList() override;
 
     QString getName() const override;
     QString getDescription() const override;
@@ -29,25 +43,21 @@ public:
 private:
     QSocProjectManager *projectManager = nullptr;
 
-    /**
-     * @brief Check if a path is within the project directory
-     * @param filePath The path to check
-     * @return true if path is within project directory, false otherwise
-     */
-    bool isPathAllowed(const QString &filePath) const;
+    QString             todoFilePath() const;
+    QList<QSocTodoItem> loadTodos() const;
+    QString             formatTodoList(const QList<QSocTodoItem> &todos) const;
 };
 
 /**
- * @brief Tool to list files in a directory (restricted to project directory)
+ * @brief Tool to add a new todo item
  */
-class QSocToolFileList : public QSocTool
+class QSocToolTodoAdd : public QSocTool
 {
     Q_OBJECT
 
 public:
-    explicit QSocToolFileList(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
-    ~QSocToolFileList() override;
+    explicit QSocToolTodoAdd(QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+    ~QSocToolTodoAdd() override;
 
     QString getName() const override;
     QString getDescription() const override;
@@ -59,25 +69,22 @@ public:
 private:
     QSocProjectManager *projectManager = nullptr;
 
-    /**
-     * @brief Check if a path is within the project directory
-     * @param dirPath The path to check
-     * @return true if path is within project directory, false otherwise
-     */
-    bool isPathAllowed(const QString &dirPath) const;
+    QString             todoFilePath() const;
+    QList<QSocTodoItem> loadTodos() const;
+    bool                saveTodos(const QList<QSocTodoItem> &todos) const;
 };
 
 /**
- * @brief Tool to write files (restricted to project directory)
+ * @brief Tool to update a todo item's status
  */
-class QSocToolFileWrite : public QSocTool
+class QSocToolTodoUpdate : public QSocTool
 {
     Q_OBJECT
 
 public:
-    explicit QSocToolFileWrite(
+    explicit QSocToolTodoUpdate(
         QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
-    ~QSocToolFileWrite() override;
+    ~QSocToolTodoUpdate() override;
 
     QString getName() const override;
     QString getDescription() const override;
@@ -88,20 +95,23 @@ public:
 
 private:
     QSocProjectManager *projectManager = nullptr;
-    bool                isPathAllowed(const QString &filePath) const;
+
+    QString             todoFilePath() const;
+    QList<QSocTodoItem> loadTodos() const;
+    bool                saveTodos(const QList<QSocTodoItem> &todos) const;
 };
 
 /**
- * @brief Tool to edit files with string replacement (restricted to project directory)
+ * @brief Tool to delete a todo item
  */
-class QSocToolFileEdit : public QSocTool
+class QSocToolTodoDelete : public QSocTool
 {
     Q_OBJECT
 
 public:
-    explicit QSocToolFileEdit(
+    explicit QSocToolTodoDelete(
         QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
-    ~QSocToolFileEdit() override;
+    ~QSocToolTodoDelete() override;
 
     QString getName() const override;
     QString getDescription() const override;
@@ -112,7 +122,10 @@ public:
 
 private:
     QSocProjectManager *projectManager = nullptr;
-    bool                isPathAllowed(const QString &filePath) const;
+
+    QString             todoFilePath() const;
+    QList<QSocTodoItem> loadTodos() const;
+    bool                saveTodos(const QList<QSocTodoItem> &todos) const;
 };
 
-#endif // QSOCTOOLFILE_H
+#endif // QSOCTOOLTODO_H
