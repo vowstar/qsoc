@@ -66,7 +66,12 @@ void QAgentStatusLine::toolCalled(const QString &toolName, const QString &detail
 
     /* Output tool call to history (scrolling output) */
     QTextStream out(stdout);
-    out << "\r\033[K"; /* Clear status line first */
+
+    /* Clear TODO list + status line before printing tool info */
+    if (displayedTodoLineCount > 0) {
+        out << QString("\033[%1A").arg(displayedTodoLineCount); /* Move up to TODO start */
+    }
+    out << "\r\033[J"; /* Clear from cursor to end of screen */
 
     /* Simple format: [Tool] name: detail */
     if (detail.isEmpty()) {
@@ -79,6 +84,9 @@ void QAgentStatusLine::toolCalled(const QString &toolName, const QString &detail
         }
         out << line << Qt::endl;
     }
+
+    /* Reset displayed count - render() will redraw TODO list */
+    displayedTodoLineCount = 0;
 
     currentStatus = QString("Running %1...").arg(toolName);
     render();
@@ -261,10 +269,19 @@ void QAgentStatusLine::printContent(const QString &content)
     if (active) {
         /* Reset timer - content output is progress */
         stepElapsedTimer.restart();
-        /* Clear current status line */
-        out << "\r\033[K";
+
+        /* Clear TODO list + status line before printing content */
+        if (displayedTodoLineCount > 0) {
+            out << QString("\033[%1A").arg(displayedTodoLineCount);
+        }
+        out << "\r\033[J";
+
         /* Output content */
         out << content << Qt::flush;
+
+        /* Reset displayed count - render() will redraw TODO list */
+        displayedTodoLineCount = 0;
+
         /* Redraw status line */
         render();
     } else {
@@ -275,32 +292,16 @@ void QAgentStatusLine::printContent(const QString &content)
 
 void QAgentStatusLine::updateTodoDisplay(const QString &todoResult)
 {
-    QTextStream out(stdout);
-    out << "\r\033[K";
-
-    /* Format based on result type */
+    /* Cache the result for reference */
     if (todoResult.startsWith("Todo List:") || todoResult.startsWith("No todos found")) {
-        /* Full todo list */
         todoListCache = todoResult;
-        out << "\n[Todo]\n" << todoResult << Qt::endl;
-    } else if (todoResult.startsWith("Added todo")) {
-        /* todo_add result: "Added todo #1: title (priority)" */
-        out << "  -> " << todoResult << Qt::endl;
-    } else if (todoResult.startsWith("Updated todo")) {
-        /* todo_update result: "Updated todo #1 status to: done" */
-        out << "  -> " << todoResult << Qt::endl;
-    } else if (todoResult.startsWith("Deleted todo")) {
-        /* todo_delete result: "Deleted todo #1" */
-        out << "  -> " << todoResult << Qt::endl;
-    } else if (todoResult.startsWith("Error:")) {
-        /* Error message */
-        out << "  -> " << todoResult << Qt::endl;
-    } else {
-        /* Unknown format, just print */
-        out << todoResult << Qt::endl;
     }
 
-    render();
+    /* No scrolling output - TODO list is displayed persistently via render() */
+    /* Just trigger a render to update the display */
+    if (active) {
+        render();
+    }
 }
 
 void QAgentStatusLine::updateTokens(qint64 input, qint64 output)
