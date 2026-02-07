@@ -12,6 +12,143 @@
 #include <unistd.h>
 #endif
 
+/* Check if a Unicode code point is a wide (double-width) terminal character */
+static bool isWideChar(uint code)
+{
+    return (code >= 0x1100 && code <= 0x115F)       /* Hangul Jamo */
+           || code == 0x2329 || code == 0x232A      /* Angle brackets */
+           || (code >= 0x2E80 && code <= 0x303E)    /* CJK Radicals, Kangxi, CJK Symbols */
+           || (code >= 0x3040 && code <= 0x33BF)    /* Hiragana, Katakana, Bopomofo */
+           || (code >= 0x3400 && code <= 0x4DBF)    /* CJK Extension A */
+           || (code >= 0x4E00 && code <= 0x9FFF)    /* CJK Unified Ideographs */
+           || (code >= 0xA000 && code <= 0xA4CF)    /* Yi */
+           || (code >= 0xAC00 && code <= 0xD7AF)    /* Hangul Syllables */
+           || (code >= 0xF900 && code <= 0xFAFF)    /* CJK Compatibility Ideographs */
+           || (code >= 0xFE10 && code <= 0xFE19)    /* Vertical Forms */
+           || (code >= 0xFE30 && code <= 0xFE6F)    /* CJK Compatibility Forms */
+           || (code >= 0xFF01 && code <= 0xFF60)    /* Fullwidth Forms */
+           || (code >= 0xFFE0 && code <= 0xFFE6)    /* Fullwidth Signs */
+           || (code >= 0x20000 && code <= 0x2FFFF)  /* CJK Extension B-F */
+           || (code >= 0x30000 && code <= 0x3FFFF); /* CJK Extension G+ */
+}
+
+/* Calculate terminal visual width of a string (handles CJK double-width + ANSI escapes) */
+static int visualWidth(const QString &text)
+{
+    int width = 0;
+    int idx   = 0;
+    int len   = text.length();
+
+    while (idx < len) {
+        QChar ch = text[idx];
+
+        /* Skip ANSI CSI sequences: ESC [ ... final_byte(0x40-0x7E) */
+        if (ch == '\033' && idx + 1 < len && text[idx + 1] == '[') {
+            idx += 2;
+            while (idx < len) {
+                ushort code = text[idx].unicode();
+                ++idx;
+                if (code >= 0x40 && code <= 0x7E) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        /* Skip other ESC sequences (ESC + single char) */
+        if (ch == '\033') {
+            idx += 2;
+            continue;
+        }
+
+        /* Handle surrogate pairs for characters beyond BMP */
+        uint codePoint;
+        int  charLen;
+        if (ch.isHighSurrogate() && idx + 1 < len && text[idx + 1].isLowSurrogate()) {
+            codePoint = QChar::surrogateToUcs4(ch, text[idx + 1]);
+            charLen   = 2;
+        } else {
+            codePoint = ch.unicode();
+            charLen   = 1;
+        }
+
+        /* Control characters have zero width */
+        if (codePoint < 0x20 || (codePoint >= 0x7F && codePoint < 0xA0)) {
+            idx += charLen;
+            continue;
+        }
+
+        width += isWideChar(codePoint) ? 2 : 1;
+        idx += charLen;
+    }
+
+    return width;
+}
+
+/* Truncate string to fit within maxWidth terminal columns, appending "..." if needed */
+static QString truncateToVisualWidth(const QString &text, int maxWidth)
+{
+    if (visualWidth(text) <= maxWidth) {
+        return text;
+    }
+
+    int targetWidth = maxWidth - 3; /* Reserve 3 columns for "..." */
+    if (targetWidth <= 0) {
+        return "...";
+    }
+
+    int width = 0;
+    int idx   = 0;
+    int len   = text.length();
+
+    while (idx < len) {
+        QChar ch = text[idx];
+
+        /* Preserve ANSI CSI sequences (zero visual width) */
+        if (ch == '\033' && idx + 1 < len && text[idx + 1] == '[') {
+            idx += 2;
+            while (idx < len) {
+                ushort code = text[idx].unicode();
+                ++idx;
+                if (code >= 0x40 && code <= 0x7E) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (ch == '\033') {
+            idx += 2;
+            continue;
+        }
+
+        uint codePoint;
+        int  charLen;
+        if (ch.isHighSurrogate() && idx + 1 < len && text[idx + 1].isLowSurrogate()) {
+            codePoint = QChar::surrogateToUcs4(ch, text[idx + 1]);
+            charLen   = 2;
+        } else {
+            codePoint = ch.unicode();
+            charLen   = 1;
+        }
+
+        if (codePoint < 0x20 || (codePoint >= 0x7F && codePoint < 0xA0)) {
+            idx += charLen;
+            continue;
+        }
+
+        int charWidth = isWideChar(codePoint) ? 2 : 1;
+        if (width + charWidth > targetWidth) {
+            break;
+        }
+
+        width += charWidth;
+        idx += charLen;
+    }
+
+    return text.left(idx) + "...";
+}
+
 QAgentStatusLine::QAgentStatusLine(QObject *parent)
     : QObject(parent)
     , spinnerTimer(new QTimer(this))
@@ -92,9 +229,7 @@ void QAgentStatusLine::toolCalled(const QString &toolName, const QString &detail
     } else {
         QString line      = QString("[Tool] %1: %2").arg(toolName, detail);
         int     termWidth = getTerminalWidth();
-        if (line.length() > termWidth - 1) {
-            line = line.left(termWidth - 4) + "...";
-        }
+        line              = truncateToVisualWidth(line, termWidth - 1);
         out << line << Qt::endl;
     }
 
@@ -225,10 +360,7 @@ void QAgentStatusLine::render()
 
     /* Get terminal width and truncate if necessary */
     int termWidth = getTerminalWidth();
-    if (statusLine.length() > termWidth - 1) {
-        /* Leave room for cursor, truncate with "..." */
-        statusLine = statusLine.left(termWidth - 4) + "...";
-    }
+    statusLine    = truncateToVisualWidth(statusLine, termWidth - 1);
 
     QTextStream out(stdout);
 
@@ -258,7 +390,9 @@ void QAgentStatusLine::render()
 
     /* Output partial content line (ephemeral - redrawn each render) */
     if (!currentPartialLine.isEmpty()) {
-        out << currentPartialLine;
+        out << "\033[?7l"; /* Disable auto-wrap: safety net for long lines */
+        out << truncateToVisualWidth(currentPartialLine, termWidth - 1);
+        out << "\033[?7h"; /* Re-enable auto-wrap */
     }
 
     /* Separator between partial content and TODO items */
@@ -275,25 +409,23 @@ void QAgentStatusLine::render()
         if (item.status == "done") {
             checkbox = "[x]";
         } else if (item.id == activeTodoId) {
-            /* Current item: use spinner for animation */
-            checkbox = QString("[%1]").arg(spinner);
+            /* Blink effect: alternate [*] and [ ] with uniform 500ms/500ms timing */
+            checkbox = (spinnerIndex % 10 < 5) ? "[*]" : "[ ]";
         } else {
             checkbox = "[ ]";
         }
 
         QString line = QString("%1 %2 (%3)").arg(checkbox, item.title, item.priority);
 
-        /* Truncate if too long */
-        if (line.length() > termWidth - 1) {
-            line = line.left(termWidth - 4) + "...";
-        }
+        /* Truncate if too long (visual width for CJK) */
+        line = truncateToVisualWidth(line, termWidth - 1);
 
         out << line << "\n";
     }
 
-    /* Update displayed line count: TODO lines + partial content line */
-    int hasPartialLine     = currentPartialLine.isEmpty() ? 0 : 1;
-    displayedTodoLineCount = todoLineCount + hasPartialLine;
+    /* Update displayed line count: truncation + DECAWM guarantees no wrapping */
+    int hasSeparator       = (!currentPartialLine.isEmpty() && todoLineCount > 0) ? 1 : 0;
+    displayedTodoLineCount = hasSeparator + todoLineCount;
 
     /* Output status line */
     out << statusLine << Qt::flush;
