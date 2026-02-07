@@ -591,7 +591,13 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                             } catch (...) {
                                 /* Ignore parse errors */
                             }
-                            statusLine.toolCalled(toolName, detail);
+                            /* Skip [Tool] output for todo tools - status shown in TODO list */
+                            if (toolName.startsWith("todo_")) {
+                                statusLine.resetProgress();
+                                statusLine.update(QString("Running %1...").arg(toolName));
+                            } else {
+                                statusLine.toolCalled(toolName, detail);
+                            }
                         }));
 
                 connections.append(
@@ -618,7 +624,6 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                     statusLine.updateTodoStatus(todoId, newStatus);
                                 }
                             }
-                            /* Show todo result for all todo tools */
                             if (toolName.startsWith("todo_")) {
                                 statusLine.updateTodoDisplay(result);
                             }
@@ -805,7 +810,13 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                             } catch (...) {
                                 /* Ignore parse errors */
                             }
-                            statusLine.toolCalled(toolName, detail);
+                            /* Skip [Tool] output for todo tools - status shown in TODO list */
+                            if (toolName.startsWith("todo_")) {
+                                statusLine.resetProgress();
+                                statusLine.update(QString("Running %1...").arg(toolName));
+                            } else {
+                                statusLine.toolCalled(toolName, detail);
+                            }
                         }));
 
                 connections.append(
@@ -832,7 +843,6 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                     statusLine.updateTodoStatus(todoId, newStatus);
                                 }
                             }
-                            /* Show todo result for all todo tools */
                             if (toolName.startsWith("todo_")) {
                                 statusLine.updateTodoDisplay(result);
                             }
@@ -1089,7 +1099,13 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                     } catch (...) {
                         /* Ignore parse errors */
                     }
-                    statusLine.toolCalled(toolName, detail);
+                    /* Skip [Tool] output for todo tools - status shown in TODO list */
+                    if (toolName.startsWith("todo_")) {
+                        statusLine.resetProgress();
+                        statusLine.update(QString("Running %1...").arg(toolName));
+                    } else {
+                        statusLine.toolCalled(toolName, detail);
+                    }
                 });
 
             auto connToolResult = QObject::connect(
@@ -1115,7 +1131,6 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                             statusLine.updateTodoStatus(todoId, newStatus);
                         }
                     }
-                    /* Show todo result for all todo tools */
                     if (toolName.startsWith("todo_")) {
                         statusLine.updateTodoDisplay(result);
                     }
@@ -1261,7 +1276,13 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                     } catch (...) {
                         /* Ignore parse errors */
                     }
-                    statusLine.toolCalled(toolName, detail);
+                    /* Skip [Tool] output for todo tools - status shown in TODO list */
+                    if (toolName.startsWith("todo_")) {
+                        statusLine.resetProgress();
+                        statusLine.update(QString("Running %1...").arg(toolName));
+                    } else {
+                        statusLine.toolCalled(toolName, detail);
+                    }
                 });
 
             auto connToolResult = QObject::connect(
@@ -1287,7 +1308,6 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                             statusLine.updateTodoStatus(todoId, newStatus);
                         }
                     }
-                    /* Show todo result for all todo tools */
                     if (toolName.startsWith("todo_")) {
                         statusLine.updateTodoDisplay(result);
                     }
