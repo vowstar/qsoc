@@ -17,6 +17,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
@@ -401,6 +402,122 @@ private slots:
         QString result = tool.execute(args);
 
         QVERIFY(result.startsWith("Error:"));
+    }
+
+    /* Bash Timeout Tests */
+    void testBashTimeout()
+    {
+        QSocToolShellBash tool(this, projectManager);
+        json              args = {{"command", "sleep 10"}, {"timeout", 1000}};
+
+        QString result = tool.execute(args);
+
+        QVERIFY(result.contains("timed out"));
+        QVERIFY(result.contains("Process ID:"));
+        QVERIFY(result.contains("STILL RUNNING"));
+        QVERIFY(result.contains("bash_manage"));
+    }
+
+    void testBashManageStatus()
+    {
+        QSocToolShellBash tool(this, projectManager);
+        json              bashArgs = {{"command", "sleep 10"}, {"timeout", 1000}};
+
+        QString bashResult = tool.execute(bashArgs);
+        QVERIFY(bashResult.contains("Process ID:"));
+
+        /* Extract process ID */
+        QRegularExpression      regex("Process ID: (\\d+)");
+        QRegularExpressionMatch match = regex.match(bashResult);
+        QVERIFY(match.hasMatch());
+        int processId = match.captured(1).toInt();
+
+        /* Check status */
+        QSocToolBashManage manageTool(this);
+        json               statusArgs = {{"process_id", processId}, {"action", "status"}};
+
+        QString statusResult = manageTool.execute(statusArgs);
+        QVERIFY(statusResult.contains("RUNNING") || statusResult.contains("FINISHED"));
+        QVERIFY(statusResult.contains("sleep 10"));
+
+        /* Kill it */
+        json    killArgs   = {{"process_id", processId}, {"action", "kill"}};
+        QString killResult = manageTool.execute(killArgs);
+        QVERIFY(killResult.contains("killed") || killResult.contains("exit code"));
+    }
+
+    void testBashManageKill()
+    {
+        QSocToolShellBash tool(this, projectManager);
+        json              bashArgs = {{"command", "sleep 30"}, {"timeout", 500}};
+
+        QString bashResult = tool.execute(bashArgs);
+        QVERIFY(bashResult.contains("Process ID:"));
+
+        QRegularExpression      regex("Process ID: (\\d+)");
+        QRegularExpressionMatch match = regex.match(bashResult);
+        QVERIFY(match.hasMatch());
+        int processId = match.captured(1).toInt();
+
+        /* Kill the process */
+        QSocToolBashManage manageTool(this);
+        json               killArgs = {{"process_id", processId}, {"action", "kill"}};
+
+        QString killResult = manageTool.execute(killArgs);
+        QVERIFY(killResult.contains("killed"));
+
+        /* Verify it's cleaned up */
+        json    statusArgs   = {{"process_id", processId}, {"action", "status"}};
+        QString statusResult = manageTool.execute(statusArgs);
+        QVERIFY(statusResult.contains("Error:"));
+        QVERIFY(statusResult.contains("No active process"));
+    }
+
+    void testBashManageWait()
+    {
+        QSocToolShellBash tool(this, projectManager);
+        /* Short command that finishes quickly, but with short timeout */
+        json bashArgs = {{"command", "echo done && sleep 1"}, {"timeout", 200}};
+
+        QString bashResult = tool.execute(bashArgs);
+        QVERIFY(bashResult.contains("Process ID:"));
+
+        QRegularExpression      regex("Process ID: (\\d+)");
+        QRegularExpressionMatch match = regex.match(bashResult);
+        QVERIFY(match.hasMatch());
+        int processId = match.captured(1).toInt();
+
+        /* Wait for it to finish */
+        QSocToolBashManage manageTool(this);
+        json waitArgs = {{"process_id", processId}, {"action", "wait"}, {"timeout", 5000}};
+
+        QString waitResult = manageTool.execute(waitArgs);
+        QVERIFY(
+            waitResult.contains("completed") || waitResult.contains("finished")
+            || waitResult.contains("done"));
+    }
+
+    void testBashManageInvalidProcess()
+    {
+        QSocToolBashManage manageTool(this);
+        json               args = {{"process_id", 99999}, {"action", "status"}};
+
+        QString result = manageTool.execute(args);
+        QVERIFY(result.contains("Error:"));
+        QVERIFY(result.contains("No active process"));
+    }
+
+    void testBashManageMissingParams()
+    {
+        QSocToolBashManage manageTool(this);
+
+        /* Missing process_id */
+        json args1 = {{"action", "status"}};
+        QVERIFY(manageTool.execute(args1).contains("Error:"));
+
+        /* Missing action */
+        json args2 = {{"process_id", 1}};
+        QVERIFY(manageTool.execute(args2).contains("Error:"));
     }
 
     /* Registry Execute Tool */

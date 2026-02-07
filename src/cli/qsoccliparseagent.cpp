@@ -250,8 +250,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(fileEditTool);
 
     /* Shell tools */
-    auto *shellBashTool = new QSocToolShellBash(this, projectManager);
+    auto *shellBashTool  = new QSocToolShellBash(this, projectManager);
+    auto *bashManageTool = new QSocToolBashManage(this);
     toolRegistry->registerTool(shellBashTool);
+    toolRegistry->registerTool(bashManageTool);
 
     /* Documentation tools */
     auto *docQueryTool = new QSocToolDocQuery(this);

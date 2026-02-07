@@ -48,7 +48,10 @@ struct QSocAgentConfig
 
 ### File & Shell
 - file_read/write/edit/list: File operations (use absolute paths)
-- shell_bash: Run shell commands. Example: {"command": "mkdir -p rtl", "working_directory": "/path"}
+- shell_bash: Run shell commands. Set timeout as needed (no upper limit). If timed out, process keeps running.
+  Example: {"command": "make -j16", "timeout": 300000, "working_directory": "/path"}
+- bash_manage: Manage a timed-out bash process: check status, wait more, read output, kill, or terminate.
+  Example: {"process_id": 1, "action": "status"}
 - path_context: Manage common paths. Actions: list, set_working, add, remove, clear
 
 ### Task Management

@@ -308,6 +308,7 @@ private:
     QString         streamBuffer;
     QString         streamAccumulatedContent;
     QMap<int, json> streamAccumulatedToolCalls;
+    bool            streamCompleted = false;
 };
 
 #endif // QLLMSERVICE_H
