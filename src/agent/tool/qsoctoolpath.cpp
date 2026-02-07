@@ -82,6 +82,58 @@ void QSocPathContext::clearUserDirs()
     userDirs.clear();
 }
 
+bool QSocPathContext::isWriteAllowed(const QString &path) const
+{
+    QStringList dirs = getWritableDirs();
+
+    QFileInfo fileInfo(path);
+    QString   canonicalPath = fileInfo.canonicalFilePath();
+    if (canonicalPath.isEmpty()) {
+        /* File doesn't exist yet, check parent */
+        QFileInfo parentInfo(fileInfo.absolutePath());
+        canonicalPath = parentInfo.canonicalFilePath();
+        if (canonicalPath.isEmpty()) {
+            return false;
+        }
+    }
+
+    for (const QString &dir : dirs) {
+        QDir    d(dir);
+        QString canonicalDir = d.canonicalPath();
+        if (!canonicalDir.isEmpty() && canonicalPath.startsWith(canonicalDir)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QStringList QSocPathContext::getWritableDirs() const
+{
+    QMutexLocker locker(&mutex);
+    QStringList  dirs;
+
+    /* Project directory */
+    if (projectManager) {
+        QString projDir = projectManager->getProjectPath();
+        if (!projDir.isEmpty()) {
+            dirs << projDir;
+        }
+    }
+
+    /* Working directory */
+    if (!workingDir.isEmpty()) {
+        dirs << workingDir;
+    }
+
+    /* User directories */
+    dirs << userDirs;
+
+    /* System temp directory */
+    dirs << QDir::tempPath();
+
+    return dirs;
+}
+
 QString QSocPathContext::getSummary() const
 {
     QMutexLocker locker(&mutex);

@@ -5,18 +5,17 @@
 #define QSOCTOOLFILE_H
 
 #include "agent/qsoctool.h"
-#include "common/qsocprojectmanager.h"
+#include "agent/tool/qsoctoolpath.h"
 
 /**
- * @brief Tool to read files (restricted to project directory)
+ * @brief Tool to read files (unrestricted)
  */
 class QSocToolFileRead : public QSocTool
 {
     Q_OBJECT
 
 public:
-    explicit QSocToolFileRead(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+    explicit QSocToolFileRead(QObject *parent = nullptr, QSocPathContext *pathContext = nullptr);
     ~QSocToolFileRead() override;
 
     QString getName() const override;
@@ -24,29 +23,21 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
-    void setProjectManager(QSocProjectManager *projectManager);
+    void setPathContext(QSocPathContext *pathContext);
 
 private:
-    QSocProjectManager *projectManager = nullptr;
-
-    /**
-     * @brief Check if a path is within the project directory
-     * @param filePath The path to check
-     * @return true if path is within project directory, false otherwise
-     */
-    bool isPathAllowed(const QString &filePath) const;
+    QSocPathContext *pathContext = nullptr;
 };
 
 /**
- * @brief Tool to list files in a directory (restricted to project directory)
+ * @brief Tool to list files in a directory (unrestricted)
  */
 class QSocToolFileList : public QSocTool
 {
     Q_OBJECT
 
 public:
-    explicit QSocToolFileList(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+    explicit QSocToolFileList(QObject *parent = nullptr, QSocPathContext *pathContext = nullptr);
     ~QSocToolFileList() override;
 
     QString getName() const override;
@@ -54,29 +45,21 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
-    void setProjectManager(QSocProjectManager *projectManager);
+    void setPathContext(QSocPathContext *pathContext);
 
 private:
-    QSocProjectManager *projectManager = nullptr;
-
-    /**
-     * @brief Check if a path is within the project directory
-     * @param dirPath The path to check
-     * @return true if path is within project directory, false otherwise
-     */
-    bool isPathAllowed(const QString &dirPath) const;
+    QSocPathContext *pathContext = nullptr;
 };
 
 /**
- * @brief Tool to write files (restricted to project directory)
+ * @brief Tool to write files (restricted to allowed directories)
  */
 class QSocToolFileWrite : public QSocTool
 {
     Q_OBJECT
 
 public:
-    explicit QSocToolFileWrite(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+    explicit QSocToolFileWrite(QObject *parent = nullptr, QSocPathContext *pathContext = nullptr);
     ~QSocToolFileWrite() override;
 
     QString getName() const override;
@@ -84,23 +67,21 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
-    void setProjectManager(QSocProjectManager *projectManager);
+    void setPathContext(QSocPathContext *pathContext);
 
 private:
-    QSocProjectManager *projectManager = nullptr;
-    bool                isPathAllowed(const QString &filePath) const;
+    QSocPathContext *pathContext = nullptr;
 };
 
 /**
- * @brief Tool to edit files with string replacement (restricted to project directory)
+ * @brief Tool to edit files with string replacement (restricted to allowed directories)
  */
 class QSocToolFileEdit : public QSocTool
 {
     Q_OBJECT
 
 public:
-    explicit QSocToolFileEdit(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+    explicit QSocToolFileEdit(QObject *parent = nullptr, QSocPathContext *pathContext = nullptr);
     ~QSocToolFileEdit() override;
 
     QString getName() const override;
@@ -108,11 +89,10 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
-    void setProjectManager(QSocProjectManager *projectManager);
+    void setPathContext(QSocPathContext *pathContext);
 
 private:
-    QSocProjectManager *projectManager = nullptr;
-    bool                isPathAllowed(const QString &filePath) const;
+    QSocPathContext *pathContext = nullptr;
 };
 
 #endif // QSOCTOOLFILE_H
