@@ -543,6 +543,13 @@ json QSocAgent::getMessages() const
     return messages;
 }
 
+void QSocAgent::setMessages(const json &msgs)
+{
+    if (msgs.is_array()) {
+        messages = msgs;
+    }
+}
+
 int QSocAgent::estimateTokens(const QString &text) const
 {
     /* Simple estimation: approximately 4 characters per token */

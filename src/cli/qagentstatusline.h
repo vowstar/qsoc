@@ -149,6 +149,16 @@ private:
      */
     int displayedTodoLineCount = 0;
 
+    /**
+     * @brief Buffered content waiting to be flushed by render()
+     */
+    QString pendingContent;
+
+    /**
+     * @brief The current incomplete line of streaming content (ephemeral zone)
+     */
+    QString currentPartialLine;
+
 public:
     /**
      * @brief Update and display todo list
@@ -185,6 +195,13 @@ public:
      * @param newStatus The new status ("done", "pending", "in_progress")
      */
     void updateTodoStatus(int todoId, const QString &newStatus);
+
+    /**
+     * @brief Get a TODO item's title by ID
+     * @param todoId The ID of the todo item
+     * @return Title string, or empty if not found
+     */
+    QString getTodoTitle(int todoId) const;
 
     /**
      * @brief Update token usage counters

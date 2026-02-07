@@ -23,6 +23,8 @@
 
 #include <QDir>
 #include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
 #include <QPair>
 #include <QRegularExpression>
 #include <QTextStream>
@@ -90,8 +92,8 @@ QAgentStatusLine::TodoItem parseTodoAddResult(const QString &result)
  */
 QPair<int, QString> parseTodoUpdateResult(const QString &result)
 {
-    /* Match: "Updated todo #ID status to: STATUS" */
-    QRegularExpression      regex(R"(Updated todo #(\d+) status to:\s*(\w+))");
+    /* Match: "Updated todo #ID: Title (status: STATUS)" */
+    QRegularExpression      regex(R"(Updated todo #(\d+):\s*.+?\(status:\s*(\w+)\))");
     QRegularExpressionMatch match = regex.match(result);
 
     if (match.hasMatch()) {
@@ -99,6 +101,70 @@ QPair<int, QString> parseTodoUpdateResult(const QString &result)
     }
 
     return qMakePair(-1, QString());
+}
+
+/**
+ * @brief Get the conversation file path for the current project
+ * @param pm Project manager
+ * @return Path to the conversation JSON file
+ */
+QString conversationFilePath(QSocProjectManager *pm)
+{
+    QString projectPath = pm->getProjectPath();
+    if (projectPath.isEmpty()) {
+        projectPath = QDir::currentPath();
+    }
+    return QDir(projectPath).filePath(".qsoc/conversation.json");
+}
+
+/**
+ * @brief Save the conversation history to a file
+ * @param agent The agent whose messages to save
+ * @param pm Project manager for path resolution
+ */
+void saveConversation(QSocAgent *agent, QSocProjectManager *pm)
+{
+    QString   filePath = conversationFilePath(pm);
+    QFileInfo fileInfo(filePath);
+    QDir      parentDir = fileInfo.absoluteDir();
+    if (!parentDir.exists()) {
+        parentDir.mkpath(".");
+    }
+    QFile file(filePath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream stream(&file);
+        json        doc = {{"version", 1}, {"messages", agent->getMessages()}};
+        stream << QString::fromStdString(doc.dump());
+        file.close();
+    }
+}
+
+/**
+ * @brief Load a conversation history from a file
+ * @param agent The agent to restore messages into
+ * @param pm Project manager for path resolution
+ * @return True if conversation was loaded successfully
+ */
+bool loadConversation(QSocAgent *agent, QSocProjectManager *pm)
+{
+    QString filePath = conversationFilePath(pm);
+    QFile   file(filePath);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return false;
+    }
+    QTextStream stream(&file);
+    QString     content = stream.readAll();
+    file.close();
+    try {
+        json doc = json::parse(content.toStdString());
+        if (doc.contains("messages") && doc["messages"].is_array()) {
+            agent->setMessages(doc["messages"]);
+            return true;
+        }
+    } catch (...) {
+        /* Ignore parse errors */
+    }
+    return false;
 }
 
 } /* namespace */
@@ -150,7 +216,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         }
     } else {
         /* Try to load first available project */
-        projectManager->loadFirst();
+        projectManager->loadFirst(true); /* Silent in agent mode */
     }
 
     /* Create agent configuration */
@@ -416,6 +482,15 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
     QAgentStatusLine statusLine(this);
     bool             useStatusLine = termCap.isOutputInteractive();
 
+    /* Load previous conversation if available */
+    if (loadConversation(agent, projectManager)) {
+        int msgCount = static_cast<int>(agent->getMessages().size());
+        if (termCap.isOutputInteractive()) {
+            qout << "(Loaded " << msgCount << " messages from previous session)" << Qt::endl
+                 << Qt::endl;
+        }
+    }
+
     /* Main loop */
     while (true) {
         QString input;
@@ -452,6 +527,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
         }
         if (input.toLower() == "clear") {
             agent->clearHistory();
+            QFile::remove(conversationFilePath(projectManager));
             if (termCap.isOutputInteractive()) {
                 qout << "History cleared." << Qt::endl;
             }
@@ -507,8 +583,10 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                     detail = QString::fromStdString(
                                         args["regex"].get<std::string>());
                                 } else if (args.contains("id")) {
-                                    /* todo_update, todo_delete - id only, title from result */
-                                    detail = "#" + QString::number(args["id"].get<int>());
+                                    int     todoId = args["id"].get<int>();
+                                    QString title  = statusLine.getTodoTitle(todoId);
+                                    detail         = title.isEmpty() ? "#" + QString::number(todoId)
+                                                                     : "\"" + title + "\"";
                                 }
                             } catch (...) {
                                 /* Ignore parse errors */
@@ -671,6 +749,9 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             loop.exec();
             loopRunning = false;
 
+            /* Save conversation after each interaction */
+            saveConversation(agent, projectManager);
+
             /* Disconnect all signals to avoid stale connections */
             for (const auto &conn : connections) {
                 QObject::disconnect(conn);
@@ -716,8 +797,10 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                     detail = QString::fromStdString(
                                         args["regex"].get<std::string>());
                                 } else if (args.contains("id")) {
-                                    /* todo_update, todo_delete - id only, title from result */
-                                    detail = "#" + QString::number(args["id"].get<int>());
+                                    int     todoId = args["id"].get<int>();
+                                    QString title  = statusLine.getTodoTitle(todoId);
+                                    detail         = title.isEmpty() ? "#" + QString::number(todoId)
+                                                                     : "\"" + title + "\"";
                                 }
                             } catch (...) {
                                 /* Ignore parse errors */
@@ -875,6 +958,9 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             loop.exec();
             loopRunning = false;
 
+            /* Save conversation after each interaction */
+            saveConversation(agent, projectManager);
+
             if (!useStatusLine) {
                 qout << "\r\033[K"; /* Clear the "Thinking..." line */
             }
@@ -914,6 +1000,13 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
     /* Create status line for visual feedback */
     QAgentStatusLine statusLine(this);
 
+    /* Load previous conversation if available */
+    if (loadConversation(agent, projectManager)) {
+        int msgCount = static_cast<int>(agent->getMessages().size());
+        qout << "(Loaded " << msgCount << " messages from previous session)" << Qt::endl
+             << Qt::endl;
+    }
+
     /* Main loop */
     while (true) {
         QString input = readline->readLine("qsoc> ");
@@ -936,6 +1029,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
         }
         if (input.toLower() == "clear") {
             agent->clearHistory();
+            QFile::remove(conversationFilePath(projectManager));
             qout << "History cleared." << Qt::endl;
             continue;
         }
@@ -1114,6 +1208,9 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             loop.exec();
             loopRunning = false;
 
+            /* Save conversation after each interaction */
+            saveConversation(agent, projectManager);
+
             /* Disconnect all signals to avoid stale connections */
             QObject::disconnect(connToolCalled);
             QObject::disconnect(connToolResult);
@@ -1282,6 +1379,9 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
+
+            /* Save conversation after each interaction */
+            saveConversation(agent, projectManager);
 
             /* Display complete result at once */
             if (!finalResult.isEmpty()) {
