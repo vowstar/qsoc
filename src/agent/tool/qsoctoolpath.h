@@ -35,6 +35,12 @@ public:
     void removeUserDir(const QString &dir);
     void clearUserDirs();
 
+    /* Permission checks */
+    bool isWriteAllowed(const QString &path) const;
+
+    /* All writable directories for display */
+    QStringList getWritableDirs() const;
+
     /* Get compact summary for injection into messages (max ~200 chars) */
     QString getSummary() const;
 

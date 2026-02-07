@@ -7,6 +7,7 @@
 #include "agent/tool/qsoctoolfile.h"
 #include "agent/tool/qsoctoolgenerate.h"
 #include "agent/tool/qsoctoolmodule.h"
+#include "agent/tool/qsoctoolpath.h"
 #include "agent/tool/qsoctoolproject.h"
 #include "agent/tool/qsoctoolshell.h"
 #include "common/qsocbusmanager.h"
@@ -44,6 +45,7 @@ private:
     QSocModuleManager   *moduleManager   = nullptr;
     QSocBusManager      *busManager      = nullptr;
     QSocGenerateManager *generateManager = nullptr;
+    QSocPathContext     *pathContext     = nullptr;
 
 private slots:
     void initTestCase()
@@ -57,10 +59,12 @@ private slots:
         generateManager = new QSocGenerateManager(this, projectManager);
 
         projectManager->setProjectPath(tempDir.path());
+        pathContext = new QSocPathContext(this, projectManager);
     }
 
     void cleanupTestCase()
     {
+        delete pathContext;
         delete generateManager;
         delete busManager;
         delete moduleManager;
@@ -160,7 +164,7 @@ private slots:
     /* File Tools Tests */
     void testFileReadMissingPath()
     {
-        QSocToolFileRead tool(this, projectManager);
+        QSocToolFileRead tool(this, pathContext);
         json             args = json::object();
 
         QString result = tool.execute(args);
@@ -171,7 +175,7 @@ private slots:
 
     void testFileReadNonexistent()
     {
-        QSocToolFileRead tool(this, projectManager);
+        QSocToolFileRead tool(this, pathContext);
         json             args = {{"file_path", "/nonexistent/path/file.txt"}};
 
         QString result = tool.execute(args);
@@ -181,17 +185,31 @@ private slots:
 
     void testFileReadSecurityCheck()
     {
-        QSocToolFileRead tool(this, projectManager);
+        /* Read should be unrestricted - /etc/passwd should be readable */
+        QSocToolFileRead tool(this, pathContext);
         json             args = {{"file_path", "/etc/passwd"}};
 
         QString result = tool.execute(args);
 
-        QVERIFY(result.contains("Access denied") || result.contains("Error:"));
+        /* Should succeed (contain file content like root:) or fail with permission error,
+         * but NOT "Access denied" */
+        QVERIFY(!result.contains("Access denied"));
+    }
+
+    void testFileWriteSecurityCheck()
+    {
+        /* Write outside allowed directories should be denied */
+        QSocToolFileWrite tool(this, pathContext);
+        json              args = {{"file_path", "/etc/test_write_deny.txt"}, {"content", "test"}};
+
+        QString result = tool.execute(args);
+
+        QVERIFY(result.contains("Access denied"));
     }
 
     void testFileListDirectory()
     {
-        QSocToolFileList tool(this, projectManager);
+        QSocToolFileList tool(this, pathContext);
         json             args = {{"directory", tempDir.path().toStdString()}};
 
         QString result = tool.execute(args);
@@ -203,7 +221,7 @@ private slots:
     void testFileWriteAndRead()
     {
         /* Write a file */
-        QSocToolFileWrite writeTool(this, projectManager);
+        QSocToolFileWrite writeTool(this, pathContext);
         QString           testContent = "Hello, QSoC Agent Test!";
         QString           testFile    = tempDir.path() + "/test_write.txt";
 
@@ -214,7 +232,7 @@ private slots:
         QVERIFY(writeResult.contains("Successfully"));
 
         /* Read it back */
-        QSocToolFileRead readTool(this, projectManager);
+        QSocToolFileRead readTool(this, pathContext);
         json             readArgs = {{"file_path", testFile.toStdString()}};
 
         QString readResult = readTool.execute(readArgs);
@@ -231,7 +249,7 @@ private slots:
         file.close();
 
         /* Edit it */
-        QSocToolFileEdit editTool(this, projectManager);
+        QSocToolFileEdit editTool(this, pathContext);
         json             editArgs
             = {{"file_path", testFile.toStdString()},
                {"old_string", "World"},
@@ -257,7 +275,7 @@ private slots:
         file.close();
 
         /* Try to edit without replace_all */
-        QSocToolFileEdit editTool(this, projectManager);
+        QSocToolFileEdit editTool(this, pathContext);
         json             editArgs
             = {{"file_path", testFile.toStdString()}, {"old_string", "foo"}, {"new_string", "xxx"}};
 

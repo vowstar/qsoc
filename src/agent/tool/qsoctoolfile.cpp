@@ -12,9 +12,9 @@
 
 /* QSocToolFileRead Implementation */
 
-QSocToolFileRead::QSocToolFileRead(QObject *parent, QSocProjectManager *projectManager)
+QSocToolFileRead::QSocToolFileRead(QObject *parent, QSocPathContext *pathContext)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , pathContext(pathContext)
 {}
 
 QSocToolFileRead::~QSocToolFileRead() = default;
@@ -26,8 +26,7 @@ QString QSocToolFileRead::getName() const
 
 QString QSocToolFileRead::getDescription() const
 {
-    return "Read the contents of a file within the project directory. "
-           "For security, only files within the project directory can be read.";
+    return "Read the contents of a file. Any file on the system can be read.";
 }
 
 json QSocToolFileRead::getParametersSchema() const
@@ -46,42 +45,8 @@ json QSocToolFileRead::getParametersSchema() const
         {"required", json::array({"file_path"})}};
 }
 
-bool QSocToolFileRead::isPathAllowed(const QString &filePath) const
-{
-    if (!projectManager) {
-        return false;
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        /* Allow current directory if no project */
-        projectPath = QDir::currentPath();
-    }
-
-    QFileInfo fileInfo(filePath);
-    QString   canonicalPath = fileInfo.canonicalFilePath();
-
-    /* If file doesn't exist yet, check parent directory */
-    if (canonicalPath.isEmpty()) {
-        QFileInfo parentInfo(fileInfo.absolutePath());
-        canonicalPath = parentInfo.canonicalFilePath();
-        if (canonicalPath.isEmpty()) {
-            return false;
-        }
-    }
-
-    QDir    projectDir(projectPath);
-    QString canonicalProjectPath = projectDir.canonicalPath();
-
-    return canonicalPath.startsWith(canonicalProjectPath);
-}
-
 QString QSocToolFileRead::execute(const json &arguments)
 {
-    if (!projectManager) {
-        return "Error: Project manager not configured";
-    }
-
     if (!arguments.contains("file_path") || !arguments["file_path"].is_string()) {
         return "Error: file_path is required";
     }
@@ -91,17 +56,15 @@ QString QSocToolFileRead::execute(const json &arguments)
     /* Make path absolute if relative */
     QFileInfo fileInfo(filePath);
     if (!fileInfo.isAbsolute()) {
-        QString projectPath = projectManager->getProjectPath();
-        if (projectPath.isEmpty()) {
-            projectPath = QDir::currentPath();
+        QString basePath;
+        if (pathContext) {
+            basePath = pathContext->getProjectDir();
         }
-        filePath = QDir(projectPath).absoluteFilePath(filePath);
+        if (basePath.isEmpty()) {
+            basePath = QDir::currentPath();
+        }
+        filePath = QDir(basePath).absoluteFilePath(filePath);
         fileInfo = QFileInfo(filePath);
-    }
-
-    /* Security check */
-    if (!isPathAllowed(filePath)) {
-        return "Error: Access denied. File must be within the project directory.";
     }
 
     /* Check if file exists */
@@ -160,16 +123,16 @@ QString QSocToolFileRead::execute(const json &arguments)
     return result;
 }
 
-void QSocToolFileRead::setProjectManager(QSocProjectManager *projectManager)
+void QSocToolFileRead::setPathContext(QSocPathContext *pathContext)
 {
-    projectManager = projectManager;
+    this->pathContext = pathContext;
 }
 
 /* QSocToolFileList Implementation */
 
-QSocToolFileList::QSocToolFileList(QObject *parent, QSocProjectManager *projectManager)
+QSocToolFileList::QSocToolFileList(QObject *parent, QSocPathContext *pathContext)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , pathContext(pathContext)
 {}
 
 QSocToolFileList::~QSocToolFileList() = default;
@@ -181,8 +144,7 @@ QString QSocToolFileList::getName() const
 
 QString QSocToolFileList::getDescription() const
 {
-    return "List files in a directory within the project. "
-           "For security, only directories within the project directory can be listed.";
+    return "List files in a directory. Any directory on the system can be listed.";
 }
 
 json QSocToolFileList::getParametersSchema() const
@@ -204,36 +166,8 @@ json QSocToolFileList::getParametersSchema() const
         {"required", json::array()}};
 }
 
-bool QSocToolFileList::isPathAllowed(const QString &dirPath) const
-{
-    if (!projectManager) {
-        return false;
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    QDir    dir(dirPath);
-    QString canonicalPath = dir.canonicalPath();
-
-    if (canonicalPath.isEmpty()) {
-        return false;
-    }
-
-    QDir    projectDir(projectPath);
-    QString canonicalProjectPath = projectDir.canonicalPath();
-
-    return canonicalPath.startsWith(canonicalProjectPath);
-}
-
 QString QSocToolFileList::execute(const json &arguments)
 {
-    if (!projectManager) {
-        return "Error: Project manager not configured";
-    }
-
     /* Get directory path */
     QString dirPath;
     if (arguments.contains("directory") && arguments["directory"].is_string()) {
@@ -242,24 +176,24 @@ QString QSocToolFileList::execute(const json &arguments)
 
     /* Make path absolute if relative or empty */
     if (dirPath.isEmpty()) {
-        dirPath = projectManager->getProjectPath();
+        if (pathContext) {
+            dirPath = pathContext->getProjectDir();
+        }
         if (dirPath.isEmpty()) {
             dirPath = QDir::currentPath();
         }
     } else {
         QFileInfo dirInfo(dirPath);
         if (!dirInfo.isAbsolute()) {
-            QString projectPath = projectManager->getProjectPath();
-            if (projectPath.isEmpty()) {
-                projectPath = QDir::currentPath();
+            QString basePath;
+            if (pathContext) {
+                basePath = pathContext->getProjectDir();
             }
-            dirPath = QDir(projectPath).absoluteFilePath(dirPath);
+            if (basePath.isEmpty()) {
+                basePath = QDir::currentPath();
+            }
+            dirPath = QDir(basePath).absoluteFilePath(dirPath);
         }
-    }
-
-    /* Security check */
-    if (!isPathAllowed(dirPath)) {
-        return "Error: Access denied. Directory must be within the project directory.";
     }
 
     QDir dir(dirPath);
@@ -320,16 +254,16 @@ QString QSocToolFileList::execute(const json &arguments)
     return QString("Files in %1:\n%2").arg(dirPath, files.join("\n"));
 }
 
-void QSocToolFileList::setProjectManager(QSocProjectManager *projectManager)
+void QSocToolFileList::setPathContext(QSocPathContext *pathContext)
 {
-    projectManager = projectManager;
+    this->pathContext = pathContext;
 }
 
 /* QSocToolFileWrite Implementation */
 
-QSocToolFileWrite::QSocToolFileWrite(QObject *parent, QSocProjectManager *projectManager)
+QSocToolFileWrite::QSocToolFileWrite(QObject *parent, QSocPathContext *pathContext)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , pathContext(pathContext)
 {}
 
 QSocToolFileWrite::~QSocToolFileWrite() = default;
@@ -341,8 +275,9 @@ QString QSocToolFileWrite::getName() const
 
 QString QSocToolFileWrite::getDescription() const
 {
-    return "Write content to a file within the project directory. "
-           "Creates the file if it doesn't exist, overwrites if it does.";
+    return "Write content to a file. "
+           "Creates the file if it doesn't exist, overwrites if it does. "
+           "File must be within an allowed directory (project, working, user dirs, or temp).";
 }
 
 json QSocToolFileWrite::getParametersSchema() const
@@ -357,41 +292,8 @@ json QSocToolFileWrite::getParametersSchema() const
         {"required", json::array({"file_path", "content"})}};
 }
 
-bool QSocToolFileWrite::isPathAllowed(const QString &filePath) const
-{
-    if (!projectManager) {
-        return false;
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    QFileInfo fileInfo(filePath);
-    QString   canonicalPath = fileInfo.canonicalFilePath();
-
-    /* If file doesn't exist yet, check parent directory */
-    if (canonicalPath.isEmpty()) {
-        QFileInfo parentInfo(fileInfo.absolutePath());
-        canonicalPath = parentInfo.canonicalFilePath();
-        if (canonicalPath.isEmpty()) {
-            return false;
-        }
-    }
-
-    QDir    projectDir(projectPath);
-    QString canonicalProjectPath = projectDir.canonicalPath();
-
-    return canonicalPath.startsWith(canonicalProjectPath);
-}
-
 QString QSocToolFileWrite::execute(const json &arguments)
 {
-    if (!projectManager) {
-        return "Error: Project manager not configured";
-    }
-
     if (!arguments.contains("file_path") || !arguments["file_path"].is_string()) {
         return "Error: file_path is required";
     }
@@ -406,17 +308,21 @@ QString QSocToolFileWrite::execute(const json &arguments)
     /* Make path absolute if relative */
     QFileInfo fileInfo(filePath);
     if (!fileInfo.isAbsolute()) {
-        QString projectPath = projectManager->getProjectPath();
-        if (projectPath.isEmpty()) {
-            projectPath = QDir::currentPath();
+        QString basePath;
+        if (pathContext) {
+            basePath = pathContext->getProjectDir();
         }
-        filePath = QDir(projectPath).absoluteFilePath(filePath);
+        if (basePath.isEmpty()) {
+            basePath = QDir::currentPath();
+        }
+        filePath = QDir(basePath).absoluteFilePath(filePath);
         fileInfo = QFileInfo(filePath);
     }
 
     /* Security check */
-    if (!isPathAllowed(filePath)) {
-        return "Error: Access denied. File must be within the project directory.";
+    if (pathContext && !pathContext->isWriteAllowed(filePath)) {
+        return "Error: Access denied. File must be within an allowed directory "
+               "(project, working, user, or temp).";
     }
 
     /* Create parent directories if needed */
@@ -440,16 +346,16 @@ QString QSocToolFileWrite::execute(const json &arguments)
     return QString("Successfully wrote %1 bytes to: %2").arg(content.size()).arg(filePath);
 }
 
-void QSocToolFileWrite::setProjectManager(QSocProjectManager *projectManager)
+void QSocToolFileWrite::setPathContext(QSocPathContext *pathContext)
 {
-    projectManager = projectManager;
+    this->pathContext = pathContext;
 }
 
 /* QSocToolFileEdit Implementation */
 
-QSocToolFileEdit::QSocToolFileEdit(QObject *parent, QSocProjectManager *projectManager)
+QSocToolFileEdit::QSocToolFileEdit(QObject *parent, QSocPathContext *pathContext)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , pathContext(pathContext)
 {}
 
 QSocToolFileEdit::~QSocToolFileEdit() = default;
@@ -462,7 +368,8 @@ QString QSocToolFileEdit::getName() const
 QString QSocToolFileEdit::getDescription() const
 {
     return "Edit a file by replacing a specific string with new content. "
-           "The old_string must be unique in the file for the replacement to succeed.";
+           "The old_string must be unique in the file for the replacement to succeed. "
+           "File must be within an allowed directory (project, working, user dirs, or temp).";
 }
 
 json QSocToolFileEdit::getParametersSchema() const
@@ -481,36 +388,8 @@ json QSocToolFileEdit::getParametersSchema() const
         {"required", json::array({"file_path", "old_string", "new_string"})}};
 }
 
-bool QSocToolFileEdit::isPathAllowed(const QString &filePath) const
-{
-    if (!projectManager) {
-        return false;
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    QFileInfo fileInfo(filePath);
-    QString   canonicalPath = fileInfo.canonicalFilePath();
-
-    if (canonicalPath.isEmpty()) {
-        return false;
-    }
-
-    QDir    projectDir(projectPath);
-    QString canonicalProjectPath = projectDir.canonicalPath();
-
-    return canonicalPath.startsWith(canonicalProjectPath);
-}
-
 QString QSocToolFileEdit::execute(const json &arguments)
 {
-    if (!projectManager) {
-        return "Error: Project manager not configured";
-    }
-
     if (!arguments.contains("file_path") || !arguments["file_path"].is_string()) {
         return "Error: file_path is required";
     }
@@ -535,17 +414,21 @@ QString QSocToolFileEdit::execute(const json &arguments)
     /* Make path absolute if relative */
     QFileInfo fileInfo(filePath);
     if (!fileInfo.isAbsolute()) {
-        QString projectPath = projectManager->getProjectPath();
-        if (projectPath.isEmpty()) {
-            projectPath = QDir::currentPath();
+        QString basePath;
+        if (pathContext) {
+            basePath = pathContext->getProjectDir();
         }
-        filePath = QDir(projectPath).absoluteFilePath(filePath);
+        if (basePath.isEmpty()) {
+            basePath = QDir::currentPath();
+        }
+        filePath = QDir(basePath).absoluteFilePath(filePath);
         fileInfo = QFileInfo(filePath);
     }
 
     /* Security check */
-    if (!isPathAllowed(filePath)) {
-        return "Error: Access denied. File must be within the project directory.";
+    if (pathContext && !pathContext->isWriteAllowed(filePath)) {
+        return "Error: Access denied. File must be within an allowed directory "
+               "(project, working, user, or temp).";
     }
 
     /* Check if file exists */
@@ -599,7 +482,7 @@ QString QSocToolFileEdit::execute(const json &arguments)
         .arg(replaceAll ? count : 1);
 }
 
-void QSocToolFileEdit::setProjectManager(QSocProjectManager *projectManager)
+void QSocToolFileEdit::setPathContext(QSocPathContext *pathContext)
 {
-    projectManager = projectManager;
+    this->pathContext = pathContext;
 }

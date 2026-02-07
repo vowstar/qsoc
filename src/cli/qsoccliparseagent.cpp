@@ -305,11 +305,16 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(generateVerilogTool);
     toolRegistry->registerTool(generateTemplateTool);
 
-    /* File tools */
-    auto *fileReadTool  = new QSocToolFileRead(this, projectManager);
-    auto *fileListTool  = new QSocToolFileList(this, projectManager);
-    auto *fileWriteTool = new QSocToolFileWrite(this, projectManager);
-    auto *fileEditTool  = new QSocToolFileEdit(this, projectManager);
+    /* Path context (must be before file tools) */
+    auto *pathContext     = new QSocPathContext(this, projectManager);
+    auto *pathContextTool = new QSocToolPathContext(this, pathContext);
+    toolRegistry->registerTool(pathContextTool);
+
+    /* File tools - use pathContext for permission checks */
+    auto *fileReadTool  = new QSocToolFileRead(this, pathContext);
+    auto *fileListTool  = new QSocToolFileList(this, pathContext);
+    auto *fileWriteTool = new QSocToolFileWrite(this, pathContext);
+    auto *fileEditTool  = new QSocToolFileEdit(this, pathContext);
     toolRegistry->registerTool(fileReadTool);
     toolRegistry->registerTool(fileListTool);
     toolRegistry->registerTool(fileWriteTool);
@@ -340,11 +345,6 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(todoAddTool);
     toolRegistry->registerTool(todoUpdateTool);
     toolRegistry->registerTool(todoDeleteTool);
-
-    /* Path context tool */
-    auto *pathContext     = new QSocPathContext(this, projectManager);
-    auto *pathContextTool = new QSocToolPathContext(this, pathContext);
-    toolRegistry->registerTool(pathContextTool);
 
     /* Create agent */
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);
