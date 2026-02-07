@@ -499,6 +499,7 @@ void QLLMService::sendChatCompletionStream(
     streamBuffer.clear();
     streamAccumulatedContent.clear();
     streamAccumulatedToolCalls.clear();
+    streamCompleted = false;
 
     currentStreamReply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
 
@@ -516,7 +517,7 @@ void QLLMService::sendChatCompletionStream(
 
     /* Handle incoming data */
     connect(currentStreamReply, &QNetworkReply::readyRead, this, [this, timer]() {
-        if (!currentStreamReply) {
+        if (!currentStreamReply || streamCompleted) {
             return;
         }
 
@@ -548,9 +549,23 @@ void QLLMService::sendChatCompletionStream(
                     = parseStreamLine(data, streamAccumulatedContent, streamAccumulatedToolCalls);
 
                 if (isDone) {
+                    streamCompleted = true;
+
+                    /* Disconnect all signals from reply and timer to prevent
+                     * finished/timeout from firing during nested QEventLoop
+                     * (e.g. bash tool execution). This prevents use-after-free
+                     * when deleteLater processes during nested event loop while
+                     * network thread still has posted events for the reply. */
+                    disconnect(currentStreamReply, nullptr, this, nullptr);
+                    disconnect(timer, nullptr, this, nullptr);
+                    timer->stop();
+                    timer->deleteLater();
+                    currentStreamReply->abort();
+
                     json response
                         = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
                     emit streamComplete(response);
+                    return;
                 }
             }
         }
@@ -569,32 +584,50 @@ void QLLMService::sendChatCompletionStream(
                         && currentStreamReply->error() != QNetworkReply::OperationCanceledError;
 
         if (hasError) {
-            emit streamError(currentStreamReply->errorString());
-        } else {
+            /* Include any data already read by readyRead (error response body) */
+            QString    errorMsg  = currentStreamReply->errorString();
+            QByteArray errorBody = currentStreamReply->readAll();
+            if (!errorBody.isEmpty()) {
+                errorMsg += "\n" + QString::fromUtf8(errorBody);
+            }
+            if (!streamBuffer.isEmpty()) {
+                errorMsg += "\n" + streamBuffer;
+            }
+            emit streamError(errorMsg);
+        } else if (!streamCompleted) {
+            /* Only process remaining data if streamComplete wasn't already emitted.
+             * This prevents double emission when the finished signal fires during
+             * a nested QEventLoop (e.g. bash tool execution). */
+
             /* Process any remaining data in buffer */
             QString remaining = streamBuffer.trimmed();
-            if (!remaining.isEmpty()) {
-                if (remaining.startsWith("data: ")) {
-                    QString data = remaining.mid(6);
-                    bool    isDone
-                        = parseStreamLine(data, streamAccumulatedContent, streamAccumulatedToolCalls);
-                    if (isDone) {
-                        json response = buildStreamResponse(
-                            streamAccumulatedContent, streamAccumulatedToolCalls);
-                        emit streamComplete(response);
-                    }
+            if (!remaining.isEmpty() && remaining.startsWith("data: ")) {
+                QString data = remaining.mid(6);
+                bool    isDone
+                    = parseStreamLine(data, streamAccumulatedContent, streamAccumulatedToolCalls);
+                if (isDone) {
+                    streamCompleted = true;
+                    json response
+                        = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
+                    emit streamComplete(response);
                 }
             }
 
             /* If we have accumulated content or tool calls but didn't get [DONE],
                still emit streamComplete to avoid hanging */
-            if (!streamAccumulatedContent.isEmpty() || !streamAccumulatedToolCalls.isEmpty()) {
+            if (!streamCompleted
+                && (!streamAccumulatedContent.isEmpty() || !streamAccumulatedToolCalls.isEmpty())) {
+                streamCompleted = true;
                 json response
                     = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
                 emit streamComplete(response);
             }
         }
 
+        /* Disconnect and abort before deleteLater to ensure network thread
+         * has stopped posting events before the reply object is deleted. */
+        disconnect(currentStreamReply, nullptr, this, nullptr);
+        currentStreamReply->abort();
         currentStreamReply->deleteLater();
         currentStreamReply = nullptr;
     });
@@ -690,6 +723,9 @@ json QLLMService::buildStreamResponse(const QString &content, const QMap<int, js
 
     if (!content.isEmpty()) {
         message["content"] = content.toStdString();
+    } else {
+        /* Must be null, not missing. DeepSeek requires content field in assistant messages. */
+        message["content"] = nullptr;
     }
 
     if (!toolCalls.isEmpty()) {
