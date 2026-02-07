@@ -208,7 +208,7 @@ bool QSocProjectManager::load(const QString &projectName)
     return true;
 }
 
-bool QSocProjectManager::loadFirst()
+bool QSocProjectManager::loadFirst(bool silent)
 {
     QString filePath;
     /* If path is a directory, search and pick a *.soc_pro file */
@@ -220,7 +220,9 @@ bool QSocProjectManager::loadFirst()
             QDir::SortFlag::Name | QDir::SortFlag::IgnoreCase,
             QDir::Files | QDir::NoDotAndDotDot);
         if (projectDir.count() == 0) {
-            qCritical() << "Error: project file not found.";
+            if (!silent) {
+                qCritical() << "Error: project file not found.";
+            }
             return false;
         }
         /* Get the first path as filePath */
@@ -228,7 +230,9 @@ bool QSocProjectManager::loadFirst()
     }
     /* Check the existence of project files */
     if (!QFile::exists(filePath)) {
-        qCritical() << "Error: project file not found.";
+        if (!silent) {
+            qCritical() << "Error: project file not found.";
+        }
         return false;
     }
     const QString localProjectName = QFileInfo(filePath).completeBaseName();

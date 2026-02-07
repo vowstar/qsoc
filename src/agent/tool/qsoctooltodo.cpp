@@ -467,9 +467,11 @@ QString QSocToolTodoUpdate::execute(const json &arguments)
     QList<QSocTodoItem> todos = loadTodos();
 
     /* Find and update the item */
-    bool found = false;
+    bool    found = false;
+    QString title;
     for (QSocTodoItem &item : todos) {
         if (item.id == todoId) {
+            title       = item.title;
             item.status = status;
             found       = true;
             break;
@@ -484,7 +486,7 @@ QString QSocToolTodoUpdate::execute(const json &arguments)
         return "Error: Failed to save todo list";
     }
 
-    return QString("Updated todo #%1 status to: %2").arg(todoId).arg(status);
+    return QString("Updated todo #%1: %2 (status: %3)").arg(todoId).arg(title, status);
 }
 
 void QSocToolTodoUpdate::setProjectManager(QSocProjectManager *projectManager)
@@ -583,9 +585,11 @@ QString QSocToolTodoDelete::execute(const json &arguments)
     QList<QSocTodoItem> todos = loadTodos();
 
     /* Find and remove the item */
-    bool found = false;
+    bool    found = false;
+    QString title;
     for (int idx = 0; idx < todos.size(); ++idx) {
         if (todos[idx].id == todoId) {
+            title = todos[idx].title;
             todos.removeAt(idx);
             found = true;
             break;
@@ -605,7 +609,7 @@ QString QSocToolTodoDelete::execute(const json &arguments)
         return "Error: Failed to save todo list";
     }
 
-    return QString("Deleted todo #%1").arg(todoId);
+    return QString("Deleted todo #%1: %2").arg(todoId).arg(title);
 }
 
 void QSocToolTodoDelete::setProjectManager(QSocProjectManager *projectManager)

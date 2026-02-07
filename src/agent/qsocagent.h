@@ -136,6 +136,12 @@ public:
      */
     json getMessages() const;
 
+    /**
+     * @brief Set the conversation history
+     * @param msgs JSON array of messages to restore
+     */
+    void setMessages(const json &msgs);
+
 signals:
     /**
      * @brief Signal emitted when a tool is called

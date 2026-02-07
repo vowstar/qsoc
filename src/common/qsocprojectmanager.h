@@ -103,7 +103,7 @@ public slots:
      * @retval true Load successfully.
      * @retval false Load failed.
      */
-    bool loadFirst();
+    bool loadFirst(bool silent = false);
 
     /**
      * @brief Remove project file.

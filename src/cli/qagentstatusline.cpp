@@ -73,6 +73,19 @@ void QAgentStatusLine::toolCalled(const QString &toolName, const QString &detail
     }
     out << "\r\033[J"; /* Clear from cursor to end of screen */
 
+    /* Flush partial content permanently (tool call is a natural break) */
+    if (!currentPartialLine.isEmpty()) {
+        out << currentPartialLine << "\n";
+        currentPartialLine.clear();
+    }
+    if (!pendingContent.isEmpty()) {
+        out << pendingContent;
+        if (!pendingContent.endsWith('\n')) {
+            out << "\n";
+        }
+        pendingContent.clear();
+    }
+
     /* Simple format: [Tool] name: detail */
     if (detail.isEmpty()) {
         out << "[Tool] " << toolName << Qt::endl;
@@ -109,6 +122,20 @@ void QAgentStatusLine::stop()
 
     spinnerTimer->stop();
     active = false;
+
+    /* Flush partial content + pending content permanently */
+    if (!currentPartialLine.isEmpty() || !pendingContent.isEmpty()) {
+        QTextStream out(stdout);
+        if (displayedTodoLineCount > 0) {
+            out << QString("\033[%1A").arg(displayedTodoLineCount);
+        }
+        out << "\r\033[J";
+        out << currentPartialLine << pendingContent << Qt::flush;
+        currentPartialLine.clear();
+        pendingContent.clear();
+        displayedTodoLineCount = 0;
+    }
+
     clearLine();
 
     /* Clear TODO state */
@@ -215,6 +242,30 @@ void QAgentStatusLine::render()
     }
     out << "\r\033[J"; /* Clear from cursor to end of screen */
 
+    /* Process pending content: split complete lines to permanent scrollback */
+    if (!pendingContent.isEmpty()) {
+        QString allContent = currentPartialLine + pendingContent;
+        pendingContent.clear();
+
+        int lastNewline = allContent.lastIndexOf('\n');
+        if (lastNewline >= 0) {
+            out << allContent.left(lastNewline + 1); /* Permanent scrollback */
+            currentPartialLine = allContent.mid(lastNewline + 1);
+        } else {
+            currentPartialLine = allContent; /* No complete lines yet */
+        }
+    }
+
+    /* Output partial content line (ephemeral - redrawn each render) */
+    if (!currentPartialLine.isEmpty()) {
+        out << currentPartialLine;
+    }
+
+    /* Separator between partial content and TODO items */
+    if (!currentPartialLine.isEmpty() && todoLineCount > 0) {
+        out << "\n";
+    }
+
     /* Render TODO list (limit to 5 most recent items) */
     int startIdx = qMax(0, todoItems.size() - 5);
     for (int i = startIdx; i < todoItems.size(); ++i) {
@@ -230,8 +281,7 @@ void QAgentStatusLine::render()
             checkbox = "[ ]";
         }
 
-        QString line
-            = QString("%1 %2. %3 (%4)").arg(checkbox).arg(item.id).arg(item.title, item.priority);
+        QString line = QString("%1 %2 (%3)").arg(checkbox, item.title, item.priority);
 
         /* Truncate if too long */
         if (line.length() > termWidth - 1) {
@@ -241,8 +291,9 @@ void QAgentStatusLine::render()
         out << line << "\n";
     }
 
-    /* Update displayed line count for next render */
-    displayedTodoLineCount = todoLineCount;
+    /* Update displayed line count: TODO lines + partial content line */
+    int hasPartialLine     = currentPartialLine.isEmpty() ? 0 : 1;
+    displayedTodoLineCount = todoLineCount + hasPartialLine;
 
     /* Output status line */
     out << statusLine << Qt::flush;
@@ -258,34 +309,19 @@ void QAgentStatusLine::clearLine()
     }
     out << "\r\033[J" << Qt::flush; /* Clear from cursor to end of screen */
 
-    /* Reset displayed line count */
+    /* Reset displayed line count and partial content */
     displayedTodoLineCount = 0;
+    currentPartialLine.clear();
 }
 
 void QAgentStatusLine::printContent(const QString &content)
 {
-    QTextStream out(stdout);
-
     if (active) {
-        /* Reset timer - content output is progress */
         stepElapsedTimer.restart();
-
-        /* Clear TODO list + status line before printing content */
-        if (displayedTodoLineCount > 0) {
-            out << QString("\033[%1A").arg(displayedTodoLineCount);
-        }
-        out << "\r\033[J";
-
-        /* Output content */
-        out << content << Qt::flush;
-
-        /* Reset displayed count - render() will redraw TODO list */
-        displayedTodoLineCount = 0;
-
-        /* Redraw status line */
-        render();
+        pendingContent += content;
+        /* Flushed by render() on next timer tick (max 100ms delay) */
     } else {
-        /* Not active, just output content */
+        QTextStream out(stdout);
         out << content << Qt::flush;
     }
 }
@@ -302,6 +338,16 @@ void QAgentStatusLine::updateTodoDisplay(const QString &todoResult)
     if (active) {
         render();
     }
+}
+
+QString QAgentStatusLine::getTodoTitle(int todoId) const
+{
+    for (const auto &item : todoItems) {
+        if (item.id == todoId) {
+            return item.title;
+        }
+    }
+    return {};
 }
 
 void QAgentStatusLine::updateTokens(qint64 input, qint64 output)
