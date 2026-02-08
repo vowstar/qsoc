@@ -53,8 +53,8 @@ The following global options are available for all commands:
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [-h, --help], [Display help information for commands and options],
-    [--verbose <level>],
+    [`-h`, `--help`], [Display help information for commands and options],
+    [`--verbose <level>`],
     [Set verbosity level (0-5): \
       - 0=Silent - No output \
       - 1=Error - Only error messages (default) \
@@ -63,7 +63,7 @@ The following global options are available for all commands:
       - 4=Debug - All messages including debug information \
       - 5=Verbose - Maximum detail for all operations
     ],
-    [-v, --version], [Display version information],
+    [`-v`, `--version`], [Display version information],
   )],
   caption: [GLOBAL OPTIONS],
   kind: table,
@@ -83,11 +83,11 @@ The `project create` command creates a new QSoC project.
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [-d, --directory <path>], [The path to the project directory],
-    [-b, --bus <path>], [The path to the bus directory],
-    [-m, --module <path>], [The path to the module directory],
-    [-s, --schematic <path>], [The path to the schematic directory],
-    [-o, --output <path>], [The path to the output file],
+    [`-d`, `--directory <path>`], [The path to the project directory],
+    [`-b`, `--bus <path>`], [The path to the bus directory],
+    [`-m`, `--module <path>`], [The path to the module directory],
+    [`-s`, `--schematic <path>`], [The path to the schematic directory],
+    [`-o`, `--output <path>`], [The path to the output file],
     [name], [The name of the project to be created],
   )],
   caption: [PROJECT CREATION OPTIONS],
@@ -108,15 +108,15 @@ The `module import` command imports Verilog modules into module libraries.
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [-d, --directory <path>], [The path to the project directory],
-    [-p, --project <name>], [The project name],
-    [-l, --library <name>], [The library base name],
-    [-m, --module <regex>], [The module name or regex],
-    [-f, --filelist <path>],
+    [`-d`, `--directory <path>`], [The path to the project directory],
+    [`-p`, `--project <name>`], [The project name],
+    [`-l`, `--library <name>`], [The library base name],
+    [`-m`, `--module <regex>`], [The module name or regex],
+    [`-f`, `--filelist <path>`],
     [The path where the file list is located, including a list of verilog files in order],
-    [-D, --define <macro>],
+    [`-D`, `--define <macro>`],
     [Define macro as KEY or KEY=VALUE. Can be used multiple times to define multiple macros],
-    [-U, --undefine <macro>],
+    [`-U`, `--undefine <macro>`],
     [Undefine macro KEY at the start of all source files. Can be used multiple times],
     [files], [The verilog files to be processed],
   )],
@@ -128,13 +128,13 @@ The `module import` command imports Verilog modules into module libraries.
 <module-macro-definitions>
 The `module import` command supports Verilog preprocessor macro definitions and undefinitions:
 
-*Define Macros (-D, --define)*:
+*Define Macros (`-D`, `--define`)*:
 - Define macros that will be available during Verilog parsing
 - Supports both simple macros: `-D DEBUG` (defines DEBUG as empty)
 - Supports value macros: `-D WIDTH=32` (defines WIDTH as 32)
 - Can be used multiple times: `-D DEBUG -D WIDTH=32 -D MODE=FAST`
 
-*Undefine Macros (-U, --undefine)*:
+*Undefine Macros (`-U`, `--undefine`)*:
 - Remove macro definitions at the start of all source files
 - Useful for clearing previously defined macros
 - Can be used multiple times: `-U OLD_MACRO -U DEPRECATED_FLAG`
@@ -168,10 +168,10 @@ The `bus import` command imports buses into bus libraries.
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [-d, --directory <path>], [The path to the project directory],
-    [-p, --project <name>], [The project name],
-    [-l, --library <name>], [The library base name],
-    [-b, --bus <name>], [The specified bus name],
+    [`-d`, `--directory <path>`], [The path to the project directory],
+    [`-p`, `--project <name>`], [The project name],
+    [`-l`, `--library <name>`], [The library base name],
+    [`-b`, `--bus <name>`], [The specified bus name],
     [files], [The bus definition CSV files to be processed],
   )],
   caption: [BUS IMPORT OPTIONS],
@@ -192,10 +192,11 @@ The `generate verilog` command generates Verilog code from netlist files.
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [-d, --directory <path>], [The path to the project directory],
-    [-p, --project <name>], [The project name],
-    [-m, --merge], [Merge multiple netlist files in order before processing],
-    [-f, --force],
+    [`-d`, `--directory <path>`], [The path to the project directory],
+    [`-p`, `--project <name>`], [The project name],
+    [`-m`, `--merge`],
+    [Merge multiple netlist files in order before processing],
+    [`-f`, `--force`],
     [Force overwrite existing primitive cell files (clock_cell.v, reset_cell.v)],
     [files], [The netlist files to be processed],
   )],
@@ -240,13 +241,13 @@ The `generate template` command generates files from Jinja2 templates using CSV,
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [-d, --directory <path>], [The path to the project directory],
-    [-p, --project <name>], [The project name],
-    [--csv <file>], [CSV data file (can be used multiple times)],
-    [--yaml <file>], [YAML data file (can be used multiple times)],
-    [--json <file>], [JSON data file (can be used multiple times)],
-    [--rdl <file>], [SystemRDL data file (can be used multiple times)],
-    [--rcsv <file>],
+    [`-d`, `--directory <path>`], [The path to the project directory],
+    [`-p`, `--project <name>`], [The project name],
+    [`--csv <file>`], [CSV data file (can be used multiple times)],
+    [`--yaml <file>`], [YAML data file (can be used multiple times)],
+    [`--json <file>`], [JSON data file (can be used multiple times)],
+    [`--rdl <file>`], [SystemRDL data file (can be used multiple times)],
+    [`--rcsv <file>`],
     [RCSV (Register-CSV) data file (can be used multiple times)],
     [templates], [The Jinja2 template files to be processed],
   )],
@@ -313,11 +314,11 @@ The `generate stub` command generates Verilog and Liberty stub files for selecte
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [-d, --directory <path>], [The path to the project directory],
-    [-p, --project <name>], [The project name],
-    [-l, --library <regex>],
+    [`-d`, `--directory <path>`], [The path to the project directory],
+    [`-p`, `--project <name>`], [The project name],
+    [`-l`, `--library <regex>`],
     [The library base name or regex pattern to filter libraries],
-    [-m, --module <regex>],
+    [`-m`, `--module <regex>`],
     [The module name or regex pattern to filter modules],
     [stubname],
     [The base name for the generated stub files (generates stubname.v and stubname.lib)],
