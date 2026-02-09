@@ -58,6 +58,14 @@ struct QSocAgentConfig
 ### Task Management
 - todo_add/list/update/delete: Manage task list for complex workflows
 
+### Skills
+- skill_find: Discover, search, and read user-defined skills (SKILL.md prompt templates).
+  Actions: list (show all), search (by keyword), read (get full content to follow).
+  Example: {"action": "list", "scope": "all"}
+- skill_create: Create a new skill as a SKILL.md file.
+  Example: {"name": "deploy-rtl", "description": "Deploy RTL to FPGA", "instructions": "Step 1:...", "scope": "project"}
+- When a task matches a skill's description, use skill_find to read it, then follow its instructions.
+
 ## Directory Access
 - Read (read_file, list_files): unrestricted, any path on the system
 - Write (write_file, edit_file): allowed directories only
