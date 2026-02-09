@@ -15,6 +15,7 @@
 #include "agent/tool/qsoctoolpath.h"
 #include "agent/tool/qsoctoolproject.h"
 #include "agent/tool/qsoctoolshell.h"
+#include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctooltodo.h"
 #include "cli/qagentreadline.h"
 #include "cli/qagentstatusline.h"
@@ -345,6 +346,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(todoAddTool);
     toolRegistry->registerTool(todoUpdateTool);
     toolRegistry->registerTool(todoDeleteTool);
+
+    /* Skill tools */
+    auto *skillFindTool   = new QSocToolSkillFind(this, projectManager);
+    auto *skillCreateTool = new QSocToolSkillCreate(this, projectManager);
+    toolRegistry->registerTool(skillFindTool);
+    toolRegistry->registerTool(skillCreateTool);
 
     /* Create agent */
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);

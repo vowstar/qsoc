@@ -95,6 +95,13 @@ todo lists to manage complex multi-step workflows.
 Query built-in QSoC documentation by topic (commands, bus formats, clock trees,
 reset networks, netlist syntax, templates, etc.).
 
+=== Skills
+<agent-cap-skills>
+User-defined prompt templates (SKILL.md) that extend agent capabilities without
+code changes. Skills are stored in project (`.qsoc/skills/`) or user
+(`~/.config/qsoc/skills/`) directories. Use the built-in skill discovery and
+creation tools to bootstrap the skill ecosystem.
+
 == CONFIGURATION
 <agent-config>
 The agent requires LLM API configuration. Set the following environment variables
