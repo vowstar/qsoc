@@ -574,70 +574,341 @@ int QSocAgent::estimateMessagesTokens() const
     return total;
 }
 
-void QSocAgent::compressHistoryIfNeeded()
+int QSocAgent::compact()
 {
-    int currentTokens   = estimateMessagesTokens();
-    int thresholdTokens = static_cast<int>(
-        agentConfig.maxContextTokens * agentConfig.compressionThreshold);
+    int originalTokens = estimateMessagesTokens();
 
-    /* Only compress if we exceed threshold */
-    if (currentTokens <= thresholdTokens) {
-        return;
+    /* Layer 1: Force prune (skip threshold check) */
+    if (pruneToolOutputs(true)) {
+        int  afterPrune = estimateMessagesTokens();
+        emit compacting(1, originalTokens, afterPrune);
+    }
+
+    /* Layer 2: Force LLM compact (skip threshold check) */
+    int beforeCompact = estimateMessagesTokens();
+    if (compactWithLLM(true)) {
+        int  afterCompact = estimateMessagesTokens();
+        emit compacting(2, beforeCompact, afterCompact);
+    }
+
+    int afterTokens = estimateMessagesTokens();
+    return originalTokens - afterTokens;
+}
+
+bool QSocAgent::pruneToolOutputs(bool force)
+{
+    if (!force) {
+        int currentTokens = estimateMessagesTokens();
+        int pruneTokens   = static_cast<int>(
+            agentConfig.maxContextTokens * agentConfig.pruneThreshold);
+        if (currentTokens <= pruneTokens) {
+            return false;
+        }
+    }
+
+    int msgCount = static_cast<int>(messages.size());
+    if (msgCount == 0) {
+        return false;
+    }
+
+    /* Scan from end to find protection boundary.
+     * Everything at or after protectBoundary is protected (recent).
+     * Everything before protectBoundary is eligible for pruning. */
+    int toolTokensFromEnd = 0;
+    int protectBoundary   = 0; /* Default: protect everything (nothing to prune) */
+
+    for (int i = msgCount - 1; i >= 0; i--) {
+        const auto &msg = messages[static_cast<size_t>(i)];
+        if (msg.contains("role") && msg["role"] == "tool" && msg.contains("content")
+            && msg["content"].is_string()) {
+            int contentTokens = estimateTokens(
+                QString::fromStdString(msg["content"].get<std::string>()));
+            toolTokensFromEnd += contentTokens;
+            if (toolTokensFromEnd >= agentConfig.pruneProtectTokens) {
+                protectBoundary = i;
+                break;
+            }
+        }
+    }
+
+    /* Calculate potential savings before modifying messages */
+    int              potentialSavings = 0;
+    std::vector<int> pruneIndices;
+
+    for (int i = 0; i < protectBoundary; i++) {
+        const auto &msg = messages[static_cast<size_t>(i)];
+        if (msg.contains("role") && msg["role"] == "tool" && msg.contains("content")
+            && msg["content"].is_string()) {
+            int contentTokens = estimateTokens(
+                QString::fromStdString(msg["content"].get<std::string>()));
+            if (contentTokens > 100) {
+                int prunedTokens = estimateTokens(QString("[output pruned]"));
+                potentialSavings += contentTokens - prunedTokens;
+                pruneIndices.push_back(i);
+            }
+        }
+    }
+
+    if (potentialSavings < agentConfig.pruneMinimumSavings) {
+        return false;
+    }
+
+    /* Apply pruning */
+    for (int idx : pruneIndices) {
+        messages[static_cast<size_t>(idx)]["content"] = "[output pruned]";
     }
 
     if (agentConfig.verbose) {
-        emit verboseOutput(QString("[Compressing history: %1 tokens > %2 threshold]")
-                               .arg(currentTokens)
-                               .arg(thresholdTokens));
+        emit verboseOutput(QString("[Layer 1 Prune: saved ~%1 tokens, boundary at message %2/%3]")
+                               .arg(potentialSavings)
+                               .arg(protectBoundary)
+                               .arg(msgCount));
     }
 
-    int messagesCount = static_cast<int>(messages.size());
+    return true;
+}
 
-    /* Keep at least keepRecentMessages */
-    if (messagesCount <= agentConfig.keepRecentMessages) {
-        if (agentConfig.verbose) {
-            emit verboseOutput(QString("[Cannot compress: only %1 messages]").arg(messagesCount));
+int QSocAgent::findSafeBoundary(int proposedIndex) const
+{
+    int msgCount = static_cast<int>(messages.size());
+
+    if (proposedIndex <= 0) {
+        return 0;
+    }
+    if (proposedIndex >= msgCount) {
+        return msgCount;
+    }
+
+    /* If proposed boundary lands on a tool message, walk backwards to include
+     * the entire assistant(tool_calls) + tool group */
+    int boundary = proposedIndex;
+
+    while (boundary > 0) {
+        const auto &msg = messages[static_cast<size_t>(boundary)];
+        if (msg.contains("role") && msg["role"] == "tool") {
+            /* This is a tool response - the assistant(tool_calls) must be before it */
+            boundary--;
+        } else {
+            break;
         }
-        return;
     }
 
-    /* Create summary of old messages */
-    QString summary  = "[Previous conversation summary: ";
-    int     oldCount = messagesCount - agentConfig.keepRecentMessages;
-
-    for (int i = 0; i < oldCount; i++) {
-        const auto &msg = messages[static_cast<size_t>(i)];
-        if (msg.contains("role") && msg.contains("content") && msg["content"].is_string()) {
-            QString role    = QString::fromStdString(msg["role"].get<std::string>());
-            QString content = QString::fromStdString(msg["content"].get<std::string>());
-
-            /* Truncate long content */
-            if (content.length() > 100) {
-                content = content.left(100) + "...";
+    /* If we landed on an assistant message with tool_calls, include it too */
+    if (boundary > 0) {
+        const auto &msg = messages[static_cast<size_t>(boundary)];
+        if (msg.contains("role") && msg["role"] == "assistant" && msg.contains("tool_calls")) {
+            /* Don't split: move boundary before this assistant message */
+            /* But we need to keep the whole group, so move boundary after the group */
+            /* Actually, we want to include this group in the "old" section to be summarized,
+             * so we find where the tool responses end */
+            int groupEnd = boundary + 1;
+            while (groupEnd < msgCount) {
+                const auto &nextMsg = messages[static_cast<size_t>(groupEnd)];
+                if (nextMsg.contains("role") && nextMsg["role"] == "tool") {
+                    groupEnd++;
+                } else {
+                    break;
+                }
             }
-
-            summary += role + ": " + content + "; ";
+            boundary = groupEnd;
         }
     }
-    summary += "]";
 
-    /* Keep recent messages */
+    return boundary;
+}
+
+QString QSocAgent::formatMessagesForSummary(int start, int end) const
+{
+    QString result;
+    int     msgCount = static_cast<int>(messages.size());
+
+    if (start < 0) {
+        start = 0;
+    }
+    if (end > msgCount) {
+        end = msgCount;
+    }
+
+    for (int i = start; i < end; i++) {
+        const auto &msg = messages[static_cast<size_t>(i)];
+        if (!msg.contains("role")) {
+            continue;
+        }
+
+        QString role = QString::fromStdString(msg["role"].get<std::string>());
+
+        if (role == "assistant" && msg.contains("tool_calls")) {
+            result += QString("[Assistant called tools: ");
+            for (const auto &tc : msg["tool_calls"]) {
+                if (tc.contains("function") && tc["function"].contains("name")) {
+                    result += QString::fromStdString(tc["function"]["name"].get<std::string>());
+                    result += " ";
+                }
+            }
+            result += "]\n";
+        } else if (role == "tool") {
+            QString content = msg.contains("content") && msg["content"].is_string()
+                                  ? QString::fromStdString(msg["content"].get<std::string>())
+                                  : "";
+            /* Truncate large tool outputs for the summary prompt */
+            if (content.length() > 500) {
+                content = content.left(500) + "... (truncated)";
+            }
+            result += QString("[Tool result: %1]\n").arg(content);
+        } else if (msg.contains("content") && msg["content"].is_string()) {
+            QString content = QString::fromStdString(msg["content"].get<std::string>());
+            result += QString("[%1]: %2\n").arg(role, content);
+        }
+    }
+
+    return result;
+}
+
+bool QSocAgent::compactWithLLM(bool force)
+{
+    if (!force) {
+        int currentTokens = estimateMessagesTokens();
+        int compactTokens = static_cast<int>(
+            agentConfig.maxContextTokens * agentConfig.compactThreshold);
+        if (currentTokens <= compactTokens) {
+            return false;
+        }
+    }
+
+    int msgCount = static_cast<int>(messages.size());
+
+    if (msgCount <= agentConfig.keepRecentMessages) {
+        if (agentConfig.verbose) {
+            emit verboseOutput(QString("[Layer 2: Cannot compact, only %1 messages]").arg(msgCount));
+        }
+        return false;
+    }
+
+    /* Determine boundary: keep recent messages */
+    int proposedBoundary = msgCount - agentConfig.keepRecentMessages;
+    int boundary         = findSafeBoundary(proposedBoundary);
+
+    if (boundary <= 0) {
+        return false;
+    }
+
+    /* Format old messages for summarization */
+    QString oldContent = formatMessagesForSummary(0, boundary);
+
+    /* Try LLM summarization if service is available */
+    QString summary;
+    bool    llmSuccess = false;
+
+    if (llmService && llmService->hasEndpoint()) {
+        QString summaryPrompt
+            = QString(
+                  "You are a conversation summarizer. Produce a structured summary of the "
+                  "following "
+                  "conversation.\n\n"
+                  "## Instructions\n"
+                  "- Preserve ALL technical details: file paths, command outputs, error messages\n"
+                  "- Preserve ALL decisions and their reasoning\n"
+                  "- Preserve current task state and next steps\n"
+                  "- Be concise but never lose actionable information\n\n"
+                  "## Required Sections\n"
+                  "### Task Overview\n"
+                  "### Current State\n"
+                  "### Key Files and Paths\n"
+                  "### Decisions Made\n"
+                  "### Important Context\n"
+                  "### Next Steps\n\n"
+                  "## Conversation to summarize:\n%1")
+                  .arg(oldContent);
+
+        /* Build messages for the summarization request */
+        json summaryMessages = json::array();
+        summaryMessages.push_back(
+            {{"role", "system"},
+             {"content", "You are a precise conversation summarizer. Output only the summary."}});
+        summaryMessages.push_back({{"role", "user"}, {"content", summaryPrompt.toStdString()}});
+
+        /* Use synchronous call - safe because we're at the start of processStreamIteration */
+        json response = llmService->sendChatCompletion(summaryMessages, json::array(), 0.1);
+
+        if (response.contains("choices") && !response["choices"].empty()) {
+            auto msg = response["choices"][0]["message"];
+            if (msg.contains("content") && msg["content"].is_string()) {
+                summary    = QString::fromStdString(msg["content"].get<std::string>());
+                llmSuccess = true;
+            }
+        }
+    }
+
+    /* Fallback: mechanical truncation if LLM failed */
+    if (!llmSuccess) {
+        if (agentConfig.verbose) {
+            emit verboseOutput("[Layer 2: LLM unavailable, using mechanical summary]");
+        }
+        summary = "[Previous conversation summary: ";
+        for (int i = 0; i < boundary; i++) {
+            const auto &msg = messages[static_cast<size_t>(i)];
+            if (msg.contains("role") && msg.contains("content") && msg["content"].is_string()) {
+                QString role    = QString::fromStdString(msg["role"].get<std::string>());
+                QString content = QString::fromStdString(msg["content"].get<std::string>());
+                if (content.length() > 100) {
+                    content = content.left(100) + "...";
+                }
+                summary += role + ": " + content + "; ";
+            }
+        }
+        summary += "]";
+    }
+
+    /* Build new message history: summary + recent messages */
     json newMessages = json::array();
+    newMessages.push_back(
+        {{"role", "user"},
+         {"content", QString("[Conversation Summary]\n%1").arg(summary).toStdString()}});
 
-    /* Add summary as first message */
-    newMessages.push_back({{"role", "system"}, {"content", summary.toStdString()}});
-
-    /* Keep recent messages */
-    for (int i = messagesCount - agentConfig.keepRecentMessages; i < messagesCount; i++) {
+    for (int i = boundary; i < msgCount; i++) {
         newMessages.push_back(messages[static_cast<size_t>(i)]);
     }
 
     messages = newMessages;
 
     if (agentConfig.verbose) {
-        emit verboseOutput(QString("[Compressed from %1 to %2 messages. New token estimate: %3]")
-                               .arg(messagesCount)
+        emit verboseOutput(QString("[Layer 2 Compact: %1 -> %2 messages, ~%3 tokens%4]")
+                               .arg(msgCount)
                                .arg(messages.size())
-                               .arg(estimateMessagesTokens()));
+                               .arg(estimateMessagesTokens())
+                               .arg(llmSuccess ? "" : " (fallback)"));
+    }
+
+    return true;
+}
+
+void QSocAgent::compressHistoryIfNeeded()
+{
+    int originalTokens = estimateMessagesTokens();
+    int tokens         = originalTokens;
+
+    /* Layer 1: Prune tool outputs (60% threshold) */
+    int pruneTokens = static_cast<int>(agentConfig.maxContextTokens * agentConfig.pruneThreshold);
+    if (tokens > pruneTokens) {
+        if (pruneToolOutputs()) {
+            tokens = estimateMessagesTokens();
+            emit compacting(1, originalTokens, tokens);
+        }
+    }
+
+    /* Layer 2: LLM compaction (80% threshold) */
+    int compactTokens = static_cast<int>(
+        agentConfig.maxContextTokens * agentConfig.compactThreshold);
+    if (tokens > compactTokens) {
+        int beforeCompact = tokens;
+        if (compactWithLLM()) {
+            tokens = estimateMessagesTokens();
+            emit compacting(2, beforeCompact, tokens);
+        }
+    }
+
+    /* Layer 3: Auto-continue after compaction during streaming */
+    if (tokens < originalTokens && isStreaming) {
+        addMessage("user", "[System: Context compacted. Continue your current task.]");
     }
 }
