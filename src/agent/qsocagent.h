@@ -107,6 +107,27 @@ public:
     bool isRunning() const;
 
     /**
+     * @brief Manually trigger context compaction
+     * @return Number of tokens saved (0 if nothing compacted)
+     */
+    int compact();
+
+    /**
+     * @brief Find safe message boundary that doesn't split tool_calls/tool pairs
+     * @param proposedIndex Desired boundary index
+     * @return Adjusted index that keeps tool_calls groups intact
+     */
+    int findSafeBoundary(int proposedIndex) const;
+
+    /**
+     * @brief Format messages for summary prompt
+     * @param start Start index (inclusive)
+     * @param end End index (exclusive)
+     * @return Formatted text for LLM summarization
+     */
+    QString formatMessagesForSummary(int start, int end) const;
+
+    /**
      * @brief Set the LLM service
      * @param llmService Pointer to the LLM service
      */
@@ -223,6 +244,14 @@ signals:
      */
     void tokenUsage(qint64 inputTokens, qint64 outputTokens);
 
+    /**
+     * @brief Signal emitted when context compaction occurs
+     * @param layer Compaction layer (1=prune, 2=LLM compact)
+     * @param beforeTokens Token count before compaction
+     * @param afterTokens Token count after compaction
+     */
+    void compacting(int layer, int beforeTokens, int afterTokens);
+
 private:
     QLLMService      *llmService   = nullptr;
     QSocToolRegistry *toolRegistry = nullptr;
@@ -252,6 +281,20 @@ private:
 
     /* Retry tracking */
     int currentRetryCount = 0;
+
+    /**
+     * @brief Layer 1: Prune old tool outputs to reduce token usage
+     * @param force Skip threshold check (for manual compact)
+     * @return true if pruning saved enough tokens
+     */
+    bool pruneToolOutputs(bool force = false);
+
+    /**
+     * @brief Layer 2: Use LLM to generate a structured summary of old messages
+     * @param force Skip threshold check (for manual compact)
+     * @return true if compaction succeeded
+     */
+    bool compactWithLLM(bool force = false);
 
     /**
      * @brief Process a single iteration of the agent loop

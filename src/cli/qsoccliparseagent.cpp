@@ -241,6 +241,21 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             config.maxIterations = maxIterStr.toInt();
         }
 
+        QString pruneThresholdStr = socConfig->getValue("agent.prune_threshold");
+        if (!pruneThresholdStr.isEmpty()) {
+            config.pruneThreshold = pruneThresholdStr.toDouble();
+        }
+
+        QString compactThresholdStr = socConfig->getValue("agent.compact_threshold");
+        if (!compactThresholdStr.isEmpty()) {
+            config.compactThreshold = compactThresholdStr.toDouble();
+        }
+
+        QString compactionModelStr = socConfig->getValue("agent.compaction_model");
+        if (!compactionModelStr.isEmpty()) {
+            config.compactionModel = compactionModelStr;
+        }
+
         QString systemPrompt = socConfig->getValue("agent.system_prompt");
         if (!systemPrompt.isEmpty()) {
             config.systemPrompt = systemPrompt;
@@ -439,7 +454,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             QString     trimmed = input.trimmed().toLower();
 
             /* Complete built-in commands */
-            QStringList commands = {"exit", "quit", "clear", "help"};
+            QStringList commands = {"exit", "quit", "clear", "compact", "help"};
             for (const QString &cmd : commands) {
                 if (cmd.startsWith(trimmed)) {
                     completions.append(cmd);
@@ -544,9 +559,16 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             qout << "Commands:" << Qt::endl;
             qout << "  exit, quit  - Exit the agent" << Qt::endl;
             qout << "  clear       - Clear conversation history" << Qt::endl;
+            qout << "  compact     - Compact conversation context" << Qt::endl;
             qout << "  help        - Show this help message" << Qt::endl;
             qout << Qt::endl;
             qout << "Or just type your question/request in natural language." << Qt::endl;
+            continue;
+        }
+        if (input.toLower() == "compact") {
+            int saved = agent->compact();
+            qout << QString("Compacted: saved %1 tokens").arg(saved) << Qt::endl;
+            saveConversation(agent, projectManager);
             continue;
         }
 
@@ -750,6 +772,21 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                         if (useStatusLine) {
                             statusLine.update(
                                 QString("Retrying (%1/%2)").arg(attempt).arg(maxAttempts));
+                        }
+                    }));
+
+            /* Connect compacting signal for context compaction feedback */
+            connections.append(
+                QObject::connect(
+                    agent,
+                    &QSocAgent::compacting,
+                    &loop,
+                    [&statusLine, useStatusLine](int layer, int before, int after) {
+                        if (useStatusLine) {
+                            statusLine.update(QString("Compacting L%1: %2->%3 tokens")
+                                                  .arg(layer)
+                                                  .arg(before)
+                                                  .arg(after));
                         }
                     }));
 
@@ -965,6 +1002,21 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                         }
                     }));
 
+            /* Connect compacting signal for context compaction feedback */
+            connections.append(
+                QObject::connect(
+                    agent,
+                    &QSocAgent::compacting,
+                    &loop,
+                    [&statusLine, useStatusLine](int layer, int before, int after) {
+                        if (useStatusLine) {
+                            statusLine.update(QString("Compacting L%1: %2->%3 tokens")
+                                                  .arg(layer)
+                                                  .arg(before)
+                                                  .arg(after));
+                        }
+                    }));
+
             /* Start status line and agent */
             if (useStatusLine) {
                 statusLine.start("Thinking");
@@ -1054,6 +1106,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             qout << "Commands:" << Qt::endl;
             qout << "  exit, quit  - Exit the agent" << Qt::endl;
             qout << "  clear       - Clear conversation history" << Qt::endl;
+            qout << "  compact     - Compact conversation context" << Qt::endl;
             qout << "  help        - Show this help message" << Qt::endl;
             qout << Qt::endl;
             qout << "Keyboard shortcuts:" << Qt::endl;
@@ -1065,6 +1118,12 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             qout << "  Ctrl+L      - Clear screen" << Qt::endl;
             qout << Qt::endl;
             qout << "Or just type your question/request in natural language." << Qt::endl;
+            continue;
+        }
+        if (input.toLower() == "compact") {
+            int saved = agent->compact();
+            qout << QString("Compacted: saved %1 tokens").arg(saved) << Qt::endl;
+            saveConversation(agent, projectManager);
             continue;
         }
 
@@ -1224,6 +1283,16 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                     statusLine.update(QString("Retrying (%1/%2)").arg(attempt).arg(maxAttempts));
                 });
 
+            /* Connect compacting signal for context compaction feedback */
+            auto connCompact = QObject::connect(
+                agent,
+                &QSocAgent::compacting,
+                &loop,
+                [&statusLine](int layer, int before, int after) {
+                    statusLine.update(
+                        QString("Compacting L%1: %2->%3 tokens").arg(layer).arg(before).arg(after));
+                });
+
             /* Start status line and agent */
             statusLine.start("Thinking");
             agent->runStream(input);
@@ -1244,6 +1313,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connTokens);
             QObject::disconnect(connStuck);
             QObject::disconnect(connRetry);
+            QObject::disconnect(connCompact);
         } else {
             /* Non-streaming mode: use async API but collect result without chunk output */
             QEventLoop loop;
@@ -1401,6 +1471,16 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                     statusLine.update(QString("Retrying (%1/%2)").arg(attempt).arg(maxAttempts));
                 });
 
+            /* Connect compacting signal for context compaction feedback */
+            auto connCompact = QObject::connect(
+                agent,
+                &QSocAgent::compacting,
+                &loop,
+                [&statusLine](int layer, int before, int after) {
+                    statusLine.update(
+                        QString("Compacting L%1: %2->%3 tokens").arg(layer).arg(before).arg(after));
+                });
+
             /* Start status line and agent */
             statusLine.start("Thinking");
             agent->runStream(input);
@@ -1426,6 +1506,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connTokens);
             QObject::disconnect(connStuck);
             QObject::disconnect(connRetry);
+            QObject::disconnect(connCompact);
         }
     }
 

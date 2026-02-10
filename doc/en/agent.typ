@@ -126,6 +126,48 @@ or configure in the project YAML config file (`.qsoc/config.yaml`):
   kind: table,
 )
 
+== CONTEXT COMPACTION
+<agent-context-compaction>
+The agent implements a three-layer context compaction system to manage long
+conversations efficiently without losing critical information.
+
+=== Layer 1 -- Tool Output Pruning
+<agent-compact-prune>
+When token usage reaches 60% of the context window, old tool outputs are replaced
+with `[output pruned]`. Recent tool outputs (within the protection window) are
+preserved. This is a zero-LLM-call operation that typically saves 50--80% of tokens
+from verbose tool results like file reads and command outputs.
+
+=== Layer 2 -- LLM Compaction
+<agent-compact-llm>
+When token usage reaches 80% of the context window, the agent calls the LLM to
+generate a structured summary of older messages. The summary preserves all technical
+details (file paths, decisions, error messages) in a compact format. Recent messages
+are kept verbatim. If the LLM call fails, a mechanical fallback summary is used.
+
+=== Layer 3 -- Auto-Continue
+<agent-compact-continue>
+After compaction occurs during an active streaming session, the agent automatically
+injects a continuation prompt so the LLM resumes its current task without user
+intervention.
+
+#figure(
+  align(center)[#table(
+    columns: (0.5fr, 0.5fr, 1fr),
+    align: (auto, auto, left),
+    table.header([Parameter], [Default], [Description]),
+    table.hline(),
+    [`prune_threshold`], [0.6], [Token ratio to trigger tool output pruning],
+    [`compact_threshold`], [0.8], [Token ratio to trigger LLM summary compaction],
+    [`compaction_model`], [(empty)], [Model for compaction (empty = use primary model)],
+  )],
+  caption: [COMPACTION CONFIGURATION],
+  kind: table,
+)
+
+In interactive mode, the `compact` command triggers compaction manually and reports
+the number of tokens saved.
+
 == SECURITY
 <agent-security>
 The agent implements a read-unrestricted, write-restricted permission model:
