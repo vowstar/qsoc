@@ -58,6 +58,13 @@ public:
     virtual QString execute(const json &arguments) = 0;
 
     /**
+     * @brief Abort the current tool execution
+     * @details Default implementation is a no-op. Override in tools that run
+     *          long operations (e.g. bash processes) to support interruption.
+     */
+    virtual void abort();
+
+    /**
      * @brief Get the tool definition in OpenAI function format
      * @return JSON object in OpenAI tool format
      */
@@ -130,6 +137,12 @@ public:
      * @return List of tool names
      */
     QStringList toolNames() const;
+
+    /**
+     * @brief Abort all currently executing tools
+     * @details Calls abort() on every registered tool
+     */
+    void abortAll();
 
 private:
     QMap<QString, QSocTool *> tools_;

@@ -17,6 +17,7 @@
 #include "agent/tool/qsoctoolshell.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctooltodo.h"
+#include "cli/qagentescmonitor.h"
 #include "cli/qagentreadline.h"
 #include "cli/qagentstatusline.h"
 #include "cli/qterminalcapability.h"
@@ -410,8 +411,19 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                 loop.quit();
             });
 
+            connect(agent, &QSocAgent::runAborted, &loop, [&qout, &loop](const QString &) {
+                qout << Qt::endl << "(interrupted)" << Qt::endl;
+                loop.quit();
+            });
+
+            /* ESC key monitor */
+            QAgentEscMonitor escMonitor;
+            connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+            escMonitor.start();
+
             agent->runStream(query);
             loop.exec();
+            escMonitor.stop();
         } else {
             QString result = agent->run(query);
             return showInfo(0, result);
@@ -790,13 +802,35 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                         }
                     }));
 
+            /* Connect abort signal */
+            connections.append(
+                QObject::connect(
+                    agent,
+                    &QSocAgent::runAborted,
+                    &loop,
+                    [&qout, &loop, &statusLine, useStatusLine, &loopRunning](const QString &) {
+                        if (useStatusLine) {
+                            statusLine.stop();
+                        }
+                        qout << Qt::endl << "(interrupted)" << Qt::endl << Qt::endl;
+                        if (loopRunning) {
+                            loop.quit();
+                        }
+                    }));
+
+            /* ESC key monitor */
+            QAgentEscMonitor escMonitor;
+            QObject::connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+
             /* Start status line and agent */
             if (useStatusLine) {
                 statusLine.start("Thinking");
             }
+            escMonitor.start();
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
+            escMonitor.stop();
 
             /* Save conversation after each interaction */
             saveConversation(agent, projectManager);
@@ -1017,15 +1051,37 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                         }
                     }));
 
+            /* Connect abort signal */
+            connections.append(
+                QObject::connect(
+                    agent,
+                    &QSocAgent::runAborted,
+                    &loop,
+                    [&qout, &loop, &statusLine, useStatusLine, &loopRunning](const QString &) {
+                        if (useStatusLine) {
+                            statusLine.stop();
+                        }
+                        qout << Qt::endl << "(interrupted)" << Qt::endl << Qt::endl;
+                        if (loopRunning) {
+                            loop.quit();
+                        }
+                    }));
+
+            /* ESC key monitor */
+            QAgentEscMonitor escMonitor;
+            QObject::connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+
             /* Start status line and agent */
             if (useStatusLine) {
                 statusLine.start("Thinking");
             } else {
                 qout << "Thinking" << Qt::flush;
             }
+            escMonitor.start();
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
+            escMonitor.stop();
 
             /* Save conversation after each interaction */
             saveConversation(agent, projectManager);
@@ -1293,11 +1349,30 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                         QString("Compacting L%1: %2->%3 tokens").arg(layer).arg(before).arg(after));
                 });
 
+            /* Connect abort signal */
+            auto connAborted = QObject::connect(
+                agent,
+                &QSocAgent::runAborted,
+                &loop,
+                [&qout, &loop, &statusLine, &loopRunning](const QString &) {
+                    statusLine.stop();
+                    qout << Qt::endl << "(interrupted)" << Qt::endl << Qt::endl;
+                    if (loopRunning) {
+                        loop.quit();
+                    }
+                });
+
+            /* ESC key monitor */
+            QAgentEscMonitor escMonitor;
+            QObject::connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+
             /* Start status line and agent */
             statusLine.start("Thinking");
+            escMonitor.start();
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
+            escMonitor.stop();
 
             /* Save conversation after each interaction */
             saveConversation(agent, projectManager);
@@ -1314,6 +1389,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connStuck);
             QObject::disconnect(connRetry);
             QObject::disconnect(connCompact);
+            QObject::disconnect(connAborted);
         } else {
             /* Non-streaming mode: use async API but collect result without chunk output */
             QEventLoop loop;
@@ -1481,11 +1557,30 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                         QString("Compacting L%1: %2->%3 tokens").arg(layer).arg(before).arg(after));
                 });
 
+            /* Connect abort signal */
+            auto connAborted = QObject::connect(
+                agent,
+                &QSocAgent::runAborted,
+                &loop,
+                [&qout, &loop, &statusLine, &loopRunning](const QString &) {
+                    statusLine.stop();
+                    qout << Qt::endl << "(interrupted)" << Qt::endl << Qt::endl;
+                    if (loopRunning) {
+                        loop.quit();
+                    }
+                });
+
+            /* ESC key monitor */
+            QAgentEscMonitor escMonitor;
+            QObject::connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+
             /* Start status line and agent */
             statusLine.start("Thinking");
+            escMonitor.start();
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
+            escMonitor.stop();
 
             /* Save conversation after each interaction */
             saveConversation(agent, projectManager);
@@ -1507,6 +1602,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connStuck);
             QObject::disconnect(connRetry);
             QObject::disconnect(connCompact);
+            QObject::disconnect(connAborted);
         }
     }
 

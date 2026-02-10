@@ -7,6 +7,7 @@
 #include "agent/qsoctool.h"
 #include "common/qsocprojectmanager.h"
 
+#include <QEventLoop>
 #include <QMap>
 #include <QProcess>
 
@@ -39,11 +40,15 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    void    abort() override;
 
     void setProjectManager(QSocProjectManager *projectManager);
 
 private:
     QSocProjectManager *projectManager = nullptr;
+
+    static QProcess   *currentProcess;
+    static QEventLoop *currentLoop;
 
     static QMap<int, QSocBashProcessInfo> activeProcesses;
     static int                            nextProcessId;

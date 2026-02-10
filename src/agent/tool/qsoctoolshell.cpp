@@ -15,7 +15,9 @@
 
 /* Static members */
 QMap<int, QSocBashProcessInfo> QSocToolShellBash::activeProcesses;
-int                            QSocToolShellBash::nextProcessId = 1;
+int                            QSocToolShellBash::nextProcessId  = 1;
+QProcess                      *QSocToolShellBash::currentProcess = nullptr;
+QEventLoop                    *QSocToolShellBash::currentLoop    = nullptr;
 
 QSocToolShellBash::QSocToolShellBash(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
@@ -166,7 +168,12 @@ QString QSocToolShellBash::execute(const json &arguments)
 
     QTimer::singleShot(timeout, &loop, [&loop]() { loop.quit(); });
 
+    /* Set static pointers so abort() can reach us */
+    currentProcess = process;
+    currentLoop    = &loop;
     loop.exec();
+    currentProcess = nullptr;
+    currentLoop    = nullptr;
 
     if (finished) {
         /* Process completed within timeout */
@@ -228,6 +235,16 @@ QString QSocToolShellBash::execute(const json &arguments)
         .arg(processId)
         .arg(outputPath)
         .arg(lastOutput);
+}
+
+void QSocToolShellBash::abort()
+{
+    if (currentProcess && currentProcess->state() != QProcess::NotRunning) {
+        currentProcess->kill();
+    }
+    if (currentLoop && currentLoop->isRunning()) {
+        currentLoop->quit();
+    }
 }
 
 void QSocToolShellBash::setProjectManager(QSocProjectManager *projectManager)

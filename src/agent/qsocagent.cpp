@@ -167,6 +167,15 @@ void QSocAgent::handleStreamChunk(const QString &chunk)
 
 void QSocAgent::handleStreamError(const QString &error)
 {
+    /* Check if this error was caused by user abort */
+    if (abortRequested) {
+        isStreaming = false;
+        heartbeatTimer->stop();
+        abortRequested = false;
+        emit runAborted(streamFinalContent);
+        return;
+    }
+
     /* Check if error is retryable (timeout or network error) */
     bool isRetryable = error.contains("timeout", Qt::CaseInsensitive)
                        || error.contains("network", Qt::CaseInsensitive)
@@ -432,6 +441,13 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
         QString argumentsStr = QString::fromStdString(
             toolCall["function"]["arguments"].get<std::string>());
 
+        /* Check for abort - must still add tool message for API format compliance */
+        if (abortRequested) {
+            addToolMessage(toolCallId, "Aborted by user");
+            emit toolResult(functionName, "Aborted by user");
+            continue;
+        }
+
         if (agentConfig.verbose) {
             emit verboseOutput(QString("  -> Calling tool: %1").arg(functionName));
             emit verboseOutput(QString("     Arguments: %1").arg(argumentsStr));
@@ -511,6 +527,16 @@ void QSocAgent::clearPendingRequests()
 void QSocAgent::abort()
 {
     abortRequested = true;
+
+    /* Cascade to LLM stream */
+    if (llmService) {
+        llmService->abortStream();
+    }
+
+    /* Cascade to running tools */
+    if (toolRegistry) {
+        toolRegistry->abortAll();
+    }
 }
 
 bool QSocAgent::isRunning() const

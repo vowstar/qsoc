@@ -168,6 +168,22 @@ intervention.
 In interactive mode, the `compact` command triggers compaction manually and reports
 the number of tokens saved.
 
+== INTERRUPT HANDLING
+<agent-interrupt>
+Press *ESC* during agent execution to abort the current operation. The interrupt
+cascades through all active subsystems:
+
+- *LLM Streaming*: The HTTP connection is aborted immediately
+- *Tool Execution*: Running bash processes are killed, pending tools are skipped
+- *Message Format*: Skipped tool calls receive `"Aborted by user"` placeholder
+  responses to maintain API message format compliance
+
+After interruption, the agent prints `(interrupted)` and returns to the input
+prompt. Conversation history is preserved, so you can continue the session normally.
+
+The ESC monitor uses `termios` raw mode with `QSocketNotifier` on stdin, which
+works inside nested `QEventLoop` instances (e.g. during bash tool execution).
+
 == SECURITY
 <agent-security>
 The agent implements a read-unrestricted, write-restricted permission model:

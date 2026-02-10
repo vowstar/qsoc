@@ -11,6 +11,8 @@ QSocTool::QSocTool(QObject *parent)
 
 QSocTool::~QSocTool() = default;
 
+void QSocTool::abort() {}
+
 json QSocTool::getDefinition() const
 {
     return {
@@ -72,4 +74,11 @@ int QSocToolRegistry::count() const
 QStringList QSocToolRegistry::toolNames() const
 {
     return tools_.keys();
+}
+
+void QSocToolRegistry::abortAll()
+{
+    for (auto *tool : tools_) {
+        tool->abort();
+    }
 }
