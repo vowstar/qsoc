@@ -461,6 +461,19 @@ LLMResponse QLLMService::sendRequestToEndpoint(
     return response;
 }
 
+void QLLMService::abortStream()
+{
+    if (!currentStreamReply || streamCompleted) {
+        return;
+    }
+    streamCompleted = true;
+    disconnect(currentStreamReply, nullptr, this, nullptr);
+    currentStreamReply->abort();
+    currentStreamReply->deleteLater();
+    currentStreamReply = nullptr;
+    emit streamError("Aborted by user");
+}
+
 void QLLMService::sendChatCompletionStream(
     const json &messages, const json &tools, double temperature)
 {

@@ -184,6 +184,12 @@ public slots:
     void sendChatCompletionStream(
         const json &messages, const json &tools = json::array(), double temperature = 0.2);
 
+    /**
+     * @brief Abort the current streaming request
+     * @details Disconnects signals, aborts the HTTP reply, and emits streamError
+     */
+    void abortStream();
+
 signals:
     /**
      * @brief Signal emitted when a text chunk is received during streaming
