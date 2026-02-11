@@ -273,10 +273,12 @@ void QAgentStatusLine::stop()
 
     clearLine();
 
-    /* Clear TODO state */
+    /* Clear TODO, queue, and input state */
     todoItems.clear();
+    queuedRequests.clear();
     activeTodoId           = -1;
     displayedTodoLineCount = 0;
+    inputLineText.clear();
 }
 
 bool QAgentStatusLine::isActive() const
@@ -423,12 +425,31 @@ void QAgentStatusLine::render()
         out << line << "\n";
     }
 
+    /* Render queued requests (between TODO and status bar) */
+    int queueLineCount = qMin(static_cast<int>(queuedRequests.size()), 3);
+    int queueStartIdx  = qMax(0, static_cast<int>(queuedRequests.size()) - 3);
+    for (int i = queueStartIdx; i < queuedRequests.size(); ++i) {
+        QString line = "\033[2m> " + queuedRequests[i] + "\033[0m";
+        line         = truncateToVisualWidth(line, termWidth - 1);
+        out << line << "\n";
+    }
+
     /* Update displayed line count: truncation + DECAWM guarantees no wrapping */
     int hasSeparator       = (!currentPartialLine.isEmpty() && todoLineCount > 0) ? 1 : 0;
-    displayedTodoLineCount = hasSeparator + todoLineCount;
+    int hasInputLine       = !inputLineText.isEmpty() ? 1 : 0;
+    displayedTodoLineCount = hasSeparator + todoLineCount + queueLineCount + hasInputLine;
 
     /* Output status line */
-    out << statusLine << Qt::flush;
+    out << statusLine;
+
+    /* Output input line below status bar if user is typing */
+    if (!inputLineText.isEmpty()) {
+        QString inputDisplay = "> " + inputLineText;
+        inputDisplay         = truncateToVisualWidth(inputDisplay, termWidth - 1);
+        out << "\n" << inputDisplay;
+    }
+
+    out << Qt::flush;
 }
 
 void QAgentStatusLine::clearLine()
@@ -455,6 +476,46 @@ void QAgentStatusLine::printContent(const QString &content)
     } else {
         QTextStream out(stdout);
         out << content << Qt::flush;
+    }
+}
+
+void QAgentStatusLine::setInputLine(const QString &text)
+{
+    inputLineText = text;
+    if (active) {
+        render();
+    }
+}
+
+void QAgentStatusLine::clearInputLine()
+{
+    inputLineText.clear();
+}
+
+void QAgentStatusLine::addQueuedRequest(const QString &text)
+{
+    queuedRequests.append(text);
+    if (active) {
+        render();
+    }
+}
+
+void QAgentStatusLine::removeQueuedRequest(const QString &text)
+{
+    int idx = queuedRequests.indexOf(text);
+    if (idx >= 0) {
+        queuedRequests.removeAt(idx);
+    }
+    if (active) {
+        render();
+    }
+}
+
+void QAgentStatusLine::clearQueuedRequests()
+{
+    queuedRequests.clear();
+    if (active) {
+        render();
     }
 }
 
