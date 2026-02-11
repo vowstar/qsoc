@@ -107,6 +107,9 @@ private:
     qint64 inputTokens  = 0;
     qint64 outputTokens = 0;
 
+    /* Thinking level for display */
+    QString thinkingLevel;
+
     /* Pure ASCII spinner frames for maximum terminal compatibility */
     const QStringList spinnerFrames = {"-", "\\", "|", "/"};
 
@@ -219,6 +222,12 @@ public:
      * @param output Output (completion) tokens
      */
     void updateTokens(qint64 input, qint64 output);
+
+    /**
+     * @brief Set thinking level for status bar display
+     * @param level Thinking level (empty=hidden, "low"/"medium"/"high")
+     */
+    void setThinkingLevel(const QString &level);
 
     /**
      * @brief Set the input line text for display below status bar

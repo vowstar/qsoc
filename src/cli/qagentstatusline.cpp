@@ -175,7 +175,8 @@ void QAgentStatusLine::start(const QString &status)
     toolCallCount = 0;
     inputTokens   = 0;
     outputTokens  = 0;
-    active        = true;
+    thinkingLevel.clear();
+    active = true;
     stepElapsedTimer.start();
     totalElapsedTimer.start();
     render();
@@ -358,6 +359,9 @@ void QAgentStatusLine::render()
     if (!toolInfo.isEmpty()) {
         statusLine += " " + toolInfo;
     }
+    if (!thinkingLevel.isEmpty()) {
+        statusLine += QString(" [T:%1]").arg(thinkingLevel);
+    }
     statusLine += warning;
 
     /* Get terminal width and truncate if necessary */
@@ -368,7 +372,6 @@ void QAgentStatusLine::render()
 
     /* Calculate lines to clear: TODO list + status line */
     int todoLineCount = qMin(todoItems.size(), 5); /* Limit to 5 items */
-    int totalLines    = todoLineCount + 1;
 
     /* Move cursor up and clear if we have TODO lines displayed */
     if (displayedTodoLineCount > 0) {
@@ -547,6 +550,11 @@ void QAgentStatusLine::updateTokens(qint64 input, qint64 output)
 {
     inputTokens  = input;
     outputTokens = output;
+}
+
+void QAgentStatusLine::setThinkingLevel(const QString &level)
+{
+    thinkingLevel = level;
 }
 
 void QAgentStatusLine::setTodoList(const QList<TodoItem> &items)

@@ -182,7 +182,11 @@ public slots:
      * @param temperature Temperature parameter (0.0-1.0)
      */
     void sendChatCompletionStream(
-        const json &messages, const json &tools = json::array(), double temperature = 0.2);
+        const json    &messages,
+        const json    &tools           = json::array(),
+        double         temperature     = 0.2,
+        const QString &reasoningEffort = QString(),
+        const QString &modelOverride   = QString());
 
     /**
      * @brief Abort the current streaming request
@@ -210,6 +214,12 @@ signals:
      * @param response The complete response JSON
      */
     void streamComplete(const json &response);
+
+    /**
+     * @brief Signal emitted when a reasoning chunk is received during streaming
+     * @param chunk The reasoning content chunk
+     */
+    void streamReasoningChunk(const QString &chunk);
 
     /**
      * @brief Signal emitted when an error occurs during streaming
@@ -315,6 +325,7 @@ private:
     QString         streamAccumulatedContent;
     QMap<int, json> streamAccumulatedToolCalls;
     bool            streamCompleted = false;
+    QString         streamAccumulatedReasoning;
 };
 
 #endif // QLLMSERVICE_H

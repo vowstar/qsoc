@@ -194,6 +194,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         {"no-stream",
          QCoreApplication::translate(
              "main", "Disable streaming output (streaming is enabled by default).")},
+        {"thinking",
+         QCoreApplication::translate("main", "Thinking level (low/medium/high)."),
+         "level"},
+        {"model-reasoning",
+         QCoreApplication::translate("main", "Model to use when thinking is enabled."),
+         "model"},
     });
 
     parser.parse(appArguments);
@@ -261,6 +267,16 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         if (!systemPrompt.isEmpty()) {
             config.systemPrompt = systemPrompt;
         }
+
+        QString thinkingStr = socConfig->getValue("agent.thinking");
+        if (!thinkingStr.isEmpty()) {
+            config.thinkingLevel = thinkingStr;
+        }
+
+        QString reasoningModelStr = socConfig->getValue("llm.model_reasoning");
+        if (!reasoningModelStr.isEmpty()) {
+            config.reasoningModel = reasoningModelStr;
+        }
     }
 
     /* Command line overrides config file */
@@ -269,6 +285,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     }
     if (parser.isSet("temperature")) {
         config.temperature = parser.value("temperature").toDouble();
+    }
+    if (parser.isSet("thinking")) {
+        config.thinkingLevel = parser.value("thinking").toLower();
+    }
+    if (parser.isSet("model-reasoning")) {
+        config.reasoningModel = parser.value("model-reasoning");
     }
 
     /* Determine streaming mode (enabled by default) */
@@ -401,6 +423,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                 qout << chunk << Qt::flush;
             });
 
+            connect(agent, &QSocAgent::reasoningChunk, [&qout](const QString &chunk) {
+                qout << "\033[2m" << chunk << "\033[0m" << Qt::flush;
+            });
+
             connect(agent, &QSocAgent::runComplete, [&qout, &loop](const QString &) {
                 qout << Qt::endl;
                 loop.quit();
@@ -481,7 +507,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             QString     trimmed = input.trimmed().toLower();
 
             /* Complete built-in commands */
-            QStringList commands = {"exit", "quit", "clear", "compact", "help"};
+            QStringList commands
+                = {"exit", "quit", "/exit", "/quit", "/clear", "/compact", "/thinking", "/help"};
             for (const QString &cmd : commands) {
                 if (cmd.startsWith(trimmed)) {
                     completions.append(cmd);
@@ -522,7 +549,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
     /* Print welcome message only if stdout is TTY */
     if (termCap.isOutputInteractive()) {
         qout << "QSoC Agent - Interactive AI Assistant for SoC Design" << Qt::endl;
-        qout << "Type 'exit' or 'quit' to exit, 'clear' to clear history" << Qt::endl;
+        qout << "Type 'exit' to exit, '/help' for commands" << Qt::endl;
         qout << "(Running in simple mode)" << Qt::endl;
         qout << Qt::endl;
     }
@@ -564,17 +591,18 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
 
         input = input.trimmed();
 
-        /* Handle special commands */
+        /* Handle special commands (slash-prefixed, exit/quit also work without slash) */
         if (input.isEmpty()) {
             continue;
         }
-        if (input.toLower() == "exit" || input.toLower() == "quit") {
+        QString cmd = input.toLower();
+        if (cmd == "exit" || cmd == "quit" || cmd == "/exit" || cmd == "/quit") {
             if (termCap.isOutputInteractive()) {
                 qout << "Goodbye!" << Qt::endl;
             }
             break;
         }
-        if (input.toLower() == "clear") {
+        if (cmd == "/clear") {
             agent->clearHistory();
             QFile::remove(conversationFilePath(projectManager));
             if (termCap.isOutputInteractive()) {
@@ -582,20 +610,41 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             }
             continue;
         }
-        if (input.toLower() == "help") {
+        if (cmd == "/help") {
             qout << "Commands:" << Qt::endl;
-            qout << "  exit, quit  - Exit the agent" << Qt::endl;
-            qout << "  clear       - Clear conversation history" << Qt::endl;
-            qout << "  compact     - Compact conversation context" << Qt::endl;
-            qout << "  help        - Show this help message" << Qt::endl;
+            qout << "  exit, /exit  - Exit the agent" << Qt::endl;
+            qout << "  /clear       - Clear conversation history" << Qt::endl;
+            qout << "  /compact     - Compact conversation context" << Qt::endl;
+            qout << "  /thinking    - Show/set thinking level (off/low/medium/high)" << Qt::endl;
+            qout << "  /help        - Show this help message" << Qt::endl;
             qout << Qt::endl;
             qout << "Or just type your question/request in natural language." << Qt::endl;
             continue;
         }
-        if (input.toLower() == "compact") {
+        if (cmd == "/compact") {
             int saved = agent->compact();
             qout << QString("Compacted: saved %1 tokens").arg(saved) << Qt::endl;
             saveConversation(agent, projectManager);
+            continue;
+        }
+        if (cmd.startsWith("/thinking")) {
+            QString         level = input.mid(9).trimmed().toLower();
+            QSocAgentConfig cfg   = agent->getConfig();
+            if (level.isEmpty()) {
+                qout << "Thinking: " << (cfg.thinkingLevel.isEmpty() ? "off" : cfg.thinkingLevel);
+                if (!cfg.reasoningModel.isEmpty()) {
+                    qout << " (model: " << cfg.reasoningModel << ")";
+                }
+                qout << Qt::endl;
+            } else if (level == "off") {
+                agent->setThinkingLevel(QString());
+                qout << "Thinking: off" << Qt::endl;
+            } else if (level == "low" || level == "medium" || level == "high") {
+                agent->setThinkingLevel(level);
+                qout << "Thinking: " << level << Qt::endl;
+            } else {
+                qout << "Usage: /thinking [off|low|medium|high]" << Qt::endl;
+            }
             continue;
         }
 
@@ -837,6 +886,18 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             QAgentInputMonitor escMonitor;
             QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
 
+            /* Connect reasoning chunk display */
+            if (useStatusLine) {
+                connections.append(
+                    QObject::connect(
+                        agent,
+                        &QSocAgent::reasoningChunk,
+                        &statusLine,
+                        [&statusLine](const QString &chunk) {
+                            statusLine.printContent("\033[2m" + chunk + "\033[0m");
+                        }));
+            }
+
             /* Connect input queuing signals */
             connections.append(
                 QObject::connect(
@@ -844,6 +905,34 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     &QAgentInputMonitor::inputReady,
                     agent,
                     [agent, &statusLine, useStatusLine, &qout](const QString &text) {
+                        if (text.startsWith("/thinking")) {
+                            QString level = text.mid(9).trimmed().toLower();
+                            if (level.isEmpty()) {
+                                QSocAgentConfig cfg  = agent->getConfig();
+                                QString         info = QString("\nThinking: %1")
+                                                   .arg(
+                                                       cfg.thinkingLevel.isEmpty()
+                                                           ? "off"
+                                                           : cfg.thinkingLevel);
+                                if (!cfg.reasoningModel.isEmpty()) {
+                                    info += QString(" (model: %1)").arg(cfg.reasoningModel);
+                                }
+                                info += "\n";
+                                statusLine.printContent(info);
+                            } else if (level == "off") {
+                                agent->setThinkingLevel(QString());
+                                statusLine.setThinkingLevel(QString());
+                                statusLine.printContent("\nThinking: off\n");
+                            } else if (level == "low" || level == "medium" || level == "high") {
+                                agent->setThinkingLevel(level);
+                                statusLine.setThinkingLevel(level);
+                                statusLine.printContent(QString("\nThinking: %1\n").arg(level));
+                            } else {
+                                statusLine.printContent(
+                                    "\nUsage: /thinking [off|low|medium|high]\n");
+                            }
+                            return;
+                        }
                         agent->queueRequest(text);
                         if (useStatusLine) {
                             statusLine.addQueuedRequest(text);
@@ -875,6 +964,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
 
             /* Start status line and agent */
             if (useStatusLine) {
+                statusLine.setThinkingLevel(agent->getConfig().thinkingLevel);
                 statusLine.start("Thinking");
             }
             escMonitor.start();
@@ -1129,6 +1219,34 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     &QAgentInputMonitor::inputReady,
                     agent,
                     [agent, &statusLine, useStatusLine, &qout](const QString &text) {
+                        if (text.startsWith("/thinking")) {
+                            QString level = text.mid(9).trimmed().toLower();
+                            if (level.isEmpty()) {
+                                QSocAgentConfig cfg  = agent->getConfig();
+                                QString         info = QString("\nThinking: %1")
+                                                   .arg(
+                                                       cfg.thinkingLevel.isEmpty()
+                                                           ? "off"
+                                                           : cfg.thinkingLevel);
+                                if (!cfg.reasoningModel.isEmpty()) {
+                                    info += QString(" (model: %1)").arg(cfg.reasoningModel);
+                                }
+                                info += "\n";
+                                statusLine.printContent(info);
+                            } else if (level == "off") {
+                                agent->setThinkingLevel(QString());
+                                statusLine.setThinkingLevel(QString());
+                                statusLine.printContent("\nThinking: off\n");
+                            } else if (level == "low" || level == "medium" || level == "high") {
+                                agent->setThinkingLevel(level);
+                                statusLine.setThinkingLevel(level);
+                                statusLine.printContent(QString("\nThinking: %1\n").arg(level));
+                            } else {
+                                statusLine.printContent(
+                                    "\nUsage: /thinking [off|low|medium|high]\n");
+                            }
+                            return;
+                        }
                         agent->queueRequest(text);
                         if (useStatusLine) {
                             statusLine.addQueuedRequest(text);
@@ -1160,6 +1278,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
 
             /* Start status line and agent */
             if (useStatusLine) {
+                statusLine.setThinkingLevel(agent->getConfig().thinkingLevel);
                 statusLine.start("Thinking");
             } else {
                 qout << "Thinking" << Qt::flush;
@@ -1198,7 +1317,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
 
     /* Print welcome message */
     qout << "QSoC Agent - Interactive AI Assistant for SoC Design" << Qt::endl;
-    qout << "Type 'exit' or 'quit' to exit, 'clear' to clear history" << Qt::endl;
+    qout << "Type 'exit' to exit, '/help' for commands" << Qt::endl;
 
     if (readline->terminalCapability().supportsColor()) {
         qout << "(Enhanced mode with readline support";
@@ -1231,26 +1350,28 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
 
         input = input.trimmed();
 
-        /* Handle special commands */
+        /* Handle special commands (slash-prefixed, exit/quit also work without slash) */
         if (input.isEmpty()) {
             continue;
         }
-        if (input.toLower() == "exit" || input.toLower() == "quit") {
+        QString cmd = input.toLower();
+        if (cmd == "exit" || cmd == "quit" || cmd == "/exit" || cmd == "/quit") {
             qout << "Goodbye!" << Qt::endl;
             break;
         }
-        if (input.toLower() == "clear") {
+        if (cmd == "/clear") {
             agent->clearHistory();
             QFile::remove(conversationFilePath(projectManager));
             qout << "History cleared." << Qt::endl;
             continue;
         }
-        if (input.toLower() == "help") {
+        if (cmd == "/help") {
             qout << "Commands:" << Qt::endl;
-            qout << "  exit, quit  - Exit the agent" << Qt::endl;
-            qout << "  clear       - Clear conversation history" << Qt::endl;
-            qout << "  compact     - Compact conversation context" << Qt::endl;
-            qout << "  help        - Show this help message" << Qt::endl;
+            qout << "  exit, /exit  - Exit the agent" << Qt::endl;
+            qout << "  /clear       - Clear conversation history" << Qt::endl;
+            qout << "  /compact     - Compact conversation context" << Qt::endl;
+            qout << "  /thinking    - Show/set thinking level (off/low/medium/high)" << Qt::endl;
+            qout << "  /help        - Show this help message" << Qt::endl;
             qout << Qt::endl;
             qout << "Keyboard shortcuts:" << Qt::endl;
             qout << "  Up/Down     - Browse history" << Qt::endl;
@@ -1263,10 +1384,30 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             qout << "Or just type your question/request in natural language." << Qt::endl;
             continue;
         }
-        if (input.toLower() == "compact") {
+        if (cmd == "/compact") {
             int saved = agent->compact();
             qout << QString("Compacted: saved %1 tokens").arg(saved) << Qt::endl;
             saveConversation(agent, projectManager);
+            continue;
+        }
+        if (cmd.startsWith("/thinking")) {
+            QString         level = input.mid(9).trimmed().toLower();
+            QSocAgentConfig cfg   = agent->getConfig();
+            if (level.isEmpty()) {
+                qout << "Thinking: " << (cfg.thinkingLevel.isEmpty() ? "off" : cfg.thinkingLevel);
+                if (!cfg.reasoningModel.isEmpty()) {
+                    qout << " (model: " << cfg.reasoningModel << ")";
+                }
+                qout << Qt::endl;
+            } else if (level == "off") {
+                agent->setThinkingLevel(QString());
+                qout << "Thinking: off" << Qt::endl;
+            } else if (level == "low" || level == "medium" || level == "high") {
+                agent->setThinkingLevel(level);
+                qout << "Thinking: " << level << Qt::endl;
+            } else {
+                qout << "Usage: /thinking [off|low|medium|high]" << Qt::endl;
+            }
             continue;
         }
 
@@ -1453,12 +1594,43 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QAgentInputMonitor escMonitor;
             QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
 
+            /* Connect reasoning chunk display */
+            auto connReasoning = QObject::connect(
+                agent, &QSocAgent::reasoningChunk, &statusLine, [&statusLine](const QString &chunk) {
+                    statusLine.printContent("\033[2m" + chunk + "\033[0m");
+                });
+
             /* Connect input queuing signals */
             auto connInputReady = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::inputReady,
                 agent,
                 [agent, &statusLine](const QString &text) {
+                    if (text.startsWith("/thinking")) {
+                        QString level = text.mid(9).trimmed().toLower();
+                        if (level.isEmpty()) {
+                            QSocAgentConfig cfg = agent->getConfig();
+                            QString         info
+                                = QString("\nThinking: %1")
+                                      .arg(cfg.thinkingLevel.isEmpty() ? "off" : cfg.thinkingLevel);
+                            if (!cfg.reasoningModel.isEmpty()) {
+                                info += QString(" (model: %1)").arg(cfg.reasoningModel);
+                            }
+                            info += "\n";
+                            statusLine.printContent(info);
+                        } else if (level == "off") {
+                            agent->setThinkingLevel(QString());
+                            statusLine.setThinkingLevel(QString());
+                            statusLine.printContent("\nThinking: off\n");
+                        } else if (level == "low" || level == "medium" || level == "high") {
+                            agent->setThinkingLevel(level);
+                            statusLine.setThinkingLevel(level);
+                            statusLine.printContent(QString("\nThinking: %1\n").arg(level));
+                        } else {
+                            statusLine.printContent("\nUsage: /thinking [off|low|medium|high]\n");
+                        }
+                        return;
+                    }
                     agent->queueRequest(text);
                     statusLine.addQueuedRequest(text);
                 });
@@ -1477,6 +1649,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 &QAgentStatusLine::setInputLine);
 
             /* Start status line and agent */
+            statusLine.setThinkingLevel(agent->getConfig().thinkingLevel);
             statusLine.start("Thinking");
             escMonitor.start();
             agent->runStream(input);
@@ -1492,6 +1665,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connToolResult);
             QObject::disconnect(connTodoTrack);
             QObject::disconnect(connContentChunk);
+            QObject::disconnect(connReasoning);
             QObject::disconnect(connRunComplete);
             QObject::disconnect(connRunError);
             QObject::disconnect(connHeartbeat);
@@ -1693,6 +1867,31 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 &QAgentInputMonitor::inputReady,
                 agent,
                 [agent, &statusLine](const QString &text) {
+                    if (text.startsWith("/thinking")) {
+                        QString level = text.mid(9).trimmed().toLower();
+                        if (level.isEmpty()) {
+                            QSocAgentConfig cfg = agent->getConfig();
+                            QString         info
+                                = QString("\nThinking: %1")
+                                      .arg(cfg.thinkingLevel.isEmpty() ? "off" : cfg.thinkingLevel);
+                            if (!cfg.reasoningModel.isEmpty()) {
+                                info += QString(" (model: %1)").arg(cfg.reasoningModel);
+                            }
+                            info += "\n";
+                            statusLine.printContent(info);
+                        } else if (level == "off") {
+                            agent->setThinkingLevel(QString());
+                            statusLine.setThinkingLevel(QString());
+                            statusLine.printContent("\nThinking: off\n");
+                        } else if (level == "low" || level == "medium" || level == "high") {
+                            agent->setThinkingLevel(level);
+                            statusLine.setThinkingLevel(level);
+                            statusLine.printContent(QString("\nThinking: %1\n").arg(level));
+                        } else {
+                            statusLine.printContent("\nUsage: /thinking [off|low|medium|high]\n");
+                        }
+                        return;
+                    }
                     agent->queueRequest(text);
                     statusLine.addQueuedRequest(text);
                 });
@@ -1711,6 +1910,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 &QAgentStatusLine::setInputLine);
 
             /* Start status line and agent */
+            statusLine.setThinkingLevel(agent->getConfig().thinkingLevel);
             statusLine.start("Thinking");
             escMonitor.start();
             agent->runStream(input);
