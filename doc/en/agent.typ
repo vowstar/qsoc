@@ -184,6 +184,31 @@ prompt. Conversation history is preserved, so you can continue the session norma
 The ESC monitor uses `termios` raw mode with `QSocketNotifier` on stdin, which
 works inside nested `QEventLoop` instances (e.g. during bash tool execution).
 
+=== Input Queuing
+<agent-input-queuing>
+While the agent is executing (LLM streaming, tool calls), you can type follow-up
+requests directly. The input line appears below the status bar:
+
+```
+\ Thinking... (1.2k/3.4k 1:54) [21 tools]
+> your follow-up request here
+```
+
+Press *Enter* to submit the request into the queue. The agent consumes queued
+requests at the start of the next iteration, so the LLM sees your new message in
+the following round. Multiple requests can be queued.
+
+Keyboard shortcuts during input:
+- *Enter* -- Submit the current input to the queue
+- *Backspace* -- Delete the last character (CJK and emoji are deleted as a unit)
+- *Ctrl-U* -- Clear the entire input line
+- *Ctrl-W* -- Delete the last word
+- *ESC* -- Clear the input line and interrupt the agent
+
+CJK and multilingual input via IME is fully supported. Raw mode operates at the
+PTY/termios layer, which is architecturally below the terminal emulator's IME
+composition. Characters arrive as complete UTF-8 sequences.
+
 == SECURITY
 <agent-security>
 The agent implements a read-unrestricted, write-restricted permission model:

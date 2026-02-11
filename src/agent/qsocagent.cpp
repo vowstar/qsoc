@@ -330,10 +330,7 @@ void QSocAgent::handleStreamComplete(const json &response)
         return;
     }
 
-    /* Regular response without tool calls - we're done */
-    isStreaming = false;
-    heartbeatTimer->stop();
-
+    /* Regular response without tool calls */
     if (message.contains("content") && message["content"].is_string()) {
         QString content = QString::fromStdString(message["content"].get<std::string>());
 
@@ -343,9 +340,27 @@ void QSocAgent::handleStreamComplete(const json &response)
 
         /* Add to history */
         addMessage("assistant", content);
+
+        /* Continue if there are queued requests */
+        if (hasPendingRequests()) {
+            processStreamIteration();
+            return;
+        }
+
+        isStreaming = false;
+        heartbeatTimer->stop();
         emit runComplete(content);
     } else {
         addMessage("assistant", "");
+
+        /* Continue if there are queued requests */
+        if (hasPendingRequests()) {
+            processStreamIteration();
+            return;
+        }
+
+        isStreaming = false;
+        heartbeatTimer->stop();
         emit runComplete("");
     }
 }

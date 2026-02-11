@@ -17,7 +17,7 @@
 #include "agent/tool/qsoctoolshell.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctooltodo.h"
-#include "cli/qagentescmonitor.h"
+#include "cli/qagentinputmonitor.h"
 #include "cli/qagentreadline.h"
 #include "cli/qagentstatusline.h"
 #include "cli/qterminalcapability.h"
@@ -417,8 +417,23 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             });
 
             /* ESC key monitor */
-            QAgentEscMonitor escMonitor;
-            connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+            QAgentInputMonitor escMonitor;
+            connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            connect(
+                &escMonitor,
+                &QAgentInputMonitor::inputReady,
+                agent,
+                [agent, &qout](const QString &text) {
+                    agent->queueRequest(text);
+                    qout << "\n(queued: " << text << ")\n" << Qt::flush;
+                });
+            connect(
+                agent,
+                &QSocAgent::processingQueuedRequest,
+                agent,
+                [&qout](const QString &request, int) {
+                    qout << "\n> " << request << "\n" << Qt::flush;
+                });
             escMonitor.start();
 
             agent->runStream(query);
@@ -819,8 +834,44 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     }));
 
             /* ESC key monitor */
-            QAgentEscMonitor escMonitor;
-            QObject::connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+            QAgentInputMonitor escMonitor;
+            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+
+            /* Connect input queuing signals */
+            connections.append(
+                QObject::connect(
+                    &escMonitor,
+                    &QAgentInputMonitor::inputReady,
+                    agent,
+                    [agent, &statusLine, useStatusLine, &qout](const QString &text) {
+                        agent->queueRequest(text);
+                        if (useStatusLine) {
+                            statusLine.addQueuedRequest(text);
+                        } else {
+                            qout << "\n(queued: " << text << ")\n" << Qt::flush;
+                        }
+                    }));
+            connections.append(
+                QObject::connect(
+                    agent,
+                    &QSocAgent::processingQueuedRequest,
+                    &statusLine,
+                    [&statusLine, useStatusLine, &qout](const QString &request, int) {
+                        if (useStatusLine) {
+                            statusLine.removeQueuedRequest(request);
+                            statusLine.printContent(QString("\n> %1\n").arg(request));
+                        } else {
+                            qout << "\n> " << request << "\n" << Qt::flush;
+                        }
+                    }));
+            if (useStatusLine) {
+                connections.append(
+                    QObject::connect(
+                        &escMonitor,
+                        &QAgentInputMonitor::inputChanged,
+                        &statusLine,
+                        &QAgentStatusLine::setInputLine));
+            }
 
             /* Start status line and agent */
             if (useStatusLine) {
@@ -1068,8 +1119,44 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     }));
 
             /* ESC key monitor */
-            QAgentEscMonitor escMonitor;
-            QObject::connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+            QAgentInputMonitor escMonitor;
+            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+
+            /* Connect input queuing signals */
+            connections.append(
+                QObject::connect(
+                    &escMonitor,
+                    &QAgentInputMonitor::inputReady,
+                    agent,
+                    [agent, &statusLine, useStatusLine, &qout](const QString &text) {
+                        agent->queueRequest(text);
+                        if (useStatusLine) {
+                            statusLine.addQueuedRequest(text);
+                        } else {
+                            qout << "\n(queued: " << text << ")\n" << Qt::flush;
+                        }
+                    }));
+            connections.append(
+                QObject::connect(
+                    agent,
+                    &QSocAgent::processingQueuedRequest,
+                    &statusLine,
+                    [&statusLine, useStatusLine, &qout](const QString &request, int) {
+                        if (useStatusLine) {
+                            statusLine.removeQueuedRequest(request);
+                            statusLine.printContent(QString("\n> %1\n").arg(request));
+                        } else {
+                            qout << "\n> " << request << "\n" << Qt::flush;
+                        }
+                    }));
+            if (useStatusLine) {
+                connections.append(
+                    QObject::connect(
+                        &escMonitor,
+                        &QAgentInputMonitor::inputChanged,
+                        &statusLine,
+                        &QAgentStatusLine::setInputLine));
+            }
 
             /* Start status line and agent */
             if (useStatusLine) {
@@ -1363,8 +1450,31 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 });
 
             /* ESC key monitor */
-            QAgentEscMonitor escMonitor;
-            QObject::connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+            QAgentInputMonitor escMonitor;
+            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+
+            /* Connect input queuing signals */
+            auto connInputReady = QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::inputReady,
+                agent,
+                [agent, &statusLine](const QString &text) {
+                    agent->queueRequest(text);
+                    statusLine.addQueuedRequest(text);
+                });
+            auto connProcessingQueued = QObject::connect(
+                agent,
+                &QSocAgent::processingQueuedRequest,
+                &statusLine,
+                [&statusLine](const QString &request, int) {
+                    statusLine.removeQueuedRequest(request);
+                    statusLine.printContent(QString("\n> %1\n").arg(request));
+                });
+            auto connInputChanged = QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::inputChanged,
+                &statusLine,
+                &QAgentStatusLine::setInputLine);
 
             /* Start status line and agent */
             statusLine.start("Thinking");
@@ -1390,6 +1500,9 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connRetry);
             QObject::disconnect(connCompact);
             QObject::disconnect(connAborted);
+            QObject::disconnect(connInputReady);
+            QObject::disconnect(connProcessingQueued);
+            QObject::disconnect(connInputChanged);
         } else {
             /* Non-streaming mode: use async API but collect result without chunk output */
             QEventLoop loop;
@@ -1571,8 +1684,31 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 });
 
             /* ESC key monitor */
-            QAgentEscMonitor escMonitor;
-            QObject::connect(&escMonitor, &QAgentEscMonitor::escPressed, agent, &QSocAgent::abort);
+            QAgentInputMonitor escMonitor;
+            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+
+            /* Connect input queuing signals */
+            auto connInputReady = QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::inputReady,
+                agent,
+                [agent, &statusLine](const QString &text) {
+                    agent->queueRequest(text);
+                    statusLine.addQueuedRequest(text);
+                });
+            auto connProcessingQueued = QObject::connect(
+                agent,
+                &QSocAgent::processingQueuedRequest,
+                &statusLine,
+                [&statusLine](const QString &request, int) {
+                    statusLine.removeQueuedRequest(request);
+                    statusLine.printContent(QString("\n> %1\n").arg(request));
+                });
+            auto connInputChanged = QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::inputChanged,
+                &statusLine,
+                &QAgentStatusLine::setInputLine);
 
             /* Start status line and agent */
             statusLine.start("Thinking");
@@ -1603,6 +1739,9 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connRetry);
             QObject::disconnect(connCompact);
             QObject::disconnect(connAborted);
+            QObject::disconnect(connInputReady);
+            QObject::disconnect(connProcessingQueued);
+            QObject::disconnect(connInputChanged);
         }
     }
 
