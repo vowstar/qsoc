@@ -56,6 +56,7 @@ so you only need to configure the endpoint URL, API key, and model name.
     [llm.url], [API endpoint URL (OpenAI Chat Completions format)],
     [llm.key], [API key for authentication (optional for local services)],
     [llm.model], [Model name to use],
+    [llm.model_reasoning], [Model for reasoning/thinking mode (optional)],
     [llm.timeout], [Request timeout in milliseconds (default: 30000)],
   )],
   caption: [LLM CONFIGURATION OPTIONS],
@@ -132,6 +133,34 @@ proxy:
   port: 7890
 ```
 
+== AGENT CONFIGURATION
+<agent-config>
+Agent behavior can be configured in the YAML config file under the `agent` key.
+These settings can also be overridden by command-line options (see @agent-command).
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [agent.temperature], [LLM temperature 0.0--1.0 (default: 0.2)],
+    [agent.max_tokens], [Maximum context tokens (default: 128000)],
+    [agent.max_iterations], [Maximum agent iterations (default: 100)],
+    [agent.thinking], [Thinking level: off, low, medium, high],
+    [agent.stream], [Enable streaming output: true/false (default: true)],
+    [agent.prune_threshold],
+    [Token ratio to trigger tool output pruning (default: 0.6)],
+    [agent.compact_threshold],
+    [Token ratio to trigger LLM compaction (default: 0.8)],
+    [agent.compaction_model],
+    [Model for compaction (empty = use primary model)],
+    [agent.system_prompt], [Custom system prompt override],
+  )],
+  caption: [AGENT CONFIGURATION OPTIONS],
+  kind: table,
+)
+
 == COMPLETE CONFIGURATION EXAMPLE
 <config-example>
 Below is an example of a complete QSoC configuration file:
@@ -142,7 +171,13 @@ llm:
   url: https://api.deepseek.com/v1/chat/completions
   key: sk-xxx
   model: deepseek-chat
+  model_reasoning: deepseek-reasoner
   timeout: 30000
+
+# Agent Configuration
+agent:
+  thinking: high
+  max_tokens: 128000
 
 # Network Proxy (if needed)
 proxy:

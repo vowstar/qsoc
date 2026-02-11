@@ -1,12 +1,10 @@
 = AGENT MODE
 <agent-overview>
-QSoC provides an interactive AI agent mode that enables natural language interaction
-for SoC design tasks. The agent leverages LLM (Large Language Model) capabilities
-with tool calling to automate complex workflows.
+QSoC provides an interactive AI agent for SoC design automation. The agent uses
+LLM tool calling to execute multi-step workflows through natural language.
 
 == AGENT COMMAND
 <agent-command>
-The agent command starts an interactive AI assistant or executes a single query.
 
 #figure(
   align(center)[#table(
@@ -14,12 +12,14 @@ The agent command starts an interactive AI assistant or executes a single query.
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [`-d`, `--directory <path>`], [The path to the project directory],
-    [`-p`, `--project <name>`], [The name of the project to use],
+    [`-d`, `--directory <path>`], [Project directory path],
+    [`-p`, `--project <name>`], [Project name],
     [`-q`, `--query <text>`], [Single query mode (non-interactive)],
     [`--max-tokens <n>`], [Maximum context tokens (default: 128000)],
-    [`--temperature <n>`], [LLM temperature 0.0-1.0 (default: 0.2)],
-    [`--no-stream`], [Disable streaming output (streaming enabled by default)],
+    [`--temperature <n>`], [LLM temperature 0.0--1.0 (default: 0.2)],
+    [`--no-stream`], [Disable streaming output],
+    [`--thinking <level>`], [Reasoning effort: low, medium, high],
+    [`--model-reasoning <model>`], [Model to use when thinking is enabled],
   )],
   caption: [AGENT COMMAND OPTIONS],
   kind: table,
@@ -27,227 +27,137 @@ The agent command starts an interactive AI assistant or executes a single query.
 
 === Interactive Mode
 <agent-interactive>
-Start the agent in interactive mode for continuous conversation:
 
 ```bash
 qsoc agent
-qsoc agent -d /path/to/project
-qsoc agent -p myproject
+qsoc agent -d /path/to/project -p myproject
+qsoc agent --thinking high --model-reasoning deepseek-reasoner
 ```
-
-In interactive mode, the following commands are available:
-- `exit` or `quit` - Exit the agent
-- `clear` - Clear conversation history
-- `help` - Show help message
 
 === Single Query Mode
 <agent-single-query>
-Execute a single query without entering interactive mode:
 
 ```bash
 qsoc agent -q "List all modules in the project"
 qsoc agent -q "Import cpu.v and add AXI bus interface"
 ```
 
-== CAPABILITIES
-<agent-capabilities>
-The agent provides the following capabilities through natural language interaction:
-
-=== Project & Module Management
-<agent-cap-project>
-Create and manage SoC projects, import Verilog/SystemVerilog modules, configure
-bus interfaces, and browse module libraries.
-
-=== Bus Interface Management
-<agent-cap-bus>
-Import, browse, and manage bus definitions (AXI, APB, Wishbone, etc.) from CSV
-bus libraries.
-
-=== Code Generation
-<agent-cap-generate>
-Generate Verilog RTL code from netlist files (clock trees, reset networks, FSMs,
-interconnects) and render Jinja2 templates with CSV, YAML, JSON, SystemRDL, or
-RCSV data sources.
-
-=== File Operations
-<agent-cap-file>
-Read any file on the system. Write and edit files within allowed directories
-(project, working, user-added, and temporary directories). List directory contents
-with pattern filtering.
-
-=== Shell Execution
-<agent-cap-shell>
-Execute bash commands with configurable timeout. Manage long-running background
-processes (check status, read output, terminate).
-
-=== Path & Directory Management
-<agent-cap-path>
-Configure allowed directories for file write access. Add, remove, and list
-registered paths at runtime.
-
-=== Memory & Task Management
-<agent-cap-memory>
-Persistent agent memory for notes across sessions. Built-in task tracking with
-todo lists to manage complex multi-step workflows.
-
-=== Documentation
-<agent-cap-docs>
-Query built-in QSoC documentation by topic (commands, bus formats, clock trees,
-reset networks, netlist syntax, templates, etc.).
-
-=== Skills
-<agent-cap-skills>
-User-defined prompt templates (SKILL.md) that extend agent capabilities without
-code changes. Skills are stored in project (`.qsoc/skills/`) or user
-(`~/.config/qsoc/skills/`) directories. Use the built-in skill discovery and
-creation tools to bootstrap the skill ecosystem.
-
-== CONFIGURATION
-<agent-config>
-The agent requires LLM API configuration. Set the following environment variables
-or configure in the project YAML config file (`.qsoc/config.yaml`):
+== INTERACTIVE COMMANDS
+<agent-commands>
+The following commands are available during an interactive session:
 
 #figure(
   align(center)[#table(
-    columns: (0.5fr, 1fr),
+    columns: (0.35fr, 1fr),
     align: (auto, left),
-    table.header([Variable], [Description]),
+    table.header([Command], [Description]),
     table.hline(),
-    [`QSOC_AI_PROVIDER`], [AI provider name (e.g., openai, deepseek)],
-    [`QSOC_API_KEY`], [API key for the AI provider],
-    [`QSOC_AI_MODEL`], [Model name to use],
-    [`QSOC_API_URL`], [Base URL for API endpoint],
-    [`QSOC_AGENT_TEMPERATURE`], [LLM temperature 0.0-1.0 (default: 0.2)],
-    [`QSOC_AGENT_MAX_TOKENS`], [Maximum context tokens (default: 128000)],
-    [`QSOC_AGENT_MAX_ITERATIONS`], [Maximum agent iterations (default: 100)],
-    [`QSOC_AGENT_SYSTEM_PROMPT`], [Custom system prompt override],
+    [`exit`, `/exit`], [Exit the agent],
+    [`/clear`], [Clear conversation history],
+    [`/compact`], [Compact conversation context and report tokens saved],
+    [`/thinking [level]`], [Show or set thinking level (off/low/medium/high)],
+    [`/help`], [Show help message],
   )],
-  caption: [AGENT CONFIGURATION],
+  caption: [INTERACTIVE COMMANDS],
+  kind: table,
+)
+
+== CAPABILITIES
+<agent-capabilities>
+The agent provides the following tools through natural language:
+
+- *Project & Module* -- Create projects, import Verilog/SystemVerilog, configure bus interfaces
+- *Bus Interfaces* -- Import and manage bus definitions (AXI, APB, Wishbone, etc.)
+- *Code Generation* -- Generate Verilog RTL from netlist files, render Jinja2 templates
+- *File Operations* -- Read any file; write/edit within allowed directories
+- *Shell Execution* -- Run bash commands with timeout; manage background processes
+- *Path Management* -- Configure allowed directories for file write access
+- *Memory & Tasks* -- Persistent notes across sessions; todo list for multi-step workflows
+- *Documentation* -- Query built-in QSoC docs by topic
+- *Skills* -- User-defined prompt templates (`SKILL.md`) in `.qsoc/skills/` or `~/.config/qsoc/skills/`
+
+== THINKING / REASONING
+<agent-thinking>
+The `--thinking` option enables extended reasoning for complex tasks. When set,
+a `reasoning_effort` parameter is sent to the LLM API.
+
+If `llm.model_reasoning` is configured, the agent automatically switches to that
+model when thinking is enabled, and switches back when thinking is off. This
+allows pairing a fast model for normal use with a reasoning model for hard
+problems.
+
+The receiving side always parses `reasoning_content` and `reasoning_details`
+fields from the SSE stream, regardless of the `--thinking` setting. Reasoning
+output is displayed in dim text.
+
+#figure(
+  align(center)[#table(
+    columns: (0.3fr, 0.3fr, 1fr),
+    align: (auto, auto, left),
+    table.header([`--thinking`], [`model_reasoning`], [Behavior]),
+    table.hline(),
+    [not set], [not set], [Primary model, no reasoning parameter],
+    [not set], [set], [Primary model; reasoning model idle],
+    [`high`], [not set], [Primary model + `reasoning_effort`],
+    [`high`],
+    [`deepseek-reasoner`],
+    [Switch to reasoning model + `reasoning_effort`],
+  )],
+  caption: [MODEL SELECTION BEHAVIOR],
   kind: table,
 )
 
 == CONTEXT COMPACTION
 <agent-context-compaction>
-The agent implements a three-layer context compaction system to manage long
-conversations efficiently without losing critical information.
+Long conversations are managed by a three-layer compaction system:
 
-=== Layer 1 -- Tool Output Pruning
-<agent-compact-prune>
-When token usage reaches 60% of the context window, old tool outputs are replaced
-with `[output pruned]`. Recent tool outputs (within the protection window) are
-preserved. This is a zero-LLM-call operation that typically saves 50--80% of tokens
-from verbose tool results like file reads and command outputs.
++ *Tool Output Pruning* (60% threshold) -- Old tool outputs are replaced with
+  `[output pruned]`. Zero LLM calls.
++ *LLM Compaction* (80% threshold) -- Older messages are summarized by the LLM,
+  preserving technical details (file paths, decisions, errors).
++ *Auto-Continue* -- After compaction during streaming, the agent automatically
+  resumes the current task.
 
-=== Layer 2 -- LLM Compaction
-<agent-compact-llm>
-When token usage reaches 80% of the context window, the agent calls the LLM to
-generate a structured summary of older messages. The summary preserves all technical
-details (file paths, decisions, error messages) in a compact format. Recent messages
-are kept verbatim. If the LLM call fails, a mechanical fallback summary is used.
+Use `/compact` to trigger compaction manually.
 
-=== Layer 3 -- Auto-Continue
-<agent-compact-continue>
-After compaction occurs during an active streaming session, the agent automatically
-injects a continuation prompt so the LLM resumes its current task without user
-intervention.
+== INPUT QUEUING
+<agent-input-queuing>
+While the agent is executing, you can type follow-up requests. The input line
+appears below the status bar. Press *Enter* to submit; the agent consumes queued
+requests at the start of the next iteration.
 
-#figure(
-  align(center)[#table(
-    columns: (0.5fr, 0.5fr, 1fr),
-    align: (auto, auto, left),
-    table.header([Parameter], [Default], [Description]),
-    table.hline(),
-    [`prune_threshold`], [0.6], [Token ratio to trigger tool output pruning],
-    [`compact_threshold`], [0.8], [Token ratio to trigger LLM summary compaction],
-    [`compaction_model`], [(empty)], [Model for compaction (empty = use primary model)],
-  )],
-  caption: [COMPACTION CONFIGURATION],
-  kind: table,
-)
-
-In interactive mode, the `compact` command triggers compaction manually and reports
-the number of tokens saved.
+Keyboard shortcuts:
+- *Enter* -- Submit input to queue
+- *Backspace* -- Delete last character (CJK/emoji aware)
+- *Ctrl-U* -- Clear line
+- *Ctrl-W* -- Delete last word
+- *ESC* -- Clear line and interrupt the agent
 
 == INTERRUPT HANDLING
 <agent-interrupt>
-Press *ESC* during agent execution to abort the current operation. The interrupt
-cascades through all active subsystems:
-
-- *LLM Streaming*: The HTTP connection is aborted immediately
-- *Tool Execution*: Running bash processes are killed, pending tools are skipped
-- *Message Format*: Skipped tool calls receive `"Aborted by user"` placeholder
-  responses to maintain API message format compliance
-
-After interruption, the agent prints `(interrupted)` and returns to the input
-prompt. Conversation history is preserved, so you can continue the session normally.
-
-The ESC monitor uses `termios` raw mode with `QSocketNotifier` on stdin, which
-works inside nested `QEventLoop` instances (e.g. during bash tool execution).
-
-=== Input Queuing
-<agent-input-queuing>
-While the agent is executing (LLM streaming, tool calls), you can type follow-up
-requests directly. The input line appears below the status bar:
-
-```
-\ Thinking... (1.2k/3.4k 1:54) [21 tools]
-> your follow-up request here
-```
-
-Press *Enter* to submit the request into the queue. The agent consumes queued
-requests at the start of the next iteration, so the LLM sees your new message in
-the following round. Multiple requests can be queued.
-
-Keyboard shortcuts during input:
-- *Enter* -- Submit the current input to the queue
-- *Backspace* -- Delete the last character (CJK and emoji are deleted as a unit)
-- *Ctrl-U* -- Clear the entire input line
-- *Ctrl-W* -- Delete the last word
-- *ESC* -- Clear the input line and interrupt the agent
-
-CJK and multilingual input via IME is fully supported. Raw mode operates at the
-PTY/termios layer, which is architecturally below the terminal emulator's IME
-composition. Characters arrive as complete UTF-8 sequences.
+Press *ESC* to abort the current operation. The interrupt cascades through LLM
+streaming, tool execution, and pending tool calls. Conversation history is
+preserved.
 
 == SECURITY
 <agent-security>
-The agent implements a read-unrestricted, write-restricted permission model:
+The agent uses a read-unrestricted, write-restricted permission model:
 
-- *File Read Access*: File reading and directory listing can access any path on the system
-- *File Write Access*: File writing and editing are restricted to allowed directories only:
-  - Project directory
-  - Working directory
-  - User-added directories (managed at runtime)
-  - System temporary directory (`/tmp`)
-- *Shell Commands*: Bash commands have configurable timeout with no upper limit.
-  Timed-out processes continue running in the background and can be managed separately
-- *Output Truncation*: Large command outputs are truncated to prevent memory issues
+- *Read*: Any path on the system
+- *Write*: Project directory, working directory, user-added directories, `/tmp`
+- *Shell*: Configurable timeout, no upper limit
 
 == CONVERSATION PERSISTENCE
 <agent-persistence>
-The agent automatically saves and loads conversation history. Session state is stored
-in `.qsoc/conversation.json` within the project directory, allowing conversations to
-resume across sessions.
+Session state is saved to `.qsoc/conversation.json` in the project directory,
+allowing conversations to resume across sessions.
 
 == USAGE EXAMPLES
 <agent-examples>
 
-=== Create and Configure a Project
 ```
 qsoc> Create a new project named "soc_design" in the current directory
 qsoc> Import all Verilog files from ./rtl directory
 qsoc> Add AXI4 slave interface to the cpu module
-```
-
-=== Generate RTL
-```
-qsoc> Show the netlist format documentation
 qsoc> Generate Verilog from netlist.yaml with output name "top"
-```
-
-=== Explore the Codebase
-```
-qsoc> List all modules that match "axi.*"
-qsoc> Show details of the dma_controller module
-qsoc> Read the configuration file config.yaml
 ```
