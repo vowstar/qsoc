@@ -150,6 +150,13 @@ void QSocAgent::runStream(const QString &userQuery)
         &QSocAgent::handleStreamError,
         Qt::UniqueConnection);
 
+    connect(
+        llmService,
+        &QLLMService::streamReasoningChunk,
+        this,
+        &QSocAgent::handleReasoningChunk,
+        Qt::UniqueConnection);
+
     /* Start first iteration */
     processStreamIteration();
 }
@@ -163,6 +170,14 @@ void QSocAgent::handleStreamChunk(const QString &chunk)
     totalOutputTokens.fetch_add(chunkTokens);
 
     emit contentChunk(chunk);
+}
+
+void QSocAgent::handleReasoningChunk(const QString &chunk)
+{
+    lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+    int chunkTokens  = estimateTokens(chunk);
+    totalOutputTokens.fetch_add(chunkTokens);
+    emit reasoningChunk(chunk);
 }
 
 void QSocAgent::handleStreamError(const QString &error)
@@ -284,8 +299,15 @@ void QSocAgent::processStreamIteration()
     int inputTokens = estimateMessagesTokens();
     totalInputTokens.fetch_add(inputTokens);
 
+    /* Determine model override for reasoning */
+    QString modelOverride;
+    if (!agentConfig.thinkingLevel.isEmpty() && !agentConfig.reasoningModel.isEmpty()) {
+        modelOverride = agentConfig.reasoningModel;
+    }
+
     /* Send streaming request */
-    llmService->sendChatCompletionStream(messagesWithSystem, tools, agentConfig.temperature);
+    llmService->sendChatCompletionStream(
+        messagesWithSystem, tools, agentConfig.temperature, agentConfig.thinkingLevel, modelOverride);
 }
 
 void QSocAgent::handleStreamComplete(const json &response)
@@ -338,8 +360,8 @@ void QSocAgent::handleStreamComplete(const json &response)
             emit verboseOutput(QString("[Assistant]: %1").arg(content));
         }
 
-        /* Add to history */
-        addMessage("assistant", content);
+        /* Push full message to preserve reasoning_content for DeepSeek R1 */
+        messages.push_back(message);
 
         /* Continue if there are queued requests */
         if (hasPendingRequests()) {
@@ -351,7 +373,8 @@ void QSocAgent::handleStreamComplete(const json &response)
         heartbeatTimer->stop();
         emit runComplete(content);
     } else {
-        addMessage("assistant", "");
+        /* Push full message to preserve reasoning_content for DeepSeek R1 */
+        messages.push_back(message);
 
         /* Continue if there are queued requests */
         if (hasPendingRequests()) {
@@ -567,6 +590,16 @@ void QSocAgent::setLLMService(QLLMService *llmService)
 void QSocAgent::setToolRegistry(QSocToolRegistry *toolRegistry)
 {
     this->toolRegistry = toolRegistry;
+}
+
+void QSocAgent::setThinkingLevel(const QString &level)
+{
+    agentConfig.thinkingLevel = level;
+}
+
+void QSocAgent::setReasoningModel(const QString &model)
+{
+    agentConfig.reasoningModel = model;
 }
 
 void QSocAgent::setConfig(const QSocAgentConfig &config)

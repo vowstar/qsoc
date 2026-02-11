@@ -140,6 +140,18 @@ public:
     void setToolRegistry(QSocToolRegistry *toolRegistry);
 
     /**
+     * @brief Set the thinking/reasoning level
+     * @param level Thinking level: empty/off, "low", "medium", "high"
+     */
+    void setThinkingLevel(const QString &level);
+
+    /**
+     * @brief Set the reasoning model
+     * @param model Model name to use when thinking is enabled (empty=use primary)
+     */
+    void setReasoningModel(const QString &model);
+
+    /**
      * @brief Set the agent configuration
      * @param config Agent configuration
      */
@@ -252,6 +264,12 @@ signals:
      */
     void compacting(int layer, int beforeTokens, int afterTokens);
 
+    /**
+     * @brief Signal emitted for each reasoning chunk during streaming
+     * @param chunk The reasoning content chunk
+     */
+    void reasoningChunk(const QString &chunk);
+
 private:
     QLLMService      *llmService   = nullptr;
     QSocToolRegistry *toolRegistry = nullptr;
@@ -350,6 +368,12 @@ private:
      * @param error Error message
      */
     void handleStreamError(const QString &error);
+
+    /**
+     * @brief Handle reasoning chunk from LLM
+     * @param chunk Reasoning content chunk
+     */
+    void handleReasoningChunk(const QString &chunk);
 
     /**
      * @brief Estimate the number of tokens in a text

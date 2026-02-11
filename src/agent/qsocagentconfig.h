@@ -31,6 +31,12 @@ struct QSocAgentConfig
     /* LLM temperature parameter (0.0-1.0) */
     double temperature = 0.2;
 
+    /* Thinking level: empty=off, "low", "medium", "high" */
+    QString thinkingLevel;
+
+    /* Reasoning model: empty=use primary model when thinking */
+    QString reasoningModel;
+
     /* Enable verbose output */
     bool verbose = true;
 
