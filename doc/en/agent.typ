@@ -62,18 +62,51 @@ The following commands are available during an interactive session:
   kind: table,
 )
 
+== DECISION FLOW
+<agent-decision-flow>
+The agent follows a four-tier decision flow for every request:
+
++ *Tier 1 -- Skills*: Search for matching user-defined skills via `skill_find`.
+  If a skill matches, read and follow its instructions.
++ *Tier 2 -- SoC Infrastructure*: If the request involves clock tree, reset
+  network, power sequencing, or FSM generation, the agent queries built-in
+  documentation (`query_docs`) for the YAML format, writes a `.soc_net` file,
+  and calls `generate_verilog` to produce production-grade RTL. The agent never
+  writes clock/reset/power/FSM Verilog by hand.
++ *Tier 3 -- Plan*: For tasks requiring 3+ steps, decompose into a TODO
+  checklist before execution.
++ *Tier 4 -- Execute*: Use file, shell, generation, or other tools directly.
+
+== SoC INFRASTRUCTURE
+<agent-soc-infrastructure>
+The `generate_verilog` tool produces production RTL from `.soc_net` YAML files
+with four primitive generators:
+
+- *Clock* -- ICG gating, static/dynamic/auto dividers, glitch-free MUX, STA
+  guide buffers, test enable bypass
+- *Reset* -- ARSR synchronizers (async assert / sync release), multi-source
+  matrices, reset reason recording
+- *Power* -- 8-state FSM per domain
+  (OFF→WAIT\_DEP→TURN\_ON→CLK\_ON→ON→RST\_ASSERT→TURN\_OFF), hard/soft
+  dependencies, fault recovery
+- *FSM* -- Table-mode (Moore/Mealy) and microcode-mode, binary/onehot/gray
+  encoding
+
+The agent detects SoC infrastructure requests by keyword (clock, reset, power,
+FSM, etc.) and routes them through Tier 2 automatically.
+
 == CAPABILITIES
 <agent-capabilities>
 The agent provides the following tools through natural language:
 
 - *Project & Module* -- Create projects, import Verilog/SystemVerilog, configure bus interfaces
 - *Bus Interfaces* -- Import and manage bus definitions (AXI, APB, Wishbone, etc.)
-- *Code Generation* -- Generate Verilog RTL from netlist files, render Jinja2 templates
+- *Code Generation* -- Generate Verilog RTL from `.soc_net` netlist files, render Jinja2 templates
 - *File Operations* -- Read any file; write/edit within allowed directories
 - *Shell Execution* -- Run bash commands with timeout; manage background processes
 - *Path Management* -- Configure allowed directories for file write access
 - *Memory & Tasks* -- Persistent notes across sessions; todo list for multi-step workflows
-- *Documentation* -- Query built-in QSoC docs by topic
+- *Documentation* -- Query built-in QSoC docs by topic (15 topics including clock, reset, power, fsm)
 - *Skills* -- User-defined prompt templates (`SKILL.md`) in `.qsoc/skills/` or `~/.config/qsoc/skills/`
 
 == THINKING / REASONING
