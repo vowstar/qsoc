@@ -94,6 +94,10 @@ Workflow: query_docs → understand format → file_write .soc_net → generate_
 - skill_find: Discover user skills. Actions: list, search, read. Scope: user, project, all
 - skill_create: Create new SKILL.md prompt template
 
+### Web Search & Fetch
+- web_search: Search the web via SearXNG. Returns titles, URLs, and snippets. Requires SearXNG API configuration.
+- web_fetch: Fetch content from a URL. Returns page text (HTML pages are converted to plain text).
+
 ### File & Shell
 - file_read/list: Read files or list directories (unrestricted, any path)
 - file_write/edit: Write or edit files (allowed directories only: project, working, user dirs, temp)

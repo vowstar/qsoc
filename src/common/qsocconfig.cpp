@@ -104,6 +104,17 @@ void QSocConfig::loadFromEnvironment()
             setValue(iter.value(), env.value(iter.key()));
         }
     }
+
+    /* Web-specific environment variables */
+    const QMap<QString, QString> webEnvVars
+        = {{"QSOC_WEB_SEARCH_API_URL", "web.search_api_url"},
+           {"QSOC_WEB_SEARCH_API_KEY", "web.search_api_key"}};
+
+    for (auto iter = webEnvVars.constBegin(); iter != webEnvVars.constEnd(); ++iter) {
+        if (env.contains(iter.key())) {
+            setValue(iter.value(), env.value(iter.key()));
+        }
+    }
 }
 
 void QSocConfig::loadFromYamlFile(const QString &filePath, bool override)
@@ -267,7 +278,15 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "#   max_tokens: 128000        # Maximum context tokens\n";
     out << "#   max_iterations: 100       # Safety limit for iterations\n";
     out << "#   system_prompt: |          # Custom system prompt\n";
-    out << "#     You are a helpful assistant.\n";
+    out << "#     You are a helpful assistant.\n\n";
+
+    out << "# =============================================================================\n";
+    out << "# Web Search & Fetch Configuration\n";
+    out << "# =============================================================================\n\n";
+
+    out << "# web:\n";
+    out << "#   search_api_url: http://localhost:8080  # SearXNG API URL\n";
+    out << "#   search_api_key:                        # SearXNG API key (optional)\n";
 
     file.close();
 
