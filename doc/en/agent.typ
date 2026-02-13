@@ -108,6 +108,7 @@ The agent provides the following tools through natural language:
 - *Memory & Tasks* -- Persistent notes across sessions; todo list for multi-step workflows
 - *Documentation* -- Query built-in QSoC docs by topic (15 topics including clock, reset, power, fsm)
 - *Skills* -- User-defined prompt templates (`SKILL.md`) in `.qsoc/skills/` or `~/.config/qsoc/skills/`
+- *Web Access* -- Search the web via SearXNG (`web_search`) and fetch URL content (`web_fetch`)
 
 == THINKING / REASONING
 <agent-thinking>

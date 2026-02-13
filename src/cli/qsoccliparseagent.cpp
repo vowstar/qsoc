@@ -17,6 +17,7 @@
 #include "agent/tool/qsoctoolshell.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctooltodo.h"
+#include "agent/tool/qsoctoolweb.h"
 #include "cli/qagentinputmonitor.h"
 #include "cli/qagentreadline.h"
 #include "cli/qagentstatusline.h"
@@ -391,6 +392,15 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(skillFindTool);
     toolRegistry->registerTool(skillCreateTool);
 
+    /* Web tools */
+    auto *webFetchTool = new QSocToolWebFetch(this, socConfig);
+    toolRegistry->registerTool(webFetchTool);
+
+    if (socConfig && !socConfig->getValue("web.search_api_url").isEmpty()) {
+        auto *webSearchTool = new QSocToolWebSearch(this, socConfig);
+        toolRegistry->registerTool(webSearchTool);
+    }
+
     /* Create agent */
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);
 
@@ -687,6 +697,11 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                 } else if (args.contains("regex")) {
                                     detail = QString::fromStdString(
                                         args["regex"].get<std::string>());
+                                } else if (args.contains("query")) {
+                                    detail = QString::fromStdString(
+                                        args["query"].get<std::string>());
+                                } else if (args.contains("url")) {
+                                    detail = QString::fromStdString(args["url"].get<std::string>());
                                 } else if (args.contains("id")) {
                                     int     todoId = args["id"].get<int>();
                                     QString title  = statusLine.getTodoTitle(todoId);
@@ -1020,6 +1035,11 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                 } else if (args.contains("regex")) {
                                     detail = QString::fromStdString(
                                         args["regex"].get<std::string>());
+                                } else if (args.contains("query")) {
+                                    detail = QString::fromStdString(
+                                        args["query"].get<std::string>());
+                                } else if (args.contains("url")) {
+                                    detail = QString::fromStdString(args["url"].get<std::string>());
                                 } else if (args.contains("id")) {
                                     int     todoId = args["id"].get<int>();
                                     QString title  = statusLine.getTodoTitle(todoId);
@@ -1442,6 +1462,10 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                             detail = QString::fromStdString(args["name"].get<std::string>());
                         } else if (args.contains("regex")) {
                             detail = QString::fromStdString(args["regex"].get<std::string>());
+                        } else if (args.contains("query")) {
+                            detail = QString::fromStdString(args["query"].get<std::string>());
+                        } else if (args.contains("url")) {
+                            detail = QString::fromStdString(args["url"].get<std::string>());
                         } else if (args.contains("id")) {
                             /* todo_update, todo_delete - id only, title from result */
                             detail = "#" + QString::number(args["id"].get<int>());
@@ -1709,6 +1733,10 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                             detail = QString::fromStdString(args["name"].get<std::string>());
                         } else if (args.contains("regex")) {
                             detail = QString::fromStdString(args["regex"].get<std::string>());
+                        } else if (args.contains("query")) {
+                            detail = QString::fromStdString(args["query"].get<std::string>());
+                        } else if (args.contains("url")) {
+                            detail = QString::fromStdString(args["url"].get<std::string>());
                         } else if (args.contains("id")) {
                             /* todo_update, todo_delete - id only, title from result */
                             detail = "#" + QString::number(args["id"].get<int>());

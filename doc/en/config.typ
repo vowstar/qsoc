@@ -161,6 +161,34 @@ These settings can also be overridden by command-line options (see @agent-comman
   kind: table,
 )
 
+== WEB CONFIGURATION
+<web-config>
+The agent can search the web via SearXNG and fetch URL content. Web search
+requires a SearXNG instance URL to be configured; web fetch works without
+configuration.
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [web.search_api_url], [SearXNG instance URL (e.g., `http://localhost:8080`). Required for `web_search`.],
+    [web.search_api_key], [SearXNG API key (optional)],
+  )],
+  caption: [WEB CONFIGURATION OPTIONS],
+  kind: table,
+)
+
+Environment variables: `QSOC_WEB_SEARCH_API_URL`, `QSOC_WEB_SEARCH_API_KEY`.
+
+Example:
+```yaml
+web:
+  search_api_url: http://localhost:8080
+  search_api_key: my-secret-key
+```
+
 == COMPLETE CONFIGURATION EXAMPLE
 <config-example>
 Below is an example of a complete QSoC configuration file:
@@ -184,6 +212,10 @@ proxy:
   type: http
   host: 127.0.0.1
   port: 7890
+
+# Web Search (optional, requires SearXNG)
+web:
+  search_api_url: http://localhost:8080
 ```
 
 == AUTOMATIC TEMPLATE CREATION
