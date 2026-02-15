@@ -54,7 +54,7 @@ public:
     QString execute(const json &arguments) override;
     void    abort() override;
 
-    static QString htmlToText(const QString &html);
+    static QString htmlToMarkdown(const QString &html);
 
 private:
     QSocConfig            *config         = nullptr;
