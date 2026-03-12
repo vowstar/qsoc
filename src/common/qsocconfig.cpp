@@ -96,6 +96,7 @@ void QSocConfig::loadFromEnvironment()
     const QMap<QString, QString> agentEnvVars
         = {{"QSOC_AGENT_TEMPERATURE", "agent.temperature"},
            {"QSOC_AGENT_MAX_TOKENS", "agent.max_tokens"},
+           {"QSOC_AGENT_MAX_OUTPUT_TOKENS", "agent.max_output_tokens"},
            {"QSOC_AGENT_MAX_ITERATIONS", "agent.max_iterations"},
            {"QSOC_AGENT_SYSTEM_PROMPT", "agent.system_prompt"}};
 
@@ -276,6 +277,7 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "# agent:\n";
     out << "#   temperature: 0.2          # LLM temperature (0.0-1.0)\n";
     out << "#   max_tokens: 128000        # Maximum context tokens\n";
+    out << "#   max_output_tokens: 16384  # Maximum output tokens per response\n";
     out << "#   max_iterations: 100       # Safety limit for iterations\n";
     out << "#   system_prompt: |          # Custom system prompt\n";
     out << "#     You are a helpful assistant.\n\n";

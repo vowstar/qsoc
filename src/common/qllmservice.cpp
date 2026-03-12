@@ -479,7 +479,8 @@ void QLLMService::sendChatCompletionStream(
     const json    &tools,
     double         temperature,
     const QString &reasoningEffort,
-    const QString &modelOverride)
+    const QString &modelOverride,
+    int            maxOutputTokens)
 {
     if (!hasEndpoint()) {
         emit streamError("No LLM endpoint configured");
@@ -521,6 +522,11 @@ void QLLMService::sendChatCompletionStream(
 
     if (!tools.empty()) {
         payload["tools"] = tools;
+    }
+
+    /* Set max output tokens if specified */
+    if (maxOutputTokens > 0) {
+        payload["max_tokens"] = maxOutputTokens;
     }
 
     /* Reset streaming state */
@@ -793,7 +799,8 @@ json QLLMService::buildStreamResponse(const QString &content, const QMap<int, js
     return {{"choices", json::array({{{"message", message}}})}};
 }
 
-json QLLMService::sendChatCompletion(const json &messages, const json &tools, double temperature)
+json QLLMService::sendChatCompletion(
+    const json &messages, const json &tools, double temperature, int maxOutputTokens)
 {
     if (!hasEndpoint()) {
         return {{"error", "No LLM endpoint configured"}};
@@ -819,6 +826,11 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
         /* Add tools if provided */
         if (!tools.empty()) {
             payload["tools"] = tools;
+        }
+
+        /* Set max output tokens if specified */
+        if (maxOutputTokens > 0) {
+            payload["max_tokens"] = maxOutputTokens;
         }
 
         QEventLoop     loop;

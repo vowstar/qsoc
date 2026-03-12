@@ -16,6 +16,9 @@ struct QSocAgentConfig
     /* Maximum context tokens before compression */
     int maxContextTokens = 128000;
 
+    /* Maximum output tokens per response (0 = API default) */
+    int maxOutputTokens = 16384;
+
     /* Layer 1: Tool output pruning */
     double pruneThreshold      = 0.6;   /* 60% triggers pruning */
     int    pruneProtectTokens  = 40000; /* Protect recent 40k tokens of tool output */
