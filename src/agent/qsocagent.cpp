@@ -307,7 +307,12 @@ void QSocAgent::processStreamIteration()
 
     /* Send streaming request */
     llmService->sendChatCompletionStream(
-        messagesWithSystem, tools, agentConfig.temperature, agentConfig.thinkingLevel, modelOverride);
+        messagesWithSystem,
+        tools,
+        agentConfig.temperature,
+        agentConfig.thinkingLevel,
+        modelOverride,
+        agentConfig.maxOutputTokens);
 }
 
 void QSocAgent::handleStreamComplete(const json &response)
@@ -413,8 +418,8 @@ bool QSocAgent::processIteration()
     json tools = toolRegistry->getToolDefinitions();
 
     /* Call LLM */
-    json response
-        = llmService->sendChatCompletion(messagesWithSystem, tools, agentConfig.temperature);
+    json response = llmService->sendChatCompletion(
+        messagesWithSystem, tools, agentConfig.temperature, agentConfig.maxOutputTokens);
 
     /* Check for errors */
     if (response.contains("error")) {

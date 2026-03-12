@@ -311,6 +311,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             config.maxContextTokens = maxTokensStr.toInt();
         }
 
+        QString maxOutputTokensStr = socConfig->getValue("agent.max_output_tokens");
+        if (!maxOutputTokensStr.isEmpty()) {
+            config.maxOutputTokens = maxOutputTokensStr.toInt();
+        }
+
         QString maxIterStr = socConfig->getValue("agent.max_iterations");
         if (!maxIterStr.isEmpty()) {
             config.maxIterations = maxIterStr.toInt();

@@ -171,7 +171,10 @@ public slots:
      * @return Full JSON response from the LLM (may contain tool_calls)
      */
     json sendChatCompletion(
-        const json &messages, const json &tools = json::array(), double temperature = 0.2);
+        const json &messages,
+        const json &tools           = json::array(),
+        double      temperature     = 0.2,
+        int         maxOutputTokens = 0);
 
     /**
      * @brief Send streaming chat completion with tool definitions (Agent mode)
@@ -186,7 +189,8 @@ public slots:
         const json    &tools           = json::array(),
         double         temperature     = 0.2,
         const QString &reasoningEffort = QString(),
-        const QString &modelOverride   = QString());
+        const QString &modelOverride   = QString(),
+        int            maxOutputTokens = 0);
 
     /**
      * @brief Abort the current streaming request
