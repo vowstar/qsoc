@@ -60,6 +60,11 @@ signals:
     void escPressed();
 
     /**
+     * @brief Emitted when Ctrl+C is detected (byte 0x03)
+     */
+    void ctrlCPressed();
+
+    /**
      * @brief Emitted when user presses Enter with non-empty input
      * @param text Complete input line
      */

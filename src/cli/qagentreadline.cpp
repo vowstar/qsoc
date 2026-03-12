@@ -59,15 +59,25 @@ void QAgentReadline::setupKeyBindings()
 
     /* Ctrl+W to delete word */
     replxxInstance->bind_key_internal(replxx::Replxx::KEY::control('W'), "kill_to_begining_of_word");
+
+    /* Ctrl+C to interrupt (set flag and bail) */
+    replxxInstance->bind_key(replxx::Replxx::KEY::control('C'), [this](char32_t) {
+        ctrlCFlag = true;
+        return replxx::Replxx::ACTION_RESULT::BAIL;
+    });
 }
 
 QString QAgentReadline::readLine(const QString &prompt)
 {
-    eofFlag = false;
+    eofFlag   = false;
+    ctrlCFlag = false;
 
     const char *result = replxxInstance->input(prompt.toStdString());
 
     if (result == nullptr) {
+        if (ctrlCFlag) {
+            return QString();
+        }
         eofFlag = true;
         return QString();
     }
@@ -85,6 +95,11 @@ QString QAgentReadline::readLine(const QString &prompt)
 bool QAgentReadline::isEof() const
 {
     return eofFlag;
+}
+
+bool QAgentReadline::isCtrlC() const
+{
+    return ctrlCFlag;
 }
 
 void QAgentReadline::setHistoryFile(const QString &path)

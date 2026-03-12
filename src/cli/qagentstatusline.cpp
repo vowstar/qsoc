@@ -282,6 +282,26 @@ void QAgentStatusLine::stop()
     inputLineText.clear();
 }
 
+void QAgentStatusLine::pause()
+{
+    if (!active) {
+        return;
+    }
+
+    spinnerTimer->stop();
+    clearLine();
+}
+
+void QAgentStatusLine::resume()
+{
+    if (!active) {
+        return;
+    }
+
+    render();
+    spinnerTimer->start(100);
+}
+
 bool QAgentStatusLine::isActive() const
 {
     return active;
@@ -447,8 +467,13 @@ void QAgentStatusLine::render()
 
     /* Output input line below status bar if user is typing */
     if (!inputLineText.isEmpty()) {
-        QString inputDisplay = "> " + inputLineText;
-        inputDisplay         = truncateToVisualWidth(inputDisplay, termWidth - 1);
+        QString inputDisplay;
+        if (inputLineText.startsWith("!")) {
+            inputDisplay = "\033[33m! \033[0m" + inputLineText.mid(1);
+        } else {
+            inputDisplay = "> " + inputLineText;
+        }
+        inputDisplay = truncateToVisualWidth(inputDisplay, termWidth - 1);
         out << "\n" << inputDisplay;
     }
 
