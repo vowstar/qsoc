@@ -69,6 +69,15 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
+        /* Ctrl+C: interrupt */
+        if (byte == 0x03) {
+            inputBuffer.clear();
+            utf8Pending.clear();
+            emit inputChanged(inputBuffer);
+            emit ctrlCPressed();
+            return;
+        }
+
         /* ESC: abort (clears input buffer first) */
         if (byte == 0x1B) {
             inputBuffer.clear();
@@ -148,7 +157,7 @@ void QAgentInputMonitor::start()
 
         /* Enter raw mode: non-canonical, no echo */
         struct termios raw = origTermios;
-        raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+        raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO | ISIG);
         raw.c_cc[VMIN]  = 0;
         raw.c_cc[VTIME] = 0;
         tcsetattr(STDIN_FILENO, TCSANOW, &raw);

@@ -74,6 +74,18 @@ public:
     void stop();
 
     /**
+     * @brief Temporarily hide status line for external terminal I/O
+     * @details Stops spinner timer and clears display, preserving all state.
+     */
+    void pause();
+
+    /**
+     * @brief Restore status line after pause()
+     * @details Redraws display and restarts spinner timer.
+     */
+    void resume();
+
+    /**
      * @brief Check if status line is currently active
      * @return True if active
      */

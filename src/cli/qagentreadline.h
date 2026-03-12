@@ -71,6 +71,12 @@ public:
     bool isEof() const;
 
     /**
+     * @brief Check if last input was interrupted by Ctrl+C
+     * @return True if last readLine() returned due to Ctrl+C
+     */
+    bool isCtrlC() const;
+
+    /**
      * @brief Set the history file path
      * @param path Path to history file (will be created if not exists)
      */
@@ -162,7 +168,8 @@ private:
     std::unique_ptr<replxx::Replxx> replxxInstance;
     QTerminalCapability             termCap;
     QString                         historyFilePath;
-    bool                            eofFlag = false;
+    bool                            eofFlag   = false;
+    bool                            ctrlCFlag = false;
     CompletionCallback              completionCallback;
     HintCallback                    hintCallback;
 

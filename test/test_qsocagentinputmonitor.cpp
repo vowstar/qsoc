@@ -411,10 +411,28 @@ private slots:
             changeCount++;
         });
 
-        /* Control chars 0x01-0x07 should be ignored (except handled ones) */
-        const char data[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
-        monitor.processBytes(data, 7);
+        /* Control chars should be ignored (except 0x03=Ctrl+C and other handled ones) */
+        const char data[] = {0x01, 0x02, 0x04, 0x05, 0x06, 0x07};
+        monitor.processBytes(data, 6);
         QCOMPARE(changeCount, 0);
+    }
+
+    void testCtrlCEmitsSignal()
+    {
+        QAgentInputMonitor monitor;
+        int                ctrlCCount  = 0;
+        int                changeCount = 0;
+
+        connect(&monitor, &QAgentInputMonitor::ctrlCPressed, [&ctrlCCount]() { ctrlCCount++; });
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&changeCount](const QString &) {
+            changeCount++;
+        });
+
+        /* Ctrl+C (0x03) should emit ctrlCPressed and clear buffer */
+        const char ctrlC = 0x03;
+        monitor.processBytes(&ctrlC, 1);
+        QCOMPARE(ctrlCCount, 1);
+        QCOMPARE(changeCount, 1); /* inputChanged emitted to clear buffer */
     }
 
     void testStopClearsInputState()

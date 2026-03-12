@@ -24,6 +24,7 @@
 #include "cli/qterminalcapability.h"
 #include "common/qstaticlog.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
@@ -32,7 +33,40 @@
 #include <QRegularExpression>
 #include <QTextStream>
 
+#include <atomic>
+#include <csignal>
+#include <cstdlib>
+#include <sys/wait.h>
+
 namespace {
+
+/* Double Ctrl+C exit tracking */
+std::atomic<qint64> g_lastInterruptMs{0};
+constexpr qint64    DOUBLE_PRESS_MS = 2000;
+
+bool checkDoubleInterrupt()
+{
+    qint64 now  = QDateTime::currentMSecsSinceEpoch();
+    qint64 last = g_lastInterruptMs.exchange(now);
+    return (last > 0 && (now - last) < DOUBLE_PRESS_MS);
+}
+
+/* SIGINT handler for non-raw-mode states */
+volatile sig_atomic_t g_sigintReceived = 0;
+
+void sigintHandler(int)
+{
+    g_sigintReceived = 1;
+}
+
+void installSigintHandler()
+{
+    struct sigaction sigact = {};
+    sigact.sa_handler       = sigintHandler;
+    sigemptyset(&sigact.sa_mask);
+    sigact.sa_flags = 0;
+    sigaction(SIGINT, &sigact, nullptr);
+}
 
 /**
  * @brief Parse todo_list result into structured items
@@ -104,6 +138,39 @@ QPair<int, QString> parseTodoUpdateResult(const QString &result)
     }
 
     return qMakePair(-1, QString());
+}
+
+/**
+ * @brief Execute a shell escape command with real-time terminal I/O
+ * @param command The shell command to execute
+ * @param supportsColor Whether the terminal supports ANSI colors
+ * @details Uses std::system() so the child process inherits the terminal directly.
+ *          Supports Ctrl+C (POSIX: parent ignores SIGINT, child gets it) and has no timeout.
+ */
+void runShellEscape(const QString &command, bool supportsColor)
+{
+    QTextStream out(stdout);
+    if (supportsColor) {
+        out << "\033[33m$ " << command << "\033[0m" << Qt::endl;
+    } else {
+        out << "$ " << command << Qt::endl;
+    }
+    out.flush();
+
+    int ret = std::system(qPrintable(command));
+
+    if (WIFEXITED(ret)) {
+        int exitCode = WEXITSTATUS(ret);
+        if (exitCode != 0) {
+            if (supportsColor) {
+                out << "\033[31m(exit code: " << exitCode << ")\033[0m" << Qt::endl;
+            } else {
+                out << "(exit code: " << exitCode << ")" << Qt::endl;
+            }
+        }
+    } else if (WIFSIGNALED(ret)) {
+        out << "(signal: " << WTERMSIG(ret) << ")" << Qt::endl;
+    }
 }
 
 /**
@@ -420,6 +487,9 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         QStaticLog::logD(Q_FUNC_INFO, QString("Tool result: %1 -> %2").arg(toolName, truncated));
     });
 
+    /* Install SIGINT handler for Ctrl+C support in non-raw-mode states */
+    installSigintHandler();
+
     /* Check if single query mode */
     if (parser.isSet("query")) {
         QString     query = parser.value("query");
@@ -455,11 +525,29 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             /* ESC key monitor */
             QAgentInputMonitor escMonitor;
             connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            connect(&escMonitor, &QAgentInputMonitor::ctrlCPressed, agent, [agent, &escMonitor]() {
+                if (checkDoubleInterrupt()) {
+                    escMonitor.stop();
+                    QTextStream(stderr) << "\n" << Qt::flush;
+                    _exit(130);
+                }
+                agent->abort();
+            });
             connect(
                 &escMonitor,
                 &QAgentInputMonitor::inputReady,
                 agent,
-                [agent, &qout](const QString &text) {
+                [agent, &qout, &escMonitor](const QString &text) {
+                    if (text.startsWith("!")) {
+                        QString shellCmd = text.mid(1).trimmed();
+                        if (!shellCmd.isEmpty()) {
+                            qout << "\n" << Qt::flush;
+                            escMonitor.stop();
+                            runShellEscape(shellCmd, true);
+                            escMonitor.start();
+                        }
+                        return;
+                    }
                     agent->queueRequest(text);
                     qout << "\n(queued: " << text << ")\n" << Qt::flush;
                 });
@@ -592,8 +680,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             qout << "qsoc> " << Qt::flush;
             input = qin.readLine();
 
-            /* Check for EOF */
+            /* Check for EOF or SIGINT */
             if (input.isNull()) {
+                if (g_sigintReceived) {
+                    g_sigintReceived = 0;
+                    if (checkDoubleInterrupt()) {
+                        qout << Qt::endl;
+                        break;
+                    }
+                    qout << Qt::endl;
+                    continue;
+                }
                 qout << Qt::endl << "Goodbye!" << Qt::endl;
                 break;
             }
@@ -603,6 +700,13 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
 
         /* Handle special commands (slash-prefixed, exit/quit also work without slash) */
         if (input.isEmpty()) {
+            continue;
+        }
+        if (input.startsWith("!")) {
+            QString shellCmd = input.mid(1).trimmed();
+            if (!shellCmd.isEmpty()) {
+                runShellEscape(shellCmd, termCap.supportsColor());
+            }
             continue;
         }
         QString cmd = input.toLower();
@@ -626,6 +730,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             qout << "  /clear       - Clear conversation history" << Qt::endl;
             qout << "  /compact     - Compact conversation context" << Qt::endl;
             qout << "  /thinking    - Show/set thinking level (off/low/medium/high)" << Qt::endl;
+            qout << "  !<command>   - Execute a shell command directly" << Qt::endl;
             qout << "  /help        - Show this help message" << Qt::endl;
             qout << Qt::endl;
             qout << "Or just type your question/request in natural language." << Qt::endl;
@@ -900,6 +1005,21 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             /* ESC key monitor */
             QAgentInputMonitor escMonitor;
             QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::ctrlCPressed,
+                agent,
+                [agent, &statusLine, useStatusLine, &escMonitor]() {
+                    if (checkDoubleInterrupt()) {
+                        if (useStatusLine) {
+                            statusLine.stop();
+                        }
+                        escMonitor.stop();
+                        QTextStream(stderr) << "\n" << Qt::flush;
+                        _exit(130);
+                    }
+                    agent->abort();
+                });
 
             /* Connect reasoning chunk display */
             if (useStatusLine) {
@@ -919,7 +1039,23 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     &escMonitor,
                     &QAgentInputMonitor::inputReady,
                     agent,
-                    [agent, &statusLine, useStatusLine, &qout](const QString &text) {
+                    [agent, &statusLine, useStatusLine, &qout, &escMonitor](const QString &text) {
+                        if (text.startsWith("!")) {
+                            QString shellCmd = text.mid(1).trimmed();
+                            if (!shellCmd.isEmpty()) {
+                                if (useStatusLine) {
+                                    statusLine.pause();
+                                }
+                                qout << "\n" << Qt::flush;
+                                escMonitor.stop();
+                                runShellEscape(shellCmd, true);
+                                escMonitor.start();
+                                if (useStatusLine) {
+                                    statusLine.resume();
+                                }
+                            }
+                            return;
+                        }
                         if (text.startsWith("/thinking")) {
                             QString level = text.mid(9).trimmed().toLower();
                             if (level.isEmpty()) {
@@ -1231,6 +1367,21 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             /* ESC key monitor */
             QAgentInputMonitor escMonitor;
             QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::ctrlCPressed,
+                agent,
+                [agent, &statusLine, useStatusLine, &escMonitor]() {
+                    if (checkDoubleInterrupt()) {
+                        if (useStatusLine) {
+                            statusLine.stop();
+                        }
+                        escMonitor.stop();
+                        QTextStream(stderr) << "\n" << Qt::flush;
+                        _exit(130);
+                    }
+                    agent->abort();
+                });
 
             /* Connect input queuing signals */
             connections.append(
@@ -1238,7 +1389,23 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     &escMonitor,
                     &QAgentInputMonitor::inputReady,
                     agent,
-                    [agent, &statusLine, useStatusLine, &qout](const QString &text) {
+                    [agent, &statusLine, useStatusLine, &qout, &escMonitor](const QString &text) {
+                        if (text.startsWith("!")) {
+                            QString shellCmd = text.mid(1).trimmed();
+                            if (!shellCmd.isEmpty()) {
+                                if (useStatusLine) {
+                                    statusLine.pause();
+                                }
+                                qout << "\n" << Qt::flush;
+                                escMonitor.stop();
+                                runShellEscape(shellCmd, true);
+                                escMonitor.start();
+                                if (useStatusLine) {
+                                    statusLine.resume();
+                                }
+                            }
+                            return;
+                        }
                         if (text.startsWith("/thinking")) {
                             QString level = text.mid(9).trimmed().toLower();
                             if (level.isEmpty()) {
@@ -1368,10 +1535,27 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             break;
         }
 
+        /* Check for Ctrl+C */
+        if (readline->isCtrlC()) {
+            if (checkDoubleInterrupt()) {
+                qout << Qt::endl;
+                break;
+            }
+            qout << Qt::endl;
+            continue;
+        }
+
         input = input.trimmed();
 
         /* Handle special commands (slash-prefixed, exit/quit also work without slash) */
         if (input.isEmpty()) {
+            continue;
+        }
+        if (input.startsWith("!")) {
+            QString shellCmd = input.mid(1).trimmed();
+            if (!shellCmd.isEmpty()) {
+                runShellEscape(shellCmd, readline->terminalCapability().supportsColor());
+            }
             continue;
         }
         QString cmd = input.toLower();
@@ -1391,6 +1575,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             qout << "  /clear       - Clear conversation history" << Qt::endl;
             qout << "  /compact     - Compact conversation context" << Qt::endl;
             qout << "  /thinking    - Show/set thinking level (off/low/medium/high)" << Qt::endl;
+            qout << "  !<command>   - Execute a shell command directly" << Qt::endl;
             qout << "  /help        - Show this help message" << Qt::endl;
             qout << Qt::endl;
             qout << "Keyboard shortcuts:" << Qt::endl;
@@ -1617,6 +1802,19 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             /* ESC key monitor */
             QAgentInputMonitor escMonitor;
             QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            auto connCtrlC = QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::ctrlCPressed,
+                agent,
+                [agent, &statusLine, &escMonitor]() {
+                    if (checkDoubleInterrupt()) {
+                        statusLine.stop();
+                        escMonitor.stop();
+                        QTextStream(stderr) << "\n" << Qt::flush;
+                        _exit(130);
+                    }
+                    agent->abort();
+                });
 
             /* Connect reasoning chunk display */
             auto connReasoning = QObject::connect(
@@ -1629,7 +1827,18 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 &escMonitor,
                 &QAgentInputMonitor::inputReady,
                 agent,
-                [agent, &statusLine](const QString &text) {
+                [agent, &statusLine, &escMonitor](const QString &text) {
+                    if (text.startsWith("!")) {
+                        QString shellCmd = text.mid(1).trimmed();
+                        if (!shellCmd.isEmpty()) {
+                            statusLine.pause();
+                            escMonitor.stop();
+                            runShellEscape(shellCmd, true);
+                            escMonitor.start();
+                            statusLine.resume();
+                        }
+                        return;
+                    }
                     if (text.startsWith("/thinking")) {
                         QString level = text.mid(9).trimmed().toLower();
                         if (level.isEmpty()) {
@@ -1698,6 +1907,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connRetry);
             QObject::disconnect(connCompact);
             QObject::disconnect(connAborted);
+            QObject::disconnect(connCtrlC);
             QObject::disconnect(connInputReady);
             QObject::disconnect(connProcessingQueued);
             QObject::disconnect(connInputChanged);
@@ -1888,13 +2098,37 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             /* ESC key monitor */
             QAgentInputMonitor escMonitor;
             QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            auto connCtrlC = QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::ctrlCPressed,
+                agent,
+                [agent, &statusLine, &escMonitor]() {
+                    if (checkDoubleInterrupt()) {
+                        statusLine.stop();
+                        escMonitor.stop();
+                        QTextStream(stderr) << "\n" << Qt::flush;
+                        _exit(130);
+                    }
+                    agent->abort();
+                });
 
             /* Connect input queuing signals */
             auto connInputReady = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::inputReady,
                 agent,
-                [agent, &statusLine](const QString &text) {
+                [agent, &statusLine, &escMonitor](const QString &text) {
+                    if (text.startsWith("!")) {
+                        QString shellCmd = text.mid(1).trimmed();
+                        if (!shellCmd.isEmpty()) {
+                            statusLine.pause();
+                            escMonitor.stop();
+                            runShellEscape(shellCmd, true);
+                            escMonitor.start();
+                            statusLine.resume();
+                        }
+                        return;
+                    }
                     if (text.startsWith("/thinking")) {
                         QString level = text.mid(9).trimmed().toLower();
                         if (level.isEmpty()) {
@@ -1967,6 +2201,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connRetry);
             QObject::disconnect(connCompact);
             QObject::disconnect(connAborted);
+            QObject::disconnect(connCtrlC);
             QObject::disconnect(connInputReady);
             QObject::disconnect(connProcessingQueued);
             QObject::disconnect(connInputChanged);
