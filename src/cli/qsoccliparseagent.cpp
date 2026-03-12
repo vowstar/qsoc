@@ -1529,13 +1529,23 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
     while (true) {
         QString input = readline->readLine("qsoc> ");
 
-        /* Check for EOF */
+        /* Check for EOF or Ctrl+C */
         if (readline->isEof()) {
+            /* Fallback: SIGINT may interrupt replxx before key binding fires */
+            if (g_sigintReceived) {
+                g_sigintReceived = 0;
+                if (checkDoubleInterrupt()) {
+                    qout << Qt::endl;
+                    break;
+                }
+                qout << Qt::endl;
+                continue;
+            }
             qout << Qt::endl << "Goodbye!" << Qt::endl;
             break;
         }
 
-        /* Check for Ctrl+C */
+        /* Check for Ctrl+C (replxx key binding path) */
         if (readline->isCtrlC()) {
             if (checkDoubleInterrupt()) {
                 qout << Qt::endl;
