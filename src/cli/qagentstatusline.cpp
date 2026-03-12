@@ -420,8 +420,8 @@ void QAgentStatusLine::render()
         out << "\033[?7h"; /* Re-enable auto-wrap */
     }
 
-    /* Separator between partial content and TODO items */
-    if (!currentPartialLine.isEmpty() && todoLineCount > 0) {
+    /* Separator: newline after partial content so status line is on its own line */
+    if (!currentPartialLine.isEmpty()) {
         out << "\n";
     }
 
@@ -458,7 +458,7 @@ void QAgentStatusLine::render()
     }
 
     /* Update displayed line count: truncation + DECAWM guarantees no wrapping */
-    int hasSeparator       = (!currentPartialLine.isEmpty() && todoLineCount > 0) ? 1 : 0;
+    int hasSeparator       = !currentPartialLine.isEmpty() ? 1 : 0;
     int hasInputLine       = !inputLineText.isEmpty() ? 1 : 0;
     displayedTodoLineCount = hasSeparator + todoLineCount + queueLineCount + hasInputLine;
 
