@@ -330,6 +330,7 @@ private:
     QMap<int, json> streamAccumulatedToolCalls;
     bool            streamCompleted = false;
     QString         streamAccumulatedReasoning;
+    bool            reasoningModeActive = false;
 };
 
 #endif // QLLMSERVICE_H

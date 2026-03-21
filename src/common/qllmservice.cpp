@@ -529,6 +529,9 @@ void QLLMService::sendChatCompletionStream(
         payload["max_tokens"] = maxOutputTokens;
     }
 
+    /* Track whether reasoning mode is active for buildStreamResponse */
+    reasoningModeActive = !reasoningEffort.isEmpty();
+
     /* Reset streaming state */
     streamBuffer.clear();
     streamAccumulatedContent.clear();
@@ -782,10 +785,13 @@ json QLLMService::buildStreamResponse(const QString &content, const QMap<int, js
         message["content"] = nullptr;
     }
 
-    /* DeepSeek R1 requires reasoning_content in assistant messages.
-     * Without this, subsequent API calls fail with "Missing reasoning_content field". */
+    /* DeepSeek R1 requires reasoning_content in ALL assistant messages when thinking
+     * mode is active. Without this, subsequent API calls fail with
+     * "Missing reasoning_content field". Always include the field. */
     if (!streamAccumulatedReasoning.isEmpty()) {
         message["reasoning_content"] = streamAccumulatedReasoning.toStdString();
+    } else if (reasoningModeActive) {
+        message["reasoning_content"] = "";
     }
 
     if (!toolCalls.isEmpty()) {
