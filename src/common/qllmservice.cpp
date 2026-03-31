@@ -234,6 +234,12 @@ void QLLMService::loadConfigSettings()
             endpoint.timeout = timeoutStr.toInt();
         }
 
+        /* Get max output tokens if configured */
+        QString maxOutputStr = config->getValue("llm.max_output_tokens");
+        if (!maxOutputStr.isEmpty()) {
+            endpoint.maxOutputTokens = maxOutputStr.toInt();
+        }
+
         endpoints.append(endpoint);
     }
 
@@ -479,8 +485,7 @@ void QLLMService::sendChatCompletionStream(
     const json    &tools,
     double         temperature,
     const QString &reasoningEffort,
-    const QString &modelOverride,
-    int            maxOutputTokens)
+    const QString &modelOverride)
 {
     if (!hasEndpoint()) {
         emit streamError("No LLM endpoint configured");
@@ -524,9 +529,9 @@ void QLLMService::sendChatCompletionStream(
         payload["tools"] = tools;
     }
 
-    /* Set max output tokens if specified */
-    if (maxOutputTokens > 0) {
-        payload["max_tokens"] = maxOutputTokens;
+    /* Set max output tokens from endpoint config */
+    if (endpoint.maxOutputTokens > 0) {
+        payload["max_tokens"] = endpoint.maxOutputTokens;
     }
 
     /* Track whether reasoning mode is active for buildStreamResponse */
@@ -805,8 +810,7 @@ json QLLMService::buildStreamResponse(const QString &content, const QMap<int, js
     return {{"choices", json::array({{{"message", message}}})}};
 }
 
-json QLLMService::sendChatCompletion(
-    const json &messages, const json &tools, double temperature, int maxOutputTokens)
+json QLLMService::sendChatCompletion(const json &messages, const json &tools, double temperature)
 {
     if (!hasEndpoint()) {
         return {{"error", "No LLM endpoint configured"}};
@@ -834,9 +838,9 @@ json QLLMService::sendChatCompletion(
             payload["tools"] = tools;
         }
 
-        /* Set max output tokens if specified */
-        if (maxOutputTokens > 0) {
-            payload["max_tokens"] = maxOutputTokens;
+        /* Set max output tokens from endpoint config */
+        if (endpoint.maxOutputTokens > 0) {
+            payload["max_tokens"] = endpoint.maxOutputTokens;
         }
 
         QEventLoop     loop;

@@ -5,6 +5,7 @@
 #define QSOCAGENT_H
 
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocmemorymanager.h"
 #include "agent/qsoctool.h"
 #include "common/qllmservice.h"
 
@@ -152,6 +153,12 @@ public:
     void setReasoningModel(const QString &model);
 
     /**
+     * @brief Set the memory manager for persistent memory injection
+     * @param manager Pointer to the memory manager
+     */
+    void setMemoryManager(QSocMemoryManager *manager);
+
+    /**
      * @brief Set the agent configuration
      * @param config Agent configuration
      */
@@ -271,10 +278,11 @@ signals:
     void reasoningChunk(const QString &chunk);
 
 private:
-    QLLMService      *llmService   = nullptr;
-    QSocToolRegistry *toolRegistry = nullptr;
-    QSocAgentConfig   agentConfig;
-    json              messages;
+    QLLMService       *llmService    = nullptr;
+    QSocToolRegistry  *toolRegistry  = nullptr;
+    QSocMemoryManager *memoryManager = nullptr;
+    QSocAgentConfig    agentConfig;
+    json               messages;
 
     /* Streaming state */
     bool    isStreaming     = false;
@@ -387,6 +395,12 @@ private:
      * @return Estimated token count for all messages
      */
     int estimateMessagesTokens() const;
+
+    /**
+     * @brief Build system prompt with auto-injected memory content
+     * @return System prompt with memory section appended
+     */
+    QString buildSystemPromptWithMemory() const;
 };
 
 #endif // QSOCAGENT_H

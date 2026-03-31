@@ -3,17 +3,11 @@
 
 #include "agent/tool/qsoctoolmemory.h"
 
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QStandardPaths>
-#include <QTextStream>
-
 /* QSocToolMemoryRead Implementation */
 
-QSocToolMemoryRead::QSocToolMemoryRead(QObject *parent, QSocProjectManager *projectManager)
+QSocToolMemoryRead::QSocToolMemoryRead(QObject *parent, QSocMemoryManager *memoryManager)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , memoryManager(memoryManager)
 {}
 
 QSocToolMemoryRead::~QSocToolMemoryRead() = default;
@@ -25,8 +19,10 @@ QString QSocToolMemoryRead::getName() const
 
 QString QSocToolMemoryRead::getDescription() const
 {
-    return "Read persistent memory containing user preferences and project context. "
-           "Memory is stored in Markdown format and persists across sessions.";
+    return "Read persistent memory. Memory is organized as topic files with YAML frontmatter "
+           "in two scopes: 'user' (global preferences) and 'project' (project-specific context). "
+           "The MEMORY.md index is auto-loaded into the system prompt; use this tool to read "
+           "individual topic file content.";
 }
 
 json QSocToolMemoryRead::getParametersSchema() const
@@ -37,107 +33,98 @@ json QSocToolMemoryRead::getParametersSchema() const
          {{"scope",
            {{"type", "string"},
             {"enum", {"user", "project", "all"}},
+            {"description", "Which memory scope to read (default: all)"}}},
+          {"name",
+           {{"type", "string"},
             {"description",
-             "Which memory to read: 'user' for user preferences, 'project' for project "
-             "context, 'all' for both (default: all)"}}}}},
+             "Read a specific topic file by name (e.g., 'user-preferences'). "
+             "If omitted, lists all topics with their metadata."}}},
+          {"type",
+           {{"type", "string"},
+            {"enum", {"user", "feedback", "project", "reference"}},
+            {"description", "Filter by memory type"}}}}},
         {"required", json::array()}};
-}
-
-QString QSocToolMemoryRead::userMemoryPath() const
-{
-    QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    return QDir(configPath).filePath("qsoc/memory.md");
-}
-
-QString QSocToolMemoryRead::projectMemoryPath() const
-{
-    if (!projectManager) {
-        return {};
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    return QDir(projectPath).filePath(".qsoc/memory.md");
-}
-
-QString QSocToolMemoryRead::readMemoryFile(const QString &filePath) const
-{
-    if (filePath.isEmpty()) {
-        return {};
-    }
-
-    QFile file(filePath);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return {};
-    }
-
-    QTextStream stream(&file);
-    QString     content = stream.readAll();
-    file.close();
-
-    return content;
 }
 
 QString QSocToolMemoryRead::execute(const json &arguments)
 {
+    if (!memoryManager) {
+        return "Error: Memory manager not configured";
+    }
+
     QString scope = "all";
     if (arguments.contains("scope") && arguments["scope"].is_string()) {
         scope = QString::fromStdString(arguments["scope"].get<std::string>());
     }
 
-    QString result;
+    /* Read a specific topic file */
+    if (arguments.contains("name") && arguments["name"].is_string()) {
+        QString name = QString::fromStdString(arguments["name"].get<std::string>());
 
-    /* Read user memory */
-    if (scope == "user" || scope == "all") {
-        QString userPath   = userMemoryPath();
-        QString userMemory = readMemoryFile(userPath);
-
-        if (!userMemory.isEmpty()) {
-            result += "## User Memory\n\n";
-            result += userMemory;
-            result += "\n";
-        } else if (scope == "user") {
-            result += "No user memory found at: " + userPath + "\n";
+        /* Try user scope first, then project */
+        if (scope == "user" || scope == "all") {
+            QString content = memoryManager->readTopicFile("user", name);
+            if (!content.isEmpty()) {
+                return QString("## %1 (user scope)\n\n%2").arg(name, content);
+            }
         }
+        if (scope == "project" || scope == "all") {
+            QString content = memoryManager->readTopicFile("project", name);
+            if (!content.isEmpty()) {
+                return QString("## %1 (project scope)\n\n%2").arg(name, content);
+            }
+        }
+        return QString("No topic file found: %1").arg(name);
     }
 
-    /* Read project memory */
-    if (scope == "project" || scope == "all") {
-        QString projectPath   = projectMemoryPath();
-        QString projectMemory = readMemoryFile(projectPath);
+    /* List all topics with metadata */
+    QString typeFilter;
+    if (arguments.contains("type") && arguments["type"].is_string()) {
+        typeFilter = QString::fromStdString(arguments["type"].get<std::string>());
+    }
 
-        if (!projectMemory.isEmpty()) {
-            if (!result.isEmpty()) {
-                result += "\n---\n\n";
-            }
-            result += "## Project Memory\n\n";
-            result += projectMemory;
-            result += "\n";
-        } else if (scope == "project") {
-            result += "No project memory found at: " + projectPath + "\n";
+    auto entries = memoryManager->scanMemories(scope);
+
+    if (entries.isEmpty()) {
+        return "No memory found. Use memory_write to save preferences and context.";
+    }
+
+    QString result;
+    for (const auto &entry : entries) {
+        if (!typeFilter.isEmpty() && entry.type != typeFilter) {
+            continue;
         }
+
+        QString age;
+        if (entry.ageDays > 1) {
+            age = QString(" (%1 days ago)").arg(entry.ageDays);
+        }
+
+        result += QString("- **%1** [%2] — %3%4\n")
+                      .arg(
+                          entry.name,
+                          entry.type.isEmpty() ? "untyped" : entry.type,
+                          entry.description.isEmpty() ? "(no description)" : entry.description,
+                          age);
     }
 
     if (result.isEmpty()) {
-        return "No memory found. Use memory_write to save preferences and context.";
+        return QString("No memory found matching type '%1'.").arg(typeFilter);
     }
 
     return result;
 }
 
-void QSocToolMemoryRead::setProjectManager(QSocProjectManager *projectManager)
+void QSocToolMemoryRead::setMemoryManager(QSocMemoryManager *memoryManager)
 {
-    projectManager = projectManager;
+    this->memoryManager = memoryManager;
 }
 
 /* QSocToolMemoryWrite Implementation */
 
-QSocToolMemoryWrite::QSocToolMemoryWrite(QObject *parent, QSocProjectManager *projectManager)
+QSocToolMemoryWrite::QSocToolMemoryWrite(QObject *parent, QSocMemoryManager *memoryManager)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , memoryManager(memoryManager)
 {}
 
 QSocToolMemoryWrite::~QSocToolMemoryWrite() = default;
@@ -149,9 +136,10 @@ QString QSocToolMemoryWrite::getName() const
 
 QString QSocToolMemoryWrite::getDescription() const
 {
-    return "Write persistent memory to save user preferences or project context. "
-           "Memory is stored in Markdown format and persists across sessions. "
-           "Use 'user' scope for user preferences, 'project' scope for project-specific context.";
+    return "Write persistent memory as a topic file with YAML frontmatter. "
+           "The MEMORY.md index is automatically rebuilt after each write. "
+           "Memory types: 'user' (role/preferences), 'feedback' (approach corrections), "
+           "'project' (decisions/context), 'reference' (external resources).";
 }
 
 json QSocToolMemoryWrite::getParametersSchema() const
@@ -159,121 +147,77 @@ json QSocToolMemoryWrite::getParametersSchema() const
     return {
         {"type", "object"},
         {"properties",
-         {{"content",
+         {{"name",
            {{"type", "string"},
-            {"description", "The content to write (Markdown format recommended)"}}},
+            {"description",
+             "Topic filename (e.g., 'user-preferences', 'project-architecture'). "
+             "Lowercase, hyphens allowed."}}},
+          {"content",
+           {{"type", "string"}, {"description", "The memory content to write (Markdown format)"}}},
           {"scope",
            {{"type", "string"},
             {"enum", {"user", "project"}},
             {"description",
-             "Where to save: 'user' for user preferences (~/.config/qsoc/memory.md), "
-             "'project' for project context (<project>/.qsoc/memory.md)"}}},
-          {"append",
-           {{"type", "boolean"},
+             "Where to save: 'user' for global preferences, 'project' for project context"}}},
+          {"type",
+           {{"type", "string"},
+            {"enum", {"user", "feedback", "project", "reference"}},
+            {"description", "Memory type for categorization"}}},
+          {"description",
+           {{"type", "string"},
             {"description",
-             "If true, append to existing content instead of replacing "
-             "(default: false)"}}}}},
-        {"required", json::array({"content", "scope"})}};
-}
-
-QString QSocToolMemoryWrite::userMemoryPath() const
-{
-    QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    return QDir(configPath).filePath("qsoc/memory.md");
-}
-
-QString QSocToolMemoryWrite::projectMemoryPath() const
-{
-    if (!projectManager) {
-        return {};
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    return QDir(projectPath).filePath(".qsoc/memory.md");
-}
-
-bool QSocToolMemoryWrite::writeMemoryFile(const QString &filePath, const QString &content) const
-{
-    if (filePath.isEmpty()) {
-        return false;
-    }
-
-    /* Create parent directories if needed */
-    QFileInfo fileInfo(filePath);
-    QDir      parentDir = fileInfo.absoluteDir();
-    if (!parentDir.exists()) {
-        if (!parentDir.mkpath(".")) {
-            return false;
-        }
-    }
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        return false;
-    }
-
-    QTextStream out(&file);
-    out << content;
-    file.close();
-
-    return true;
+             "One-line description for the MEMORY.md index (be specific for relevance)"}}}}},
+        {"required", json::array({"name", "content", "scope"})}};
 }
 
 QString QSocToolMemoryWrite::execute(const json &arguments)
 {
+    if (!memoryManager) {
+        return "Error: Memory manager not configured";
+    }
+
+    /* Extract required parameters */
+    if (!arguments.contains("name") || !arguments["name"].is_string()) {
+        return "Error: 'name' is required (topic filename)";
+    }
     if (!arguments.contains("content") || !arguments["content"].is_string()) {
-        return "Error: content is required";
+        return "Error: 'content' is required";
     }
-
     if (!arguments.contains("scope") || !arguments["scope"].is_string()) {
-        return "Error: scope is required (must be 'user' or 'project')";
+        return "Error: 'scope' is required ('user' or 'project')";
     }
 
+    QString name    = QString::fromStdString(arguments["name"].get<std::string>());
     QString content = QString::fromStdString(arguments["content"].get<std::string>());
     QString scope   = QString::fromStdString(arguments["scope"].get<std::string>());
 
-    bool append = false;
-    if (arguments.contains("append") && arguments["append"].is_boolean()) {
-        append = arguments["append"].get<bool>();
-    }
-
-    /* Determine file path */
-    QString filePath;
-    if (scope == "user") {
-        filePath = userMemoryPath();
-    } else if (scope == "project") {
-        filePath = projectMemoryPath();
-        if (filePath.isEmpty()) {
-            return "Error: No project directory available for project-scoped memory";
-        }
-    } else {
+    if (scope != "user" && scope != "project") {
         return "Error: scope must be 'user' or 'project'";
     }
 
-    /* Handle append mode */
-    if (append) {
-        QFile file(filePath);
-        if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream stream(&file);
-            QString     existing = stream.readAll();
-            file.close();
-            content = existing + "\n" + content;
-        }
+    /* Extract optional parameters */
+    QString type;
+    if (arguments.contains("type") && arguments["type"].is_string()) {
+        type = QString::fromStdString(arguments["type"].get<std::string>());
     }
 
-    /* Write the file */
-    if (!writeMemoryFile(filePath, content)) {
-        return QString("Error: Failed to write memory to: %1").arg(filePath);
+    QString description;
+    if (arguments.contains("description") && arguments["description"].is_string()) {
+        description = QString::fromStdString(arguments["description"].get<std::string>());
     }
 
-    return QString("Successfully saved memory to: %1 (%2 bytes)").arg(filePath).arg(content.size());
+    /* Write topic file (auto-rebuilds index) */
+    if (!memoryManager->writeTopicFile(scope, name, type, description, content)) {
+        return QString("Error: Failed to write memory topic '%1'").arg(name);
+    }
+
+    QString scopeDir = (scope == "user") ? memoryManager->userMemoryDir()
+                                         : memoryManager->projectMemoryDir();
+
+    return QString("Saved memory '%1' to %2 scope (%3)").arg(name, scope, scopeDir);
 }
 
-void QSocToolMemoryWrite::setProjectManager(QSocProjectManager *projectManager)
+void QSocToolMemoryWrite::setMemoryManager(QSocMemoryManager *memoryManager)
 {
-    projectManager = projectManager;
+    this->memoryManager = memoryManager;
 }

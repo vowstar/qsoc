@@ -96,9 +96,11 @@ void QSocConfig::loadFromEnvironment()
     const QMap<QString, QString> agentEnvVars
         = {{"QSOC_AGENT_TEMPERATURE", "agent.temperature"},
            {"QSOC_AGENT_MAX_TOKENS", "agent.max_tokens"},
-           {"QSOC_AGENT_MAX_OUTPUT_TOKENS", "agent.max_output_tokens"},
+           {"QSOC_LLM_MAX_OUTPUT_TOKENS", "llm.max_output_tokens"},
            {"QSOC_AGENT_MAX_ITERATIONS", "agent.max_iterations"},
-           {"QSOC_AGENT_SYSTEM_PROMPT", "agent.system_prompt"}};
+           {"QSOC_AGENT_SYSTEM_PROMPT", "agent.system_prompt"},
+           {"QSOC_AGENT_AUTO_LOAD_MEMORY", "agent.auto_load_memory"},
+           {"QSOC_AGENT_MEMORY_MAX_CHARS", "agent.memory_max_chars"}};
 
     for (auto iter = agentEnvVars.constBegin(); iter != agentEnvVars.constEnd(); ++iter) {
         if (env.contains(iter.key())) {
@@ -251,7 +253,8 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "#   url: https://api.deepseek.com/v1/chat/completions\n";
     out << "#   key: sk-xxx\n";
     out << "#   model: deepseek-chat\n";
-    out << "#   timeout: 30000\n\n";
+    out << "#   timeout: 30000\n";
+    out << "#   max_output_tokens: 8192   # Max output tokens (0 or omit = API default)\n\n";
 
     out << "# Common endpoints:\n";
     out << "# - DeepSeek:  https://api.deepseek.com/v1/chat/completions\n";
@@ -277,8 +280,9 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "# agent:\n";
     out << "#   temperature: 0.2          # LLM temperature (0.0-1.0)\n";
     out << "#   max_tokens: 128000        # Maximum context tokens\n";
-    out << "#   max_output_tokens: 16384  # Maximum output tokens per response\n";
     out << "#   max_iterations: 100       # Safety limit for iterations\n";
+    out << "#   auto_load_memory: true    # Auto-inject memory into system prompt\n";
+    out << "#   memory_max_chars: 24000   # Max chars for memory in system prompt\n";
     out << "#   system_prompt: |          # Custom system prompt\n";
     out << "#     You are a helpful assistant.\n\n";
 
