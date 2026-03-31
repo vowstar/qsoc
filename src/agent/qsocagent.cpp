@@ -280,12 +280,13 @@ void QSocAgent::processStreamIteration()
         emit verboseOutput(info);
     }
 
-    /* Build messages with system prompt */
+    /* Build messages with system prompt (includes auto-injected memory) */
     json messagesWithSystem = json::array();
 
-    if (!agentConfig.systemPrompt.isEmpty()) {
+    QString fullSystemPrompt = buildSystemPromptWithMemory();
+    if (!fullSystemPrompt.isEmpty()) {
         messagesWithSystem.push_back(
-            {{"role", "system"}, {"content", agentConfig.systemPrompt.toStdString()}});
+            {{"role", "system"}, {"content", fullSystemPrompt.toStdString()}});
     }
 
     for (const auto &msg : messages) {
@@ -307,12 +308,7 @@ void QSocAgent::processStreamIteration()
 
     /* Send streaming request */
     llmService->sendChatCompletionStream(
-        messagesWithSystem,
-        tools,
-        agentConfig.temperature,
-        agentConfig.thinkingLevel,
-        modelOverride,
-        agentConfig.maxOutputTokens);
+        messagesWithSystem, tools, agentConfig.temperature, agentConfig.thinkingLevel, modelOverride);
 }
 
 void QSocAgent::handleStreamComplete(const json &response)
@@ -400,13 +396,13 @@ bool QSocAgent::processIteration()
         return true;
     }
 
-    /* Build messages with system prompt */
+    /* Build messages with system prompt (includes auto-injected memory) */
     json messagesWithSystem = json::array();
 
-    /* Add system prompt as first message */
-    if (!agentConfig.systemPrompt.isEmpty()) {
+    QString fullSystemPrompt = buildSystemPromptWithMemory();
+    if (!fullSystemPrompt.isEmpty()) {
         messagesWithSystem.push_back(
-            {{"role", "system"}, {"content", agentConfig.systemPrompt.toStdString()}});
+            {{"role", "system"}, {"content", fullSystemPrompt.toStdString()}});
     }
 
     /* Add conversation history */
@@ -418,8 +414,8 @@ bool QSocAgent::processIteration()
     json tools = toolRegistry->getToolDefinitions();
 
     /* Call LLM */
-    json response = llmService->sendChatCompletion(
-        messagesWithSystem, tools, agentConfig.temperature, agentConfig.maxOutputTokens);
+    json response
+        = llmService->sendChatCompletion(messagesWithSystem, tools, agentConfig.temperature);
 
     /* Check for errors */
     if (response.contains("error")) {
@@ -523,6 +519,32 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
         /* Add tool response to messages */
         addToolMessage(toolCallId, result);
     }
+}
+
+void QSocAgent::setMemoryManager(QSocMemoryManager *manager)
+{
+    memoryManager = manager;
+}
+
+QString QSocAgent::buildSystemPromptWithMemory() const
+{
+    QString prompt = agentConfig.systemPrompt;
+
+    if (!agentConfig.autoLoadMemory || !memoryManager) {
+        return prompt;
+    }
+
+    QString memoryContent = memoryManager->loadMemoryForPrompt(agentConfig.memoryMaxChars);
+    if (memoryContent.isEmpty()) {
+        return prompt;
+    }
+
+    prompt += "\n\n## Memory\n\n"
+              "Below is persistent memory from previous sessions. "
+              "Use this context but verify stale information against current code.\n\n"
+              + memoryContent;
+
+    return prompt;
 }
 
 void QSocAgent::addMessage(const QString &role, const QString &content)
@@ -988,6 +1010,9 @@ void QSocAgent::compressHistoryIfNeeded()
 
     /* Layer 3: Auto-continue after compaction during streaming */
     if (tokens < originalTokens && isStreaming) {
-        addMessage("user", "[System: Context compacted. Continue your current task.]");
+        addMessage(
+            "user",
+            "[System: Context compacted. Your persistent memory is still available "
+            "in the system prompt. Continue your current task.]");
     }
 }

@@ -16,9 +16,6 @@ struct QSocAgentConfig
     /* Maximum context tokens before compression */
     int maxContextTokens = 128000;
 
-    /* Maximum output tokens per response (0 = API default) */
-    int maxOutputTokens = 16384;
-
     /* Layer 1: Tool output pruning */
     double pruneThreshold      = 0.6;   /* 60% triggers pruning */
     int    pruneProtectTokens  = 40000; /* Protect recent 40k tokens of tool output */
@@ -39,6 +36,10 @@ struct QSocAgentConfig
 
     /* Reasoning model: empty=use primary model when thinking */
     QString reasoningModel;
+
+    /* Memory injection settings */
+    bool autoLoadMemory = true;  /* Auto-inject memory into system prompt */
+    int  memoryMaxChars = 24000; /* Max chars (~6000 tokens) for memory in prompt */
 
     /* Enable verbose output */
     bool verbose = true;

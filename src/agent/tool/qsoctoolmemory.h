@@ -4,13 +4,13 @@
 #ifndef QSOCTOOLMEMORY_H
 #define QSOCTOOLMEMORY_H
 
+#include "agent/qsocmemorymanager.h"
 #include "agent/qsoctool.h"
-#include "common/qsocprojectmanager.h"
 
 /**
  * @brief Tool to read agent memory (persistent context across sessions)
- * @details Reads from both user-level (~/.config/qsoc/memory.md) and
- *          project-level (<project>/.qsoc/memory.md) memory files.
+ * @details Reads from both user-level and project-level memory directories.
+ *          Supports filtering by scope, type, or specific topic name.
  */
 class QSocToolMemoryRead : public QSocTool
 {
@@ -18,7 +18,7 @@ class QSocToolMemoryRead : public QSocTool
 
 public:
     explicit QSocToolMemoryRead(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+        QObject *parent = nullptr, QSocMemoryManager *memoryManager = nullptr);
     ~QSocToolMemoryRead() override;
 
     QString getName() const override;
@@ -26,34 +26,15 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
-    void setProjectManager(QSocProjectManager *projectManager);
+    void setMemoryManager(QSocMemoryManager *memoryManager);
 
 private:
-    QSocProjectManager *projectManager = nullptr;
-
-    /**
-     * @brief Get the user-level memory file path
-     * @return Path to ~/.config/qsoc/memory.md
-     */
-    QString userMemoryPath() const;
-
-    /**
-     * @brief Get the project-level memory file path
-     * @return Path to <project>/.qsoc/memory.md
-     */
-    QString projectMemoryPath() const;
-
-    /**
-     * @brief Read content from a memory file
-     * @param filePath Path to the memory file
-     * @return File content or empty string if not found
-     */
-    QString readMemoryFile(const QString &filePath) const;
+    QSocMemoryManager *memoryManager = nullptr;
 };
 
 /**
  * @brief Tool to write agent memory (persistent context across sessions)
- * @details Writes to either user-level or project-level memory file.
+ * @details Writes topic files with YAML frontmatter and auto-rebuilds the index.
  */
 class QSocToolMemoryWrite : public QSocTool
 {
@@ -61,7 +42,7 @@ class QSocToolMemoryWrite : public QSocTool
 
 public:
     explicit QSocToolMemoryWrite(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+        QObject *parent = nullptr, QSocMemoryManager *memoryManager = nullptr);
     ~QSocToolMemoryWrite() override;
 
     QString getName() const override;
@@ -69,30 +50,10 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
-    void setProjectManager(QSocProjectManager *projectManager);
+    void setMemoryManager(QSocMemoryManager *memoryManager);
 
 private:
-    QSocProjectManager *projectManager = nullptr;
-
-    /**
-     * @brief Get the user-level memory file path
-     * @return Path to ~/.config/qsoc/memory.md
-     */
-    QString userMemoryPath() const;
-
-    /**
-     * @brief Get the project-level memory file path
-     * @return Path to <project>/.qsoc/memory.md
-     */
-    QString projectMemoryPath() const;
-
-    /**
-     * @brief Write content to a memory file
-     * @param filePath Path to the memory file
-     * @param content Content to write
-     * @return True if successful
-     */
-    bool writeMemoryFile(const QString &filePath, const QString &content) const;
+    QSocMemoryManager *memoryManager = nullptr;
 };
 
 #endif // QSOCTOOLMEMORY_H

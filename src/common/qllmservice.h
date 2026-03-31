@@ -22,11 +22,12 @@ using json = nlohmann::json;
  */
 struct LLMEndpoint
 {
-    QString name;            /* Endpoint name for identification */
-    QUrl    url;             /* API endpoint URL */
-    QString key;             /* API key (optional for local services) */
-    QString model;           /* Model name to use */
-    int     timeout = 30000; /* Request timeout in milliseconds */
+    QString name;                    /* Endpoint name for identification */
+    QUrl    url;                     /* API endpoint URL */
+    QString key;                     /* API key (optional for local services) */
+    QString model;                   /* Model name to use */
+    int     timeout         = 30000; /* Request timeout in milliseconds */
+    int     maxOutputTokens = 0;     /* Max output tokens (0 = API default) */
 };
 
 /**
@@ -171,10 +172,7 @@ public slots:
      * @return Full JSON response from the LLM (may contain tool_calls)
      */
     json sendChatCompletion(
-        const json &messages,
-        const json &tools           = json::array(),
-        double      temperature     = 0.2,
-        int         maxOutputTokens = 0);
+        const json &messages, const json &tools = json::array(), double temperature = 0.2);
 
     /**
      * @brief Send streaming chat completion with tool definitions (Agent mode)
@@ -189,8 +187,7 @@ public slots:
         const json    &tools           = json::array(),
         double         temperature     = 0.2,
         const QString &reasoningEffort = QString(),
-        const QString &modelOverride   = QString(),
-        int            maxOutputTokens = 0);
+        const QString &modelOverride   = QString());
 
     /**
      * @brief Abort the current streaming request

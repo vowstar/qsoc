@@ -311,11 +311,6 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             config.maxContextTokens = maxTokensStr.toInt();
         }
 
-        QString maxOutputTokensStr = socConfig->getValue("agent.max_output_tokens");
-        if (!maxOutputTokensStr.isEmpty()) {
-            config.maxOutputTokens = maxOutputTokensStr.toInt();
-        }
-
         QString maxIterStr = socConfig->getValue("agent.max_iterations");
         if (!maxIterStr.isEmpty()) {
             config.maxIterations = maxIterStr.toInt();
@@ -349,6 +344,17 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         QString reasoningModelStr = socConfig->getValue("llm.model_reasoning");
         if (!reasoningModelStr.isEmpty()) {
             config.reasoningModel = reasoningModelStr;
+        }
+
+        QString autoLoadMemoryStr = socConfig->getValue("agent.auto_load_memory");
+        if (!autoLoadMemoryStr.isEmpty()) {
+            config.autoLoadMemory
+                = (autoLoadMemoryStr.toLower() == "true" || autoLoadMemoryStr == "1");
+        }
+
+        QString memoryMaxCharsStr = socConfig->getValue("agent.memory_max_chars");
+        if (!memoryMaxCharsStr.isEmpty()) {
+            config.memoryMaxChars = memoryMaxCharsStr.toInt();
         }
     }
 
@@ -442,9 +448,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     auto *docQueryTool = new QSocToolDocQuery(this);
     toolRegistry->registerTool(docQueryTool);
 
-    /* Memory tools */
-    auto *memoryReadTool  = new QSocToolMemoryRead(this, projectManager);
-    auto *memoryWriteTool = new QSocToolMemoryWrite(this, projectManager);
+    /* Memory manager and tools */
+    auto *memoryManager   = new QSocMemoryManager(this, projectManager);
+    auto *memoryReadTool  = new QSocToolMemoryRead(this, memoryManager);
+    auto *memoryWriteTool = new QSocToolMemoryWrite(this, memoryManager);
     toolRegistry->registerTool(memoryReadTool);
     toolRegistry->registerTool(memoryWriteTool);
 
@@ -475,6 +482,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
     /* Create agent */
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);
+    agent->setMemoryManager(memoryManager);
 
     /* Connect verbose output signal */
     connect(agent, &QSocAgent::verboseOutput, [](const QString &message) {
