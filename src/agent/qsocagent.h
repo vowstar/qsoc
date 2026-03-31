@@ -397,10 +397,19 @@ private:
     int estimateMessagesTokens() const;
 
     /**
+     * @brief Estimate total tokens including messages, system prompt, and tool definitions
+     * @return Estimated total token count for the full LLM request
+     */
+    int estimateTotalTokens() const;
+
+    /**
      * @brief Build system prompt with auto-injected memory content
      * @return System prompt with memory section appended
      */
     QString buildSystemPromptWithMemory() const;
+
+    /* Compaction failure tracking */
+    int compactFailureCount = 0;
 };
 
 #endif // QSOCAGENT_H

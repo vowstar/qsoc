@@ -487,6 +487,44 @@ private slots:
 
         delete agent;
     }
+    void testSystemPromptAffectsCompactionThreshold()
+    {
+        /* With a large system prompt, compaction should trigger even when messages alone
+         * are below threshold — proving system prompt tokens are counted in budget. */
+        QString largePrompt = QString("x").repeated(40000); /* ~10000 tokens */
+
+        QSocAgentConfig config;
+        config.maxContextTokens   = 20000; /* 20k budget */
+        config.pruneThreshold     = 0.99;  /* Don't prune */
+        config.compactThreshold   = 0.5;   /* Compact at 10k tokens */
+        config.keepRecentMessages = 2;
+        config.systemPrompt       = largePrompt;
+        config.autoLoadMemory     = false;
+
+        auto *agent = createAgent(config);
+
+        /* Add messages totaling ~5000 tokens (20000 chars / 4) */
+        json msgs = json::array();
+        for (int i = 0; i < 10; i++) {
+            msgs.push_back(
+                {{"role", "user"},
+                 {"content", QString("Message %1 ").arg(i).repeated(100).toStdString()}});
+            msgs.push_back(
+                {{"role", "assistant"},
+                 {"content", QString("Reply %1 ").arg(i).repeated(100).toStdString()}});
+        }
+        agent->setMessages(msgs);
+
+        /* Messages alone: ~5000 tokens (below 10k threshold)
+         * System prompt: ~10000 tokens
+         * Total: ~15000 tokens (above 10k threshold)
+         * So compact() should trigger compaction */
+        int saved = agent->compact();
+        QVERIFY2(
+            saved > 0, "Compaction should trigger when system prompt pushes total over threshold");
+
+        delete agent;
+    }
 };
 
 QTEST_APPLESS_MAIN(Test)
