@@ -270,7 +270,7 @@ void QSocAgent::processStreamIteration()
     compressHistoryIfNeeded();
 
     if (agentConfig.verbose) {
-        int     currentTokens = estimateMessagesTokens();
+        int     currentTokens = estimateTotalTokens();
         QString info          = QString("[Iteration %1 | Tokens: %2/%3 (%4%) | Messages: %5]")
                            .arg(streamIteration)
                            .arg(currentTokens)
@@ -296,8 +296,8 @@ void QSocAgent::processStreamIteration()
     /* Get tool definitions */
     json tools = toolRegistry->getToolDefinitions();
 
-    /* Estimate input tokens for this request */
-    int inputTokens = estimateMessagesTokens();
+    /* Estimate input tokens for this request (includes system prompt + tool defs) */
+    int inputTokens = estimateTotalTokens();
     totalInputTokens.fetch_add(inputTokens);
 
     /* Determine model override for reasoning */
@@ -675,6 +675,24 @@ int QSocAgent::estimateMessagesTokens() const
     return total;
 }
 
+int QSocAgent::estimateTotalTokens() const
+{
+    int tokens = estimateMessagesTokens();
+
+    /* System prompt + memory injection */
+    tokens += estimateTokens(buildSystemPromptWithMemory());
+
+    /* Tool definitions */
+    if (toolRegistry) {
+        json tools = toolRegistry->getToolDefinitions();
+        if (!tools.empty()) {
+            tokens += estimateTokens(QString::fromStdString(tools.dump()));
+        }
+    }
+
+    return tokens;
+}
+
 int QSocAgent::compact()
 {
     int originalTokens = estimateMessagesTokens();
@@ -699,7 +717,7 @@ int QSocAgent::compact()
 bool QSocAgent::pruneToolOutputs(bool force)
 {
     if (!force) {
-        int currentTokens = estimateMessagesTokens();
+        int currentTokens = estimateTotalTokens();
         int pruneTokens   = static_cast<int>(
             agentConfig.maxContextTokens * agentConfig.pruneThreshold);
         if (currentTokens <= pruneTokens) {
@@ -868,7 +886,7 @@ QString QSocAgent::formatMessagesForSummary(int start, int end) const
 bool QSocAgent::compactWithLLM(bool force)
 {
     if (!force) {
-        int currentTokens = estimateMessagesTokens();
+        int currentTokens = estimateTotalTokens();
         int compactTokens = static_cast<int>(
             agentConfig.maxContextTokens * agentConfig.compactThreshold);
         if (currentTokens <= compactTokens) {
@@ -896,11 +914,12 @@ bool QSocAgent::compactWithLLM(bool force)
     /* Format old messages for summarization */
     QString oldContent = formatMessagesForSummary(0, boundary);
 
-    /* Try LLM summarization if service is available */
-    QString summary;
-    bool    llmSuccess = false;
+    /* Try LLM summarization if service is available and not circuit-broken */
+    QString              summary;
+    bool                 llmSuccess         = false;
+    static constexpr int maxCompactFailures = 3;
 
-    if (llmService && llmService->hasEndpoint()) {
+    if (compactFailureCount < maxCompactFailures && llmService && llmService->hasEndpoint()) {
         QString summaryPrompt
             = QString(
                   "You are a conversation summarizer. Produce a structured summary of the "
@@ -915,8 +934,11 @@ bool QSocAgent::compactWithLLM(bool force)
                   "### Task Overview\n"
                   "### Current State\n"
                   "### Key Files and Paths\n"
+                  "### Errors and Fixes\n"
                   "### Decisions Made\n"
                   "### Important Context\n"
+                  "### All User Messages\n"
+                  "Reproduce every user message verbatim - they are short and critical.\n"
                   "### Next Steps\n\n"
                   "## Conversation to summarize:\n%1")
                   .arg(oldContent);
@@ -934,16 +956,23 @@ bool QSocAgent::compactWithLLM(bool force)
         if (response.contains("choices") && !response["choices"].empty()) {
             auto msg = response["choices"][0]["message"];
             if (msg.contains("content") && msg["content"].is_string()) {
-                summary    = QString::fromStdString(msg["content"].get<std::string>());
-                llmSuccess = true;
+                summary             = QString::fromStdString(msg["content"].get<std::string>());
+                llmSuccess          = true;
+                compactFailureCount = 0;
             }
+        }
+
+        if (!llmSuccess) {
+            compactFailureCount++;
         }
     }
 
-    /* Fallback: mechanical truncation if LLM failed */
+    /* Fallback: mechanical truncation if LLM failed or circuit-broken */
     if (!llmSuccess) {
         if (agentConfig.verbose) {
-            emit verboseOutput("[Layer 2: LLM unavailable, using mechanical summary]");
+            emit verboseOutput(QString("[Layer 2: Using mechanical summary (failures: %1/%2)]")
+                                   .arg(compactFailureCount)
+                                   .arg(maxCompactFailures));
         }
         summary = "[Previous conversation summary: ";
         for (int i = 0; i < boundary; i++) {
@@ -985,14 +1014,14 @@ bool QSocAgent::compactWithLLM(bool force)
 
 void QSocAgent::compressHistoryIfNeeded()
 {
-    int originalTokens = estimateMessagesTokens();
+    int originalTokens = estimateTotalTokens();
     int tokens         = originalTokens;
 
     /* Layer 1: Prune tool outputs (60% threshold) */
     int pruneTokens = static_cast<int>(agentConfig.maxContextTokens * agentConfig.pruneThreshold);
     if (tokens > pruneTokens) {
         if (pruneToolOutputs()) {
-            tokens = estimateMessagesTokens();
+            tokens = estimateTotalTokens();
             emit compacting(1, originalTokens, tokens);
         }
     }
@@ -1003,7 +1032,7 @@ void QSocAgent::compressHistoryIfNeeded()
     if (tokens > compactTokens) {
         int beforeCompact = tokens;
         if (compactWithLLM()) {
-            tokens = estimateMessagesTokens();
+            tokens = estimateTotalTokens();
             emit compacting(2, beforeCompact, tokens);
         }
     }
