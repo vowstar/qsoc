@@ -67,8 +67,8 @@ void QSocConfig::loadConfig()
     /* User-level config */
     loadFromYamlFile(userConfigPath);
 
-    /* Project-level config (if project manager available) */
-    loadFromProjectYaml();
+    /* Project-level config - overrides user config */
+    loadFromProjectYaml(true);
 
     /* Environment variables - highest priority */
     loadFromEnvironment();
@@ -92,17 +92,23 @@ void QSocConfig::loadFromEnvironment()
         }
     }
 
-    /* Agent-specific environment variables with compound keys */
-    const QMap<QString, QString> agentEnvVars
-        = {{"QSOC_AGENT_TEMPERATURE", "agent.temperature"},
-           {"QSOC_AGENT_MAX_TOKENS", "agent.max_tokens"},
+    /* Compound key environment variables (highest priority) */
+    const QMap<QString, QString> compoundEnvVars
+        = {/* LLM endpoint config */
+           {"QSOC_LLM_URL", "llm.url"},
+           {"QSOC_LLM_KEY", "llm.key"},
+           {"QSOC_LLM_MODEL", "llm.model"},
+           {"QSOC_LLM_TIMEOUT", "llm.timeout"},
            {"QSOC_LLM_MAX_OUTPUT_TOKENS", "llm.max_output_tokens"},
+           /* Agent config */
+           {"QSOC_AGENT_TEMPERATURE", "agent.temperature"},
+           {"QSOC_AGENT_MAX_TOKENS", "agent.max_tokens"},
            {"QSOC_AGENT_MAX_ITERATIONS", "agent.max_iterations"},
            {"QSOC_AGENT_SYSTEM_PROMPT", "agent.system_prompt"},
            {"QSOC_AGENT_AUTO_LOAD_MEMORY", "agent.auto_load_memory"},
            {"QSOC_AGENT_MEMORY_MAX_CHARS", "agent.memory_max_chars"}};
 
-    for (auto iter = agentEnvVars.constBegin(); iter != agentEnvVars.constEnd(); ++iter) {
+    for (auto iter = compoundEnvVars.constBegin(); iter != compoundEnvVars.constEnd(); ++iter) {
         if (env.contains(iter.key())) {
             setValue(iter.value(), env.value(iter.key()));
         }
