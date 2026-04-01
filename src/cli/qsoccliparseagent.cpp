@@ -279,6 +279,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     /* Set up project path if specified */
     if (parser.isSet("directory")) {
         projectManager->setProjectPath(parser.value("directory"));
+        /* Full reload: picks up project .qsoc.yml, env vars stay highest priority */
+        socConfig->loadConfig();
+        /* Reload LLM endpoints from updated config */
+        llmService->setConfig(socConfig);
     }
 
     /* Load project if specified */
@@ -662,6 +666,15 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
         qout << "QSoC Agent - Interactive AI Assistant for SoC Design" << Qt::endl;
         qout << "Type 'exit' to exit, '/help' for commands" << Qt::endl;
         qout << "(Running in simple mode)" << Qt::endl;
+        /* Show endpoint info */
+        if (socConfig) {
+            QString model = socConfig->getValue("llm.model");
+            QString url   = socConfig->getValue("llm.url");
+            if (!model.isEmpty() || !url.isEmpty()) {
+                qout << "Model: " << (model.isEmpty() ? "default" : model)
+                     << " | Endpoint: " << (url.isEmpty() ? "not configured" : url) << Qt::endl;
+            }
+        }
         qout << Qt::endl;
     }
 
@@ -1525,6 +1538,15 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             qout << ", streaming enabled";
         }
         qout << ")" << Qt::endl;
+    }
+    /* Show endpoint info */
+    if (socConfig) {
+        QString model = socConfig->getValue("llm.model");
+        QString url   = socConfig->getValue("llm.url");
+        if (!model.isEmpty() || !url.isEmpty()) {
+            qout << "Model: " << (model.isEmpty() ? "default" : model)
+                 << " | Endpoint: " << (url.isEmpty() ? "not configured" : url) << Qt::endl;
+        }
     }
     qout << Qt::endl;
 
