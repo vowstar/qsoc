@@ -1038,6 +1038,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                     if (toolName == "todo_list") {
                         auto items = parseTodoListResult(result);
                         todoWidget.setItems(items);
+                        todoWidget.clearDone();
                     } else if (toolName == "todo_add") {
                         auto item = parseTodoAddResult(result);
                         if (item.id >= 0) {
@@ -1047,10 +1048,13 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                         auto [todoId, newStatus] = parseTodoUpdateResult(result);
                         if (todoId >= 0) {
                             todoWidget.updateStatus(todoId, newStatus);
+                            todoWidget.clearDone();
                         }
-                    }
-                    if (toolName.startsWith("todo_")) {
-                        /* updateTodoDisplay deprecated: widgets auto-render */ (void) (result);
+                    } else if (toolName == "todo_delete") {
+                        auto [todoId, newStatus] = parseTodoUpdateResult(result);
+                        if (todoId >= 0) {
+                            todoWidget.removeItem(todoId);
+                        }
                     }
                 });
 
@@ -1308,6 +1312,9 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                 &compositor,
                 [&inputWidget](const QString &text) { inputWidget.setText(text); });
 
+            /* Clear completed TODOs from previous query */
+            todoWidget.clearDone();
+
             /* Start status line and agent */
             statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
             statusBarWidget.setStatus("Reasoning");
@@ -1414,6 +1421,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                     if (toolName == "todo_list") {
                         auto items = parseTodoListResult(result);
                         todoWidget.setItems(items);
+                        todoWidget.clearDone();
                     } else if (toolName == "todo_add") {
                         auto item = parseTodoAddResult(result);
                         if (item.id >= 0) {
@@ -1423,10 +1431,13 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                         auto [todoId, newStatus] = parseTodoUpdateResult(result);
                         if (todoId >= 0) {
                             todoWidget.updateStatus(todoId, newStatus);
+                            todoWidget.clearDone();
                         }
-                    }
-                    if (toolName.startsWith("todo_")) {
-                        /* updateTodoDisplay deprecated: widgets auto-render */ (void) (result);
+                    } else if (toolName == "todo_delete") {
+                        auto [todoId, newStatus] = parseTodoUpdateResult(result);
+                        if (todoId >= 0) {
+                            todoWidget.removeItem(todoId);
+                        }
                     }
                 });
 
@@ -1674,6 +1685,9 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                 &QAgentInputMonitor::inputChanged,
                 &compositor,
                 [&inputWidget](const QString &text) { inputWidget.setText(text); });
+
+            /* Clear completed TODOs from previous query */
+            todoWidget.clearDone();
 
             /* Start status line and agent */
             statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
