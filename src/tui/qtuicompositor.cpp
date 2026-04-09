@@ -1,0 +1,313 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
+
+#include "tui/qtuicompositor.h"
+
+#include <cstdio>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#else
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
+
+QTuiCompositor::QTuiCompositor(QObject *parent)
+    : QObject(parent)
+    , timer(new QTimer(this))
+{
+    connect(timer, &QTimer::timeout, this, &QTuiCompositor::onTimer);
+}
+
+QTuiCompositor::~QTuiCompositor()
+{
+    if (active) {
+        stop();
+    }
+}
+
+void QTuiCompositor::start(int intervalMs)
+{
+    if (active) {
+        return;
+    }
+    active = true;
+    enterAltScreen();
+
+    int termW = getTerminalWidth();
+    int termH = getTerminalHeight();
+    screen.resize(termW, termH);
+    recalculateLayout();
+
+    timer->start(intervalMs);
+    render();
+}
+
+void QTuiCompositor::stop()
+{
+    if (!active) {
+        return;
+    }
+    timer->stop();
+    active = false;
+    exitAltScreen();
+
+    /* Print scrollview content to normal stdout so it's visible after alt screen */
+    QString content = scrollView.toPlainText();
+    if (!content.isEmpty()) {
+        fputs(content.toUtf8().constData(), stdout);
+        if (!content.endsWith('\n')) {
+            fputs("\n", stdout);
+        }
+        fflush(stdout);
+    }
+
+    scrollView.clear();
+}
+
+bool QTuiCompositor::isActive() const
+{
+    return active;
+}
+
+void QTuiCompositor::pause()
+{
+    if (!active) {
+        return;
+    }
+    timer->stop();
+    exitAltScreen();
+}
+
+void QTuiCompositor::resume()
+{
+    if (!active) {
+        return;
+    }
+    enterAltScreen();
+    int termW = getTerminalWidth();
+    int termH = getTerminalHeight();
+    screen.resize(termW, termH);
+    screen.invalidate();
+    recalculateLayout();
+    timer->start();
+    render();
+}
+
+void QTuiCompositor::setTitle(const QString &newTitle)
+{
+    title = newTitle;
+}
+
+void QTuiCompositor::printContent(const QString &content, QTuiScrollView::LineStyle style)
+{
+    scrollView.appendPartial(content, style);
+}
+
+void QTuiCompositor::flushContent()
+{
+    /* Force partial line to become complete line */
+    scrollView.appendPartial("\n", QTuiScrollView::Normal);
+}
+
+void QTuiCompositor::onTimer()
+{
+    /* Check terminal resize */
+    int termW = getTerminalWidth();
+    int termH = getTerminalHeight();
+    if (termW != screen.width() || termH != screen.height()) {
+        screen.resize(termW, termH);
+        screen.invalidate();
+        recalculateLayout();
+    }
+
+    /* Tick animations */
+    todoWidget.tick();
+    statusBarWidget.tick();
+    emit tick();
+
+    render();
+}
+
+void QTuiCompositor::resetExecution()
+{
+    statusBarWidget.stopTimers();
+    statusBarWidget.setStatus("Ready");
+    queueWidget.clearAll();
+    scrollView.scrollToBottom();
+    render();
+}
+
+void QTuiCompositor::scrollContentUp(int lineCount)
+{
+    scrollView.scrollUp(lineCount);
+}
+
+void QTuiCompositor::scrollContentDown(int lineCount)
+{
+    scrollView.scrollDown(lineCount);
+}
+
+void QTuiCompositor::render()
+{
+    if (!active) {
+        return;
+    }
+
+    screen.clear();
+    recalculateLayout();
+
+    renderTitle();
+    renderContent();
+    renderTodo();
+    renderQueued();
+    renderStatusBar();
+    renderSeparator();
+    renderInput();
+
+    QString ansi = screen.toAnsi();
+    fputs(ansi.toUtf8().constData(), stdout);
+
+    /* Park real cursor at input line for IME support.
+     * Terminal emulators render IME preedit at the physical cursor.
+     * Disable auto-wrap to prevent IME preedit from causing line wrap. */
+    int cursorCol = inputWidget.cursorColumn() + 1; /* 1-based */
+    int cursorRow = layout.inputRow + 1;            /* 1-based */
+    fprintf(stdout, "\033[?7l\033[%d;%dH\033[?25h", cursorRow, cursorCol);
+
+    fflush(stdout);
+}
+
+void QTuiCompositor::enterAltScreen()
+{
+    /* Hide cursor + enter alt screen + clear + disable auto-wrap + enable SGR mouse */
+    fputs(
+        "\033[?25l\033[?1049h\033[2J\033[H"
+        "\033[?7l"
+        "\033[?1000h\033[?1003h\033[?1006h",
+        stdout);
+    fflush(stdout);
+}
+
+void QTuiCompositor::exitAltScreen()
+{
+    /* Disable mouse + re-enable auto-wrap + exit alt screen + show cursor */
+    fputs(
+        "\033[?1006l\033[?1003l\033[?1000l"
+        "\033[?7h"
+        "\033[?1049l\033[?25h",
+        stdout);
+    fflush(stdout);
+}
+
+int QTuiCompositor::getTerminalWidth() const
+{
+#ifdef Q_OS_WIN
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        return csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    }
+    return 80;
+#else
+    struct winsize winsz = {};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) == 0 && winsz.ws_col > 0) {
+        return winsz.ws_col;
+    }
+    return 80;
+#endif
+}
+
+int QTuiCompositor::getTerminalHeight() const
+{
+#ifdef Q_OS_WIN
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        return csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    }
+    return 24;
+#else
+    struct winsize winsz = {};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) == 0 && winsz.ws_row > 0) {
+        return winsz.ws_row;
+    }
+    return 24;
+#endif
+}
+
+void QTuiCompositor::recalculateLayout()
+{
+    int totalH = screen.height();
+    int totalW = screen.width();
+
+    /* Fixed regions at bottom (from bottom up) */
+    layout.inputRow     = totalH - 1; /* Input: last row */
+    layout.separatorRow = totalH - 2; /* Separator: second to last */
+    layout.statusRow    = totalH - 3; /* Status bar */
+
+    int queueLines    = queueWidget.lineCount();
+    layout.queueStart = layout.statusRow - queueLines;
+
+    int todoLines    = todoWidget.lineCount();
+    layout.todoStart = layout.queueStart - todoLines;
+
+    /* Content area fills between title and TODO */
+    layout.titleRow      = 0;
+    layout.contentStart  = 1;
+    layout.contentHeight = layout.todoStart - layout.contentStart;
+
+    if (layout.contentHeight < 1) {
+        layout.contentHeight = 1; /* Minimum 1 line for content */
+    }
+
+    (void) totalW;
+}
+
+void QTuiCompositor::renderTitle()
+{
+    int width = screen.width();
+
+    /* Fill title bar with inverted style */
+    for (int col = 0; col < width; col++) {
+        screen.putChar(col, 0, ' ', true, false, true);
+    }
+
+    /* Title text */
+    QString titleText = " " + title;
+    screen.putString(0, 0, titleText.left(width), true, false, true);
+}
+
+void QTuiCompositor::renderContent()
+{
+    scrollView.render(screen, layout.contentStart, layout.contentHeight, screen.width());
+}
+
+void QTuiCompositor::renderTodo()
+{
+    if (todoWidget.lineCount() == 0) {
+        return;
+    }
+    todoWidget.render(screen, layout.todoStart, screen.width());
+}
+
+void QTuiCompositor::renderQueued()
+{
+    if (queueWidget.lineCount() == 0) {
+        return;
+    }
+    queueWidget.render(screen, layout.queueStart, screen.width());
+}
+
+void QTuiCompositor::renderStatusBar()
+{
+    statusBarWidget.render(screen, layout.statusRow, screen.width());
+}
+
+void QTuiCompositor::renderSeparator()
+{
+    screen.hline(layout.separatorRow, '-');
+}
+
+void QTuiCompositor::renderInput()
+{
+    inputWidget.render(screen, layout.inputRow, screen.width());
+}

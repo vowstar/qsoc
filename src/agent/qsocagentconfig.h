@@ -31,10 +31,10 @@ struct QSocAgentConfig
     /* LLM temperature parameter (0.0-1.0) */
     double temperature = 0.2;
 
-    /* Thinking level: empty=off, "low", "medium", "high" */
-    QString thinkingLevel;
+    /* Reasoning effort level: empty=off, "low", "medium", "high" */
+    QString effortLevel;
 
-    /* Reasoning model: empty=use primary model when thinking */
+    /* Reasoning model: empty=use primary model when effort is set */
     QString reasoningModel;
 
     /* Memory injection settings */

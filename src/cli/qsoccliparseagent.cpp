@@ -20,9 +20,14 @@
 #include "agent/tool/qsoctoolweb.h"
 #include "cli/qagentinputmonitor.h"
 #include "cli/qagentreadline.h"
-#include "cli/qagentstatusline.h"
 #include "cli/qterminalcapability.h"
 #include "common/qstaticlog.h"
+#include "tui/qtuicompositor.h"
+#include "tui/qtuiinputline.h"
+#include "tui/qtuimenu.h"
+#include "tui/qtuiqueuedlist.h"
+#include "tui/qtuistatusbar.h"
+#include "tui/qtuitodolist.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -96,49 +101,86 @@ QString formatModelList(QLLMService *llmService)
 /**
  * @brief Handle /model command, returns true if command was handled
  */
-bool handleModelCommand(
-    const QString &input, QTextStream &qout, QLLMService *llmService, QSocAgent *agent)
+/**
+ * @brief Apply model switch: update endpoint + sync agent context budget
+ */
+void applyModelSwitch(
+    const QString &modelId, QTextStream &qout, QLLMService *llmService, QSocAgent *agent)
 {
-    QString arg = input.mid(6).trimmed();
-
-    if (arg.isEmpty()) {
-        /* List models */
-        if (llmService->availableModels().isEmpty()) {
-            qout << "No models configured. Add llm.models section to .qsoc.yml" << Qt::endl;
-        } else {
-            QStringList models  = llmService->availableModels();
-            QString     current = llmService->getCurrentModelId();
-            qout << "Available models:" << Qt::endl;
-            for (const QString &modelId : models) {
-                LLMModelConfig cfg    = llmService->getModelConfig(modelId);
-                QString        marker = (modelId == current) ? "* " : "  ";
-                QString        name   = cfg.name.isEmpty() ? cfg.id : cfg.name;
-                QString        info   = QString("(%1K ctx, %2K out)")
-                                   .arg(cfg.contextTokens / 1000)
-                                   .arg(cfg.maxOutputTokens > 0 ? cfg.maxOutputTokens / 1000 : 0);
-                if (cfg.reasoning) {
-                    info += " [reasoning]";
-                }
-                qout << "  " << marker << modelId << "  " << name << " " << info << Qt::endl;
-            }
-        }
-        return true;
-    }
-
-    /* Switch model */
-    if (llmService->setCurrentModel(arg)) {
-        LLMModelConfig cfg = llmService->getModelConfig(arg);
-        /* Sync agent context budget */
+    if (llmService->setCurrentModel(modelId)) {
+        LLMModelConfig  cfg      = llmService->getModelConfig(modelId);
         QSocAgentConfig agentCfg = agent->getConfig();
         if (cfg.contextTokens > 0) {
             agentCfg.maxContextTokens = cfg.contextTokens;
         }
         agent->setConfig(agentCfg);
         QString name = cfg.name.isEmpty() ? cfg.id : cfg.name;
-        qout << "Model: " << arg << " (" << name << ")" << Qt::endl;
+        qout << "Model: " << modelId << " (" << name << ")" << Qt::endl;
     } else {
-        qout << "Unknown model: " << arg << Qt::endl;
+        qout << "Unknown model: " << modelId << Qt::endl;
         qout << "Use /model to list available models" << Qt::endl;
+    }
+}
+
+/**
+ * @brief Handle /model command. interactive=true opens TUI menu, false prints list only.
+ */
+bool handleModelCommand(
+    const QString &input,
+    QTextStream   &qout,
+    QLLMService   *llmService,
+    QSocAgent     *agent,
+    bool           interactive = true)
+{
+    QString arg = input.mid(6).trimmed();
+
+    if (!arg.isEmpty()) {
+        applyModelSwitch(arg, qout, llmService, agent);
+        return true;
+    }
+
+    QStringList models = llmService->availableModels();
+    if (models.isEmpty()) {
+        qout << "No models configured. Add llm.models section to .qsoc.yml" << Qt::endl;
+        return true;
+    }
+
+    if (interactive) {
+        /* Build menu items */
+        QList<QTuiMenu::MenuItem> items;
+        QString                   current = llmService->getCurrentModelId();
+        for (const QString &modelId : models) {
+            LLMModelConfig     cfg = llmService->getModelConfig(modelId);
+            QTuiMenu::MenuItem item;
+            item.label  = modelId;
+            item.hint   = cfg.reasoning ? "[R]" : "";
+            item.marked = (modelId == current);
+            items.append(item);
+        }
+
+        QTuiMenu menu;
+        menu.setTitle("Model Selection");
+        menu.setItems(items);
+
+        int currentIdx = models.indexOf(current);
+        if (currentIdx >= 0) {
+            menu.setHighlight(currentIdx);
+        }
+
+        int selected = menu.exec();
+        if (selected >= 0 && selected < models.size()) {
+            applyModelSwitch(models[selected], qout, llmService, agent);
+        }
+    } else {
+        /* Non-interactive: just print list */
+        QString current = llmService->getCurrentModelId();
+        qout << "Available models:" << Qt::endl;
+        for (const QString &modelId : models) {
+            LLMModelConfig cfg    = llmService->getModelConfig(modelId);
+            QString        marker = (modelId == current) ? "* " : "  ";
+            QString        name   = cfg.name.isEmpty() ? cfg.id : cfg.name;
+            qout << "  " << marker << modelId << "  " << name << Qt::endl;
+        }
     }
     return true;
 }
@@ -148,9 +190,9 @@ bool handleModelCommand(
  * @param result The result string from todo_list tool
  * @return List of parsed TodoItem structures
  */
-QList<QAgentStatusLine::TodoItem> parseTodoListResult(const QString &result)
+QList<QTuiTodoList::TodoItem> parseTodoListResult(const QString &result)
 {
-    QList<QAgentStatusLine::TodoItem> items;
+    QList<QTuiTodoList::TodoItem> items;
 
     /* Match pattern: [x] or [ ] followed by ID. Title (priority) */
     QRegularExpression regex(R"(\[([ x])\]\s*(\d+)\.\s*(.+?)\s*\((\w+)\))");
@@ -159,7 +201,7 @@ QList<QAgentStatusLine::TodoItem> parseTodoListResult(const QString &result)
     for (const QString &line : lines) {
         QRegularExpressionMatch match = regex.match(line);
         if (match.hasMatch()) {
-            QAgentStatusLine::TodoItem item;
+            QTuiTodoList::TodoItem item;
             item.status   = (match.captured(1) == "x") ? "done" : "pending";
             item.id       = match.captured(2).toInt();
             item.title    = match.captured(3).trimmed();
@@ -177,9 +219,9 @@ QList<QAgentStatusLine::TodoItem> parseTodoListResult(const QString &result)
  *        Format: "Added todo #37: Title here (priority)"
  * @return TodoItem if parsed successfully, empty item if not
  */
-QAgentStatusLine::TodoItem parseTodoAddResult(const QString &result)
+QTuiTodoList::TodoItem parseTodoAddResult(const QString &result)
 {
-    QAgentStatusLine::TodoItem item;
+    QTuiTodoList::TodoItem item;
     item.id = -1; /* Invalid by default */
 
     /* Match: "Added todo #ID: Title (priority)" */
@@ -337,11 +379,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         {"no-stream",
          QCoreApplication::translate(
              "main", "Disable streaming output (streaming is enabled by default).")},
-        {"thinking",
-         QCoreApplication::translate("main", "Thinking level (low/medium/high)."),
+        {"effort",
+         QCoreApplication::translate("main", "Reasoning effort level (low/medium/high)."),
          "level"},
         {"model-reasoning",
-         QCoreApplication::translate("main", "Model to use when thinking is enabled."),
+         QCoreApplication::translate("main", "Model to use when reasoning effort is set."),
          "model"},
     });
 
@@ -415,9 +457,9 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             config.systemPrompt = systemPrompt;
         }
 
-        QString thinkingStr = socConfig->getValue("agent.thinking");
-        if (!thinkingStr.isEmpty()) {
-            config.thinkingLevel = thinkingStr;
+        QString effortStr = socConfig->getValue("agent.effort");
+        if (!effortStr.isEmpty()) {
+            config.effortLevel = effortStr;
         }
 
         QString reasoningModelStr = socConfig->getValue("llm.model_reasoning");
@@ -444,8 +486,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     if (parser.isSet("temperature")) {
         config.temperature = parser.value("temperature").toDouble();
     }
-    if (parser.isSet("thinking")) {
-        config.thinkingLevel = parser.value("thinking").toLower();
+    if (parser.isSet("effort")) {
+        config.effortLevel = parser.value("effort").toLower();
     }
     if (parser.isSet("model-reasoning")) {
         config.reasoningModel = parser.value("model-reasoning");
@@ -715,7 +757,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                    "/quit",
                    "/clear",
                    "/compact",
-                   "/thinking",
+                   "/effort",
                    "/model",
                    "/help"};
             for (const QString &cmd : commands) {
@@ -775,8 +817,12 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
     }
 
     /* Create status line for visual feedback (only if output is interactive) */
-    QAgentStatusLine statusLine(this);
-    bool             useStatusLine = termCap.isOutputInteractive();
+    QTuiCompositor compositor(this);
+    auto          &todoWidget      = compositor.todoList();
+    auto          &queueWidget     = compositor.queuedList();
+    auto          &statusBarWidget = compositor.statusBar();
+    auto          &inputWidget     = compositor.inputLine();
+    bool           useStatusLine   = termCap.isOutputInteractive();
 
     /* Load previous conversation if available */
     if (loadConversation(agent, projectManager)) {
@@ -851,7 +897,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             qout << "  exit, /exit  - Exit the agent" << Qt::endl;
             qout << "  /clear       - Clear conversation history" << Qt::endl;
             qout << "  /compact     - Compact conversation context" << Qt::endl;
-            qout << "  /thinking    - Show/set thinking level (off/low/medium/high)" << Qt::endl;
+            qout << "  /effort    - Show/set reasoning effort (off/low/medium/high)" << Qt::endl;
             qout << "  /model       - Show/switch model" << Qt::endl;
             qout << "  !<command>   - Execute a shell command directly" << Qt::endl;
             qout << "  /help        - Show this help message" << Qt::endl;
@@ -865,28 +911,33 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             saveConversation(agent, projectManager);
             continue;
         }
-        if (cmd.startsWith("/thinking")) {
-            QString         level = input.mid(9).trimmed().toLower();
+        if (cmd.startsWith("/effort")) {
+            QString         level = input.mid(7).trimmed().toLower();
             QSocAgentConfig cfg   = agent->getConfig();
             if (level.isEmpty()) {
-                qout << "Thinking: " << (cfg.thinkingLevel.isEmpty() ? "off" : cfg.thinkingLevel);
+                qout << "Effort: " << (cfg.effortLevel.isEmpty() ? "off" : cfg.effortLevel);
                 if (!cfg.reasoningModel.isEmpty()) {
                     qout << " (model: " << cfg.reasoningModel << ")";
                 }
                 qout << Qt::endl;
             } else if (level == "off") {
-                agent->setThinkingLevel(QString());
-                qout << "Thinking: off" << Qt::endl;
+                agent->setEffortLevel(QString());
+                qout << "Effort: off" << Qt::endl;
             } else if (level == "low" || level == "medium" || level == "high") {
-                agent->setThinkingLevel(level);
-                qout << "Thinking: " << level << Qt::endl;
+                agent->setEffortLevel(level);
+                qout << "Effort: " << level << Qt::endl;
             } else {
-                qout << "Usage: /thinking [off|low|medium|high]" << Qt::endl;
+                qout << "Usage: /effort [off|low|medium|high]" << Qt::endl;
             }
             continue;
         }
         if (cmd.startsWith("/model")) {
             handleModelCommand(input, qout, llmService, agent);
+            {
+                QString mid = llmService->getCurrentModelId();
+                statusBarWidget.setModel(mid);
+                compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+            }
             continue;
         }
 
@@ -902,8 +953,12 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     QObject::connect(
                         agent,
                         &QSocAgent::toolCalled,
-                        &statusLine,
-                        [&statusLine](const QString &toolName, const QString &arguments) {
+                        &compositor,
+                        [&compositor,
+                         &statusBarWidget,
+                         &todoWidget,
+                         &queueWidget,
+                         &inputWidget](const QString &toolName, const QString &arguments) {
                             /* Extract detail from arguments for better UX */
                             QString detail;
                             try {
@@ -936,7 +991,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                     detail = QString::fromStdString(args["url"].get<std::string>());
                                 } else if (args.contains("id")) {
                                     int     todoId = args["id"].get<int>();
-                                    QString title  = statusLine.getTodoTitle(todoId);
+                                    QString title  = todoWidget.getTitle(todoId);
                                     detail         = title.isEmpty() ? "#" + QString::number(todoId)
                                                                      : "\"" + title + "\"";
                                 }
@@ -945,10 +1000,10 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                             }
                             /* Skip [Tool] output for todo tools - status shown in TODO list */
                             if (toolName.startsWith("todo_")) {
-                                statusLine.resetProgress();
-                                statusLine.update(QString("Running %1...").arg(toolName));
+                                statusBarWidget.resetProgress();
+                                statusBarWidget.setStatus(QString("Running %1...").arg(toolName));
                             } else {
-                                statusLine.toolCalled(toolName, detail);
+                                statusBarWidget.toolCalled(toolName, detail);
                             }
                         }));
 
@@ -956,28 +1011,33 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     QObject::connect(
                         agent,
                         &QSocAgent::toolResult,
-                        &statusLine,
-                        [&statusLine](const QString &toolName, const QString &result) {
-                            statusLine.resetProgress();
-                            statusLine.update(QString("%1 done, thinking").arg(toolName));
+                        &compositor,
+                        [&compositor,
+                         &statusBarWidget,
+                         &todoWidget,
+                         &queueWidget,
+                         &inputWidget](const QString &toolName, const QString &result) {
+                            statusBarWidget.resetProgress();
+                            statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
 
                             /* Parse and update todo list based on tool type */
                             if (toolName == "todo_list") {
                                 auto items = parseTodoListResult(result);
-                                statusLine.setTodoList(items);
+                                todoWidget.setItems(items);
                             } else if (toolName == "todo_add") {
                                 auto item = parseTodoAddResult(result);
                                 if (item.id >= 0) {
-                                    statusLine.addTodoItem(item);
+                                    todoWidget.addItem(item);
                                 }
                             } else if (toolName == "todo_update") {
                                 auto [todoId, newStatus] = parseTodoUpdateResult(result);
                                 if (todoId >= 0) {
-                                    statusLine.updateTodoStatus(todoId, newStatus);
+                                    todoWidget.updateStatus(todoId, newStatus);
                                 }
                             }
                             if (toolName.startsWith("todo_")) {
-                                statusLine.updateTodoDisplay(result);
+                                /* updateTodoDisplay deprecated: widgets auto-render */ (
+                                    void) (result);
                             }
                         }));
 
@@ -986,8 +1046,12 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     QObject::connect(
                         agent,
                         &QSocAgent::toolCalled,
-                        &statusLine,
-                        [&statusLine](const QString &toolName, const QString &arguments) {
+                        &compositor,
+                        [&compositor,
+                         &statusBarWidget,
+                         &todoWidget,
+                         &queueWidget,
+                         &inputWidget](const QString &toolName, const QString &arguments) {
                             if (toolName == "todo_update") {
                                 try {
                                     auto args = json::parse(arguments.toStdString());
@@ -996,9 +1060,9 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                             args["status"].get<std::string>());
                                         if (status == "in_progress" && args.contains("id")) {
                                             int todoId = args["id"].get<int>();
-                                            statusLine.setActiveTodo(todoId);
+                                            todoWidget.setActive(todoId);
                                         } else if (status == "done" || status == "pending") {
-                                            statusLine.clearActiveTodo();
+                                            todoWidget.clearActive();
                                         }
                                     }
                                 } catch (...) {
@@ -1013,9 +1077,14 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::contentChunk,
                     &loop,
-                    [&statusLine, useStatusLine](const QString &chunk) {
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](const QString &chunk) {
                         if (useStatusLine) {
-                            statusLine.printContent(chunk);
+                            compositor.printContent(chunk);
                         } else {
                             QTextStream(stdout) << chunk << Qt::flush;
                         }
@@ -1026,9 +1095,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::runComplete,
                     &loop,
-                    [&qout, &loop, &statusLine, useStatusLine, &loopRunning](const QString &) {
+                    [&qout,
+                     &loop,
+                     &compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &loopRunning](const QString &) {
                         if (useStatusLine) {
-                            statusLine.stop();
+                            compositor.stop();
                         }
                         qout << Qt::endl << Qt::endl;
                         if (loopRunning) {
@@ -1041,9 +1118,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::runError,
                     &loop,
-                    [&qout, &loop, &statusLine, useStatusLine, &loopRunning](const QString &error) {
+                    [&qout,
+                     &loop,
+                     &compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &loopRunning](const QString &error) {
                         if (useStatusLine) {
-                            statusLine.stop();
+                            compositor.stop();
                         }
                         qout << Qt::endl << "Error: " << error << Qt::endl << Qt::endl;
                         if (loopRunning) {
@@ -1054,9 +1139,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             /* Connect heartbeat - updates status and token display */
             connections.append(
                 QObject::connect(
-                    agent, &QSocAgent::heartbeat, &loop, [&statusLine, useStatusLine](int, int) {
+                    agent,
+                    &QSocAgent::heartbeat,
+                    &loop,
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](int, int) {
                         if (useStatusLine) {
-                            statusLine.update("Working");
+                            statusBarWidget.setStatus("Working");
                         }
                     }));
 
@@ -1066,9 +1159,14 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::tokenUsage,
                     &loop,
-                    [&statusLine, useStatusLine](qint64 input, qint64 output) {
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](qint64 input, qint64 output) {
                         if (useStatusLine) {
-                            statusLine.updateTokens(input, output);
+                            statusBarWidget.updateTokens(input, output);
                         }
                     }));
 
@@ -1078,9 +1176,14 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::stuckDetected,
                     &loop,
-                    [&statusLine, useStatusLine](int, int silentSeconds) {
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](int, int silentSeconds) {
                         if (useStatusLine) {
-                            statusLine.update(
+                            statusBarWidget.setStatus(
                                 QString("Working [%1s no progress]").arg(silentSeconds));
                         }
                     }));
@@ -1091,9 +1194,14 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::retrying,
                     &loop,
-                    [&statusLine, useStatusLine](int attempt, int maxAttempts, const QString &) {
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](int attempt, int maxAttempts, const QString &) {
                         if (useStatusLine) {
-                            statusLine.update(
+                            statusBarWidget.setStatus(
                                 QString("Retrying (%1/%2)").arg(attempt).arg(maxAttempts));
                         }
                     }));
@@ -1104,12 +1212,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::compacting,
                     &loop,
-                    [&statusLine, useStatusLine](int layer, int before, int after) {
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](int layer, int before, int after) {
                         if (useStatusLine) {
-                            statusLine.update(QString("Compacting L%1: %2->%3 tokens")
-                                                  .arg(layer)
-                                                  .arg(before)
-                                                  .arg(after));
+                            statusBarWidget.setStatus(QString("Compacting L%1: %2->%3 tokens")
+                                                          .arg(layer)
+                                                          .arg(before)
+                                                          .arg(after));
                         }
                     }));
 
@@ -1119,9 +1232,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::runAborted,
                     &loop,
-                    [&qout, &loop, &statusLine, useStatusLine, &loopRunning](const QString &) {
+                    [&qout,
+                     &loop,
+                     &compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &loopRunning](const QString &) {
                         if (useStatusLine) {
-                            statusLine.stop();
+                            compositor.stop();
                         }
                         qout << Qt::endl << "(interrupted)" << Qt::endl << Qt::endl;
                         if (loopRunning) {
@@ -1136,10 +1257,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
                 agent,
-                [agent, &statusLine, useStatusLine, &escMonitor]() {
+                [agent,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 useStatusLine,
+                 &escMonitor]() {
                     if (checkDoubleInterrupt()) {
                         if (useStatusLine) {
-                            statusLine.stop();
+                            compositor.stop();
                         }
                         escMonitor.stop();
                         QTextStream(stderr) << "\n" << Qt::flush;
@@ -1154,9 +1282,10 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     QObject::connect(
                         agent,
                         &QSocAgent::reasoningChunk,
-                        &statusLine,
-                        [&statusLine](const QString &chunk) {
-                            statusLine.printContent("\033[2m" + chunk + "\033[0m");
+                        &compositor,
+                        [&compositor, &statusBarWidget, &todoWidget, &queueWidget, &inputWidget](
+                            const QString &chunk) {
+                            compositor.printContent(chunk, QTuiScrollView::Dim);
                         }));
             }
 
@@ -1166,59 +1295,64 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     &escMonitor,
                     &QAgentInputMonitor::inputReady,
                     agent,
-                    [agent, &statusLine, useStatusLine, &qout, &escMonitor, llm = this->llmService](
-                        const QString &text) {
+                    [agent,
+                     &compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &qout,
+                     &escMonitor,
+                     llm = this->llmService](const QString &text) {
                         if (text.startsWith("!")) {
                             QString shellCmd = text.mid(1).trimmed();
                             if (!shellCmd.isEmpty()) {
                                 if (useStatusLine) {
-                                    statusLine.pause();
+                                    compositor.pause();
                                 }
                                 qout << "\n" << Qt::flush;
                                 escMonitor.stop();
                                 runShellEscape(shellCmd, true);
                                 escMonitor.start();
                                 if (useStatusLine) {
-                                    statusLine.resume();
+                                    compositor.resume();
                                 }
                             }
                             return;
                         }
-                        if (text.startsWith("/thinking")) {
-                            QString level = text.mid(9).trimmed().toLower();
+                        if (text.startsWith("/effort")) {
+                            QString level = text.mid(7).trimmed().toLower();
                             if (level.isEmpty()) {
-                                QSocAgentConfig cfg  = agent->getConfig();
-                                QString         info = QString("\nThinking: %1")
-                                                   .arg(
-                                                       cfg.thinkingLevel.isEmpty()
-                                                           ? "off"
-                                                           : cfg.thinkingLevel);
+                                QSocAgentConfig cfg = agent->getConfig();
+                                QString         info
+                                    = QString("\nEffort: %1")
+                                          .arg(cfg.effortLevel.isEmpty() ? "off" : cfg.effortLevel);
                                 if (!cfg.reasoningModel.isEmpty()) {
                                     info += QString(" (model: %1)").arg(cfg.reasoningModel);
                                 }
                                 info += "\n";
-                                statusLine.printContent(info);
+                                compositor.printContent(info);
                             } else if (level == "off") {
-                                agent->setThinkingLevel(QString());
-                                statusLine.setThinkingLevel(QString());
-                                statusLine.printContent("\nThinking: off\n");
+                                agent->setEffortLevel(QString());
+                                statusBarWidget.setEffortLevel(QString());
+                                compositor.printContent("\nEffort: off\n");
                             } else if (level == "low" || level == "medium" || level == "high") {
-                                agent->setThinkingLevel(level);
-                                statusLine.setThinkingLevel(level);
-                                statusLine.printContent(QString("\nThinking: %1\n").arg(level));
+                                agent->setEffortLevel(level);
+                                statusBarWidget.setEffortLevel(level);
+                                compositor.printContent(QString("\nEffort: %1\n").arg(level));
                             } else {
-                                statusLine.printContent(
-                                    "\nUsage: /thinking [off|low|medium|high]\n");
+                                compositor.printContent("\nUsage: /effort [off|low|medium|high]\n");
                             }
                             return;
                         }
                         if (text.startsWith("/model")) {
-                            handleModelCommand(text, qout, llm, agent);
+                            handleModelCommand(text, qout, llm, agent, false);
                             return;
                         }
                         agent->queueRequest(text);
                         if (useStatusLine) {
-                            statusLine.addQueuedRequest(text);
+                            queueWidget.addRequest(text);
                         } else {
                             qout << "\n(queued: " << text << ")\n" << Qt::flush;
                         }
@@ -1227,11 +1361,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                 QObject::connect(
                     agent,
                     &QSocAgent::processingQueuedRequest,
-                    &statusLine,
-                    [&statusLine, useStatusLine, &qout](const QString &request, int) {
+                    &compositor,
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &qout](const QString &request, int) {
                         if (useStatusLine) {
-                            statusLine.removeQueuedRequest(request);
-                            statusLine.printContent(QString("\n> %1\n").arg(request));
+                            queueWidget.removeRequest(request);
+                            compositor.printContent(QString("\n> %1\n").arg(request));
                         } else {
                             qout << "\n> " << request << "\n" << Qt::flush;
                         }
@@ -1241,14 +1381,22 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     QObject::connect(
                         &escMonitor,
                         &QAgentInputMonitor::inputChanged,
-                        &statusLine,
-                        &QAgentStatusLine::setInputLine));
+                        &compositor,
+                        [&inputWidget](const QString &text) { inputWidget.setText(text); }));
             }
 
             /* Start status line and agent */
             if (useStatusLine) {
-                statusLine.setThinkingLevel(agent->getConfig().thinkingLevel);
-                statusLine.start("Thinking");
+                QString modelId = llmService->getCurrentModelId();
+                compositor.setTitle("QSoC Agent -- " + (modelId.isEmpty() ? "default" : modelId));
+                statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
+                statusBarWidget.setStatus("Reasoning");
+                statusBarWidget.startTimers();
+                {
+                    QString mid = llmService->getCurrentModelId();
+                    compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+                }
+                compositor.start();
             }
             escMonitor.start();
             agent->runStream(input);
@@ -1276,8 +1424,12 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     QObject::connect(
                         agent,
                         &QSocAgent::toolCalled,
-                        &statusLine,
-                        [&statusLine](const QString &toolName, const QString &arguments) {
+                        &compositor,
+                        [&compositor,
+                         &statusBarWidget,
+                         &todoWidget,
+                         &queueWidget,
+                         &inputWidget](const QString &toolName, const QString &arguments) {
                             /* Extract detail from arguments for better UX */
                             QString detail;
                             try {
@@ -1310,7 +1462,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                     detail = QString::fromStdString(args["url"].get<std::string>());
                                 } else if (args.contains("id")) {
                                     int     todoId = args["id"].get<int>();
-                                    QString title  = statusLine.getTodoTitle(todoId);
+                                    QString title  = todoWidget.getTitle(todoId);
                                     detail         = title.isEmpty() ? "#" + QString::number(todoId)
                                                                      : "\"" + title + "\"";
                                 }
@@ -1319,10 +1471,10 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                             }
                             /* Skip [Tool] output for todo tools - status shown in TODO list */
                             if (toolName.startsWith("todo_")) {
-                                statusLine.resetProgress();
-                                statusLine.update(QString("Running %1...").arg(toolName));
+                                statusBarWidget.resetProgress();
+                                statusBarWidget.setStatus(QString("Running %1...").arg(toolName));
                             } else {
-                                statusLine.toolCalled(toolName, detail);
+                                statusBarWidget.toolCalled(toolName, detail);
                             }
                         }));
 
@@ -1330,28 +1482,33 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     QObject::connect(
                         agent,
                         &QSocAgent::toolResult,
-                        &statusLine,
-                        [&statusLine](const QString &toolName, const QString &result) {
-                            statusLine.resetProgress();
-                            statusLine.update(QString("%1 done, thinking").arg(toolName));
+                        &compositor,
+                        [&compositor,
+                         &statusBarWidget,
+                         &todoWidget,
+                         &queueWidget,
+                         &inputWidget](const QString &toolName, const QString &result) {
+                            statusBarWidget.resetProgress();
+                            statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
 
                             /* Parse and update todo list based on tool type */
                             if (toolName == "todo_list") {
                                 auto items = parseTodoListResult(result);
-                                statusLine.setTodoList(items);
+                                todoWidget.setItems(items);
                             } else if (toolName == "todo_add") {
                                 auto item = parseTodoAddResult(result);
                                 if (item.id >= 0) {
-                                    statusLine.addTodoItem(item);
+                                    todoWidget.addItem(item);
                                 }
                             } else if (toolName == "todo_update") {
                                 auto [todoId, newStatus] = parseTodoUpdateResult(result);
                                 if (todoId >= 0) {
-                                    statusLine.updateTodoStatus(todoId, newStatus);
+                                    todoWidget.updateStatus(todoId, newStatus);
                                 }
                             }
                             if (toolName.startsWith("todo_")) {
-                                statusLine.updateTodoDisplay(result);
+                                /* updateTodoDisplay deprecated: widgets auto-render */ (
+                                    void) (result);
                             }
                         }));
 
@@ -1360,8 +1517,12 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     QObject::connect(
                         agent,
                         &QSocAgent::toolCalled,
-                        &statusLine,
-                        [&statusLine](const QString &toolName, const QString &arguments) {
+                        &compositor,
+                        [&compositor,
+                         &statusBarWidget,
+                         &todoWidget,
+                         &queueWidget,
+                         &inputWidget](const QString &toolName, const QString &arguments) {
                             if (toolName == "todo_update") {
                                 try {
                                     auto args = json::parse(arguments.toStdString());
@@ -1370,9 +1531,9 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                             args["status"].get<std::string>());
                                         if (status == "in_progress" && args.contains("id")) {
                                             int todoId = args["id"].get<int>();
-                                            statusLine.setActiveTodo(todoId);
+                                            todoWidget.setActive(todoId);
                                         } else if (status == "done" || status == "pending") {
-                                            statusLine.clearActiveTodo();
+                                            todoWidget.clearActive();
                                         }
                                     }
                                 } catch (...) {
@@ -1394,9 +1555,16 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::runComplete,
                     &loop,
-                    [&loop, &statusLine, useStatusLine, &loopRunning](const QString &) {
+                    [&loop,
+                     &compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &loopRunning](const QString &) {
                         if (useStatusLine) {
-                            statusLine.stop();
+                            compositor.stop();
                         }
                         if (loopRunning) {
                             loop.quit();
@@ -1408,9 +1576,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::runError,
                     &loop,
-                    [&qout, &loop, &statusLine, useStatusLine, &loopRunning](const QString &error) {
+                    [&qout,
+                     &loop,
+                     &compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &loopRunning](const QString &error) {
                         if (useStatusLine) {
-                            statusLine.stop();
+                            compositor.stop();
                         }
                         qout << Qt::endl << "Error: " << error << Qt::endl << Qt::endl;
                         if (loopRunning) {
@@ -1421,9 +1597,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             /* Connect heartbeat - updates status and token display */
             connections.append(
                 QObject::connect(
-                    agent, &QSocAgent::heartbeat, &loop, [&statusLine, useStatusLine](int, int) {
+                    agent,
+                    &QSocAgent::heartbeat,
+                    &loop,
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](int, int) {
                         if (useStatusLine) {
-                            statusLine.update("Working");
+                            statusBarWidget.setStatus("Working");
                         }
                     }));
 
@@ -1433,9 +1617,14 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::tokenUsage,
                     &loop,
-                    [&statusLine, useStatusLine](qint64 input, qint64 output) {
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](qint64 input, qint64 output) {
                         if (useStatusLine) {
-                            statusLine.updateTokens(input, output);
+                            statusBarWidget.updateTokens(input, output);
                         }
                     }));
 
@@ -1445,9 +1634,14 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::stuckDetected,
                     &loop,
-                    [&statusLine, useStatusLine](int, int silentSeconds) {
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](int, int silentSeconds) {
                         if (useStatusLine) {
-                            statusLine.update(
+                            statusBarWidget.setStatus(
                                 QString("Working [%1s no progress]").arg(silentSeconds));
                         }
                     }));
@@ -1458,9 +1652,14 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::retrying,
                     &loop,
-                    [&statusLine, useStatusLine](int attempt, int maxAttempts, const QString &) {
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](int attempt, int maxAttempts, const QString &) {
                         if (useStatusLine) {
-                            statusLine.update(
+                            statusBarWidget.setStatus(
                                 QString("Retrying (%1/%2)").arg(attempt).arg(maxAttempts));
                         }
                     }));
@@ -1471,12 +1670,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::compacting,
                     &loop,
-                    [&statusLine, useStatusLine](int layer, int before, int after) {
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine](int layer, int before, int after) {
                         if (useStatusLine) {
-                            statusLine.update(QString("Compacting L%1: %2->%3 tokens")
-                                                  .arg(layer)
-                                                  .arg(before)
-                                                  .arg(after));
+                            statusBarWidget.setStatus(QString("Compacting L%1: %2->%3 tokens")
+                                                          .arg(layer)
+                                                          .arg(before)
+                                                          .arg(after));
                         }
                     }));
 
@@ -1486,9 +1690,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     agent,
                     &QSocAgent::runAborted,
                     &loop,
-                    [&qout, &loop, &statusLine, useStatusLine, &loopRunning](const QString &) {
+                    [&qout,
+                     &loop,
+                     &compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &loopRunning](const QString &) {
                         if (useStatusLine) {
-                            statusLine.stop();
+                            compositor.stop();
                         }
                         qout << Qt::endl << "(interrupted)" << Qt::endl << Qt::endl;
                         if (loopRunning) {
@@ -1503,10 +1715,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
                 agent,
-                [agent, &statusLine, useStatusLine, &escMonitor]() {
+                [agent,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 useStatusLine,
+                 &escMonitor]() {
                     if (checkDoubleInterrupt()) {
                         if (useStatusLine) {
-                            statusLine.stop();
+                            compositor.stop();
                         }
                         escMonitor.stop();
                         QTextStream(stderr) << "\n" << Qt::flush;
@@ -1521,59 +1740,64 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     &escMonitor,
                     &QAgentInputMonitor::inputReady,
                     agent,
-                    [agent, &statusLine, useStatusLine, &qout, &escMonitor, llm = this->llmService](
-                        const QString &text) {
+                    [agent,
+                     &compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &qout,
+                     &escMonitor,
+                     llm = this->llmService](const QString &text) {
                         if (text.startsWith("!")) {
                             QString shellCmd = text.mid(1).trimmed();
                             if (!shellCmd.isEmpty()) {
                                 if (useStatusLine) {
-                                    statusLine.pause();
+                                    compositor.pause();
                                 }
                                 qout << "\n" << Qt::flush;
                                 escMonitor.stop();
                                 runShellEscape(shellCmd, true);
                                 escMonitor.start();
                                 if (useStatusLine) {
-                                    statusLine.resume();
+                                    compositor.resume();
                                 }
                             }
                             return;
                         }
-                        if (text.startsWith("/thinking")) {
-                            QString level = text.mid(9).trimmed().toLower();
+                        if (text.startsWith("/effort")) {
+                            QString level = text.mid(7).trimmed().toLower();
                             if (level.isEmpty()) {
-                                QSocAgentConfig cfg  = agent->getConfig();
-                                QString         info = QString("\nThinking: %1")
-                                                   .arg(
-                                                       cfg.thinkingLevel.isEmpty()
-                                                           ? "off"
-                                                           : cfg.thinkingLevel);
+                                QSocAgentConfig cfg = agent->getConfig();
+                                QString         info
+                                    = QString("\nEffort: %1")
+                                          .arg(cfg.effortLevel.isEmpty() ? "off" : cfg.effortLevel);
                                 if (!cfg.reasoningModel.isEmpty()) {
                                     info += QString(" (model: %1)").arg(cfg.reasoningModel);
                                 }
                                 info += "\n";
-                                statusLine.printContent(info);
+                                compositor.printContent(info);
                             } else if (level == "off") {
-                                agent->setThinkingLevel(QString());
-                                statusLine.setThinkingLevel(QString());
-                                statusLine.printContent("\nThinking: off\n");
+                                agent->setEffortLevel(QString());
+                                statusBarWidget.setEffortLevel(QString());
+                                compositor.printContent("\nEffort: off\n");
                             } else if (level == "low" || level == "medium" || level == "high") {
-                                agent->setThinkingLevel(level);
-                                statusLine.setThinkingLevel(level);
-                                statusLine.printContent(QString("\nThinking: %1\n").arg(level));
+                                agent->setEffortLevel(level);
+                                statusBarWidget.setEffortLevel(level);
+                                compositor.printContent(QString("\nEffort: %1\n").arg(level));
                             } else {
-                                statusLine.printContent(
-                                    "\nUsage: /thinking [off|low|medium|high]\n");
+                                compositor.printContent("\nUsage: /effort [off|low|medium|high]\n");
                             }
                             return;
                         }
                         if (text.startsWith("/model")) {
-                            handleModelCommand(text, qout, llm, agent);
+                            handleModelCommand(text, qout, llm, agent, false);
                             return;
                         }
                         agent->queueRequest(text);
                         if (useStatusLine) {
-                            statusLine.addQueuedRequest(text);
+                            queueWidget.addRequest(text);
                         } else {
                             qout << "\n(queued: " << text << ")\n" << Qt::flush;
                         }
@@ -1582,11 +1806,17 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                 QObject::connect(
                     agent,
                     &QSocAgent::processingQueuedRequest,
-                    &statusLine,
-                    [&statusLine, useStatusLine, &qout](const QString &request, int) {
+                    &compositor,
+                    [&compositor,
+                     &statusBarWidget,
+                     &todoWidget,
+                     &queueWidget,
+                     &inputWidget,
+                     useStatusLine,
+                     &qout](const QString &request, int) {
                         if (useStatusLine) {
-                            statusLine.removeQueuedRequest(request);
-                            statusLine.printContent(QString("\n> %1\n").arg(request));
+                            queueWidget.removeRequest(request);
+                            compositor.printContent(QString("\n> %1\n").arg(request));
                         } else {
                             qout << "\n> " << request << "\n" << Qt::flush;
                         }
@@ -1596,16 +1826,22 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     QObject::connect(
                         &escMonitor,
                         &QAgentInputMonitor::inputChanged,
-                        &statusLine,
-                        &QAgentStatusLine::setInputLine));
+                        &compositor,
+                        [&inputWidget](const QString &text) { inputWidget.setText(text); }));
             }
 
             /* Start status line and agent */
             if (useStatusLine) {
-                statusLine.setThinkingLevel(agent->getConfig().thinkingLevel);
-                statusLine.start("Thinking");
+                statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
+                statusBarWidget.setStatus("Reasoning");
+                statusBarWidget.startTimers();
+                {
+                    QString mid = llmService->getCurrentModelId();
+                    compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+                }
+                compositor.start();
             } else {
-                qout << "Thinking" << Qt::flush;
+                qout << "Reasoning" << Qt::flush;
             }
             escMonitor.start();
             agent->runStream(input);
@@ -1617,7 +1853,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             saveConversation(agent, projectManager);
 
             if (!useStatusLine) {
-                qout << "\r\033[K"; /* Clear the "Thinking..." line */
+                qout << "\r\033[K"; /* Clear the "Reasoning..." line */
             }
 
             /* Display complete result at once */
@@ -1639,141 +1875,189 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
 {
     QTextStream qout(stdout);
 
-    /* Print welcome message */
-    qout << "QSoC Agent - Interactive AI Assistant for SoC Design" << Qt::endl;
-    qout << "Type 'exit' to exit, '/help' for commands" << Qt::endl;
+    /* Create TUI compositor — enters alt screen immediately */
+    QTuiCompositor compositor(this);
+    auto          &todoWidget      = compositor.todoList();
+    auto          &queueWidget     = compositor.queuedList();
+    auto          &statusBarWidget = compositor.statusBar();
+    auto          &inputWidget     = compositor.inputLine();
 
-    if (readline->terminalCapability().supportsColor()) {
-        qout << "(Enhanced mode with readline support";
-        if (streaming) {
-            qout << ", streaming enabled";
-        }
-        qout << ")" << Qt::endl;
+    /* Set title and start full-screen TUI */
+    {
+        QString mid = llmService->getCurrentModelId();
+        compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
     }
-    /* Show endpoint info */
-    if (socConfig) {
-        QString model = socConfig->getValue("llm.model");
-        QString url   = socConfig->getValue("llm.url");
-        if (!model.isEmpty() || !url.isEmpty()) {
-            qout << "Model: " << (model.isEmpty() ? "default" : model)
-                 << " | Endpoint: " << (url.isEmpty() ? "not configured" : url) << Qt::endl;
-        }
-    }
-    qout << Qt::endl;
+    statusBarWidget.setStatus("Ready");
+    statusBarWidget.setModel(llmService->getCurrentModelId());
+    compositor.start();
 
-    /* Create status line for visual feedback */
-    QAgentStatusLine statusLine(this);
+    /* Show welcome banner in scroll view */
+    compositor.printContent("QSoC Agent - Interactive AI Assistant for SoC Design\n");
+    compositor.printContent("Type 'exit' to exit, '/help' for commands\n");
+    if (streaming) {
+        compositor.printContent("(Enhanced mode, streaming enabled)\n");
+    }
+
+    /* Connect mouse wheel from input monitor to compositor scroll */
+    QAgentInputMonitor inputMonitor(this);
+    connect(&inputMonitor, &QAgentInputMonitor::mouseWheel, [&compositor](int direction) {
+        if (direction == 0) {
+            compositor.scrollContentUp(3);
+        } else {
+            compositor.scrollContentDown(3);
+        }
+    });
+
+    /* Connect live input display */
+    connect(&inputMonitor, &QAgentInputMonitor::inputChanged, [&inputWidget](const QString &text) {
+        inputWidget.setText(text);
+    });
+
+    /* Start input monitor (raw mode for entire REPL lifetime) */
+    inputMonitor.start();
 
     /* Load previous conversation if available */
     if (loadConversation(agent, projectManager)) {
         int msgCount = static_cast<int>(agent->getMessages().size());
-        qout << "(Loaded " << msgCount << " messages from previous session)" << Qt::endl
-             << Qt::endl;
+        compositor.printContent(
+            QString("(Loaded %1 messages from previous session)\n\n").arg(msgCount));
     }
 
-    /* Main loop */
-    while (true) {
-        QString input = readline->readLine("qsoc> ");
+    /* Main loop: use inputMonitor for prompt (raw mode, full-screen TUI) */
+    bool exitRequested = false;
 
-        /* Check for EOF or Ctrl+C */
-        if (readline->isEof()) {
-            /* Fallback: SIGINT may interrupt replxx before key binding fires */
-            if (g_sigintReceived) {
-                g_sigintReceived = 0;
+    while (!exitRequested) {
+        /* Wait for user input via QEventLoop + inputMonitor signals */
+        QEventLoop promptLoop;
+        QString    input;
+
+        /* Show prompt hint in status bar */
+        statusBarWidget.setStatus("Ready");
+        inputWidget.clear();
+        compositor.render();
+
+        auto connInput = connect(
+            &inputMonitor,
+            &QAgentInputMonitor::inputReady,
+            [&input, &promptLoop](const QString &text) {
+                input = text;
+                promptLoop.quit();
+            });
+        auto connCtrlC = connect(
+            &inputMonitor,
+            &QAgentInputMonitor::ctrlCPressed,
+            [&promptLoop, &exitRequested, &compositor]() {
                 if (checkDoubleInterrupt()) {
-                    qout << Qt::endl;
-                    break;
+                    exitRequested = true;
+                    promptLoop.quit();
+                } else {
+                    compositor.printContent("\n^C\n");
+                    promptLoop.quit();
                 }
-                qout << Qt::endl;
-                continue;
-            }
-            qout << Qt::endl << "Goodbye!" << Qt::endl;
-            break;
-        }
+            });
+        auto connEsc = connect(&inputMonitor, &QAgentInputMonitor::escPressed, [&promptLoop]() {
+            promptLoop.quit();
+        });
 
-        /* Check for Ctrl+C (replxx key binding path) */
-        if (readline->isCtrlC()) {
-            if (checkDoubleInterrupt()) {
-                qout << Qt::endl;
-                break;
-            }
-            qout << Qt::endl;
-            continue;
+        promptLoop.exec();
+
+        QObject::disconnect(connInput);
+        QObject::disconnect(connCtrlC);
+        QObject::disconnect(connEsc);
+
+        if (exitRequested) {
+            break;
         }
 
         input = input.trimmed();
 
-        /* Handle special commands (slash-prefixed, exit/quit also work without slash) */
         if (input.isEmpty()) {
             continue;
         }
+
+        /* Echo user input in scroll view */
+        compositor.printContent("\nqsoc> " + input + "\n");
+
         if (input.startsWith("!")) {
             QString shellCmd = input.mid(1).trimmed();
             if (!shellCmd.isEmpty()) {
-                runShellEscape(shellCmd, readline->terminalCapability().supportsColor());
+                compositor.pause();
+                inputMonitor.stop();
+                runShellEscape(shellCmd, true);
+                inputMonitor.start();
+                compositor.resume();
             }
             continue;
         }
         QString cmd = input.toLower();
         if (cmd == "exit" || cmd == "quit" || cmd == "/exit" || cmd == "/quit") {
-            qout << "Goodbye!" << Qt::endl;
+            compositor.printContent("Goodbye!\n");
             break;
         }
         if (cmd == "/clear") {
             agent->clearHistory();
             QFile::remove(conversationFilePath(projectManager));
-            qout << "History cleared." << Qt::endl;
+            compositor.printContent("History cleared.\n");
             continue;
         }
         if (cmd == "/help") {
-            qout << "Commands:" << Qt::endl;
-            qout << "  exit, /exit  - Exit the agent" << Qt::endl;
-            qout << "  /clear       - Clear conversation history" << Qt::endl;
-            qout << "  /compact     - Compact conversation context" << Qt::endl;
-            qout << "  /thinking    - Show/set thinking level (off/low/medium/high)" << Qt::endl;
-            qout << "  /model       - Show/switch model" << Qt::endl;
-            qout << "  !<command>   - Execute a shell command directly" << Qt::endl;
-            qout << "  /help        - Show this help message" << Qt::endl;
-            qout << Qt::endl;
-            qout << "Keyboard shortcuts:" << Qt::endl;
-            qout << "  Up/Down     - Browse history" << Qt::endl;
-            qout << "  Ctrl+R      - Search history" << Qt::endl;
-            qout << "  Ctrl+A/E    - Move to start/end of line" << Qt::endl;
-            qout << "  Ctrl+K      - Delete to end of line" << Qt::endl;
-            qout << "  Ctrl+W      - Delete word" << Qt::endl;
-            qout << "  Ctrl+L      - Clear screen" << Qt::endl;
-            qout << Qt::endl;
-            qout << "Or just type your question/request in natural language." << Qt::endl;
+            compositor.printContent("Commands:\n");
+            compositor.printContent("  exit, /exit  - Exit the agent\n");
+            compositor.printContent("  /clear       - Clear conversation history\n");
+            compositor.printContent("  /compact     - Compact conversation context\n");
+            compositor.printContent(
+                "  /effort    - Show/set reasoning effort (off/low/medium/high)\n");
+            compositor.printContent("  /model       - Show/switch model\n");
+            compositor.printContent("  !<command>   - Execute a shell command directly\n");
+            compositor.printContent("  /help        - Show this help message\n");
+            compositor.printContent("\n");
+            compositor.printContent("Keyboard shortcuts:\n");
+            compositor.printContent("  Up/Down     - Browse history\n");
+            compositor.printContent("  Ctrl+R      - Search history\n");
+            compositor.printContent("  Ctrl+A/E    - Move to start/end of line\n");
+            compositor.printContent("  Ctrl+K      - Delete to end of line\n");
+            compositor.printContent("  Ctrl+W      - Delete word\n");
+            compositor.printContent("  Ctrl+L      - Clear screen\n");
+            compositor.printContent("\n");
+            compositor.printContent("Or just type your question/request in natural language.\n");
             continue;
         }
         if (cmd == "/compact") {
             int saved = agent->compact();
-            qout << QString("Compacted: saved %1 tokens").arg(saved) << Qt::endl;
+            compositor.printContent(QString("Compacted: saved %1 tokens\n").arg(saved));
             saveConversation(agent, projectManager);
             continue;
         }
-        if (cmd.startsWith("/thinking")) {
-            QString         level = input.mid(9).trimmed().toLower();
+        if (cmd.startsWith("/effort")) {
+            QString         level = input.mid(7).trimmed().toLower();
             QSocAgentConfig cfg   = agent->getConfig();
             if (level.isEmpty()) {
-                qout << "Thinking: " << (cfg.thinkingLevel.isEmpty() ? "off" : cfg.thinkingLevel);
+                compositor.printContent(
+                    "Effort: " + (cfg.effortLevel.isEmpty() ? QString("off") : cfg.effortLevel));
                 if (!cfg.reasoningModel.isEmpty()) {
-                    qout << " (model: " << cfg.reasoningModel << ")";
+                    compositor.printContent(" (model: " + cfg.reasoningModel + ")");
                 }
-                qout << Qt::endl;
+                compositor.printContent("\n");
             } else if (level == "off") {
-                agent->setThinkingLevel(QString());
-                qout << "Thinking: off" << Qt::endl;
+                agent->setEffortLevel(QString());
+                compositor.printContent("Effort: off\n");
             } else if (level == "low" || level == "medium" || level == "high") {
-                agent->setThinkingLevel(level);
-                qout << "Thinking: " << level << Qt::endl;
+                agent->setEffortLevel(level);
+                compositor.printContent("Effort: " + level + "\n");
             } else {
-                qout << "Usage: /thinking [off|low|medium|high]" << Qt::endl;
+                compositor.printContent("Usage: /effort [off|low|medium|high]\n");
             }
             continue;
         }
         if (cmd.startsWith("/model")) {
             handleModelCommand(input, qout, llmService, agent);
+            inputMonitor.resetEscState();
+            {
+                QString mid = llmService->getCurrentModelId();
+                statusBarWidget.setModel(mid);
+                compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+            }
+            compositor.render(); /* Redraw after menu overlay */
             continue;
         }
 
@@ -1786,8 +2070,12 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             auto connToolCalled = QObject::connect(
                 agent,
                 &QSocAgent::toolCalled,
-                &statusLine,
-                [&statusLine](const QString &toolName, const QString &arguments) {
+                &compositor,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](const QString &toolName, const QString &arguments) {
                     /* Extract detail from arguments for better UX */
                     QString detail;
                     try {
@@ -1821,38 +2109,42 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                     }
                     /* Skip [Tool] output for todo tools - status shown in TODO list */
                     if (toolName.startsWith("todo_")) {
-                        statusLine.resetProgress();
-                        statusLine.update(QString("Running %1...").arg(toolName));
+                        statusBarWidget.resetProgress();
+                        statusBarWidget.setStatus(QString("Running %1...").arg(toolName));
                     } else {
-                        statusLine.toolCalled(toolName, detail);
+                        statusBarWidget.toolCalled(toolName, detail);
                     }
                 });
 
             auto connToolResult = QObject::connect(
                 agent,
                 &QSocAgent::toolResult,
-                &statusLine,
-                [&statusLine](const QString &toolName, const QString &result) {
-                    statusLine.resetProgress();
-                    statusLine.update(QString("%1 done, thinking").arg(toolName));
+                &compositor,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](const QString &toolName, const QString &result) {
+                    statusBarWidget.resetProgress();
+                    statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
 
                     /* Parse and update todo list based on tool type */
                     if (toolName == "todo_list") {
                         auto items = parseTodoListResult(result);
-                        statusLine.setTodoList(items);
+                        todoWidget.setItems(items);
                     } else if (toolName == "todo_add") {
                         auto item = parseTodoAddResult(result);
                         if (item.id >= 0) {
-                            statusLine.addTodoItem(item);
+                            todoWidget.addItem(item);
                         }
                     } else if (toolName == "todo_update") {
                         auto [todoId, newStatus] = parseTodoUpdateResult(result);
                         if (todoId >= 0) {
-                            statusLine.updateTodoStatus(todoId, newStatus);
+                            todoWidget.updateStatus(todoId, newStatus);
                         }
                     }
                     if (toolName.startsWith("todo_")) {
-                        statusLine.updateTodoDisplay(result);
+                        /* updateTodoDisplay deprecated: widgets auto-render */ (void) (result);
                     }
                 });
 
@@ -1860,8 +2152,12 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             auto connTodoTrack = QObject::connect(
                 agent,
                 &QSocAgent::toolCalled,
-                &statusLine,
-                [&statusLine](const QString &toolName, const QString &arguments) {
+                &compositor,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](const QString &toolName, const QString &arguments) {
                     if (toolName == "todo_update") {
                         try {
                             auto args = json::parse(arguments.toStdString());
@@ -1870,9 +2166,9 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                                     args["status"].get<std::string>());
                                 if (status == "in_progress" && args.contains("id")) {
                                     int todoId = args["id"].get<int>();
-                                    statusLine.setActiveTodo(todoId);
+                                    todoWidget.setActive(todoId);
                                 } else if (status == "done" || status == "pending") {
-                                    statusLine.clearActiveTodo();
+                                    todoWidget.clearActive();
                                 }
                             }
                         } catch (...) {
@@ -1882,17 +2178,26 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 });
 
             auto connContentChunk = QObject::connect(
-                agent, &QSocAgent::contentChunk, &loop, [&statusLine](const QString &chunk) {
-                    statusLine.printContent(chunk);
-                });
+                agent,
+                &QSocAgent::contentChunk,
+                &loop,
+                [&compositor, &statusBarWidget, &todoWidget, &queueWidget, &inputWidget](
+                    const QString &chunk) { compositor.printContent(chunk); });
 
             auto connRunComplete = QObject::connect(
                 agent,
                 &QSocAgent::runComplete,
                 &loop,
-                [&qout, &loop, &statusLine, &loopRunning](const QString &) {
-                    statusLine.stop();
-                    qout << Qt::endl << Qt::endl;
+                [&qout,
+                 &loop,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 &loopRunning](const QString &) {
+                    compositor.resetExecution();
+                    compositor.printContent("\n");
                     if (loopRunning) {
                         loop.quit();
                     }
@@ -1902,30 +2207,55 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 agent,
                 &QSocAgent::runError,
                 &loop,
-                [&qout, &loop, &statusLine, &loopRunning](const QString &error) {
-                    statusLine.stop();
-                    qout << Qt::endl << "Error: " << error << Qt::endl << Qt::endl;
+                [&qout,
+                 &loop,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 &loopRunning](const QString &error) {
+                    compositor.resetExecution();
+                    compositor.printContent("\nError: " + error + "\n");
                     if (loopRunning) {
                         loop.quit();
                     }
                 });
 
             /* Connect heartbeat - updates status and token display */
-            auto connHeartbeat
-                = QObject::connect(agent, &QSocAgent::heartbeat, &loop, [&statusLine](int, int) {
-                      statusLine.update("Working");
-                  });
+            auto connHeartbeat = QObject::connect(
+                agent,
+                &QSocAgent::heartbeat,
+                &loop,
+                [&compositor, &statusBarWidget, &todoWidget, &queueWidget, &inputWidget](int, int) {
+                    statusBarWidget.setStatus("Working");
+                });
 
             /* Connect token usage update */
             auto connTokens = QObject::connect(
-                agent, &QSocAgent::tokenUsage, &loop, [&statusLine](qint64 input, qint64 output) {
-                    statusLine.updateTokens(input, output);
+                agent,
+                &QSocAgent::tokenUsage,
+                &loop,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](qint64 input, qint64 output) {
+                    statusBarWidget.updateTokens(input, output);
                 });
 
             /* Connect stuck detection for warning */
             auto connStuck = QObject::connect(
-                agent, &QSocAgent::stuckDetected, &loop, [&statusLine](int, int silentSeconds) {
-                    statusLine.update(QString("Working [%1s no progress]").arg(silentSeconds));
+                agent,
+                &QSocAgent::stuckDetected,
+                &loop,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](int, int silentSeconds) {
+                    statusBarWidget.setStatus(
+                        QString("Working [%1s no progress]").arg(silentSeconds));
                 });
 
             /* Connect retrying signal for user feedback */
@@ -1933,8 +2263,13 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 agent,
                 &QSocAgent::retrying,
                 &loop,
-                [&statusLine](int attempt, int maxAttempts, const QString &) {
-                    statusLine.update(QString("Retrying (%1/%2)").arg(attempt).arg(maxAttempts));
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](int attempt, int maxAttempts, const QString &) {
+                    statusBarWidget.setStatus(
+                        QString("Retrying (%1/%2)").arg(attempt).arg(maxAttempts));
                 });
 
             /* Connect compacting signal for context compaction feedback */
@@ -1942,8 +2277,12 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 agent,
                 &QSocAgent::compacting,
                 &loop,
-                [&statusLine](int layer, int before, int after) {
-                    statusLine.update(
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](int layer, int before, int after) {
+                    statusBarWidget.setStatus(
                         QString("Compacting L%1: %2->%3 tokens").arg(layer).arg(before).arg(after));
                 });
 
@@ -1952,26 +2291,33 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 agent,
                 &QSocAgent::runAborted,
                 &loop,
-                [&qout, &loop, &statusLine, &loopRunning](const QString &) {
-                    statusLine.stop();
-                    qout << Qt::endl << "(interrupted)" << Qt::endl << Qt::endl;
+                [&qout,
+                 &loop,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 &loopRunning](const QString &) {
+                    compositor.resetExecution();
+                    compositor.printContent("\n(interrupted)\n");
                     if (loopRunning) {
                         loop.quit();
                     }
                 });
 
-            /* ESC key monitor */
-            QAgentInputMonitor escMonitor;
-            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            /* Use existing inputMonitor for ESC/Ctrl+C during execution */
+            auto &escMonitor  = inputMonitor;
+            auto  connEscExec = QObject::connect(
+                &escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
             auto connCtrlC = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
                 agent,
-                [agent, &statusLine, &escMonitor]() {
+                [agent, &compositor, &escMonitor]() {
                     if (checkDoubleInterrupt()) {
-                        statusLine.stop();
                         escMonitor.stop();
-                        QTextStream(stderr) << "\n" << Qt::flush;
+                        compositor.stop();
                         _exit(130);
                     }
                     agent->abort();
@@ -1979,8 +2325,8 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
 
             /* Connect reasoning chunk display */
             auto connReasoning = QObject::connect(
-                agent, &QSocAgent::reasoningChunk, &statusLine, [&statusLine](const QString &chunk) {
-                    statusLine.printContent("\033[2m" + chunk + "\033[0m");
+                agent, &QSocAgent::reasoningChunk, &compositor, [&compositor](const QString &chunk) {
+                    compositor.printContent(chunk, QTuiScrollView::Dim);
                 });
 
             /* Connect input queuing signals */
@@ -1988,73 +2334,86 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 &escMonitor,
                 &QAgentInputMonitor::inputReady,
                 agent,
-                [agent, &statusLine, &escMonitor, &qout, llm = this->llmService](
-                    const QString &text) {
+                [agent,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 &escMonitor,
+                 &qout,
+                 llm = this->llmService](const QString &text) {
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
-                            statusLine.pause();
-                            escMonitor.stop();
+                            compositor.pause();
                             runShellEscape(shellCmd, true);
-                            escMonitor.start();
-                            statusLine.resume();
+                            compositor.resume();
                         }
                         return;
                     }
                     if (text.startsWith("/model")) {
-                        handleModelCommand(text, qout, llm, agent);
+                        handleModelCommand(text, qout, llm, agent, false);
                         return;
                     }
-                    if (text.startsWith("/thinking")) {
-                        QString level = text.mid(9).trimmed().toLower();
+                    if (text.startsWith("/effort")) {
+                        QString level = text.mid(7).trimmed().toLower();
                         if (level.isEmpty()) {
                             QSocAgentConfig cfg = agent->getConfig();
                             QString         info
-                                = QString("\nThinking: %1")
-                                      .arg(cfg.thinkingLevel.isEmpty() ? "off" : cfg.thinkingLevel);
+                                = QString("\nEffort: %1")
+                                      .arg(cfg.effortLevel.isEmpty() ? "off" : cfg.effortLevel);
                             if (!cfg.reasoningModel.isEmpty()) {
                                 info += QString(" (model: %1)").arg(cfg.reasoningModel);
                             }
                             info += "\n";
-                            statusLine.printContent(info);
+                            compositor.printContent(info);
                         } else if (level == "off") {
-                            agent->setThinkingLevel(QString());
-                            statusLine.setThinkingLevel(QString());
-                            statusLine.printContent("\nThinking: off\n");
+                            agent->setEffortLevel(QString());
+                            statusBarWidget.setEffortLevel(QString());
+                            compositor.printContent("\nEffort: off\n");
                         } else if (level == "low" || level == "medium" || level == "high") {
-                            agent->setThinkingLevel(level);
-                            statusLine.setThinkingLevel(level);
-                            statusLine.printContent(QString("\nThinking: %1\n").arg(level));
+                            agent->setEffortLevel(level);
+                            statusBarWidget.setEffortLevel(level);
+                            compositor.printContent(QString("\nEffort: %1\n").arg(level));
                         } else {
-                            statusLine.printContent("\nUsage: /thinking [off|low|medium|high]\n");
+                            compositor.printContent("\nUsage: /effort [off|low|medium|high]\n");
                         }
                         return;
                     }
                     agent->queueRequest(text);
-                    statusLine.addQueuedRequest(text);
+                    queueWidget.addRequest(text);
                 });
             auto connProcessingQueued = QObject::connect(
                 agent,
                 &QSocAgent::processingQueuedRequest,
-                &statusLine,
-                [&statusLine](const QString &request, int) {
-                    statusLine.removeQueuedRequest(request);
-                    statusLine.printContent(QString("\n> %1\n").arg(request));
+                &compositor,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](const QString &request, int) {
+                    queueWidget.removeRequest(request);
+                    compositor.printContent(QString("\n> %1\n").arg(request));
                 });
             auto connInputChanged = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::inputChanged,
-                &statusLine,
-                &QAgentStatusLine::setInputLine);
+                &compositor,
+                [&inputWidget](const QString &text) { inputWidget.setText(text); });
 
             /* Start status line and agent */
-            statusLine.setThinkingLevel(agent->getConfig().thinkingLevel);
-            statusLine.start("Thinking");
-            escMonitor.start();
+            statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
+            statusBarWidget.setStatus("Reasoning");
+            statusBarWidget.startTimers();
+            {
+                QString mid = llmService->getCurrentModelId();
+                compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+            }
+            compositor.start();
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
-            escMonitor.stop();
 
             /* Save conversation after each interaction */
             saveConversation(agent, projectManager);
@@ -2087,8 +2446,12 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             auto connToolCalled = QObject::connect(
                 agent,
                 &QSocAgent::toolCalled,
-                &statusLine,
-                [&statusLine](const QString &toolName, const QString &arguments) {
+                &compositor,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](const QString &toolName, const QString &arguments) {
                     /* Extract detail from arguments for better UX */
                     QString detail;
                     try {
@@ -2122,38 +2485,42 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                     }
                     /* Skip [Tool] output for todo tools - status shown in TODO list */
                     if (toolName.startsWith("todo_")) {
-                        statusLine.resetProgress();
-                        statusLine.update(QString("Running %1...").arg(toolName));
+                        statusBarWidget.resetProgress();
+                        statusBarWidget.setStatus(QString("Running %1...").arg(toolName));
                     } else {
-                        statusLine.toolCalled(toolName, detail);
+                        statusBarWidget.toolCalled(toolName, detail);
                     }
                 });
 
             auto connToolResult = QObject::connect(
                 agent,
                 &QSocAgent::toolResult,
-                &statusLine,
-                [&statusLine](const QString &toolName, const QString &result) {
-                    statusLine.resetProgress();
-                    statusLine.update(QString("%1 done, thinking").arg(toolName));
+                &compositor,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](const QString &toolName, const QString &result) {
+                    statusBarWidget.resetProgress();
+                    statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
 
                     /* Parse and update todo list based on tool type */
                     if (toolName == "todo_list") {
                         auto items = parseTodoListResult(result);
-                        statusLine.setTodoList(items);
+                        todoWidget.setItems(items);
                     } else if (toolName == "todo_add") {
                         auto item = parseTodoAddResult(result);
                         if (item.id >= 0) {
-                            statusLine.addTodoItem(item);
+                            todoWidget.addItem(item);
                         }
                     } else if (toolName == "todo_update") {
                         auto [todoId, newStatus] = parseTodoUpdateResult(result);
                         if (todoId >= 0) {
-                            statusLine.updateTodoStatus(todoId, newStatus);
+                            todoWidget.updateStatus(todoId, newStatus);
                         }
                     }
                     if (toolName.startsWith("todo_")) {
-                        statusLine.updateTodoDisplay(result);
+                        /* updateTodoDisplay deprecated: widgets auto-render */ (void) (result);
                     }
                 });
 
@@ -2161,8 +2528,12 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             auto connTodoTrack = QObject::connect(
                 agent,
                 &QSocAgent::toolCalled,
-                &statusLine,
-                [&statusLine](const QString &toolName, const QString &arguments) {
+                &compositor,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](const QString &toolName, const QString &arguments) {
                     if (toolName == "todo_update") {
                         try {
                             auto args = json::parse(arguments.toStdString());
@@ -2171,9 +2542,9 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                                     args["status"].get<std::string>());
                                 if (status == "in_progress" && args.contains("id")) {
                                     int todoId = args["id"].get<int>();
-                                    statusLine.setActiveTodo(todoId);
+                                    todoWidget.setActive(todoId);
                                 } else if (status == "done" || status == "pending") {
-                                    statusLine.clearActiveTodo();
+                                    todoWidget.clearActive();
                                 }
                             }
                         } catch (...) {
@@ -2192,8 +2563,14 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 agent,
                 &QSocAgent::runComplete,
                 &loop,
-                [&loop, &statusLine, &loopRunning](const QString &) {
-                    statusLine.stop();
+                [&loop,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 &loopRunning](const QString &) {
+                    compositor.resetExecution();
                     if (loopRunning) {
                         loop.quit();
                     }
@@ -2203,30 +2580,55 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 agent,
                 &QSocAgent::runError,
                 &loop,
-                [&qout, &loop, &statusLine, &loopRunning](const QString &error) {
-                    statusLine.stop();
-                    qout << Qt::endl << "Error: " << error << Qt::endl << Qt::endl;
+                [&qout,
+                 &loop,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 &loopRunning](const QString &error) {
+                    compositor.resetExecution();
+                    compositor.printContent("\nError: " + error + "\n");
                     if (loopRunning) {
                         loop.quit();
                     }
                 });
 
             /* Connect heartbeat - updates status and token display */
-            auto connHeartbeat
-                = QObject::connect(agent, &QSocAgent::heartbeat, &loop, [&statusLine](int, int) {
-                      statusLine.update("Working");
-                  });
+            auto connHeartbeat = QObject::connect(
+                agent,
+                &QSocAgent::heartbeat,
+                &loop,
+                [&compositor, &statusBarWidget, &todoWidget, &queueWidget, &inputWidget](int, int) {
+                    statusBarWidget.setStatus("Working");
+                });
 
             /* Connect token usage update */
             auto connTokens = QObject::connect(
-                agent, &QSocAgent::tokenUsage, &loop, [&statusLine](qint64 input, qint64 output) {
-                    statusLine.updateTokens(input, output);
+                agent,
+                &QSocAgent::tokenUsage,
+                &loop,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](qint64 input, qint64 output) {
+                    statusBarWidget.updateTokens(input, output);
                 });
 
             /* Connect stuck detection for warning */
             auto connStuck = QObject::connect(
-                agent, &QSocAgent::stuckDetected, &loop, [&statusLine](int, int silentSeconds) {
-                    statusLine.update(QString("Working [%1s no progress]").arg(silentSeconds));
+                agent,
+                &QSocAgent::stuckDetected,
+                &loop,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](int, int silentSeconds) {
+                    statusBarWidget.setStatus(
+                        QString("Working [%1s no progress]").arg(silentSeconds));
                 });
 
             /* Connect retrying signal for user feedback */
@@ -2234,8 +2636,13 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 agent,
                 &QSocAgent::retrying,
                 &loop,
-                [&statusLine](int attempt, int maxAttempts, const QString &) {
-                    statusLine.update(QString("Retrying (%1/%2)").arg(attempt).arg(maxAttempts));
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](int attempt, int maxAttempts, const QString &) {
+                    statusBarWidget.setStatus(
+                        QString("Retrying (%1/%2)").arg(attempt).arg(maxAttempts));
                 });
 
             /* Connect compacting signal for context compaction feedback */
@@ -2243,8 +2650,12 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 agent,
                 &QSocAgent::compacting,
                 &loop,
-                [&statusLine](int layer, int before, int after) {
-                    statusLine.update(
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](int layer, int before, int after) {
+                    statusBarWidget.setStatus(
                         QString("Compacting L%1: %2->%3 tokens").arg(layer).arg(before).arg(after));
                 });
 
@@ -2253,26 +2664,33 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 agent,
                 &QSocAgent::runAborted,
                 &loop,
-                [&qout, &loop, &statusLine, &loopRunning](const QString &) {
-                    statusLine.stop();
-                    qout << Qt::endl << "(interrupted)" << Qt::endl << Qt::endl;
+                [&qout,
+                 &loop,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 &loopRunning](const QString &) {
+                    compositor.resetExecution();
+                    compositor.printContent("\n(interrupted)\n");
                     if (loopRunning) {
                         loop.quit();
                     }
                 });
 
-            /* ESC key monitor */
-            QAgentInputMonitor escMonitor;
-            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            /* Use existing inputMonitor for ESC/Ctrl+C during execution */
+            auto &escMonitor  = inputMonitor;
+            auto  connEscExec = QObject::connect(
+                &escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
             auto connCtrlC = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
                 agent,
-                [agent, &statusLine, &escMonitor]() {
+                [agent, &compositor, &escMonitor]() {
                     if (checkDoubleInterrupt()) {
-                        statusLine.stop();
                         escMonitor.stop();
-                        QTextStream(stderr) << "\n" << Qt::flush;
+                        compositor.stop();
                         _exit(130);
                     }
                     agent->abort();
@@ -2283,80 +2701,93 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 &escMonitor,
                 &QAgentInputMonitor::inputReady,
                 agent,
-                [agent, &statusLine, &escMonitor, &qout, llm = this->llmService](
-                    const QString &text) {
+                [agent,
+                 &compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget,
+                 &escMonitor,
+                 &qout,
+                 llm = this->llmService](const QString &text) {
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
-                            statusLine.pause();
-                            escMonitor.stop();
+                            compositor.pause();
                             runShellEscape(shellCmd, true);
-                            escMonitor.start();
-                            statusLine.resume();
+                            compositor.resume();
                         }
                         return;
                     }
                     if (text.startsWith("/model")) {
-                        handleModelCommand(text, qout, llm, agent);
+                        handleModelCommand(text, qout, llm, agent, false);
                         return;
                     }
-                    if (text.startsWith("/thinking")) {
-                        QString level = text.mid(9).trimmed().toLower();
+                    if (text.startsWith("/effort")) {
+                        QString level = text.mid(7).trimmed().toLower();
                         if (level.isEmpty()) {
                             QSocAgentConfig cfg = agent->getConfig();
                             QString         info
-                                = QString("\nThinking: %1")
-                                      .arg(cfg.thinkingLevel.isEmpty() ? "off" : cfg.thinkingLevel);
+                                = QString("\nEffort: %1")
+                                      .arg(cfg.effortLevel.isEmpty() ? "off" : cfg.effortLevel);
                             if (!cfg.reasoningModel.isEmpty()) {
                                 info += QString(" (model: %1)").arg(cfg.reasoningModel);
                             }
                             info += "\n";
-                            statusLine.printContent(info);
+                            compositor.printContent(info);
                         } else if (level == "off") {
-                            agent->setThinkingLevel(QString());
-                            statusLine.setThinkingLevel(QString());
-                            statusLine.printContent("\nThinking: off\n");
+                            agent->setEffortLevel(QString());
+                            statusBarWidget.setEffortLevel(QString());
+                            compositor.printContent("\nEffort: off\n");
                         } else if (level == "low" || level == "medium" || level == "high") {
-                            agent->setThinkingLevel(level);
-                            statusLine.setThinkingLevel(level);
-                            statusLine.printContent(QString("\nThinking: %1\n").arg(level));
+                            agent->setEffortLevel(level);
+                            statusBarWidget.setEffortLevel(level);
+                            compositor.printContent(QString("\nEffort: %1\n").arg(level));
                         } else {
-                            statusLine.printContent("\nUsage: /thinking [off|low|medium|high]\n");
+                            compositor.printContent("\nUsage: /effort [off|low|medium|high]\n");
                         }
                         return;
                     }
                     agent->queueRequest(text);
-                    statusLine.addQueuedRequest(text);
+                    queueWidget.addRequest(text);
                 });
             auto connProcessingQueued = QObject::connect(
                 agent,
                 &QSocAgent::processingQueuedRequest,
-                &statusLine,
-                [&statusLine](const QString &request, int) {
-                    statusLine.removeQueuedRequest(request);
-                    statusLine.printContent(QString("\n> %1\n").arg(request));
+                &compositor,
+                [&compositor,
+                 &statusBarWidget,
+                 &todoWidget,
+                 &queueWidget,
+                 &inputWidget](const QString &request, int) {
+                    queueWidget.removeRequest(request);
+                    compositor.printContent(QString("\n> %1\n").arg(request));
                 });
             auto connInputChanged = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::inputChanged,
-                &statusLine,
-                &QAgentStatusLine::setInputLine);
+                &compositor,
+                [&inputWidget](const QString &text) { inputWidget.setText(text); });
 
             /* Start status line and agent */
-            statusLine.setThinkingLevel(agent->getConfig().thinkingLevel);
-            statusLine.start("Thinking");
-            escMonitor.start();
+            statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
+            statusBarWidget.setStatus("Reasoning");
+            statusBarWidget.startTimers();
+            {
+                QString mid = llmService->getCurrentModelId();
+                compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+            }
+            compositor.start();
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
-            escMonitor.stop();
 
             /* Save conversation after each interaction */
             saveConversation(agent, projectManager);
 
             /* Display complete result at once */
             if (!finalResult.isEmpty()) {
-                qout << Qt::endl << finalResult << Qt::endl << Qt::endl;
+                compositor.printContent("\n" + finalResult + "\n");
             }
 
             /* Disconnect signals */
@@ -2378,6 +2809,10 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             QObject::disconnect(connInputChanged);
         }
     }
+
+    /* Stop TUI and restore terminal */
+    inputMonitor.stop();
+    compositor.stop();
 
     return true;
 }
