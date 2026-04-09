@@ -11,19 +11,44 @@
 
 namespace {
 
-/* Helper: Parse markdown todo file into structured list */
+/* Helper: Read high water mark from .qsoc/todos.hwm */
+int readHighWaterMark(const QString &todoDir)
+{
+    QFile file(QDir(todoDir).filePath("todos.hwm"));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return 0;
+    }
+    return QTextStream(&file).readAll().trimmed().toInt();
+}
+
+/* Helper: Write high water mark */
+void writeHighWaterMark(const QString &todoDir, int hwm)
+{
+    QDir dir(todoDir);
+    if (!dir.exists()) {
+        dir.mkpath(".");
+    }
+    QFile file(dir.filePath("todos.hwm"));
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream(&file) << hwm;
+    }
+}
+
+/* Helper: Parse markdown todo file into structured list.
+ * Format: - [x] #42 Task title
+ * IDs are stable — never renumbered after deletion. */
 QList<QSocTodoItem> parseTodoMarkdown(const QString &content)
 {
     QList<QSocTodoItem> todos;
-    QStringList         lines     = content.split('\n');
-    QString             priority  = "medium";
-    int                 idCounter = 0;
+    QStringList         lines    = content.split('\n');
+    QString             priority = "medium";
 
-    /* Regex to match: - [x] or - [ ] followed by text */
-    QRegularExpression todoRegex(R"(^-\s*\[([ xX])\]\s*(.+)$)");
+    /* Match: - [x] #42 Title  or legacy: - [x] Title (no ID) */
+    QRegularExpression todoRegex(R"(^-\s*\[([ xX])\]\s*(?:#(\d+)\s+)?(.+)$)");
+
+    int legacyId = 0;
 
     for (const QString &line : lines) {
-        /* Check for priority section headers */
         if (line.startsWith("## High Priority")) {
             priority = "high";
             continue;
@@ -37,21 +62,14 @@ QList<QSocTodoItem> parseTodoMarkdown(const QString &content)
             continue;
         }
 
-        /* Parse todo items */
         QRegularExpressionMatch match = todoRegex.match(line.trimmed());
         if (match.hasMatch()) {
             QSocTodoItem item;
-            item.id       = ++idCounter;
-            item.title    = match.captured(2).trimmed();
-            item.priority = priority;
-
-            QString checkbox = match.captured(1);
-            if (checkbox.toLower() == "x") {
-                item.status = "done";
-            } else {
-                item.status = "pending";
-            }
-
+            QString      idStr = match.captured(2);
+            item.id            = idStr.isEmpty() ? ++legacyId : idStr.toInt();
+            item.title         = match.captured(3).trimmed();
+            item.priority      = priority;
+            item.status        = (match.captured(1).toLower() == "x") ? "done" : "pending";
             todos.append(item);
         }
     }
@@ -59,12 +77,12 @@ QList<QSocTodoItem> parseTodoMarkdown(const QString &content)
     return todos;
 }
 
-/* Helper: Generate markdown from todo list */
+/* Helper: Generate markdown from todo list.
+ * Embeds stable IDs: - [ ] #42 Task title */
 QString generateTodoMarkdown(const QList<QSocTodoItem> &todos)
 {
     QString result = "# QSoC Todo List\n\n";
 
-    /* Group by priority */
     QList<QSocTodoItem> highPriority;
     QList<QSocTodoItem> mediumPriority;
     QList<QSocTodoItem> lowPriority;
@@ -79,35 +97,21 @@ QString generateTodoMarkdown(const QList<QSocTodoItem> &todos)
         }
     }
 
-    /* Output high priority */
-    if (!highPriority.isEmpty()) {
-        result += "## High Priority\n\n";
-        for (const QSocTodoItem &item : highPriority) {
+    auto writeGroup = [&result](const QString &header, const QList<QSocTodoItem> &group) {
+        if (group.isEmpty()) {
+            return;
+        }
+        result += header + "\n\n";
+        for (const QSocTodoItem &item : group) {
             QString checkbox = (item.status == "done") ? "[x]" : "[ ]";
-            result += QString("- %1 %2\n").arg(checkbox, item.title);
+            result += QString("- %1 #%2 %3\n").arg(checkbox).arg(item.id).arg(item.title);
         }
         result += "\n";
-    }
+    };
 
-    /* Output medium priority */
-    if (!mediumPriority.isEmpty()) {
-        result += "## Medium Priority\n\n";
-        for (const QSocTodoItem &item : mediumPriority) {
-            QString checkbox = (item.status == "done") ? "[x]" : "[ ]";
-            result += QString("- %1 %2\n").arg(checkbox, item.title);
-        }
-        result += "\n";
-    }
-
-    /* Output low priority */
-    if (!lowPriority.isEmpty()) {
-        result += "## Low Priority\n\n";
-        for (const QSocTodoItem &item : lowPriority) {
-            QString checkbox = (item.status == "done") ? "[x]" : "[ ]";
-            result += QString("- %1 %2\n").arg(checkbox, item.title);
-        }
-        result += "\n";
-    }
+    writeGroup("## High Priority", highPriority);
+    writeGroup("## Medium Priority", mediumPriority);
+    writeGroup("## Low Priority", lowPriority);
 
     return result;
 }
@@ -342,14 +346,24 @@ QString QSocToolTodoAdd::execute(const json &arguments)
 
     QList<QSocTodoItem> todos = loadTodos();
 
-    /* Create new item */
+    /* Allocate next ID from high water mark */
+    QString todoDir = QFileInfo(todoFilePath()).absolutePath();
+    int     hwm     = readHighWaterMark(todoDir);
+
+    /* Also check existing todos for max ID (in case hwm file is stale) */
+    for (const auto &item : todos) {
+        hwm = qMax(hwm, item.id);
+    }
+
     QSocTodoItem newItem;
-    newItem.id       = static_cast<int>(todos.size()) + 1;
+    newItem.id       = hwm + 1;
     newItem.title    = title;
     newItem.priority = priority;
     newItem.status   = "pending";
 
     todos.append(newItem);
+
+    writeHighWaterMark(todoDir, newItem.id);
 
     if (!saveTodos(todos)) {
         return "Error: Failed to save todo list";
@@ -600,10 +614,7 @@ QString QSocToolTodoDelete::execute(const json &arguments)
         return QString("Error: Todo #%1 not found").arg(todoId);
     }
 
-    /* Renumber remaining items */
-    for (int idx = 0; idx < todos.size(); ++idx) {
-        todos[idx].id = idx + 1;
-    }
+    /* IDs are stable — no renumbering after deletion */
 
     if (!saveTodos(todos)) {
         return "Error: Failed to save todo list";

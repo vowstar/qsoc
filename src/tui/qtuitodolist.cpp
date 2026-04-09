@@ -86,6 +86,13 @@ void QTuiTodoList::updateStatus(int todoId, const QString &newStatus)
     for (auto &item : items) {
         if (item.id == todoId) {
             item.status = newStatus;
+            if (newStatus == "done") {
+                QElapsedTimer timer;
+                timer.start();
+                completionTimers[todoId] = timer;
+            } else {
+                completionTimers.remove(todoId);
+            }
             return;
         }
     }
@@ -138,4 +145,16 @@ void QTuiTodoList::removeItem(int todoId)
 void QTuiTodoList::tick()
 {
     animFrame++;
+
+    /* Expire done items after TTL */
+    QList<int> expired;
+    for (auto iter = completionTimers.begin(); iter != completionTimers.end(); ++iter) {
+        if (iter.value().elapsed() > DONE_TTL_MS) {
+            expired.append(iter.key());
+        }
+    }
+    for (int todoId : expired) {
+        completionTimers.remove(todoId);
+        removeItem(todoId);
+    }
 }
