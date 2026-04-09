@@ -385,27 +385,6 @@ private:
     bool runAgentLoop(QSocAgent *agent, bool streaming = false);
 
     /**
-     * @brief Run the agent loop in simple mode (for pipes/non-TTY).
-     * @details This function runs a simple input loop without readline.
-     * @param agent The agent to run.
-     * @param streaming Whether to use streaming mode.
-     * @retval true Run successfully.
-     * @retval false Run failed.
-     */
-    bool runAgentLoopSimple(QSocAgent *agent, bool streaming = false);
-
-    /**
-     * @brief Run the agent loop in enhanced mode (with readline).
-     * @details This function runs with full readline support.
-     * @param agent The agent to run.
-     * @param readline The readline instance.
-     * @param streaming Whether to use streaming mode.
-     * @retval true Run successfully.
-     * @retval false Run failed.
-     */
-    bool runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readline, bool streaming = false);
-
-    /**
      * @brief Show application name and version and emit exit with exitCode.
      * @details This function will show application name and version and emit
      *          exit with exitCode.
