@@ -34,6 +34,13 @@ public:
     QString getTitle(int todoId) const;
     void    tick();
 
+    /* Remove all completed (done) TODOs */
+    void clearDone();
+    /* Remove a specific TODO by id */
+    void removeItem(int todoId);
+    /* Clear all TODOs */
+    void clearAll();
+
     static constexpr int MAX_VISIBLE = 5;
 
 private:

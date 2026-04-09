@@ -3,6 +3,8 @@
 
 #include "tui/qtuitodolist.h"
 
+#include <algorithm>
+
 int QTuiTodoList::lineCount() const
 {
     if (items.isEmpty()) {
@@ -107,6 +109,30 @@ QString QTuiTodoList::getTitle(int todoId) const
         }
     }
     return {};
+}
+
+void QTuiTodoList::clearDone()
+{
+    items.erase(
+        std::remove_if(
+            items.begin(), items.end(), [](const TodoItem &item) { return item.status == "done"; }),
+        items.end());
+}
+
+void QTuiTodoList::clearAll()
+{
+    items.clear();
+    activeTodoId = -1;
+}
+
+void QTuiTodoList::removeItem(int todoId)
+{
+    for (int idx = 0; idx < items.size(); idx++) {
+        if (items[idx].id == todoId) {
+            items.removeAt(idx);
+            return;
+        }
+    }
 }
 
 void QTuiTodoList::tick()
