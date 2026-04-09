@@ -224,6 +224,50 @@ QMap<QString, QString> QSocConfig::getAllValues() const
     return configValues;
 }
 
+YAML::Node QSocConfig::getYamlNode(const QString &dotPath) const
+{
+    QStringList parts = dotPath.split('.');
+
+    /* Helper: traverse a YAML node by path segments */
+    auto resolve = [&](const QString &filePath) -> YAML::Node {
+        if (!QFile::exists(filePath)) {
+            return {};
+        }
+        try {
+            YAML::Node root = YAML::LoadFile(filePath.toStdString());
+            YAML::Node node = root;
+            for (const QString &part : parts) {
+                if (!node.IsMap() || !node[part.toStdString()]) {
+                    return {};
+                }
+                node = node[part.toStdString()];
+            }
+            return node;
+        } catch (const YAML::Exception &) {
+            return {};
+        }
+    };
+
+    /* Project config has higher priority */
+    if (projectManager) {
+        QString projectPath = projectManager->getProjectPath();
+        if (!projectPath.isEmpty()) {
+            YAML::Node node = resolve(QDir(projectPath).filePath(CONFIG_FILE_PROJECT));
+            if (node.IsDefined() && !node.IsNull()) {
+                return node;
+            }
+        }
+    }
+
+    /* Fall back to user config */
+    YAML::Node node = resolve(QDir::home().absoluteFilePath(CONFIG_FILE_USER));
+    if (node.IsDefined() && !node.IsNull()) {
+        return node;
+    }
+
+    return {};
+}
+
 bool QSocConfig::createTemplateConfig(const QString &filePath)
 {
     /* Create directory if it doesn't exist */

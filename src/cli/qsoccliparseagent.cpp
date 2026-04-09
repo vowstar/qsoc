@@ -69,6 +69,81 @@ void installSigintHandler()
 }
 
 /**
+ * @brief Format model list for /model command output
+ */
+QString formatModelList(QLLMService *llmService)
+{
+    QStringList models  = llmService->availableModels();
+    QString     current = llmService->getCurrentModelId();
+    QString     result  = "Available models:\n";
+
+    for (const QString &modelId : models) {
+        LLMModelConfig cfg    = llmService->getModelConfig(modelId);
+        QString        marker = (modelId == current) ? "* " : "  ";
+        QString        name   = cfg.name.isEmpty() ? cfg.id : cfg.name;
+        QString        info   = QString("(%1K ctx, %2K out)")
+                           .arg(cfg.contextTokens / 1000)
+                           .arg(cfg.maxOutputTokens > 0 ? cfg.maxOutputTokens / 1000 : 0);
+        if (cfg.reasoning) {
+            info += " [reasoning]";
+        }
+        result += QString("  %1%-30s %2 %3\n").arg(marker, modelId, info);
+    }
+
+    return result;
+}
+
+/**
+ * @brief Handle /model command, returns true if command was handled
+ */
+bool handleModelCommand(
+    const QString &input, QTextStream &qout, QLLMService *llmService, QSocAgent *agent)
+{
+    QString arg = input.mid(6).trimmed();
+
+    if (arg.isEmpty()) {
+        /* List models */
+        if (llmService->availableModels().isEmpty()) {
+            qout << "No models configured. Add llm.models section to .qsoc.yml" << Qt::endl;
+        } else {
+            QStringList models  = llmService->availableModels();
+            QString     current = llmService->getCurrentModelId();
+            qout << "Available models:" << Qt::endl;
+            for (const QString &modelId : models) {
+                LLMModelConfig cfg    = llmService->getModelConfig(modelId);
+                QString        marker = (modelId == current) ? "* " : "  ";
+                QString        name   = cfg.name.isEmpty() ? cfg.id : cfg.name;
+                QString        info   = QString("(%1K ctx, %2K out)")
+                                   .arg(cfg.contextTokens / 1000)
+                                   .arg(cfg.maxOutputTokens > 0 ? cfg.maxOutputTokens / 1000 : 0);
+                if (cfg.reasoning) {
+                    info += " [reasoning]";
+                }
+                qout << "  " << marker << modelId << "  " << name << " " << info << Qt::endl;
+            }
+        }
+        return true;
+    }
+
+    /* Switch model */
+    if (llmService->setCurrentModel(arg)) {
+        LLMModelConfig cfg = llmService->getModelConfig(arg);
+        /* Sync agent context budget */
+        QSocAgentConfig agentCfg = agent->getConfig();
+        if (cfg.contextTokens > 0) {
+            agentCfg.maxContextTokens = cfg.contextTokens;
+        }
+        agent->setConfig(agentCfg);
+        QString name = cfg.name.isEmpty() ? cfg.id : cfg.name;
+        qout << "Model: " << arg << " (" << name << ")" << Qt::endl;
+    } else {
+        qout << "Unknown model: " << arg << Qt::endl;
+        qout << "Use /model to list available models" << Qt::endl;
+    }
+    return true;
+}
+
+/**
  * @brief Parse todo_list result into structured items
  * @param result The result string from todo_list tool
  * @return List of parsed TodoItem structures
@@ -484,6 +559,17 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         toolRegistry->registerTool(webSearchTool);
     }
 
+    /* Sync context budget from model registry if available */
+    {
+        QString modelId = llmService->getCurrentModelId();
+        if (!modelId.isEmpty()) {
+            LLMModelConfig modelCfg = llmService->getModelConfig(modelId);
+            if (modelCfg.contextTokens > 0) {
+                config.maxContextTokens = modelCfg.contextTokens;
+            }
+        }
+    }
+
     /* Create agent */
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);
     agent->setMemoryManager(memoryManager);
@@ -623,7 +709,15 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
 
             /* Complete built-in commands */
             QStringList commands
-                = {"exit", "quit", "/exit", "/quit", "/clear", "/compact", "/thinking", "/help"};
+                = {"exit",
+                   "quit",
+                   "/exit",
+                   "/quit",
+                   "/clear",
+                   "/compact",
+                   "/thinking",
+                   "/model",
+                   "/help"};
             for (const QString &cmd : commands) {
                 if (cmd.startsWith(trimmed)) {
                     completions.append(cmd);
@@ -666,13 +760,15 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
         qout << "QSoC Agent - Interactive AI Assistant for SoC Design" << Qt::endl;
         qout << "Type 'exit' to exit, '/help' for commands" << Qt::endl;
         qout << "(Running in simple mode)" << Qt::endl;
-        /* Show endpoint info */
-        if (socConfig) {
-            QString model = socConfig->getValue("llm.model");
-            QString url   = socConfig->getValue("llm.url");
-            if (!model.isEmpty() || !url.isEmpty()) {
-                qout << "Model: " << (model.isEmpty() ? "default" : model)
-                     << " | Endpoint: " << (url.isEmpty() ? "not configured" : url) << Qt::endl;
+        /* Show current model info */
+        {
+            QString modelId = llmService->getCurrentModelId();
+            if (!modelId.isEmpty()) {
+                LLMModelConfig cfg  = llmService->getModelConfig(modelId);
+                QString        name = cfg.name.isEmpty() ? modelId : cfg.name;
+                qout << "Model: " << modelId << " (" << name << ")" << Qt::endl;
+            } else if (llmService->hasEndpoint()) {
+                qout << "Model: " << socConfig->getValue("llm.model", "default") << Qt::endl;
             }
         }
         qout << Qt::endl;
@@ -756,6 +852,7 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             qout << "  /clear       - Clear conversation history" << Qt::endl;
             qout << "  /compact     - Compact conversation context" << Qt::endl;
             qout << "  /thinking    - Show/set thinking level (off/low/medium/high)" << Qt::endl;
+            qout << "  /model       - Show/switch model" << Qt::endl;
             qout << "  !<command>   - Execute a shell command directly" << Qt::endl;
             qout << "  /help        - Show this help message" << Qt::endl;
             qout << Qt::endl;
@@ -786,6 +883,10 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
             } else {
                 qout << "Usage: /thinking [off|low|medium|high]" << Qt::endl;
             }
+            continue;
+        }
+        if (cmd.startsWith("/model")) {
+            handleModelCommand(input, qout, llmService, agent);
             continue;
         }
 
@@ -1065,7 +1166,8 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     &escMonitor,
                     &QAgentInputMonitor::inputReady,
                     agent,
-                    [agent, &statusLine, useStatusLine, &qout, &escMonitor](const QString &text) {
+                    [agent, &statusLine, useStatusLine, &qout, &escMonitor, llm = this->llmService](
+                        const QString &text) {
                         if (text.startsWith("!")) {
                             QString shellCmd = text.mid(1).trimmed();
                             if (!shellCmd.isEmpty()) {
@@ -1108,6 +1210,10 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                 statusLine.printContent(
                                     "\nUsage: /thinking [off|low|medium|high]\n");
                             }
+                            return;
+                        }
+                        if (text.startsWith("/model")) {
+                            handleModelCommand(text, qout, llm, agent);
                             return;
                         }
                         agent->queueRequest(text);
@@ -1415,7 +1521,8 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                     &escMonitor,
                     &QAgentInputMonitor::inputReady,
                     agent,
-                    [agent, &statusLine, useStatusLine, &qout, &escMonitor](const QString &text) {
+                    [agent, &statusLine, useStatusLine, &qout, &escMonitor, llm = this->llmService](
+                        const QString &text) {
                         if (text.startsWith("!")) {
                             QString shellCmd = text.mid(1).trimmed();
                             if (!shellCmd.isEmpty()) {
@@ -1458,6 +1565,10 @@ bool QSocCliWorker::runAgentLoopSimple(QSocAgent *agent, bool streaming)
                                 statusLine.printContent(
                                     "\nUsage: /thinking [off|low|medium|high]\n");
                             }
+                            return;
+                        }
+                        if (text.startsWith("/model")) {
+                            handleModelCommand(text, qout, llm, agent);
                             return;
                         }
                         agent->queueRequest(text);
@@ -1620,6 +1731,7 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             qout << "  /clear       - Clear conversation history" << Qt::endl;
             qout << "  /compact     - Compact conversation context" << Qt::endl;
             qout << "  /thinking    - Show/set thinking level (off/low/medium/high)" << Qt::endl;
+            qout << "  /model       - Show/switch model" << Qt::endl;
             qout << "  !<command>   - Execute a shell command directly" << Qt::endl;
             qout << "  /help        - Show this help message" << Qt::endl;
             qout << Qt::endl;
@@ -1658,6 +1770,10 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
             } else {
                 qout << "Usage: /thinking [off|low|medium|high]" << Qt::endl;
             }
+            continue;
+        }
+        if (cmd.startsWith("/model")) {
+            handleModelCommand(input, qout, llmService, agent);
             continue;
         }
 
@@ -1872,7 +1988,8 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 &escMonitor,
                 &QAgentInputMonitor::inputReady,
                 agent,
-                [agent, &statusLine, &escMonitor](const QString &text) {
+                [agent, &statusLine, &escMonitor, &qout, llm = this->llmService](
+                    const QString &text) {
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
@@ -1882,6 +1999,10 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                             escMonitor.start();
                             statusLine.resume();
                         }
+                        return;
+                    }
+                    if (text.startsWith("/model")) {
+                        handleModelCommand(text, qout, llm, agent);
                         return;
                     }
                     if (text.startsWith("/thinking")) {
@@ -2162,7 +2283,8 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                 &escMonitor,
                 &QAgentInputMonitor::inputReady,
                 agent,
-                [agent, &statusLine, &escMonitor](const QString &text) {
+                [agent, &statusLine, &escMonitor, &qout, llm = this->llmService](
+                    const QString &text) {
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
@@ -2172,6 +2294,10 @@ bool QSocCliWorker::runAgentLoopEnhanced(QSocAgent *agent, QAgentReadline *readl
                             escMonitor.start();
                             statusLine.resume();
                         }
+                        return;
+                    }
+                    if (text.startsWith("/model")) {
+                        handleModelCommand(text, qout, llm, agent);
                         return;
                     }
                     if (text.startsWith("/thinking")) {

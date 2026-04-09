@@ -6,6 +6,8 @@
 
 #include "common/qsocprojectmanager.h"
 
+#include <yaml-cpp/yaml.h>
+
 #include <QMap>
 #include <QObject>
 #include <QString>
@@ -101,6 +103,15 @@ public slots:
      * @return Map of all configuration values.
      */
     QMap<QString, QString> getAllValues() const;
+
+    /**
+     * @brief Get a YAML node by dot-separated path
+     * @details Traverses loaded config files to find a deep YAML node.
+     *          Checks project config first, then user config.
+     * @param dotPath Dot-separated path (e.g., "llm.models")
+     * @return YAML::Node at the path, or undefined node if not found
+     */
+    YAML::Node getYamlNode(const QString &dotPath) const;
 
 private:
     /* Project manager pointer, can be nullptr */

@@ -62,6 +62,46 @@ bool QLLMService::hasEndpoint() const
     return !endpoints.isEmpty();
 }
 
+QStringList QLLMService::availableModels() const
+{
+    return modelConfigs.keys();
+}
+
+LLMModelConfig QLLMService::getModelConfig(const QString &modelId) const
+{
+    return modelConfigs.value(modelId, LLMModelConfig());
+}
+
+QString QLLMService::getCurrentModelId() const
+{
+    return currentModelId;
+}
+
+bool QLLMService::setCurrentModel(const QString &modelId)
+{
+    if (!modelConfigs.contains(modelId)) {
+        return false;
+    }
+
+    currentModelId                  = modelId;
+    const LLMModelConfig &modelConf = modelConfigs[modelId];
+
+    /* Rebuild primary endpoint from model config */
+    endpoints.clear();
+    currentEndpoint = 0;
+
+    LLMEndpoint endpoint;
+    endpoint.name            = modelConf.name.isEmpty() ? modelConf.id : modelConf.name;
+    endpoint.url             = QUrl(modelConf.url);
+    endpoint.key             = modelConf.key;
+    endpoint.model           = modelConf.id;
+    endpoint.timeout         = modelConf.timeout;
+    endpoint.maxOutputTokens = modelConf.maxOutputTokens;
+    endpoints.append(endpoint);
+
+    return true;
+}
+
 void QLLMService::setFallbackStrategy(LLMFallbackStrategy strategy)
 {
     fallbackStrategy = strategy;
@@ -210,37 +250,86 @@ void QLLMService::loadConfigSettings()
 {
     endpoints.clear();
     currentEndpoint = 0;
+    modelConfigs.clear();
+    defaultModelId.clear();
+    currentModelId.clear();
 
     if (!config) {
         return;
     }
 
-    /* Load from llm.url, llm.key, llm.model */
-    QString url   = config->getValue("llm.url");
-    QString key   = config->getValue("llm.key");
-    QString model = config->getValue("llm.model");
+    /* Load model registry from llm.models (YAML 3-level nesting) */
+    YAML::Node modelsNode = config->getYamlNode("llm.models");
+    if (modelsNode.IsDefined() && modelsNode.IsMap()) {
+        for (const auto &item : modelsNode) {
+            try {
+                LLMModelConfig modelCfg;
+                modelCfg.id = QString::fromStdString(item.first.as<std::string>());
 
-    /* Add endpoint if URL is available */
-    if (!url.isEmpty()) {
-        LLMEndpoint endpoint;
-        endpoint.name  = "primary";
-        endpoint.url   = QUrl(url);
-        endpoint.key   = key;
-        endpoint.model = model;
+                YAML::Node node = item.second;
+                if (node["name"]) {
+                    modelCfg.name = QString::fromStdString(node["name"].as<std::string>());
+                }
+                if (node["url"]) {
+                    modelCfg.url = QString::fromStdString(node["url"].as<std::string>());
+                }
+                if (node["key"]) {
+                    modelCfg.key = QString::fromStdString(node["key"].as<std::string>());
+                }
+                if (node["timeout"]) {
+                    modelCfg.timeout = node["timeout"].as<int>();
+                }
+                if (node["context"]) {
+                    modelCfg.contextTokens = node["context"].as<int>();
+                }
+                if (node["max_output_tokens"]) {
+                    modelCfg.maxOutputTokens = node["max_output_tokens"].as<int>();
+                }
+                if (node["reasoning"]) {
+                    modelCfg.reasoning = node["reasoning"].as<bool>();
+                }
 
-        /* Get timeout if configured */
-        QString timeoutStr = config->getValue("llm.timeout");
-        if (!timeoutStr.isEmpty()) {
-            endpoint.timeout = timeoutStr.toInt();
+                modelConfigs[modelCfg.id] = modelCfg;
+            } catch (const YAML::Exception &err) {
+                qWarning() << "Failed to parse model config:" << err.what();
+            }
         }
+    }
 
-        /* Get max output tokens if configured */
-        QString maxOutputStr = config->getValue("llm.max_output_tokens");
-        if (!maxOutputStr.isEmpty()) {
-            endpoint.maxOutputTokens = maxOutputStr.toInt();
+    /* Select default model */
+    defaultModelId = config->getValue("llm.model");
+
+    if (!defaultModelId.isEmpty() && modelConfigs.contains(defaultModelId)) {
+        /* Use model registry */
+        setCurrentModel(defaultModelId);
+    } else if (!modelConfigs.isEmpty()) {
+        /* Fall back to first model in registry */
+        setCurrentModel(modelConfigs.firstKey());
+    } else {
+        /* Legacy: load from flat llm.url/llm.key/llm.model */
+        QString url   = config->getValue("llm.url");
+        QString key   = config->getValue("llm.key");
+        QString model = config->getValue("llm.model");
+
+        if (!url.isEmpty()) {
+            LLMEndpoint endpoint;
+            endpoint.name  = "primary";
+            endpoint.url   = QUrl(url);
+            endpoint.key   = key;
+            endpoint.model = model;
+
+            QString timeoutStr = config->getValue("llm.timeout");
+            if (!timeoutStr.isEmpty()) {
+                endpoint.timeout = timeoutStr.toInt();
+            }
+
+            QString maxOutputStr = config->getValue("llm.max_output_tokens");
+            if (!maxOutputStr.isEmpty()) {
+                endpoint.maxOutputTokens = maxOutputStr.toInt();
+            }
+
+            endpoints.append(endpoint);
         }
-
-        endpoints.append(endpoint);
     }
 
     /* Load fallback strategy */
