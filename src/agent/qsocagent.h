@@ -141,14 +141,14 @@ public:
     void setToolRegistry(QSocToolRegistry *toolRegistry);
 
     /**
-     * @brief Set the thinking/reasoning level
-     * @param level Thinking level: empty/off, "low", "medium", "high"
+     * @brief Set the reasoning effort level
+     * @param level Effort level: empty/off, "low", "medium", "high"
      */
-    void setThinkingLevel(const QString &level);
+    void setEffortLevel(const QString &level);
 
     /**
      * @brief Set the reasoning model
-     * @param model Model name to use when thinking is enabled (empty=use primary)
+     * @param model Model name to use when effort is set (empty=use primary)
      */
     void setReasoningModel(const QString &model);
 

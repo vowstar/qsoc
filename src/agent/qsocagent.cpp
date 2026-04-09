@@ -302,13 +302,13 @@ void QSocAgent::processStreamIteration()
 
     /* Determine model override for reasoning */
     QString modelOverride;
-    if (!agentConfig.thinkingLevel.isEmpty() && !agentConfig.reasoningModel.isEmpty()) {
+    if (!agentConfig.effortLevel.isEmpty() && !agentConfig.reasoningModel.isEmpty()) {
         modelOverride = agentConfig.reasoningModel;
     }
 
     /* Send streaming request */
     llmService->sendChatCompletionStream(
-        messagesWithSystem, tools, agentConfig.temperature, agentConfig.thinkingLevel, modelOverride);
+        messagesWithSystem, tools, agentConfig.temperature, agentConfig.effortLevel, modelOverride);
 }
 
 void QSocAgent::handleStreamComplete(const json &response)
@@ -619,9 +619,9 @@ void QSocAgent::setToolRegistry(QSocToolRegistry *toolRegistry)
     this->toolRegistry = toolRegistry;
 }
 
-void QSocAgent::setThinkingLevel(const QString &level)
+void QSocAgent::setEffortLevel(const QString &level)
 {
-    agentConfig.thinkingLevel = level;
+    agentConfig.effortLevel = level;
 }
 
 void QSocAgent::setReasoningModel(const QString &model)

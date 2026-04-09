@@ -54,27 +54,17 @@ public:
     void processBytes(const char *data, int len);
 
 signals:
-    /**
-     * @brief Emitted when ESC key is detected
-     */
     void escPressed();
-
-    /**
-     * @brief Emitted when Ctrl+C is detected (byte 0x03)
-     */
     void ctrlCPressed();
-
-    /**
-     * @brief Emitted when user presses Enter with non-empty input
-     * @param text Complete input line
-     */
     void inputReady(const QString &text);
-
-    /**
-     * @brief Emitted on each keystroke for live display
-     * @param text Current input buffer content
-     */
     void inputChanged(const QString &text);
+
+    /* Mouse events (SGR format: ESC [ < btn ; x ; y M/m) */
+    void mouseWheel(int direction); /* 0=up, 1=down */
+    void mouseClick(int button, int col, int row, bool pressed);
+
+    /* Arrow keys */
+    void arrowKey(int key); /* 'A'=up, 'B'=down, 'C'=right, 'D'=left */
 
 private:
     static int  utf8SeqLen(unsigned char lead);
@@ -89,6 +79,17 @@ private:
     bool             termiosSaved = false;
     QString          inputBuffer;
     QByteArray       utf8Pending;
+    QByteArray       escBuffer; /* Buffer for ESC sequence parsing */
+    bool             inEscSeq = false;
+
+    void processEscSequence();
+
+public:
+    /* Reset ESC sequence state (call after modal overlay consumes ESC) */
+    void resetEscState();
+
+private:
+    void resetEscBuffer();
 };
 
 #endif // QAGENTINPUTMONITOR_H

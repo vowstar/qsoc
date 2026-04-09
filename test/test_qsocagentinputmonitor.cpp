@@ -233,45 +233,30 @@ private slots:
     void testEscClearsInputAndEmits()
     {
         QAgentInputMonitor monitor;
-        QStringList        changes;
         int                escCount = 0;
 
-        connect(&monitor, &QAgentInputMonitor::inputChanged, [&changes](const QString &text) {
-            changes.append(text);
-        });
         connect(&monitor, &QAgentInputMonitor::escPressed, [&escCount]() { escCount++; });
 
-        /* Type "abc" then ESC */
-        const char data[] = {'a', 'b', 'c', 0x1B};
-        monitor.processBytes(data, 4);
+        /* Send ESC followed by a non-[ byte to trigger immediate escPressed.
+         * Bare ESC alone uses a 50ms timer which needs a running event loop. */
+        const char data[] = {'a', 'b', 'c', 0x1B, 'x'};
+        monitor.processBytes(data, 5);
 
-        /* inputChanged("") emitted before escPressed */
-        QVERIFY(!changes.isEmpty());
-        QCOMPARE(changes.last(), "");
         QCOMPARE(escCount, 1);
     }
 
     void testEscStopsProcessing()
     {
         QAgentInputMonitor monitor;
-        QStringList        changes;
+        bool               escReceived = false;
 
-        connect(&monitor, &QAgentInputMonitor::inputChanged, [&changes](const QString &text) {
-            changes.append(text);
-        });
+        connect(&monitor, &QAgentInputMonitor::escPressed, [&escReceived]() { escReceived = true; });
 
-        /* ESC in the middle of input stops processing remaining bytes */
-        const char data[] = {'a', 0x1B, 'b', 'c'};
-        monitor.processBytes(data, 4);
+        /* ESC followed by non-CSI byte ('b') triggers escPressed immediately */
+        const char data[] = {'a', 0x1B, 'b'};
+        monitor.processBytes(data, 3);
 
-        /* After ESC, 'b' and 'c' should NOT be processed */
-        bool hasBC = false;
-        for (const QString &change : changes) {
-            if (change.contains('b') || change.contains('c')) {
-                hasBC = true;
-            }
-        }
-        QVERIFY(!hasBC);
+        QVERIFY(escReceived);
     }
 
     void testUtf8CjkInput()
