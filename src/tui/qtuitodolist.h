@@ -6,7 +6,9 @@
 
 #include "tui/qtuiwidget.h"
 
+#include <QElapsedTimer>
 #include <QList>
+#include <QMap>
 #include <QString>
 
 /**
@@ -44,9 +46,11 @@ public:
     static constexpr int MAX_VISIBLE = 5;
 
 private:
-    QList<TodoItem> items;
-    int             activeTodoId = -1;
-    int             animFrame    = 0;
+    QList<TodoItem>          items;
+    int                      activeTodoId = -1;
+    int                      animFrame    = 0;
+    QMap<int, QElapsedTimer> completionTimers;    /* id → time since marked done */
+    static constexpr int     DONE_TTL_MS = 30000; /* 30 seconds */
 };
 
 #endif // QTUITODOLIST_H
