@@ -31,6 +31,22 @@ struct LLMEndpoint
 };
 
 /**
+ * @brief Model configuration from llm.models section
+ * @details Each model is self-contained with its own URL, key, and limits
+ */
+struct LLMModelConfig
+{
+    QString id;                       /* Model ID (config key, sent to API) */
+    QString name;                     /* Friendly display name */
+    QString url;                      /* API endpoint URL */
+    QString key;                      /* API key (empty = no auth) */
+    int     timeout         = 120000; /* Request timeout ms */
+    int     contextTokens   = 128000; /* Context window size */
+    int     maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
+    bool    reasoning       = false;  /* Supports thinking/reasoning mode */
+};
+
+/**
  * @brief The LLMResponse struct
  * @details This struct holds the result of an LLM request
  */
@@ -118,6 +134,34 @@ public slots:
      * @param strategy Strategy to use when an endpoint fails
      */
     void setFallbackStrategy(LLMFallbackStrategy strategy);
+
+    /* Model registry */
+
+    /**
+     * @brief Get list of available model IDs from config
+     * @return List of model IDs
+     */
+    QStringList availableModels() const;
+
+    /**
+     * @brief Get configuration for a specific model
+     * @param modelId Model ID
+     * @return Model config (empty id if not found)
+     */
+    LLMModelConfig getModelConfig(const QString &modelId) const;
+
+    /**
+     * @brief Get the currently active model ID
+     * @return Current model ID
+     */
+    QString getCurrentModelId() const;
+
+    /**
+     * @brief Switch to a different model, updating the active endpoint
+     * @param modelId Model ID from the models registry
+     * @return True if model found and switched, false otherwise
+     */
+    bool setCurrentModel(const QString &modelId);
 
     /* LLM request methods */
 
@@ -229,11 +273,14 @@ signals:
     void streamError(const QString &error);
 
 private:
-    QNetworkAccessManager *networkManager = nullptr;
-    QSocConfig            *config         = nullptr;
-    QList<LLMEndpoint>     endpoints;
-    int                    currentEndpoint  = 0;
-    LLMFallbackStrategy    fallbackStrategy = LLMFallbackStrategy::Sequential;
+    QNetworkAccessManager        *networkManager = nullptr;
+    QSocConfig                   *config         = nullptr;
+    QList<LLMEndpoint>            endpoints;
+    int                           currentEndpoint  = 0;
+    LLMFallbackStrategy           fallbackStrategy = LLMFallbackStrategy::Sequential;
+    QMap<QString, LLMModelConfig> modelConfigs;
+    QString                       defaultModelId;
+    QString                       currentModelId;
 
     /**
      * @brief Load configuration settings from config
