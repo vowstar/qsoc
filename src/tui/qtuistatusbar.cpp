@@ -18,6 +18,9 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     if (!running) {
         /* Idle state: static, no spinner/timer */
         line = currentStatus;
+        if (!effortLevel.isEmpty()) {
+            line += " [E:" + effortLevel + "]";
+        }
         if (!modelId.isEmpty()) {
             line += " [" + modelId + "]";
         }

@@ -114,6 +114,8 @@ void applyModelSwitch(
         if (cfg.contextTokens > 0) {
             agentCfg.maxContextTokens = cfg.contextTokens;
         }
+        /* Apply model's default effort level */
+        agentCfg.effortLevel = cfg.effort;
         agent->setConfig(agentCfg);
         QString name = cfg.name.isEmpty() ? cfg.id : cfg.name;
         qout << "Model: " << modelId << " (" << name << ")" << Qt::endl;
@@ -620,13 +622,16 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         toolRegistry->registerTool(webSearchTool);
     }
 
-    /* Sync context budget from model registry if available */
+    /* Sync context budget and effort from model registry */
     {
         QString modelId = llmService->getCurrentModelId();
         if (!modelId.isEmpty()) {
             LLMModelConfig modelCfg = llmService->getModelConfig(modelId);
             if (modelCfg.contextTokens > 0) {
                 config.maxContextTokens = modelCfg.contextTokens;
+            }
+            if (!modelCfg.effort.isEmpty()) {
+                config.effortLevel = modelCfg.effort;
             }
         }
     }
@@ -795,6 +800,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
     }
     statusBarWidget.setStatus("Ready");
     statusBarWidget.setModel(llmService->getCurrentModelId());
+    statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
     compositor.start();
 
     /* Show welcome banner in scroll view */
@@ -988,9 +994,10 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             {
                 QString mid = llmService->getCurrentModelId();
                 statusBarWidget.setModel(mid);
+                statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
                 compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
             }
-            compositor.invalidate(); /* Force full redraw after menu overlay */
+            compositor.invalidate();
             compositor.render();
             continue;
         }
