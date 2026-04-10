@@ -935,20 +935,47 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             continue;
         }
         if (cmd.startsWith("/effort")) {
-            QString         level = input.mid(7).trimmed().toLower();
-            QSocAgentConfig cfg   = agent->getConfig();
+            QString level = input.mid(7).trimmed().toLower();
+
             if (level.isEmpty()) {
-                compositor.printContent(
-                    "Effort: " + (cfg.effortLevel.isEmpty() ? QString("off") : cfg.effortLevel));
-                if (!cfg.reasoningModel.isEmpty()) {
-                    compositor.printContent(" (model: " + cfg.reasoningModel + ")");
+                /* Interactive menu */
+                QStringList options = {"off", "low", "medium", "high"};
+                QString     current = agent->getConfig().effortLevel;
+                if (current.isEmpty()) {
+                    current = "off";
                 }
-                compositor.printContent("\n");
-            } else if (level == "off") {
+
+                QList<QTuiMenu::MenuItem> items;
+                for (const QString &opt : options) {
+                    QTuiMenu::MenuItem item;
+                    item.label  = opt;
+                    item.marked = (opt == current);
+                    items.append(item);
+                }
+
+                QTuiMenu menu;
+                menu.setTitle("Reasoning Effort");
+                menu.setItems(items);
+                menu.setHighlight(options.indexOf(current));
+
+                int selected = menu.exec();
+                if (selected >= 0 && selected < options.size()) {
+                    level = options[selected];
+                } else {
+                    compositor.invalidate();
+                    compositor.render();
+                    continue; /* Cancelled */
+                }
+                compositor.invalidate();
+            }
+
+            if (level == "off") {
                 agent->setEffortLevel(QString());
+                statusBarWidget.setEffortLevel(QString());
                 compositor.printContent("Effort: off\n");
             } else if (level == "low" || level == "medium" || level == "high") {
                 agent->setEffortLevel(level);
+                statusBarWidget.setEffortLevel(level);
                 compositor.printContent("Effort: " + level + "\n");
             } else {
                 compositor.printContent("Usage: /effort [off|low|medium|high]\n");
@@ -963,7 +990,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                 statusBarWidget.setModel(mid);
                 compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
             }
-            compositor.render(); /* Redraw after menu overlay */
+            compositor.invalidate(); /* Force full redraw after menu overlay */
+            compositor.render();
             continue;
         }
 
