@@ -17,8 +17,9 @@ public:
     int  lineCount() const override;
     void render(QTuiScreen &screen, int startY, int width) override;
 
-    void setText(const QString &text);
-    void clear();
+    void    setText(const QString &text);
+    void    clear();
+    QString getText() const { return text; }
 
     /* Returns the column where the cursor should be (for IME positioning) */
     int cursorColumn() const;

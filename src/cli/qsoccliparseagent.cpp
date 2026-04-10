@@ -835,13 +835,63 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             QString("(Loaded %1 messages from previous session)\n\n").arg(msgCount));
     }
 
-    /* Main loop: use inputMonitor for prompt (raw mode, full-screen TUI) */
+    /* Input history for arrow key navigation */
+    QStringList inputHistory;
+    int         historyPos = -1; /* -1 = not browsing, 0 = most recent */
+    QString     savedInput;      /* Input buffer before browsing */
+
+    /* Load history from file */
+    {
+        QString projectPath = projectManager->getProjectPath();
+        if (!projectPath.isEmpty()) {
+            QFile histFile(QDir(projectPath).filePath(".qsoc/history"));
+            if (histFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream stream(&histFile);
+                while (!stream.atEnd()) {
+                    QString line = stream.readLine();
+                    if (!line.isEmpty()) {
+                        inputHistory.append(line);
+                    }
+                }
+            }
+        }
+    }
+
+    /* Connect arrow keys for history browsing */
+    connect(&inputMonitor, &QAgentInputMonitor::arrowKey, [&](int key) {
+        if (key == 'A') { /* Up */
+            if (inputHistory.isEmpty()) {
+                return;
+            }
+            if (historyPos < 0) {
+                savedInput = inputWidget.getText().isEmpty() ? QString() : inputWidget.getText();
+                historyPos = 0;
+            } else if (historyPos < inputHistory.size() - 1) {
+                historyPos++;
+            }
+            int idx = inputHistory.size() - 1 - historyPos;
+            inputMonitor.setInputBuffer(inputHistory[idx]);
+        } else if (key == 'B') { /* Down */
+            if (historyPos < 0) {
+                return;
+            }
+            historyPos--;
+            if (historyPos < 0) {
+                inputMonitor.setInputBuffer(savedInput);
+            } else {
+                int idx = inputHistory.size() - 1 - historyPos;
+                inputMonitor.setInputBuffer(inputHistory[idx]);
+            }
+        }
+    });
+
+    /* Main loop */
     bool exitRequested = false;
 
     while (!exitRequested) {
-        /* Wait for user input via QEventLoop + inputMonitor signals */
         QEventLoop promptLoop;
         QString    input;
+        historyPos = -1;
 
         /* Show prompt hint in status bar */
         statusBarWidget.setStatus("Ready");
@@ -889,6 +939,21 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
 
         /* Echo user input in scroll view */
         compositor.printContent("\nqsoc> " + input + "\n");
+
+        /* Add to history (skip duplicates of last entry) */
+        if (inputHistory.isEmpty() || inputHistory.last() != input) {
+            inputHistory.append(input);
+            /* Persist to file */
+            QString projectPath = projectManager->getProjectPath();
+            if (!projectPath.isEmpty()) {
+                QString histDir = QDir(projectPath).filePath(".qsoc");
+                QDir(histDir).mkpath(".");
+                QFile histFile(QDir(histDir).filePath("history"));
+                if (histFile.open(QIODevice::Append | QIODevice::Text)) {
+                    QTextStream(&histFile) << input << "\n";
+                }
+            }
+        }
 
         if (input.startsWith("!")) {
             QString shellCmd = input.mid(1).trimmed();

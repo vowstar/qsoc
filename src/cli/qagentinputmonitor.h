@@ -88,6 +88,9 @@ public:
     /* Reset ESC sequence state (call after modal overlay consumes ESC) */
     void resetEscState();
 
+    /* Set input buffer content (for history navigation) */
+    void setInputBuffer(const QString &text);
+
 private:
     void resetEscBuffer();
 };
