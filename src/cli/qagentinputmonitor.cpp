@@ -51,6 +51,12 @@ void QAgentInputMonitor::resetEscState()
     resetEscBuffer();
 }
 
+void QAgentInputMonitor::setInputBuffer(const QString &text)
+{
+    inputBuffer = text;
+    emit inputChanged(inputBuffer);
+}
+
 void QAgentInputMonitor::resetEscBuffer()
 {
     escBuffer.clear();

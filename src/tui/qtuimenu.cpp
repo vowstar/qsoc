@@ -106,11 +106,11 @@ int QTuiMenu::exec()
         }
     }
 
-    /* Center menu vertically */
+    /* Align menu bottom to just above separator/input (3 rows from bottom) */
     int menuH  = lineCount();
-    int startY = (termH - menuH) / 2;
-    if (startY < 0) {
-        startY = 0;
+    int startY = termH - 3 - menuH;
+    if (startY < 1) {
+        startY = 1; /* Don't overlap title bar */
     }
 
     /* Overlay rendering: render menu rows directly onto current screen.
