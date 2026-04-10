@@ -288,6 +288,9 @@ void QLLMService::loadConfigSettings()
                 if (node["reasoning"]) {
                     modelCfg.reasoning = node["reasoning"].as<bool>();
                 }
+                if (node["effort"]) {
+                    modelCfg.effort = QString::fromStdString(node["effort"].as<std::string>());
+                }
 
                 modelConfigs[modelCfg.id] = modelCfg;
             } catch (const YAML::Exception &err) {

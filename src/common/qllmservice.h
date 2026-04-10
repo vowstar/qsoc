@@ -44,6 +44,7 @@ struct LLMModelConfig
     int     contextTokens   = 128000; /* Context window size */
     int     maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
     bool    reasoning       = false;  /* Supports thinking/reasoning mode */
+    QString effort;                   /* Default effort: empty/off, "low", "medium", "high" */
 };
 
 /**
