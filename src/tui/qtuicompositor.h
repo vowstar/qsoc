@@ -57,6 +57,9 @@ public:
     /* Force full redraw */
     void render();
 
+    /* Invalidate screen buffer (force full repaint on next render) */
+    void invalidate();
+
     /* Direct access to child widgets */
     QTuiScrollView &contentView() { return scrollView; }
     QTuiTodoList   &todoList() { return todoWidget; }

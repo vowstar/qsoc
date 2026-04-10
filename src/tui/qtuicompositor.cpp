@@ -138,6 +138,11 @@ void QTuiCompositor::resetExecution()
     render();
 }
 
+void QTuiCompositor::invalidate()
+{
+    screen.invalidate();
+}
+
 void QTuiCompositor::scrollContentUp(int lineCount)
 {
     scrollView.scrollUp(lineCount);
