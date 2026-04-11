@@ -43,12 +43,17 @@ public:
     /* Clear all TODOs */
     void clearAll();
 
+    /* Show/hide the widget without clearing items (used by Ctrl+T hotkey) */
+    void setVisible(bool vis) { visible = vis; }
+    bool isVisible() const { return visible; }
+
     static constexpr int MAX_VISIBLE = 5;
 
 private:
     QList<TodoItem>          items;
     int                      activeTodoId = -1;
     int                      animFrame    = 0;
+    bool                     visible      = true;
     QMap<int, QElapsedTimer> completionTimers;    /* id → time since marked done */
     static constexpr int     DONE_TTL_MS = 30000; /* 30 seconds */
 };

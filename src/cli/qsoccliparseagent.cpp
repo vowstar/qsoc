@@ -19,6 +19,7 @@
 #include "agent/tool/qsoctooltodo.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "cli/qagentcompletion.h"
+#include "cli/qagenthistorysearch.h"
 #include "cli/qagentinputmonitor.h"
 #include "cli/qsocexternaleditor.h"
 #include "cli/qterminalcapability.h"
@@ -826,11 +827,43 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         }
     });
 
-    /* Connect live input display (text + cursor position) */
+    /* Input history + reverse-i-search state — declared early so lambdas
+     * below can capture them. The history file load happens after the
+     * conversation restore (further down). */
+    QStringList         inputHistory;
+    bool                searching = false;
+    QString             searchOriginal;
+    int                 searchOriginalCursor = 0;
+    QString             searchQuery; /* Live query text inside reverse-i-search mode */
+    QString             searchCurrentMatch;
+    bool                searchFailed = false;
+    QAgentHistorySearch historySearch{inputHistory};
+
+    /* Connect live input display (text + cursor position).
+     * In reverse-i-search mode, the monitor's buffer holds the live search
+     * query — we route it through the search engine and drive the input
+     * line's search-mode rendering instead of the normal text display. */
     connect(
         &inputMonitor,
         &QAgentInputMonitor::inputChanged,
-        [&inputWidget, &inputMonitor](const QString &text) {
+        [&inputWidget,
+         &inputMonitor,
+         &searching,
+         &historySearch,
+         &searchQuery,
+         &searchCurrentMatch,
+         &searchFailed,
+         &compositor](const QString &text) {
+            if (searching) {
+                searchQuery = text;
+                historySearch.rewind();
+                auto match         = historySearch.findNext(text);
+                searchCurrentMatch = match.text;
+                searchFailed       = (match.index < 0) && !text.isEmpty();
+                inputWidget.setSearchMode(true, text, searchCurrentMatch, searchFailed);
+                compositor.invalidate();
+                return;
+            }
             inputWidget.setText(text);
             inputWidget.setCursorPos(inputMonitor.getCursorPos());
         });
@@ -947,10 +980,10 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             QString("(Loaded %1 messages from previous session)\n\n").arg(msgCount));
     }
 
-    /* Input history for arrow key navigation */
-    QStringList inputHistory;
-    int         historyPos = -1; /* -1 = not browsing, 0 = most recent */
-    QString     savedInput;      /* Input buffer before browsing */
+    /* Input history navigation position (inputHistory itself is declared above
+     * so the search lambdas can capture it). */
+    int     historyPos = -1; /* -1 = not browsing, 0 = most recent */
+    QString savedInput;      /* Input buffer before browsing */
 
     /* Load history from file (decode \\n → \n to restore multi-line entries) */
     {
@@ -972,8 +1005,26 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
     }
 
     /* Connect arrow keys: when completion popup is visible, Up/Down navigate
-     * the popup (wrapping); otherwise they walk the input history. */
+     * the popup (wrapping); otherwise they walk the input history. Arrow
+     * keys while in reverse-i-search mode accept the current match and
+     * exit so the user can edit it further. */
     connect(&inputMonitor, &QAgentInputMonitor::arrowKey, [&](int key) {
+        if (searching) {
+            /* Accept whatever is currently matched and leave search mode so
+             * the monitor resumes normal editing with the selection loaded. */
+            searching = false;
+            inputWidget.setSearchMode(false, QString(), QString(), false);
+            inputMonitor.setSubmitBlocked(false);
+            if (!searchCurrentMatch.isEmpty()) {
+                inputMonitor.setInputBuffer(searchCurrentMatch);
+            } else {
+                inputMonitor.setInputBuffer(searchOriginal);
+            }
+            searchCurrentMatch.clear();
+            searchFailed = false;
+            compositor.invalidate();
+            /* Fall through so Left/Right still move cursor after exit. */
+        }
         if (popupWidget.isVisible()) {
             if (key == 'A') {
                 popupWidget.moveHighlight(-1);
@@ -1010,9 +1061,28 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         }
     });
 
-    /* submitBlockedKey: Enter or Tab pressed while popup is open → confirm
-     * the current highlighted completion and rewrite the input buffer. */
+    /* submitBlockedKey: Enter or Tab pressed while the input monitor is
+     * blocked. Routes to either the completion popup confirmation or the
+     * reverse-i-search accept path depending on which mode is active. */
     connect(&inputMonitor, &QAgentInputMonitor::submitBlockedKey, [&, this](int /*key*/) {
+        if (searching) {
+            /* Accept the current match and exit search mode. The loaded
+             * text lands in the buffer but is NOT auto-submitted so the
+             * user can edit before pressing Enter again. */
+            searching = false;
+            inputWidget.setSearchMode(false, QString(), QString(), false);
+            inputMonitor.setSubmitBlocked(false);
+            if (!searchCurrentMatch.isEmpty()) {
+                inputMonitor.setInputBuffer(searchCurrentMatch);
+            } else {
+                inputMonitor.setInputBuffer(searchOriginal);
+            }
+            searchCurrentMatch.clear();
+            searchFailed = false;
+            compositor.invalidate();
+            compositor.render();
+            return;
+        }
         if (!popupWidget.isVisible() || popupWidget.getItems().isEmpty() || popupAtPos < 0) {
             return;
         }
@@ -1043,6 +1113,48 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         popupAtPos = -1;
         inputMonitor.setSubmitBlocked(false);
         compositor.invalidate();
+    });
+
+    /* Ctrl+R reverse-i-search: first press enters search mode, subsequent
+     * presses with the same query advance to the next older unique match. */
+    connect(&inputMonitor, &QAgentInputMonitor::historySearchRequested, [&]() {
+        if (!searching) {
+            /* Enter search mode: snapshot original, clear monitor buffer,
+             * block Enter so hitting submit accepts the match instead. */
+            searching            = true;
+            searchOriginal       = inputWidget.getText();
+            searchOriginalCursor = inputMonitor.getCursorPos();
+            searchQuery.clear();
+            searchCurrentMatch.clear();
+            searchFailed = false;
+            historySearch.rewind();
+            inputWidget.setSearchMode(true, QString(), QString(), false);
+            inputMonitor.setInputBuffer(QString());
+            inputMonitor.setSubmitBlocked(true);
+            compositor.invalidate();
+            compositor.render();
+            return;
+        }
+        /* Already searching: advance to the next older unique match for the
+         * current query. The monitor's buffer holds the live query; we keep
+         * a mirror in searchQuery via the inputChanged hook above. */
+        auto match = historySearch.findNext(searchQuery);
+        if (match.index >= 0) {
+            searchCurrentMatch = match.text;
+            searchFailed       = false;
+        } else {
+            searchFailed = true;
+        }
+        inputWidget.setSearchMode(true, searchQuery, searchCurrentMatch, searchFailed);
+        compositor.invalidate();
+        compositor.render();
+    });
+
+    /* Ctrl+T: toggle the TODO list visibility. */
+    connect(&inputMonitor, &QAgentInputMonitor::toggleTodosRequested, [&]() {
+        todoWidget.setVisible(!todoWidget.isVisible());
+        compositor.invalidate();
+        compositor.render();
     });
 
     /* External editor (Ctrl+X Ctrl+E or Ctrl+G): pause the TUI, hand off
@@ -1104,7 +1216,23 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         auto connCtrlC = connect(
             &inputMonitor,
             &QAgentInputMonitor::ctrlCPressed,
-            [&promptLoop, &exitRequested, &compositor]() {
+            [&promptLoop,
+             &exitRequested,
+             &compositor,
+             &searching,
+             &inputMonitor,
+             &inputWidget,
+             &searchCurrentMatch,
+             &searchFailed]() {
+                /* Ctrl+C in reverse-i-search mode cancels the search in
+                 * addition to interrupting. Mirrors readline behavior. */
+                if (searching) {
+                    searching = false;
+                    inputWidget.setSearchMode(false, QString(), QString(), false);
+                    inputMonitor.setSubmitBlocked(false);
+                    searchCurrentMatch.clear();
+                    searchFailed = false;
+                }
                 if (checkDoubleInterrupt()) {
                     exitRequested = true;
                     promptLoop.quit();
@@ -1122,7 +1250,24 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
              &inputMonitor,
              &inputWidget,
              &dismissedFor,
-             &compositor]() {
+             &compositor,
+             &searching,
+             &searchOriginal,
+             &searchCurrentMatch,
+             &searchFailed]() {
+                /* Reverse-i-search takes priority: Esc restores the original
+                 * input the user had before pressing Ctrl+R and leaves the
+                 * prompt intact so the loop keeps running. */
+                if (searching) {
+                    searching = false;
+                    inputWidget.setSearchMode(false, QString(), QString(), false);
+                    inputMonitor.setSubmitBlocked(false);
+                    inputMonitor.setInputBuffer(searchOriginal);
+                    searchCurrentMatch.clear();
+                    searchFailed = false;
+                    compositor.invalidate();
+                    return;
+                }
                 /* If popup is open, Esc closes the popup and remembers this
                  * input so it doesn't auto-reopen until the user types more. */
                 if (popupWidget.isVisible()) {
@@ -1217,6 +1362,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             compositor.printContent("  \\ + Enter   - Continue on next line\n");
             compositor.printContent("  (paste)     - Multi-line paste preserved as one input\n");
             compositor.printContent("  Ctrl+X Ctrl+E or Ctrl+G - Edit current input in $EDITOR\n");
+            compositor.printContent("  Ctrl+R      - Reverse-i-search through prompt history\n");
+            compositor.printContent("  Ctrl+T      - Toggle TODO list visibility\n");
             compositor.printContent("  @<name>     - Fuzzy-complete a project file path\n");
             compositor.printContent("\n");
             compositor.printContent("Or just type your question/request in natural language.\n");

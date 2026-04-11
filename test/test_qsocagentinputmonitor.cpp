@@ -1030,6 +1030,32 @@ private slots:
         QCOMPARE(ctrlCCount, 1);
     }
 
+    void testCtrlRPressedEmitsHistorySearch()
+    {
+        QAgentInputMonitor monitor;
+        int                count = 0;
+        connect(&monitor, &QAgentInputMonitor::historySearchRequested, [&count]() { count++; });
+
+        const char ctrlR = 0x12;
+        monitor.processBytes(&ctrlR, 1);
+        QCOMPARE(count, 1);
+
+        /* Second press also emits — REPL interprets as "next match" */
+        monitor.processBytes(&ctrlR, 1);
+        QCOMPARE(count, 2);
+    }
+
+    void testCtrlTPressedEmitsToggleTodos()
+    {
+        QAgentInputMonitor monitor;
+        int                count = 0;
+        connect(&monitor, &QAgentInputMonitor::toggleTodosRequested, [&count]() { count++; });
+
+        const char ctrlT = 0x14;
+        monitor.processBytes(&ctrlT, 1);
+        QCOMPARE(count, 1);
+    }
+
     void testStopClearsInputState()
     {
         QAgentInputMonitor monitor;

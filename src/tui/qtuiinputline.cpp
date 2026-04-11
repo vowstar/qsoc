@@ -47,6 +47,9 @@ QString contentForDisplay(const QString &line, int lineIdx, bool startsWithBang)
 
 int QTuiInputLine::lineCount() const
 {
+    if (searchMode) {
+        return 1;
+    }
     int total = 1 + static_cast<int>(text.count(QLatin1Char('\n')));
     total     = qMax(total, 1);
     return qMin(total, MAX_VISIBLE_LINES);
@@ -54,6 +57,14 @@ int QTuiInputLine::lineCount() const
 
 void QTuiInputLine::render(QTuiScreen &screen, int startY, int width)
 {
+    if (searchMode) {
+        const QString label   = searchFailed ? QStringLiteral("(failing bck-i-search)`")
+                                             : QStringLiteral("(bck-i-search)`");
+        QString       display = label + searchQuery + QStringLiteral("': ") + searchMatch;
+        screen.putString(0, startY, display.left(width));
+        return;
+    }
+
     QStringList lines          = splitLines(text);
     int         total          = static_cast<int>(lines.size());
     bool        startsWithBang = text.startsWith(QLatin1Char('!'));
@@ -89,6 +100,9 @@ void QTuiInputLine::setCursorPos(int pos)
 
 int QTuiInputLine::cursorLine() const
 {
+    if (searchMode) {
+        return 0;
+    }
     /* Count newlines before cursorPos to find which logical line the cursor is on */
     int logicalLine = 0;
     int limit       = qMin(cursorPos, static_cast<int>(text.size()));
@@ -106,6 +120,13 @@ int QTuiInputLine::cursorLine() const
 
 int QTuiInputLine::cursorColumn() const
 {
+    if (searchMode) {
+        /* Park cursor right after the query text so IME preedit lands there. */
+        const QString label = searchFailed ? QStringLiteral("(failing bck-i-search)`")
+                                           : QStringLiteral("(bck-i-search)`");
+        return QTuiText::visualWidth(label) + QTuiText::visualWidth(searchQuery);
+    }
+
     /* Find start of current logical line */
     int lineStart = cursorPos;
     while (lineStart > 0 && text[lineStart - 1] != QLatin1Char('\n')) {
@@ -130,4 +151,13 @@ int QTuiInputLine::cursorColumn() const
     }
 
     return QTuiText::visualWidth(prompt) + QTuiText::visualWidth(segment);
+}
+
+void QTuiInputLine::setSearchMode(
+    bool active, const QString &query, const QString &match, bool failed)
+{
+    searchMode   = active;
+    searchQuery  = query;
+    searchMatch  = match;
+    searchFailed = failed;
 }

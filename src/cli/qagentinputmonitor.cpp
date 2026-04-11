@@ -353,6 +353,18 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
+        /* Ctrl+R: reverse-i-search of input history */
+        if (byte == 0x12) {
+            emit historySearchRequested();
+            continue;
+        }
+
+        /* Ctrl+T: toggle TODO list visibility */
+        if (byte == 0x14) {
+            emit toggleTodosRequested();
+            continue;
+        }
+
         /* ESC: start sequence buffering */
         if (byte == 0x1B) {
             inEscSeq = true;

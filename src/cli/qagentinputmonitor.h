@@ -82,6 +82,19 @@ signals:
      */
     void externalEditorRequested();
 
+    /**
+     * @brief Emitted on Ctrl+R — request reverse-i-search of the input history.
+     *        REPL owns the search state machine; the monitor is stateless.
+     *        When already searching, the REPL uses a second Ctrl+R as the
+     *        "next older match" command.
+     */
+    void historySearchRequested();
+
+    /**
+     * @brief Emitted on Ctrl+T — request toggling the TODO list visibility.
+     */
+    void toggleTodosRequested();
+
 private:
     static int  utf8SeqLen(unsigned char lead);
     static bool isUtf8Continuation(unsigned char byte);
