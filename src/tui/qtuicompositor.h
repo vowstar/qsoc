@@ -4,6 +4,7 @@
 #ifndef QTUICOMPOSITOR_H
 #define QTUICOMPOSITOR_H
 
+#include "tui/qtuicompletionpopup.h"
 #include "tui/qtuiinputline.h"
 #include "tui/qtuiqueuedlist.h"
 #include "tui/qtuiscreen.h"
@@ -61,11 +62,12 @@ public:
     void invalidate();
 
     /* Direct access to child widgets */
-    QTuiScrollView &contentView() { return scrollView; }
-    QTuiTodoList   &todoList() { return todoWidget; }
-    QTuiStatusBar  &statusBar() { return statusBarWidget; }
-    QTuiInputLine  &inputLine() { return inputWidget; }
-    QTuiQueuedList &queuedList() { return queueWidget; }
+    QTuiScrollView      &contentView() { return scrollView; }
+    QTuiTodoList        &todoList() { return todoWidget; }
+    QTuiStatusBar       &statusBar() { return statusBarWidget; }
+    QTuiInputLine       &inputLine() { return inputWidget; }
+    QTuiQueuedList      &queuedList() { return queueWidget; }
+    QTuiCompletionPopup &completionPopup() { return popupWidget; }
 
 signals:
     void tick();
@@ -74,12 +76,13 @@ private slots:
     void onTimer();
 
 private:
-    QTuiScreen     screen;
-    QTuiScrollView scrollView;
-    QTuiTodoList   todoWidget;
-    QTuiQueuedList queueWidget;
-    QTuiStatusBar  statusBarWidget;
-    QTuiInputLine  inputWidget;
+    QTuiScreen          screen;
+    QTuiScrollView      scrollView;
+    QTuiTodoList        todoWidget;
+    QTuiQueuedList      queueWidget;
+    QTuiStatusBar       statusBarWidget;
+    QTuiInputLine       inputWidget;
+    QTuiCompletionPopup popupWidget;
 
     QTimer *timer  = nullptr;
     bool    active = false;
@@ -108,6 +111,7 @@ private:
         int contentHeight = 0;
         int todoStart     = 0;
         int queueStart    = 0;
+        int popupStart    = 0; /* Completion popup: above status bar when visible */
         int statusRow     = 0;
         int separatorRow  = 0;
         int inputRow      = 0;
@@ -120,6 +124,7 @@ private:
     void renderContent();
     void renderTodo();
     void renderQueued();
+    void renderCompletionPopup();
     void renderStatusBar();
     void renderSeparator();
     void renderInput();

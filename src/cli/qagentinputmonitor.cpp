@@ -95,6 +95,32 @@ void QAgentInputMonitor::moveCursorRight()
     }
 }
 
+void QAgentInputMonitor::insertCompletion(int atPos, const QString &replacement, QChar trailing)
+{
+    if (atPos < 0 || atPos >= static_cast<int>(inputBuffer.size())) {
+        return;
+    }
+    /* Remove '@query' (from '@' at atPos up to current cursor) and
+     * insert '@' + replacement + optional trailing char at atPos. */
+    int removeLen = cursorPos - atPos;
+    if (removeLen <= 0) {
+        return;
+    }
+    inputBuffer.remove(atPos, removeLen);
+    QString inserted = QLatin1Char('@') + replacement;
+    if (!trailing.isNull()) {
+        inserted.append(trailing);
+    }
+    inputBuffer.insert(atPos, inserted);
+    cursorPos = atPos + static_cast<int>(inserted.size());
+    emit inputChanged(inputBuffer);
+}
+
+void QAgentInputMonitor::setSubmitBlocked(bool blocked)
+{
+    submitBlocked = blocked;
+}
+
 void QAgentInputMonitor::resetEscBuffer()
 {
     escBuffer.clear();
@@ -315,6 +341,11 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                 insertAtCursor(QStringLiteral("\n"));
                 continue;
             }
+            /* Submit blocked (completion popup open): REPL owns Enter semantics */
+            if (submitBlocked) {
+                emit submitBlockedKey('E');
+                continue;
+            }
             /* Backslash line continuation: trailing '\' + Enter → newline inserted, no submit.
              * Mirrors bash behavior: the backslash must be the last character of the buffer. */
             if (inputBuffer.endsWith(QLatin1Char('\\'))) {
@@ -420,8 +451,13 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
-        /* Tab: ignore (reserved for future completion) */
+        /* Tab: when submit is blocked (completion popup open), Tab confirms.
+         * Otherwise ignored — @file completion is triggered live by the REPL
+         * on inputChanged, not by Tab. */
         if (byte == '\t') {
+            if (submitBlocked) {
+                emit submitBlockedKey('T');
+            }
             continue;
         }
 
@@ -447,9 +483,13 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
         auto *guard = this;
         QTimer::singleShot(50, guard, [this]() {
             if (active && inEscSeq && escBuffer.size() == 1) {
-                inputBuffer.clear();
-                cursorPos = 0;
-                emit inputChanged(inputBuffer);
+                /* When submit is blocked (completion popup open), Esc only
+                 * dismisses the popup — keep the input buffer intact. */
+                if (!submitBlocked) {
+                    inputBuffer.clear();
+                    cursorPos = 0;
+                    emit inputChanged(inputBuffer);
+                }
                 emit escPressed();
                 resetEscBuffer();
             }
