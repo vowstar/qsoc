@@ -1084,6 +1084,153 @@ private slots:
         QCOMPARE(count, 1);
     }
 
+    /* Undo stack tests */
+
+    void testUndoOnEmptyBufferIsNoop()
+    {
+        QAgentInputMonitor monitor;
+        int                changeCount = 0;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&changeCount](const QString &) {
+            changeCount++;
+        });
+
+        const char ctrlUnderscore = 0x1F;
+        monitor.processBytes(&ctrlUnderscore, 1);
+        QCOMPARE(changeCount, 0);
+    }
+
+    void testUndoPrintableBurstCoalesces()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Rapid typing should coalesce into a single undo step via debounce. */
+        monitor.processBytes("hello", 5);
+        QCOMPARE(lastText, QStringLiteral("hello"));
+
+        const char ctrlUnderscore = 0x1F;
+        monitor.processBytes(&ctrlUnderscore, 1);
+        QCOMPARE(lastText, QString());
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testUndoBigActionsAreIndividual()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("hello world", 11);
+        /* Ctrl+W deletes "world", pushing its own snapshot */
+        const char ctrlW = 0x17;
+        monitor.processBytes(&ctrlW, 1);
+        QCOMPARE(lastText, QStringLiteral("hello "));
+
+        /* First undo: restore "hello world" */
+        const char ctrlUnderscore = 0x1F;
+        monitor.processBytes(&ctrlUnderscore, 1);
+        QCOMPARE(lastText, QStringLiteral("hello world"));
+
+        /* Second undo: restore empty */
+        monitor.processBytes(&ctrlUnderscore, 1);
+        QCOMPARE(lastText, QString());
+    }
+
+    void testUndoClearsOnSubmit()
+    {
+        QAgentInputMonitor monitor;
+        QString            readyText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyText](const QString &text) {
+            readyText = text;
+        });
+        QString lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("abc", 3);
+        const char enter = '\n';
+        monitor.processBytes(&enter, 1);
+        QCOMPARE(readyText, QStringLiteral("abc"));
+        QCOMPARE(lastText, QString());
+
+        /* Undo after submit should be a no-op — the stack was cleared. */
+        monitor.processBytes("xyz", 3);
+        const char ctrlUnderscore = 0x1F;
+        monitor.processBytes(&ctrlUnderscore, 1);
+        /* Exactly ONE level of undo (the xyz burst) should be available;
+         * the older "abc" history is gone after submit. */
+        QCOMPARE(lastText, QString());
+        monitor.processBytes(&ctrlUnderscore, 1);
+        QCOMPARE(lastText, QString()); /* Already empty, no further rollback */
+    }
+
+    void testUndoClearsOnCtrlC()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("hello", 5);
+        const char ctrlC = 0x03;
+        monitor.processBytes(&ctrlC, 1);
+        QCOMPARE(lastText, QString());
+
+        /* Undo after Ctrl+C is a no-op. */
+        const char ctrlUnderscore = 0x1F;
+        monitor.processBytes(&ctrlUnderscore, 1);
+        QCOMPARE(lastText, QString());
+    }
+
+    void testUndoDeleteRestoresBufferAndCursor()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("hello", 5);
+        /* Ctrl+A to start, then Delete once (removes 'h') */
+        const char ctrlA = 0x01;
+        monitor.processBytes(&ctrlA, 1);
+        const char del[] = {0x1B, '[', '3', '~'};
+        monitor.processBytes(del, 4);
+        QCOMPARE(lastText, QStringLiteral("ello"));
+        QCOMPARE(monitor.getCursorPos(), 0);
+
+        const char ctrlUnderscore = 0x1F;
+        monitor.processBytes(&ctrlUnderscore, 1);
+        QCOMPARE(lastText, QStringLiteral("hello"));
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testUndoSetInputBufferIsUndoable()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("typed", 5);
+        /* Simulate history recall / completion confirm */
+        monitor.setInputBuffer(QStringLiteral("from history"));
+        QCOMPARE(lastText, QStringLiteral("from history"));
+
+        /* One undo should roll back the setInputBuffer to the typed state. */
+        const char ctrlUnderscore = 0x1F;
+        monitor.processBytes(&ctrlUnderscore, 1);
+        QCOMPARE(lastText, QStringLiteral("typed"));
+    }
+
     /* Bracketed paste accumulation / pastedReceived tests */
 
     void testBracketedPasteAccumulatesPayload()

@@ -42,9 +42,42 @@ bool QAgentInputMonitor::isUtf8Continuation(unsigned char byte)
 
 void QAgentInputMonitor::insertAtCursor(const QString &decoded)
 {
+    pushUndoSnapshot(/*fromPrintable=*/true);
     inputBuffer.insert(cursorPos, decoded);
     cursorPos += decoded.size();
     emit inputChanged(inputBuffer);
+}
+
+void QAgentInputMonitor::pushUndoSnapshot(bool fromPrintable)
+{
+    /* Debounce rule: consecutive printable-character insertions within the
+     * debounce window coalesce into a single snapshot so a burst of typing
+     * undoes in one stroke. Any non-printable action always starts a new
+     * snapshot — Ctrl+K, Ctrl+W, atomic chip delete, paste, etc. */
+    const bool shouldCoalesce = fromPrintable && !undoStack.isEmpty()
+                                && undoStack.last().fromPrintable && undoTimerValid
+                                && undoTimer.elapsed() < UNDO_DEBOUNCE_MS;
+    if (shouldCoalesce) {
+        undoTimer.restart();
+        return;
+    }
+
+    UndoSnapshot snap;
+    snap.text          = inputBuffer;
+    snap.cursorPos     = cursorPos;
+    snap.fromPrintable = fromPrintable;
+    undoStack.append(snap);
+    if (undoStack.size() > UNDO_MAX_DEPTH) {
+        undoStack.removeFirst();
+    }
+    undoTimer.restart();
+    undoTimerValid = true;
+}
+
+void QAgentInputMonitor::clearUndoStack()
+{
+    undoStack.clear();
+    undoTimerValid = false;
 }
 
 void QAgentInputMonitor::resetEscState()
@@ -54,6 +87,10 @@ void QAgentInputMonitor::resetEscState()
 
 void QAgentInputMonitor::setInputBuffer(const QString &text)
 {
+    /* External rewrites (history recall, completion confirm, external editor
+     * return, paste chip insert) capture an undo checkpoint so Ctrl+_ can
+     * roll back the load. */
+    pushUndoSnapshot(/*fromPrintable=*/false);
     inputBuffer = text;
     cursorPos   = inputBuffer.size();
     emit inputChanged(inputBuffer);
@@ -323,6 +360,7 @@ void QAgentInputMonitor::processEscSequence()
                 int atomicStart = -1;
                 int atomicLen   = 0;
                 if (findAtomicSpanAtCursor(/*forward=*/true, atomicStart, atomicLen)) {
+                    pushUndoSnapshot(/*fromPrintable=*/false);
                     inputBuffer.remove(atomicStart, atomicLen);
                     cursorPos = atomicStart;
                     emit inputChanged(inputBuffer);
@@ -331,6 +369,7 @@ void QAgentInputMonitor::processEscSequence()
                 }
                 int step = nextCharStep();
                 if (step > 0) {
+                    pushUndoSnapshot(/*fromPrintable=*/false);
                     inputBuffer.remove(cursorPos, step);
                     emit inputChanged(inputBuffer);
                 }
@@ -419,6 +458,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             inputBuffer.clear();
             cursorPos = 0;
             utf8Pending.clear();
+            clearUndoStack();
             emit inputChanged(inputBuffer);
             emit ctrlCPressed();
             continue;
@@ -455,6 +495,19 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
+        /* Ctrl+_: undo the last edit (readline-compatible undo key, 0x1F).
+         * The stack holds PRE-mutation snapshots so we just pop and restore. */
+        if (byte == 0x1F) {
+            if (!undoStack.isEmpty()) {
+                UndoSnapshot snap = undoStack.takeLast();
+                inputBuffer       = snap.text;
+                int maxPos        = static_cast<int>(inputBuffer.size());
+                cursorPos         = qBound(0, snap.cursorPos, maxPos);
+                emit inputChanged(inputBuffer);
+            }
+            continue;
+        }
+
         /* ESC: start sequence buffering */
         if (byte == 0x1B) {
             inEscSeq = true;
@@ -478,6 +531,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             /* Backslash line continuation: trailing '\' + Enter → newline inserted, no submit.
              * Mirrors bash behavior: the backslash must be the last character of the buffer. */
             if (inputBuffer.endsWith(QLatin1Char('\\'))) {
+                pushUndoSnapshot(/*fromPrintable=*/false);
                 inputBuffer.chop(1);
                 inputBuffer.append(QLatin1Char('\n'));
                 int maxPos = static_cast<int>(inputBuffer.size());
@@ -490,6 +544,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                 QString text = inputBuffer;
                 inputBuffer.clear();
                 cursorPos = 0;
+                clearUndoStack();
                 emit inputChanged(inputBuffer);
                 emit inputReady(text);
             }
@@ -501,6 +556,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             int atomicStart = -1;
             int atomicLen   = 0;
             if (findAtomicSpanAtCursor(/*forward=*/false, atomicStart, atomicLen)) {
+                pushUndoSnapshot(/*fromPrintable=*/false);
                 inputBuffer.remove(atomicStart, atomicLen);
                 cursorPos = atomicStart;
                 emit inputChanged(inputBuffer);
@@ -508,6 +564,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             }
             int step = prevCharStep();
             if (step > 0) {
+                pushUndoSnapshot(/*fromPrintable=*/false);
                 inputBuffer.remove(cursorPos - step, step);
                 cursorPos -= step;
                 emit inputChanged(inputBuffer);
@@ -548,6 +605,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                 end++;
             }
             if (end > cursorPos) {
+                pushUndoSnapshot(/*fromPrintable=*/false);
                 inputBuffer.remove(cursorPos, end - cursorPos);
                 emit inputChanged(inputBuffer);
             }
@@ -561,6 +619,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                 start--;
             }
             if (start < cursorPos) {
+                pushUndoSnapshot(/*fromPrintable=*/false);
                 inputBuffer.remove(start, cursorPos - start);
                 cursorPos = start;
                 emit inputChanged(inputBuffer);
@@ -581,6 +640,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                 end--;
             }
             if (end < cursorPos) {
+                pushUndoSnapshot(/*fromPrintable=*/false);
                 inputBuffer.remove(end, cursorPos - end);
                 cursorPos = end;
                 emit inputChanged(inputBuffer);
@@ -703,6 +763,7 @@ void QAgentInputMonitor::stop()
     utf8Pending.clear();
     resetEscBuffer();
     pastedBuffer.clear();
+    clearUndoStack();
     inBracketedPaste = false;
     inCtrlXChord     = false;
     emit inputChanged(QString());
