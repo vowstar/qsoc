@@ -797,6 +797,10 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
     auto          &inputWidget     = compositor.inputLine();
     auto          &popupWidget     = compositor.completionPopup();
 
+    /* Discoverability hint shown when the input line is empty. */
+    inputWidget.setPlaceholder(
+        QStringLiteral("try /help, @file, !shell, Ctrl+R to search, Ctrl+X Ctrl+E to edit"));
+
     /* File completion engine for '@file' references */
     QAgentCompletionEngine completionEngine;
 

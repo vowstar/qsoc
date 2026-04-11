@@ -26,6 +26,14 @@ public:
     void    clear();
     QString getText() const { return text; }
 
+    /**
+     * @brief Set the dim placeholder shown on an empty, non-search input line.
+     * @details Rendered after the "> " prompt in dim style when the buffer is
+     *          empty so new users can see available shortcuts at a glance.
+     *          Pass an empty string to disable.
+     */
+    void setPlaceholder(const QString &hint) { placeholder = hint; }
+
     /* Set cursor position (QChar index into text) for cursor rendering */
     void setCursorPos(int pos);
     int  getCursorPos() const { return cursorPos; }
@@ -49,6 +57,7 @@ public:
 private:
     QString text;
     int     cursorPos = 0;
+    QString placeholder;
 
     bool    searchMode = false;
     QString searchQuery;

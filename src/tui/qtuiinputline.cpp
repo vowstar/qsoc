@@ -65,6 +65,23 @@ void QTuiInputLine::render(QTuiScreen &screen, int startY, int width)
         return;
     }
 
+    /* Empty buffer with a placeholder set: show the dim hint after "> "
+     * so new users can discover slash / @ / ! / Ctrl+R shortcuts. */
+    if (text.isEmpty() && !placeholder.isEmpty()) {
+        screen.putString(0, startY, QStringLiteral("> "));
+        QString hint      = placeholder;
+        int     available = width - 2;
+        if (available > 0) {
+            screen.putString(
+                2,
+                startY,
+                hint.left(available),
+                /*bold=*/false,
+                /*dim=*/true);
+        }
+        return;
+    }
+
     QStringList lines          = splitLines(text);
     int         total          = static_cast<int>(lines.size());
     bool        startsWithBang = text.startsWith(QLatin1Char('!'));
