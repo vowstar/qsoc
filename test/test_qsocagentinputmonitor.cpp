@@ -1170,6 +1170,116 @@ private slots:
         QCOMPARE(changeCount, 0);
     }
 
+    /* Atomic delete tests */
+
+    void testBackspaceAtomicDeletesWholeChip()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.setAtomicPattern(
+            QRegularExpression(QStringLiteral(R"(\[Pasted text #\d+ \+\d+ lines\])")));
+
+        /* "hi [Pasted text #1 +3 lines]" — cursor lands at end (28) */
+        monitor.processBytes("hi [Pasted text #1 +3 lines]", 28);
+        QCOMPARE(monitor.getCursorPos(), 28);
+
+        /* Backspace with cursor at end of chip → delete the whole chip */
+        const char backspace = 0x7F;
+        monitor.processBytes(&backspace, 1);
+        QCOMPARE(lastText, QStringLiteral("hi "));
+        QCOMPARE(monitor.getCursorPos(), 3);
+    }
+
+    void testBackspaceAdjacentCharStillWorks()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.setAtomicPattern(
+            QRegularExpression(QStringLiteral(R"(\[Pasted text #\d+ \+\d+ lines\])")));
+
+        /* Plain text — backspace still removes a single char */
+        monitor.processBytes("hello", 5);
+        const char backspace = 0x7F;
+        monitor.processBytes(&backspace, 1);
+        QCOMPARE(lastText, QStringLiteral("hell"));
+        QCOMPARE(monitor.getCursorPos(), 4);
+    }
+
+    void testBackspaceInsideChipDeletesWholeChip()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.setAtomicPattern(
+            QRegularExpression(QStringLiteral(R"(\[Pasted text #\d+ \+\d+ lines\])")));
+
+        /* Paste at the start, then move cursor into the middle of the chip. */
+        monitor.processBytes("[Pasted text #5 +2 lines] end", 29);
+        /* Move cursor to position 10 (inside "[Pasted text #5 +2 lines]") */
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        for (int i = 0; i < 19; i++) {
+            monitor.processBytes(arrowLeft, 3);
+        }
+        QCOMPARE(monitor.getCursorPos(), 10);
+
+        const char backspace = 0x7F;
+        monitor.processBytes(&backspace, 1);
+        QCOMPARE(lastText, QStringLiteral(" end"));
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testForwardDeleteAtomicDeletesChip()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.setAtomicPattern(
+            QRegularExpression(QStringLiteral(R"(\[Pasted text #\d+ \+\d+ lines\])")));
+
+        monitor.processBytes("pre [Pasted text #1 +3 lines] post", 34);
+        /* Move cursor to position 4 (just before '[') */
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        for (int i = 0; i < 30; i++) {
+            monitor.processBytes(arrowLeft, 3);
+        }
+        QCOMPARE(monitor.getCursorPos(), 4);
+
+        /* ESC [ 3 ~ = forward Delete */
+        const char del[] = {0x1B, '[', '3', '~'};
+        monitor.processBytes(del, 4);
+        QCOMPARE(lastText, QStringLiteral("pre  post"));
+        QCOMPARE(monitor.getCursorPos(), 4);
+    }
+
+    void testAtomicDisabledWhenPatternEmpty()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* No pattern set — backspace behaves normally even inside chip-like text */
+        monitor.processBytes("[Pasted text #1 +3 lines]", 25);
+        const char backspace = 0x7F;
+        monitor.processBytes(&backspace, 1);
+        QCOMPARE(lastText, QStringLiteral("[Pasted text #1 +3 lines"));
+    }
+
     void testStopClearsInputState()
     {
         QAgentInputMonitor monitor;

@@ -823,6 +823,10 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
 
     /* Connect mouse wheel from input monitor to compositor scroll */
     QAgentInputMonitor inputMonitor(this);
+    /* Teach the monitor to treat "[Pasted text #N +M lines]" chip labels as
+     * atomic glyphs so Backspace / Delete never leave a half-eaten chip. */
+    inputMonitor.setAtomicPattern(
+        QRegularExpression(QStringLiteral(R"(\[Pasted text #\d+(?: \+\d+ lines)?\])")));
     connect(&inputMonitor, &QAgentInputMonitor::mouseWheel, [&compositor](int direction) {
         if (direction == 0) {
             compositor.scrollContentUp(3);

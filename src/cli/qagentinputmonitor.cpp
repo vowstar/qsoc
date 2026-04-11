@@ -128,6 +128,51 @@ void QAgentInputMonitor::insertText(const QString &text)
     }
 }
 
+void QAgentInputMonitor::setAtomicPattern(const QRegularExpression &pattern)
+{
+    atomicPattern = pattern;
+}
+
+bool QAgentInputMonitor::findAtomicSpanAtCursor(bool forward, int &outStart, int &outLen) const
+{
+    outStart = -1;
+    outLen   = 0;
+    if (atomicPattern.pattern().isEmpty() || !atomicPattern.isValid()) {
+        return false;
+    }
+    /* Only scan a reasonable window around the cursor so very long buffers
+     * don't pay for a full re-match on every edit. 200 QChars is larger than
+     * any realistic chip label. */
+    const int scanRadius = 200;
+    int       scanFrom   = qMax(0, cursorPos - scanRadius);
+    int       scanTo     = qMin(static_cast<int>(inputBuffer.size()), cursorPos + scanRadius);
+    QString   slice      = inputBuffer.mid(scanFrom, scanTo - scanFrom);
+
+    auto iter = atomicPattern.globalMatch(slice);
+    while (iter.hasNext()) {
+        auto match    = iter.next();
+        int  absStart = scanFrom + static_cast<int>(match.capturedStart(0));
+        int  absEnd   = scanFrom + static_cast<int>(match.capturedEnd(0));
+
+        /* For Backspace: cursor is inside the match OR directly at its end. */
+        if (!forward) {
+            if (cursorPos > absStart && cursorPos <= absEnd) {
+                outStart = absStart;
+                outLen   = absEnd - absStart;
+                return true;
+            }
+        } else {
+            /* For forward Delete: cursor is inside the match OR directly at its start. */
+            if (cursorPos >= absStart && cursorPos < absEnd) {
+                outStart = absStart;
+                outLen   = absEnd - absStart;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void QAgentInputMonitor::resetEscBuffer()
 {
     escBuffer.clear();
@@ -273,8 +318,17 @@ void QAgentInputMonitor::processEscSequence()
                 resetEscBuffer();
                 return;
             }
-            /* ESC [ 3 ~ = Delete (delete char at cursor, surrogate-aware) */
+            /* ESC [ 3 ~ = Delete (delete char at cursor, surrogate + atomic-aware) */
             if (escBuffer == QByteArray("\033[3~")) {
+                int atomicStart = -1;
+                int atomicLen   = 0;
+                if (findAtomicSpanAtCursor(/*forward=*/true, atomicStart, atomicLen)) {
+                    inputBuffer.remove(atomicStart, atomicLen);
+                    cursorPos = atomicStart;
+                    emit inputChanged(inputBuffer);
+                    resetEscBuffer();
+                    return;
+                }
                 int step = nextCharStep();
                 if (step > 0) {
                     inputBuffer.remove(cursorPos, step);
@@ -436,8 +490,16 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
-        /* Backspace: delete char at cursorPos-1 (surrogate-aware) */
+        /* Backspace: delete char at cursorPos-1 (surrogate-aware, atomic-aware) */
         if (byte == 0x7F || byte == '\b') {
+            int atomicStart = -1;
+            int atomicLen   = 0;
+            if (findAtomicSpanAtCursor(/*forward=*/false, atomicStart, atomicLen)) {
+                inputBuffer.remove(atomicStart, atomicLen);
+                cursorPos = atomicStart;
+                emit inputChanged(inputBuffer);
+                continue;
+            }
             int step = prevCharStep();
             if (step > 0) {
                 inputBuffer.remove(cursorPos - step, step);
