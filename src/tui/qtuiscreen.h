@@ -7,20 +7,38 @@
 #include <QString>
 #include <QVector>
 
+#include <cstdint>
+
+/**
+ * @brief Foreground color enum for cell text. Default leaves the terminal's
+ *        current foreground untouched, the named values map to the standard
+ *        ANSI 8-color palette.
+ */
+enum class QTuiFgColor : std::uint8_t {
+    Default = 0,
+    Red     = 1,
+    Green   = 2,
+    Yellow  = 3,
+    Blue    = 4,
+    Magenta = 5,
+    Cyan    = 6,
+};
+
 /**
  * @brief A single terminal cell with character and style attributes
  */
 struct QTuiCell
 {
-    QChar character = ' ';
-    bool  bold      = false;
-    bool  dim       = false;
-    bool  inverted  = false;
+    QChar       character = ' ';
+    bool        bold      = false;
+    bool        dim       = false;
+    bool        inverted  = false;
+    QTuiFgColor fgColor   = QTuiFgColor::Default;
 
     bool operator==(const QTuiCell &other) const
     {
         return character == other.character && bold == other.bold && dim == other.dim
-               && inverted == other.inverted;
+               && inverted == other.inverted && fgColor == other.fgColor;
     }
     bool operator!=(const QTuiCell &other) const { return !(*this == other); }
 };
@@ -48,14 +66,21 @@ public:
 
     /* Drawing primitives */
     void putChar(
-        int col, int row, QChar ch, bool bold = false, bool dim = false, bool inverted = false);
+        int         col,
+        int         row,
+        QChar       ch,
+        bool        bold     = false,
+        bool        dim      = false,
+        bool        inverted = false,
+        QTuiFgColor fgColor  = QTuiFgColor::Default);
     void putString(
         int            col,
         int            row,
         const QString &text,
         bool           bold     = false,
         bool           dim      = false,
-        bool           inverted = false);
+        bool           inverted = false,
+        QTuiFgColor    fgColor  = QTuiFgColor::Default);
 
     /* Draw a horizontal line of a character across full width */
     void hline(int row, QChar ch = '-');

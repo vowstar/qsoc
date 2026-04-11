@@ -17,7 +17,15 @@
 class QTuiScrollView
 {
 public:
-    enum LineStyle : int { Normal = 0, Dim = 1, Bold = 2 };
+    enum LineStyle : int {
+        Normal      = 0,
+        Dim         = 1,
+        Bold        = 2,
+        DiffAdd     = 3, /* '+' lines, rendered green */
+        DiffDel     = 4, /* '-' lines, rendered red */
+        DiffHunk    = 5, /* '@@' headers, rendered yellow + bold */
+        DiffContext = 6, /* unchanged context lines, dim */
+    };
 
     /* Append a complete line */
     void appendLine(const QString &text, LineStyle style = Normal);

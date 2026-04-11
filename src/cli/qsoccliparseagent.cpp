@@ -23,6 +23,7 @@
 #include "cli/qagentinputmonitor.h"
 #include "cli/qsocexternaleditor.h"
 #include "cli/qterminalcapability.h"
+#include "common/qsoclinediff.h"
 #include "common/qstaticlog.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuiinputline.h"
@@ -861,6 +862,49 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
     int                  nextPasteId         = 1;
     static constexpr int PASTE_CHIP_CHAR_MIN = 500;
     static constexpr int PASTE_CHIP_LINE_MIN = 4;
+
+    /* Per-edit_file diff capture: when the agent calls edit_file, the
+     * toolCalled hook stashes the path + old/new strings here so the
+     * toolResult hook can render a unified-style colored diff to the
+     * scroll view on success. Reset after each render so a follow-up
+     * tool call doesn't accidentally re-emit the same diff. */
+    QString pendingDiffPath;
+    QString pendingDiffOldString;
+    QString pendingDiffNewString;
+
+    /* Helper: render a unified diff to the scroll view with the diff line
+     * styles defined on QTuiScrollView (Hunk = yellow bold, Add = green,
+     * Del = red, Context = dim). Called from the toolResult hook when an
+     * edit_file or write_file completes successfully. */
+    auto renderDiffToScrollView =
+        [&compositor](const QString &path, const QString &oldText, const QString &newText) {
+            const auto diff = QSocLineDiff::computeLineDiff(oldText, newText);
+            if (diff.isEmpty()) {
+                return;
+            }
+            compositor.printContent(
+                QStringLiteral("\n--- a/") + path + QLatin1Char('\n'), QTuiScrollView::DiffDel);
+            compositor.printContent(
+                QStringLiteral("+++ b/") + path + QLatin1Char('\n'), QTuiScrollView::DiffAdd);
+            for (const auto &line : diff) {
+                QTuiScrollView::LineStyle style = QTuiScrollView::DiffContext;
+                switch (line.kind) {
+                case QSocLineDiff::Kind::Hunk:
+                    style = QTuiScrollView::DiffHunk;
+                    break;
+                case QSocLineDiff::Kind::Add:
+                    style = QTuiScrollView::DiffAdd;
+                    break;
+                case QSocLineDiff::Kind::Del:
+                    style = QTuiScrollView::DiffDel;
+                    break;
+                case QSocLineDiff::Kind::Context:
+                    style = QTuiScrollView::DiffContext;
+                    break;
+                }
+                compositor.printContent(line.text + QLatin1Char('\n'), style);
+            }
+        };
 
     /* Helper: expand "[Pasted text #N +M lines]" chips inline with the
      * stored content from pastedContents. Unknown ids (e.g. recalled from
@@ -1742,7 +1786,11 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
-                 &inputWidget](const QString &toolName, const QString &arguments) {
+                 &inputWidget,
+                 &pendingDiffPath,
+                 &pendingDiffOldString,
+                 &pendingDiffNewString](const QString &toolName, const QString &arguments) {
+                    Q_UNUSED(compositor)
                     /* Extract detail from arguments for better UX */
                     QString detail;
                     try {
@@ -1771,6 +1819,22 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                             /* todo_update, todo_delete - id only, title from result */
                             detail = "#" + QString::number(args["id"].get<int>());
                         }
+
+                        /* Capture edit_file args for the diff renderer in the
+                         * matching toolResult hook below. */
+                        if (toolName == "edit_file" && args.contains("file_path")
+                            && args.contains("old_string") && args.contains("new_string")) {
+                            pendingDiffPath = QString::fromStdString(
+                                args["file_path"].get<std::string>());
+                            pendingDiffOldString = QString::fromStdString(
+                                args["old_string"].get<std::string>());
+                            pendingDiffNewString = QString::fromStdString(
+                                args["new_string"].get<std::string>());
+                        } else {
+                            pendingDiffPath.clear();
+                            pendingDiffOldString.clear();
+                            pendingDiffNewString.clear();
+                        }
                     } catch (...) {
                         /* Ignore parse errors */
                     }
@@ -1791,9 +1855,25 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
-                 &inputWidget](const QString &toolName, const QString &result) {
+                 &inputWidget,
+                 &pendingDiffPath,
+                 &pendingDiffOldString,
+                 &pendingDiffNewString,
+                 &renderDiffToScrollView](const QString &toolName, const QString &result) {
                     statusBarWidget.resetProgress();
                     statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
+
+                    /* edit_file diff: render a colored unified diff to the
+                     * scroll view when the previous toolCalled hook stashed
+                     * old/new strings AND the result indicates success. */
+                    if (toolName == "edit_file" && !pendingDiffPath.isEmpty()
+                        && result.startsWith(QStringLiteral("Successfully"))) {
+                        renderDiffToScrollView(
+                            pendingDiffPath, pendingDiffOldString, pendingDiffNewString);
+                    }
+                    pendingDiffPath.clear();
+                    pendingDiffOldString.clear();
+                    pendingDiffNewString.clear();
 
                     /* Parse and update todo list based on tool type */
                     if (toolName == "todo_list") {
@@ -2125,7 +2205,11 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
-                 &inputWidget](const QString &toolName, const QString &arguments) {
+                 &inputWidget,
+                 &pendingDiffPath,
+                 &pendingDiffOldString,
+                 &pendingDiffNewString](const QString &toolName, const QString &arguments) {
+                    Q_UNUSED(compositor)
                     /* Extract detail from arguments for better UX */
                     QString detail;
                     try {
@@ -2154,6 +2238,22 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                             /* todo_update, todo_delete - id only, title from result */
                             detail = "#" + QString::number(args["id"].get<int>());
                         }
+
+                        /* Capture edit_file args for the diff renderer in the
+                         * matching toolResult hook below. */
+                        if (toolName == "edit_file" && args.contains("file_path")
+                            && args.contains("old_string") && args.contains("new_string")) {
+                            pendingDiffPath = QString::fromStdString(
+                                args["file_path"].get<std::string>());
+                            pendingDiffOldString = QString::fromStdString(
+                                args["old_string"].get<std::string>());
+                            pendingDiffNewString = QString::fromStdString(
+                                args["new_string"].get<std::string>());
+                        } else {
+                            pendingDiffPath.clear();
+                            pendingDiffOldString.clear();
+                            pendingDiffNewString.clear();
+                        }
                     } catch (...) {
                         /* Ignore parse errors */
                     }
@@ -2174,9 +2274,25 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
-                 &inputWidget](const QString &toolName, const QString &result) {
+                 &inputWidget,
+                 &pendingDiffPath,
+                 &pendingDiffOldString,
+                 &pendingDiffNewString,
+                 &renderDiffToScrollView](const QString &toolName, const QString &result) {
                     statusBarWidget.resetProgress();
                     statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
+
+                    /* edit_file diff: render a colored unified diff to the
+                     * scroll view when the previous toolCalled hook stashed
+                     * old/new strings AND the result indicates success. */
+                    if (toolName == "edit_file" && !pendingDiffPath.isEmpty()
+                        && result.startsWith(QStringLiteral("Successfully"))) {
+                        renderDiffToScrollView(
+                            pendingDiffPath, pendingDiffOldString, pendingDiffNewString);
+                    }
+                    pendingDiffPath.clear();
+                    pendingDiffOldString.clear();
+                    pendingDiffNewString.clear();
 
                     /* Parse and update todo list based on tool type */
                     if (toolName == "todo_list") {
