@@ -843,6 +843,43 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
     bool                searchFailed = false;
     QAgentHistorySearch historySearch{inputHistory};
 
+    /* Paste chip state: pastedContents stores the full text of every chip
+     * currently referenced in the input buffer. Chips are session-local —
+     * not persisted across restarts. nextPasteId assigns monotonic ids so
+     * two pastes never collide inside the same session. */
+    QMap<int, QString>   pastedContents;
+    int                  nextPasteId         = 1;
+    static constexpr int PASTE_CHIP_CHAR_MIN = 500;
+    static constexpr int PASTE_CHIP_LINE_MIN = 4;
+
+    /* Helper: expand "[Pasted text #N +M lines]" chips inline with the
+     * stored content from pastedContents. Unknown ids (e.g. recalled from
+     * history in a later session) fall through as the literal chip text. */
+    auto expandPasteChips = [&pastedContents](const QString &text) -> QString {
+        static const QRegularExpression chipRe(
+            QStringLiteral(R"(\[Pasted text #(\d+) \+\d+ lines\])"));
+        auto matchIter = chipRe.globalMatch(text);
+        if (!matchIter.hasNext()) {
+            return text;
+        }
+        QString expanded;
+        int     pos = 0;
+        while (matchIter.hasNext()) {
+            auto match = matchIter.next();
+            expanded += text.mid(pos, match.capturedStart(0) - pos);
+            bool parsed  = false;
+            int  pasteId = match.captured(1).toInt(&parsed);
+            if (parsed && pastedContents.contains(pasteId)) {
+                expanded += pastedContents.value(pasteId);
+            } else {
+                expanded += match.captured(0);
+            }
+            pos = match.capturedEnd(0);
+        }
+        expanded += text.mid(pos);
+        return expanded;
+    };
+
     /* Connect live input display (text + cursor position).
      * In reverse-i-search mode, the monitor's buffer holds the live search
      * query — we route it through the search engine and drive the input
@@ -1242,11 +1279,37 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         compositor.render();
     });
 
+    /* Bracketed paste: decide between literal insert and a chip reference.
+     * Short pastes (< PASTE_CHIP_CHAR_MIN chars AND < PASTE_CHIP_LINE_MIN
+     * lines) drop into the buffer as-is. Large pastes get a monotonic id
+     * allocated, the full content stashed in pastedContents, and only a
+     * "[Pasted text #N +M lines]" label inserted so the TUI layout stays
+     * readable. Chips expand back to the full content at submission time. */
+    connect(&inputMonitor, &QAgentInputMonitor::pastedReceived, [&](const QString &text) {
+        if (text.isEmpty()) {
+            return;
+        }
+        int  lineCount = static_cast<int>(text.count(QLatin1Char('\n'))) + 1;
+        bool big       = (text.size() >= PASTE_CHIP_CHAR_MIN) || (lineCount > PASTE_CHIP_LINE_MIN);
+        if (!big) {
+            inputMonitor.insertText(text);
+            return;
+        }
+        int pasteId             = nextPasteId++;
+        pastedContents[pasteId] = text;
+        QString chip = QStringLiteral("[Pasted text #%1 +%2 lines]").arg(pasteId).arg(lineCount);
+        inputMonitor.insertText(chip);
+    });
+
     /* External editor (Ctrl+X Ctrl+E or Ctrl+G): pause the TUI, hand off
      * to $EDITOR with the current input text, and reload the edited result
-     * into the input buffer when the editor exits. */
+     * into the input buffer when the editor exits. Paste chips are expanded
+     * into the tempfile so the user can actually edit their pasted content;
+     * the edited return text replaces the buffer as-is — chips are not
+     * reconstructed, so the user sees (and commits) the real payload. */
     connect(&inputMonitor, &QAgentInputMonitor::externalEditorRequested, [&]() {
-        const QString current = inputWidget.getText();
+        const QString rawBuffer = inputWidget.getText();
+        const QString current   = expandPasteChips(rawBuffer);
 
         /* Tear down the alt-screen and raw-mode monitor so the editor owns
          * the terminal. Mirrors the '!<cmd>' shell-escape dance. */
@@ -1265,10 +1328,10 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         if (success) {
             inputMonitor.setInputBuffer(editedText);
         } else {
-            /* Restore the original input so a failed editor invocation
-             * doesn't silently wipe what the user already typed — stop()
-             * cleared the buffer as part of its tear-down. */
-            inputMonitor.setInputBuffer(current);
+            /* Restore the ORIGINAL chip-containing buffer (not the expanded
+             * form) so a failed editor invocation is a pure no-op — we don't
+             * want to silently expand chips when the user just bailed out. */
+            inputMonitor.setInputBuffer(rawBuffer);
             if (!errMessage.isEmpty()) {
                 compositor.printContent(
                     QStringLiteral("External editor: ") + errMessage + QLatin1Char('\n'));
@@ -1387,7 +1450,11 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         /* Echo user input in scroll view */
         compositor.printContent("\nqsoc> " + input + "\n");
 
-        /* Add to history (skip duplicates of last entry) */
+        /* Add to history (skip duplicates of last entry). Saved in CHIP form
+         * — the full paste payload is deliberately not persisted across
+         * restarts (session-scoped only). Expanding chips happens *after*
+         * this save so downstream consumers see the real payload but
+         * history stays compact. */
         if (inputHistory.isEmpty() || inputHistory.last() != input) {
             inputHistory.append(input);
             /* Persist to file — encode \ as \\ and \n as \\n so each entry stays on one line */
@@ -1404,6 +1471,10 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                 }
             }
         }
+
+        /* From this point on, `input` is the fully expanded submission text
+         * that downstream code (shell escape, agent runStream) consumes. */
+        input = expandPasteChips(input);
 
         if (input.startsWith("!")) {
             QString shellCmd = input.mid(1).trimmed();
