@@ -678,11 +678,23 @@ private slots:
         QCOMPARE(readyText, QStringLiteral("hel\\lo"));
     }
 
+    /* Helper: bridge pastedReceived → insertText to simulate the REPL's
+     * literal-insert path. Tests that want chip logic can skip this bridge. */
+    static void bridgePasteToInsert(QAgentInputMonitor &monitor)
+    {
+        connect(
+            &monitor,
+            &QAgentInputMonitor::pastedReceived,
+            &monitor,
+            [&monitor](const QString &text) { monitor.insertText(text); });
+    }
+
     void testBracketedPasteInsertsLiteralNewlines()
     {
         QAgentInputMonitor monitor;
-        int                readyCount = 0;
-        QString            lastText;
+        bridgePasteToInsert(monitor);
+        int     readyCount = 0;
+        QString lastText;
         connect(&monitor, &QAgentInputMonitor::inputReady, [&readyCount](const QString &) {
             readyCount++;
         });
@@ -704,7 +716,8 @@ private slots:
     void testEnterAfterPasteSubmits()
     {
         QAgentInputMonitor monitor;
-        QString            readyText;
+        bridgePasteToInsert(monitor);
+        QString readyText;
         connect(&monitor, &QAgentInputMonitor::inputReady, [&readyText](const QString &text) {
             readyText = text;
         });
@@ -724,7 +737,8 @@ private slots:
     void testBackspaceJoinsLinesAcrossNewline()
     {
         QAgentInputMonitor monitor;
-        QString            lastText;
+        bridgePasteToInsert(monitor);
+        QString lastText;
         connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
             lastText = text;
         });
@@ -751,8 +765,9 @@ private slots:
     void testCtrlAOnSecondLineGoesToLineStartNotBufferStart()
     {
         QAgentInputMonitor monitor;
-        const char         startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
-        const char         endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+        bridgePasteToInsert(monitor);
+        const char startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
         monitor.processBytes(startMarker, 6);
         monitor.processBytes("line1\nline2", 11);
         monitor.processBytes(endMarker, 6);
@@ -769,7 +784,8 @@ private slots:
     void testCtrlKOnFirstLineOnlyKillsFirstLine()
     {
         QAgentInputMonitor monitor;
-        QString            lastText;
+        bridgePasteToInsert(monitor);
+        QString lastText;
         connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
             lastText = text;
         });
@@ -796,7 +812,8 @@ private slots:
     void testBracketedPasteToggleIsIdempotent()
     {
         QAgentInputMonitor monitor;
-        QString            lastText;
+        bridgePasteToInsert(monitor);
+        QString lastText;
         connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
             lastText = text;
         });
@@ -1054,6 +1071,103 @@ private slots:
         const char ctrlT = 0x14;
         monitor.processBytes(&ctrlT, 1);
         QCOMPARE(count, 1);
+    }
+
+    /* Bracketed paste accumulation / pastedReceived tests */
+
+    void testBracketedPasteAccumulatesPayload()
+    {
+        QAgentInputMonitor monitor;
+        int                pastedCount = 0;
+        QString            lastPayload;
+        int                inputChangeCount = 0;
+        connect(
+            &monitor,
+            &QAgentInputMonitor::pastedReceived,
+            [&pastedCount, &lastPayload](const QString &text) {
+                pastedCount++;
+                lastPayload = text;
+            });
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&inputChangeCount](const QString &) {
+            inputChangeCount++;
+        });
+
+        const char startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes("alpha\nbeta\ngamma", 16);
+        monitor.processBytes(endMarker, 6);
+
+        /* REPL owns insertion — the monitor itself must not touch inputBuffer
+         * during bracketed paste, so inputChanged should not fire and cursor
+         * stays at 0. */
+        QCOMPARE(pastedCount, 1);
+        QCOMPARE(lastPayload, QStringLiteral("alpha\nbeta\ngamma"));
+        QCOMPARE(inputChangeCount, 0);
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testBracketedPasteHandlesUtf8()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastPayload;
+        connect(&monitor, &QAgentInputMonitor::pastedReceived, [&lastPayload](const QString &text) {
+            lastPayload = text;
+        });
+
+        /* 你好 world = UTF-8 6 bytes + " world" */
+        const char startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes("\xe4\xbd\xa0\xe5\xa5\xbd world", 12);
+        monitor.processBytes(endMarker, 6);
+
+        QCOMPARE(lastPayload, QStringLiteral("\u4f60\u597d world"));
+    }
+
+    void testEmptyPasteEmitsEmptyPayload()
+    {
+        QAgentInputMonitor monitor;
+        int                count       = 0;
+        QString            lastPayload = QStringLiteral("sentinel");
+        connect(&monitor, &QAgentInputMonitor::pastedReceived, [&](const QString &text) {
+            count++;
+            lastPayload = text;
+        });
+
+        const char startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes(endMarker, 6);
+
+        QCOMPARE(count, 1);
+        QVERIFY(lastPayload.isEmpty());
+    }
+
+    void testInsertTextAppendsAtCursor()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("hello ", 6);
+        monitor.insertText(QStringLiteral("[Pasted text #1 +3 lines]"));
+        QCOMPARE(lastText, QStringLiteral("hello [Pasted text #1 +3 lines]"));
+        QCOMPARE(monitor.getCursorPos(), 31);
+    }
+
+    void testInsertTextEmptyIsNoop()
+    {
+        QAgentInputMonitor monitor;
+        int                changeCount = 0;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&changeCount](const QString &) {
+            changeCount++;
+        });
+
+        monitor.insertText(QString());
+        QCOMPARE(changeCount, 0);
     }
 
     void testStopClearsInputState()

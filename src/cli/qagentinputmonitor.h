@@ -95,6 +95,16 @@ signals:
      */
     void toggleTodosRequested();
 
+    /**
+     * @brief Emitted when a bracketed paste completes, carrying the full
+     *        decoded paste payload. The REPL decides whether to insert the
+     *        text literally or replace it with a "[Pasted text #N +M lines]"
+     *        chip reference. Monitor never auto-inserts paste content — the
+     *        REPL is responsible for either calling insertText(payload) or
+     *        insertText(chipLabel) based on its own size heuristics.
+     */
+    void pastedReceived(const QString &text);
+
 private:
     static int  utf8SeqLen(unsigned char lead);
     static bool isUtf8Continuation(unsigned char byte);
@@ -113,7 +123,8 @@ private:
     QString          inputBuffer;
     int              cursorPos = 0; /* Insertion point in inputBuffer (QChar index) */
     QByteArray       utf8Pending;
-    QByteArray       escBuffer; /* Buffer for ESC sequence parsing */
+    QByteArray       escBuffer;    /* Buffer for ESC sequence parsing */
+    QByteArray       pastedBuffer; /* Accumulator for bracketed paste payload */
     bool             inEscSeq         = false;
     bool             inBracketedPaste = false; /* True while inside \033[200~ ... \033[201~ */
     bool             submitBlocked    = false; /* Enter/Tab emit submitBlockedKey instead */
@@ -141,6 +152,14 @@ public:
      * @param trailing    Optional trailing char (' ' for file, '/' for dir)
      */
     void insertCompletion(int atPos, const QString &replacement, QChar trailing = QLatin1Char(' '));
+
+    /**
+     * @brief Insert arbitrary text at the current cursor position.
+     * @details Public wrapper around the internal insertAtCursor so the REPL
+     *          can push pasted payloads or chip labels without reaching into
+     *          private state. Cursor advances by text.size() QChars.
+     */
+    void insertText(const QString &text);
 
     /**
      * @brief When blocked, Enter and Tab emit submitBlockedKey() instead of

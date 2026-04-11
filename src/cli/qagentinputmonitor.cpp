@@ -121,6 +121,13 @@ void QAgentInputMonitor::setSubmitBlocked(bool blocked)
     submitBlocked = blocked;
 }
 
+void QAgentInputMonitor::insertText(const QString &text)
+{
+    if (!text.isEmpty()) {
+        insertAtCursor(text);
+    }
+}
+
 void QAgentInputMonitor::resetEscBuffer()
 {
     escBuffer.clear();
@@ -225,11 +232,19 @@ void QAgentInputMonitor::processEscSequence()
             /* Bracketed paste markers: ESC [ 200 ~ (start), ESC [ 201 ~ (end) */
             if (escBuffer == QByteArray("\033[200~")) {
                 inBracketedPaste = true;
+                pastedBuffer.clear();
                 resetEscBuffer();
                 return;
             }
             if (escBuffer == QByteArray("\033[201~")) {
                 inBracketedPaste = false;
+                /* Decode the accumulated paste as UTF-8 and hand it off to
+                 * the REPL. The monitor intentionally does NOT insert the
+                 * content itself — the REPL decides between literal insert
+                 * and a "[Pasted text #N +M lines]" chip based on size. */
+                QString decoded = QString::fromUtf8(pastedBuffer);
+                pastedBuffer.clear();
+                emit pastedReceived(decoded);
                 resetEscBuffer();
                 return;
             }
@@ -307,6 +322,21 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
         if (inEscSeq) {
             escBuffer.append(static_cast<char>(byte));
             processEscSequence();
+            continue;
+        }
+
+        /* Inside a bracketed paste: redirect every byte to the paste buffer
+         * (including newlines and UTF-8 continuation bytes) so the REPL
+         * receives the full payload as a single signal. ESC starts the
+         * escape parser so the '[201~' end marker is still recognized. */
+        if (inBracketedPaste) {
+            if (byte == 0x1B) {
+                inEscSeq = true;
+                escBuffer.clear();
+                escBuffer.append(static_cast<char>(byte));
+                continue;
+            }
+            pastedBuffer.append(static_cast<char>(byte));
             continue;
         }
 
@@ -604,6 +634,7 @@ void QAgentInputMonitor::stop()
     cursorPos = 0;
     utf8Pending.clear();
     resetEscBuffer();
+    pastedBuffer.clear();
     inBracketedPaste = false;
     inCtrlXChord     = false;
     emit inputChanged(QString());
