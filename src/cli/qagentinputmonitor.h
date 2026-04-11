@@ -5,6 +5,8 @@
 #define QAGENTINPUTMONITOR_H
 
 #include <QByteArray>
+#include <QElapsedTimer>
+#include <QList>
 #include <QObject>
 #include <QRegularExpression>
 #include <QSocketNotifier>
@@ -122,6 +124,21 @@ private:
     void        moveCursorLeft();
     void        moveCursorRight();
 
+    /* Undo stack primitives. A snapshot captures the buffer + cursor state
+     * that existed BEFORE a mutation. Push callers tag whether the change
+     * was a printable-character insertion so consecutive keystrokes can
+     * coalesce into a single undo step via a 500ms debounce window. */
+    struct UndoSnapshot
+    {
+        QString text;
+        int     cursorPos     = 0;
+        bool    fromPrintable = false;
+    };
+    static constexpr int UNDO_MAX_DEPTH   = 100;
+    static constexpr int UNDO_DEBOUNCE_MS = 500;
+    void                 pushUndoSnapshot(bool fromPrintable);
+    void                 clearUndoStack();
+
     /**
      * @brief Find an atomic-pattern match whose span overlaps or is adjacent
      *        to the cursor for the given direction.
@@ -135,19 +152,22 @@ private:
 #ifndef _WIN32
     struct termios origTermios;
 #endif
-    QSocketNotifier   *notifier     = nullptr;
-    bool               active       = false;
-    bool               termiosSaved = false;
-    QString            inputBuffer;
-    int                cursorPos = 0; /* Insertion point in inputBuffer (QChar index) */
-    QByteArray         utf8Pending;
-    QByteArray         escBuffer;     /* Buffer for ESC sequence parsing */
-    QByteArray         pastedBuffer;  /* Accumulator for bracketed paste payload */
-    QRegularExpression atomicPattern; /* Matches glyphs that delete as a unit */
-    bool               inEscSeq         = false;
-    bool               inBracketedPaste = false; /* True while inside \033[200~ ... \033[201~ */
-    bool               submitBlocked    = false; /* Enter/Tab emit submitBlockedKey instead */
-    bool               inCtrlXChord     = false; /* True after Ctrl+X, waiting for second key */
+    QSocketNotifier    *notifier     = nullptr;
+    bool                active       = false;
+    bool                termiosSaved = false;
+    QString             inputBuffer;
+    int                 cursorPos = 0; /* Insertion point in inputBuffer (QChar index) */
+    QByteArray          utf8Pending;
+    QByteArray          escBuffer;     /* Buffer for ESC sequence parsing */
+    QByteArray          pastedBuffer;  /* Accumulator for bracketed paste payload */
+    QRegularExpression  atomicPattern; /* Matches glyphs that delete as a unit */
+    QList<UndoSnapshot> undoStack;     /* Pre-mutation snapshots for Ctrl+_ */
+    QElapsedTimer       undoTimer;     /* Elapsed since the last snapshot push */
+    bool                undoTimerValid   = false;
+    bool                inEscSeq         = false;
+    bool                inBracketedPaste = false; /* True while inside \033[200~ ... \033[201~ */
+    bool                submitBlocked    = false; /* Enter/Tab emit submitBlockedKey instead */
+    bool                inCtrlXChord     = false; /* True after Ctrl+X, waiting for second key */
 
     void processEscSequence();
 

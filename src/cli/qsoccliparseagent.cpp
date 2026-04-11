@@ -1632,6 +1632,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             compositor.printContent("  Ctrl+R      - Reverse-i-search through prompt history\n");
             compositor.printContent("  Ctrl+T      - Toggle TODO list visibility\n");
             compositor.printContent("  Ctrl+L      - Force a full screen repaint\n");
+            compositor.printContent("  Ctrl+_      - Undo the last edit\n");
             compositor.printContent("  @<name>     - Fuzzy-complete a project file path\n");
             compositor.printContent("\n");
             compositor.printContent("Or just type your question/request in natural language.\n");
