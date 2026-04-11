@@ -40,9 +40,10 @@ bool QAgentInputMonitor::isUtf8Continuation(unsigned char byte)
     return (byte & 0xC0) == 0x80;
 }
 
-void QAgentInputMonitor::appendToInput(const QString &decoded)
+void QAgentInputMonitor::insertAtCursor(const QString &decoded)
 {
-    inputBuffer.append(decoded);
+    inputBuffer.insert(cursorPos, decoded);
+    cursorPos += decoded.size();
     emit inputChanged(inputBuffer);
 }
 
@@ -54,7 +55,44 @@ void QAgentInputMonitor::resetEscState()
 void QAgentInputMonitor::setInputBuffer(const QString &text)
 {
     inputBuffer = text;
+    cursorPos   = inputBuffer.size();
     emit inputChanged(inputBuffer);
+}
+
+int QAgentInputMonitor::prevCharStep() const
+{
+    if (cursorPos >= 2 && inputBuffer[cursorPos - 1].isLowSurrogate()
+        && inputBuffer[cursorPos - 2].isHighSurrogate()) {
+        return 2;
+    }
+    return (cursorPos > 0) ? 1 : 0;
+}
+
+int QAgentInputMonitor::nextCharStep() const
+{
+    if (cursorPos + 1 < inputBuffer.size() && inputBuffer[cursorPos].isHighSurrogate()
+        && inputBuffer[cursorPos + 1].isLowSurrogate()) {
+        return 2;
+    }
+    return (cursorPos < inputBuffer.size()) ? 1 : 0;
+}
+
+void QAgentInputMonitor::moveCursorLeft()
+{
+    int step = prevCharStep();
+    if (step > 0) {
+        cursorPos -= step;
+        emit inputChanged(inputBuffer);
+    }
+}
+
+void QAgentInputMonitor::moveCursorRight()
+{
+    int step = nextCharStep();
+    if (step > 0) {
+        cursorPos += step;
+        emit inputChanged(inputBuffer);
+    }
 }
 
 void QAgentInputMonitor::resetEscBuffer()
@@ -109,11 +147,47 @@ void QAgentInputMonitor::processEscSequence()
             return;
         }
 
-        /* Arrow keys: ESC [ A/B/C/D (exactly 3 bytes) */
+        /* Arrow keys and Home/End: ESC [ A/B/C/D/H/F (exactly 3 bytes).
+         * Up/Down ('A'/'B') emit arrowKey for history navigation.
+         * Left/Right ('C'/'D') move the cursor within the input buffer.
+         * Home/End ('H'/'F') jump to start/end of current line. */
         if (escBuffer.size() == 3) {
             char last = escBuffer[2];
-            if (last >= 'A' && last <= 'D') {
+            if (last == 'A' || last == 'B') {
                 emit arrowKey(last);
+                resetEscBuffer();
+                return;
+            }
+            if (last == 'C') {
+                moveCursorRight();
+                resetEscBuffer();
+                return;
+            }
+            if (last == 'D') {
+                moveCursorLeft();
+                resetEscBuffer();
+                return;
+            }
+            if (last == 'H') {
+                int oldPos = cursorPos;
+                while (cursorPos > 0 && inputBuffer[cursorPos - 1] != QLatin1Char('\n')) {
+                    cursorPos--;
+                }
+                if (cursorPos != oldPos) {
+                    emit inputChanged(inputBuffer);
+                }
+                resetEscBuffer();
+                return;
+            }
+            if (last == 'F') {
+                int oldPos = cursorPos;
+                while (cursorPos < static_cast<int>(inputBuffer.size())
+                       && inputBuffer[cursorPos] != QLatin1Char('\n')) {
+                    cursorPos++;
+                }
+                if (cursorPos != oldPos) {
+                    emit inputChanged(inputBuffer);
+                }
                 resetEscBuffer();
                 return;
             }
@@ -122,7 +196,53 @@ void QAgentInputMonitor::processEscSequence()
         /* Other CSI: check if final byte received (0x40-0x7E) */
         char last = escBuffer[escBuffer.size() - 1];
         if (last >= 0x40 && last <= 0x7E) {
-            resetEscBuffer(); /* Complete — ignore unknown */
+            /* Bracketed paste markers: ESC [ 200 ~ (start), ESC [ 201 ~ (end) */
+            if (escBuffer == QByteArray("\033[200~")) {
+                inBracketedPaste = true;
+                resetEscBuffer();
+                return;
+            }
+            if (escBuffer == QByteArray("\033[201~")) {
+                inBracketedPaste = false;
+                resetEscBuffer();
+                return;
+            }
+            /* ESC [ 1 ~ = Home */
+            if (escBuffer == QByteArray("\033[1~")) {
+                int oldPos = cursorPos;
+                while (cursorPos > 0 && inputBuffer[cursorPos - 1] != QLatin1Char('\n')) {
+                    cursorPos--;
+                }
+                if (cursorPos != oldPos) {
+                    emit inputChanged(inputBuffer);
+                }
+                resetEscBuffer();
+                return;
+            }
+            /* ESC [ 4 ~ = End */
+            if (escBuffer == QByteArray("\033[4~")) {
+                int oldPos = cursorPos;
+                while (cursorPos < static_cast<int>(inputBuffer.size())
+                       && inputBuffer[cursorPos] != QLatin1Char('\n')) {
+                    cursorPos++;
+                }
+                if (cursorPos != oldPos) {
+                    emit inputChanged(inputBuffer);
+                }
+                resetEscBuffer();
+                return;
+            }
+            /* ESC [ 3 ~ = Delete (delete char at cursor, surrogate-aware) */
+            if (escBuffer == QByteArray("\033[3~")) {
+                int step = nextCharStep();
+                if (step > 0) {
+                    inputBuffer.remove(cursorPos, step);
+                    emit inputChanged(inputBuffer);
+                }
+                resetEscBuffer();
+                return;
+            }
+            resetEscBuffer(); /* Complete — unknown CSI ignored */
             return;
         }
 
@@ -155,11 +275,11 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             if (isUtf8Continuation(byte)) {
                 utf8Pending.append(static_cast<char>(byte));
                 int expected = utf8SeqLen(static_cast<unsigned char>(utf8Pending[0]));
-                if (utf8Pending.size() >= expected) {
+                if (static_cast<int>(utf8Pending.size()) >= expected) {
                     QString decoded = QString::fromUtf8(utf8Pending);
                     utf8Pending.clear();
                     if (!decoded.isEmpty()) {
-                        appendToInput(decoded);
+                        insertAtCursor(decoded);
                     }
                 }
             } else {
@@ -173,6 +293,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
          * read() can all be processed (critical for double Ctrl+C detection) */
         if (byte == 0x03) {
             inputBuffer.clear();
+            cursorPos = 0;
             utf8Pending.clear();
             emit inputChanged(inputBuffer);
             emit ctrlCPressed();
@@ -189,47 +310,117 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
 
         /* Enter */
         if (byte == '\r' || byte == '\n') {
+            /* In bracketed paste: newline becomes literal content, never submit */
+            if (inBracketedPaste) {
+                insertAtCursor(QStringLiteral("\n"));
+                continue;
+            }
+            /* Backslash line continuation: trailing '\' + Enter → newline inserted, no submit.
+             * Mirrors bash behavior: the backslash must be the last character of the buffer. */
+            if (inputBuffer.endsWith(QLatin1Char('\\'))) {
+                inputBuffer.chop(1);
+                inputBuffer.append(QLatin1Char('\n'));
+                int maxPos = static_cast<int>(inputBuffer.size());
+                cursorPos  = qMin(cursorPos, maxPos);
+                emit inputChanged(inputBuffer);
+                continue;
+            }
+            /* Normal submit */
             if (!inputBuffer.isEmpty()) {
                 QString text = inputBuffer;
                 inputBuffer.clear();
+                cursorPos = 0;
                 emit inputChanged(inputBuffer);
                 emit inputReady(text);
             }
             continue;
         }
 
-        /* Backspace */
+        /* Backspace: delete char at cursorPos-1 (surrogate-aware) */
         if (byte == 0x7F || byte == '\b') {
-            if (!inputBuffer.isEmpty()) {
-                int bufLen = inputBuffer.size();
-                if (bufLen >= 2 && inputBuffer[bufLen - 1].isLowSurrogate()
-                    && inputBuffer[bufLen - 2].isHighSurrogate()) {
-                    inputBuffer.chop(2);
-                } else {
-                    inputBuffer.chop(1);
-                }
+            int step = prevCharStep();
+            if (step > 0) {
+                inputBuffer.remove(cursorPos - step, step);
+                cursorPos -= step;
                 emit inputChanged(inputBuffer);
             }
             continue;
         }
 
-        /* Ctrl-U: clear line */
+        /* Ctrl-A: move to start of current line */
+        if (byte == 0x01) {
+            int oldPos = cursorPos;
+            while (cursorPos > 0 && inputBuffer[cursorPos - 1] != QLatin1Char('\n')) {
+                cursorPos--;
+            }
+            if (cursorPos != oldPos) {
+                emit inputChanged(inputBuffer);
+            }
+            continue;
+        }
+
+        /* Ctrl-E: move to end of current line */
+        if (byte == 0x05) {
+            int oldPos = cursorPos;
+            while (cursorPos < static_cast<int>(inputBuffer.size())
+                   && inputBuffer[cursorPos] != QLatin1Char('\n')) {
+                cursorPos++;
+            }
+            if (cursorPos != oldPos) {
+                emit inputChanged(inputBuffer);
+            }
+            continue;
+        }
+
+        /* Ctrl-K: kill from cursor to end of current line */
+        if (byte == 0x0B) {
+            int end = cursorPos;
+            while (end < static_cast<int>(inputBuffer.size())
+                   && inputBuffer[end] != QLatin1Char('\n')) {
+                end++;
+            }
+            if (end > cursorPos) {
+                inputBuffer.remove(cursorPos, end - cursorPos);
+                emit inputChanged(inputBuffer);
+            }
+            continue;
+        }
+
+        /* Ctrl-U: kill from start of current line to cursor */
         if (byte == 0x15) {
-            inputBuffer.clear();
-            emit inputChanged(inputBuffer);
+            int start = cursorPos;
+            while (start > 0 && inputBuffer[start - 1] != QLatin1Char('\n')) {
+                start--;
+            }
+            if (start < cursorPos) {
+                inputBuffer.remove(start, cursorPos - start);
+                cursorPos = start;
+                emit inputChanged(inputBuffer);
+            }
             continue;
         }
 
-        /* Ctrl-W: delete word */
+        /* Ctrl-W: delete word back from cursor */
         if (byte == 0x17) {
-            inputBuffer   = inputBuffer.trimmed();
-            int lastSpace = inputBuffer.lastIndexOf(' ');
-            inputBuffer   = (lastSpace >= 0) ? inputBuffer.left(lastSpace + 1) : QString();
-            emit inputChanged(inputBuffer);
+            int end = cursorPos;
+            /* Skip trailing spaces */
+            while (end > 0 && inputBuffer[end - 1].isSpace()
+                   && inputBuffer[end - 1] != QLatin1Char('\n')) {
+                end--;
+            }
+            /* Skip non-space word chars */
+            while (end > 0 && !inputBuffer[end - 1].isSpace()) {
+                end--;
+            }
+            if (end < cursorPos) {
+                inputBuffer.remove(end, cursorPos - end);
+                cursorPos = end;
+                emit inputChanged(inputBuffer);
+            }
             continue;
         }
 
-        /* Tab: ignore */
+        /* Tab: ignore (reserved for future completion) */
         if (byte == '\t') {
             continue;
         }
@@ -242,7 +433,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
 
         /* Printable ASCII */
         if (byte >= 0x20 && byte <= 0x7E) {
-            appendToInput(QString(QChar(byte)));
+            insertAtCursor(QString(QChar(byte)));
             continue;
         }
     }
@@ -257,6 +448,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
         QTimer::singleShot(50, guard, [this]() {
             if (active && inEscSeq && escBuffer.size() == 1) {
                 inputBuffer.clear();
+                cursorPos = 0;
                 emit inputChanged(inputBuffer);
                 emit escPressed();
                 resetEscBuffer();
@@ -286,12 +478,20 @@ void QAgentInputMonitor::start()
 
     notifier = new QSocketNotifier(STDIN_FILENO, QSocketNotifier::Read, this);
     connect(notifier, &QSocketNotifier::activated, this, [this]() {
-        char buf[256];
+        char buf[4096];
         auto bytesRead = read(STDIN_FILENO, buf, sizeof(buf));
         if (bytesRead > 0) {
             processBytes(buf, static_cast<int>(bytesRead));
         }
     });
+
+    /* Enable bracketed paste mode: terminal wraps pasted text with
+     * \033[200~ ... \033[201~ so we can distinguish typed Enter from pasted newline. */
+    {
+        const char *seq     = "\033[?2004h";
+        ssize_t     written = write(STDOUT_FILENO, seq, 8);
+        (void) written;
+    }
 
     active = true;
 #endif
@@ -309,14 +509,23 @@ void QAgentInputMonitor::stop()
         notifier = nullptr;
     }
 
+    /* Disable bracketed paste mode before restoring termios */
+    {
+        const char *seq     = "\033[?2004l";
+        ssize_t     written = write(STDOUT_FILENO, seq, 8);
+        (void) written;
+    }
+
     if (termiosSaved) {
         tcsetattr(STDIN_FILENO, TCSANOW, &origTermios);
         termiosSaved = false;
     }
 
     inputBuffer.clear();
+    cursorPos = 0;
     utf8Pending.clear();
     resetEscBuffer();
+    inBracketedPaste = false;
     emit inputChanged(QString());
 
     active = false;
