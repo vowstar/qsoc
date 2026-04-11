@@ -36,6 +36,9 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMap>
 #include <QPair>
 #include <QRegularExpression>
 #include <QTextStream>
@@ -837,15 +840,18 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
 
     /* Input history + reverse-i-search state — declared early so lambdas
      * below can capture them. The history file load happens after the
-     * conversation restore (further down). */
-    QStringList         inputHistory;
-    bool                searching = false;
-    QString             searchOriginal;
-    int                 searchOriginalCursor = 0;
-    QString             searchQuery; /* Live query text inside reverse-i-search mode */
-    QString             searchCurrentMatch;
-    bool                searchFailed = false;
-    QAgentHistorySearch historySearch{inputHistory};
+     * conversation restore (further down). inputHistoryPastes is aligned
+     * by index with inputHistory and holds the paste content map that was
+     * in scope when each entry was submitted, so chips survive a restart. */
+    QStringList               inputHistory;
+    QList<QMap<int, QString>> inputHistoryPastes;
+    bool                      searching = false;
+    QString                   searchOriginal;
+    int                       searchOriginalCursor = 0;
+    QString                   searchQuery; /* Live query text inside reverse-i-search mode */
+    QString                   searchCurrentMatch;
+    bool                      searchFailed = false;
+    QAgentHistorySearch       historySearch{inputHistory};
 
     /* Paste chip state: pastedContents stores the full text of every chip
      * currently referenced in the input buffer. Chips are session-local —
@@ -1094,20 +1100,42 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
     int     historyPos = -1; /* -1 = not browsing, 0 = most recent */
     QString savedInput;      /* Input buffer before browsing */
 
-    /* Load history from file (decode \\n → \n to restore multi-line entries) */
+    /* Load history from .qsoc/history.jsonl. Each line is a JSON object
+     * {"display": "<chip form>", "pastes": {"<id>": "<content>"}}. Missing
+     * or malformed lines are skipped silently — history is advisory, not a
+     * source of truth we want to hard-fail on. */
     {
         QString projectPath = projectManager->getProjectPath();
         if (!projectPath.isEmpty()) {
-            QFile histFile(QDir(projectPath).filePath(".qsoc/history"));
+            QFile histFile(QDir(projectPath).filePath(".qsoc/history.jsonl"));
             if (histFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 QTextStream stream(&histFile);
                 while (!stream.atEnd()) {
                     QString line = stream.readLine();
-                    if (!line.isEmpty()) {
-                        line.replace(QStringLiteral("\\n"), QStringLiteral("\n"));
-                        line.replace(QStringLiteral("\\\\"), QStringLiteral("\\"));
-                        inputHistory.append(line);
+                    if (line.isEmpty()) {
+                        continue;
                     }
+                    QJsonParseError err{};
+                    QJsonDocument   doc = QJsonDocument::fromJson(line.toUtf8(), &err);
+                    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+                        continue;
+                    }
+                    QJsonObject obj     = doc.object();
+                    QString     display = obj.value(QStringLiteral("display")).toString();
+                    if (display.isEmpty()) {
+                        continue;
+                    }
+                    QMap<int, QString> pastes;
+                    QJsonObject        pastesObj = obj.value(QStringLiteral("pastes")).toObject();
+                    for (auto pIt = pastesObj.begin(); pIt != pastesObj.end(); ++pIt) {
+                        bool ok      = false;
+                        int  pasteId = pIt.key().toInt(&ok);
+                        if (ok) {
+                            pastes[pasteId] = pIt.value().toString();
+                        }
+                    }
+                    inputHistory.append(display);
+                    inputHistoryPastes.append(pastes);
                 }
             }
         }
@@ -1144,6 +1172,53 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             }
             return;
         }
+        /* Helper: pull history entry `idx` into the input buffer with paste
+         * content recovery. Each persisted paste id is renumbered to a
+         * fresh session-local id so recalled entries never clash with
+         * in-session pastedContents. The chip labels in `display` are
+         * rewritten with the new ids via a single regex pass. */
+        auto recallHistoryEntry = [&](int idx) {
+            const QString &display = inputHistory[idx];
+            if (idx < 0 || idx >= inputHistoryPastes.size()) {
+                inputMonitor.setInputBuffer(display);
+                return;
+            }
+            const QMap<int, QString> &storedPastes = inputHistoryPastes[idx];
+            if (storedPastes.isEmpty()) {
+                inputMonitor.setInputBuffer(display);
+                return;
+            }
+            /* Allocate fresh ids and fill pastedContents. */
+            QMap<int, int> idRemap;
+            for (auto pIt = storedPastes.begin(); pIt != storedPastes.end(); ++pIt) {
+                int newId             = nextPasteId++;
+                idRemap[pIt.key()]    = newId;
+                pastedContents[newId] = pIt.value();
+            }
+            /* Single regex pass rewrites each chip to use the new id. */
+            static const QRegularExpression chipRewriteRe(
+                QStringLiteral(R"(\[Pasted text #(\d+)((?: \+\d+ lines)?)\])"));
+            QString rewritten;
+            int     pos       = 0;
+            auto    matchIter = chipRewriteRe.globalMatch(display);
+            while (matchIter.hasNext()) {
+                auto match = matchIter.next();
+                rewritten += display.mid(pos, match.capturedStart(0) - pos);
+                bool parsed = false;
+                int  oldId  = match.captured(1).toInt(&parsed);
+                if (parsed && idRemap.contains(oldId)) {
+                    rewritten += QStringLiteral("[Pasted text #%1%2]")
+                                     .arg(idRemap.value(oldId))
+                                     .arg(match.captured(2));
+                } else {
+                    rewritten += match.captured(0);
+                }
+                pos = match.capturedEnd(0);
+            }
+            rewritten += display.mid(pos);
+            inputMonitor.setInputBuffer(rewritten);
+        };
+
         if (key == 'A') { /* Up */
             if (inputHistory.isEmpty()) {
                 return;
@@ -1154,8 +1229,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             } else if (historyPos < inputHistory.size() - 1) {
                 historyPos++;
             }
-            int idx = inputHistory.size() - 1 - historyPos;
-            inputMonitor.setInputBuffer(inputHistory[idx]);
+            int idx = static_cast<int>(inputHistory.size()) - 1 - historyPos;
+            recallHistoryEntry(idx);
         } else if (key == 'B') { /* Down */
             if (historyPos < 0) {
                 return;
@@ -1164,8 +1239,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             if (historyPos < 0) {
                 inputMonitor.setInputBuffer(savedInput);
             } else {
-                int idx = inputHistory.size() - 1 - historyPos;
-                inputMonitor.setInputBuffer(inputHistory[idx]);
+                int idx = static_cast<int>(inputHistory.size()) - 1 - historyPos;
+                recallHistoryEntry(idx);
             }
         }
     });
@@ -1455,23 +1530,47 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         compositor.printContent("\nqsoc> " + input + "\n");
 
         /* Add to history (skip duplicates of last entry). Saved in CHIP form
-         * — the full paste payload is deliberately not persisted across
-         * restarts (session-scoped only). Expanding chips happens *after*
-         * this save so downstream consumers see the real payload but
-         * history stays compact. */
+         * with any referenced paste payloads captured alongside so chips
+         * survive a restart. The chip form is what goes into both the
+         * in-memory list and the JSONL file; the expansion below only
+         * affects the downstream submission copy. */
         if (inputHistory.isEmpty() || inputHistory.last() != input) {
+            /* Extract the pastes referenced by the current input. */
+            QMap<int, QString> entryPastes;
+            {
+                static const QRegularExpression chipExtractRe(
+                    QStringLiteral(R"(\[Pasted text #(\d+)(?: \+\d+ lines)?\])"));
+                auto matchIter = chipExtractRe.globalMatch(input);
+                while (matchIter.hasNext()) {
+                    auto match   = matchIter.next();
+                    bool parsed  = false;
+                    int  pasteId = match.captured(1).toInt(&parsed);
+                    if (parsed && pastedContents.contains(pasteId)) {
+                        entryPastes[pasteId] = pastedContents.value(pasteId);
+                    }
+                }
+            }
+
             inputHistory.append(input);
-            /* Persist to file — encode \ as \\ and \n as \\n so each entry stays on one line */
+            inputHistoryPastes.append(entryPastes);
+
+            /* Persist to .qsoc/history.jsonl as one JSON object per line. */
             QString projectPath = projectManager->getProjectPath();
             if (!projectPath.isEmpty()) {
                 QString histDir = QDir(projectPath).filePath(".qsoc");
                 QDir(histDir).mkpath(".");
-                QFile histFile(QDir(histDir).filePath("history"));
-                if (histFile.open(QIODevice::Append | QIODevice::Text)) {
-                    QString encoded = input;
-                    encoded.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
-                    encoded.replace(QStringLiteral("\n"), QStringLiteral("\\n"));
-                    QTextStream(&histFile) << encoded << "\n";
+                QFile histFile(QDir(histDir).filePath("history.jsonl"));
+                if (histFile.open(QIODevice::Append)) {
+                    QJsonObject obj;
+                    obj[QStringLiteral("display")] = input;
+                    QJsonObject pastesJson;
+                    for (auto pIt = entryPastes.begin(); pIt != entryPastes.end(); ++pIt) {
+                        pastesJson[QString::number(pIt.key())] = pIt.value();
+                    }
+                    obj[QStringLiteral("pastes")] = pastesJson;
+                    QJsonDocument doc(obj);
+                    histFile.write(doc.toJson(QJsonDocument::Compact));
+                    histFile.write("\n");
                 }
             }
         }
