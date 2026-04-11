@@ -449,6 +449,12 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
+        /* Ctrl+L: force compositor repaint (readline-compatible redraw key) */
+        if (byte == 0x0C) {
+            emit redrawRequested();
+            continue;
+        }
+
         /* ESC: start sequence buffering */
         if (byte == 0x1B) {
             inEscSeq = true;

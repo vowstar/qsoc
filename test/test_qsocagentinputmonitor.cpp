@@ -1073,6 +1073,17 @@ private slots:
         QCOMPARE(count, 1);
     }
 
+    void testCtrlLPressedEmitsRedraw()
+    {
+        QAgentInputMonitor monitor;
+        int                count = 0;
+        connect(&monitor, &QAgentInputMonitor::redrawRequested, [&count]() { count++; });
+
+        const char ctrlL = 0x0C;
+        monitor.processBytes(&ctrlL, 1);
+        QCOMPARE(count, 1);
+    }
+
     /* Bracketed paste accumulation / pastedReceived tests */
 
     void testBracketedPasteAccumulatesPayload()

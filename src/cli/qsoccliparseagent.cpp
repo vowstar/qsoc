@@ -1358,6 +1358,12 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         compositor.render();
     });
 
+    /* Ctrl+L: force a full compositor repaint — readline-style clear-and-redraw. */
+    connect(&inputMonitor, &QAgentInputMonitor::redrawRequested, [&]() {
+        compositor.invalidate();
+        compositor.render();
+    });
+
     /* Bracketed paste: decide between literal insert and a chip reference.
      * Short pastes (< PASTE_CHIP_CHAR_MIN chars AND < PASTE_CHIP_LINE_MIN
      * lines) drop into the buffer as-is. Large pastes get a monotonic id
@@ -1625,6 +1631,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             compositor.printContent("  Ctrl+X Ctrl+E or Ctrl+G - Edit current input in $EDITOR\n");
             compositor.printContent("  Ctrl+R      - Reverse-i-search through prompt history\n");
             compositor.printContent("  Ctrl+T      - Toggle TODO list visibility\n");
+            compositor.printContent("  Ctrl+L      - Force a full screen repaint\n");
             compositor.printContent("  @<name>     - Fuzzy-complete a project file path\n");
             compositor.printContent("\n");
             compositor.printContent("Or just type your question/request in natural language.\n");
