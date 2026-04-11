@@ -6,6 +6,7 @@
 
 #include <QByteArray>
 #include <QObject>
+#include <QRegularExpression>
 #include <QSocketNotifier>
 #include <QString>
 
@@ -114,21 +115,32 @@ private:
     void        moveCursorLeft();
     void        moveCursorRight();
 
+    /**
+     * @brief Find an atomic-pattern match whose span overlaps or is adjacent
+     *        to the cursor for the given direction.
+     * @param forward true for forward Delete, false for Backspace
+     * @param outStart out-param: start of the match in inputBuffer (-1 if none)
+     * @param outLen   out-param: length of the match in QChars (0 if none)
+     * @return true on a hit worth deleting atomically.
+     */
+    bool findAtomicSpanAtCursor(bool forward, int &outStart, int &outLen) const;
+
 #ifndef _WIN32
     struct termios origTermios;
 #endif
-    QSocketNotifier *notifier     = nullptr;
-    bool             active       = false;
-    bool             termiosSaved = false;
-    QString          inputBuffer;
-    int              cursorPos = 0; /* Insertion point in inputBuffer (QChar index) */
-    QByteArray       utf8Pending;
-    QByteArray       escBuffer;    /* Buffer for ESC sequence parsing */
-    QByteArray       pastedBuffer; /* Accumulator for bracketed paste payload */
-    bool             inEscSeq         = false;
-    bool             inBracketedPaste = false; /* True while inside \033[200~ ... \033[201~ */
-    bool             submitBlocked    = false; /* Enter/Tab emit submitBlockedKey instead */
-    bool             inCtrlXChord     = false; /* True after Ctrl+X, waiting for second key */
+    QSocketNotifier   *notifier     = nullptr;
+    bool               active       = false;
+    bool               termiosSaved = false;
+    QString            inputBuffer;
+    int                cursorPos = 0; /* Insertion point in inputBuffer (QChar index) */
+    QByteArray         utf8Pending;
+    QByteArray         escBuffer;     /* Buffer for ESC sequence parsing */
+    QByteArray         pastedBuffer;  /* Accumulator for bracketed paste payload */
+    QRegularExpression atomicPattern; /* Matches glyphs that delete as a unit */
+    bool               inEscSeq         = false;
+    bool               inBracketedPaste = false; /* True while inside \033[200~ ... \033[201~ */
+    bool               submitBlocked    = false; /* Enter/Tab emit submitBlockedKey instead */
+    bool               inCtrlXChord     = false; /* True after Ctrl+X, waiting for second key */
 
     void processEscSequence();
 
@@ -160,6 +172,17 @@ public:
      *          private state. Cursor advances by text.size() QChars.
      */
     void insertText(const QString &text);
+
+    /**
+     * @brief Register a regex whose matches should behave as atomic glyphs
+     *        for Backspace / Delete.
+     * @details When set, a Backspace or forward Delete that lands anywhere
+     *          inside a match — or immediately adjacent to it — removes the
+     *          whole match instead of one character. Used by the REPL to
+     *          make "[Pasted text #N +M lines]" chips deletable as a unit.
+     *          Pass a default-constructed QRegularExpression to disable.
+     */
+    void setAtomicPattern(const QRegularExpression &pattern);
 
     /**
      * @brief When blocked, Enter and Tab emit submitBlockedKey() instead of
