@@ -1089,9 +1089,20 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                 }
             };
 
-            /* Skip if user dismissed popup for this exact input via Esc */
-            if (dismissedFor == text) {
+            /* Skip if user dismissed popup for this exact non-empty input via
+             * Esc. Empty buffer never matches "dismissed for" so a stale
+             * empty initial value can't trap the popup-close path below
+             * (without this guard, typing "/" then backspacing left the
+             * popup stuck on screen because dismissedFor == text == ""). */
+            if (!dismissedFor.isEmpty() && dismissedFor == text) {
                 return;
+            }
+            /* Reaching an empty buffer also resets the dismissal state, so
+             * after the user wipes everything (Ctrl+U / backspace-to-empty
+             * / submit) the next round of typing starts fresh and can
+             * legitimately re-open the popup for the same token. */
+            if (text.isEmpty()) {
+                dismissedFor.clear();
             }
 
             /* Slash command completion (highest priority, position 0 only) */
