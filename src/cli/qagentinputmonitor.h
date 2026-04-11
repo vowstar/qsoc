@@ -66,6 +66,14 @@ signals:
     /* Arrow keys */
     void arrowKey(int key); /* 'A'=up, 'B'=down, 'C'=right, 'D'=left */
 
+    /**
+     * @brief Emitted when Enter or Tab is pressed while submit is blocked
+     *        (e.g. completion popup is open). REPL can use this to confirm
+     *        the popup selection without the input buffer being wiped.
+     * @param key 'E' for Enter, 'T' for Tab
+     */
+    void submitBlockedKey(int key);
+
 private:
     static int  utf8SeqLen(unsigned char lead);
     static bool isUtf8Continuation(unsigned char byte);
@@ -87,6 +95,7 @@ private:
     QByteArray       escBuffer; /* Buffer for ESC sequence parsing */
     bool             inEscSeq         = false;
     bool             inBracketedPaste = false; /* True while inside \033[200~ ... \033[201~ */
+    bool             submitBlocked    = false; /* Enter/Tab emit submitBlockedKey instead */
 
     void processEscSequence();
 
@@ -99,6 +108,25 @@ public:
 
     /* Current cursor position within inputBuffer (QChar index) */
     int getCursorPos() const { return cursorPos; }
+
+    /**
+     * @brief Replace the '@query' token ending at cursorPos with a replacement
+     *        (typically a file path) and advance the cursor past it.
+     * @param atPos       Absolute buffer position of the '@' char to replace
+     * @param replacement Text to insert (should NOT start with '@'; '@' is
+     *                    prepended automatically so references render as
+     *                    '@path/to/file')
+     * @param trailing    Optional trailing char (' ' for file, '/' for dir)
+     */
+    void insertCompletion(int atPos, const QString &replacement, QChar trailing = QLatin1Char(' '));
+
+    /**
+     * @brief When blocked, Enter and Tab emit submitBlockedKey() instead of
+     *        inputReady/tab-ignore, so the REPL can own popup confirmation
+     *        without the buffer being cleared by the monitor.
+     */
+    void setSubmitBlocked(bool blocked);
+    bool isSubmitBlocked() const { return submitBlocked; }
 
 private:
     void resetEscBuffer();

@@ -845,6 +845,114 @@ private slots:
         QCOMPARE(monitor.getCursorPos(), 0);
     }
 
+    /* Submit-blocked tests (used by completion popup) */
+
+    void testSubmitBlockedEnterEmitsSpecialSignal()
+    {
+        QAgentInputMonitor monitor;
+        int                readyCount   = 0;
+        int                blockedCount = 0;
+        int                lastKey      = 0;
+
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyCount](const QString &) {
+            readyCount++;
+        });
+        connect(&monitor, &QAgentInputMonitor::submitBlockedKey, [&blockedCount, &lastKey](int key) {
+            blockedCount++;
+            lastKey = key;
+        });
+
+        monitor.processBytes("hello", 5);
+        monitor.setSubmitBlocked(true);
+
+        const char enter = '\n';
+        monitor.processBytes(&enter, 1);
+        QCOMPARE(readyCount, 0);
+        QCOMPARE(blockedCount, 1);
+        QCOMPARE(lastKey, static_cast<int>('E'));
+        /* Buffer should stay intact */
+        QCOMPARE(monitor.getCursorPos(), 5);
+    }
+
+    void testSubmitBlockedTabEmitsSpecialSignal()
+    {
+        QAgentInputMonitor monitor;
+        int                blockedCount = 0;
+        int                lastKey      = 0;
+
+        connect(&monitor, &QAgentInputMonitor::submitBlockedKey, [&blockedCount, &lastKey](int key) {
+            blockedCount++;
+            lastKey = key;
+        });
+
+        monitor.processBytes("hello", 5);
+        monitor.setSubmitBlocked(true);
+
+        const char tab = '\t';
+        monitor.processBytes(&tab, 1);
+        QCOMPARE(blockedCount, 1);
+        QCOMPARE(lastKey, static_cast<int>('T'));
+    }
+
+    void testSubmitBlockedTabWhenNotBlockedIsIgnored()
+    {
+        QAgentInputMonitor monitor;
+        int                blockedCount = 0;
+        connect(&monitor, &QAgentInputMonitor::submitBlockedKey, [&blockedCount](int) {
+            blockedCount++;
+        });
+
+        monitor.processBytes("hello", 5);
+        /* submitBlocked is false by default */
+        const char tab = '\t';
+        monitor.processBytes(&tab, 1);
+        QCOMPARE(blockedCount, 0);
+        QCOMPARE(monitor.getCursorPos(), 5);
+    }
+
+    void testInsertCompletionReplacesAtToken()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Type "hello @foo" — cursorPos=10, @ at index 6 */
+        monitor.processBytes("hello @foo", 10);
+        QCOMPARE(monitor.getCursorPos(), 10);
+
+        monitor.insertCompletion(6, QStringLiteral("src/foo.cpp"), QLatin1Char(' '));
+        QCOMPARE(lastText, QStringLiteral("hello @src/foo.cpp "));
+        QCOMPARE(monitor.getCursorPos(), 19);
+    }
+
+    void testInsertCompletionDirectoryTrailingSlash()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("@s", 2);
+        monitor.insertCompletion(0, QStringLiteral("src"), QLatin1Char('/'));
+        QCOMPARE(lastText, QStringLiteral("@src/"));
+        QCOMPARE(monitor.getCursorPos(), 5);
+    }
+
+    void testInsertCompletionIgnoresInvalidPos()
+    {
+        QAgentInputMonitor monitor;
+        monitor.processBytes("hello", 5);
+        int origCursor = monitor.getCursorPos();
+
+        /* atPos outside range — no-op */
+        monitor.insertCompletion(-1, QStringLiteral("x"), QLatin1Char(' '));
+        monitor.insertCompletion(100, QStringLiteral("x"), QLatin1Char(' '));
+        QCOMPARE(monitor.getCursorPos(), origCursor);
+    }
+
     void testStopClearsInputState()
     {
         QAgentInputMonitor monitor;

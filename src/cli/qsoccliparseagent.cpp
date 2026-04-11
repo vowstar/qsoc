@@ -18,6 +18,7 @@
 #include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctooltodo.h"
 #include "agent/tool/qsoctoolweb.h"
+#include "cli/qagentcompletion.h"
 #include "cli/qagentinputmonitor.h"
 #include "cli/qterminalcapability.h"
 #include "common/qstaticlog.h"
@@ -792,6 +793,10 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
     auto          &queueWidget     = compositor.queuedList();
     auto          &statusBarWidget = compositor.statusBar();
     auto          &inputWidget     = compositor.inputLine();
+    auto          &popupWidget     = compositor.completionPopup();
+
+    /* File completion engine for '@file' references */
+    QAgentCompletionEngine completionEngine;
 
     /* Set title and start full-screen TUI */
     {
@@ -829,6 +834,108 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             inputWidget.setCursorPos(inputMonitor.getCursorPos());
         });
 
+    /* '@file' completion state: dismissed-for remembers last input that was
+     * dismissed via Esc to prevent the popup from auto-reopening. */
+    QString dismissedFor;
+    /* popupAtPos: QChar index of '@' in the buffer when popup is open, -1 otherwise. */
+    int popupAtPos = -1;
+
+    /* Helper: detect '@<token>' ending at cursorPos. Returns atPos >= 0 on match. */
+    auto detectAtToken = [](const QString &buf, int cursor, int &outAtPos, QString &outQuery) {
+        outAtPos = -1;
+        outQuery.clear();
+        if (cursor <= 0 || buf.isEmpty()) {
+            return false;
+        }
+        /* Walk back from cursor to find '@' or a token-invalid char. */
+        int scan = cursor - 1;
+        while (scan >= 0) {
+            QChar chr = buf[scan];
+            if (chr == QLatin1Char('@')) {
+                break;
+            }
+            /* Whitespace or newline: '@' not in current token */
+            if (chr == QLatin1Char(' ') || chr == QLatin1Char('\n') || chr == QLatin1Char('\t')) {
+                return false;
+            }
+            scan--;
+        }
+        if (scan < 0) {
+            return false;
+        }
+        /* '@' must be at buffer start or preceded by whitespace/newline */
+        bool atBoundary = (scan == 0) || buf[scan - 1] == QLatin1Char(' ')
+                          || buf[scan - 1] == QLatin1Char('\n');
+        if (!atBoundary) {
+            return false;
+        }
+        outAtPos = scan;
+        outQuery = buf.mid(scan + 1, cursor - scan - 1);
+        return true;
+    };
+
+    /* Completion popup: refresh on every inputChanged */
+    connect(
+        &inputMonitor,
+        &QAgentInputMonitor::inputChanged,
+        [this,
+         &inputMonitor,
+         &popupWidget,
+         &completionEngine,
+         &compositor,
+         &popupAtPos,
+         &dismissedFor,
+         detectAtToken](const QString &text) {
+            /* Skip if user dismissed popup for this exact input via Esc */
+            if (dismissedFor == text) {
+                return;
+            }
+            /* bash mode (leading '!'): no '@' completion */
+            if (text.startsWith(QLatin1Char('!'))) {
+                if (popupWidget.isVisible()) {
+                    popupWidget.setVisible(false);
+                    popupAtPos = -1;
+                    inputMonitor.setSubmitBlocked(false);
+                    compositor.invalidate();
+                }
+                return;
+            }
+            int     atPos = -1;
+            QString query;
+            bool    found = detectAtToken(text, inputMonitor.getCursorPos(), atPos, query);
+            if (!found) {
+                if (popupWidget.isVisible()) {
+                    popupWidget.setVisible(false);
+                    popupAtPos = -1;
+                    inputMonitor.setSubmitBlocked(false);
+                    compositor.invalidate();
+                }
+                return;
+            }
+
+            QString projectPath = projectManager->getProjectPath();
+            if (projectPath.isEmpty()) {
+                projectPath = QDir::currentPath();
+            }
+            QStringList matches = completionEngine.complete(projectPath, query, 50);
+            if (matches.isEmpty()) {
+                if (popupWidget.isVisible()) {
+                    popupWidget.setVisible(false);
+                    popupAtPos = -1;
+                    inputMonitor.setSubmitBlocked(false);
+                    compositor.invalidate();
+                }
+                return;
+            }
+
+            popupWidget.setItems(matches);
+            popupWidget.setHighlight(0);
+            popupWidget.setVisible(true);
+            popupAtPos = atPos;
+            inputMonitor.setSubmitBlocked(true);
+            compositor.invalidate();
+        });
+
     /* Start input monitor (raw mode for entire REPL lifetime) */
     inputMonitor.start();
 
@@ -863,8 +970,19 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         }
     }
 
-    /* Connect arrow keys for history browsing */
+    /* Connect arrow keys: when completion popup is visible, Up/Down navigate
+     * the popup (wrapping); otherwise they walk the input history. */
     connect(&inputMonitor, &QAgentInputMonitor::arrowKey, [&](int key) {
+        if (popupWidget.isVisible()) {
+            if (key == 'A') {
+                popupWidget.moveHighlight(-1);
+                compositor.invalidate();
+            } else if (key == 'B') {
+                popupWidget.moveHighlight(1);
+                compositor.invalidate();
+            }
+            return;
+        }
         if (key == 'A') { /* Up */
             if (inputHistory.isEmpty()) {
                 return;
@@ -889,6 +1007,41 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                 inputMonitor.setInputBuffer(inputHistory[idx]);
             }
         }
+    });
+
+    /* submitBlockedKey: Enter or Tab pressed while popup is open → confirm
+     * the current highlighted completion and rewrite the input buffer. */
+    connect(&inputMonitor, &QAgentInputMonitor::submitBlockedKey, [&, this](int /*key*/) {
+        if (!popupWidget.isVisible() || popupWidget.getItems().isEmpty() || popupAtPos < 0) {
+            return;
+        }
+        int         idx   = popupWidget.getHighlight();
+        QStringList items = popupWidget.getItems();
+        if (idx < 0 || idx >= items.size()) {
+            return;
+        }
+        const QString &picked = items[idx];
+
+        /* Decide trailing char: '/' if selection is a directory, else ' '. */
+        QChar   trailing    = QLatin1Char(' ');
+        QString projectPath = projectManager->getProjectPath();
+        if (projectPath.isEmpty()) {
+            projectPath = QDir::currentPath();
+        }
+        QFileInfo info(QDir(projectPath).filePath(picked));
+        if (info.isDir()) {
+            trailing = QLatin1Char('/');
+        }
+
+        inputMonitor.insertCompletion(popupAtPos, picked, trailing);
+
+        /* Hide popup — inputChanged will fire from insertCompletion and
+         * re-evaluate the @-token; if the new token (post-insert) also
+         * matches a prefix, the popup will be re-shown naturally. */
+        popupWidget.setVisible(false);
+        popupAtPos = -1;
+        inputMonitor.setSubmitBlocked(false);
+        compositor.invalidate();
     });
 
     /* Main loop */
@@ -923,9 +1076,28 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                     promptLoop.quit();
                 }
             });
-        auto connEsc = connect(&inputMonitor, &QAgentInputMonitor::escPressed, [&promptLoop]() {
-            promptLoop.quit();
-        });
+        auto connEsc = connect(
+            &inputMonitor,
+            &QAgentInputMonitor::escPressed,
+            [&promptLoop,
+             &popupWidget,
+             &popupAtPos,
+             &inputMonitor,
+             &inputWidget,
+             &dismissedFor,
+             &compositor]() {
+                /* If popup is open, Esc closes the popup and remembers this
+                 * input so it doesn't auto-reopen until the user types more. */
+                if (popupWidget.isVisible()) {
+                    dismissedFor = inputWidget.getText();
+                    popupWidget.setVisible(false);
+                    popupAtPos = -1;
+                    inputMonitor.setSubmitBlocked(false);
+                    compositor.invalidate();
+                    return;
+                }
+                promptLoop.quit();
+            });
 
         promptLoop.exec();
 

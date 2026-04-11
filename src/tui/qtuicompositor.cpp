@@ -166,6 +166,7 @@ void QTuiCompositor::render()
     renderContent();
     renderTodo();
     renderQueued();
+    renderCompletionPopup();
     renderStatusBar();
     renderSeparator();
     renderInput();
@@ -254,8 +255,12 @@ void QTuiCompositor::recalculateLayout()
     layout.separatorRow = layout.inputRow - 1;
     layout.statusRow    = layout.separatorRow - 1;
 
+    /* Completion popup: appears just above the status bar when visible */
+    int popupLines    = popupWidget.lineCount();
+    layout.popupStart = layout.statusRow - popupLines;
+
     int queueLines    = queueWidget.lineCount();
-    layout.queueStart = layout.statusRow - queueLines;
+    layout.queueStart = layout.popupStart - queueLines;
 
     int todoLines    = todoWidget.lineCount();
     layout.todoStart = layout.queueStart - todoLines;
@@ -303,6 +308,14 @@ void QTuiCompositor::renderQueued()
         return;
     }
     queueWidget.render(screen, layout.queueStart, screen.width());
+}
+
+void QTuiCompositor::renderCompletionPopup()
+{
+    if (popupWidget.lineCount() == 0) {
+        return;
+    }
+    popupWidget.render(screen, layout.popupStart, screen.width());
 }
 
 void QTuiCompositor::renderStatusBar()
