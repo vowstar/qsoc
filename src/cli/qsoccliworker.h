@@ -382,7 +382,8 @@ private:
      * @retval true Run successfully.
      * @retval false Run failed.
      */
-    bool runAgentLoop(QSocAgent *agent, bool streaming = false);
+    bool runAgentLoop(
+        QSocAgent *agent, bool streaming = false, const QString &resumeSessionId = QString());
 
     /**
      * @brief Show application name and version and emit exit with exitCode.

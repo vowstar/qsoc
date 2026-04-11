@@ -5,6 +5,7 @@
 
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocsession.h"
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolbus.h"
 #include "agent/tool/qsoctooldoc.h"
@@ -319,67 +320,39 @@ void runShellEscape(const QString &command, bool supportsColor)
 }
 
 /**
- * @brief Get the conversation file path for the current project
- * @param pm Project manager
- * @return Path to the conversation JSON file
+ * @brief Resolve the project path for session storage.
+ * @details Sessions live under <projectPath>/.qsoc/sessions so they move with
+ *          the project when the user copies / renames the directory. Falls
+ *          back to CWD when no project is loaded so a stray `qsoc agent` from
+ *          an arbitrary directory still gets persistence.
  */
-QString conversationFilePath(QSocProjectManager *pm)
+QString sessionProjectPath(QSocProjectManager *pmanager)
 {
-    QString projectPath = pm->getProjectPath();
+    QString projectPath = pmanager->getProjectPath();
     if (projectPath.isEmpty()) {
         projectPath = QDir::currentPath();
     }
-    return QDir(projectPath).filePath(".qsoc/conversation.json");
+    return projectPath;
 }
 
 /**
- * @brief Save the conversation history to a file
- * @param agent The agent whose messages to save
- * @param pm Project manager for path resolution
+ * @brief Persist the messages added since lastIndex to the session JSONL.
+ * @return The new persisted index (always agent->getMessages().size()).
  */
-void saveConversation(QSocAgent *agent, QSocProjectManager *pm)
+int persistSessionDelta(QSocAgent *agent, QSocSession *session, int lastIndex)
 {
-    QString   filePath = conversationFilePath(pm);
-    QFileInfo fileInfo(filePath);
-    QDir      parentDir = fileInfo.absoluteDir();
-    if (!parentDir.exists()) {
-        parentDir.mkpath(".");
+    if (session == nullptr) {
+        return lastIndex;
     }
-    QFile file(filePath);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream stream(&file);
-        json        doc = {{"version", 1}, {"messages", agent->getMessages()}};
-        stream << QString::fromStdString(doc.dump());
-        file.close();
+    const json messages = agent->getMessages();
+    if (!messages.is_array()) {
+        return lastIndex;
     }
-}
-
-/**
- * @brief Load a conversation history from a file
- * @param agent The agent to restore messages into
- * @param pm Project manager for path resolution
- * @return True if conversation was loaded successfully
- */
-bool loadConversation(QSocAgent *agent, QSocProjectManager *pm)
-{
-    QString filePath = conversationFilePath(pm);
-    QFile   file(filePath);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return false;
+    const int total = static_cast<int>(messages.size());
+    for (int idx = lastIndex; idx < total; idx++) {
+        session->appendMessage(messages[idx]);
     }
-    QTextStream stream(&file);
-    QString     content = stream.readAll();
-    file.close();
-    try {
-        json doc = json::parse(content.toStdString());
-        if (doc.contains("messages") && doc["messages"].is_array()) {
-            agent->setMessages(doc["messages"]);
-            return true;
-        }
-    } catch (...) {
-        /* Ignore parse errors */
-    }
-    return false;
+    return total;
 }
 
 } /* namespace */
@@ -413,7 +386,24 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         {"model-reasoning",
          QCoreApplication::translate("main", "Model to use when reasoning effort is set."),
          "model"},
+        {"resume",
+         QCoreApplication::translate(
+             "main",
+             "Resume a previous session. Pass the id (or unique prefix) as a positional "
+             "argument to load it directly, or omit it to pick from a list.")},
+        {"continue",
+         QCoreApplication::translate("main", "Continue the most recent session for this project.")},
     });
+
+    /* Optional positional argument: a session id (or unique prefix). Mirrors
+     * the pattern other qsoc subcommands use for "verb [target]" CLIs. The
+     * value is only consulted when --resume is set; otherwise it's ignored
+     * so plain `qsoc agent` keeps working unchanged. */
+    parser.addPositionalArgument(
+        "session-id",
+        QCoreApplication::translate(
+            "main", "Optional session id (or unique prefix) when --resume is set."),
+        "[session-id]");
 
     parser.parse(appArguments);
 
@@ -747,11 +737,46 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         return true;
     }
 
-    /* Interactive mode */
-    return runAgentLoop(agent, streaming);
+    /* Interactive mode — resolve --resume / --continue to a session id (or
+     * empty for "fresh"). The picker for bare --resume runs inside
+     * runAgentLoop after the compositor is up so we can use QTuiMenu.
+     *
+     * --resume piggy-backs on an optional positional argument: bare
+     * --resume opens the picker, while `qsoc agent --resume <id>` resolves
+     * <id> as a unique prefix and loads that session directly. We use a
+     * positional instead of a value-bearing option because Qt's
+     * QCommandLineParser doesn't natively support optional values, and
+     * other qsoc subcommands already use the "verb [target]" positional
+     * pattern. */
+    QString resumeSessionId;
+    if (parser.isSet("resume")) {
+        const QString     projectPath = sessionProjectPath(projectManager);
+        const QStringList positionals = parser.positionalArguments();
+        const QString     rawValue    = positionals.isEmpty() ? QString() : positionals.first();
+        if (!rawValue.isEmpty()) {
+            resumeSessionId = QSocSession::resolveId(projectPath, rawValue);
+            if (resumeSessionId.isEmpty()) {
+                return showError(
+                    1,
+                    QCoreApplication::translate("main", "Error: no session matches '%1'.")
+                        .arg(rawValue));
+            }
+        } else {
+            /* Bare --resume: sentinel "-" tells runAgentLoop to open the
+             * interactive picker once the compositor is up. */
+            resumeSessionId = QStringLiteral("-");
+        }
+    } else if (parser.isSet("continue")) {
+        const QString projectPath = sessionProjectPath(projectManager);
+        const auto    sessions    = QSocSession::listAll(projectPath);
+        if (!sessions.isEmpty()) {
+            resumeSessionId = sessions.first().id;
+        }
+    }
+    return runAgentLoop(agent, streaming, resumeSessionId);
 }
 
-bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
+bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString &resumeSessionId)
 {
     /* Require interactive terminal for TUI */
     QTerminalCapability termCap;
@@ -1165,11 +1190,85 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
     /* Start input monitor (raw mode for entire REPL lifetime) */
     inputMonitor.start();
 
-    /* Load previous conversation if available */
-    if (loadConversation(agent, projectManager)) {
-        int msgCount = static_cast<int>(agent->getMessages().size());
-        compositor.printContent(
-            QString("(Loaded %1 messages from previous session)\n\n").arg(msgCount));
+    /* Session storage. Each interactive REPL run owns one session JSONL
+     * under <projectPath>/.qsoc/sessions/<id>.jsonl. lastPersistedIndex
+     * tracks how many entries from agent->getMessages() have already hit
+     * disk so each turn only appends the delta. resumeSessionId is the
+     * id selected by --resume / --continue at startup; the helper at the
+     * top of QSocCliWorker stashes it before calling runAgentLoop. */
+    std::unique_ptr<QSocSession> currentSession;
+    int                          lastPersistedIndex = 0;
+    {
+        const QString projectPath = sessionProjectPath(projectManager);
+        QString       sessionId   = resumeSessionId;
+
+        /* Sentinel "-" from CLI parsing means "open the picker now". The
+         * picker uses QTuiMenu which needs the compositor to be running,
+         * which it already is at this point. */
+        if (sessionId == QStringLiteral("-")) {
+            sessionId.clear();
+            const auto sessions = QSocSession::listAll(projectPath);
+            if (sessions.isEmpty()) {
+                compositor.printContent("No previous sessions found — starting fresh.\n\n");
+            } else {
+                QList<QTuiMenu::MenuItem> items;
+                items.reserve(sessions.size());
+                for (const QSocSession::Info &info : sessions) {
+                    QTuiMenu::MenuItem item;
+                    QString label = info.lastModified.toString(QStringLiteral("MM-dd HH:mm"));
+                    label += QString(" (%1 msgs)").arg(info.messageCount);
+                    QString prompt = info.firstPrompt.isEmpty() ? QStringLiteral("(no prompt)")
+                                                                : info.firstPrompt;
+                    if (prompt.size() > 50) {
+                        prompt = prompt.left(47) + QStringLiteral("...");
+                    }
+                    item.label = label;
+                    item.hint  = prompt;
+                    items.append(item);
+                }
+                QTuiMenu menu;
+                menu.setTitle("Resume session");
+                menu.setItems(items);
+                menu.setHighlight(0);
+                const int selected = menu.exec();
+                compositor.invalidate();
+                compositor.render();
+                if (selected >= 0 && selected < sessions.size()) {
+                    sessionId = sessions[selected].id;
+                }
+            }
+        } else if (!sessionId.isEmpty()) {
+            const QString resolved = QSocSession::resolveId(projectPath, sessionId);
+            if (!resolved.isEmpty()) {
+                sessionId = resolved;
+            }
+        }
+
+        if (sessionId.isEmpty()) {
+            sessionId = QSocSession::generateId();
+        }
+        const QString sessionPath
+            = QDir(QSocSession::sessionsDir(projectPath)).filePath(sessionId + ".jsonl");
+        currentSession = std::make_unique<QSocSession>(sessionId, sessionPath);
+
+        /* Resume an existing session if the JSONL already exists; otherwise
+         * stamp the new session with creation metadata. */
+        if (QFile::exists(sessionPath)) {
+            const json restored = QSocSession::loadMessages(sessionPath);
+            if (restored.is_array() && !restored.empty()) {
+                agent->setMessages(restored);
+                lastPersistedIndex = static_cast<int>(agent->getMessages().size());
+                compositor.printContent(QString("(Resumed session %1, %2 messages)\n\n")
+                                            .arg(sessionId.left(8))
+                                            .arg(lastPersistedIndex));
+            }
+        } else {
+            currentSession->appendMeta(
+                QStringLiteral("created"),
+                QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+            currentSession->appendMeta(QStringLiteral("cwd"), projectPath);
+            compositor.printContent(QString("(New session %1)\n\n").arg(sessionId.left(8)));
+        }
     }
 
     /* Input history navigation position (inputHistory itself is declared above
@@ -1680,7 +1779,17 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         }
         if (cmd == "/clear") {
             agent->clearHistory();
-            QFile::remove(conversationFilePath(projectManager));
+            if (currentSession) {
+                /* Truncate the existing JSONL in place — keep the same id
+                 * so any in-flight references stay valid, then re-stamp
+                 * the creation metadata so the file isn't entirely empty. */
+                QFile::remove(currentSession->filePath());
+                currentSession->appendMeta(
+                    QStringLiteral("created"),
+                    QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+                currentSession->appendMeta(QStringLiteral("cwd"), sessionProjectPath(projectManager));
+            }
+            lastPersistedIndex = 0;
             compositor.printContent("History cleared.\n");
             continue;
         }
@@ -1718,7 +1827,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         if (cmd == "/compact") {
             int saved = agent->compact();
             compositor.printContent(QString("Compacted: saved %1 tokens\n").arg(saved));
-            saveConversation(agent, projectManager);
+            lastPersistedIndex
+                = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
             continue;
         }
         if (cmd.startsWith("/effort")) {
@@ -2181,7 +2291,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             loopRunning = false;
 
             /* Save conversation after each interaction */
-            saveConversation(agent, projectManager);
+            lastPersistedIndex
+                = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
 
             /* Disconnect all signals to avoid stale connections */
             QObject::disconnect(connToolCalled);
@@ -2591,7 +2702,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             loopRunning = false;
 
             /* Save conversation after each interaction */
-            saveConversation(agent, projectManager);
+            lastPersistedIndex
+                = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
 
             /* Display complete result at once */
             if (!finalResult.isEmpty()) {
