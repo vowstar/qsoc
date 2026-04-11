@@ -34,6 +34,15 @@ public:
      */
     void setPlaceholder(const QString &hint) { placeholder = hint; }
 
+    /**
+     * @brief Set the dim trailing hint shown after the buffer text.
+     * @details Used for inline slash-command argument hints like
+     *          "/effort " → "<dim>off|low|medium|high</dim>". Rendered only
+     *          when the buffer is non-empty, single-line, and not in search
+     *          mode. Empty hint disables the feature.
+     */
+    void setTrailingHint(const QString &hint) { trailingHint = hint; }
+
     /* Set cursor position (QChar index into text) for cursor rendering */
     void setCursorPos(int pos);
     int  getCursorPos() const { return cursorPos; }
@@ -58,6 +67,7 @@ private:
     QString text;
     int     cursorPos = 0;
     QString placeholder;
+    QString trailingHint;
 
     bool    searchMode = false;
     QString searchQuery;

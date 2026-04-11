@@ -894,6 +894,15 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
      * In reverse-i-search mode, the monitor's buffer holds the live search
      * query — we route it through the search engine and drive the input
      * line's search-mode rendering instead of the normal text display. */
+    /* Static inline argument hint table for slash commands. Rendered in
+     * dim style right after the buffer when the user has typed "/cmd "
+     * (trailing space) with no arguments yet, so the user can discover
+     * what each slash command expects without re-reading help text. */
+    static const QMap<QString, QString> kSlashHints{
+        {QStringLiteral("/effort"), QStringLiteral("off|low|medium|high")},
+        {QStringLiteral("/model"), QStringLiteral("<model-id>")},
+    };
+
     connect(
         &inputMonitor,
         &QAgentInputMonitor::inputChanged,
@@ -917,6 +926,19 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             }
             inputWidget.setText(text);
             inputWidget.setCursorPos(inputMonitor.getCursorPos());
+
+            /* Slash-command inline hint: exactly "/cmd " (command + trailing
+             * space, no arguments yet, single line). */
+            QString hint;
+            if (text.startsWith(QLatin1Char('/')) && text.endsWith(QLatin1Char(' '))
+                && !text.contains(QLatin1Char('\n'))) {
+                int spaceIdx = text.indexOf(QLatin1Char(' '));
+                if (spaceIdx == text.size() - 1) {
+                    QString cmd = text.left(spaceIdx);
+                    hint        = kSlashHints.value(cmd, QString());
+                }
+            }
+            inputWidget.setTrailingHint(hint);
         });
 
     /* Completion popup state. The popup widget is single-instance and hosts
