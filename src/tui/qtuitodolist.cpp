@@ -7,7 +7,7 @@
 
 int QTuiTodoList::lineCount() const
 {
-    if (items.isEmpty()) {
+    if (!visible || items.isEmpty()) {
         return 0;
     }
     return qMin(static_cast<int>(items.size()), MAX_VISIBLE);

@@ -36,9 +36,24 @@ public:
     /* Cursor screen column (0-indexed, includes prompt prefix + visual width) */
     int cursorColumn() const;
 
+    /**
+     * @brief Enable or disable reverse-i-search display mode.
+     * @details When active, the normal text buffer is hidden and the widget
+     *          renders "(bck-i-search)`<query>': <match>" or
+     *          "(failing bck-i-search)`<query>': " on no match. The cursor
+     *          is parked at the end of the query portion for IME support.
+     */
+    void setSearchMode(bool active, const QString &query, const QString &match, bool failed);
+    bool isSearchMode() const { return searchMode; }
+
 private:
     QString text;
     int     cursorPos = 0;
+
+    bool    searchMode = false;
+    QString searchQuery;
+    QString searchMatch;
+    bool    searchFailed = false;
 };
 
 #endif // QTUIINPUTLINE_H
