@@ -872,11 +872,49 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             inputWidget.setCursorPos(inputMonitor.getCursorPos());
         });
 
-    /* '@file' completion state: dismissed-for remembers last input that was
-     * dismissed via Esc to prevent the popup from auto-reopening. */
-    QString dismissedFor;
-    /* popupAtPos: QChar index of '@' in the buffer when popup is open, -1 otherwise. */
-    int popupAtPos = -1;
+    /* Completion popup state. The popup widget is single-instance and hosts
+     * either '@file' or '/slash' completion at a time — popupKind tracks
+     * which one owns the current session so submitBlockedKey knows which
+     * accept path to take. dismissedFor remembers the exact input that was
+     * dismissed via Esc so the popup doesn't auto-reopen. */
+    enum class PopupKind : std::uint8_t {
+        None,
+        AtFile,
+        SlashCommand,
+    };
+    PopupKind popupKind = PopupKind::None;
+    QString   dismissedFor;
+    int       popupAtPos = -1; /* '@' position for AtFile, 0 for SlashCommand */
+
+    /* Static slash command table for tab completion. Keep in sync with the
+     * command dispatch below. */
+    const QStringList slashCommands
+        = {QStringLiteral("help"),
+           QStringLiteral("clear"),
+           QStringLiteral("compact"),
+           QStringLiteral("effort"),
+           QStringLiteral("model"),
+           QStringLiteral("exit"),
+           QStringLiteral("quit")};
+
+    /* Helper: detect '/<word>' at start of buffer with cursor inside the
+     * command word (no whitespace between '/' and cursor). Returns the
+     * partial command after '/' via outQuery. */
+    auto detectSlashCommand = [](const QString &buf, int cursor, QString &outQuery) -> bool {
+        outQuery.clear();
+        if (buf.isEmpty() || buf[0] != QLatin1Char('/')) {
+            return false;
+        }
+        int limit = qMin(cursor, static_cast<int>(buf.size()));
+        for (int idx = 1; idx < limit; idx++) {
+            QChar chr = buf[idx];
+            if (chr == QLatin1Char(' ') || chr == QLatin1Char('\n') || chr == QLatin1Char('\t')) {
+                return false;
+            }
+        }
+        outQuery = buf.mid(1, limit - 1);
+        return true;
+    };
 
     /* Helper: detect '@<token>' ending at cursorPos. Returns atPos >= 0 on match. */
     auto detectAtToken = [](const QString &buf, int cursor, int &outAtPos, QString &outQuery) {
@@ -921,33 +959,62 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
          &popupWidget,
          &completionEngine,
          &compositor,
+         &popupKind,
          &popupAtPos,
          &dismissedFor,
+         &slashCommands,
+         detectSlashCommand,
          detectAtToken](const QString &text) {
-            /* Skip if user dismissed popup for this exact input via Esc */
-            if (dismissedFor == text) {
-                return;
-            }
-            /* bash mode (leading '!'): no '@' completion */
-            if (text.startsWith(QLatin1Char('!'))) {
+            /* Helper: close whichever popup is currently showing. */
+            auto closePopup = [&]() {
                 if (popupWidget.isVisible()) {
                     popupWidget.setVisible(false);
+                    popupKind  = PopupKind::None;
                     popupAtPos = -1;
                     inputMonitor.setSubmitBlocked(false);
                     compositor.invalidate();
                 }
+            };
+
+            /* Skip if user dismissed popup for this exact input via Esc */
+            if (dismissedFor == text) {
+                return;
+            }
+
+            /* Slash command completion (highest priority, position 0 only) */
+            QString slashQuery;
+            if (detectSlashCommand(text, inputMonitor.getCursorPos(), slashQuery)) {
+                QStringList matches;
+                for (const QString &cmd : slashCommands) {
+                    if (cmd.startsWith(slashQuery, Qt::CaseInsensitive)) {
+                        matches.append(cmd);
+                    }
+                }
+                if (matches.isEmpty()) {
+                    closePopup();
+                    return;
+                }
+                popupWidget.setTitle(QStringLiteral("/command"));
+                popupWidget.setItems(matches);
+                popupWidget.setHighlight(0);
+                popupWidget.setVisible(true);
+                popupKind  = PopupKind::SlashCommand;
+                popupAtPos = 0;
+                inputMonitor.setSubmitBlocked(true);
+                compositor.invalidate();
+                return;
+            }
+
+            /* bash mode (leading '!'): no '@' completion */
+            if (text.startsWith(QLatin1Char('!'))) {
+                closePopup();
                 return;
             }
             int     atPos = -1;
             QString query;
             bool    found = detectAtToken(text, inputMonitor.getCursorPos(), atPos, query);
             if (!found) {
-                if (popupWidget.isVisible()) {
-                    popupWidget.setVisible(false);
-                    popupAtPos = -1;
-                    inputMonitor.setSubmitBlocked(false);
-                    compositor.invalidate();
-                }
+                closePopup();
                 return;
             }
 
@@ -957,18 +1024,15 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             }
             QStringList matches = completionEngine.complete(projectPath, query, 50);
             if (matches.isEmpty()) {
-                if (popupWidget.isVisible()) {
-                    popupWidget.setVisible(false);
-                    popupAtPos = -1;
-                    inputMonitor.setSubmitBlocked(false);
-                    compositor.invalidate();
-                }
+                closePopup();
                 return;
             }
 
+            popupWidget.setTitle(QStringLiteral("@file"));
             popupWidget.setItems(matches);
             popupWidget.setHighlight(0);
             popupWidget.setVisible(true);
+            popupKind  = PopupKind::AtFile;
             popupAtPos = atPos;
             inputMonitor.setSubmitBlocked(true);
             compositor.invalidate();
@@ -1097,23 +1161,40 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         }
         const QString &picked = items[idx];
 
-        /* Decide trailing char: '/' if selection is a directory, else ' '. */
-        QChar   trailing    = QLatin1Char(' ');
-        QString projectPath = projectManager->getProjectPath();
-        if (projectPath.isEmpty()) {
-            projectPath = QDir::currentPath();
-        }
-        QFileInfo info(QDir(projectPath).filePath(picked));
-        if (info.isDir()) {
-            trailing = QLatin1Char('/');
+        if (popupKind == PopupKind::SlashCommand) {
+            /* Replace the partial "/query" with "/picked " so the user can
+             * then type arguments (if any) or press Enter to submit. */
+            const QString current = inputWidget.getText();
+            int           cursor  = inputMonitor.getCursorPos();
+            int           end     = cursor;
+            /* Find the end of the command word (first whitespace after '/') */
+            while (end < current.size() && current[end] != QLatin1Char(' ')
+                   && current[end] != QLatin1Char('\n')) {
+                end++;
+            }
+            QString before  = current.left(0); /* buffer up to '/' == "" */
+            QString after   = current.mid(end);
+            QString rebuilt = QLatin1Char('/') + picked + QLatin1Char(' ') + after;
+            inputMonitor.setInputBuffer(rebuilt);
+        } else {
+            /* AtFile: decide trailing char: '/' if directory, else ' '. */
+            QChar   trailing    = QLatin1Char(' ');
+            QString projectPath = projectManager->getProjectPath();
+            if (projectPath.isEmpty()) {
+                projectPath = QDir::currentPath();
+            }
+            QFileInfo info(QDir(projectPath).filePath(picked));
+            if (info.isDir()) {
+                trailing = QLatin1Char('/');
+            }
+            inputMonitor.insertCompletion(popupAtPos, picked, trailing);
         }
 
-        inputMonitor.insertCompletion(popupAtPos, picked, trailing);
-
-        /* Hide popup — inputChanged will fire from insertCompletion and
-         * re-evaluate the @-token; if the new token (post-insert) also
-         * matches a prefix, the popup will be re-shown naturally. */
+        /* Hide popup — inputChanged will fire from the buffer rewrite and
+         * re-evaluate both detection paths; popup can re-open naturally
+         * if the new text still matches a prefix. */
         popupWidget.setVisible(false);
+        popupKind  = PopupKind::None;
         popupAtPos = -1;
         inputMonitor.setSubmitBlocked(false);
         compositor.invalidate();
@@ -1250,6 +1331,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             &QAgentInputMonitor::escPressed,
             [&promptLoop,
              &popupWidget,
+             &popupKind,
              &popupAtPos,
              &inputMonitor,
              &inputWidget,
@@ -1277,6 +1359,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                 if (popupWidget.isVisible()) {
                     dismissedFor = inputWidget.getText();
                     popupWidget.setVisible(false);
+                    popupKind  = PopupKind::None;
                     popupAtPos = -1;
                     inputMonitor.setSubmitBlocked(false);
                     compositor.invalidate();
