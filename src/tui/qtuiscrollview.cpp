@@ -19,6 +19,15 @@ void QTuiScrollView::appendLine(const QString &text, LineStyle style)
 
 void QTuiScrollView::appendPartial(const QString &text, LineStyle style)
 {
+    /* When the caller switches style mid-stream while a partial line is
+     * still pending, finalize that partial under its ORIGINAL style first
+     * — otherwise the new style would retroactively recolor the prior
+     * content (e.g. a diff render landing right after a streaming
+     * reasoning chunk would paint the unfinished sentence red). */
+    if (style != partialStyle && !partialLine.isEmpty()) {
+        appendLine(partialLine, partialStyle);
+        partialLine.clear();
+    }
     partialStyle = style;
     partialLine += text;
 
@@ -66,8 +75,26 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
             style = partialStyle;
         }
 
-        bool isDim  = (style == Dim);
-        bool isBold = (style == Bold);
+        bool        isDim   = (style == Dim) || (style == DiffContext);
+        bool        isBold  = (style == Bold) || (style == DiffHunk);
+        QTuiFgColor fgColor = QTuiFgColor::Default;
+        switch (style) {
+        case DiffAdd:
+            fgColor = QTuiFgColor::Green;
+            break;
+        case DiffDel:
+            fgColor = QTuiFgColor::Red;
+            break;
+        case DiffHunk:
+            fgColor = QTuiFgColor::Yellow;
+            break;
+        case Normal:
+        case Dim:
+        case Bold:
+        case DiffContext:
+        default:
+            break;
+        }
         /* Truncate by visual width (not char count) to prevent CJK overflow into scrollbar */
         QString truncated = text;
         if (QTuiText::visualWidth(truncated) > contentWidth) {
@@ -77,7 +104,7 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
                 truncated.chop(1);
             }
         }
-        screen.putString(0, screenY, truncated, isBold, isDim);
+        screen.putString(0, screenY, truncated, isBold, isDim, /*inverted=*/false, fgColor);
     }
 
     /* Render ASCII scrollbar on the right column */

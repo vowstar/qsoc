@@ -48,7 +48,8 @@ const QTuiCell &QTuiScreen::at(int col, int row) const
     return defaultCell;
 }
 
-void QTuiScreen::putChar(int col, int row, QChar ch, bool bold, bool dim, bool inverted)
+void QTuiScreen::putChar(
+    int col, int row, QChar ch, bool bold, bool dim, bool inverted, QTuiFgColor fgColor)
 {
     if (row < 0 || row >= rows || col < 0 || col >= cols) {
         return;
@@ -58,9 +59,11 @@ void QTuiScreen::putChar(int col, int row, QChar ch, bool bold, bool dim, bool i
     cell.bold      = bold;
     cell.dim       = dim;
     cell.inverted  = inverted;
+    cell.fgColor   = fgColor;
 }
 
-void QTuiScreen::putString(int col, int row, const QString &text, bool bold, bool dim, bool inverted)
+void QTuiScreen::putString(
+    int col, int row, const QString &text, bool bold, bool dim, bool inverted, QTuiFgColor fgColor)
 {
     if (row < 0 || row >= rows) {
         return;
@@ -70,10 +73,10 @@ void QTuiScreen::putString(int col, int row, const QString &text, bool bold, boo
     int pos = col;
 
     while (idx < len && pos < cols) {
-        QChar ch = text[idx];
+        QChar chr = text[idx];
 
         /* Skip ANSI CSI sequences */
-        if (ch == '\033' && idx + 1 < len && text[idx + 1] == '[') {
+        if (chr == '\033' && idx + 1 < len && text[idx + 1] == '[') {
             idx += 2;
             while (idx < len) {
                 ushort code = text[idx].unicode();
@@ -84,13 +87,13 @@ void QTuiScreen::putString(int col, int row, const QString &text, bool bold, boo
             }
             continue;
         }
-        if (ch == '\033') {
+        if (chr == '\033') {
             idx += 2;
             continue;
         }
 
         if (pos >= 0) {
-            putChar(pos, row, ch, bold, dim, inverted);
+            putChar(pos, row, chr, bold, dim, inverted, fgColor);
         }
         pos++;
         idx++;
@@ -118,9 +121,10 @@ QString QTuiScreen::toAnsi()
     /* Cursor home */
     output += "\033[H";
 
-    bool currentBold     = false;
-    bool currentDim      = false;
-    bool currentInverted = false;
+    bool        currentBold     = false;
+    bool        currentDim      = false;
+    bool        currentInverted = false;
+    QTuiFgColor currentColor    = QTuiFgColor::Default;
 
     for (int row = 0; row < rows; row++) {
         /* Check if this row changed (skip unchanged rows for performance) */
@@ -150,7 +154,7 @@ QString QTuiScreen::toAnsi()
             /* Emit style changes */
             bool needReset = false;
             if (cell.bold != currentBold || cell.dim != currentDim
-                || cell.inverted != currentInverted) {
+                || cell.inverted != currentInverted || cell.fgColor != currentColor) {
                 needReset = true;
             }
 
@@ -159,6 +163,7 @@ QString QTuiScreen::toAnsi()
                 currentBold     = false;
                 currentDim      = false;
                 currentInverted = false;
+                currentColor    = QTuiFgColor::Default;
 
                 QString attrs;
                 if (cell.bold) {
@@ -170,6 +175,11 @@ QString QTuiScreen::toAnsi()
                 if (cell.inverted) {
                     attrs += "7;";
                 }
+                /* Foreground colour: 30 + ANSI index when not Default. */
+                if (cell.fgColor != QTuiFgColor::Default) {
+                    int code = 30 + static_cast<int>(cell.fgColor);
+                    attrs += QString::number(code) + ";";
+                }
                 if (!attrs.isEmpty()) {
                     attrs.chop(1); /* Remove trailing ; */
                     output += "\033[" + attrs + "m";
@@ -177,6 +187,7 @@ QString QTuiScreen::toAnsi()
                 currentBold     = cell.bold;
                 currentDim      = cell.dim;
                 currentInverted = cell.inverted;
+                currentColor    = cell.fgColor;
             }
 
             output += cell.character;
@@ -187,7 +198,7 @@ QString QTuiScreen::toAnsi()
     }
 
     /* Reset attributes at end */
-    if (currentBold || currentDim || currentInverted) {
+    if (currentBold || currentDim || currentInverted || currentColor != QTuiFgColor::Default) {
         output += "\033[0m";
     }
 
