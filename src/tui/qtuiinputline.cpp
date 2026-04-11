@@ -95,6 +95,25 @@ void QTuiInputLine::render(QTuiScreen &screen, int startY, int width)
         QString display = prompt + content;
         screen.putString(0, startY + row, display.left(width));
     }
+
+    /* Trailing hint (slash command argument preview): rendered only for a
+     * single-line buffer so it can't collide with continuation prompts, and
+     * positioned immediately after the buffer text in dim style. The cursor
+     * stays at the end of the real buffer — the hint is purely decorative. */
+    if (!trailingHint.isEmpty() && total == 1 && visCount == 1) {
+        QString prompt    = promptForLine(0, startsWithBang);
+        QString content   = contentForDisplay(lines[0], 0, startsWithBang);
+        int     column    = QTuiText::visualWidth(prompt) + QTuiText::visualWidth(content) + 1;
+        int     available = width - column;
+        if (available > 0) {
+            screen.putString(
+                column,
+                startY,
+                trailingHint.left(available),
+                /*bold=*/false,
+                /*dim=*/true);
+        }
+    }
 }
 
 void QTuiInputLine::setText(const QString &newText)
