@@ -106,6 +106,13 @@ signals:
      */
     void pastedReceived(const QString &text);
 
+    /**
+     * @brief Emitted on Ctrl+L — request a full compositor repaint. Useful
+     *        after a background process scribbles on the alt-screen or when
+     *        a resize glitch leaves leftover artifacts.
+     */
+    void redrawRequested();
+
 private:
     static int  utf8SeqLen(unsigned char lead);
     static bool isUtf8Continuation(unsigned char byte);
