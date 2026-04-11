@@ -820,10 +820,14 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         }
     });
 
-    /* Connect live input display */
-    connect(&inputMonitor, &QAgentInputMonitor::inputChanged, [&inputWidget](const QString &text) {
-        inputWidget.setText(text);
-    });
+    /* Connect live input display (text + cursor position) */
+    connect(
+        &inputMonitor,
+        &QAgentInputMonitor::inputChanged,
+        [&inputWidget, &inputMonitor](const QString &text) {
+            inputWidget.setText(text);
+            inputWidget.setCursorPos(inputMonitor.getCursorPos());
+        });
 
     /* Start input monitor (raw mode for entire REPL lifetime) */
     inputMonitor.start();
@@ -840,7 +844,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
     int         historyPos = -1; /* -1 = not browsing, 0 = most recent */
     QString     savedInput;      /* Input buffer before browsing */
 
-    /* Load history from file */
+    /* Load history from file (decode \\n → \n to restore multi-line entries) */
     {
         QString projectPath = projectManager->getProjectPath();
         if (!projectPath.isEmpty()) {
@@ -850,6 +854,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
                 while (!stream.atEnd()) {
                     QString line = stream.readLine();
                     if (!line.isEmpty()) {
+                        line.replace(QStringLiteral("\\n"), QStringLiteral("\n"));
+                        line.replace(QStringLiteral("\\\\"), QStringLiteral("\\"));
                         inputHistory.append(line);
                     }
                 }
@@ -943,14 +949,17 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         /* Add to history (skip duplicates of last entry) */
         if (inputHistory.isEmpty() || inputHistory.last() != input) {
             inputHistory.append(input);
-            /* Persist to file */
+            /* Persist to file — encode \ as \\ and \n as \\n so each entry stays on one line */
             QString projectPath = projectManager->getProjectPath();
             if (!projectPath.isEmpty()) {
                 QString histDir = QDir(projectPath).filePath(".qsoc");
                 QDir(histDir).mkpath(".");
                 QFile histFile(QDir(histDir).filePath("history"));
                 if (histFile.open(QIODevice::Append | QIODevice::Text)) {
-                    QTextStream(&histFile) << input << "\n";
+                    QString encoded = input;
+                    encoded.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
+                    encoded.replace(QStringLiteral("\n"), QStringLiteral("\\n"));
+                    QTextStream(&histFile) << encoded << "\n";
                 }
             }
         }
@@ -990,11 +999,14 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             compositor.printContent("\n");
             compositor.printContent("Keyboard shortcuts:\n");
             compositor.printContent("  Up/Down     - Browse history\n");
-            compositor.printContent("  Ctrl+R      - Search history\n");
+            compositor.printContent("  Left/Right  - Move cursor\n");
             compositor.printContent("  Ctrl+A/E    - Move to start/end of line\n");
             compositor.printContent("  Ctrl+K      - Delete to end of line\n");
-            compositor.printContent("  Ctrl+W      - Delete word\n");
-            compositor.printContent("  Ctrl+L      - Clear screen\n");
+            compositor.printContent("  Ctrl+U      - Delete to start of line\n");
+            compositor.printContent("  Ctrl+W      - Delete previous word\n");
+            compositor.printContent("  Backspace   - Delete character before cursor\n");
+            compositor.printContent("  \\ + Enter   - Continue on next line\n");
+            compositor.printContent("  (paste)     - Multi-line paste preserved as one input\n");
             compositor.printContent("\n");
             compositor.printContent("Or just type your question/request in natural language.\n");
             continue;

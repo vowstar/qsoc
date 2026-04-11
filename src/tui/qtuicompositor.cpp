@@ -176,8 +176,8 @@ void QTuiCompositor::render()
     /* Park real cursor at input line for IME support.
      * Terminal emulators render IME preedit at the physical cursor.
      * Disable auto-wrap to prevent IME preedit from causing line wrap. */
-    int cursorCol = inputWidget.cursorColumn() + 1; /* 1-based */
-    int cursorRow = layout.inputRow + 1;            /* 1-based */
+    int cursorCol = inputWidget.cursorColumn() + 1;                 /* 1-based */
+    int cursorRow = layout.inputRow + inputWidget.cursorLine() + 1; /* 1-based */
     fprintf(stdout, "\033[?7l\033[%d;%dH\033[?25h", cursorRow, cursorCol);
 
     fflush(stdout);
@@ -244,10 +244,15 @@ void QTuiCompositor::recalculateLayout()
     int totalH = screen.height();
     int totalW = screen.width();
 
-    /* Fixed regions at bottom (from bottom up) */
-    layout.inputRow     = totalH - 1; /* Input: last row */
-    layout.separatorRow = totalH - 2; /* Separator: second to last */
-    layout.statusRow    = totalH - 3; /* Status bar */
+    /* Dynamic input height: grows with multi-line content, capped at 1/3 of screen */
+    int inputH    = inputWidget.lineCount();
+    int maxInputH = qMax(1, totalH / 3);
+    inputH        = qBound(1, inputH, maxInputH);
+
+    /* Fixed regions at bottom (from bottom up) — inputRow is the TOP of input area */
+    layout.inputRow     = totalH - inputH;
+    layout.separatorRow = layout.inputRow - 1;
+    layout.statusRow    = layout.separatorRow - 1;
 
     int queueLines    = queueWidget.lineCount();
     layout.queueStart = layout.statusRow - queueLines;
@@ -260,9 +265,7 @@ void QTuiCompositor::recalculateLayout()
     layout.contentStart  = 1;
     layout.contentHeight = layout.todoStart - layout.contentStart;
 
-    if (layout.contentHeight < 1) {
-        layout.contentHeight = 1; /* Minimum 1 line for content */
-    }
+    layout.contentHeight = qMax(1, layout.contentHeight);
 
     (void) totalW;
 }

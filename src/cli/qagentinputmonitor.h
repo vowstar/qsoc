@@ -69,7 +69,11 @@ signals:
 private:
     static int  utf8SeqLen(unsigned char lead);
     static bool isUtf8Continuation(unsigned char byte);
-    void        appendToInput(const QString &decoded);
+    void        insertAtCursor(const QString &decoded);
+    int         prevCharStep() const;
+    int         nextCharStep() const;
+    void        moveCursorLeft();
+    void        moveCursorRight();
 
 #ifndef _WIN32
     struct termios origTermios;
@@ -78,9 +82,11 @@ private:
     bool             active       = false;
     bool             termiosSaved = false;
     QString          inputBuffer;
+    int              cursorPos = 0; /* Insertion point in inputBuffer (QChar index) */
     QByteArray       utf8Pending;
     QByteArray       escBuffer; /* Buffer for ESC sequence parsing */
-    bool             inEscSeq = false;
+    bool             inEscSeq         = false;
+    bool             inBracketedPaste = false; /* True while inside \033[200~ ... \033[201~ */
 
     void processEscSequence();
 
@@ -90,6 +96,9 @@ public:
 
     /* Set input buffer content (for history navigation) */
     void setInputBuffer(const QString &text);
+
+    /* Current cursor position within inputBuffer (QChar index) */
+    int getCursorPos() const { return cursorPos; }
 
 private:
     void resetEscBuffer();

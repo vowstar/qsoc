@@ -396,7 +396,9 @@ private slots:
             changeCount++;
         });
 
-        /* Control chars should be ignored (except 0x03=Ctrl+C and other handled ones) */
+        /* Unhandled control chars should be silently dropped.
+         * 0x01 (Ctrl+A) and 0x05 (Ctrl+E) are now cursor moves but are no-ops
+         * on an empty buffer, so they must not emit inputChanged either. */
         const char data[] = {0x01, 0x02, 0x04, 0x05, 0x06, 0x07};
         monitor.processBytes(data, 6);
         QCOMPARE(changeCount, 0);
@@ -418,6 +420,429 @@ private slots:
         monitor.processBytes(&ctrlC, 1);
         QCOMPARE(ctrlCCount, 1);
         QCOMPARE(changeCount, 1); /* inputChanged emitted to clear buffer */
+    }
+
+    /* Cursor position + line editing tests */
+
+    void testCursorStartsAtZero()
+    {
+        QAgentInputMonitor monitor;
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testCursorAdvancesOnInsert()
+    {
+        QAgentInputMonitor monitor;
+        const char         data[] = "hello";
+        monitor.processBytes(data, 5);
+        QCOMPARE(monitor.getCursorPos(), 5);
+    }
+
+    void testArrowLeftRightMoveCursor()
+    {
+        QAgentInputMonitor monitor;
+        const char         data[] = "abc";
+        monitor.processBytes(data, 3);
+        QCOMPARE(monitor.getCursorPos(), 3);
+
+        /* Left */
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        monitor.processBytes(arrowLeft, 3);
+        QCOMPARE(monitor.getCursorPos(), 2);
+
+        /* Right */
+        const char arrowRight[] = {0x1B, '[', 'C'};
+        monitor.processBytes(arrowRight, 3);
+        QCOMPARE(monitor.getCursorPos(), 3);
+    }
+
+    void testArrowLeftClampsAtZero()
+    {
+        QAgentInputMonitor monitor;
+        const char         arrowLeft[] = {0x1B, '[', 'D'};
+        monitor.processBytes(arrowLeft, 3);
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testCursorInsertsInMiddle()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Type "hello" then move cursor left 3 times → position 2 (between "he" and "llo") */
+        monitor.processBytes("hello", 5);
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        for (int i = 0; i < 3; i++) {
+            monitor.processBytes(arrowLeft, 3);
+        }
+        QCOMPARE(monitor.getCursorPos(), 2);
+
+        monitor.processBytes("XY", 2);
+        QCOMPARE(lastText, QStringLiteral("heXYllo"));
+        QCOMPARE(monitor.getCursorPos(), 4);
+    }
+
+    void testBackspaceAtCursorNotEnd()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("hello", 5);
+        /* Move cursor to position 2 ("he|llo") */
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        for (int i = 0; i < 3; i++) {
+            monitor.processBytes(arrowLeft, 3);
+        }
+
+        /* Backspace deletes 'e' leaving "hllo" cursor=1 */
+        const char backspace = 0x7F;
+        monitor.processBytes(&backspace, 1);
+        QCOMPARE(lastText, QStringLiteral("hllo"));
+        QCOMPARE(monitor.getCursorPos(), 1);
+    }
+
+    void testCtrlAMovesToLineStart()
+    {
+        QAgentInputMonitor monitor;
+        monitor.processBytes("hello", 5);
+        QCOMPARE(monitor.getCursorPos(), 5);
+
+        const char ctrlA = 0x01;
+        monitor.processBytes(&ctrlA, 1);
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testCtrlEMovesToLineEnd()
+    {
+        QAgentInputMonitor monitor;
+        monitor.processBytes("hello", 5);
+        const char ctrlA = 0x01;
+        monitor.processBytes(&ctrlA, 1);
+        QCOMPARE(monitor.getCursorPos(), 0);
+
+        const char ctrlE = 0x05;
+        monitor.processBytes(&ctrlE, 1);
+        QCOMPARE(monitor.getCursorPos(), 5);
+    }
+
+    void testCtrlKKillsToEndOfLine()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("hello world", 11);
+        /* Move cursor to position 5 (between "hello" and " world") */
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        for (int i = 0; i < 6; i++) {
+            monitor.processBytes(arrowLeft, 3);
+        }
+
+        const char ctrlK = 0x0B;
+        monitor.processBytes(&ctrlK, 1);
+        QCOMPARE(lastText, QStringLiteral("hello"));
+        QCOMPARE(monitor.getCursorPos(), 5);
+    }
+
+    void testCtrlUKillsToStartOfLine()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("hello world", 11);
+        /* Move cursor to position 6 (between " " and "world") */
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        for (int i = 0; i < 5; i++) {
+            monitor.processBytes(arrowLeft, 3);
+        }
+
+        const char ctrlU = 0x15;
+        monitor.processBytes(&ctrlU, 1);
+        QCOMPARE(lastText, QStringLiteral("world"));
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testHomeKeyMovesCursorToLineStart()
+    {
+        QAgentInputMonitor monitor;
+        monitor.processBytes("hello", 5);
+        QCOMPARE(monitor.getCursorPos(), 5);
+
+        const char home[] = {0x1B, '[', 'H'};
+        monitor.processBytes(home, 3);
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testEndKeyMovesCursorToLineEnd()
+    {
+        QAgentInputMonitor monitor;
+        monitor.processBytes("hello", 5);
+        const char ctrlA = 0x01;
+        monitor.processBytes(&ctrlA, 1);
+        QCOMPARE(monitor.getCursorPos(), 0);
+
+        const char end[] = {0x1B, '[', 'F'};
+        monitor.processBytes(end, 3);
+        QCOMPARE(monitor.getCursorPos(), 5);
+    }
+
+    void testHomeTildeSequence()
+    {
+        QAgentInputMonitor monitor;
+        monitor.processBytes("hello", 5);
+        const char home[] = {0x1B, '[', '1', '~'};
+        monitor.processBytes(home, 4);
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testEndTildeSequence()
+    {
+        QAgentInputMonitor monitor;
+        monitor.processBytes("hello", 5);
+        const char ctrlA = 0x01;
+        monitor.processBytes(&ctrlA, 1);
+        const char end[] = {0x1B, '[', '4', '~'};
+        monitor.processBytes(end, 4);
+        QCOMPARE(monitor.getCursorPos(), 5);
+    }
+
+    void testDeleteKeyRemovesCharAtCursor()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        monitor.processBytes("hello", 5);
+        const char ctrlA = 0x01;
+        monitor.processBytes(&ctrlA, 1);
+
+        const char del[] = {0x1B, '[', '3', '~'};
+        monitor.processBytes(del, 4);
+        QCOMPARE(lastText, QStringLiteral("ello"));
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    /* Multi-line / bracketed paste / backslash continuation tests */
+
+    void testBackslashEnterInsertsNewline()
+    {
+        QAgentInputMonitor monitor;
+        int                readyCount = 0;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyCount](const QString &) {
+            readyCount++;
+        });
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Type "line1\" then Enter — should not submit, should become "line1\n" */
+        monitor.processBytes("line1\\", 6);
+        const char enter = '\n';
+        monitor.processBytes(&enter, 1);
+
+        QCOMPARE(readyCount, 0);
+        QCOMPARE(lastText, QStringLiteral("line1\n"));
+    }
+
+    void testBackslashMidBufferEnterSubmits()
+    {
+        QAgentInputMonitor monitor;
+        QString            readyText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyText](const QString &text) {
+            readyText = text;
+        });
+
+        /* "hel\lo" with cursor in middle — trailing char is 'o' not '\', so Enter submits */
+        monitor.processBytes("hel\\lo", 6);
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        for (int i = 0; i < 2; i++) {
+            monitor.processBytes(arrowLeft, 3);
+        }
+        const char enter = '\n';
+        monitor.processBytes(&enter, 1);
+
+        QCOMPARE(readyText, QStringLiteral("hel\\lo"));
+    }
+
+    void testBracketedPasteInsertsLiteralNewlines()
+    {
+        QAgentInputMonitor monitor;
+        int                readyCount = 0;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyCount](const QString &) {
+            readyCount++;
+        });
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Bracketed paste: ESC[200~ ... ESC[201~ */
+        const char startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes("alpha\nbeta\ngamma", 16);
+        monitor.processBytes(endMarker, 6);
+
+        QCOMPARE(readyCount, 0); /* Newlines inside paste must NOT submit */
+        QCOMPARE(lastText, QStringLiteral("alpha\nbeta\ngamma"));
+    }
+
+    void testEnterAfterPasteSubmits()
+    {
+        QAgentInputMonitor monitor;
+        QString            readyText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyText](const QString &text) {
+            readyText = text;
+        });
+
+        /* Paste "a\nb", then press Enter outside paste — should submit "a\nb" */
+        const char startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes("a\nb", 3);
+        monitor.processBytes(endMarker, 6);
+
+        const char enter = '\n';
+        monitor.processBytes(&enter, 1);
+        QCOMPARE(readyText, QStringLiteral("a\nb"));
+    }
+
+    void testBackspaceJoinsLinesAcrossNewline()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Paste "a\nb" — cursor at end (position 3) */
+        const char startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes("a\nb", 3);
+        monitor.processBytes(endMarker, 6);
+
+        /* Move cursor to position 2 (start of "b", just after newline) */
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        monitor.processBytes(arrowLeft, 3);
+        QCOMPARE(monitor.getCursorPos(), 2);
+
+        /* Backspace removes the newline, joining lines */
+        const char backspace = 0x7F;
+        monitor.processBytes(&backspace, 1);
+        QCOMPARE(lastText, QStringLiteral("ab"));
+        QCOMPARE(monitor.getCursorPos(), 1);
+    }
+
+    void testCtrlAOnSecondLineGoesToLineStartNotBufferStart()
+    {
+        QAgentInputMonitor monitor;
+        const char         startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char         endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes("line1\nline2", 11);
+        monitor.processBytes(endMarker, 6);
+
+        /* Cursor at end of buffer (position 11, after "line2") */
+        QCOMPARE(monitor.getCursorPos(), 11);
+
+        const char ctrlA = 0x01;
+        monitor.processBytes(&ctrlA, 1);
+        /* Should move to position 6 (after newline, start of "line2") */
+        QCOMPARE(monitor.getCursorPos(), 6);
+    }
+
+    void testCtrlKOnFirstLineOnlyKillsFirstLine()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        const char startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes("line1\nline2", 11);
+        monitor.processBytes(endMarker, 6);
+
+        /* Move cursor to position 3 (middle of "line1") */
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        for (int i = 0; i < 8; i++) {
+            monitor.processBytes(arrowLeft, 3);
+        }
+        QCOMPARE(monitor.getCursorPos(), 3);
+
+        const char ctrlK = 0x0B;
+        monitor.processBytes(&ctrlK, 1);
+        /* Should kill "e1" leaving "lin\nline2" */
+        QCOMPARE(lastText, QStringLiteral("lin\nline2"));
+    }
+
+    void testBracketedPasteToggleIsIdempotent()
+    {
+        QAgentInputMonitor monitor;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Start paste, insert text, end paste — then start again and insert more */
+        const char startMarker[] = {0x1B, '[', '2', '0', '0', '~'};
+        const char endMarker[]   = {0x1B, '[', '2', '0', '1', '~'};
+
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes("foo\n", 4);
+        monitor.processBytes(endMarker, 6);
+
+        monitor.processBytes(startMarker, 6);
+        monitor.processBytes("bar", 3);
+        monitor.processBytes(endMarker, 6);
+
+        QCOMPARE(lastText, QStringLiteral("foo\nbar"));
+    }
+
+    void testUtf8CjkCursorMove()
+    {
+        QAgentInputMonitor monitor;
+        /* 你好 = 2 QChars (6 UTF-8 bytes) */
+        const char cjk[] = "\xe4\xbd\xa0\xe5\xa5\xbd";
+        monitor.processBytes(cjk, 6);
+        QCOMPARE(monitor.getCursorPos(), 2);
+
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        monitor.processBytes(arrowLeft, 3);
+        QCOMPARE(monitor.getCursorPos(), 1);
+        monitor.processBytes(arrowLeft, 3);
+        QCOMPARE(monitor.getCursorPos(), 0);
+    }
+
+    void testEmojiCursorSkipsSurrogatePair()
+    {
+        QAgentInputMonitor monitor;
+        /* 🎉 = 1 code point but 2 QChars (surrogate pair) in UTF-16 */
+        const char emoji[] = "\xf0\x9f\x8e\x89";
+        monitor.processBytes(emoji, 4);
+        QCOMPARE(monitor.getCursorPos(), 2); /* High + low surrogate */
+
+        /* One Left arrow should jump over both surrogate halves */
+        const char arrowLeft[] = {0x1B, '[', 'D'};
+        monitor.processBytes(arrowLeft, 3);
+        QCOMPARE(monitor.getCursorPos(), 0);
     }
 
     void testStopClearsInputState()
