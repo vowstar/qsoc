@@ -74,6 +74,14 @@ signals:
      */
     void submitBlockedKey(int key);
 
+    /**
+     * @brief Emitted when the user requests to open the current input in an
+     *        external editor. Triggered by Ctrl+X Ctrl+E chord or by Ctrl+G.
+     *        The REPL handler should pause the compositor, run the editor,
+     *        and rewrite the input buffer with the result.
+     */
+    void externalEditorRequested();
+
 private:
     static int  utf8SeqLen(unsigned char lead);
     static bool isUtf8Continuation(unsigned char byte);
@@ -96,6 +104,7 @@ private:
     bool             inEscSeq         = false;
     bool             inBracketedPaste = false; /* True while inside \033[200~ ... \033[201~ */
     bool             submitBlocked    = false; /* Enter/Tab emit submitBlockedKey instead */
+    bool             inCtrlXChord     = false; /* True after Ctrl+X, waiting for second key */
 
     void processEscSequence();
 
