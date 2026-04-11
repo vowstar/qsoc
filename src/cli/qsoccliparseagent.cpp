@@ -20,6 +20,7 @@
 #include "agent/tool/qsoctoolweb.h"
 #include "cli/qagentcompletion.h"
 #include "cli/qagentinputmonitor.h"
+#include "cli/qsocexternaleditor.h"
 #include "cli/qterminalcapability.h"
 #include "common/qstaticlog.h"
 #include "tui/qtuicompositor.h"
@@ -1044,6 +1045,42 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
         compositor.invalidate();
     });
 
+    /* External editor (Ctrl+X Ctrl+E or Ctrl+G): pause the TUI, hand off
+     * to $EDITOR with the current input text, and reload the edited result
+     * into the input buffer when the editor exits. */
+    connect(&inputMonitor, &QAgentInputMonitor::externalEditorRequested, [&]() {
+        const QString current = inputWidget.getText();
+
+        /* Tear down the alt-screen and raw-mode monitor so the editor owns
+         * the terminal. Mirrors the '!<cmd>' shell-escape dance. */
+        compositor.pause();
+        inputMonitor.stop();
+
+        QString editedText;
+        QString errMessage;
+        bool    success = QSocExternalEditor::editText(current, editedText, errMessage);
+
+        /* Restore TUI before reporting anything so output lands in the
+         * scroll view rather than the cooked terminal. */
+        inputMonitor.start();
+        compositor.resume();
+
+        if (success) {
+            inputMonitor.setInputBuffer(editedText);
+        } else {
+            /* Restore the original input so a failed editor invocation
+             * doesn't silently wipe what the user already typed — stop()
+             * cleared the buffer as part of its tear-down. */
+            inputMonitor.setInputBuffer(current);
+            if (!errMessage.isEmpty()) {
+                compositor.printContent(
+                    QStringLiteral("External editor: ") + errMessage + QLatin1Char('\n'));
+            }
+        }
+        compositor.invalidate();
+        compositor.render();
+    });
+
     /* Main loop */
     bool exitRequested = false;
 
@@ -1179,6 +1216,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming)
             compositor.printContent("  Backspace   - Delete character before cursor\n");
             compositor.printContent("  \\ + Enter   - Continue on next line\n");
             compositor.printContent("  (paste)     - Multi-line paste preserved as one input\n");
+            compositor.printContent("  Ctrl+X Ctrl+E or Ctrl+G - Edit current input in $EDITOR\n");
+            compositor.printContent("  @<name>     - Fuzzy-complete a project file path\n");
             compositor.printContent("\n");
             compositor.printContent("Or just type your question/request in natural language.\n");
             continue;

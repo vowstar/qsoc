@@ -289,6 +289,20 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
     for (int i = 0; i < len; i++) {
         auto byte = static_cast<unsigned char>(data[i]);
 
+        /* Ctrl+X chord: waiting for second key of the two-key sequence.
+         * Ctrl+X Ctrl+E → external editor. Any other byte cancels the
+         * chord and falls through to normal processing (reprocess via i--). */
+        if (inCtrlXChord) {
+            inCtrlXChord = false;
+            if (byte == 0x05) { /* Ctrl+E */
+                emit externalEditorRequested();
+                continue;
+            }
+            /* Not a recognized chord — reprocess this byte normally */
+            i--;
+            continue;
+        }
+
         /* Continue accumulating ESC sequence */
         if (inEscSeq) {
             escBuffer.append(static_cast<char>(byte));
@@ -323,6 +337,19 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             utf8Pending.clear();
             emit inputChanged(inputBuffer);
             emit ctrlCPressed();
+            continue;
+        }
+
+        /* Ctrl+X: start two-key chord (Ctrl+X Ctrl+E → external editor).
+         * The next byte is interpreted by the chord branch at the top. */
+        if (byte == 0x18) {
+            inCtrlXChord = true;
+            continue;
+        }
+
+        /* Ctrl+G: direct external editor trigger (readline-compatible alias) */
+        if (byte == 0x07) {
+            emit externalEditorRequested();
             continue;
         }
 
@@ -566,6 +593,7 @@ void QAgentInputMonitor::stop()
     utf8Pending.clear();
     resetEscBuffer();
     inBracketedPaste = false;
+    inCtrlXChord     = false;
     emit inputChanged(QString());
 
     active = false;

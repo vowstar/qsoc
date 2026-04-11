@@ -953,6 +953,83 @@ private slots:
         QCOMPARE(monitor.getCursorPos(), origCursor);
     }
 
+    /* External editor chord tests */
+
+    void testCtrlXAloneDoesNotEmit()
+    {
+        QAgentInputMonitor monitor;
+        int                editorCount = 0;
+        connect(&monitor, &QAgentInputMonitor::externalEditorRequested, [&editorCount]() {
+            editorCount++;
+        });
+
+        const char ctrlX = 0x18;
+        monitor.processBytes(&ctrlX, 1);
+        QCOMPARE(editorCount, 0);
+    }
+
+    void testCtrlXCtrlEEmitsExternalEditor()
+    {
+        QAgentInputMonitor monitor;
+        int                editorCount = 0;
+        connect(&monitor, &QAgentInputMonitor::externalEditorRequested, [&editorCount]() {
+            editorCount++;
+        });
+
+        const char seq[] = {0x18, 0x05}; /* Ctrl+X Ctrl+E */
+        monitor.processBytes(seq, 2);
+        QCOMPARE(editorCount, 1);
+    }
+
+    void testCtrlXCancelsOnOtherByte()
+    {
+        QAgentInputMonitor monitor;
+        int                editorCount = 0;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::externalEditorRequested, [&editorCount]() {
+            editorCount++;
+        });
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Ctrl+X then 'a' — chord cancels, 'a' is inserted normally */
+        const char seq[] = {0x18, 'a'};
+        monitor.processBytes(seq, 2);
+        QCOMPARE(editorCount, 0);
+        QCOMPARE(lastText, QStringLiteral("a"));
+    }
+
+    void testCtrlGDirectlyTriggersExternalEditor()
+    {
+        QAgentInputMonitor monitor;
+        int                editorCount = 0;
+        connect(&monitor, &QAgentInputMonitor::externalEditorRequested, [&editorCount]() {
+            editorCount++;
+        });
+
+        const char ctrlG = 0x07;
+        monitor.processBytes(&ctrlG, 1);
+        QCOMPARE(editorCount, 1);
+    }
+
+    void testCtrlXThenCtrlCFiresInterrupt()
+    {
+        QAgentInputMonitor monitor;
+        int                editorCount = 0;
+        int                ctrlCCount  = 0;
+        connect(&monitor, &QAgentInputMonitor::externalEditorRequested, [&editorCount]() {
+            editorCount++;
+        });
+        connect(&monitor, &QAgentInputMonitor::ctrlCPressed, [&ctrlCCount]() { ctrlCCount++; });
+
+        /* Ctrl+X then Ctrl+C — chord cancels, Ctrl+C still interrupts */
+        const char seq[] = {0x18, 0x03};
+        monitor.processBytes(seq, 2);
+        QCOMPARE(editorCount, 0);
+        QCOMPARE(ctrlCCount, 1);
+    }
+
     void testStopClearsInputState()
     {
         QAgentInputMonitor monitor;
