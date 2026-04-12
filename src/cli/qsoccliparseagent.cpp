@@ -294,30 +294,37 @@ QPair<int, QString> parseTodoUpdateResult(const QString &result)
  * @details Uses std::system() so the child process inherits the terminal directly.
  *          Supports Ctrl+C (POSIX: parent ignores SIGINT, child gets it) and has no timeout.
  */
-void runShellEscape(const QString &command, bool supportsColor)
+/**
+ * @brief Run a shell command and return its combined stdout+stderr output.
+ * @details Uses popen() so the output can be captured and displayed in the
+ *          scrollView after the compositor resumes the alt-screen. Without
+ *          capture, any output written to stdout during compositor.pause()
+ *          would be erased the moment resume() switches back to the
+ *          alt-screen buffer.
+ */
+QString runShellEscape(const QString &command)
 {
-    QTextStream out(stdout);
-    if (supportsColor) {
-        out << "\033[33m$ " << command << "\033[0m" << Qt::endl;
-    } else {
-        out << "$ " << command << Qt::endl;
+    QString result;
+    /* Redirect stderr to stdout so error messages are also captured. */
+    const QByteArray cmd  = (command + " 2>&1").toLocal8Bit();
+    FILE            *pipe = popen(cmd.constData(), "r");
+    if (pipe == nullptr) {
+        return QStringLiteral("(failed to run command)\n");
     }
-    out.flush();
-
-    int ret = std::system(qPrintable(command));
-
+    char buf[4096];
+    while (fgets(buf, sizeof(buf), pipe) != nullptr) {
+        result += QString::fromLocal8Bit(buf);
+    }
+    int ret = pclose(pipe);
     if (WIFEXITED(ret)) {
         int exitCode = WEXITSTATUS(ret);
         if (exitCode != 0) {
-            if (supportsColor) {
-                out << "\033[31m(exit code: " << exitCode << ")\033[0m" << Qt::endl;
-            } else {
-                out << "(exit code: " << exitCode << ")" << Qt::endl;
-            }
+            result += QString("(exit code: %1)\n").arg(exitCode);
         }
     } else if (WIFSIGNALED(ret)) {
-        out << "(signal: " << WTERMSIG(ret) << ")" << Qt::endl;
+        result += QString("(signal: %1)\n").arg(WTERMSIG(ret));
     }
+    return result;
 }
 
 /**
@@ -743,10 +750,15 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
-                            qout << "\n" << Qt::flush;
+                            qout << "\n$ " << shellCmd << "\n" << Qt::flush;
                             escMonitor.stop();
-                            runShellEscape(shellCmd, true);
+                            const QString output = runShellEscape(shellCmd);
                             escMonitor.start();
+                            qout << output;
+                            if (!output.endsWith(QLatin1Char('\n'))) {
+                                qout << "\n";
+                            }
+                            qout.flush();
                         }
                         return;
                     }
@@ -2105,11 +2117,18 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
         if (input.startsWith("!")) {
             QString shellCmd = input.mid(1).trimmed();
             if (!shellCmd.isEmpty()) {
+                compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                 compositor.pause();
                 inputMonitor.stop();
-                runShellEscape(shellCmd, true);
+                const QString output = runShellEscape(shellCmd);
                 inputMonitor.start();
                 compositor.resume();
+                if (!output.isEmpty()) {
+                    compositor.printContent(output, QTuiScrollView::Dim);
+                    if (!output.endsWith(QLatin1Char('\n'))) {
+                        compositor.printContent("\n");
+                    }
+                }
             }
             continue;
         }
@@ -3336,9 +3355,16 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
+                            compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                             compositor.pause();
-                            runShellEscape(shellCmd, true);
+                            const QString output = runShellEscape(shellCmd);
                             compositor.resume();
+                            if (!output.isEmpty()) {
+                                compositor.printContent(output, QTuiScrollView::Dim);
+                                if (!output.endsWith(QLatin1Char('\n'))) {
+                                    compositor.printContent("\n");
+                                }
+                            }
                         }
                         return;
                     }
@@ -3784,9 +3810,16 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
+                            compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                             compositor.pause();
-                            runShellEscape(shellCmd, true);
+                            const QString output = runShellEscape(shellCmd);
                             compositor.resume();
+                            if (!output.isEmpty()) {
+                                compositor.printContent(output, QTuiScrollView::Dim);
+                                if (!output.endsWith(QLatin1Char('\n'))) {
+                                    compositor.printContent("\n");
+                                }
+                            }
                         }
                         return;
                     }
