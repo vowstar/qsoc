@@ -7,6 +7,8 @@
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolpath.h"
 
+class QSocFileHistory;
+
 /**
  * @brief Tool to read files (unrestricted)
  */
@@ -69,8 +71,17 @@ public:
 
     void setPathContext(QSocPathContext *pathContext);
 
+    /**
+     * @brief Attach a file history store for pre-edit backups.
+     * @details When set, write_file captures the current content of the
+     *          target file (or marks it absent) via trackEdit() before
+     *          overwriting. The store can be nullptr to disable tracking.
+     */
+    void setFileHistory(QSocFileHistory *history);
+
 private:
     QSocPathContext *pathContext = nullptr;
+    QSocFileHistory *fileHistory = nullptr;
 };
 
 /**
@@ -91,8 +102,17 @@ public:
 
     void setPathContext(QSocPathContext *pathContext);
 
+    /**
+     * @brief Attach a file history store for pre-edit backups.
+     * @details When set, edit_file captures the current content of the
+     *          target file via trackEdit() before applying the string
+     *          replacement. The store can be nullptr to disable tracking.
+     */
+    void setFileHistory(QSocFileHistory *history);
+
 private:
     QSocPathContext *pathContext = nullptr;
+    QSocFileHistory *fileHistory = nullptr;
 };
 
 #endif // QSOCTOOLFILE_H
