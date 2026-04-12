@@ -58,6 +58,14 @@ public:
 
 signals:
     void escPressed();
+    /**
+     * @brief Emitted when two Esc keys are pressed within DOUBLE_ESC_WINDOW_MS
+     *        of each other with no other keys in between. Used by the REPL to
+     *        open the message-rewind picker. The REPL handler is responsible
+     *        for gating on buffer-empty / non-modal state — the monitor only
+     *        detects the keystroke timing.
+     */
+    void escEscPressed();
     void ctrlCPressed();
     void inputReady(const QString &text);
     void inputChanged(const QString &text);
@@ -134,8 +142,9 @@ private:
         int     cursorPos     = 0;
         bool    fromPrintable = false;
     };
-    static constexpr int UNDO_MAX_DEPTH   = 100;
-    static constexpr int UNDO_DEBOUNCE_MS = 500;
+    static constexpr int UNDO_MAX_DEPTH       = 100;
+    static constexpr int UNDO_DEBOUNCE_MS     = 500;
+    static constexpr int DOUBLE_ESC_WINDOW_MS = 500;
     void                 pushUndoSnapshot(bool fromPrintable);
     void                 clearUndoStack();
 
@@ -163,13 +172,34 @@ private:
     QRegularExpression  atomicPattern; /* Matches glyphs that delete as a unit */
     QList<UndoSnapshot> undoStack;     /* Pre-mutation snapshots for Ctrl+_ */
     QElapsedTimer       undoTimer;     /* Elapsed since the last snapshot push */
-    bool                undoTimerValid   = false;
-    bool                inEscSeq         = false;
-    bool                inBracketedPaste = false; /* True while inside \033[200~ ... \033[201~ */
-    bool                submitBlocked    = false; /* Enter/Tab emit submitBlockedKey instead */
-    bool                inCtrlXChord     = false; /* True after Ctrl+X, waiting for second key */
+    bool                undoTimerValid = false;
+    /* Elapsed since the first Esc of a potential double-Esc chord. Reset
+     * whenever any non-Esc byte arrives so typing between the two Escs
+     * doesn't falsely trigger a rewind. */
+    QElapsedTimer doubleEscTimer;
+    bool          doubleEscTimerValid = false;
+    bool          inEscSeq            = false;
+    bool          inBracketedPaste    = false; /* True while inside \033[200~ ... \033[201~ */
+    bool          submitBlocked       = false; /* Enter/Tab emit submitBlockedKey instead */
+    bool          inCtrlXChord        = false; /* True after Ctrl+X, waiting for second key */
 
     void processEscSequence();
+
+    /**
+     * @brief Emit escPressed() and update the double-Esc detection state.
+     * @details Centralises the "bare Esc" fire path so synchronous
+     *          (ESC + non-[) and timer-delayed (bare ESC timeout) branches
+     *          both feed the same double-Esc window.
+     */
+    void emitBareEsc();
+
+    /**
+     * @brief Clear any pending double-Esc arming.
+     * @details Called from every action branch that represents user input
+     *          other than a bare Esc. Prevents "Esc → arrow → Esc" and
+     *          similar sequences from being mistaken for a rewind chord.
+     */
+    void cancelDoubleEscArming() { doubleEscTimerValid = false; }
 
 public:
     /* Reset ESC sequence state (call after modal overlay consumes ESC) */

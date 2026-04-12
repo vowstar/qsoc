@@ -42,6 +42,7 @@ bool QAgentInputMonitor::isUtf8Continuation(unsigned char byte)
 
 void QAgentInputMonitor::insertAtCursor(const QString &decoded)
 {
+    cancelDoubleEscArming();
     pushUndoSnapshot(/*fromPrintable=*/true);
     inputBuffer.insert(cursorPos, decoded);
     cursorPos += decoded.size();
@@ -83,6 +84,28 @@ void QAgentInputMonitor::clearUndoStack()
 void QAgentInputMonitor::resetEscState()
 {
     resetEscBuffer();
+    doubleEscTimerValid = false;
+}
+
+void QAgentInputMonitor::emitBareEsc()
+{
+    /* Double-Esc detection: if the previous bare Esc happened within
+     * DOUBLE_ESC_WINDOW_MS and nothing else was typed in between, emit
+     * escEscPressed() INSTEAD of escPressed(). Skipping escPressed on the
+     * double-Esc case is important: REPL handlers typically quit the
+     * surrounding promptLoop on bare Esc (to cancel input), which would
+     * unwind the REPL iteration before the rewind picker can finish and
+     * clear the input widget on the next cycle. Reset the timer after
+     * reporting so three Escs in a row don't cascade into multiple
+     * rewinds. */
+    if (doubleEscTimerValid && doubleEscTimer.elapsed() < DOUBLE_ESC_WINDOW_MS) {
+        doubleEscTimerValid = false;
+        emit escEscPressed();
+        return;
+    }
+    emit escPressed();
+    doubleEscTimer.start();
+    doubleEscTimerValid = true;
 }
 
 void QAgentInputMonitor::setInputBuffer(const QString &text)
@@ -251,6 +274,7 @@ void QAgentInputMonitor::processEscSequence()
                             emit mouseClick(btnFlags & 3, mouseCol, mouseRow, pressed);
                         }
                     }
+                    cancelDoubleEscArming();
                     resetEscBuffer();
                     return;
                 }
@@ -270,16 +294,19 @@ void QAgentInputMonitor::processEscSequence()
             char last = escBuffer[2];
             if (last == 'A' || last == 'B') {
                 emit arrowKey(last);
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
             if (last == 'C') {
                 moveCursorRight();
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
             if (last == 'D') {
                 moveCursorLeft();
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
@@ -291,6 +318,7 @@ void QAgentInputMonitor::processEscSequence()
                 if (cursorPos != oldPos) {
                     emit inputChanged(inputBuffer);
                 }
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
@@ -303,6 +331,7 @@ void QAgentInputMonitor::processEscSequence()
                 if (cursorPos != oldPos) {
                     emit inputChanged(inputBuffer);
                 }
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
@@ -315,6 +344,7 @@ void QAgentInputMonitor::processEscSequence()
             if (escBuffer == QByteArray("\033[200~")) {
                 inBracketedPaste = true;
                 pastedBuffer.clear();
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
@@ -327,6 +357,7 @@ void QAgentInputMonitor::processEscSequence()
                 QString decoded = QString::fromUtf8(pastedBuffer);
                 pastedBuffer.clear();
                 emit pastedReceived(decoded);
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
@@ -339,6 +370,7 @@ void QAgentInputMonitor::processEscSequence()
                 if (cursorPos != oldPos) {
                     emit inputChanged(inputBuffer);
                 }
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
@@ -352,6 +384,7 @@ void QAgentInputMonitor::processEscSequence()
                 if (cursorPos != oldPos) {
                     emit inputChanged(inputBuffer);
                 }
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
@@ -364,6 +397,7 @@ void QAgentInputMonitor::processEscSequence()
                     inputBuffer.remove(atomicStart, atomicLen);
                     cursorPos = atomicStart;
                     emit inputChanged(inputBuffer);
+                    cancelDoubleEscArming();
                     resetEscBuffer();
                     return;
                 }
@@ -373,9 +407,11 @@ void QAgentInputMonitor::processEscSequence()
                     inputBuffer.remove(cursorPos, step);
                     emit inputChanged(inputBuffer);
                 }
+                cancelDoubleEscArming();
                 resetEscBuffer();
                 return;
             }
+            cancelDoubleEscArming();
             resetEscBuffer(); /* Complete — unknown CSI ignored */
             return;
         }
@@ -388,7 +424,7 @@ void QAgentInputMonitor::processEscSequence()
     }
 
     /* ESC + non-[ : unknown sequence — treat as bare ESC */
-    emit escPressed();
+    emitBareEsc();
     resetEscBuffer();
 }
 
@@ -396,6 +432,17 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
 {
     for (int i = 0; i < len; i++) {
         auto byte = static_cast<unsigned char>(data[i]);
+
+        /* Double-Esc gate: a standalone non-Esc byte (one that is neither
+         * starting a new ESC sequence nor continuing an in-progress one)
+         * cancels any pending "first Esc armed" state. Continuation bytes
+         * of an existing ESC sequence (inEscSeq == true) are part of the
+         * SAME keystroke as the leading 0x1B and must be handled by the
+         * action branches inside processEscSequence, which call
+         * cancelDoubleEscArming() themselves. */
+        if (byte != 0x1B && !inEscSeq) {
+            cancelDoubleEscArming();
+        }
 
         /* Ctrl+X chord: waiting for second key of the two-key sequence.
          * Ctrl+X Ctrl+E → external editor. Any other byte cancels the
@@ -413,6 +460,23 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
 
         /* Continue accumulating ESC sequence */
         if (inEscSeq) {
+            /* Edge case: two ESC bytes back-to-back in one read() burst. The
+             * pending escBuffer only has a lone 0x1B and the new byte is
+             * also 0x1B — that means the first Esc's 50ms timer never got
+             * a chance to fire. Finalise the pending one as a bare Esc
+             * (which may fire double-Esc if the previous one was armed),
+             * then start a fresh ESC sequence for this new byte. */
+            if (byte == 0x1B && escBuffer.size() == 1) {
+                if (!submitBlocked) {
+                    inputBuffer.clear();
+                    cursorPos = 0;
+                    emit inputChanged(inputBuffer);
+                }
+                emitBareEsc();
+                escBuffer.clear();
+                escBuffer.append(static_cast<char>(byte));
+                continue;
+            }
             escBuffer.append(static_cast<char>(byte));
             processEscSequence();
             continue;
@@ -687,7 +751,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                     cursorPos = 0;
                     emit inputChanged(inputBuffer);
                 }
-                emit escPressed();
+                emitBareEsc();
                 resetEscBuffer();
             }
         });
