@@ -165,6 +165,12 @@ public:
     void setMemoryManager(QSocMemoryManager *manager);
 
     /**
+     * @brief Get the current memory manager.
+     * @return Pointer (may be nullptr if never set).
+     */
+    QSocMemoryManager *getMemoryManager() const { return memoryManager; }
+
+    /**
      * @brief Set the agent configuration
      * @param config Agent configuration
      */
@@ -187,6 +193,12 @@ public:
      * @param msgs JSON array of messages to restore
      */
     void setMessages(const json &msgs);
+
+    /**
+     * @brief Estimate the number of tokens in a text (public for /context).
+     * @return Estimated token count (approximately 4 characters per token).
+     */
+    int estimateTokens(const QString &text) const;
 
 signals:
     /**
@@ -388,13 +400,6 @@ private:
      * @param chunk Reasoning content chunk
      */
     void handleReasoningChunk(const QString &chunk);
-
-    /**
-     * @brief Estimate the number of tokens in a text
-     * @param text The text to estimate
-     * @return Estimated token count (approximately 4 characters per token)
-     */
-    int estimateTokens(const QString &text) const;
 
     /**
      * @brief Estimate the total tokens in the message history
