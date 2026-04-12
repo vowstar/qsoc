@@ -566,6 +566,13 @@ QString QSocAgent::buildSystemPromptWithMemory() const
         }
     }
 
+    /* Available skills: injected so the LLM knows what skills exist without
+     * needing to call skill_find first. User-invocable skills are also
+     * available as /name slash commands. */
+    if (!agentConfig.skillListing.isEmpty()) {
+        prompt += QStringLiteral("\n\n## Available Skills\n\n") + agentConfig.skillListing;
+    }
+
     if (!agentConfig.autoLoadMemory || !memoryManager) {
         return prompt;
     }

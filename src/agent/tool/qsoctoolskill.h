@@ -28,22 +28,32 @@ public:
 
     void setProjectManager(QSocProjectManager *projectManager);
 
-private:
-    QSocProjectManager *projectManager = nullptr;
-
     struct SkillInfo
     {
         QString name;
         QString description;
+        QString argumentHint; /* e.g. "-m 'message'" for /commit */
+        QString whenToUse;    /* trigger hint for the LLM */
         QString path;
-        QString scope;
+        QString scope;                /* "project" or "user" */
+        bool    userInvocable = true; /* register as /name slash command */
     };
 
-    QString          userSkillsPath() const;
-    QString          projectSkillsPath() const;
+    /* Scan all skill directories and return a merged, deduplicated list.
+     * Project-scoped skills take priority over user-scoped ones with the
+     * same name. Public so the REPL can use it for prompt injection and
+     * slash command registration. */
+    QList<SkillInfo> scanAllSkills() const;
+
+    /* Read the full SKILL.md content (frontmatter + body). */
+    QString readSkillContent(const QString &filePath) const;
+
+private:
+    QSocProjectManager *projectManager = nullptr;
+
+    QStringList      allSkillsDirs() const;
     QList<SkillInfo> scanSkillsDir(const QString &dirPath, const QString &scope) const;
     SkillInfo        parseSkillFile(const QString &filePath, const QString &scope) const;
-    QString          readSkillContent(const QString &filePath) const;
 };
 
 /**

@@ -52,24 +52,26 @@ json QSocToolSkillFind::getParametersSchema() const
         {"required", json::array({"action"})}};
 }
 
-QString QSocToolSkillFind::userSkillsPath() const
+QStringList QSocToolSkillFind::allSkillsDirs() const
 {
-    QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    return QDir(configPath).filePath("qsoc/skills");
-}
-
-QString QSocToolSkillFind::projectSkillsPath() const
-{
-    if (!projectManager) {
-        return {};
+    QStringList dirs;
+    /* Project-local paths (searched first → higher priority). */
+    QString projectPath;
+    if (projectManager) {
+        projectPath = projectManager->getProjectPath();
     }
-
-    QString projectPath = projectManager->getProjectPath();
     if (projectPath.isEmpty()) {
         projectPath = QDir::currentPath();
     }
+    dirs.append(QDir(projectPath).filePath(QStringLiteral(".qsoc/skills")));
+    dirs.append(QDir(projectPath).filePath(QStringLiteral(".agents/skills")));
 
-    return QDir(projectPath).filePath(".qsoc/skills");
+    /* Global / user-level paths. */
+    const QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
+    dirs.append(QDir(configPath).filePath(QStringLiteral("qsoc/skills")));
+    const QString homePath = QDir::homePath();
+    dirs.append(QDir(homePath).filePath(QStringLiteral(".agents/skills")));
+    return dirs;
 }
 
 QSocToolSkillFind::SkillInfo QSocToolSkillFind::parseSkillFile(
@@ -110,10 +112,16 @@ QSocToolSkillFind::SkillInfo QSocToolSkillFind::parseSkillFile(
         QString key   = line.left(colonPos).trimmed();
         QString value = line.mid(colonPos + 1).trimmed();
 
-        if (key == "name") {
+        if (key == QLatin1String("name")) {
             info.name = value;
-        } else if (key == "description") {
+        } else if (key == QLatin1String("description")) {
             info.description = value;
+        } else if (key == QLatin1String("argument-hint")) {
+            info.argumentHint = value;
+        } else if (key == QLatin1String("when_to_use") || key == QLatin1String("when-to-use")) {
+            info.whenToUse = value;
+        } else if (key == QLatin1String("user-invocable")) {
+            info.userInvocable = (value.toLower() != QLatin1String("false"));
         }
     }
 
@@ -158,6 +166,26 @@ QString QSocToolSkillFind::readSkillContent(const QString &filePath) const
     return content;
 }
 
+QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkills() const
+{
+    const QStringList dirs = allSkillsDirs();
+    QList<SkillInfo>  result;
+    QSet<QString>     seen; /* dedup by name, first-found wins (project > user) */
+    for (const QString &dir : dirs) {
+        const QString scope = dir.contains(QLatin1String(".qsoc/"))
+                                      || dir.contains(QLatin1String(".agents/"))
+                                  ? QStringLiteral("project")
+                                  : QStringLiteral("user");
+        for (const SkillInfo &skill : scanSkillsDir(dir, scope)) {
+            if (!seen.contains(skill.name)) {
+                seen.insert(skill.name);
+                result.append(skill);
+            }
+        }
+    }
+    return result;
+}
+
 QString QSocToolSkillFind::execute(const json &arguments)
 {
     if (!arguments.contains("action") || !arguments["action"].is_string()) {
@@ -166,23 +194,21 @@ QString QSocToolSkillFind::execute(const json &arguments)
 
     QString action = QString::fromStdString(arguments["action"].get<std::string>());
 
+    /* Collect skills — scope filtering is done after scanAllSkills for simplicity. */
     QString scope = "all";
     if (arguments.contains("scope") && arguments["scope"].is_string()) {
         scope = QString::fromStdString(arguments["scope"].get<std::string>());
     }
 
-    /* Collect skills from requested scopes */
-    QList<SkillInfo> allSkills;
-
-    if (scope == "project" || scope == "all") {
-        QString projPath = projectSkillsPath();
-        if (!projPath.isEmpty()) {
-            allSkills.append(scanSkillsDir(projPath, "project"));
+    QList<SkillInfo> allSkills = scanAllSkills();
+    if (scope != "all") {
+        QList<SkillInfo> filtered;
+        for (const SkillInfo &skill : allSkills) {
+            if (skill.scope == scope) {
+                filtered.append(skill);
+            }
         }
-    }
-
-    if (scope == "user" || scope == "all") {
-        allSkills.append(scanSkillsDir(userSkillsPath(), "user"));
+        allSkills = filtered;
     }
 
     if (action == "list") {
@@ -296,8 +322,8 @@ json QSocToolSkillCreate::getParametersSchema() const
 
 QString QSocToolSkillCreate::userSkillsPath() const
 {
-    QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    return QDir(configPath).filePath("qsoc/skills");
+    const QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
+    return QDir(configPath).filePath(QStringLiteral("qsoc/skills"));
 }
 
 QString QSocToolSkillCreate::projectSkillsPath() const
@@ -311,7 +337,7 @@ QString QSocToolSkillCreate::projectSkillsPath() const
         projectPath = QDir::currentPath();
     }
 
-    return QDir(projectPath).filePath(".qsoc/skills");
+    return QDir(projectPath).filePath(QStringLiteral(".qsoc/skills"));
 }
 
 bool QSocToolSkillCreate::isValidSkillName(const QString &name) const
@@ -400,6 +426,7 @@ QString QSocToolSkillCreate::execute(const json &arguments)
     out << "---\n";
     out << "name: " << name << "\n";
     out << "description: " << description << "\n";
+    out << "user-invocable: true\n";
     out << "---\n\n";
     out << instructions;
 

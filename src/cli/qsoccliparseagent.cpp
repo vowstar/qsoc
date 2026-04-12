@@ -516,6 +516,32 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * into the system prompt by buildSystemPromptWithMemory(). */
     config.projectPath = projectManager->getProjectPath();
 
+    /* Pre-scan skills and build a listing for system prompt injection.
+     * We instantiate a temporary QSocToolSkillFind just for the scan —
+     * the real tool instance is created below and registered in the
+     * tool registry. */
+    {
+        QSocToolSkillFind scanner(nullptr, projectManager);
+        const auto        skills = scanner.scanAllSkills();
+        if (!skills.isEmpty()) {
+            QString listing;
+            listing += QStringLiteral(
+                "The following skills are installed. Use skill_find(action:\"read\", "
+                "query:\"<name>\") to load the full prompt, or the user can invoke "
+                "user-invocable ones directly as /<name> slash commands.\n\n");
+            for (const auto &skill : skills) {
+                listing += QStringLiteral("- **") + skill.name + QStringLiteral("** [")
+                           + skill.scope + QStringLiteral("]: ") + skill.description;
+                if (skill.userInvocable) {
+                    listing += QStringLiteral(" (user-invocable: /") + skill.name
+                               + QStringLiteral(")");
+                }
+                listing += QStringLiteral("\n");
+            }
+            config.skillListing = listing;
+        }
+    }
+
     /* Determine streaming mode (enabled by default) */
     bool streaming = true;
 
@@ -1057,9 +1083,9 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
     QString   dismissedFor;
     int       popupAtPos = -1; /* '@' position for AtFile, 0 for SlashCommand */
 
-    /* Static slash command table for tab completion. Keep in sync with the
-     * command dispatch below. */
-    const QStringList slashCommands
+    /* Slash command table for tab completion. Built-in commands plus
+     * user-invocable skills discovered at startup. */
+    QStringList slashCommands
         = {QStringLiteral("help"),
            QStringLiteral("branch"),
            QStringLiteral("clear"),
@@ -1073,6 +1099,21 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
            QStringLiteral("status"),
            QStringLiteral("exit"),
            QStringLiteral("quit")};
+
+    /* Discover user-invocable skills and register them as slash commands.
+     * skillPaths maps "/skill-name" → SKILL.md file path for dispatch. */
+    QMap<QString, QString> skillPaths;
+    if (auto *reg = agent->getToolRegistry()) {
+        if (auto *skillTool = dynamic_cast<QSocToolSkillFind *>(
+                reg->getTool(QStringLiteral("skill_find")))) {
+            for (const auto &skill : skillTool->scanAllSkills()) {
+                if (skill.userInvocable && !slashCommands.contains(skill.name)) {
+                    slashCommands.append(skill.name);
+                    skillPaths.insert(QStringLiteral("/") + skill.name, skill.path);
+                }
+            }
+        }
+    }
 
     /* Helper: detect '/<word>' at start of buffer with cursor inside the
      * command word (no whitespace between '/' and cursor). Returns the
@@ -2934,6 +2975,31 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             compositor.invalidate();
             compositor.render();
             continue;
+        }
+
+        /* User-invocable skill dispatch: if the command matches a registered
+         * skill name, read the SKILL.md body and prepend it to the user
+         * input so the LLM sees the skill prompt + any trailing arguments
+         * as a single user message. This replaces `input` and falls through
+         * to the normal agent query path below. */
+        if (cmd.startsWith(QLatin1Char('/')) && !skillPaths.isEmpty()) {
+            /* Extract "/name args..." — cmd is already lowercased. */
+            const int     spaceIdx = cmd.indexOf(QLatin1Char(' '));
+            const QString skillCmd = (spaceIdx > 0) ? cmd.left(spaceIdx) : cmd;
+            if (skillPaths.contains(skillCmd)) {
+                const QString skillContent = QSocToolSkillFind(nullptr, projectManager)
+                                                 .readSkillContent(skillPaths.value(skillCmd));
+                if (!skillContent.isEmpty()) {
+                    const QString args = (spaceIdx > 0) ? input.mid(spaceIdx + 1).trimmed()
+                                                        : QString();
+                    input              = skillContent;
+                    if (!args.isEmpty()) {
+                        input += QStringLiteral("\n\nArguments passed: ") + args;
+                    }
+                    compositor.printContent(
+                        QString("(Running skill %1)\n").arg(skillCmd), QTuiScrollView::Dim);
+                }
+            }
         }
 
         /* Run agent */
