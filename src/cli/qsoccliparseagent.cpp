@@ -473,7 +473,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
         QString systemPrompt = socConfig->getValue("agent.system_prompt");
         if (!systemPrompt.isEmpty()) {
-            config.systemPrompt = systemPrompt;
+            config.systemPromptOverride = systemPrompt;
         }
 
         QString effortStr = socConfig->getValue("agent.effort");
@@ -540,6 +540,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             }
             config.skillListing = listing;
         }
+    }
+
+    /* Expose the model ID for system prompt injection. */
+    if (llmService) {
+        config.modelId = llmService->getCurrentModelId();
     }
 
     /* Determine streaming mode (enabled by default) */
@@ -2127,7 +2132,11 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             /* System prompt decomposition: base, instructions, memory.
              * buildSystemPromptWithMemory() returns the full string, but
              * we can re-derive components from the config + managers. */
-            const int basePromptTokens = agent->estimateTokens(agent->getConfig().systemPrompt);
+            const int basePromptTokens = agent->estimateTokens(agent->buildSystemPromptWithMemory())
+                                         - agent->estimateTokens(
+                                             agent->getMemoryManager()
+                                                 ? agent->getMemoryManager()->loadMemoryForPrompt()
+                                                 : QString());
 
             int instructionTokens = 0;
             {

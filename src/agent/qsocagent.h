@@ -211,6 +211,12 @@ public:
      */
     int estimateMessagesTokens() const;
 
+    /**
+     * @brief Build the full system prompt from modular sections + dynamic
+     *        context (project instructions, skills, memory).
+     */
+    QString buildSystemPromptWithMemory() const;
+
 signals:
     /**
      * @brief Signal emitted when a tool is called
@@ -414,11 +420,7 @@ private:
 
     /* estimateMessagesTokens / estimateTotalTokens declared public above */
 
-    /**
-     * @brief Build system prompt with auto-injected memory content
-     * @return System prompt with memory section appended
-     */
-    QString buildSystemPromptWithMemory() const;
+    /* buildSystemPromptWithMemory declared public above */
 
     /* Compaction failure tracking */
     int compactFailureCount = 0;

@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QMutexLocker>
+#include <QSysInfo>
 #include <QTextStream>
 
 QSocAgent::QSocAgent(
@@ -531,13 +532,132 @@ void QSocAgent::setMemoryManager(QSocMemoryManager *manager)
 
 QString QSocAgent::buildSystemPromptWithMemory() const
 {
-    QString prompt = agentConfig.systemPrompt;
+    /* If a full override is configured, use it verbatim + dynamic sections. */
+    if (!agentConfig.systemPromptOverride.isEmpty()) {
+        return agentConfig.systemPromptOverride;
+    }
 
-    /* Project instructions: AGENTS.md and AGENTS.local.md from the
-     * project root. Both files are loaded when present; AGENTS.md is
-     * intended for repo-committed team rules, AGENTS.local.md for
-     * per-user overrides that stay in .gitignore. Injected before
-     * memory so instructions take priority over recalled state. */
+    /* ── Static sections ─────────────────────────────────────────────── */
+
+    QString prompt;
+
+    /* Section 1: Identity */
+    prompt += QStringLiteral(
+        "You are QSoC Agent, an interactive AI assistant for System-on-Chip design "
+        "automation. You help users with RTL generation, bus integration, module "
+        "management, project automation, and general software engineering tasks.\n");
+
+    /* Section 2: Doing tasks */
+    prompt += QStringLiteral(
+        "\n# Doing tasks\n"
+        "- The user will primarily request SoC design and software engineering tasks.\n"
+        "- Read and understand existing code before suggesting modifications.\n"
+        "- For multi-step tasks (3+ steps), create a TODO list first, then execute step by step.\n"
+        "- Prefer editing existing files over creating new ones.\n"
+        "- Do not add features, refactor, or make improvements beyond what was asked.\n"
+        "- Complete every step — do not stop until the full task is done.\n"
+        "- After each tool call, briefly explain the result.\n"
+        "- If a tool fails, explain the error and try to fix it.\n");
+
+    /* Section 3: SoC infrastructure (domain-specific) */
+    prompt += QStringLiteral(
+        "\n# SoC infrastructure\n"
+        "qsoc generates production RTL from .soc_net YAML files via generate_verilog:\n"
+        "- **clock**: ICG gating, static/dynamic/auto dividers, glitch-free MUX, STA guide "
+        "buffers, test enable\n"
+        "- **reset**: ARSR synchronizers (async assert/sync release), multi-source matrices, reset "
+        "reason recording\n"
+        "- **power**: 8-state FSM per domain (OFF→WAIT_DEP→TURN_ON→CLK_ON→ON→RST_ASSERT→TURN_OFF), "
+        "hard/soft dependencies, fault recovery\n"
+        "- **fsm**: Table-mode (Moore/Mealy) and microcode-mode, binary/onehot/gray encoding\n"
+        "\n"
+        "For clock/reset/power/FSM tasks, ALWAYS:\n"
+        "1. Call query_docs with the matching topic to get YAML format details\n"
+        "2. Write a .soc_net YAML file using the documented format\n"
+        "3. Call generate_verilog with that file to produce production-grade Verilog\n"
+        "NEVER write clock/reset/power/FSM Verilog manually — qsoc generates it with "
+        "ICG, glitch-free MUX, ARSR synchronizers, 8-state power FSM, and proper DFT "
+        "support that hand-written code will lack.\n"
+        "\n"
+        "Keyword triggers:\n"
+        "- clock/clk/divider/ICG/PLL/clock gate → query_docs topic:\"clock\"\n"
+        "- reset/rst/ARSR/synchronizer/reset tree → query_docs topic:\"reset\"\n"
+        "- power/domain/pgood/power sequence → query_docs topic:\"power\"\n"
+        "- FSM/state machine/sequencer/microcode → query_docs topic:\"fsm\"\n");
+
+    /* Section 4: Actions & safety */
+    prompt += QStringLiteral(
+        "\n# Executing actions with care\n"
+        "Consider the reversibility and blast radius of every action.\n"
+        "- Local, reversible actions (editing files, running tests) — proceed freely.\n"
+        "- Hard-to-reverse or shared-state actions (deleting files, force-push, "
+        "dropping data) — explain the risk and confirm with the user first.\n"
+        "- Never skip safety hooks (e.g. --no-verify) unless the user explicitly asks.\n"
+        "- When encountering unexpected state (unfamiliar files, branches), investigate "
+        "before deleting or overwriting — it may be the user's in-progress work.\n"
+        "\n"
+        "Directory access:\n"
+        "- Read: unrestricted (any path)\n"
+        "- Write: allowed directories only (project, working, user-added, temp)\n"
+        "- Use path_context to manage allowed directories\n"
+        "- Always use absolute paths\n");
+
+    /* Section 5: Using tools */
+    prompt += QStringLiteral(
+        "\n# Using your tools\n"
+        "- Use dedicated tools (file_read, file_write, file_edit, grep, glob) instead "
+        "of shell equivalents when available — they are more reliable and reviewable.\n"
+        "- Break down complex work with todo_add / todo_update to track progress.\n"
+        "- For SoC infrastructure: query_docs → file_write .soc_net → generate_verilog.\n"
+        "- For web research: web_search for discovery, web_fetch for content retrieval.\n"
+        "- Tool definitions are provided separately — you do not need to memorize their "
+        "schemas.\n");
+
+    /* Section 6: Tone and style */
+    prompt += QStringLiteral(
+        "\n# Tone and style\n"
+        "- Do not use emojis unless the user explicitly asks for them.\n"
+        "- Be concise. Lead with the answer or action, not the reasoning.\n"
+        "- Use Github-flavored markdown for formatting.\n"
+        "- When referencing code, include `file_path:line_number` for navigation.\n"
+        "- Do not restate what the user said — just do it.\n"
+        "- If you can say it in one sentence, do not use three.\n");
+
+    /* Section 7: Output efficiency */
+    prompt += QStringLiteral(
+        "\n# Output efficiency\n"
+        "Go straight to the point. Try the simplest approach first.\n"
+        "Focus text output on:\n"
+        "- Decisions that need the user's input\n"
+        "- High-level status updates at natural milestones\n"
+        "- Errors or blockers that change the plan\n"
+        "Skip filler words, preamble, and unnecessary transitions.\n");
+
+    /* ── Dynamic sections ────────────────────────────────────────────── */
+
+    /* Section 8: Environment */
+    {
+        QString envSection = QStringLiteral("\n# Environment\n");
+        if (!agentConfig.modelId.isEmpty()) {
+            envSection += QStringLiteral("- Model: ") + agentConfig.modelId + QStringLiteral("\n");
+        }
+        envSection += QStringLiteral("- Platform: ") + QSysInfo::productType() + QStringLiteral(" ")
+                      + QSysInfo::productVersion() + QStringLiteral("\n");
+        envSection += QStringLiteral("- Architecture: ") + QSysInfo::currentCpuArchitecture()
+                      + QStringLiteral("\n");
+        if (!agentConfig.projectPath.isEmpty()) {
+            envSection += QStringLiteral("- Working directory: ") + agentConfig.projectPath
+                          + QStringLiteral("\n");
+            /* Detect git repo */
+            QDir gitDir(agentConfig.projectPath);
+            if (gitDir.exists(QStringLiteral(".git"))) {
+                envSection += QStringLiteral("- Git repository: yes\n");
+            }
+        }
+        prompt += envSection;
+    }
+
+    /* Section 9: Project instructions (AGENTS.md / AGENTS.local.md) */
     if (!agentConfig.projectPath.isEmpty()) {
         QDir    projectDir(agentConfig.projectPath);
         QString instructions;
@@ -559,33 +679,29 @@ QString QSocAgent::buildSystemPromptWithMemory() const
         }
         if (!instructions.isEmpty()) {
             prompt += QStringLiteral(
-                          "\n\n## Project Instructions\n\n"
+                          "\n# Project instructions\n"
                           "The following rules were loaded from AGENTS.md / AGENTS.local.md "
                           "in the project root. Follow them precisely.\n\n")
-                      + instructions;
+                      + instructions + QStringLiteral("\n");
         }
     }
 
-    /* Available skills: injected so the LLM knows what skills exist without
-     * needing to call skill_find first. User-invocable skills are also
-     * available as /name slash commands. */
+    /* Section 10: Available skills */
     if (!agentConfig.skillListing.isEmpty()) {
-        prompt += QStringLiteral("\n\n## Available Skills\n\n") + agentConfig.skillListing;
+        prompt += QStringLiteral("\n# Available skills\n\n") + agentConfig.skillListing;
     }
 
-    if (!agentConfig.autoLoadMemory || !memoryManager) {
-        return prompt;
+    /* Section 11: Memory */
+    if (agentConfig.autoLoadMemory && memoryManager) {
+        QString memoryContent = memoryManager->loadMemoryForPrompt(agentConfig.memoryMaxChars);
+        if (!memoryContent.isEmpty()) {
+            prompt += QStringLiteral(
+                          "\n# Memory\n"
+                          "Below is persistent memory from previous sessions. "
+                          "Use this context but verify stale information against current code.\n\n")
+                      + memoryContent;
+        }
     }
-
-    QString memoryContent = memoryManager->loadMemoryForPrompt(agentConfig.memoryMaxChars);
-    if (memoryContent.isEmpty()) {
-        return prompt;
-    }
-
-    prompt += "\n\n## Memory\n\n"
-              "Below is persistent memory from previous sessions. "
-              "Use this context but verify stale information against current code.\n\n"
-              + memoryContent;
 
     return prompt;
 }
