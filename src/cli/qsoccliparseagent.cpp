@@ -512,6 +512,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         config.reasoningModel = parser.value("model-reasoning");
     }
 
+    /* Expose the project path so AGENTS.md / AGENTS.local.md get loaded
+     * into the system prompt by buildSystemPromptWithMemory(). */
+    config.projectPath = projectManager->getProjectPath();
+
     /* Determine streaming mode (enabled by default) */
     bool streaming = true;
 

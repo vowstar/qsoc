@@ -37,6 +37,9 @@ struct QSocAgentConfig
     /* Reasoning model: empty=use primary model when effort is set */
     QString reasoningModel;
 
+    /* Project instructions (AGENTS.md / AGENTS.local.md) */
+    QString projectPath; /* Set by parseAgent; empty = no project instructions loaded */
+
     /* Memory injection settings */
     bool autoLoadMemory = true;  /* Auto-inject memory into system prompt */
     int  memoryMaxChars = 24000; /* Max chars (~6000 tokens) for memory in prompt */

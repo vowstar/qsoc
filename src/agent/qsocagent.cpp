@@ -5,7 +5,10 @@
 
 #include <QDateTime>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
 #include <QMutexLocker>
+#include <QTextStream>
 
 QSocAgent::QSocAgent(
     QObject *parent, QLLMService *llmService, QSocToolRegistry *toolRegistry, QSocAgentConfig config)
@@ -529,6 +532,39 @@ void QSocAgent::setMemoryManager(QSocMemoryManager *manager)
 QString QSocAgent::buildSystemPromptWithMemory() const
 {
     QString prompt = agentConfig.systemPrompt;
+
+    /* Project instructions: AGENTS.md and AGENTS.local.md from the
+     * project root. Both files are loaded when present; AGENTS.md is
+     * intended for repo-committed team rules, AGENTS.local.md for
+     * per-user overrides that stay in .gitignore. Injected before
+     * memory so instructions take priority over recalled state. */
+    if (!agentConfig.projectPath.isEmpty()) {
+        QDir    projectDir(agentConfig.projectPath);
+        QString instructions;
+        for (const QString &name :
+             {QStringLiteral("AGENTS.md"), QStringLiteral("AGENTS.local.md")}) {
+            const QString path = projectDir.filePath(name);
+            QFile         file(path);
+            if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream   stream(&file);
+                const QString content = stream.readAll().trimmed();
+                file.close();
+                if (!content.isEmpty()) {
+                    if (!instructions.isEmpty()) {
+                        instructions += QStringLiteral("\n\n");
+                    }
+                    instructions += content;
+                }
+            }
+        }
+        if (!instructions.isEmpty()) {
+            prompt += QStringLiteral(
+                          "\n\n## Project Instructions\n\n"
+                          "The following rules were loaded from AGENTS.md / AGENTS.local.md "
+                          "in the project root. Follow them precisely.\n\n")
+                      + instructions;
+        }
+    }
 
     if (!agentConfig.autoLoadMemory || !memoryManager) {
         return prompt;
