@@ -1061,12 +1061,16 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
      * command dispatch below. */
     const QStringList slashCommands
         = {QStringLiteral("help"),
+           QStringLiteral("branch"),
            QStringLiteral("clear"),
            QStringLiteral("compact"),
            QStringLiteral("context"),
+           QStringLiteral("cost"),
            QStringLiteral("diff"),
            QStringLiteral("effort"),
            QStringLiteral("model"),
+           QStringLiteral("rename"),
+           QStringLiteral("status"),
            QStringLiteral("exit"),
            QStringLiteral("quit")};
 
@@ -1238,6 +1242,17 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
      * the resumed message history so snapshots continue the sequence after
      * --continue / --resume. */
     int turnCounter = 0;
+
+    /* Auto-compact: after each turn, check if context usage exceeds the
+     * configured threshold. If so, compact and report savings. A circuit
+     * breaker trips after 3 consecutive compact failures to avoid an
+     * infinite retry loop when the conversation is genuinely large. */
+    int                  autoCompactFailures       = 0;
+    static constexpr int AUTO_COMPACT_MAX_FAILURES = 3;
+
+    /* Cumulative session token accounting for /cost. */
+    qint64 sessionInputTokens  = 0;
+    qint64 sessionOutputTokens = 0;
     {
         const QString projectPath = sessionProjectPath(projectManager);
         QString       sessionId   = resumeSessionId;
@@ -1257,8 +1272,10 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     QTuiMenu::MenuItem item;
                     QString label = info.lastModified.toString(QStringLiteral("MM-dd HH:mm"));
                     label += QString(" (%1 msgs)").arg(info.messageCount);
-                    QString prompt = info.firstPrompt.isEmpty() ? QStringLiteral("(no prompt)")
-                                                                : info.firstPrompt;
+                    /* Show user-assigned title if present, otherwise first prompt. */
+                    QString prompt = !info.title.isEmpty()         ? info.title
+                                     : !info.firstPrompt.isEmpty() ? info.firstPrompt
+                                                                   : QStringLiteral("(no prompt)");
                     if (prompt.size() > 50) {
                         prompt = prompt.left(47) + QStringLiteral("...");
                     }
@@ -2625,13 +2642,17 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
         if (cmd == "/help") {
             compositor.printContent("Commands:\n");
             compositor.printContent("  exit, /exit  - Exit the agent\n");
+            compositor.printContent("  /branch [n]  - Fork session (optionally name it)\n");
             compositor.printContent("  /clear       - Clear conversation history\n");
             compositor.printContent("  /compact     - Compact conversation context\n");
             compositor.printContent("  /context     - Show token usage breakdown + suggestions\n");
+            compositor.printContent("  /cost        - Show session token/cost totals\n");
             compositor.printContent("  /diff        - Review file edits turn-by-turn\n");
             compositor.printContent(
                 "  /effort    - Show/set reasoning effort (off/low/medium/high)\n");
             compositor.printContent("  /model       - Show/switch model\n");
+            compositor.printContent("  /rename <t>  - Set session title for resume picker\n");
+            compositor.printContent("  /status      - Show model, session, endpoint info\n");
             compositor.printContent("  !<command>   - Execute a shell command directly\n");
             compositor.printContent("  /help        - Show this help message\n");
             compositor.printContent("\n");
@@ -2656,10 +2677,185 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             continue;
         }
         if (cmd == "/compact") {
-            int saved = agent->compact();
-            compositor.printContent(QString("Compacted: saved %1 tokens\n").arg(saved));
+            const int msgsBefore = static_cast<int>(agent->getMessages().size());
+            const int tokBefore  = agent->estimateMessagesTokens();
+            const int saved      = agent->compact();
+            const int msgsAfter  = static_cast<int>(agent->getMessages().size());
+            const int tokAfter   = tokBefore - saved;
+            compositor.printContent(
+                QString("Compacted: %1 messages -> %2 | %3 -> %4 tokens (saved %5)\n")
+                    .arg(msgsBefore)
+                    .arg(msgsAfter)
+                    .arg(tokBefore)
+                    .arg(tokAfter)
+                    .arg(saved));
             lastPersistedIndex
                 = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
+            continue;
+        }
+        if (cmd == "/cost") {
+            auto fmtTok = [](qint64 tokens) -> QString {
+                if (tokens >= 1000) {
+                    return QString::number(tokens / 1000.0, 'f', 1) + "k";
+                }
+                return QString::number(tokens);
+            };
+            compositor.printContent("\n");
+            compositor.printContent("Session Cost\n", QTuiScrollView::Bold);
+            compositor.printContent(
+                QString("  Input tokens:  %1\n").arg(fmtTok(sessionInputTokens)));
+            compositor.printContent(
+                QString("  Output tokens: %1\n").arg(fmtTok(sessionOutputTokens)));
+
+            /* Configurable cost rates from project config. If not set, show
+             * a hint instead of a dollar figure so users know they can
+             * configure it. Keys: llm.cost_input_per_mtok,
+             * llm.cost_output_per_mtok, llm.cost_currency. */
+            double  inputRate  = 0;
+            double  outputRate = 0;
+            QString currency;
+            if (socConfig) {
+                const QString inStr  = socConfig->getValue("llm.cost_input_per_mtok");
+                const QString outStr = socConfig->getValue("llm.cost_output_per_mtok");
+                currency             = socConfig->getValue("llm.cost_currency");
+                if (!inStr.isEmpty()) {
+                    inputRate = inStr.toDouble();
+                }
+                if (!outStr.isEmpty()) {
+                    outputRate = outStr.toDouble();
+                }
+            }
+            if (inputRate > 0 || outputRate > 0) {
+                if (currency.isEmpty()) {
+                    currency = QStringLiteral("USD");
+                }
+                const double inputCost  = sessionInputTokens * inputRate / 1e6;
+                const double outputCost = sessionOutputTokens * outputRate / 1e6;
+                const double totalCost  = inputCost + outputCost;
+                compositor.printContent(
+                    QString("  Input cost:    %1 %2\n").arg(inputCost, 0, 'f', 4).arg(currency));
+                compositor.printContent(
+                    QString("  Output cost:   %1 %2\n").arg(outputCost, 0, 'f', 4).arg(currency));
+                compositor.printContent(
+                    QString("  Total:         %1 %2\n").arg(totalCost, 0, 'f', 4).arg(currency),
+                    QTuiScrollView::Bold);
+                compositor.printContent(
+                    QString("  Rate: %1/%2 %3/Mtok (input/output)\n")
+                        .arg(inputRate, 0, 'f', 2)
+                        .arg(outputRate, 0, 'f', 2)
+                        .arg(currency),
+                    QTuiScrollView::Dim);
+            } else {
+                compositor.printContent(
+                    "\n  Cost rates not configured. Set in project config:\n", QTuiScrollView::Dim);
+                compositor.printContent(
+                    "    llm.cost_input_per_mtok = <price per million input tokens>\n",
+                    QTuiScrollView::Dim);
+                compositor.printContent(
+                    "    llm.cost_output_per_mtok = <price per million output tokens>\n",
+                    QTuiScrollView::Dim);
+                compositor.printContent(
+                    "    llm.cost_currency = USD  (optional, default USD)\n", QTuiScrollView::Dim);
+                compositor.printContent(
+                    "  Or if you're on a subscription plan, cost tracking may not apply.\n",
+                    QTuiScrollView::Dim);
+            }
+            compositor.printContent("\n");
+            continue;
+        }
+        if (cmd == "/status") {
+            compositor.printContent("\n");
+            compositor.printContent("Status\n", QTuiScrollView::Bold);
+            compositor.printContent(QString("  Model:    %1\n")
+                                        .arg(
+                                            llmService->getCurrentModelId().isEmpty()
+                                                ? QStringLiteral("(default)")
+                                                : llmService->getCurrentModelId()));
+            compositor.printContent(QString("  Effort:   %1\n")
+                                        .arg(
+                                            agent->getConfig().effortLevel.isEmpty()
+                                                ? QStringLiteral("off")
+                                                : agent->getConfig().effortLevel));
+            if (currentSession) {
+                compositor.printContent(QString("  Session:  %1 (%2 messages)\n")
+                                            .arg(currentSession->id().left(8))
+                                            .arg(agent->getMessages().size()));
+            }
+            compositor.printContent(
+                QString("  Project:  %1\n").arg(sessionProjectPath(projectManager)));
+            /* Endpoint URL display would require exposing the endpoints list
+             * from QLLMService; skip for now — model ID is sufficient. */
+            if (currentFileHistory && !currentFileHistory->isEmpty()) {
+                compositor.printContent(
+                    QString("  File history: %1 snapshot(s)\n")
+                        .arg(currentFileHistory->listSnapshots().size()),
+                    QTuiScrollView::Dim);
+            }
+            compositor.printContent("\n");
+            continue;
+        }
+        if (cmd.startsWith("/branch")) {
+            const QString branchName = input.mid(7).trimmed();
+            if (!currentSession) {
+                compositor.printContent("(no active session to branch)\n");
+                continue;
+            }
+            const QString projectPath = sessionProjectPath(projectManager);
+            const QString newId       = QSocSession::generateId();
+            const QString newPath
+                = QDir(QSocSession::sessionsDir(projectPath)).filePath(newId + ".jsonl");
+
+            /* Copy session JSONL. */
+            QFile::copy(currentSession->filePath(), newPath);
+
+            /* Append forkedFrom meta to the new session. */
+            QSocSession newSession(newId, newPath);
+            newSession.appendMeta(QStringLiteral("forkedFrom"), currentSession->id());
+            if (!branchName.isEmpty()) {
+                newSession.appendMeta(QStringLiteral("title"), branchName);
+            }
+
+            /* Copy file-history directory if it exists. */
+            if (currentFileHistory) {
+                const QString srcHist
+                    = QSocFileHistory::historyDir(projectPath, currentSession->id());
+                const QString dstHist = QSocFileHistory::historyDir(projectPath, newId);
+                QDir().mkpath(dstHist);
+                /* Copy snapshots.jsonl */
+                QFile::copy(
+                    QDir(srcHist).filePath(QStringLiteral("snapshots.jsonl")),
+                    QDir(dstHist).filePath(QStringLiteral("snapshots.jsonl")));
+                /* Hard-link (or copy) backup blobs. */
+                QDir          backupsSrc(QDir(srcHist).filePath(QStringLiteral("backups")));
+                const QString backupsDst = QDir(dstHist).filePath(QStringLiteral("backups"));
+                QDir().mkpath(backupsDst);
+                const auto entries
+                    = backupsSrc.entryInfoList({QStringLiteral("*.bak")}, QDir::Files);
+                for (const QFileInfo &entry : entries) {
+                    const QString dst = QDir(backupsDst).filePath(entry.fileName());
+                    if (!QFile::link(entry.absoluteFilePath(), dst)) {
+                        QFile::copy(entry.absoluteFilePath(), dst);
+                    }
+                }
+            }
+
+            const QString label = branchName.isEmpty() ? newId.left(8) : branchName;
+            compositor.printContent(
+                QString("(Branched to %1 — resume with: --resume %2)\n").arg(label, newId.left(8)));
+            continue;
+        }
+        if (cmd.startsWith("/rename")) {
+            const QString newTitle = input.mid(7).trimmed();
+            if (newTitle.isEmpty()) {
+                compositor.printContent("Usage: /rename <title>\n");
+                continue;
+            }
+            if (!currentSession) {
+                compositor.printContent("(no active session)\n");
+                continue;
+            }
+            currentSession->appendMeta(QStringLiteral("title"), newTitle);
+            compositor.printContent(QString("Session renamed to: %1\n").arg(newTitle));
             continue;
         }
         if (cmd.startsWith("/effort")) {
@@ -2934,17 +3130,17 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     statusBarWidget.setStatus("Working");
                 });
 
-            /* Connect token usage update */
+            /* Connect token usage update + session cost accumulator */
             auto connTokens = QObject::connect(
                 agent,
                 &QSocAgent::tokenUsage,
                 &loop,
-                [&compositor,
-                 &statusBarWidget,
-                 &todoWidget,
-                 &queueWidget,
-                 &inputWidget](qint64 input, qint64 output) {
+                [&statusBarWidget,
+                 &sessionInputTokens,
+                 &sessionOutputTokens](qint64 input, qint64 output) {
                     statusBarWidget.updateTokens(input, output);
+                    sessionInputTokens  = input;
+                    sessionOutputTokens = output;
                 });
 
             /* Connect stuck detection for warning */
@@ -3131,6 +3327,31 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             if (currentFileHistory) {
                 turnCounter++;
                 currentFileHistory->makeSnapshot(turnCounter);
+            }
+
+            /* Auto-compact: if context usage exceeds the configured threshold
+             * and the circuit breaker hasn't tripped, compact now. */
+            if (autoCompactFailures < AUTO_COMPACT_MAX_FAILURES) {
+                const int    currentTokens = agent->estimateTotalTokens();
+                const double threshold     = agent->getConfig().compactThreshold;
+                const int    maxCtx        = agent->getConfig().maxContextTokens;
+                if (currentTokens > static_cast<int>(maxCtx * threshold)) {
+                    const int before = agent->estimateMessagesTokens();
+                    const int saved  = agent->compact();
+                    if (saved > 0) {
+                        autoCompactFailures = 0;
+                        lastPersistedIndex
+                            = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
+                        compositor.printContent(
+                            QString("(auto-compacted: %1 -> %2 tokens, saved %3)\n")
+                                .arg(before)
+                                .arg(before - saved)
+                                .arg(saved),
+                            QTuiScrollView::Dim);
+                    } else {
+                        autoCompactFailures++;
+                    }
+                }
             }
 
             /* Disconnect all signals to avoid stale connections */
@@ -3359,17 +3580,17 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     statusBarWidget.setStatus("Working");
                 });
 
-            /* Connect token usage update */
+            /* Connect token usage update + session cost accumulator */
             auto connTokens = QObject::connect(
                 agent,
                 &QSocAgent::tokenUsage,
                 &loop,
-                [&compositor,
-                 &statusBarWidget,
-                 &todoWidget,
-                 &queueWidget,
-                 &inputWidget](qint64 input, qint64 output) {
+                [&statusBarWidget,
+                 &sessionInputTokens,
+                 &sessionOutputTokens](qint64 input, qint64 output) {
                     statusBarWidget.updateTokens(input, output);
+                    sessionInputTokens  = input;
+                    sessionOutputTokens = output;
                 });
 
             /* Connect stuck detection for warning */
@@ -3547,6 +3768,30 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             if (currentFileHistory) {
                 turnCounter++;
                 currentFileHistory->makeSnapshot(turnCounter);
+            }
+
+            /* Auto-compact (same logic as streaming path). */
+            if (autoCompactFailures < AUTO_COMPACT_MAX_FAILURES) {
+                const int    currentTokens = agent->estimateTotalTokens();
+                const double threshold     = agent->getConfig().compactThreshold;
+                const int    maxCtx        = agent->getConfig().maxContextTokens;
+                if (currentTokens > static_cast<int>(maxCtx * threshold)) {
+                    const int before = agent->estimateMessagesTokens();
+                    const int saved  = agent->compact();
+                    if (saved > 0) {
+                        autoCompactFailures = 0;
+                        lastPersistedIndex
+                            = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
+                        compositor.printContent(
+                            QString("(auto-compacted: %1 -> %2 tokens, saved %3)\n")
+                                .arg(before)
+                                .arg(before - saved)
+                                .arg(saved),
+                            QTuiScrollView::Dim);
+                    } else {
+                        autoCompactFailures++;
+                    }
+                }
             }
 
             /* Display complete result at once */

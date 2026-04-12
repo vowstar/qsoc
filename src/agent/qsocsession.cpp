@@ -186,6 +186,8 @@ QSocSession::Info QSocSession::readInfo(const QString &filePath)
                     }
                 } else if (key == QStringLiteral("first_prompt") && info.firstPrompt.isEmpty()) {
                     info.firstPrompt = value;
+                } else if (key == QStringLiteral("title")) {
+                    info.title = value;
                 } else if (key == QStringLiteral("branch")) {
                     info.branch = value;
                 }

@@ -195,10 +195,21 @@ public:
     void setMessages(const json &msgs);
 
     /**
-     * @brief Estimate the number of tokens in a text (public for /context).
+     * @brief Estimate the number of tokens in a text.
      * @return Estimated token count (approximately 4 characters per token).
      */
     int estimateTokens(const QString &text) const;
+
+    /**
+     * @brief Estimate total tokens for the next API call (system prompt +
+     *        tool defs + all messages).
+     */
+    int estimateTotalTokens() const;
+
+    /**
+     * @brief Estimate tokens in the message history only.
+     */
+    int estimateMessagesTokens() const;
 
 signals:
     /**
@@ -401,17 +412,7 @@ private:
      */
     void handleReasoningChunk(const QString &chunk);
 
-    /**
-     * @brief Estimate the total tokens in the message history
-     * @return Estimated token count for all messages
-     */
-    int estimateMessagesTokens() const;
-
-    /**
-     * @brief Estimate total tokens including messages, system prompt, and tool definitions
-     * @return Estimated total token count for the full LLM request
-     */
-    int estimateTotalTokens() const;
+    /* estimateMessagesTokens / estimateTotalTokens declared public above */
 
     /**
      * @brief Build system prompt with auto-injected memory content

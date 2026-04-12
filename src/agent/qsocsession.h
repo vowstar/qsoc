@@ -40,6 +40,7 @@ public:
         QDateTime createdAt;
         QDateTime lastModified;
         QString   firstPrompt;
+        QString   title; /* User-assigned display name (/rename) */
         QString   branch;
         int       messageCount = 0;
     };
