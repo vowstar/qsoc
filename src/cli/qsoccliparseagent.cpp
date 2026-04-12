@@ -2740,6 +2740,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             compositor.printContent("  Ctrl+T      - Toggle TODO list visibility\n");
             compositor.printContent("  Ctrl+L      - Force a full screen repaint\n");
             compositor.printContent("  Ctrl+_      - Undo the last edit\n");
+            compositor.printContent(
+                "  Shift+drag  - Select text (terminal convention with mouse tracking)\n");
             compositor.printContent("  @<name>     - Fuzzy-complete a project file path\n");
             compositor.printContent("\n");
             compositor.printContent("Or just type your question/request in natural language.\n");

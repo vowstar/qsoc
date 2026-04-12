@@ -186,11 +186,14 @@ void QTuiCompositor::render()
 
 void QTuiCompositor::enterAltScreen()
 {
-    /* Hide cursor + enter alt screen + clear + disable auto-wrap + enable SGR mouse */
+    /* Hide cursor + enter alt screen + clear + disable auto-wrap.
+     * Enable button-event mouse tracking (?1000h) + SGR encoding (?1006h)
+     * for scroll wheel support. Text selection: Shift+click-drag (this is
+     * the universal terminal convention when mouse tracking is active). */
     fputs(
         "\033[?25l\033[?1049h\033[2J\033[H"
         "\033[?7l"
-        "\033[?1000h\033[?1003h\033[?1006h",
+        "\033[?1000h\033[?1006h",
         stdout);
     fflush(stdout);
 }
@@ -199,7 +202,7 @@ void QTuiCompositor::exitAltScreen()
 {
     /* Disable mouse + re-enable auto-wrap + exit alt screen + show cursor */
     fputs(
-        "\033[?1006l\033[?1003l\033[?1000l"
+        "\033[?1006l\033[?1000l"
         "\033[?7h"
         "\033[?1049l\033[?25h",
         stdout);
