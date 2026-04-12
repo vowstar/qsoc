@@ -259,6 +259,66 @@ private slots:
         QVERIFY(escReceived);
     }
 
+    void testDoubleEscEmitsEscEsc()
+    {
+        QAgentInputMonitor monitor;
+        int                escCount    = 0;
+        int                escEscCount = 0;
+
+        connect(&monitor, &QAgentInputMonitor::escPressed, [&escCount]() { escCount++; });
+        connect(&monitor, &QAgentInputMonitor::escEscPressed, [&escEscCount]() { escEscCount++; });
+
+        /* Two back-to-back ESCs followed by non-CSI bytes → both fire the
+         * synchronous bare-Esc path in processEscSequence. The first one
+         * emits escPressed and arms the double-Esc window; the second one
+         * fires escEscPressed INSTEAD of escPressed so the REPL's bare-Esc
+         * handler doesn't unwind the promptLoop in the middle of a rewind. */
+        const char data1[] = {0x1B, 'x'};
+        monitor.processBytes(data1, 2);
+        QCOMPARE(escCount, 1);
+        QCOMPARE(escEscCount, 0);
+
+        const char data2[] = {0x1B, 'y'};
+        monitor.processBytes(data2, 2);
+        QCOMPARE(escCount, 1); /* no new escPressed — replaced by escEscPressed */
+        QCOMPARE(escEscCount, 1);
+    }
+
+    void testEscEscResetByIntermediateKey()
+    {
+        QAgentInputMonitor monitor;
+        int                escEscCount = 0;
+
+        connect(&monitor, &QAgentInputMonitor::escEscPressed, [&escEscCount]() { escEscCount++; });
+
+        /* Esc, type a char, Esc → must NOT be treated as double-Esc because
+         * the intermediate keystroke cancels the chord. */
+        const char data[] = {0x1B, 'x', 'a', 0x1B, 'y'};
+        monitor.processBytes(data, 5);
+
+        QCOMPARE(escEscCount, 0);
+    }
+
+    void testTripleEscDoesNotCascade()
+    {
+        QAgentInputMonitor monitor;
+        int                escEscCount = 0;
+
+        connect(&monitor, &QAgentInputMonitor::escEscPressed, [&escEscCount]() { escEscCount++; });
+
+        /* Three Escs in a row should fire escEscPressed exactly once: the
+         * second Esc triggers it, then the third one re-arms a NEW potential
+         * chord rather than firing a second escEscPressed. */
+        const char data1[] = {0x1B, 'x'};
+        monitor.processBytes(data1, 2);
+        const char data2[] = {0x1B, 'y'};
+        monitor.processBytes(data2, 2);
+        const char data3[] = {0x1B, 'z'};
+        monitor.processBytes(data3, 2);
+
+        QCOMPARE(escEscCount, 1);
+    }
+
     void testUtf8CjkInput()
     {
         QAgentInputMonitor monitor;

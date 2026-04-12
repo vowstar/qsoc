@@ -1692,11 +1692,151 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                 promptLoop.quit();
             });
 
+        /* Esc-Esc (two Esc keys within 500ms, no intervening keystrokes):
+         * open a picker over previous user messages and rewind the session
+         * to the point just before the chosen message. The picked message's
+         * text is loaded back into the input buffer so the user can edit it
+         * and branch off from there. Gated strictly on buffer empty + no
+         * modal overlays — otherwise the second Esc is a harmless no-op
+         * since the first one already cleared / dismissed something. */
+        auto connEscEsc = connect(
+            &inputMonitor,
+            &QAgentInputMonitor::escEscPressed,
+            [this,
+             agent,
+             &currentSession,
+             &lastPersistedIndex,
+             &compositor,
+             &inputMonitor,
+             &inputWidget,
+             &popupWidget,
+             &searching]() {
+                (void) this;
+                if (searching || popupWidget.isVisible()) {
+                    return;
+                }
+                if (!inputWidget.getText().isEmpty()) {
+                    return;
+                }
+                if (!currentSession) {
+                    return;
+                }
+
+                const json allMessages = agent->getMessages();
+                if (!allMessages.is_array()) {
+                    return;
+                }
+
+                /* Collect user messages with their absolute indices so the
+                 * picker shows only what the user typed, not the tool
+                 * traffic and assistant replies in between. Each user
+                 * message also gets a turn number (1-indexed) used to look
+                 * up the matching file-history snapshot. */
+                struct UserMsgRef
+                {
+                    int     index;
+                    QString content;
+                };
+                QList<UserMsgRef> userMsgs;
+                for (int idx = 0; idx < static_cast<int>(allMessages.size()); idx++) {
+                    const auto &msg = allMessages[idx];
+                    if (!msg.is_object() || !msg.contains("role") || !msg.contains("content")) {
+                        continue;
+                    }
+                    if (msg["role"].get<std::string>() != "user") {
+                        continue;
+                    }
+                    if (!msg["content"].is_string()) {
+                        continue;
+                    }
+                    const QString content
+                        = QString::fromStdString(msg["content"].get<std::string>());
+                    if (content.isEmpty()) {
+                        continue;
+                    }
+                    userMsgs.append(UserMsgRef{.index = idx, .content = content});
+                }
+
+                if (userMsgs.isEmpty()) {
+                    compositor.printContent("(no previous messages to rewind to)\n");
+                    compositor.invalidate();
+                    return;
+                }
+
+                /* Build picker items — most recent at the bottom so the
+                 * initial highlight lands there and the common case of
+                 * "rewind one step" is a single Enter. */
+                QList<QTuiMenu::MenuItem> items;
+                items.reserve(userMsgs.size());
+                for (const UserMsgRef &ref : userMsgs) {
+                    QTuiMenu::MenuItem item;
+                    QString            preview = ref.content;
+                    preview.replace(QLatin1Char('\n'), QLatin1Char(' '));
+                    if (preview.size() > 60) {
+                        preview = preview.left(57) + QStringLiteral("...");
+                    }
+                    item.label = QString("#%1").arg(ref.index + 1);
+                    item.hint  = preview;
+                    items.append(item);
+                }
+
+                QTuiMenu menu;
+                menu.setTitle("Rewind to earlier message");
+                menu.setItems(items);
+                menu.setHighlight(static_cast<int>(items.size()) - 1);
+                const int selected = menu.exec();
+                inputMonitor.resetEscState();
+                compositor.invalidate();
+                compositor.render();
+
+                if (selected < 0 || selected >= userMsgs.size()) {
+                    return;
+                }
+
+                const UserMsgRef &pick = userMsgs[selected];
+
+                /* Preserve the original createdAt so the session picker
+                 * still shows the original timestamp after a rewind. The
+                 * rewriteMessages call truncates the file entirely, so
+                 * meta must be re-emitted afterwards. */
+                const QSocSession::Info origInfo
+                    = QSocSession::readInfo(currentSession->filePath());
+
+                json truncated = json::array();
+                for (int idx = 0; idx < pick.index; idx++) {
+                    truncated.push_back(allMessages[idx]);
+                }
+                agent->setMessages(truncated);
+                currentSession->rewriteMessages(truncated);
+                if (origInfo.createdAt.isValid()) {
+                    currentSession->appendMeta(
+                        QStringLiteral("created"), origInfo.createdAt.toString(Qt::ISODateWithMs));
+                }
+                lastPersistedIndex = static_cast<int>(truncated.size());
+
+                /* Load the picked message back into the input buffer so the
+                 * user can edit and resubmit. setInputBuffer emits
+                 * inputChanged which the REPL's connected slot forwards to
+                 * inputWidget.setText — force a subsequent render so the
+                 * restored text is visible before the user types anything. */
+                inputMonitor.setInputBuffer(pick.content);
+
+                compositor.printContent(
+                    QString(
+                        "\n(Rewound: kept %1 message%2, picked text restored for "
+                        "editing)\n")
+                        .arg(lastPersistedIndex)
+                        .arg(lastPersistedIndex == 1 ? "" : "s"));
+                compositor.invalidate();
+                compositor.render();
+            });
+
         promptLoop.exec();
 
         QObject::disconnect(connInput);
         QObject::disconnect(connCtrlC);
         QObject::disconnect(connEsc);
+        QObject::disconnect(connEscEsc);
 
         if (exitRequested) {
             break;
