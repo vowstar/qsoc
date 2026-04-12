@@ -901,17 +901,45 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
     /* Helper: render a unified diff to the scroll view with the diff line
      * styles defined on QTuiScrollView (Hunk = yellow bold, Add = green,
      * Del = red, Context = dim). Called from the toolResult hook when an
-     * edit_file or write_file completes successfully. */
-    auto renderDiffToScrollView =
-        [&compositor](const QString &path, const QString &oldText, const QString &newText) {
+     * edit_file or write_file completes successfully. projectManager is
+     * captured via a local pointer because it's a class member that can't
+     * appear directly in the lambda's capture list. */
+    auto *projectManagerPtr = projectManager;
+    auto  renderDiffToScrollView =
+        [&compositor,
+         projectManagerPtr](const QString &path, const QString &oldText, const QString &newText) {
             const auto diff = QSocLineDiff::computeLineDiff(oldText, newText);
             if (diff.isEmpty()) {
                 return;
             }
+            /* Prefer project-relative paths so the header reads as
+         * "--- a/bus/apb.yaml" rather than "--- a//abs/path/bus/apb.yaml".
+         * When the file lives outside the project, show the absolute path
+         * without the a/ + b/ prefix so we don't produce the double slash
+         * "a//abs/path" that unified-diff parsers trip over. */
+            QString       displayPath = path;
+            QString       headerA;
+            QString       headerB;
+            const QString projectPath = projectManagerPtr != nullptr
+                                            ? projectManagerPtr->getProjectPath()
+                                            : QString();
+            if (!projectPath.isEmpty() && displayPath.startsWith(projectPath)) {
+                displayPath = displayPath.mid(projectPath.size());
+                if (displayPath.startsWith(QLatin1Char('/'))) {
+                    displayPath = displayPath.mid(1);
+                }
+            }
+            if (QFileInfo(displayPath).isAbsolute()) {
+                headerA = displayPath;
+                headerB = displayPath;
+            } else {
+                headerA = QStringLiteral("a/") + displayPath;
+                headerB = QStringLiteral("b/") + displayPath;
+            }
             compositor.printContent(
-                QStringLiteral("\n--- a/") + path + QLatin1Char('\n'), QTuiScrollView::DiffDel);
+                QStringLiteral("\n--- ") + headerA + QLatin1Char('\n'), QTuiScrollView::DiffDel);
             compositor.printContent(
-                QStringLiteral("+++ b/") + path + QLatin1Char('\n'), QTuiScrollView::DiffAdd);
+                QStringLiteral("+++ ") + headerB + QLatin1Char('\n'), QTuiScrollView::DiffAdd);
             for (const auto &line : diff) {
                 QTuiScrollView::LineStyle style = QTuiScrollView::DiffContext;
                 switch (line.kind) {
@@ -1742,6 +1770,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             [this,
              agent,
              &currentSession,
+             &currentFileHistory,
+             &turnCounter,
              &lastPersistedIndex,
              &compositor,
              &inputMonitor,
@@ -1772,9 +1802,11 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                 struct UserMsgRef
                 {
                     int     index;
+                    int     turn;
                     QString content;
                 };
                 QList<UserMsgRef> userMsgs;
+                int               turnSeen = 0;
                 for (int idx = 0; idx < static_cast<int>(allMessages.size()); idx++) {
                     const auto &msg = allMessages[idx];
                     if (!msg.is_object() || !msg.contains("role") || !msg.contains("content")) {
@@ -1783,15 +1815,16 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     if (msg["role"].get<std::string>() != "user") {
                         continue;
                     }
+                    turnSeen++;
                     if (!msg["content"].is_string()) {
                         continue;
                     }
-                    const QString content
-                        = QString::fromStdString(msg["content"].get<std::string>());
+                    const QString content = QString::fromStdString(
+                        msg["content"].get<std::string>());
                     if (content.isEmpty()) {
                         continue;
                     }
-                    userMsgs.append(UserMsgRef{.index = idx, .content = content});
+                    userMsgs.append(UserMsgRef{.index = idx, .turn = turnSeen, .content = content});
                 }
 
                 if (userMsgs.isEmpty()) {
@@ -1800,9 +1833,17 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     return;
                 }
 
-                /* Build picker items — most recent at the bottom so the
-                 * initial highlight lands there and the common case of
-                 * "rewind one step" is a single Enter. */
+                /* Build the first picker: pick which user message to rewind
+                 * to. We annotate each item with [files] when a snapshot
+                 * exists for its turn so the user can see at a glance
+                 * whether the files will follow. */
+                QSet<int> turnsWithSnapshots;
+                if (currentFileHistory) {
+                    for (const auto &snap : currentFileHistory->listSnapshots()) {
+                        turnsWithSnapshots.insert(snap.turn);
+                    }
+                }
+
                 QList<QTuiMenu::MenuItem> items;
                 items.reserve(userMsgs.size());
                 for (const UserMsgRef &ref : userMsgs) {
@@ -1812,8 +1853,14 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     if (preview.size() > 60) {
                         preview = preview.left(57) + QStringLiteral("...");
                     }
-                    item.label = QString("#%1").arg(ref.index + 1);
-                    item.hint  = preview;
+                    /* "pre-state" for turn N is snapshot (N-1). A user
+                     * message is file-restorable as long as we have either
+                     * the baseline (turn 0) or some prior turn snapshot. */
+                    const bool fileRestorable = turnsWithSnapshots.contains(ref.turn - 1)
+                                                || ref.turn == 1;
+                    item.label = QString("#%1%2").arg(ref.turn).arg(
+                        fileRestorable ? QStringLiteral(" [files]") : QString());
+                    item.hint = preview;
                     items.append(item);
                 }
 
@@ -1830,14 +1877,44 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     return;
                 }
 
-                const UserMsgRef &pick = userMsgs[selected];
+                const UserMsgRef &pick            = userMsgs[selected];
+                const bool        hasFileSnapshot = turnsWithSnapshots.contains(pick.turn - 1)
+                                             || pick.turn == 1;
+
+                /* Second picker: choose mode. Only shown when a file
+                 * snapshot exists; otherwise we implicitly fall through to
+                 * context-only since there's nothing to restore anyway. */
+                bool restoreFiles = false;
+                if (hasFileSnapshot && currentFileHistory) {
+                    QList<QTuiMenu::MenuItem> modeItems;
+                    QTuiMenu::MenuItem        a;
+                    a.label = QStringLiteral("Context + Files");
+                    a.hint  = QStringLiteral("revert edited files to this point");
+                    modeItems.append(a);
+                    QTuiMenu::MenuItem b;
+                    b.label = QStringLiteral("Context Only");
+                    b.hint  = QStringLiteral("truncate messages, keep files as-is");
+                    modeItems.append(b);
+
+                    QTuiMenu modeMenu;
+                    modeMenu.setTitle("Rewind mode");
+                    modeMenu.setItems(modeItems);
+                    modeMenu.setHighlight(0); /* default to full rewind */
+                    const int modeSel = modeMenu.exec();
+                    inputMonitor.resetEscState();
+                    compositor.invalidate();
+                    compositor.render();
+                    if (modeSel < 0) {
+                        return; /* user cancelled mode pick */
+                    }
+                    restoreFiles = (modeSel == 0);
+                }
 
                 /* Preserve the original createdAt so the session picker
                  * still shows the original timestamp after a rewind. The
                  * rewriteMessages call truncates the file entirely, so
                  * meta must be re-emitted afterwards. */
-                const QSocSession::Info origInfo
-                    = QSocSession::readInfo(currentSession->filePath());
+                const QSocSession::Info origInfo = QSocSession::readInfo(currentSession->filePath());
 
                 json truncated = json::array();
                 for (int idx = 0; idx < pick.index; idx++) {
@@ -1851,6 +1928,18 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                 }
                 lastPersistedIndex = static_cast<int>(truncated.size());
 
+                /* File restore + snapshot truncation. The rewound turn's
+                 * pre-state is snapshot (turn - 1); applying that puts the
+                 * disk back where it was just before the picked message
+                 * ran, then we drop the orphaned future snapshots. */
+                QStringList restoredFiles;
+                if (restoreFiles && currentFileHistory) {
+                    const int targetSnapshot = pick.turn - 1;
+                    restoredFiles            = currentFileHistory->applySnapshot(targetSnapshot);
+                    currentFileHistory->truncateAfter(targetSnapshot);
+                    turnCounter = targetSnapshot;
+                }
+
                 /* Load the picked message back into the input buffer so the
                  * user can edit and resubmit. setInputBuffer emits
                  * inputChanged which the REPL's connected slot forwards to
@@ -1858,12 +1947,18 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                  * restored text is visible before the user types anything. */
                 inputMonitor.setInputBuffer(pick.content);
 
+                const QString fileSummary = restoredFiles.isEmpty()
+                                                ? QString()
+                                                : QString(", %1 file%2 restored")
+                                                      .arg(restoredFiles.size())
+                                                      .arg(restoredFiles.size() == 1 ? "" : "s");
                 compositor.printContent(
                     QString(
-                        "\n(Rewound: kept %1 message%2, picked text restored for "
+                        "\n(Rewound: kept %1 message%2%3, picked text restored for "
                         "editing)\n")
                         .arg(lastPersistedIndex)
-                        .arg(lastPersistedIndex == 1 ? "" : "s"));
+                        .arg(lastPersistedIndex == 1 ? "" : "s")
+                        .arg(fileSummary));
                 compositor.invalidate();
                 compositor.render();
             });
@@ -1954,6 +2049,209 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             compositor.printContent("Goodbye!\n");
             break;
         }
+        if (cmd == "/diff") {
+            if (!currentFileHistory || currentFileHistory->isEmpty()) {
+                compositor.printContent("(no file history available yet — run an edit first)\n");
+                continue;
+            }
+            const auto snapshots = currentFileHistory->listSnapshots();
+            /* A "turn" is meaningful only when there's a post-turn snapshot
+             * to diff against its predecessor. Turn 0 is the baseline. */
+            struct TurnEntry
+            {
+                int                    turn;
+                QMap<QString, QString> filesBefore;
+                QMap<QString, QString> filesAfter;
+            };
+            QList<TurnEntry> turns;
+            for (int i = 0; i < snapshots.size(); i++) {
+                if (snapshots[i].turn == 0) {
+                    continue; /* baseline is the "before" of turn 1, not a turn itself */
+                }
+                TurnEntry entry;
+                entry.turn       = snapshots[i].turn;
+                entry.filesAfter = snapshots[i].files;
+                /* "Before" = effective state at turn-1. Walk all snapshots
+                 * with turn <= (this.turn - 1), keep the latest record per
+                 * path. */
+                for (int j = 0; j < snapshots.size(); j++) {
+                    if (snapshots[j].turn > entry.turn - 1) {
+                        continue;
+                    }
+                    for (auto it = snapshots[j].files.begin(); it != snapshots[j].files.end();
+                         ++it) {
+                        entry.filesBefore.insert(it.key(), it.value());
+                    }
+                }
+                turns.append(entry);
+            }
+
+            if (turns.isEmpty()) {
+                compositor.printContent("(no completed turns to diff yet)\n");
+                continue;
+            }
+
+            /* Build per-turn summary items with a +/- count rolled up over
+             * every edited file in that turn. */
+            QList<QTuiMenu::MenuItem> turnItems;
+            turnItems.reserve(turns.size());
+            for (const TurnEntry &entry : turns) {
+                int           filesChanged = 0;
+                int           linesAdded   = 0;
+                int           linesRemoved = 0;
+                QSet<QString> allPaths;
+                for (auto it = entry.filesBefore.begin(); it != entry.filesBefore.end(); ++it) {
+                    allPaths.insert(it.key());
+                }
+                for (auto it = entry.filesAfter.begin(); it != entry.filesAfter.end(); ++it) {
+                    allPaths.insert(it.key());
+                }
+                for (const QString &path : allPaths) {
+                    const QString shaBefore = entry.filesBefore.value(path);
+                    const QString shaAfter  = entry.filesAfter.value(path);
+                    if (shaBefore == shaAfter) {
+                        continue; /* untouched this turn */
+                    }
+                    filesChanged++;
+                    const QString before = shaBefore.isEmpty()
+                                               ? QString()
+                                               : currentFileHistory->contentAt(path, entry.turn - 1);
+                    const QString after  = shaAfter.isEmpty()
+                                               ? QString()
+                                               : currentFileHistory->contentAt(path, entry.turn);
+                    const auto    diff   = QSocLineDiff::computeLineDiff(before, after);
+                    for (const auto &line : diff) {
+                        if (line.kind == QSocLineDiff::Kind::Add) {
+                            linesAdded++;
+                        } else if (line.kind == QSocLineDiff::Kind::Del) {
+                            linesRemoved++;
+                        }
+                    }
+                }
+                QTuiMenu::MenuItem item;
+                item.label = QString("Turn #%1").arg(entry.turn);
+                item.hint  = QString("%1 file%2  +%3 -%4")
+                                .arg(filesChanged)
+                                .arg(filesChanged == 1 ? "" : "s")
+                                .arg(linesAdded)
+                                .arg(linesRemoved);
+                turnItems.append(item);
+            }
+
+            QTuiMenu turnMenu;
+            turnMenu.setTitle("Diff: pick a turn");
+            turnMenu.setItems(turnItems);
+            turnMenu.setHighlight(static_cast<int>(turnItems.size()) - 1);
+            const int turnSel = turnMenu.exec();
+            inputMonitor.resetEscState();
+            compositor.invalidate();
+            compositor.render();
+            if (turnSel < 0 || turnSel >= turns.size()) {
+                continue;
+            }
+            const TurnEntry &chosenTurn = turns[turnSel];
+
+            /* Second picker: per-file list for the chosen turn. */
+            struct FileEntry
+            {
+                QString path;
+                QString shaBefore;
+                QString shaAfter;
+                int     added;
+                int     removed;
+            };
+            QList<FileEntry> fileEntries;
+            {
+                QSet<QString> allPaths;
+                for (auto it = chosenTurn.filesBefore.begin(); it != chosenTurn.filesBefore.end();
+                     ++it) {
+                    allPaths.insert(it.key());
+                }
+                for (auto it = chosenTurn.filesAfter.begin(); it != chosenTurn.filesAfter.end();
+                     ++it) {
+                    allPaths.insert(it.key());
+                }
+                for (const QString &path : allPaths) {
+                    FileEntry entry;
+                    entry.path      = path;
+                    entry.shaBefore = chosenTurn.filesBefore.value(path);
+                    entry.shaAfter  = chosenTurn.filesAfter.value(path);
+                    if (entry.shaBefore == entry.shaAfter) {
+                        continue;
+                    }
+                    const QString before
+                        = entry.shaBefore.isEmpty()
+                              ? QString()
+                              : currentFileHistory->contentAt(path, chosenTurn.turn - 1);
+                    const QString after = entry.shaAfter.isEmpty()
+                                              ? QString()
+                                              : currentFileHistory->contentAt(path, chosenTurn.turn);
+                    const auto    diff  = QSocLineDiff::computeLineDiff(before, after);
+                    entry.added         = 0;
+                    entry.removed       = 0;
+                    for (const auto &line : diff) {
+                        if (line.kind == QSocLineDiff::Kind::Add) {
+                            entry.added++;
+                        } else if (line.kind == QSocLineDiff::Kind::Del) {
+                            entry.removed++;
+                        }
+                    }
+                    fileEntries.append(entry);
+                }
+                std::sort(
+                    fileEntries.begin(),
+                    fileEntries.end(),
+                    [](const FileEntry &lhs, const FileEntry &rhs) { return lhs.path < rhs.path; });
+            }
+
+            if (fileEntries.isEmpty()) {
+                compositor.printContent("(no files changed in this turn)\n");
+                continue;
+            }
+
+            QList<QTuiMenu::MenuItem> fileItems;
+            fileItems.reserve(fileEntries.size());
+            for (const FileEntry &entry : fileEntries) {
+                QTuiMenu::MenuItem item;
+                /* Strip the project-path prefix from the label so long
+                 * absolute paths don't dominate the picker width. */
+                QString       shortPath   = entry.path;
+                const QString projectPath = sessionProjectPath(projectManager);
+                if (!projectPath.isEmpty() && shortPath.startsWith(projectPath)) {
+                    shortPath = shortPath.mid(projectPath.size());
+                    if (shortPath.startsWith(QLatin1Char('/'))) {
+                        shortPath = shortPath.mid(1);
+                    }
+                }
+                item.label = shortPath;
+                item.hint  = QString("+%1 -%2").arg(entry.added).arg(entry.removed);
+                fileItems.append(item);
+            }
+
+            QTuiMenu fileMenu;
+            fileMenu.setTitle(QString("Diff: turn #%1 files").arg(chosenTurn.turn));
+            fileMenu.setItems(fileItems);
+            fileMenu.setHighlight(0);
+            const int fileSel = fileMenu.exec();
+            inputMonitor.resetEscState();
+            compositor.invalidate();
+            compositor.render();
+            if (fileSel < 0 || fileSel >= fileEntries.size()) {
+                continue;
+            }
+
+            const FileEntry &chosenFile = fileEntries[fileSel];
+            const QString    beforeText
+                = chosenFile.shaBefore.isEmpty()
+                      ? QString()
+                      : currentFileHistory->contentAt(chosenFile.path, chosenTurn.turn - 1);
+            const QString afterText
+                = chosenFile.shaAfter.isEmpty()
+                      ? QString()
+                      : currentFileHistory->contentAt(chosenFile.path, chosenTurn.turn);
+            renderDiffToScrollView(chosenFile.path, beforeText, afterText);
+            continue;
+        }
         if (cmd == "/clear") {
             agent->clearHistory();
             if (currentSession) {
@@ -1982,6 +2280,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             compositor.printContent("  exit, /exit  - Exit the agent\n");
             compositor.printContent("  /clear       - Clear conversation history\n");
             compositor.printContent("  /compact     - Compact conversation context\n");
+            compositor.printContent("  /diff        - Review file edits turn-by-turn\n");
             compositor.printContent(
                 "  /effort    - Show/set reasoning effort (off/low/medium/high)\n");
             compositor.printContent("  /model       - Show/switch model\n");
