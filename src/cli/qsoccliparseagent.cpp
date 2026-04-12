@@ -5,6 +5,7 @@
 
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocfilehistory.h"
 #include "agent/qsocsession.h"
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolbus.h"
@@ -1196,8 +1197,13 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
      * disk so each turn only appends the delta. resumeSessionId is the
      * id selected by --resume / --continue at startup; the helper at the
      * top of QSocCliWorker stashes it before calling runAgentLoop. */
-    std::unique_ptr<QSocSession> currentSession;
-    int                          lastPersistedIndex = 0;
+    std::unique_ptr<QSocSession>     currentSession;
+    std::unique_ptr<QSocFileHistory> currentFileHistory;
+    int                              lastPersistedIndex = 0;
+    /* Monotonic turn counter driven by user-message count. Initialised from
+     * the resumed message history so snapshots continue the sequence after
+     * --continue / --resume. */
+    int turnCounter = 0;
     {
         const QString projectPath = sessionProjectPath(projectManager);
         QString       sessionId   = resumeSessionId;
@@ -1249,7 +1255,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
         }
         const QString sessionPath
             = QDir(QSocSession::sessionsDir(projectPath)).filePath(sessionId + ".jsonl");
-        currentSession = std::make_unique<QSocSession>(sessionId, sessionPath);
+        currentSession     = std::make_unique<QSocSession>(sessionId, sessionPath);
+        currentFileHistory = std::make_unique<QSocFileHistory>(projectPath, sessionId);
 
         /* Resume an existing session if the JSONL already exists; otherwise
          * stamp the new session with creation metadata. */
@@ -1258,6 +1265,21 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             if (restored.is_array() && !restored.empty()) {
                 agent->setMessages(restored);
                 lastPersistedIndex = static_cast<int>(agent->getMessages().size());
+                /* Recreate the monotonic turn counter so the next snapshot
+                 * continues the sequence from where the previous session
+                 * left off. Prefer on-disk file-history state when it
+                 * exists (authoritative); fall back to the user-message
+                 * count for sessions created before file-history was
+                 * introduced. */
+                turnCounter = currentFileHistory->latestTurn();
+                if (turnCounter == 0) {
+                    for (const auto &msg : restored) {
+                        if (msg.is_object() && msg.contains("role")
+                            && msg["role"].get<std::string>() == "user") {
+                            turnCounter++;
+                        }
+                    }
+                }
                 compositor.printContent(QString("(Resumed session %1, %2 messages)\n\n")
                                             .arg(sessionId.left(8))
                                             .arg(lastPersistedIndex));
@@ -1268,6 +1290,21 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                 QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
             currentSession->appendMeta(QStringLiteral("cwd"), projectPath);
             compositor.printContent(QString("(New session %1)\n\n").arg(sessionId.left(8)));
+        }
+
+        /* Inject the per-session file history store into the file-writing
+         * tools so their next execute() captures pre-edit backups. The
+         * registry was populated in parseAgent() long before runAgentLoop
+         * runs, so we fish the tools back out by name. */
+        if (auto *registry = agent->getToolRegistry()) {
+            if (auto *tool = dynamic_cast<QSocToolFileWrite *>(
+                    registry->getTool(QStringLiteral("write_file")))) {
+                tool->setFileHistory(currentFileHistory.get());
+            }
+            if (auto *tool = dynamic_cast<QSocToolFileEdit *>(
+                    registry->getTool(QStringLiteral("edit_file")))) {
+                tool->setFileHistory(currentFileHistory.get());
+            }
         }
     }
 
@@ -1929,7 +1966,14 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
                 currentSession->appendMeta(QStringLiteral("cwd"), sessionProjectPath(projectManager));
             }
+            if (currentFileHistory) {
+                /* Drop every snapshot so future rewinds don't surface ghost
+                 * turns from a cleared history. The next edit will create a
+                 * fresh baseline. */
+                currentFileHistory->truncateAfter(-1);
+            }
             lastPersistedIndex = 0;
+            turnCounter        = 0;
             compositor.printContent("History cleared.\n");
             continue;
         }
@@ -2433,6 +2477,14 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             /* Save conversation after each interaction */
             lastPersistedIndex
                 = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
+            /* Snapshot file state after the turn settles so rewind can
+             * restore whatever the agent's tools just did. The counter is
+             * monotonic for the session so each call lands in its own
+             * snapshots.jsonl entry. */
+            if (currentFileHistory) {
+                turnCounter++;
+                currentFileHistory->makeSnapshot(turnCounter);
+            }
 
             /* Disconnect all signals to avoid stale connections */
             QObject::disconnect(connToolCalled);
@@ -2844,6 +2896,11 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             /* Save conversation after each interaction */
             lastPersistedIndex
                 = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
+            /* Snapshot file state for non-streaming path too. */
+            if (currentFileHistory) {
+                turnCounter++;
+                currentFileHistory->makeSnapshot(turnCounter);
+            }
 
             /* Display complete result at once */
             if (!finalResult.isEmpty()) {

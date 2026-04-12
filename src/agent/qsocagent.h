@@ -141,6 +141,12 @@ public:
     void setToolRegistry(QSocToolRegistry *toolRegistry);
 
     /**
+     * @brief Get the current tool registry.
+     * @return Pointer (may be nullptr if never set).
+     */
+    QSocToolRegistry *getToolRegistry() const { return toolRegistry; }
+
+    /**
      * @brief Set the reasoning effort level
      * @param level Effort level: empty/off, "low", "medium", "high"
      */

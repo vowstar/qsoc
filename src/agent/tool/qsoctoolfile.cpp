@@ -3,6 +3,8 @@
 
 #include "agent/tool/qsoctoolfile.h"
 
+#include "agent/qsocfilehistory.h"
+
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -333,6 +335,25 @@ QString QSocToolFileWrite::execute(const json &arguments)
         }
     }
 
+    /* Pre-edit snapshot: capture the current content (or mark absent)
+     * BEFORE the overwrite so rewind can restore it later. We use the
+     * freshly-refreshed QFileInfo because parentDir.mkpath may have just
+     * ensured a directory that didn't exist before. */
+    if (fileHistory != nullptr) {
+        QFileInfo beforeInfo(filePath);
+        if (beforeInfo.exists() && beforeInfo.isFile()) {
+            QFile existing(filePath);
+            if (existing.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream   existingStream(&existing);
+                const QString existingContent = existingStream.readAll();
+                existing.close();
+                fileHistory->trackEdit(filePath, true, existingContent);
+            }
+        } else {
+            fileHistory->trackEdit(filePath, false, QString());
+        }
+    }
+
     /* Write file */
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -349,6 +370,11 @@ QString QSocToolFileWrite::execute(const json &arguments)
 void QSocToolFileWrite::setPathContext(QSocPathContext *pathContext)
 {
     this->pathContext = pathContext;
+}
+
+void QSocToolFileWrite::setFileHistory(QSocFileHistory *history)
+{
+    this->fileHistory = history;
 }
 
 /* QSocToolFileEdit Implementation */
@@ -468,6 +494,12 @@ QString QSocToolFileEdit::execute(const json &arguments)
         newContent = content.left(pos) + newString + content.mid(pos + oldString.length());
     }
 
+    /* Pre-edit snapshot: we just finished reading the original content,
+     * so it's the exact pre-mutation state the history store needs. */
+    if (fileHistory != nullptr) {
+        fileHistory->trackEdit(filePath, true, content);
+    }
+
     /* Write file */
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
         return QString("Error: Cannot open file for writing: %1").arg(filePath);
@@ -485,4 +517,9 @@ QString QSocToolFileEdit::execute(const json &arguments)
 void QSocToolFileEdit::setPathContext(QSocPathContext *pathContext)
 {
     this->pathContext = pathContext;
+}
+
+void QSocToolFileEdit::setFileHistory(QSocFileHistory *history)
+{
+    this->fileHistory = history;
 }
