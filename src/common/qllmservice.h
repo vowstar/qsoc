@@ -71,7 +71,6 @@ enum class LLMFallbackStrategy : std::uint8_t {
 /**
  * @brief The QLLMService class provides a unified interface for LLM API services
  * @details This class handles API communication using OpenAI Chat Completions format.
- *          All providers (OpenAI, DeepSeek, Groq, Claude, Ollama) support this format.
  */
 class QLLMService : public QObject
 {
