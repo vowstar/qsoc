@@ -40,6 +40,10 @@ struct QSocAgentConfig
     /* Project instructions (AGENTS.md / AGENTS.local.md) */
     QString projectPath; /* Set by parseAgent; empty = no project instructions loaded */
 
+    /* Pre-built skill listing for system prompt injection. Populated by
+     * the REPL at startup from scanAllSkills(); empty = no skills found. */
+    QString skillListing;
+
     /* Memory injection settings */
     bool autoLoadMemory = true;  /* Auto-inject memory into system prompt */
     int  memoryMaxChars = 24000; /* Max chars (~6000 tokens) for memory in prompt */
