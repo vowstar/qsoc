@@ -3137,7 +3137,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     if (toolName == "todo_list") {
                         auto items = parseTodoListResult(result);
                         todoWidget.setItems(items);
-                        todoWidget.clearDone();
+                        /* Done items expire via the 30s tick() timer. */
                     } else if (toolName == "todo_add") {
                         auto item = parseTodoAddResult(result);
                         if (item.id >= 0) {
@@ -3147,7 +3147,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                         auto [todoId, newStatus] = parseTodoUpdateResult(result);
                         if (todoId >= 0) {
                             todoWidget.updateStatus(todoId, newStatus);
-                            todoWidget.clearDone();
+                            /* Done items expire via the 30s tick() timer. */
                         }
                     } else if (toolName == "todo_delete") {
                         auto [todoId, newStatus] = parseTodoUpdateResult(result);
@@ -3418,8 +3418,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                 &compositor,
                 [&inputWidget](const QString &text) { inputWidget.setText(text); });
 
-            /* Clear completed TODOs from previous query */
-            todoWidget.clearDone();
+            /* Done TODOs expire via the 30s tick() timer — no eager clear. */
 
             /* Start status line and agent */
             statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
@@ -3601,7 +3600,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     if (toolName == "todo_list") {
                         auto items = parseTodoListResult(result);
                         todoWidget.setItems(items);
-                        todoWidget.clearDone();
+                        /* Done items expire via the 30s tick() timer. */
                     } else if (toolName == "todo_add") {
                         auto item = parseTodoAddResult(result);
                         if (item.id >= 0) {
@@ -3611,7 +3610,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                         auto [todoId, newStatus] = parseTodoUpdateResult(result);
                         if (todoId >= 0) {
                             todoWidget.updateStatus(todoId, newStatus);
-                            todoWidget.clearDone();
+                            /* Done items expire via the 30s tick() timer. */
                         }
                     } else if (toolName == "todo_delete") {
                         auto [todoId, newStatus] = parseTodoUpdateResult(result);
@@ -3873,8 +3872,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                 &compositor,
                 [&inputWidget](const QString &text) { inputWidget.setText(text); });
 
-            /* Clear completed TODOs from previous query */
-            todoWidget.clearDone();
+            /* Done TODOs expire via the 30s tick() timer — no eager clear. */
 
             /* Start status line and agent */
             statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
