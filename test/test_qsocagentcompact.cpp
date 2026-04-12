@@ -494,12 +494,12 @@ private slots:
         QString largePrompt = QString("x").repeated(40000); /* ~10000 tokens */
 
         QSocAgentConfig config;
-        config.maxContextTokens   = 20000; /* 20k budget */
-        config.pruneThreshold     = 0.99;  /* Don't prune */
-        config.compactThreshold   = 0.5;   /* Compact at 10k tokens */
-        config.keepRecentMessages = 2;
-        config.systemPrompt       = largePrompt;
-        config.autoLoadMemory     = false;
+        config.maxContextTokens     = 20000; /* 20k budget */
+        config.pruneThreshold       = 0.99;  /* Don't prune */
+        config.compactThreshold     = 0.5;   /* Compact at 10k tokens */
+        config.keepRecentMessages   = 2;
+        config.systemPromptOverride = largePrompt;
+        config.autoLoadMemory       = false;
 
         auto *agent = createAgent(config);
 
