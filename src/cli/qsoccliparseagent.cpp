@@ -2679,9 +2679,24 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
         if (cmd == "/compact") {
             const int msgsBefore = static_cast<int>(agent->getMessages().size());
             const int tokBefore  = agent->estimateMessagesTokens();
-            const int saved      = agent->compact();
-            const int msgsAfter  = static_cast<int>(agent->getMessages().size());
-            const int tokAfter   = tokBefore - saved;
+            /* Show immediate feedback so the user knows it's working — the
+             * LLM summarization call inside compact() can block for several
+             * seconds and we don't want a frozen screen. */
+            compositor.printContent("Compacting...\n", QTuiScrollView::Dim);
+            statusBarWidget.setStatus("Compacting");
+            compositor.render();
+            /* Wire the per-layer progress signal for live feedback. */
+            auto connCompacting = connect(
+                agent, &QSocAgent::compacting, [&compositor](int layer, int before, int after) {
+                    compositor.printContent(
+                        QString("  Layer %1: %2 -> %3 tokens\n").arg(layer).arg(before).arg(after),
+                        QTuiScrollView::Dim);
+                    compositor.render();
+                });
+            const int saved = agent->compact();
+            QObject::disconnect(connCompacting);
+            const int msgsAfter = static_cast<int>(agent->getMessages().size());
+            const int tokAfter  = tokBefore - saved;
             compositor.printContent(
                 QString("Compacted: %1 messages -> %2 | %3 -> %4 tokens (saved %5)\n")
                     .arg(msgsBefore)
@@ -2689,6 +2704,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     .arg(tokBefore)
                     .arg(tokAfter)
                     .arg(saved));
+            statusBarWidget.setStatus("Ready");
             lastPersistedIndex
                 = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
             continue;
@@ -3336,8 +3352,12 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                 const double threshold     = agent->getConfig().compactThreshold;
                 const int    maxCtx        = agent->getConfig().maxContextTokens;
                 if (currentTokens > static_cast<int>(maxCtx * threshold)) {
+                    compositor.printContent("(auto-compacting...)\n", QTuiScrollView::Dim);
+                    statusBarWidget.setStatus("Compacting");
+                    compositor.render();
                     const int before = agent->estimateMessagesTokens();
                     const int saved  = agent->compact();
+                    statusBarWidget.setStatus("Ready");
                     if (saved > 0) {
                         autoCompactFailures = 0;
                         lastPersistedIndex
