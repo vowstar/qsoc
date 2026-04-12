@@ -1063,6 +1063,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
         = {QStringLiteral("help"),
            QStringLiteral("clear"),
            QStringLiteral("compact"),
+           QStringLiteral("context"),
+           QStringLiteral("diff"),
            QStringLiteral("effort"),
            QStringLiteral("model"),
            QStringLiteral("exit"),
@@ -2053,6 +2055,347 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             compositor.printContent("Goodbye!\n");
             break;
         }
+        if (cmd == "/context") {
+            /* Analyse context usage by walking the message array and
+             * categorising tokens into system prompt, project instructions,
+             * tool definitions, memory, user text, assistant text, tool
+             * calls, and tool results. Uses the same rough 4-char/token
+             * estimation the agent's compaction already relies on. */
+
+            /* --- gather raw numbers --- */
+            const json allMsgs = agent->getMessages();
+            const int  maxCtx  = agent->getConfig().maxContextTokens;
+
+            /* System prompt decomposition: base, instructions, memory.
+             * buildSystemPromptWithMemory() returns the full string, but
+             * we can re-derive components from the config + managers. */
+            const int basePromptTokens = agent->estimateTokens(agent->getConfig().systemPrompt);
+
+            int instructionTokens = 0;
+            {
+                const QString pp = agent->getConfig().projectPath;
+                if (!pp.isEmpty()) {
+                    QDir dir(pp);
+                    for (const QString &name :
+                         {QStringLiteral("AGENTS.md"), QStringLiteral("AGENTS.local.md")}) {
+                        QFile file(dir.filePath(name));
+                        if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                            instructionTokens += agent->estimateTokens(QTextStream(&file).readAll());
+                            file.close();
+                        }
+                    }
+                }
+            }
+
+            int memoryTokens = 0;
+            if (auto *mm = agent->getMemoryManager()) {
+                memoryTokens = agent->estimateTokens(mm->loadMemoryForPrompt());
+            }
+
+            int toolDefTokens = 0;
+            if (auto *reg = agent->getToolRegistry()) {
+                json defs = reg->getToolDefinitions();
+                if (!defs.empty()) {
+                    toolDefTokens = agent->estimateTokens(QString::fromStdString(defs.dump()));
+                }
+            }
+
+            /* Message breakdown by role + per-tool aggregation. */
+            int userTokens  = 0;
+            int asstTokens  = 0;
+            int callTokens  = 0;
+            int resultTotal = 0;
+            /* Map tool_call_id → tool name for result attribution. */
+            QMap<QString, QString> callIdToName;
+            /* Per-tool token buckets: name → {calls, results}. */
+            struct ToolBucket
+            {
+                int calls   = 0;
+                int results = 0;
+            };
+            QMap<QString, ToolBucket> toolBuckets;
+
+            for (const auto &msg : allMsgs) {
+                if (!msg.is_object() || !msg.contains("role")) {
+                    continue;
+                }
+                const std::string role = msg["role"].get<std::string>();
+                if (role == "user") {
+                    if (msg.contains("content") && msg["content"].is_string()) {
+                        userTokens += agent->estimateTokens(
+                            QString::fromStdString(msg["content"].get<std::string>()));
+                    }
+                    userTokens += 10; /* per-message overhead */
+                } else if (role == "assistant") {
+                    if (msg.contains("content") && msg["content"].is_string()) {
+                        asstTokens += agent->estimateTokens(
+                            QString::fromStdString(msg["content"].get<std::string>()));
+                    }
+                    if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
+                        for (const auto &tc : msg["tool_calls"]) {
+                            int tcTokens = agent->estimateTokens(QString::fromStdString(tc.dump()));
+                            callTokens += tcTokens;
+                            if (tc.contains("id") && tc["id"].is_string() && tc.contains("function")
+                                && tc["function"].contains("name")
+                                && tc["function"]["name"].is_string()) {
+                                QString name = QString::fromStdString(
+                                    tc["function"]["name"].get<std::string>());
+                                QString tcId = QString::fromStdString(tc["id"].get<std::string>());
+                                callIdToName.insert(tcId, name);
+                                toolBuckets[name].calls += tcTokens;
+                            }
+                        }
+                    }
+                    asstTokens += 10;
+                } else if (role == "tool") {
+                    int resultTokens = 10;
+                    if (msg.contains("content") && msg["content"].is_string()) {
+                        resultTokens += agent->estimateTokens(
+                            QString::fromStdString(msg["content"].get<std::string>()));
+                    }
+                    resultTotal += resultTokens;
+                    /* Attribute to tool name via tool_call_id lookup. */
+                    if (msg.contains("tool_call_id") && msg["tool_call_id"].is_string()) {
+                        QString tcId = QString::fromStdString(
+                            msg["tool_call_id"].get<std::string>());
+                        QString name = callIdToName.value(tcId, QStringLiteral("(unknown)"));
+                        toolBuckets[name].results += resultTokens;
+                    }
+                }
+            }
+
+            const int usedTokens = basePromptTokens + instructionTokens + memoryTokens
+                                   + toolDefTokens + userTokens + asstTokens + callTokens
+                                   + resultTotal;
+            const int freeTokens = qMax(0, maxCtx - usedTokens);
+            const int pct        = maxCtx > 0 ? (usedTokens * 100 / maxCtx) : 0;
+
+            /* --- format bar helper --- */
+            constexpr int BAR_WIDTH = 20;
+            auto          makeBar   = [&](int tokens) -> QString {
+                int filled = maxCtx > 0 ? (tokens * BAR_WIDTH / maxCtx) : 0;
+                filled     = qBound(0, filled, BAR_WIDTH);
+                if (tokens > 0 && filled == 0) {
+                    filled = 1; /* always show at least 1 block if non-zero */
+                }
+                return QString(filled, QChar(0x2588))                /* █ */
+                       + QString(BAR_WIDTH - filled, QChar(0x2591)); /* ░ */
+            };
+            auto fmtTokens = [](int tokens) -> QString {
+                if (tokens >= 1000) {
+                    return QString::number(tokens / 1000.0, 'f', 1) + "k";
+                }
+                return QString::number(tokens);
+            };
+
+            /* --- render --- */
+            compositor.printContent("\n");
+            compositor.printContent("Context Usage\n", QTuiScrollView::Bold);
+            compositor.printContent(QString("  %1 / %2 tokens (%3%)\n\n")
+                                        .arg(fmtTokens(usedTokens), fmtTokens(maxCtx))
+                                        .arg(pct));
+
+            auto printCategory =
+                [&](const QString &label, int tokens, QTuiScrollView::LineStyle style) {
+                    const QString padLabel = label.leftJustified(18);
+                    const QString padNum   = fmtTokens(tokens).rightJustified(6);
+                    const int     pctVal   = maxCtx > 0 ? (tokens * 100 / maxCtx) : 0;
+                    compositor.printContent(
+                        QStringLiteral("  ") + padLabel + padNum + QStringLiteral("  ")
+                            + makeBar(tokens) + QStringLiteral("  ") + QString::number(pctVal)
+                            + QStringLiteral("%\n"),
+                        style);
+                };
+
+            printCategory("System prompt:", basePromptTokens, QTuiScrollView::Normal);
+            if (instructionTokens > 0) {
+                printCategory("Project rules:", instructionTokens, QTuiScrollView::Normal);
+            }
+            printCategory("Tool definitions:", toolDefTokens, QTuiScrollView::Normal);
+            if (memoryTokens > 0) {
+                printCategory("Memory:", memoryTokens, QTuiScrollView::Normal);
+            }
+            printCategory("User messages:", userTokens, QTuiScrollView::Normal);
+            printCategory("Asst messages:", asstTokens, QTuiScrollView::Normal);
+            printCategory("Tool calls:", callTokens, QTuiScrollView::Normal);
+            printCategory("Tool results:", resultTotal, QTuiScrollView::Normal);
+            printCategory("Free:", freeTokens, QTuiScrollView::Dim);
+
+            /* Per-tool breakdown (only if there are tool calls). */
+            if (!toolBuckets.isEmpty()) {
+                compositor.printContent("\n");
+                compositor.printContent("Message breakdown by tool:\n", QTuiScrollView::Bold);
+                QList<QString> toolNames = toolBuckets.keys();
+                std::sort(toolNames.begin(), toolNames.end());
+                for (const QString &name : toolNames) {
+                    const ToolBucket &bucket = toolBuckets[name];
+                    compositor.printContent(
+                        QStringLiteral("  ") + name.leftJustified(20)
+                            + fmtTokens(bucket.calls).rightJustified(6) + QStringLiteral(" calls + ")
+                            + fmtTokens(bucket.results).rightJustified(6)
+                            + QStringLiteral(" results\n"),
+                        QTuiScrollView::Dim);
+                }
+            }
+
+            /* Project instructions listing. */
+            {
+                const QString pp  = agent->getConfig().projectPath;
+                bool          any = false;
+                if (!pp.isEmpty()) {
+                    QDir dir(pp);
+                    for (const QString &name :
+                         {QStringLiteral("AGENTS.md"), QStringLiteral("AGENTS.local.md")}) {
+                        if (QFile::exists(dir.filePath(name))) {
+                            if (!any) {
+                                compositor.printContent("\n");
+                                compositor
+                                    .printContent("Project instructions:\n", QTuiScrollView::Bold);
+                                any = true;
+                            }
+                            compositor.printContent(
+                                QString("  %1 (loaded)\n").arg(name), QTuiScrollView::Dim);
+                        }
+                    }
+                }
+            }
+
+            /* --- Suggestions --- */
+            struct Suggestion
+            {
+                bool    isWarning;
+                QString title;
+                QString detail;
+                int     savings;
+            };
+            QList<Suggestion> suggestions;
+
+            /* 1. Near capacity (>= 80%) */
+            if (pct >= 80) {
+                suggestions.append(
+                    Suggestion{
+                        .isWarning = true,
+                        .title     = QString("Context is %1% full").arg(pct),
+                        .detail    = QStringLiteral(
+                            "Use /compact now to free space before the context overflows."),
+                        .savings = 0});
+            }
+
+            /* 2. Large tool results (>= 15% and >= 10k tokens) */
+            for (auto it = toolBuckets.begin(); it != toolBuckets.end(); ++it) {
+                int total   = it.value().calls + it.value().results;
+                int toolPct = maxCtx > 0 ? (total * 100 / maxCtx) : 0;
+                if (toolPct < 15 || total < 10000) {
+                    continue;
+                }
+                QString detail;
+                int     savingsEst = 0;
+                if (it.key() == QStringLiteral("shell_bash")) {
+                    detail = QStringLiteral(
+                        "Pipe output through head, tail, or grep to reduce result "
+                        "size.");
+                    savingsEst = total / 2;
+                } else if (it.key() == QStringLiteral("read_file")) {
+                    detail = QStringLiteral(
+                        "Use offset and limit parameters to read only the sections "
+                        "you need.");
+                    savingsEst = total * 3 / 10;
+                } else if (it.key() == QStringLiteral("web_fetch")) {
+                    detail = QStringLiteral(
+                        "Web page content can be very large. Extract only what you "
+                        "need.");
+                    savingsEst = total * 4 / 10;
+                } else {
+                    detail     = QStringLiteral("This tool is consuming a large share of context.");
+                    savingsEst = total / 5;
+                }
+                suggestions.append(
+                    Suggestion{
+                        .isWarning = true,
+                        .title     = QString("%1 using %2 tokens (%3%)")
+                                     .arg(it.key(), fmtTokens(total))
+                                     .arg(toolPct),
+                        .detail  = detail,
+                        .savings = savingsEst});
+            }
+
+            /* 3. Read result bloat (>= 5% and >= 10k, not already flagged) */
+            if (toolBuckets.contains(QStringLiteral("read_file"))) {
+                const auto &rb      = toolBuckets[QStringLiteral("read_file")];
+                int         total   = rb.calls + rb.results;
+                int         readPct = maxCtx > 0 ? (rb.results * 100 / maxCtx) : 0;
+                int         totPct  = maxCtx > 0 ? (total * 100 / maxCtx) : 0;
+                if (readPct >= 5 && rb.results >= 10000 && (totPct < 15 || total < 10000)) {
+                    suggestions.append(
+                        Suggestion{
+                            .isWarning = false,
+                            .title     = QString("File reads using %1 tokens (%2%)")
+                                         .arg(fmtTokens(rb.results))
+                                         .arg(readPct),
+                            .detail = QStringLiteral(
+                                "Consider referencing earlier reads. Use offset/limit for "
+                                "large files."),
+                            .savings = rb.results * 3 / 10});
+                }
+            }
+
+            /* 4. Memory bloat (>= 5% and >= 5k tokens) */
+            if (memoryTokens > 0) {
+                int memPct = maxCtx > 0 ? (memoryTokens * 100 / maxCtx) : 0;
+                if (memPct >= 5 && memoryTokens >= 5000) {
+                    suggestions.append(
+                        Suggestion{
+                            .isWarning = false,
+                            .title     = QString("Memory using %1 tokens (%2%)")
+                                         .arg(fmtTokens(memoryTokens))
+                                         .arg(memPct),
+                            .detail  = QStringLiteral("Review and prune stale memory entries."),
+                            .savings = memoryTokens * 3 / 10});
+                }
+            }
+
+            /* 5. Auto-compact hint (>= 50% without auto-compact being active) */
+            if (pct >= 50 && pct < 80) {
+                suggestions.append(
+                    Suggestion{
+                        .isWarning = false,
+                        .title     = QStringLiteral("Context is over 50% — consider /compact"),
+                        .detail    = QStringLiteral(
+                            "Running /compact now preserves recent messages and frees "
+                               "space for more turns."),
+                        .savings = 0});
+            }
+
+            /* Sort: warnings first, then by savings descending */
+            std::sort(
+                suggestions.begin(),
+                suggestions.end(),
+                [](const Suggestion &lhs, const Suggestion &rhs) {
+                    if (lhs.isWarning != rhs.isWarning) {
+                        return lhs.isWarning;
+                    }
+                    return lhs.savings > rhs.savings;
+                });
+
+            if (!suggestions.isEmpty()) {
+                compositor.printContent("\n");
+                compositor.printContent("Suggestions\n", QTuiScrollView::Bold);
+                for (const Suggestion &sug : suggestions) {
+                    const QString icon  = sug.isWarning ? QStringLiteral("  ⚠ ")
+                                                        : QStringLiteral("  ℹ ");
+                    const auto    style = sug.isWarning ? QTuiScrollView::DiffHunk
+                                                        : QTuiScrollView::Dim;
+                    QString       line  = icon + sug.title;
+                    if (sug.savings > 0) {
+                        line += QString(" -> save ~%1").arg(fmtTokens(sug.savings));
+                    }
+                    compositor.printContent(line + "\n", style);
+                    compositor.printContent("    " + sug.detail + "\n", QTuiScrollView::Dim);
+                }
+            }
+            compositor.printContent("\n");
+            continue;
+        }
         if (cmd == "/diff") {
             if (!currentFileHistory || currentFileHistory->isEmpty()) {
                 compositor.printContent("(no file history available yet — run an edit first)\n");
@@ -2284,6 +2627,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             compositor.printContent("  exit, /exit  - Exit the agent\n");
             compositor.printContent("  /clear       - Clear conversation history\n");
             compositor.printContent("  /compact     - Compact conversation context\n");
+            compositor.printContent("  /context     - Show token usage breakdown + suggestions\n");
             compositor.printContent("  /diff        - Review file edits turn-by-turn\n");
             compositor.printContent(
                 "  /effort    - Show/set reasoning effort (off/low/medium/high)\n");
