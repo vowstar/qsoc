@@ -11,17 +11,19 @@
 
 /**
  * @brief Foreground color enum for cell text. Default leaves the terminal's
- *        current foreground untouched, the named values map to the standard
- *        ANSI 8-color palette.
+ *        current foreground untouched. Named values are 256-palette indices
+ *        chosen for a warm, muted aesthetic on dark backgrounds.
  */
 enum class QTuiFgColor : std::uint8_t {
     Default = 0,
-    Red     = 1,
-    Green   = 2,
-    Yellow  = 3,
-    Blue    = 4,
-    Magenta = 5,
-    Cyan    = 6,
+    Red     = 167, /* warm red */
+    Green   = 142, /* olive green */
+    Yellow  = 214, /* amber */
+    Blue    = 109, /* muted blue */
+    Magenta = 175, /* dusty pink */
+    Cyan    = 108, /* sage green */
+    Orange  = 208, /* warm orange */
+    Gray    = 246, /* neutral gray */
 };
 
 /**

@@ -175,10 +175,9 @@ QString QTuiScreen::toAnsi()
                 if (cell.inverted) {
                     attrs += "7;";
                 }
-                /* Foreground colour: 30 + ANSI index when not Default. */
+                /* Foreground colour: 256-palette via ESC[38;5;Nm. */
                 if (cell.fgColor != QTuiFgColor::Default) {
-                    int code = 30 + static_cast<int>(cell.fgColor);
-                    attrs += QString::number(code) + ";";
+                    attrs += "38;5;" + QString::number(static_cast<int>(cell.fgColor)) + ";";
                 }
                 if (!attrs.isEmpty()) {
                     attrs.chop(1); /* Remove trailing ; */
