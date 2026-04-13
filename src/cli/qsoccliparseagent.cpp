@@ -1392,6 +1392,48 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                 compositor.printContent(QString("(Resumed session %1, %2 messages)\n\n")
                                             .arg(sessionId.left(8))
                                             .arg(lastPersistedIndex));
+
+                /* Restore pending TODOs from .qsoc/todos.md so the user
+                 * sees what was in progress when the session was saved. */
+                {
+                    const QString todoPath
+                        = QDir(projectPath).filePath(QStringLiteral(".qsoc/todos.md"));
+                    QFile todoFile(todoPath);
+                    if (todoFile.exists() && todoFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                        const QStringList lines = QTextStream(&todoFile).readAll().split(
+                            QLatin1Char('\n'));
+                        todoFile.close();
+                        QRegularExpression todoRe(
+                            QStringLiteral(R"(^-\s*\[([ xX])\]\s*#(\d+)\s+(.+)$)"));
+                        QList<QTuiTodoList::TodoItem> widgetItems;
+                        QString                       curPri = QStringLiteral("medium");
+                        for (const QString &line : lines) {
+                            if (line.startsWith(QStringLiteral("## High"))) {
+                                curPri = QStringLiteral("high");
+                            } else if (line.startsWith(QStringLiteral("## Medium"))) {
+                                curPri = QStringLiteral("medium");
+                            } else if (line.startsWith(QStringLiteral("## Low"))) {
+                                curPri = QStringLiteral("low");
+                            }
+                            auto match = todoRe.match(line);
+                            if (!match.hasMatch()) {
+                                continue;
+                            }
+                            if (match.captured(1) != QStringLiteral(" ")) {
+                                continue; /* skip done items */
+                            }
+                            QTuiTodoList::TodoItem item;
+                            item.id       = match.captured(2).toInt();
+                            item.title    = match.captured(3).trimmed();
+                            item.priority = curPri;
+                            item.status   = QStringLiteral("pending");
+                            widgetItems.append(item);
+                        }
+                        if (!widgetItems.isEmpty()) {
+                            todoWidget.setItems(widgetItems);
+                        }
+                    }
+                }
             }
         } else {
             currentSession->appendMeta(
