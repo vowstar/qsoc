@@ -12,48 +12,53 @@
 #include <unistd.h>
 #endif
 
+/* 256-palette colours used for the menu overlay. */
+static constexpr int BG_NORMAL    = 237; /* dark warm gray  — menu background */
+static constexpr int BG_HIGHLIGHT = 239; /* lighter gray    — selected row */
+static constexpr int FG_TITLE     = 214; /* amber           — title text */
+static constexpr int FG_NORMAL    = 223; /* warm cream      — item text */
+static constexpr int FG_HINT      = 246; /* neutral gray    — hint + footer */
+static constexpr int FG_HIGHLIGHT = 214; /* amber           — selected item */
+
 int QTuiMenu::lineCount() const
 {
+    /* title + items + footer */
     return static_cast<int>(items.size()) + 2;
 }
 
 void QTuiMenu::render(QTuiScreen &screen, int startY, int width)
 {
-    int boxWidth = qMin(computeBoxWidth(), width);
+    int menuW = qMin(computeBoxWidth(), width);
 
-    /* Top border */
-    QString topLine = "+- " + title + " ";
-    while (QTuiText::visualWidth(topLine) < boxWidth - 1) {
-        topLine += "-";
+    /* Title row */
+    QString titleLine = QStringLiteral("  ") + title;
+    while (QTuiText::visualWidth(titleLine) < menuW) {
+        titleLine += QLatin1Char(' ');
     }
-    topLine += "+";
-    screen.putString(0, startY, topLine.left(width), false, true);
+    screen.putString(0, startY, titleLine.left(width), true);
 
     /* Items */
     for (int idx = 0; idx < items.size(); idx++) {
-        const MenuItem &item    = items[idx];
-        QString         num     = QString("[%1]").arg(idx + 1);
-        QString         mark    = item.marked ? "*" : " ";
-        QString         content = QString("| %1 %2 %3 %4").arg(num, mark, item.label, item.hint);
-
-        while (QTuiText::visualWidth(content) < boxWidth - 1) {
-            content += " ";
+        const MenuItem &item = items[idx];
+        QString         num  = QString("  %1 ").arg(idx + 1, 2);
+        QString         body = item.label;
+        if (!item.hint.isEmpty()) {
+            body += QStringLiteral(" ") + item.hint;
         }
-        content += "|";
-
-        bool inv = (idx == highlighted && colorEnabled);
-        screen.putString(0, startY + 1 + idx, content.left(width), false, false, inv);
+        QString line = num + body;
+        while (QTuiText::visualWidth(line) < menuW) {
+            line += QLatin1Char(' ');
+        }
+        bool isHL = (idx == highlighted && colorEnabled);
+        screen.putString(0, startY + 1 + idx, line.left(width), isHL, false, isHL);
     }
 
-    /* Bottom border */
-    QString hint    = QString("1-%1/Up/Down+Enter/ESC").arg(items.size());
-    QString botLine = "+- " + hint + " ";
-    while (QTuiText::visualWidth(botLine) < boxWidth - 1) {
-        botLine += "-";
+    /* Footer */
+    QString hint = QString("  1-%1/Up/Down+Enter/Click/ESC").arg(items.size());
+    while (QTuiText::visualWidth(hint) < menuW) {
+        hint += QLatin1Char(' ');
     }
-    botLine += "+";
-    screen
-        .putString(0, startY + 1 + static_cast<int>(items.size()), botLine.left(width), false, true);
+    screen.putString(0, startY + 1 + static_cast<int>(items.size()), hint.left(width), false, true);
 }
 
 void QTuiMenu::setTitle(const QString &newTitle)
@@ -75,12 +80,12 @@ void QTuiMenu::setColorEnabled(bool enabled)
 
 int QTuiMenu::computeBoxWidth() const
 {
-    int maxWidth = QTuiText::visualWidth(title) + 6;
+    int maxWidth = QTuiText::visualWidth(title) + 4;
     for (const auto &item : items) {
-        int itemW = QTuiText::visualWidth(item.label) + QTuiText::visualWidth(item.hint) + 12;
+        int itemW = QTuiText::visualWidth(item.label) + QTuiText::visualWidth(item.hint) + 8;
         maxWidth  = qMax(maxWidth, itemW);
     }
-    return maxWidth + 4;
+    return maxWidth;
 }
 
 int QTuiMenu::exec()
@@ -106,78 +111,76 @@ int QTuiMenu::exec()
         }
     }
 
-    /* Align menu bottom to just above separator/input (3 rows from bottom) */
     int menuH  = lineCount();
     int startY = termH - 3 - menuH;
     if (startY < 1) {
-        startY = 1; /* Don't overlap title bar */
+        startY = 1;
     }
 
-    /* Overlay rendering: render menu rows directly onto current screen.
-     * Only overwrite the rows the menu occupies, preserving the rest. */
+    /* Render overlay using 256-palette background colours directly. */
     auto renderOverlay = [&]() {
-        /* Position cursor at menu start and render each row */
+        int menuW = qMin(computeBoxWidth(), termW);
+
         for (int row = 0; row < menuH && (startY + row) < termH; row++) {
-            /* Move to row, clear it, then draw menu line */
             fprintf(stdout, "\033[%d;1H\033[2K", startY + row + 1);
         }
-
-        /* Render menu to a temp screen buffer then output just the menu rows */
-        QTuiScreen overlay(termW, menuH);
-        render(overlay, 0, termW);
 
         for (int row = 0; row < menuH; row++) {
             fprintf(stdout, "\033[%d;1H", startY + row + 1);
 
-            bool curBold = false;
-            bool curDim  = false;
-            bool curInv  = false;
+            int bgColor = BG_NORMAL;
+            int fgColor = FG_NORMAL;
 
-            for (int col = 0; col < termW; col++) {
-                const QTuiCell &cell = overlay.at(col, row);
-
-                if (cell.bold != curBold || cell.dim != curDim || cell.inverted != curInv) {
-                    fputs("\033[0m", stdout);
-                    curBold = false;
-                    curDim  = false;
-                    curInv  = false;
-                    QString attrs;
-                    if (cell.bold) {
-                        attrs += "1;";
-                    }
-                    if (cell.dim) {
-                        attrs += "2;";
-                    }
-                    if (cell.inverted) {
-                        attrs += "7;";
-                    }
-                    if (!attrs.isEmpty()) {
-                        attrs.chop(1);
-                        fprintf(stdout, "\033[%sm", attrs.toUtf8().constData());
-                    }
-                    curBold = cell.bold;
-                    curDim  = cell.dim;
-                    curInv  = cell.inverted;
+            if (row == 0) {
+                /* Title */
+                fgColor = FG_TITLE;
+            } else if (row == menuH - 1) {
+                /* Footer */
+                fgColor = FG_HINT;
+            } else {
+                /* Item row */
+                int itemIdx = row - 1;
+                if (itemIdx == highlighted) {
+                    bgColor = BG_HIGHLIGHT;
+                    fgColor = FG_HIGHLIGHT;
                 }
-                fputc(cell.character.toLatin1(), stdout);
             }
-            if (curBold || curDim || curInv) {
-                fputs("\033[0m", stdout);
+
+            fprintf(stdout, "\033[38;5;%d;48;5;%dm", fgColor, bgColor);
+
+            /* Build the line content. */
+            QString line;
+            if (row == 0) {
+                line = QStringLiteral("  ") + title;
+            } else if (row == menuH - 1) {
+                line = QString("  1-%1/Up/Down+Enter/Click/ESC").arg(items.size());
+            } else {
+                int             itemIdx = row - 1;
+                const MenuItem &item    = items[itemIdx];
+                line                    = QString("  %1 %2").arg(itemIdx + 1, 2).arg(item.label);
+                if (!item.hint.isEmpty()) {
+                    line += QStringLiteral(" ") + item.hint;
+                }
             }
+
+            /* Pad to menu width and print. */
+            while (QTuiText::visualWidth(line) < menuW) {
+                line += QLatin1Char(' ');
+            }
+            fputs(line.left(termW).toUtf8().constData(), stdout);
+            fputs("\033[0m", stdout);
         }
-        fputs("\033[?25l", stdout); /* Hide cursor during menu */
+        fputs("\033[?25l", stdout);
         fflush(stdout);
     };
 
     renderOverlay();
 
-    /* We're already in raw mode (inputMonitor owns terminal).
-     * Use blocking read with VMIN=1 for menu interaction. */
     struct termios savedTerm = {};
     tcgetattr(STDIN_FILENO, &savedTerm);
     {
         struct termios menuTerm = savedTerm;
-        menuTerm.c_cc[VMIN]     = 1; /* Blocking read */
+        menuTerm.c_cc[VMIN]     = 1;
         menuTerm.c_cc[VTIME]    = 0;
         tcsetattr(STDIN_FILENO, TCSANOW, &menuTerm);
     }
@@ -192,7 +195,6 @@ int QTuiMenu::exec()
         }
 
         if (byte == 0x1B) {
-            /* Check if more bytes follow within 50ms (CSI sequence vs bare ESC) */
             fd_set         fds;
             struct timeval tv = {.tv_sec = 0, .tv_usec = 50000};
             FD_ZERO(&fds);
@@ -210,13 +212,42 @@ int QTuiMenu::exec()
                         highlighted = (highlighted + 1) % static_cast<int>(items.size());
                         renderOverlay();
                     }
-                    /* Consume mouse and other CSI sequences silently */
+                    /* SGR mouse: ESC [ < params M/m */
                     if (seq[1] == '<') {
-                        /* SGR mouse: read until M or m */
-                        char mch = 0;
+                        QByteArray params;
+                        char       mch = 0;
                         while (read(STDIN_FILENO, &mch, 1) == 1) {
                             if (mch == 'M' || mch == 'm') {
                                 break;
+                            }
+                            params.append(mch);
+                        }
+                        /* Parse btn;col;row */
+                        QList<QByteArray> parts = params.split(';');
+                        if (parts.size() == 3 && mch == 'M') {
+                            int btnFlags = parts[0].toInt();
+                            int mouseRow = parts[2].toInt(); /* 1-based */
+                            /* Left-click press on an item row → select */
+                            if ((btnFlags & 3) == 0 && !(btnFlags & 64)) {
+                                int clickedItem = mouseRow - startY - 1; /* 0-based */
+                                if (clickedItem >= 0
+                                    && clickedItem < static_cast<int>(items.size())) {
+                                    result = clickedItem;
+                                    done   = true;
+                                }
+                            }
+                            /* Scroll wheel */
+                            if (btnFlags & 64) {
+                                int dir = btnFlags & 1;
+                                if (dir == 0) { /* up */
+                                    highlighted = (highlighted <= 0)
+                                                      ? static_cast<int>(items.size()) - 1
+                                                      : highlighted - 1;
+                                } else { /* down */
+                                    highlighted = (highlighted + 1)
+                                                  % static_cast<int>(items.size());
+                                }
+                                renderOverlay();
                             }
                         }
                     }
@@ -238,10 +269,7 @@ int QTuiMenu::exec()
         }
     }
 
-    /* Restore terminal settings */
     tcsetattr(STDIN_FILENO, TCSANOW, &savedTerm);
-
-    /* Don't clear — the compositor will redraw the whole screen on next render */
     fputs("\033[?25h", stdout);
     fflush(stdout);
 

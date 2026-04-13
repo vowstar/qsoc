@@ -9,7 +9,7 @@ int QTuiCompletionPopup::lineCount() const
         return 0;
     }
     int visibleItems = qMin(static_cast<int>(items.size()), MAX_VISIBLE_ITEMS);
-    return visibleItems + 2; /* + top and bottom borders */
+    return visibleItems + 2; /* title + items + footer */
 }
 
 void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
@@ -19,27 +19,25 @@ void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
     }
 
     int visibleItems = qMin(static_cast<int>(items.size()), MAX_VISIBLE_ITEMS);
-    int boxWidth     = width;
 
-    /* Compute required box width from longest visible item */
-    int maxItemW = QTuiText::visualWidth(title) + 6;
+    /* Compute box width from longest visible item */
+    int maxItemW = QTuiText::visualWidth(title) + 4;
     for (int idx = 0; idx < visibleItems; idx++) {
         int visIdx = viewStart + idx;
         if (visIdx >= items.size()) {
             break;
         }
-        int itemW = QTuiText::visualWidth(items[visIdx]) + 6;
+        int itemW = QTuiText::visualWidth(items[visIdx]) + 4;
         maxItemW  = qMax(maxItemW, itemW);
     }
-    boxWidth = qMin(boxWidth, qMax(maxItemW, 20));
+    int boxWidth = qMin(width, qMax(maxItemW, 20));
 
-    /* Top border with title */
-    QString topLine = QStringLiteral("+- ") + title + QLatin1Char(' ');
-    while (QTuiText::visualWidth(topLine) < boxWidth - 1) {
-        topLine += QLatin1Char('-');
+    /* Title row */
+    QString titleLine = QStringLiteral("  ") + title;
+    while (QTuiText::visualWidth(titleLine) < boxWidth) {
+        titleLine += QLatin1Char(' ');
     }
-    topLine += QLatin1Char('+');
-    screen.putString(0, startY, topLine.left(width), false, true);
+    screen.putString(0, startY, titleLine.left(width), true, true);
 
     /* Items */
     for (int row = 0; row < visibleItems; row++) {
@@ -47,24 +45,21 @@ void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
         if (visIdx >= items.size()) {
             break;
         }
-        QString line = QStringLiteral("| ") + items[visIdx];
-        while (QTuiText::visualWidth(line) < boxWidth - 1) {
+        QString line = QStringLiteral("  ") + items[visIdx];
+        while (QTuiText::visualWidth(line) < boxWidth) {
             line += QLatin1Char(' ');
         }
-        line += QLatin1Char('|');
 
         bool inv = (visIdx == highlight) && colorEnabled;
-        screen.putString(0, startY + 1 + row, line.left(width), false, false, inv);
+        screen.putString(0, startY + 1 + row, line.left(width), inv, false, inv);
     }
 
-    /* Bottom border with footer hint */
-    QString hint    = QStringLiteral("Tab/Enter to accept  Esc to dismiss");
-    QString botLine = QStringLiteral("+- ") + hint + QLatin1Char(' ');
-    while (QTuiText::visualWidth(botLine) < boxWidth - 1) {
-        botLine += QLatin1Char('-');
+    /* Footer */
+    QString hint = QStringLiteral("  Tab/Enter  Esc to dismiss");
+    while (QTuiText::visualWidth(hint) < boxWidth) {
+        hint += QLatin1Char(' ');
     }
-    botLine += QLatin1Char('+');
-    screen.putString(0, startY + 1 + visibleItems, botLine.left(width), false, true);
+    screen.putString(0, startY + 1 + visibleItems, hint.left(width), false, true);
 }
 
 void QTuiCompletionPopup::setVisible(bool vis)
