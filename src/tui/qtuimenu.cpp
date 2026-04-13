@@ -35,7 +35,15 @@ void QTuiMenu::render(QTuiScreen &screen, int startY, int width)
     while (QTuiText::visualWidth(titleLine) < menuW) {
         titleLine += QLatin1Char(' ');
     }
-    screen.putString(0, startY, titleLine.left(width), true);
+    screen.putString(
+        0,
+        startY,
+        titleLine.left(width),
+        true,
+        false,
+        false,
+        QTuiFgColor::Yellow,
+        static_cast<QTuiBgColor>(BG_NORMAL));
 
     /* Items */
     for (int idx = 0; idx < items.size(); idx++) {
@@ -49,8 +57,11 @@ void QTuiMenu::render(QTuiScreen &screen, int startY, int width)
         while (QTuiText::visualWidth(line) < menuW) {
             line += QLatin1Char(' ');
         }
-        bool isHL = (idx == highlighted && colorEnabled);
-        screen.putString(0, startY + 1 + idx, line.left(width), isHL, false, isHL);
+        bool        isHL  = (idx == highlighted && colorEnabled);
+        QTuiFgColor fgCol = isHL ? static_cast<QTuiFgColor>(FG_HIGHLIGHT)
+                                 : static_cast<QTuiFgColor>(FG_NORMAL);
+        auto        bgCol = static_cast<QTuiBgColor>(isHL ? BG_HIGHLIGHT : BG_NORMAL);
+        screen.putString(0, startY + 1 + idx, line.left(width), isHL, false, false, fgCol, bgCol);
     }
 
     /* Footer */
@@ -58,7 +69,15 @@ void QTuiMenu::render(QTuiScreen &screen, int startY, int width)
     while (QTuiText::visualWidth(hint) < menuW) {
         hint += QLatin1Char(' ');
     }
-    screen.putString(0, startY + 1 + static_cast<int>(items.size()), hint.left(width), false, true);
+    screen.putString(
+        0,
+        startY + 1 + static_cast<int>(items.size()),
+        hint.left(width),
+        false,
+        true,
+        false,
+        QTuiFgColor::Gray,
+        static_cast<QTuiBgColor>(BG_NORMAL));
 }
 
 void QTuiMenu::setTitle(const QString &newTitle)

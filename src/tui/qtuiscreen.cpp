@@ -49,7 +49,14 @@ const QTuiCell &QTuiScreen::at(int col, int row) const
 }
 
 void QTuiScreen::putChar(
-    int col, int row, QChar ch, bool bold, bool dim, bool inverted, QTuiFgColor fgColor)
+    int         col,
+    int         row,
+    QChar       ch,
+    bool        bold,
+    bool        dim,
+    bool        inverted,
+    QTuiFgColor fgColor,
+    QTuiBgColor bgColor)
 {
     if (row < 0 || row >= rows || col < 0 || col >= cols) {
         return;
@@ -60,10 +67,18 @@ void QTuiScreen::putChar(
     cell.dim       = dim;
     cell.inverted  = inverted;
     cell.fgColor   = fgColor;
+    cell.bgColor   = bgColor;
 }
 
 void QTuiScreen::putString(
-    int col, int row, const QString &text, bool bold, bool dim, bool inverted, QTuiFgColor fgColor)
+    int            col,
+    int            row,
+    const QString &text,
+    bool           bold,
+    bool           dim,
+    bool           inverted,
+    QTuiFgColor    fgColor,
+    QTuiBgColor    bgColor)
 {
     if (row < 0 || row >= rows) {
         return;
@@ -93,7 +108,7 @@ void QTuiScreen::putString(
         }
 
         if (pos >= 0) {
-            putChar(pos, row, chr, bold, dim, inverted, fgColor);
+            putChar(pos, row, chr, bold, dim, inverted, fgColor, bgColor);
         }
         pos++;
         idx++;
@@ -125,6 +140,7 @@ QString QTuiScreen::toAnsi()
     bool        currentDim      = false;
     bool        currentInverted = false;
     QTuiFgColor currentColor    = QTuiFgColor::Default;
+    QTuiBgColor currentBg       = BG_DEFAULT;
 
     for (int row = 0; row < rows; row++) {
         /* Check if this row changed (skip unchanged rows for performance) */
@@ -154,7 +170,8 @@ QString QTuiScreen::toAnsi()
             /* Emit style changes */
             bool needReset = false;
             if (cell.bold != currentBold || cell.dim != currentDim
-                || cell.inverted != currentInverted || cell.fgColor != currentColor) {
+                || cell.inverted != currentInverted || cell.fgColor != currentColor
+                || cell.bgColor != currentBg) {
                 needReset = true;
             }
 
@@ -164,6 +181,7 @@ QString QTuiScreen::toAnsi()
                 currentDim      = false;
                 currentInverted = false;
                 currentColor    = QTuiFgColor::Default;
+                currentBg       = BG_DEFAULT;
 
                 QString attrs;
                 if (cell.bold) {
@@ -175,18 +193,21 @@ QString QTuiScreen::toAnsi()
                 if (cell.inverted) {
                     attrs += "7;";
                 }
-                /* Foreground colour: 256-palette via ESC[38;5;Nm. */
                 if (cell.fgColor != QTuiFgColor::Default) {
                     attrs += "38;5;" + QString::number(static_cast<int>(cell.fgColor)) + ";";
                 }
+                if (cell.bgColor != BG_DEFAULT) {
+                    attrs += "48;5;" + QString::number(static_cast<int>(cell.bgColor)) + ";";
+                }
                 if (!attrs.isEmpty()) {
-                    attrs.chop(1); /* Remove trailing ; */
+                    attrs.chop(1);
                     output += "\033[" + attrs + "m";
                 }
                 currentBold     = cell.bold;
                 currentDim      = cell.dim;
                 currentInverted = cell.inverted;
                 currentColor    = cell.fgColor;
+                currentBg       = cell.bgColor;
             }
 
             output += cell.character;
@@ -197,7 +218,8 @@ QString QTuiScreen::toAnsi()
     }
 
     /* Reset attributes at end */
-    if (currentBold || currentDim || currentInverted || currentColor != QTuiFgColor::Default) {
+    if (currentBold || currentDim || currentInverted || currentColor != QTuiFgColor::Default
+        || currentBg != BG_DEFAULT) {
         output += "\033[0m";
     }
 
