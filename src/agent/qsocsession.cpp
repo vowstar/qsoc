@@ -130,6 +130,12 @@ nlohmann::json QSocSession::loadMessages(const QString &filePath)
             nlohmann::json msg = doc;
             msg.erase("type");
             msg.erase("ts");
+            /* Sanitise: assistant messages with null content and no tool_calls
+             * are rejected by some endpoints on resume. Coerce to "". */
+            if (msg.contains("role") && msg["role"] == "assistant" && msg.contains("content")
+                && msg["content"].is_null() && !msg.contains("tool_calls")) {
+                msg["content"] = "";
+            }
             messages.push_back(msg);
         } catch (...) {
             /* Skip malformed line — probably a torn write from a crash. */

@@ -877,9 +877,14 @@ json QLLMService::buildStreamResponse(const QString &content, const QMap<int, js
 
     if (!content.isEmpty()) {
         message["content"] = content.toStdString();
-    } else {
-        /* Must be null, not missing. DeepSeek requires content field in assistant messages. */
+    } else if (!toolCalls.isEmpty()) {
+        /* Tool-call-only messages: content must be null, not missing. Some
+         * endpoints reject the message when the key is absent entirely. */
         message["content"] = nullptr;
+    } else {
+        /* No content, no tool calls: use empty string instead of null.
+         * Some endpoints reject null content on non-tool-call messages. */
+        message["content"] = "";
     }
 
     /* DeepSeek R1 requires reasoning_content in ALL assistant messages when thinking
