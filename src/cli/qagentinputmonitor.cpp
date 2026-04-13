@@ -268,8 +268,12 @@ void QAgentInputMonitor::processEscSequence()
                         bool pressed  = (chr == 'M');
                         bool isWheel  = (btnFlags & 64) != 0;
 
+                        bool isDrag = (btnFlags & 32) != 0;
+
                         if (isWheel) {
                             emit mouseWheel(btnFlags & 3);
+                        } else if (isDrag) {
+                            emit mouseDrag(mouseCol, mouseRow);
                         } else {
                             emit mouseClick(btnFlags & 3, mouseCol, mouseRow, pressed);
                         }

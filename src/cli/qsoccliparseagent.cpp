@@ -912,6 +912,26 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
         }
     });
 
+    /* Mouse click-drag text selection: press starts, drag updates, release
+     * copies to clipboard via OSC 52 and clears the highlight. SGR coords
+     * are 1-based; screen buffer is 0-based. */
+    connect(
+        &inputMonitor,
+        &QAgentInputMonitor::mouseClick,
+        [&compositor](int button, int col, int row, bool pressed) {
+            if (button != 0) {
+                return; /* only left-button */
+            }
+            if (pressed) {
+                compositor.selectionStart(col - 1, row - 1);
+            } else {
+                compositor.selectionFinish(col - 1, row - 1);
+            }
+        });
+    connect(&inputMonitor, &QAgentInputMonitor::mouseDrag, [&compositor](int col, int row) {
+        compositor.selectionUpdate(col - 1, row - 1);
+    });
+
     /* Input history + reverse-i-search state — declared early so lambdas
      * below can capture them. The history file load happens after the
      * conversation restore (further down). inputHistoryPastes is aligned
@@ -2782,8 +2802,8 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             compositor.printContent("  Ctrl+T      - Toggle TODO list visibility\n");
             compositor.printContent("  Ctrl+L      - Force a full screen repaint\n");
             compositor.printContent("  Ctrl+_      - Undo the last edit\n");
-            compositor.printContent(
-                "  Shift+drag  - Select text (terminal convention with mouse tracking)\n");
+            compositor.printContent("  Mouse drag  - Select + auto-copy to clipboard (OSC 52)\n");
+            compositor.printContent("  Shift+drag  - Native terminal selection (fallback)\n");
             compositor.printContent("  @<name>     - Fuzzy-complete a project file path\n");
             compositor.printContent("\n");
             compositor.printContent("Or just type your question/request in natural language.\n");
