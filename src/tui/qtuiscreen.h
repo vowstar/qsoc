@@ -27,6 +27,12 @@ enum class QTuiFgColor : std::uint8_t {
 };
 
 /**
+ * @brief Background color. 0 = terminal default, non-zero = 256-palette index.
+ */
+using QTuiBgColor                       = std::uint8_t;
+static constexpr QTuiBgColor BG_DEFAULT = 0;
+
+/**
  * @brief A single terminal cell with character and style attributes
  */
 struct QTuiCell
@@ -36,11 +42,13 @@ struct QTuiCell
     bool        dim       = false;
     bool        inverted  = false;
     QTuiFgColor fgColor   = QTuiFgColor::Default;
+    QTuiBgColor bgColor   = BG_DEFAULT;
 
     bool operator==(const QTuiCell &other) const
     {
         return character == other.character && bold == other.bold && dim == other.dim
-               && inverted == other.inverted && fgColor == other.fgColor;
+               && inverted == other.inverted && fgColor == other.fgColor
+               && bgColor == other.bgColor;
     }
     bool operator!=(const QTuiCell &other) const { return !(*this == other); }
 };
@@ -74,7 +82,8 @@ public:
         bool        bold     = false,
         bool        dim      = false,
         bool        inverted = false,
-        QTuiFgColor fgColor  = QTuiFgColor::Default);
+        QTuiFgColor fgColor  = QTuiFgColor::Default,
+        QTuiBgColor bgColor  = BG_DEFAULT);
     void putString(
         int            col,
         int            row,
@@ -82,7 +91,8 @@ public:
         bool           bold     = false,
         bool           dim      = false,
         bool           inverted = false,
-        QTuiFgColor    fgColor  = QTuiFgColor::Default);
+        QTuiFgColor    fgColor  = QTuiFgColor::Default,
+        QTuiBgColor    bgColor  = BG_DEFAULT);
 
     /* Draw a horizontal line of a character across full width */
     void hline(int row, QChar ch = '-');

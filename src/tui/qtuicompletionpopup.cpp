@@ -3,6 +3,10 @@
 
 #include "tui/qtuicompletionpopup.h"
 
+/* Shared menu palette — matches QTuiMenu's exec() overlay colours. */
+static constexpr QTuiBgColor MENU_BG_NORMAL    = 237;
+static constexpr QTuiBgColor MENU_BG_HIGHLIGHT = 239;
+
 int QTuiCompletionPopup::lineCount() const
 {
     if (!visible || items.isEmpty()) {
@@ -37,7 +41,8 @@ void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
     while (QTuiText::visualWidth(titleLine) < boxWidth) {
         titleLine += QLatin1Char(' ');
     }
-    screen.putString(0, startY, titleLine.left(width), true, true);
+    screen.putString(
+        0, startY, titleLine.left(width), true, false, false, QTuiFgColor::Yellow, MENU_BG_NORMAL);
 
     /* Items */
     for (int row = 0; row < visibleItems; row++) {
@@ -50,8 +55,10 @@ void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
             line += QLatin1Char(' ');
         }
 
-        bool inv = (visIdx == highlight) && colorEnabled;
-        screen.putString(0, startY + 1 + row, line.left(width), inv, false, inv);
+        bool        isHL  = (visIdx == highlight) && colorEnabled;
+        QTuiFgColor fgCol = isHL ? QTuiFgColor::Yellow : QTuiFgColor::Default;
+        QTuiBgColor bgCol = isHL ? MENU_BG_HIGHLIGHT : MENU_BG_NORMAL;
+        screen.putString(0, startY + 1 + row, line.left(width), isHL, false, false, fgCol, bgCol);
     }
 
     /* Footer */
@@ -59,7 +66,15 @@ void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
     while (QTuiText::visualWidth(hint) < boxWidth) {
         hint += QLatin1Char(' ');
     }
-    screen.putString(0, startY + 1 + visibleItems, hint.left(width), false, true);
+    screen.putString(
+        0,
+        startY + 1 + visibleItems,
+        hint.left(width),
+        false,
+        true,
+        false,
+        QTuiFgColor::Gray,
+        MENU_BG_NORMAL);
 }
 
 void QTuiCompletionPopup::setVisible(bool vis)
