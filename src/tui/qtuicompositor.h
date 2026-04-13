@@ -99,6 +99,11 @@ public:
     void scrollContentUp(int lines = 3);
     void scrollContentDown(int lines = 3);
 
+    /* Mouse text selection + auto-copy. Call from input monitor signals. */
+    void selectionStart(int col, int row);
+    void selectionUpdate(int col, int row);
+    void selectionFinish(int col, int row);
+
     /* Reset execution state without stopping the compositor (stay in alt screen) */
     void resetExecution();
 
@@ -118,6 +123,19 @@ private:
     } layout;
 
     void recalculateLayout();
+
+    /* Selection state for click-drag copy. Coords are screen-space. */
+    struct Selection
+    {
+        int  anchorCol = 0;
+        int  anchorRow = 0;
+        int  focusCol  = 0;
+        int  focusRow  = 0;
+        bool active    = false;
+    } selection;
+
+    void applySelectionHighlight();
+    void copySelectionToClipboard();
 
     /* Render each region to screen buffer */
     void renderTitle();

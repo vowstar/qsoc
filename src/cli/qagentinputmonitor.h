@@ -73,6 +73,7 @@ signals:
     /* Mouse events (SGR format: ESC [ < btn ; x ; y M/m) */
     void mouseWheel(int direction); /* 0=up, 1=down */
     void mouseClick(int button, int col, int row, bool pressed);
+    void mouseDrag(int col, int row); /* Motion with button held (?1002h) */
 
     /* Arrow keys */
     void arrowKey(int key); /* 'A'=up, 'B'=down, 'C'=right, 'D'=left */

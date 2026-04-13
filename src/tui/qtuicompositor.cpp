@@ -171,6 +171,12 @@ void QTuiCompositor::render()
     renderSeparator();
     renderInput();
 
+    /* Overlay selection highlight after all widgets so selected cells
+     * invert regardless of which widget owns them. */
+    if (selection.active) {
+        applySelectionHighlight();
+    }
+
     QString ansi = screen.toAnsi();
     fputs(ansi.toUtf8().constData(), stdout);
 
@@ -187,13 +193,13 @@ void QTuiCompositor::render()
 void QTuiCompositor::enterAltScreen()
 {
     /* Hide cursor + enter alt screen + clear + disable auto-wrap.
-     * Enable button-event mouse tracking (?1000h) + SGR encoding (?1006h)
-     * for scroll wheel support. Text selection: Shift+click-drag (this is
-     * the universal terminal convention when mouse tracking is active). */
+     * Mouse: ?1000h (button press/release/wheel) + ?1002h (drag motion)
+     * + ?1006h (SGR encoding). Enables in-app click-drag text selection
+     * with auto-copy to clipboard via OSC 52. */
     fputs(
         "\033[?25l\033[?1049h\033[2J\033[H"
         "\033[?7l"
-        "\033[?1000h\033[?1006h",
+        "\033[?1000h\033[?1002h\033[?1006h",
         stdout);
     fflush(stdout);
 }
@@ -202,7 +208,7 @@ void QTuiCompositor::exitAltScreen()
 {
     /* Disable mouse + re-enable auto-wrap + exit alt screen + show cursor */
     fputs(
-        "\033[?1006l\033[?1000l"
+        "\033[?1006l\033[?1002l\033[?1000l"
         "\033[?7h"
         "\033[?1049l\033[?25h",
         stdout);
@@ -334,4 +340,104 @@ void QTuiCompositor::renderSeparator()
 void QTuiCompositor::renderInput()
 {
     inputWidget.render(screen, layout.inputRow, screen.width());
+}
+
+/* ── Mouse selection ─────────────────────────────────────────────────── */
+
+void QTuiCompositor::selectionStart(int col, int row)
+{
+    selection.anchorCol = col;
+    selection.anchorRow = row;
+    selection.focusCol  = col;
+    selection.focusRow  = row;
+    selection.active    = true;
+    /* Immediate feedback — invert the anchor cell. */
+    invalidate();
+}
+
+void QTuiCompositor::selectionUpdate(int col, int row)
+{
+    if (!selection.active) {
+        return;
+    }
+    selection.focusCol = col;
+    selection.focusRow = row;
+    invalidate();
+}
+
+void QTuiCompositor::selectionFinish(int col, int row)
+{
+    if (!selection.active) {
+        return;
+    }
+    selection.focusCol = col;
+    selection.focusRow = row;
+    copySelectionToClipboard();
+    selection.active = false;
+    invalidate();
+}
+
+void QTuiCompositor::applySelectionHighlight()
+{
+    /* Normalise so start <= end in reading order (top-left to bottom-right). */
+    int startRow = selection.anchorRow;
+    int startCol = selection.anchorCol;
+    int endRow   = selection.focusRow;
+    int endCol   = selection.focusCol;
+    if (startRow > endRow || (startRow == endRow && startCol > endCol)) {
+        std::swap(startRow, endRow);
+        std::swap(startCol, endCol);
+    }
+
+    for (int row = startRow; row <= endRow && row < screen.height(); row++) {
+        int colBegin = (row == startRow) ? startCol : 0;
+        int colEnd   = (row == endRow) ? endCol : screen.width() - 1;
+        for (int col = colBegin; col <= colEnd && col < screen.width(); col++) {
+            QTuiCell &cell = screen.at(col, row);
+            cell.inverted  = !cell.inverted;
+        }
+    }
+}
+
+void QTuiCompositor::copySelectionToClipboard()
+{
+    /* Normalise. */
+    int startRow = selection.anchorRow;
+    int startCol = selection.anchorCol;
+    int endRow   = selection.focusRow;
+    int endCol   = selection.focusCol;
+    if (startRow > endRow || (startRow == endRow && startCol > endCol)) {
+        std::swap(startRow, endRow);
+        std::swap(startCol, endCol);
+    }
+
+    /* Extract text from screen buffer, trimming trailing spaces per row. */
+    QString text;
+    for (int row = startRow; row <= endRow && row < screen.height(); row++) {
+        int     colBegin = (row == startRow) ? startCol : 0;
+        int     colEnd   = (row == endRow) ? endCol : screen.width() - 1;
+        QString line;
+        for (int col = colBegin; col <= colEnd && col < screen.width(); col++) {
+            line += screen.at(col, row).character;
+        }
+        /* Trim trailing spaces from each line. */
+        while (line.endsWith(QLatin1Char(' '))) {
+            line.chop(1);
+        }
+        if (row > startRow) {
+            text += QLatin1Char('\n');
+        }
+        text += line;
+    }
+
+    if (text.isEmpty()) {
+        return;
+    }
+
+    /* Write to clipboard via OSC 52 escape sequence. Supported by most
+     * modern terminals (xterm, kitty, iTerm2, alacritty, Windows Terminal).
+     * Format: ESC ] 52 ; c ; <base64> ESC \ */
+    const QByteArray base64 = text.toUtf8().toBase64();
+    fprintf(stdout, "\033]52;c;%s\033\\", base64.constData());
+    fflush(stdout);
 }
