@@ -1,0 +1,152 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
+
+name: Release AppImage
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  BUILD_TYPE: Release
+  QT_VERSION: '6.6.2'
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    container:
+      image: almalinux:8
+
+    steps:
+    - name: Install dependencies
+      run: |
+        dnf install -y epel-release
+        dnf config-manager --set-enabled powertools
+        dnf install -y \
+          cmake \
+          file \
+          fontconfig-devel \
+          freetype-devel \
+          gcc-toolset-13-gcc-c++ \
+          git \
+          libX11-devel \
+          libXi-devel \
+          libXrender-devel \
+          libicu-devel \
+          librsvg2-tools \
+          libxcb-devel \
+          libxkbcommon-devel \
+          libxkbcommon-x11-devel \
+          mesa-libGL-devel \
+          mesa-libGLU-devel \
+          ninja-build \
+          patchelf \
+          python39 \
+          python39-pip \
+          sqlite-devel \
+          squashfs-tools \
+          wget \
+          which \
+          xcb-util-cursor-devel \
+          xcb-util-devel \
+          xcb-util-image-devel \
+          xcb-util-keysyms-devel \
+          xcb-util-renderutil-devel \
+          xcb-util-wm-devel
+        git config --global --add safe.directory '*'
+
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install Qt
+      run: |
+        pip3.9 install aqtinstall py7zr
+        aqt install-qt linux desktop ${{ env.QT_VERSION }} gcc_64 \
+          -m qt5compat -O /opt/qt
+
+    - name: Generate PNG icon
+      run: rsvg-convert -w 256 -h 256 resource/qsoc.svg -o resource/qsoc.png
+
+    - name: Configure CMake
+      run: |
+        source /opt/rh/gcc-toolset-13/enable
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCMAKE_INSTALL_PREFIX=/usr \
+          -DCMAKE_PREFIX_PATH=/opt/qt/${{ env.QT_VERSION }}/gcc_64 \
+          -DENABLE_CLANG_TIDY=OFF \
+          -DENABLE_DOXYGEN=OFF \
+          -DENABLE_UNIT_TEST=OFF
+
+    - name: Build
+      run: |
+        source /opt/rh/gcc-toolset-13/enable
+        cmake --build build --config ${{ env.BUILD_TYPE }}
+
+    - name: Install to AppDir
+      run: |
+        DESTDIR=$(pwd)/AppDir cmake --install build
+        rm -rf AppDir/usr/include
+
+    - name: Bundle libstdc++ and libgcc
+      run: |
+        source /opt/rh/gcc-toolset-13/enable
+        mkdir -p AppDir/usr/lib
+        cp -L "$(gcc -print-file-name=libstdc++.so.6)" AppDir/usr/lib/
+        cp -L "$(gcc -print-file-name=libgcc_s.so.1)" AppDir/usr/lib/
+
+    - name: Download packaging tools
+      run: |
+        wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+        wget -q "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
+        wget -q "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+        wget -q "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64"
+        chmod +x linuxdeploy*.AppImage appimagetool*.AppImage
+
+    - name: Remove unneeded Qt SQL drivers
+      run: |
+        find /opt/qt/${{ env.QT_VERSION }}/gcc_64/plugins/sqldrivers/ \
+          -name '*.so' ! -name '*sqlite*' -delete 2>/dev/null || true
+
+    - name: Build AppImage
+      env:
+        APPIMAGE_EXTRACT_AND_RUN: "1"
+      run: |
+        export QMAKE=/opt/qt/${{ env.QT_VERSION }}/gcc_64/bin/qmake
+        export LD_LIBRARY_PATH=/opt/qt/${{ env.QT_VERSION }}/gcc_64/lib:${LD_LIBRARY_PATH}
+        export EXTRA_QT_PLUGINS="svg"
+        export VERSION="${{ github.ref_name }}"
+        export LDAI_RUNTIME_FILE="$(pwd)/runtime-x86_64"
+        # Phase 1: Bundle dependencies with linuxdeploy (no output)
+        ./linuxdeploy-x86_64.AppImage \
+          --appdir AppDir \
+          --desktop-file AppDir/usr/share/applications/qsoc.desktop \
+          --icon-file resource/qsoc.png \
+          --plugin qt
+        # Phase 2: Convert RUNPATH to RPATH for FUSE mount compatibility
+        find AppDir/usr/lib -type f -name '*.so*' \
+          -exec patchelf --set-rpath '$ORIGIN' --force-rpath {} \; 2>/dev/null || true
+        patchelf --set-rpath '$ORIGIN/../lib' --force-rpath AppDir/usr/bin/qsoc
+        # Phase 3: Package AppImage with static runtime
+        ./appimagetool-x86_64.AppImage \
+          --runtime-file runtime-x86_64 \
+          AppDir "QSoC-${VERSION}-x86_64.AppImage"
+
+    - name: Verify AppImage
+      run: ls -la QSoC-*.AppImage*
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          QSoC-*-x86_64.AppImage
+        generate_release_notes: true
+        draft: false
+        prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
