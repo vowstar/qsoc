@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=QSoC
+GenericName=SoC Design Studio
+Comment=Quick System on Chip Studio
+Exec=qsoc gui
+Icon=qsoc
+Terminal=false
+Categories=Development;Engineering;Electronics;
+Keywords=SoC;ASIC;Verilog;Hardware;
+StartupWMClass=qsoc

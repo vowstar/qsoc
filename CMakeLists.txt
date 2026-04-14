@@ -3,6 +3,8 @@
 
 cmake_minimum_required(VERSION 3.10)
 
+include(GNUInstallDirs)
+
 # Add CMAKE_MODULE_PATH to find custom modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -435,7 +437,15 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 
 install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+
+if(UNIX AND NOT APPLE)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resource/qsoc.desktop"
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resource/qsoc.svg"
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps")
+endif()
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(${PROJECT_NAME})
