@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-name: Release AppImage
+name: Release
 
 on:
   push:
@@ -16,7 +16,7 @@ env:
   QT_VERSION: '6.6.2'
 
 jobs:
-  release:
+  build-linux:
     runs-on: ubuntu-22.04
     container:
       image: almalinux:8
@@ -47,7 +47,6 @@ jobs:
           patchelf \
           python39 \
           python39-pip \
-          sqlite-devel \
           squashfs-tools \
           wget \
           which \
@@ -101,17 +100,14 @@ jobs:
         cp -L "$(gcc -print-file-name=libgcc_s.so.1)" AppDir/usr/lib/
 
     - name: Download packaging tools
+      env:
+        APPIMAGE_EXTRACT_AND_RUN: "1"
       run: |
         wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
         wget -q "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
         wget -q "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
         wget -q "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64"
         chmod +x linuxdeploy*.AppImage appimagetool*.AppImage
-
-    - name: Remove unneeded Qt SQL drivers
-      run: |
-        find /opt/qt/${{ env.QT_VERSION }}/gcc_64/plugins/sqldrivers/ \
-          -name '*.so' ! -name '*sqlite*' -delete 2>/dev/null || true
 
     - name: Build AppImage
       env:
@@ -122,30 +118,115 @@ jobs:
         export EXTRA_QT_PLUGINS="svg"
         export VERSION="${{ github.ref_name }}"
         export LDAI_RUNTIME_FILE="$(pwd)/runtime-x86_64"
-        # Phase 1: Bundle dependencies with linuxdeploy (no output)
         ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
           --desktop-file AppDir/usr/share/applications/qsoc.desktop \
           --icon-file resource/qsoc.png \
           --plugin qt
-        # Phase 2: Convert RUNPATH to RPATH for FUSE mount compatibility
         find AppDir/usr/lib -type f -name '*.so*' \
           -exec patchelf --set-rpath '$ORIGIN' --force-rpath {} \; 2>/dev/null || true
         patchelf --set-rpath '$ORIGIN/../lib' --force-rpath AppDir/usr/bin/qsoc
-        # Phase 3: Package AppImage with static runtime
         ./appimagetool-x86_64.AppImage \
           --runtime-file runtime-x86_64 \
           AppDir "QSoC-${VERSION}-x86_64.AppImage"
 
-    - name: Verify AppImage
-      run: ls -la QSoC-*.AppImage*
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: linux-appimage
+        path: QSoC-*-x86_64.AppImage
+
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_msvc2019_64'
+        modules: 'qt5compat'
+        cache: 'true'
+        cache-key-prefix: 'install-qt-action-windows'
+
+    - name: Install tools
+      run: choco install ninja pkgconfiglite -y
+
+    - name: Configure CMake
+      run: >-
+        cmake -B build -G Ninja
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DSLANG_USE_MIMALLOC=OFF
+        -DENABLE_CLANG_TIDY=OFF
+        -DENABLE_DOXYGEN=OFF
+        -DENABLE_UNIT_TEST=OFF
+
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_TYPE }}
+
+    - name: Deploy
+      run: |
+        mkdir deploy
+        copy build\qsoc.exe deploy\
+        windeployqt deploy\qsoc.exe --release --no-translations --no-system-d3d-compiler --no-opengl-sw
+        # Bundle Qt modules that windeployqt may miss
+        $qtBin = "$env:QT_ROOT_DIR\bin"
+        foreach ($dll in @(
+          "Qt6Core5Compat.dll"
+        )) {
+          if (Test-Path "$qtBin\$dll") {
+            copy "$qtBin\$dll" deploy\
+          }
+        }
+        Remove-Item deploy\*.pdb -ErrorAction SilentlyContinue
+
+    - name: Verify deployment
+      run: |
+        cd deploy
+        .\qsoc.exe -v
+        if ($LASTEXITCODE -ne 0) { throw "qsoc.exe failed with exit code $LASTEXITCODE" }
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-exe
+        path: deploy/
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+
+    - name: Package Windows build
+      run: |
+        cd windows-exe
+        7z a ../QSoC-${{ github.ref_name }}-windows-x64.zip ./*
+
+    - name: List release files
+      run: |
+        ls -la linux-appimage/
+        ls -la QSoC-*-windows-x64.zip
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          QSoC-*-x86_64.AppImage
-        generate_release_notes: true
+          linux-appimage/QSoC-*-x86_64.AppImage
+          QSoC-*-windows-x64.zip
+        body: |
+          **Full Changelog**: https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}
         draft: false
         prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
       env:
