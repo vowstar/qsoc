@@ -5,12 +5,49 @@
 // The templates used by these constructors and converters are at the bottom of
 // BigUnsigned.h.
 
-BigUnsigned::BigUnsigned(unsigned long  x) { initFromPrimitive      (x); }
-BigUnsigned::BigUnsigned(unsigned int   x) { initFromPrimitive      (x); }
-BigUnsigned::BigUnsigned(unsigned short x) { initFromPrimitive      (x); }
-BigUnsigned::BigUnsigned(         long  x) { initFromSignedPrimitive(x); }
-BigUnsigned::BigUnsigned(         int   x) { initFromSignedPrimitive(x); }
-BigUnsigned::BigUnsigned(         short x) { initFromSignedPrimitive(x); }
+BigUnsigned::BigUnsigned(unsigned long      x) { initFromPrimitive      (x); }
+BigUnsigned::BigUnsigned(unsigned int       x) { initFromPrimitive      (x); }
+BigUnsigned::BigUnsigned(unsigned short     x) { initFromPrimitive      (x); }
+BigUnsigned::BigUnsigned(         long      x) { initFromSignedPrimitive(x); }
+BigUnsigned::BigUnsigned(         int       x) { initFromSignedPrimitive(x); }
+BigUnsigned::BigUnsigned(         short     x) { initFromSignedPrimitive(x); }
+BigUnsigned::BigUnsigned(unsigned long long x) {
+	if (x == 0)
+		; // Already zero
+	else if (x <= 0xFFFFFFFFULL) {
+		cap = 1;
+		blk = new Blk[1];
+		len = 1;
+		blk[0] = Blk(x);
+	} else {
+		cap = 2;
+		blk = new Blk[2];
+		len = 2;
+		blk[0] = Blk(x & 0xFFFFFFFFULL);
+		blk[1] = Blk(x >> 32);
+	}
+}
+BigUnsigned::BigUnsigned(long long x) {
+	if (x < 0)
+		throw "BigUnsigned: Cannot construct from negative number";
+	else {
+		unsigned long long ux = static_cast<unsigned long long>(x);
+		if (ux == 0)
+			;
+		else if (ux <= 0xFFFFFFFFULL) {
+			cap = 1;
+			blk = new Blk[1];
+			len = 1;
+			blk[0] = Blk(ux);
+		} else {
+			cap = 2;
+			blk = new Blk[2];
+			len = 2;
+			blk[0] = Blk(ux & 0xFFFFFFFFULL);
+			blk[1] = Blk(ux >> 32);
+		}
+	}
+}
 
 unsigned long  BigUnsigned::toUnsignedLong () const { return convertToPrimitive      <unsigned long >(); }
 unsigned int   BigUnsigned::toUnsignedInt  () const { return convertToPrimitive      <unsigned int  >(); }

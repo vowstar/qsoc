@@ -3,7 +3,9 @@
 
 #include "cli/qagentinputmonitor.h"
 
-#ifndef _WIN32
+#ifdef Q_OS_WIN
+#include <io.h>
+#else
 #include <unistd.h>
 #endif
 
@@ -768,7 +770,57 @@ void QAgentInputMonitor::start()
         return;
     }
 
-#ifndef _WIN32
+#ifdef Q_OS_WIN
+    origStdinHandle = GetStdHandle(STD_INPUT_HANDLE);
+    if (origStdinHandle == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    GetConsoleMode(origStdinHandle, &origConsoleMode);
+    termiosSaved = true;
+
+    DWORD mode = origConsoleMode;
+    mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+    mode |= ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT;
+    SetConsoleMode(origStdinHandle, mode);
+
+    /* Enable VT processing on stdout for ANSI escape output */
+    HANDLE hOut    = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD  outMode = 0;
+    GetConsoleMode(hOut, &outMode);
+    SetConsoleMode(hOut, outMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
+
+    /* Poll console input with a 20ms timer */
+    pollTimer = new QTimer(this);
+    pollTimer->setInterval(20);
+    connect(pollTimer, &QTimer::timeout, this, [this]() {
+        DWORD numEvents = 0;
+        if (!GetNumberOfConsoleInputEvents(origStdinHandle, &numEvents) || numEvents == 0) {
+            return;
+        }
+        std::vector<INPUT_RECORD> records(numEvents);
+        DWORD                     numRead = 0;
+        if (!ReadConsoleInput(
+                origStdinHandle, records.data(), static_cast<DWORD>(records.size()), &numRead)) {
+            return;
+        }
+        for (DWORD i = 0; i < numRead; ++i) {
+            if (records[i].EventType != KEY_EVENT || !records[i].Event.KeyEvent.bKeyDown) {
+                continue;
+            }
+            char ch = records[i].Event.KeyEvent.uChar.AsciiChar;
+            if (ch != 0) {
+                processBytes(&ch, 1);
+            }
+        }
+    });
+    pollTimer->start();
+
+    /* Enable bracketed paste mode */
+    fputs("\033[?2004h", stdout);
+    fflush(stdout);
+
+    active = true;
+#else
     if (tcgetattr(STDIN_FILENO, &origTermios) == 0) {
         termiosSaved = true;
 
@@ -790,8 +842,7 @@ void QAgentInputMonitor::start()
         }
     });
 
-    /* Enable bracketed paste mode: terminal wraps pasted text with
-     * \033[200~ ... \033[201~ so we can distinguish typed Enter from pasted newline. */
+    /* Enable bracketed paste mode */
     {
         const char *seq     = "\033[?2004h";
         ssize_t     written = write(STDOUT_FILENO, seq, 8);
@@ -808,7 +859,22 @@ void QAgentInputMonitor::stop()
         return;
     }
 
-#ifndef _WIN32
+#ifdef Q_OS_WIN
+    if (pollTimer) {
+        pollTimer->stop();
+        delete pollTimer;
+        pollTimer = nullptr;
+    }
+
+    /* Disable bracketed paste mode */
+    fputs("\033[?2004l", stdout);
+    fflush(stdout);
+
+    if (termiosSaved) {
+        SetConsoleMode(origStdinHandle, origConsoleMode);
+        termiosSaved = false;
+    }
+#else
     if (notifier) {
         delete notifier;
         notifier = nullptr;
@@ -825,6 +891,7 @@ void QAgentInputMonitor::stop()
         tcsetattr(STDIN_FILENO, TCSANOW, &origTermios);
         termiosSaved = false;
     }
+#endif
 
     inputBuffer.clear();
     cursorPos = 0;
@@ -837,7 +904,6 @@ void QAgentInputMonitor::stop()
     emit inputChanged(QString());
 
     active = false;
-#endif
 }
 
 bool QAgentInputMonitor::isActive() const
