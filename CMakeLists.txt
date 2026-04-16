@@ -43,7 +43,6 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS
     LinguistTools
     Network
     PrintSupport
-    Sql
     Svg
     Test
     Widgets
@@ -54,7 +53,6 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
     LinguistTools
     Network
     PrintSupport
-    Sql
     Svg
     Test
     Widgets
@@ -65,12 +63,8 @@ if (Qt6_FOUND)
     set(QT_LIBRARIES Qt6::Core5Compat)
 endif()
 
-# SQLite3
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3>=3.26.0)
-if(SQLITE3_FOUND)
-    message(STATUS "Use system SQLite3 library: ${SQLITE3_LIBRARIES} ${SQLITE3_VERSION}")
-endif()
+# Package config (optional, Windows may not have it)
+find_package(PkgConfig)
 
 # Slang(sv-lang)
 pkg_check_modules(SVLANG IMPORTED_TARGET sv-lang>=3.0.0)
@@ -388,7 +382,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 
 target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
-    "${SQLITE3_INCLUDE_DIRS}"
     "${SVLANG_INCLUDE_DIRS}"
     "${JSON_INCLUDE_DIRS}"
     "${INJA_INCLUDE_DIRS}"
@@ -408,11 +401,9 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt${QT_VERSION_MAJOR}::Gui
     Qt${QT_VERSION_MAJOR}::Network
     Qt${QT_VERSION_MAJOR}::PrintSupport
-    Qt${QT_VERSION_MAJOR}::Sql
     Qt${QT_VERSION_MAJOR}::Svg
     Qt${QT_VERSION_MAJOR}::Widgets
     ${QT_LIBRARIES}
-    ${SQLITE3_LIBRARIES}
     ${SVLANG_LIBRARIES}
     ${JSON_LIBRARIES}
     ${INJA_LIBRARIES}
@@ -432,7 +423,6 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
     MACOSX_BUNDLE TRUE
-    WIN32_EXECUTABLE TRUE
 )
 
 install(TARGETS ${PROJECT_NAME}

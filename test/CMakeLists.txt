@@ -81,7 +81,6 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
     )
 
     target_include_directories(${TARGET_NAME} SYSTEM PRIVATE
-        "${SQLITE3_INCLUDE_DIRS}"
         "${SVLANG_INCLUDE_DIRS}"
         "${JSON_INCLUDE_DIRS}"
         "${INJA_INCLUDE_DIRS}"
@@ -101,12 +100,10 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         Qt${QT_VERSION_MAJOR}::Gui
         Qt${QT_VERSION_MAJOR}::Network
         Qt${QT_VERSION_MAJOR}::PrintSupport
-        Qt${QT_VERSION_MAJOR}::Sql
         Qt${QT_VERSION_MAJOR}::Svg
         Qt${QT_VERSION_MAJOR}::Test
         Qt${QT_VERSION_MAJOR}::Widgets
         ${QT_LIBRARIES}
-        ${SQLITE3_LIBRARIES}
         ${SVLANG_LIBRARIES}
         ${JSON_LIBRARIES}
         ${INJA_LIBRARIES}
