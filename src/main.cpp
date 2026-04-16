@@ -8,6 +8,9 @@
 #include "gui/mainwindow/mainwindow.h"
 
 #include <QApplication>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 namespace {
 bool isGui(int &argc, char *argv[])
@@ -27,6 +30,9 @@ int main(int argc, char *argv[])
     QStaticLog::installMessageHandler();
     /* Check if GUI mode is requested */
     if (isGui(argc, argv)) {
+#ifdef Q_OS_WIN
+        FreeConsole();
+#endif
         const QApplication app(argc, argv);
         QStaticTranslator::setup();
         QSocCliWorker socCliWorker;

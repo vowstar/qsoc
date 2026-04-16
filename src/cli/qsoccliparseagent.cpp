@@ -50,7 +50,9 @@
 #include <csignal>
 #include <cstdlib>
 #include <fstream>
+#ifdef Q_OS_UNIX
 #include <sys/wait.h>
+#endif
 #include <yaml-cpp/yaml.h>
 
 namespace {
@@ -76,11 +78,15 @@ void sigintHandler(int)
 
 void installSigintHandler()
 {
+#ifdef Q_OS_UNIX
     struct sigaction sigact = {};
     sigact.sa_handler       = sigintHandler;
     sigemptyset(&sigact.sa_mask);
     sigact.sa_flags = 0;
     sigaction(SIGINT, &sigact, nullptr);
+#else
+    std::signal(SIGINT, sigintHandler);
+#endif
 }
 
 /**
@@ -306,8 +312,13 @@ QString runShellEscape(const QString &command)
 {
     QString result;
     /* Redirect stderr to stdout so error messages are also captured. */
+#ifdef Q_OS_WIN
+    const QByteArray cmd  = (command + " 2>&1").toLocal8Bit();
+    FILE            *pipe = _popen(cmd.constData(), "r");
+#else
     const QByteArray cmd  = (command + " 2>&1").toLocal8Bit();
     FILE            *pipe = popen(cmd.constData(), "r");
+#endif
     if (pipe == nullptr) {
         return QStringLiteral("(failed to run command)\n");
     }
@@ -315,7 +326,12 @@ QString runShellEscape(const QString &command)
     while (fgets(buf, sizeof(buf), pipe) != nullptr) {
         result += QString::fromLocal8Bit(buf);
     }
+#ifdef Q_OS_WIN
+    int ret = _pclose(pipe);
+#else
     int ret = pclose(pipe);
+#endif
+#ifdef Q_OS_UNIX
     if (WIFEXITED(ret)) {
         int exitCode = WEXITSTATUS(ret);
         if (exitCode != 0) {
@@ -324,6 +340,11 @@ QString runShellEscape(const QString &command)
     } else if (WIFSIGNALED(ret)) {
         result += QString("(signal: %1)\n").arg(WTERMSIG(ret));
     }
+#else
+    if (ret != 0) {
+        result += QString("(exit code: %1)\n").arg(ret);
+    }
+#endif
     return result;
 }
 

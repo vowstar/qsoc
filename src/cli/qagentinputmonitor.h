@@ -11,8 +11,10 @@
 #include <QRegularExpression>
 #include <QSocketNotifier>
 #include <QString>
-
-#ifndef _WIN32
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <QTimer>
+#else
 #include <termios.h>
 #endif
 
@@ -159,7 +161,11 @@ private:
      */
     bool findAtomicSpanAtCursor(bool forward, int &outStart, int &outLen) const;
 
-#ifndef _WIN32
+#ifdef Q_OS_WIN
+    HANDLE  origStdinHandle = INVALID_HANDLE_VALUE;
+    DWORD   origConsoleMode = 0;
+    QTimer *pollTimer       = nullptr;
+#else
     struct termios origTermios;
 #endif
     QSocketNotifier    *notifier     = nullptr;

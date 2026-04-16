@@ -5,7 +5,9 @@
 
 #include <cstdio>
 
-#ifndef Q_OS_WIN
+#ifdef Q_OS_WIN
+#include <windows.h>
+#else
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <termios.h>
@@ -109,9 +111,6 @@ int QTuiMenu::computeBoxWidth() const
 
 int QTuiMenu::exec()
 {
-#ifdef Q_OS_WIN
-    return -1;
-#else
     if (items.isEmpty()) {
         return -1;
     }
@@ -119,6 +118,13 @@ int QTuiMenu::exec()
     int termW = 80;
     int termH = 24;
     {
+#ifdef Q_OS_WIN
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+            termW = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+            termH = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+        }
+#else
         struct winsize winsz = {};
         if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) == 0) {
             if (winsz.ws_col > 0) {
@@ -128,6 +134,7 @@ int QTuiMenu::exec()
                 termH = winsz.ws_row;
             }
         }
+#endif
     }
 
     int menuH  = lineCount();
@@ -195,6 +202,12 @@ int QTuiMenu::exec()
 
     renderOverlay();
 
+#ifdef Q_OS_WIN
+    HANDLE hStdin    = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD  savedMode = 0;
+    GetConsoleMode(hStdin, &savedMode);
+    SetConsoleMode(hStdin, ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT);
+#else
     struct termios savedTerm = {};
     tcgetattr(STDIN_FILENO, &savedTerm);
     {
@@ -203,26 +216,83 @@ int QTuiMenu::exec()
         menuTerm.c_cc[VTIME]    = 0;
         tcsetattr(STDIN_FILENO, TCSANOW, &menuTerm);
     }
+#endif
 
     int  result = -1;
     bool done   = false;
 
+    /* Platform-agnostic helper: read one byte with timeout */
+    auto readByte = [&](char *out, int timeoutMs) -> bool {
+#ifdef Q_OS_WIN
+        if (WaitForSingleObject(hStdin, timeoutMs) != WAIT_OBJECT_0) {
+            return false;
+        }
+        DWORD numEvents = 0;
+        if (!GetNumberOfConsoleInputEvents(hStdin, &numEvents) || numEvents == 0) {
+            return false;
+        }
+        INPUT_RECORD rec;
+        DWORD        numRead = 0;
+        while (ReadConsoleInput(hStdin, &rec, 1, &numRead) && numRead > 0) {
+            if (rec.EventType == KEY_EVENT && rec.Event.KeyEvent.bKeyDown) {
+                char ch = rec.Event.KeyEvent.uChar.AsciiChar;
+                if (ch != 0) {
+                    *out = ch;
+                    return true;
+                }
+                /* Map virtual keys for arrow keys */
+                switch (rec.Event.KeyEvent.wVirtualKeyCode) {
+                case VK_UP:
+                    *out = 0;
+                    return true;
+                case VK_DOWN:
+                    *out = 1;
+                    return true;
+                }
+            }
+            if (!GetNumberOfConsoleInputEvents(hStdin, &numEvents) || numEvents == 0) {
+                break;
+            }
+        }
+        return false;
+#else
+        if (timeoutMs >= 0) {
+            fd_set         fds;
+            struct timeval tv = {.tv_sec = timeoutMs / 1000, .tv_usec = (timeoutMs % 1000) * 1000};
+            FD_ZERO(&fds);
+            FD_SET(STDIN_FILENO, &fds);
+            if (select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) <= 0) {
+                return false;
+            }
+        }
+        return read(STDIN_FILENO, out, 1) == 1;
+#endif
+    };
+
     while (!done) {
         char byte = 0;
-        if (read(STDIN_FILENO, &byte, 1) != 1) {
+        if (!readByte(&byte, -1)) {
             break;
         }
 
-        if (byte == 0x1B) {
-            fd_set         fds;
-            struct timeval tv = {.tv_sec = 0, .tv_usec = 50000};
-            FD_ZERO(&fds);
-            FD_SET(STDIN_FILENO, &fds);
+#ifdef Q_OS_WIN
+        /* Handle virtual key codes for arrow keys */
+        if (byte == 0) { /* Up */
+            highlighted = (highlighted <= 0) ? static_cast<int>(items.size()) - 1 : highlighted - 1;
+            renderOverlay();
+            continue;
+        }
+        if (byte == 1) { /* Down */
+            highlighted = (highlighted + 1) % static_cast<int>(items.size());
+            renderOverlay();
+            continue;
+        }
+#endif
 
+        if (byte == 0x1B) {
             char seq[2] = {};
-            if (select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0
-                && read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
-                if (read(STDIN_FILENO, &seq[1], 1) == 1) {
+            if (readByte(&seq[0], 50) && seq[0] == '[') {
+                if (readByte(&seq[1], 50)) {
                     if (seq[1] == 'A') { /* Up */
                         highlighted = (highlighted <= 0) ? static_cast<int>(items.size()) - 1
                                                          : highlighted - 1;
@@ -235,7 +305,7 @@ int QTuiMenu::exec()
                     if (seq[1] == '<') {
                         QByteArray params;
                         char       mch = 0;
-                        while (read(STDIN_FILENO, &mch, 1) == 1) {
+                        while (readByte(&mch, 50)) {
                             if (mch == 'M' || mch == 'm') {
                                 break;
                             }
@@ -288,10 +358,13 @@ int QTuiMenu::exec()
         }
     }
 
+#ifdef Q_OS_WIN
+    SetConsoleMode(hStdin, savedMode);
+#else
     tcsetattr(STDIN_FILENO, TCSANOW, &savedTerm);
+#endif
     fputs("\033[?25h", stdout);
     fflush(stdout);
 
     return result;
-#endif
 }

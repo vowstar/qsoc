@@ -60,6 +60,8 @@ public:
 	BigUnsigned(         int   x);
 	BigUnsigned(unsigned short x);
 	BigUnsigned(         short x);
+	BigUnsigned(unsigned long long x);
+	BigUnsigned(         long long x);
 protected:
 	// Helpers
 	template <class X> void initFromPrimitive      (X x);
