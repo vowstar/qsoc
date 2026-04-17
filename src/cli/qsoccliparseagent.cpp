@@ -12,6 +12,7 @@
 #include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolfile.h"
 #include "agent/tool/qsoctoolgenerate.h"
+#include "agent/tool/qsoctoollsp.h"
 #include "agent/tool/qsoctoolmemory.h"
 #include "agent/tool/qsoctoolmodule.h"
 #include "agent/tool/qsoctoolpath.h"
@@ -25,6 +26,8 @@
 #include "cli/qagentinputmonitor.h"
 #include "cli/qsocexternaleditor.h"
 #include "cli/qterminalcapability.h"
+#include "common/qlspservice.h"
+#include "common/qlspslangbackend.h"
 #include "common/qsoclinediff.h"
 #include "common/qstaticlog.h"
 #include "tui/qtuicompositor.h"
@@ -682,6 +685,14 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         auto *webSearchTool = new QSocToolWebSearch(this, socConfig);
         toolRegistry->registerTool(webSearchTool);
     }
+
+    /* LSP service setup */
+    auto *lspService = QLspService::instance();
+    lspService->addBackend(new QLspSlangBackend(lspService));
+    lspService->startAll(QDir::currentPath());
+
+    auto *lspTool = new QSocToolLsp(this);
+    toolRegistry->registerTool(lspTool);
 
     /* Sync context budget and effort from model registry */
     {

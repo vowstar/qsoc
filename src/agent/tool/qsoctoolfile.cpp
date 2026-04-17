@@ -4,6 +4,7 @@
 #include "agent/tool/qsoctoolfile.h"
 
 #include "agent/qsocfilehistory.h"
+#include "common/qlspservice.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -364,6 +365,9 @@ QString QSocToolFileWrite::execute(const json &arguments)
     out << content;
     file.close();
 
+    /* Notify LSP service about the file change. */
+    QLspService::instance()->didSave(filePath);
+
     return QString("Successfully wrote %1 bytes to: %2").arg(content.size()).arg(filePath);
 }
 
@@ -508,6 +512,9 @@ QString QSocToolFileEdit::execute(const json &arguments)
     QTextStream writeStream(&file);
     writeStream << newContent;
     file.close();
+
+    /* Notify LSP service about the file change. */
+    QLspService::instance()->didSave(filePath);
 
     return QString("Successfully edited file: %1 (%2 replacement(s))")
         .arg(filePath)
