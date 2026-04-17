@@ -117,16 +117,14 @@ bool QSocGenerateManager::renderTemplate(
                         std::string floatBuffer(trimmedView);
                         std::replace(floatBuffer.begin(), floatBuffer.end(), ',', '.');
 
-                        double doubleValue{};
-                        auto [doubleParseEnd, doubleParseErr] = std::from_chars(
-                            floatBuffer.data(),
-                            floatBuffer.data() + floatBuffer.size(),
-                            doubleValue);
-
-                        if (doubleParseErr == std::errc{}
-                            && doubleParseEnd == floatBuffer.data() + floatBuffer.size()) {
-                            row[colName] = doubleValue;
-                            continue;
+                        try {
+                            size_t pos   = 0;
+                            double value = std::stod(floatBuffer, &pos);
+                            if (pos == floatBuffer.size()) {
+                                row[colName] = value;
+                                continue;
+                            }
+                        } catch (...) {
                         }
 
                         /* Parsing failed: keep the original text */

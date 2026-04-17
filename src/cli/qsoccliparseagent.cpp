@@ -759,7 +759,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                 if (checkDoubleInterrupt()) {
                     escMonitor.stop();
                     QTextStream(stderr) << "\n" << Qt::flush;
-                    _exit(130);
+                    std::exit(130);
                 }
                 agent->abort();
             });
@@ -3412,7 +3412,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     if (checkDoubleInterrupt()) {
                         escMonitor.stop();
                         compositor.stop();
-                        _exit(130);
+                        std::exit(130);
                     }
                     agent->abort();
                 });
@@ -3872,7 +3872,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                     if (checkDoubleInterrupt()) {
                         escMonitor.stop();
                         compositor.stop();
-                        _exit(130);
+                        std::exit(130);
                     }
                     agent->abort();
                 });
