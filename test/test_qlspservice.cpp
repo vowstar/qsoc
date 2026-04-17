@@ -26,6 +26,8 @@ private slots:
 
     /* Service lifecycle */
     void addBackend_setsUpExtensionRouting();
+    void addBackend_firstWinsByDefault();
+    void addBackend_overrideReplacesExisting();
     void backendFor_matchesVerilogExtensions();
     void backendFor_returnsNullForUnknown();
     void isAvailable_afterBackendStarted();
@@ -74,6 +76,42 @@ void Test::addBackend_setsUpExtensionRouting()
     QVERIFY(backend->extensions().contains(".v"));
     QVERIFY(backend->extensions().contains(".sv"));
     delete backend;
+}
+
+void Test::addBackend_firstWinsByDefault()
+{
+    QLspService *service = QLspService::instance();
+    service->stopAll();
+
+    auto *first = new QLspSlangBackend(service);
+    service->addBackend(first);
+    service->startAll(tempDir.path());
+    QCOMPARE(service->backendFor("/tmp/x.v"), first);
+
+    /* Second registration without override flag must not replace. */
+    auto *second = new QLspSlangBackend(service);
+    service->addBackend(second);
+    QCOMPARE(service->backendFor("/tmp/x.v"), first);
+
+    service->stopAll();
+}
+
+void Test::addBackend_overrideReplacesExisting()
+{
+    QLspService *service = QLspService::instance();
+    service->stopAll();
+
+    auto *first = new QLspSlangBackend(service);
+    service->addBackend(first);
+    service->startAll(tempDir.path());
+    QCOMPARE(service->backendFor("/tmp/x.v"), first);
+
+    /* Second registration with override flag replaces the mapping. */
+    auto *second = new QLspSlangBackend(service);
+    service->addBackend(second, /* overrideExisting */ true);
+    QCOMPARE(service->backendFor("/tmp/x.v"), second);
+
+    service->stopAll();
 }
 
 void Test::backendFor_matchesVerilogExtensions()

@@ -26,6 +26,7 @@
 #include "cli/qagentinputmonitor.h"
 #include "cli/qsocexternaleditor.h"
 #include "cli/qterminalcapability.h"
+#include "common/qlspconfigloader.h"
 #include "common/qlspservice.h"
 #include "common/qlspslangbackend.h"
 #include "common/qsoclinediff.h"
@@ -686,9 +687,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         toolRegistry->registerTool(webSearchTool);
     }
 
-    /* LSP service setup */
+    /* LSP service setup. Built-in slang backend goes first as fallback;
+       external servers from qsoc.yml override it for matching extensions. */
     auto *lspService = QLspService::instance();
     lspService->addBackend(new QLspSlangBackend(lspService));
+    QLspConfigLoader::loadAndRegister(lspService, socConfig);
     lspService->startAll(QDir::currentPath());
 
     auto *lspTool = new QSocToolLsp(this);

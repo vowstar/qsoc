@@ -27,6 +27,7 @@ public:
     void        stop() override;
     bool        isReady() const override;
     QStringList extensions() const override;
+    QJsonObject capabilities() const override;
     QJsonValue  request(const QString &method, const QJsonObject &params) override;
     void        notify(const QString &method, const QJsonObject &params) override;
 

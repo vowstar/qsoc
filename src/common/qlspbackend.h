@@ -48,6 +48,16 @@ public:
     virtual QStringList extensions() const = 0;
 
     /**
+     * @brief Server capabilities (LSP ServerCapabilities shape).
+     * @details For external backends, this is the cached "capabilities"
+     *          field from the initialize response. For built-in backends,
+     *          this is what the backend implements directly. Used by the
+     *          service layer to gate optional requests like hover and
+     *          definition before sending them.
+     */
+    virtual QJsonObject capabilities() const = 0;
+
+    /**
      * @brief Send a synchronous LSP request.
      * @param method LSP method name, e.g. "textDocument/definition".
      * @param params LSP parameters as JSON.
