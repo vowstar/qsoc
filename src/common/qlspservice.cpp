@@ -21,7 +21,7 @@ QLspService::~QLspService()
     stopAll();
 }
 
-void QLspService::addBackend(QLspBackend *backend)
+void QLspService::addBackend(QLspBackend *backend, bool overrideExisting)
 {
     if (!backend)
         return;
@@ -29,10 +29,9 @@ void QLspService::addBackend(QLspBackend *backend)
     backend->setParent(this);
     backends.append(backend);
 
-    /* Map each extension to this backend (first-registered wins). */
     for (const QString &ext : backend->extensions()) {
         QString lower = ext.toLower();
-        if (!extMap.contains(lower)) {
+        if (overrideExisting || !extMap.contains(lower)) {
             extMap.insert(lower, backend);
         }
     }
@@ -51,7 +50,11 @@ void QLspService::stopAll()
 {
     for (QLspBackend *b : backends) {
         b->stop();
+        b->disconnect(this);
+        b->deleteLater();
     }
+    backends.clear();
+    extMap.clear();
     fileVersions.clear();
     diagCache.clear();
     diagPending.clear();

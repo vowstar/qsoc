@@ -256,6 +256,19 @@ QStringList QLspSlangBackend::extensions() const
     return {".v", ".sv", ".svh", ".vh"};
 }
 
+QJsonObject QLspSlangBackend::capabilities() const
+{
+    /* The built-in backend supports diagnostics via full text sync only. */
+    return QJsonObject{
+        {"textDocumentSync",
+         QJsonObject{
+             {"openClose", true},
+             {"change", 1}, /* Full text sync. */
+             {"save", true},
+         }},
+    };
+}
+
 QJsonValue QLspSlangBackend::request(const QString &method, const QJsonObject &params)
 {
     Q_UNUSED(method)

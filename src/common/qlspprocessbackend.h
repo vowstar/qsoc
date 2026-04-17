@@ -41,6 +41,7 @@ public:
     void        stop() override;
     bool        isReady() const override;
     QStringList extensions() const override;
+    QJsonObject capabilities() const override;
     QJsonValue  request(const QString &method, const QJsonObject &params) override;
     void        notify(const QString &method, const QJsonObject &params) override;
 
@@ -49,18 +50,21 @@ private:
     QStringList args;
     QStringList exts;
 
-    QProcess *process       = nullptr;
-    bool      initialized   = false;
-    int       nextRequestId = 1;
+    QProcess   *process       = nullptr;
+    bool        initialized   = false;
+    int         nextRequestId = 1;
+    QJsonObject serverCapabilities;
 
-    /* Pending synchronous requests waiting for a response. */
+    /* Pending synchronous requests waiting for a response. Keyed by
+       stringified id to handle servers that use string ids (per JSON-RPC
+       spec, id may be integer or string). */
     struct PendingRequest
     {
         QEventLoop *loop   = nullptr;
         QJsonValue *result = nullptr;
         bool        done   = false;
     };
-    QMap<int, PendingRequest> pendingRequests;
+    QMap<QString, PendingRequest> pendingRequests;
 
     /* JSON-RPC message framing */
     QByteArray readBuffer;

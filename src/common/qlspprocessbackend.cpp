@@ -4,6 +4,7 @@
 #include "common/qlspprocessbackend.h"
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QEventLoop>
 #include <QJsonArray>
@@ -47,6 +48,12 @@ bool QLspProcessBackend::start(const QString &workspaceFolder)
             Q_UNUSED(exitCode)
             Q_UNUSED(status)
             initialized = false;
+            /* Unblock any callers stuck on loop.exec() so they don't wait
+               for the request timeout when the server has already exited. */
+            for (auto iter = pendingRequests.begin(); iter != pendingRequests.end(); ++iter) {
+                if (iter->loop)
+                    iter->loop->quit();
+            }
         });
 
     process->start(command, args);
@@ -70,7 +77,6 @@ void QLspProcessBackend::stop()
             {"jsonrpc", "2.0"},
             {"id", nextRequestId++},
             {"method", "shutdown"},
-            {"params", QJsonValue()},
         };
         sendJsonRpc(shutdownMsg);
         process->waitForReadyRead(1000);
@@ -101,6 +107,7 @@ void QLspProcessBackend::stop()
     process = nullptr;
     readBuffer.clear();
     expectedContentLength = -1;
+    serverCapabilities    = {};
 }
 
 bool QLspProcessBackend::isReady() const
@@ -113,15 +120,21 @@ QStringList QLspProcessBackend::extensions() const
     return exts;
 }
 
+QJsonObject QLspProcessBackend::capabilities() const
+{
+    return serverCapabilities;
+}
+
 QJsonValue QLspProcessBackend::request(const QString &method, const QJsonObject &params)
 {
     if (!isReady())
         return QJsonValue();
 
-    int         requestId = nextRequestId++;
+    int         numericId = nextRequestId++;
+    QString     requestId = QString::number(numericId);
     QJsonObject message{
         {"jsonrpc", "2.0"},
-        {"id", requestId},
+        {"id", numericId},
         {"method", method},
         {"params", params},
     };
@@ -227,14 +240,19 @@ bool QLspProcessBackend::tryParseMessage()
 void QLspProcessBackend::handleMessage(const QJsonObject &message)
 {
     if (message.contains("id") && !message.contains("method")) {
-        /* Response to one of our requests. */
-        int responseId = message["id"].toInt();
+        /* Response to one of our requests. Per JSON-RPC, id may be integer
+           or string; stringify uniformly to match pendingRequests. */
+        QString responseId = message["id"].toVariant().toString();
         if (pendingRequests.contains(responseId)) {
             PendingRequest &pending = pendingRequests[responseId];
             if (message.contains("result")) {
                 *pending.result = message["result"];
+            } else if (message.contains("error")) {
+                /* Surface the error in logs so failures aren't silent. */
+                QJsonObject err = message["error"].toObject();
+                qWarning() << "LSP error response:" << err["code"].toInt()
+                           << err["message"].toString();
             }
-            /* If "error" is present, leave result as null. */
             pending.done = true;
             if (pending.loop)
                 pending.loop->quit();
@@ -277,7 +295,8 @@ void QLspProcessBackend::handleMessage(const QJsonObject &message)
 
 bool QLspProcessBackend::sendInitialize(const QString &workspaceFolder)
 {
-    int     requestId    = nextRequestId++;
+    int     numericId    = nextRequestId++;
+    QString requestId    = QString::number(numericId);
     QString workspaceUri = QUrl::fromLocalFile(workspaceFolder).toString();
 
     QJsonObject initParams{
@@ -334,7 +353,7 @@ bool QLspProcessBackend::sendInitialize(const QString &workspaceFolder)
 
     QJsonObject message{
         {"jsonrpc", "2.0"},
-        {"id", requestId},
+        {"id", numericId},
         {"method", "initialize"},
         {"params", initParams},
     };
@@ -353,6 +372,11 @@ bool QLspProcessBackend::sendInitialize(const QString &workspaceFolder)
 
     if (!success)
         return false;
+
+    /* Cache server capabilities for later capability gating. */
+    if (result.isObject()) {
+        serverCapabilities = result.toObject()["capabilities"].toObject();
+    }
 
     /* Send initialized notification. */
     QJsonObject initializedMsg{

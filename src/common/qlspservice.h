@@ -28,10 +28,14 @@ public:
 
     /**
      * @brief Register a backend. The service takes ownership.
-     * @details If multiple backends handle the same extension,
-     *          the first registered one wins.
+     * @param backend Backend to register.
+     * @param overrideExisting When false (default), the first backend
+     *        registered for an extension wins; subsequent registrations
+     *        for the same extension are ignored. When true, the new
+     *        backend replaces any existing mapping. Use true to let
+     *        external servers override the built-in fallback.
      */
-    void addBackend(QLspBackend *backend);
+    void addBackend(QLspBackend *backend, bool overrideExisting = false);
 
     /**
      * @brief Start all registered backends for the workspace.

@@ -324,6 +324,22 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "#   password: optional\n\n";
 
     out << "# =============================================================================\n";
+    out << "# LSP Configuration\n";
+    out << "# =============================================================================\n";
+    out << "# External Language Server Protocol servers. They override the built-in\n";
+    out << "# slang backend for matching file extensions. Each server runs as a child\n";
+    out << "# process communicating over JSON-RPC stdio.\n\n";
+
+    out << "# lsp:\n";
+    out << "#   servers:\n";
+    out << "#     verible:\n";
+    out << "#       command: verible-verilog-ls\n";
+    out << "#       extensions: [.v, .sv, .svh]\n";
+    out << "#     vhdl-ls:\n";
+    out << "#       command: vhdl_ls\n";
+    out << "#       extensions: [.vhd, .vhdl]\n\n";
+
+    out << "# =============================================================================\n";
     out << "# Agent Configuration\n";
     out << "# =============================================================================\n\n";
 

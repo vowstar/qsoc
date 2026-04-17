@@ -32,6 +32,7 @@ private slots:
     /* Lifecycle */
     void startStop();
     void extensions_returnsVerilogTypes();
+    void capabilities_declaresTextDocumentSync();
     void isReady_afterStart();
     void isReady_afterStop();
 
@@ -132,6 +133,18 @@ void Test::extensions_returnsVerilogTypes()
     QVERIFY(exts.contains(".sv"));
     QVERIFY(exts.contains(".svh"));
     QVERIFY(exts.contains(".vh"));
+}
+
+void Test::capabilities_declaresTextDocumentSync()
+{
+    QLspSlangBackend backend;
+    QJsonObject      caps = backend.capabilities();
+    QVERIFY(caps.contains("textDocumentSync"));
+
+    QJsonObject sync = caps["textDocumentSync"].toObject();
+    QVERIFY(sync["openClose"].toBool());
+    QCOMPARE(sync["change"].toInt(), 1); /* Full text sync */
+    QVERIFY(sync["save"].toBool());
 }
 
 void Test::isReady_afterStart()
