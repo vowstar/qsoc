@@ -178,6 +178,79 @@ jobs:
         cd build
         ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure -E "test_qsocgui|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected"
 
+  build-macos:
+    runs-on: macos-15
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'mac'
+        target: 'desktop'
+        arch: 'clang_64'
+        modules: 'qt5compat'
+        cache: 'true'
+        cache-key-prefix: 'install-qt-action-macos'
+
+    - name: Install tools
+      run: brew install ninja pkg-config
+
+    - name: Configure CMake (push - no tests)
+      if: github.event_name == 'push'
+      run: >-
+        cmake -B build -G Ninja
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DSLANG_USE_MIMALLOC=OFF
+        -DENABLE_UNIT_TEST=OFF
+        -DENABLE_CLANG_TIDY=OFF
+        -DENABLE_DOXYGEN=OFF
+
+    - name: Configure CMake (PR - with tests)
+      if: github.event_name == 'pull_request'
+      run: >-
+        cmake -B build -G Ninja
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DSLANG_USE_MIMALLOC=OFF
+        -DENABLE_CLANG_TIDY=OFF
+        -DENABLE_DOXYGEN=OFF
+
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_TYPE }}
+
+    - name: Smoke Test
+      if: github.event_name == 'push'
+      run: |
+        set -e
+        QSOC=./build/qsoc.app/Contents/MacOS/qsoc
+        TMPD=$(mktemp -d)
+        trap "rm -rf $TMPD" EXIT
+        echo "--- version ---"
+        $QSOC -v
+        echo "--- help ---"
+        $QSOC -h | head -3
+        echo "--- project create ---"
+        $QSOC project create -d "$TMPD" smoke_test
+        echo "--- bus import ---"
+        printf 'Name;Mode;Direction;Width;Qualifier\npclk;slave;in;1;\nprdata;slave;out;32;data\n' > "$TMPD/smoke.csv"
+        $QSOC bus import -d "$TMPD" -l smoke_lib -b smoke_bus "$TMPD/smoke.csv"
+        echo "--- module import ---"
+        printf 'module smoke_mod(input clk, output [7:0] data);\nassign data = 8'\''hFF;\nendmodule\n' > "$TMPD/smoke.v"
+        $QSOC module import -d "$TMPD" -l smoke_lib "$TMPD/smoke.v"
+        echo "--- all smoke tests passed ---"
+
+    - name: Full Test
+      if: github.event_name == 'pull_request'
+      run: |
+        cd build
+        QT_QPA_PLATFORM=offscreen ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure
+
   cppcheck:
     runs-on: ubuntu-latest
 
