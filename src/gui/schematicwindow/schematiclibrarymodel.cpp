@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "schematiclibrarymodel.h"
+#include "common/qsocconsole.h"
 #include "common/qsocmodulemanager.h"
 #include "schematicmodule.h"
 
@@ -336,7 +337,7 @@ void SchematicLibraryModel::createModel()
         for (const QString &moduleName : modules) {
             YAML::Node moduleYaml = m_moduleManager->getModuleYaml(moduleName);
             if (moduleYaml.IsNull()) {
-                qDebug() << "Failed to get YAML data for module:" << moduleName;
+                QSocConsole::debug() << "Failed to get YAML data for module:" << moduleName;
                 continue;
             }
 

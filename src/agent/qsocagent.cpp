@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
+#include "common/qsocconsole.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -396,7 +397,7 @@ void QSocAgent::handleStreamComplete(const json &response)
 bool QSocAgent::processIteration()
 {
     if (!llmService || !toolRegistry) {
-        qWarning() << "LLM service or tool registry not configured";
+        QSocConsole::warn() << "LLM service or tool registry not configured";
         return true;
     }
 
@@ -424,14 +425,14 @@ bool QSocAgent::processIteration()
     /* Check for errors */
     if (response.contains("error")) {
         QString errorMsg = QString::fromStdString(response["error"].get<std::string>());
-        qWarning() << "LLM error:" << errorMsg;
+        QSocConsole::warn() << "LLM error:" << errorMsg;
         addMessage("assistant", QString("Error: %1").arg(errorMsg));
         return true;
     }
 
     /* Extract assistant message */
     if (!response.contains("choices") || response["choices"].empty()) {
-        qWarning() << "Invalid LLM response: no choices";
+        QSocConsole::warn() << "Invalid LLM response: no choices";
         addMessage("assistant", "Error: Invalid response from LLM");
         return true;
     }

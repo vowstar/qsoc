@@ -7,7 +7,6 @@
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
 #include "common/qsocyamlutils.h"
-#include "common/qstaticlog.h"
 
 #include <fstream>
 #include <QCoreApplication>

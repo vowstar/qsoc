@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocmodulemanager.h"
+#include "common/qsocconsole.h"
 #include "common/qstaticregex.h"
 #include "common/qstaticstringweaver.h"
 
@@ -130,12 +131,12 @@ bool QSocModuleManager::isModulePathValid()
 {
     /* Validate projectManager */
     if (!projectManager) {
-        qCritical() << "Error: projectManager is nullptr.";
+        QSocConsole::error() << "projectManager is nullptr.";
         return false;
     }
     /* Validate module path. */
     if (!projectManager->isValidModulePath()) {
-        qCritical() << "Error: Invalid module path:" << projectManager->getModulePath();
+        QSocConsole::error() << "Invalid module path:" << projectManager->getModulePath();
         return false;
     }
     return true;
@@ -148,7 +149,7 @@ void QSocModuleManager::resetModuleData()
     /* Reset the module data by creating a new empty YAML node */
     moduleData = YAML::Node();
 
-    qDebug() << "Module data has been reset.";
+    QSocConsole::debug() << "Module data has been reset.";
 }
 
 bool QSocModuleManager::importFromFileList(
@@ -161,12 +162,12 @@ bool QSocModuleManager::importFromFileList(
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
     /* Validate moduleNameRegex */
     if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << moduleNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << moduleNameRegex.pattern();
         return false;
     }
 
@@ -175,7 +176,7 @@ bool QSocModuleManager::importFromFileList(
         QStringList moduleList = slangDriver->getModuleList();
         if (moduleList.isEmpty()) {
             /* No module found */
-            qCritical() << "Error: no module found.";
+            QSocConsole::error() << "no module found.";
             return false;
         }
         YAML::Node libraryYaml;
@@ -184,10 +185,10 @@ bool QSocModuleManager::importFromFileList(
         if (moduleNameRegex.pattern().isEmpty()) {
             /* Pick first module if pattern is empty */
             const QString &moduleName = moduleList.first();
-            qDebug() << "Pick first module:" << moduleName;
+            QSocConsole::debug() << "Pick first module:" << moduleName;
             if (effectiveName.isEmpty()) {
                 effectiveName = moduleName.toLower();
-                qDebug() << "Pick library filename:" << effectiveName;
+                QSocConsole::debug() << "Pick library filename:" << effectiveName;
             }
             const json       &moduleAst  = slangDriver->getModuleAst(moduleName);
             const YAML::Node &moduleYaml = getModuleYaml(moduleAst);
@@ -200,11 +201,11 @@ bool QSocModuleManager::importFromFileList(
         bool hasMatch = false;
         for (const QString &moduleName : moduleList) {
             if (QStaticRegex::isNameExactMatch(moduleName, moduleNameRegex)) {
-                qDebug() << "Found module:" << moduleName;
+                QSocConsole::debug() << "Found module:" << moduleName;
                 if (effectiveName.isEmpty()) {
                     /* Use first module name as library filename */
                     effectiveName = moduleName.toLower();
-                    qDebug() << "Pick library filename:" << effectiveName;
+                    QSocConsole::debug() << "Pick library filename:" << effectiveName;
                 }
                 const json       &moduleAst           = slangDriver->getModuleAst(moduleName);
                 const YAML::Node &moduleYaml          = getModuleYaml(moduleAst);
@@ -217,7 +218,7 @@ bool QSocModuleManager::importFromFileList(
             return true;
         }
     }
-    qCritical() << "Error: no module found.";
+    QSocConsole::error() << "no module found.";
     return false;
 }
 
@@ -277,7 +278,7 @@ YAML::Node QSocModuleManager::getModuleYaml(const QString &moduleName)
 
     /* Check if module exists in moduleData */
     if (!isModuleExist(moduleName)) {
-        qWarning() << "Module does not exist:" << moduleName;
+        QSocConsole::warn() << "Module does not exist:" << moduleName;
         return result;
     }
 
@@ -292,7 +293,7 @@ bool QSocModuleManager::saveLibraryYaml(const QString &libraryName, const YAML::
     YAML::Node localLibraryYaml;
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
     /* Check file path */
@@ -302,7 +303,7 @@ bool QSocModuleManager::saveLibraryYaml(const QString &libraryName, const YAML::
         /* Load library YAML file */
         std::ifstream inputFileStream(filePath.toStdString());
         localLibraryYaml = mergeNodes(YAML::Load(inputFileStream), libraryYaml);
-        qDebug() << "Load and merge";
+        QSocConsole::debug() << "Load and merge";
     } else {
         localLibraryYaml = libraryYaml;
     }
@@ -310,7 +311,7 @@ bool QSocModuleManager::saveLibraryYaml(const QString &libraryName, const YAML::
     /* Save YAML file */
     std::ofstream outputFileStream(filePath.toStdString());
     if (!outputFileStream.is_open()) {
-        qCritical() << "Error: Unable to open file for writing:" << filePath;
+        QSocConsole::error() << "Unable to open file for writing:" << filePath;
         return false;
     }
     outputFileStream << localLibraryYaml;
@@ -321,13 +322,13 @@ bool QSocModuleManager::isLibraryFileExist(const QString &libraryName)
 {
     /* Validate projectManager and its module path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
 
     /* Check library basename */
     if (libraryName.isEmpty()) {
-        qCritical() << "Error: library basename is empty.";
+        QSocConsole::error() << "library basename is empty.";
         return false;
     }
 
@@ -349,12 +350,12 @@ QStringList QSocModuleManager::listLibrary(const QRegularExpression &libraryName
     QStringList result;
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return result;
     }
     /* Validate libraryNameRegex */
     if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << libraryNameRegex.pattern();
         return result;
     }
     /* QDir for '.soc_mod' files in module path, sorted by name. */
@@ -377,13 +378,13 @@ bool QSocModuleManager::load(const QString &libraryName)
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
 
     /* Check if library file exists */
     if (!isLibraryFileExist(libraryName)) {
-        qCritical() << "Error: Library file does not exist for basename:" << libraryName;
+        QSocConsole::error() << "Library file does not exist for basename:" << libraryName;
         return false;
     }
 
@@ -394,7 +395,7 @@ bool QSocModuleManager::load(const QString &libraryName)
     /* Open the YAML file */
     std::ifstream fileStream(filePath.toStdString());
     if (!fileStream.is_open()) {
-        qCritical() << "Error: Unable to open file:" << filePath;
+        QSocConsole::error() << "Unable to open file:" << filePath;
         return false;
     }
 
@@ -414,7 +415,7 @@ bool QSocModuleManager::load(const QString &libraryName)
             libraryMapAdd(libraryName, QString::fromStdString(key));
         }
     } catch (const YAML::Exception &e) {
-        qCritical() << "Error parsing YAML file:" << filePath << ":" << e.what();
+        QSocConsole::error() << "failed to parse YAML file:" << filePath << ":" << e.what();
         return false;
     }
 
@@ -425,12 +426,12 @@ bool QSocModuleManager::load(const QRegularExpression &libraryNameRegex)
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
     /* Validate libraryNameRegex */
     if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << libraryNameRegex.pattern();
         return false;
     }
 
@@ -440,7 +441,7 @@ bool QSocModuleManager::load(const QRegularExpression &libraryNameRegex)
     /* Iterate through the list and load each library */
     for (const QString &basename : matchingBasenames) {
         if (!load(basename)) {
-            qCritical() << "Error: Failed to load library:" << basename;
+            QSocConsole::error() << "Failed to load library:" << basename;
             return false;
         }
     }
@@ -451,7 +452,7 @@ bool QSocModuleManager::load(const QRegularExpression &libraryNameRegex)
 bool QSocModuleManager::load(const QStringList &libraryNameList)
 {
     if (!projectManager || !projectManager->isValid()) {
-        qCritical() << "Error: Invalid or null projectManager.";
+        QSocConsole::error() << "Invalid or null projectManager.";
         return false;
     }
 
@@ -459,7 +460,7 @@ bool QSocModuleManager::load(const QStringList &libraryNameList)
 
     for (const QString &basename : uniqueBasenames) {
         if (!load(basename)) {
-            qCritical() << "Error: Failed to load library:" << basename;
+            QSocConsole::error() << "Failed to load library:" << basename;
             return false;
         }
     }
@@ -471,13 +472,13 @@ bool QSocModuleManager::save(const QString &libraryName)
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid library path.";
+        QSocConsole::error() << "projectManager is null or invalid library path.";
         return false;
     }
 
     /* Check if the libraryName exists in libraryMap */
     if (!libraryMap.contains(libraryName)) {
-        qCritical() << "Error: Library basename not found in libraryMap.";
+        QSocConsole::error() << "Library basename not found in libraryMap.";
         return false;
     }
 
@@ -487,7 +488,7 @@ bool QSocModuleManager::save(const QString &libraryName)
     for (const auto &moduleItem : libraryMap[libraryName]) {
         const std::string moduleNameStd = moduleItem.toStdString();
         if (!moduleData[moduleNameStd]) {
-            qCritical() << "Error: Module data is not exist: " << moduleNameStd;
+            QSocConsole::error() << "Module data is not exist: " << moduleNameStd;
             return false;
         }
         dataToSave[moduleNameStd] = moduleData[moduleNameStd];
@@ -501,7 +502,7 @@ bool QSocModuleManager::save(const QString &libraryName)
         = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
     std::ofstream outputFileStream(filePath.toStdString());
     if (!outputFileStream.is_open()) {
-        qCritical() << "Error: Unable to open file for writing:" << filePath;
+        QSocConsole::error() << "Unable to open file for writing:" << filePath;
         return false;
     }
     outputFileStream << dataToSave;
@@ -514,12 +515,12 @@ bool QSocModuleManager::save(const QRegularExpression &libraryNameRegex)
 
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
     /* Validate libraryNameRegex */
     if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << libraryNameRegex.pattern();
         return false;
     }
 
@@ -527,7 +528,7 @@ bool QSocModuleManager::save(const QRegularExpression &libraryNameRegex)
     for (const QString &libraryName : libraryMap.keys()) {
         if (QStaticRegex::isNameExactMatch(libraryName, libraryNameRegex)) {
             if (!save(libraryName)) {
-                qCritical() << "Error: Failed to save library:" << libraryName;
+                QSocConsole::error() << "Failed to save library:" << libraryName;
                 allSaved = false;
             }
         }
@@ -540,7 +541,7 @@ bool QSocModuleManager::save(const QStringList &libraryNameList)
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
 
@@ -548,7 +549,7 @@ bool QSocModuleManager::save(const QStringList &libraryNameList)
 
     for (const QString &basename : uniqueBasenames) {
         if (!save(basename)) {
-            qCritical() << "Error: Failed to save library:" << basename;
+            QSocConsole::error() << "Failed to save library:" << basename;
             return false;
         }
     }
@@ -560,13 +561,13 @@ bool QSocModuleManager::remove(const QString &libraryName)
 {
     /* Validate projectManager and its module path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
 
     /* Check library basename */
     if (libraryName.isEmpty()) {
-        qCritical() << "Error: library basename is empty.";
+        QSocConsole::error() << "library basename is empty.";
         return false;
     }
 
@@ -576,13 +577,13 @@ bool QSocModuleManager::remove(const QString &libraryName)
 
     /* Check if library file exists */
     if (!QFile::exists(filePath)) {
-        qCritical() << "Error: library file does not exist for basename:" << libraryName;
+        QSocConsole::error() << "library file does not exist for basename:" << libraryName;
         return false;
     }
 
     /* Remove the file */
     if (!QFile::remove(filePath)) {
-        qCritical() << "Error: Failed to remove module file:" << filePath;
+        QSocConsole::error() << "Failed to remove module file:" << filePath;
         return false;
     }
 
@@ -597,12 +598,12 @@ bool QSocModuleManager::remove(const QRegularExpression &libraryNameRegex)
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
     /* Validate libraryNameRegex */
     if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << libraryNameRegex.pattern();
         return false;
     }
 
@@ -612,7 +613,7 @@ bool QSocModuleManager::remove(const QRegularExpression &libraryNameRegex)
     /* Iterate through the list and remove each library */
     for (const QString &basename : matchingBasenames) {
         if (!remove(basename)) {
-            qCritical() << "Error: Failed to remove library:" << basename;
+            QSocConsole::error() << "Failed to remove library:" << basename;
             return false;
         }
     }
@@ -623,7 +624,7 @@ bool QSocModuleManager::remove(const QRegularExpression &libraryNameRegex)
 bool QSocModuleManager::remove(const QStringList &libraryNameList)
 {
     if (!projectManager || !projectManager->isValid()) {
-        qCritical() << "Error: Invalid or null projectManager.";
+        QSocConsole::error() << "Invalid or null projectManager.";
         return false;
     }
 
@@ -631,7 +632,7 @@ bool QSocModuleManager::remove(const QStringList &libraryNameList)
 
     for (const QString &basename : uniqueBasenames) {
         if (!remove(basename)) {
-            qCritical() << "Error: Failed to remove library:" << basename;
+            QSocConsole::error() << "Failed to remove library:" << basename;
             return false;
         }
     }
@@ -648,7 +649,7 @@ bool QSocModuleManager::isModuleExist(const QRegularExpression &moduleNameRegex)
 {
     /* Validate moduleNameRegex */
     if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << moduleNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << moduleNameRegex.pattern();
         return false;
     }
 
@@ -678,7 +679,7 @@ QStringList QSocModuleManager::listModule(const QRegularExpression &moduleNameRe
     QStringList result;
     /* Validate moduleNameRegex */
     if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << moduleNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << moduleNameRegex.pattern();
         return result;
     }
 
@@ -701,7 +702,7 @@ YAML::Node QSocModuleManager::getModuleYamls(const QRegularExpression &moduleNam
 
     /* Check if the regex is valid, if not, return an empty node */
     if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
-        qWarning() << "Invalid regular expression provided.";
+        QSocConsole::warn() << "Invalid regular expression provided.";
         return result;
     }
 
@@ -723,14 +724,14 @@ bool QSocModuleManager::updateModuleYaml(const QString &moduleName, const YAML::
 {
     /* Check if module exists in a library */
     if (!isModuleExist(moduleName)) {
-        qCritical() << "Error: Module does not exist:" << moduleName;
+        QSocConsole::error() << "Module does not exist:" << moduleName;
         return false;
     }
 
     /* Get the library name for this module */
     const QString libraryName = getModuleLibrary(moduleName);
     if (libraryName.isEmpty()) {
-        qCritical() << "Error: Could not find library for module:" << moduleName;
+        QSocConsole::error() << "Could not find library for module:" << moduleName;
         return false;
     }
 
@@ -746,12 +747,12 @@ bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
     /* Validate moduleNameRegex */
     if (!QStaticRegex::isNameRegexValid(moduleNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << moduleNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << moduleNameRegex.pattern();
         return false;
     }
 
@@ -792,13 +793,13 @@ bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
 
     /* Save libraries that still have associations in libraryMap */
     if (!save(libraryToSaveList)) {
-        qCritical() << "Error: Failed to save libraries.";
+        QSocConsole::error() << "Failed to save libraries.";
         return false;
     }
 
     /* Remove modules with no remaining associations in libraryMap */
     if (!remove(libraryToRemoveList)) {
-        qCritical() << "Error: Failed to remove modules.";
+        QSocConsole::error() << "Failed to remove modules.";
         return false;
     }
 

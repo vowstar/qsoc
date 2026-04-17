@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "qsocgenerateprimitivepower.h"
+#include "common/qsocconsole.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <cmath>
@@ -22,7 +23,7 @@ void QSocPowerPrimitive::setForceOverwrite(bool force)
 bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QTextStream &out)
 {
     if (!powerNode || !powerNode.IsMap()) {
-        qWarning() << "Invalid power node provided";
+        QSocConsole::warn() << "Invalid power node provided";
         return false;
     }
 
@@ -30,7 +31,7 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
     PowerControllerConfig config = parsePowerConfig(powerNode);
 
     if (config.domains.isEmpty()) {
-        qWarning() << "Power configuration must have at least one domain";
+        QSocConsole::warn() << "Power configuration must have at least one domain";
         return false;
     }
 
@@ -38,7 +39,7 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
     if (m_parent && m_parent->getProjectManager()) {
         QString outputDir = m_parent->getProjectManager()->getOutputPath();
         if (!generatePowerCellFile(outputDir)) {
-            qWarning() << "Failed to generate power_cell.v file";
+            QSocConsole::warn() << "Failed to generate power_cell.v file";
             return false;
         }
     }
@@ -58,7 +59,7 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
         QString typstPath = outputDir + QStringLiteral("/") + config.moduleName
                             + QStringLiteral(".typ");
         if (!generateTypstDiagram(config, typstPath)) {
-            qWarning() << "Failed to generate Typst diagram (non-critical):" << typstPath;
+            QSocConsole::warn() << "Failed to generate Typst diagram (non-critical):" << typstPath;
         }
     }
 
@@ -72,8 +73,8 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfig(
 
     // Parse basic properties
     if (!powerNode["name"]) {
-        qCritical() << "Error: 'name' field is required in power configuration";
-        qCritical() << "Example: power: { name: pwr0, ... }";
+        QSocConsole::error() << "'name' field is required in power configuration";
+        QSocConsole::err() << "Example: power: { name: pwr0, ... }" << "\n";
         return config;
     }
     config.name       = QString::fromStdString(powerNode["name"].as<std::string>());
@@ -81,13 +82,13 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfig(
 
     // Host clock and reset (required for FSM)
     if (!powerNode["host_clock"]) {
-        qCritical() << "Error: 'host_clock' field is required in power configuration";
+        QSocConsole::error() << "'host_clock' field is required in power configuration";
         return config;
     }
     config.host_clock = QString::fromStdString(powerNode["host_clock"].as<std::string>());
 
     if (!powerNode["host_reset"]) {
-        qCritical() << "Error: 'host_reset' field is required in power configuration";
+        QSocConsole::error() << "'host_reset' field is required in power configuration";
         return config;
     }
     config.host_reset = QString::fromStdString(powerNode["host_reset"].as<std::string>());
@@ -108,7 +109,7 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfig(
 
             // Domain name (required)
             if (!domainNode["name"]) {
-                qCritical() << "Error: 'name' field is required for each domain";
+                QSocConsole::error() << "'name' field is required for each domain";
                 continue;
             }
             domain.name = QString::fromStdString(domainNode["name"].as<std::string>());
@@ -170,16 +171,17 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfig(
                     if (!entry.clock.isEmpty() && !entry.reset.isEmpty()) {
                         // FATAL: Check for host signal misuse (creates circular dependency)
                         if (entry.clock == config.host_clock) {
-                            qCritical()
+                            QSocConsole::error()
                                 << "FATAL: Domain" << domain.name
                                 << "follow entry cannot use host_clock" << config.host_clock
                                 << "as synchronization clock - this creates circular dependency!";
                             continue; // Skip this erroneous configuration
                         }
                         if (entry.reset == config.host_reset) {
-                            qCritical() << "FATAL: Domain" << domain.name
-                                        << "follow entry cannot use host_reset" << config.host_reset
-                                        << "as reset output - this creates port conflict!";
+                            QSocConsole::error()
+                                << "FATAL: Domain" << domain.name
+                                << "follow entry cannot use host_reset" << config.host_reset
+                                << "as reset output - this creates port conflict!";
                             continue; // Skip this erroneous configuration
                         }
                         domain.follow_entries.append(entry);
@@ -503,14 +505,14 @@ bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
 
     // Check if file exists and is complete
     if (!m_forceOverwrite && isPowerCellFileComplete(filePath)) {
-        qInfo() << "power_cell.v already exists and is complete, skipping generation";
+        QSocConsole::info() << "power_cell.v already exists and is complete, skipping generation";
         return true;
     }
 
     // Generate power_cell.v
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Failed to open file for writing:" << filePath;
+        QSocConsole::warn() << "Failed to open file for writing:" << filePath;
         return false;
     }
 
@@ -519,7 +521,7 @@ bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
     out << "\n" << generateResetPipeModule();
     file.close();
 
-    qInfo() << "Generated power_cell.v at:" << filePath;
+    QSocConsole::info() << "Generated power_cell.v at:" << filePath;
     return true;
 }
 
@@ -1156,7 +1158,7 @@ bool QSocPowerPrimitive::generateTypstDiagram(
 {
     QFile file(outputPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Failed to open file for writing:" << outputPath;
+        QSocConsole::warn() << "Failed to open file for writing:" << outputPath;
         return false;
     }
 
@@ -1198,6 +1200,6 @@ bool QSocPowerPrimitive::generateTypstDiagram(
 
     file.close();
 
-    qInfo() << "Generated Typst diagram:" << outputPath;
+    QSocConsole::info() << "Generated Typst diagram:" << outputPath;
     return true;
 }

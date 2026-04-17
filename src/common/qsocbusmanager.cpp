@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocbusmanager.h"
+#include "common/qsocconsole.h"
 
 #include "common/qstaticregex.h"
 
@@ -41,12 +42,12 @@ bool QSocBusManager::isBusPathValid()
 {
     /* Validate projectManager */
     if (!projectManager) {
-        qCritical() << "Error: projectManager is nullptr.";
+        QSocConsole::error() << "projectManager is nullptr.";
         return false;
     }
     /* Validate bus path. */
     if (!projectManager->isValidBusPath()) {
-        qCritical() << "Error: Invalid bus path:" << projectManager->getBusPath();
+        QSocConsole::error() << "Invalid bus path:" << projectManager->getBusPath();
         return false;
     }
     return true;
@@ -57,12 +58,12 @@ bool QSocBusManager::importFromFileList(
 {
     /* Check if libraryName is empty */
     if (libraryName.isEmpty()) {
-        qCritical() << "Error: library name is empty.";
+        QSocConsole::error() << "library name is empty.";
         return false;
     }
     /* Check if busName is empty */
     if (busName.isEmpty()) {
-        qCritical() << "Error: bus name is empty.";
+        QSocConsole::error() << "bus name is empty.";
         return false;
     }
     /* Define standard column names */
@@ -191,7 +192,7 @@ bool QSocBusManager::importFromFileList(
 
     /* Save YAML file */
     if (!saveLibraryYaml(libraryName, busYaml)) {
-        qCritical() << "Error: Failed to save bus library YAML file";
+        QSocConsole::error() << "Failed to save bus library YAML file";
         return false;
     }
 
@@ -269,7 +270,7 @@ bool QSocBusManager::saveLibraryYaml(const QString &libraryName, const YAML::Nod
     YAML::Node localLibraryYaml;
     /* Validate projectManager and its path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return false;
     }
     /* Check file path */
@@ -279,7 +280,7 @@ bool QSocBusManager::saveLibraryYaml(const QString &libraryName, const YAML::Nod
         /* Load library YAML file */
         std::ifstream inputFileStream(filePath.toStdString());
         localLibraryYaml = mergeNodes(YAML::Load(inputFileStream), libraryYaml);
-        qDebug() << "Load and merge";
+        QSocConsole::debug() << "Load and merge";
     } else {
         localLibraryYaml = libraryYaml;
     }
@@ -287,7 +288,7 @@ bool QSocBusManager::saveLibraryYaml(const QString &libraryName, const YAML::Nod
     /* Save YAML file */
     std::ofstream outputFileStream(filePath.toStdString());
     if (!outputFileStream.is_open()) {
-        qCritical() << "Error: Unable to open file for writing:" << filePath;
+        QSocConsole::error() << "Unable to open file for writing:" << filePath;
         return false;
     }
     outputFileStream << localLibraryYaml;
@@ -299,12 +300,12 @@ QStringList QSocBusManager::listLibrary(const QRegularExpression &libraryNameReg
     QStringList result;
     /* Validate projectManager and its path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return result;
     }
     /* Validate libraryNameRegex */
     if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << libraryNameRegex.pattern();
         return result;
     }
     /* QDir for '.soc_bus' files in bus path, sorted by name. */
@@ -327,13 +328,13 @@ bool QSocBusManager::isLibraryFileExist(const QString &libraryName)
 {
     /* Validate projectManager and its bus path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return false;
     }
 
     /* Check library basename */
     if (libraryName.isEmpty()) {
-        qCritical() << "Error: library basename is empty.";
+        QSocConsole::error() << "library basename is empty.";
         return false;
     }
 
@@ -348,13 +349,13 @@ bool QSocBusManager::load(const QString &libraryName)
 {
     /* Validate projectManager and its path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return false;
     }
 
     /* Check if library file exists */
     if (!isLibraryFileExist(libraryName)) {
-        qCritical() << "Error: Library file does not exist for basename:" << libraryName;
+        QSocConsole::error() << "Library file does not exist for basename:" << libraryName;
         return false;
     }
 
@@ -364,7 +365,7 @@ bool QSocBusManager::load(const QString &libraryName)
     /* Open the YAML file */
     std::ifstream fileStream(filePath.toStdString());
     if (!fileStream.is_open()) {
-        qCritical() << "Error: Unable to open file:" << filePath;
+        QSocConsole::error() << "Unable to open file:" << filePath;
         return false;
     }
 
@@ -381,8 +382,8 @@ bool QSocBusManager::load(const QString &libraryName)
 
             /* Check if this is old format (no "port" node) and reject it */
             if (!busData[key]["port"]) {
-                qCritical() << "Error: Bus" << QString::fromStdString(key)
-                            << "has invalid structure (missing 'port' node)";
+                QSocConsole::error() << "Bus" << QString::fromStdString(key)
+                                     << "has invalid structure (missing 'port' node)";
                 /* Remove invalid bus data */
                 busData.remove(key);
                 return false;
@@ -394,7 +395,7 @@ bool QSocBusManager::load(const QString &libraryName)
             libraryMapAdd(libraryName, QString::fromStdString(key));
         }
     } catch (const YAML::Exception &e) {
-        qCritical() << "Error parsing YAML file:" << filePath << ":" << e.what();
+        QSocConsole::error() << "failed to parse YAML file:" << filePath << ":" << e.what();
         return false;
     }
 
@@ -405,12 +406,12 @@ bool QSocBusManager::load(const QRegularExpression &libraryNameRegex)
 {
     /* Validate projectManager and its path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return false;
     }
     /* Validate libraryNameRegex */
     if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << libraryNameRegex.pattern();
         return false;
     }
 
@@ -420,7 +421,7 @@ bool QSocBusManager::load(const QRegularExpression &libraryNameRegex)
     /* Iterate through the list and load each library */
     for (const QString &basename : matchingBasenames) {
         if (!load(basename)) {
-            qCritical() << "Error: Failed to load library:" << basename;
+            QSocConsole::error() << "Failed to load library:" << basename;
             return false;
         }
     }
@@ -431,7 +432,7 @@ bool QSocBusManager::load(const QRegularExpression &libraryNameRegex)
 bool QSocBusManager::load(const QStringList &libraryNameList)
 {
     if (!projectManager || !projectManager->isValid()) {
-        qCritical() << "Error: Invalid or null projectManager.";
+        QSocConsole::error() << "Invalid or null projectManager.";
         return false;
     }
 
@@ -439,7 +440,7 @@ bool QSocBusManager::load(const QStringList &libraryNameList)
 
     for (const QString &basename : uniqueBasenames) {
         if (!load(basename)) {
-            qCritical() << "Error: Failed to load library:" << basename;
+            QSocConsole::error() << "Failed to load library:" << basename;
             return false;
         }
     }
@@ -451,13 +452,13 @@ bool QSocBusManager::remove(const QString &libraryName)
 {
     /* Validate projectManager and its bus path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return false;
     }
 
     /* Check library basename */
     if (libraryName.isEmpty()) {
-        qCritical() << "Error: library basename is empty.";
+        QSocConsole::error() << "library basename is empty.";
         return false;
     }
 
@@ -466,13 +467,13 @@ bool QSocBusManager::remove(const QString &libraryName)
 
     /* Check if library file exists */
     if (!QFile::exists(filePath)) {
-        qCritical() << "Error: library file does not exist for basename:" << libraryName;
+        QSocConsole::error() << "library file does not exist for basename:" << libraryName;
         return false;
     }
 
     /* Remove the file */
     if (!QFile::remove(filePath)) {
-        qCritical() << "Error: Failed to remove bus file:" << filePath;
+        QSocConsole::error() << "Failed to remove bus file:" << filePath;
         return false;
     }
 
@@ -487,12 +488,12 @@ bool QSocBusManager::remove(const QRegularExpression &libraryNameRegex)
 {
     /* Validate projectManager and its path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return false;
     }
     /* Validate libraryNameRegex */
     if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << libraryNameRegex.pattern();
         return false;
     }
 
@@ -502,7 +503,7 @@ bool QSocBusManager::remove(const QRegularExpression &libraryNameRegex)
     /* Iterate through the list and remove each library */
     for (const QString &basename : matchingBasenames) {
         if (!remove(basename)) {
-            qCritical() << "Error: Failed to remove library:" << basename;
+            QSocConsole::error() << "Failed to remove library:" << basename;
             return false;
         }
     }
@@ -513,7 +514,7 @@ bool QSocBusManager::remove(const QRegularExpression &libraryNameRegex)
 bool QSocBusManager::remove(const QStringList &libraryNameList)
 {
     if (!projectManager || !projectManager->isValid()) {
-        qCritical() << "Error: Invalid or null projectManager.";
+        QSocConsole::error() << "Invalid or null projectManager.";
         return false;
     }
 
@@ -521,7 +522,7 @@ bool QSocBusManager::remove(const QStringList &libraryNameList)
 
     for (const QString &basename : uniqueBasenames) {
         if (!remove(basename)) {
-            qCritical() << "Error: Failed to remove library:" << basename;
+            QSocConsole::error() << "Failed to remove library:" << basename;
             return false;
         }
     }
@@ -533,13 +534,13 @@ bool QSocBusManager::save(const QString &libraryName)
 {
     /* Validate projectManager and its path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid library path.";
+        QSocConsole::error() << "projectManager is null or invalid library path.";
         return false;
     }
 
     /* Check if the libraryName exists in libraryMap */
     if (!libraryMap.contains(libraryName)) {
-        qCritical() << "Error: Library basename not found in libraryMap.";
+        QSocConsole::error() << "Library basename not found in libraryMap.";
         return false;
     }
 
@@ -549,7 +550,7 @@ bool QSocBusManager::save(const QString &libraryName)
     for (const auto &busItem : libraryMap[libraryName]) {
         const std::string busNameStd = busItem.toStdString();
         if (!busData[busNameStd]) {
-            qCritical() << "Error: Bus data is not exist: " << busNameStd;
+            QSocConsole::error() << "Bus data is not exist: " << busNameStd;
             return false;
         }
         dataToSave[busNameStd] = busData[busNameStd];
@@ -562,7 +563,7 @@ bool QSocBusManager::save(const QString &libraryName)
     const QString filePath = QDir(projectManager->getBusPath()).filePath(libraryName + ".soc_bus");
     std::ofstream outputFileStream(filePath.toStdString());
     if (!outputFileStream.is_open()) {
-        qCritical() << "Error: Unable to open file for writing:" << filePath;
+        QSocConsole::error() << "Unable to open file for writing:" << filePath;
         return false;
     }
     outputFileStream << dataToSave;
@@ -575,12 +576,12 @@ bool QSocBusManager::save(const QRegularExpression &libraryNameRegex)
 
     /* Validate projectManager and its path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return false;
     }
     /* Validate libraryNameRegex */
     if (!QStaticRegex::isNameRegexValid(libraryNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << libraryNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << libraryNameRegex.pattern();
         return false;
     }
 
@@ -588,7 +589,7 @@ bool QSocBusManager::save(const QRegularExpression &libraryNameRegex)
     for (const QString &libraryName : libraryMap.keys()) {
         if (QStaticRegex::isNameExactMatch(libraryName, libraryNameRegex)) {
             if (!save(libraryName)) {
-                qCritical() << "Error: Failed to save library:" << libraryName;
+                QSocConsole::error() << "Failed to save library:" << libraryName;
                 allSaved = false;
             }
         }
@@ -601,7 +602,7 @@ bool QSocBusManager::save(const QStringList &libraryNameList)
 {
     /* Validate projectManager and its path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return false;
     }
 
@@ -609,7 +610,7 @@ bool QSocBusManager::save(const QStringList &libraryNameList)
 
     for (const QString &basename : uniqueBasenames) {
         if (!save(basename)) {
-            qCritical() << "Error: Failed to save library:" << basename;
+            QSocConsole::error() << "Failed to save library:" << basename;
             return false;
         }
     }
@@ -622,7 +623,7 @@ QStringList QSocBusManager::listBus(const QRegularExpression &busNameRegex)
     QStringList result;
     /* Validate busNameRegex */
     if (!QStaticRegex::isNameRegexValid(busNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << busNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << busNameRegex.pattern();
         return result;
     }
 
@@ -643,12 +644,12 @@ bool QSocBusManager::removeBus(const QRegularExpression &busNameRegex)
 {
     /* Validate projectManager and its path */
     if (!isBusPathValid()) {
-        qCritical() << "Error: projectManager is null or invalid bus path.";
+        QSocConsole::error() << "projectManager is null or invalid bus path.";
         return false;
     }
     /* Validate busNameRegex */
     if (!QStaticRegex::isNameRegexValid(busNameRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << busNameRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << busNameRegex.pattern();
         return false;
     }
 
@@ -688,13 +689,13 @@ bool QSocBusManager::removeBus(const QRegularExpression &busNameRegex)
 
     /* Save libraries that still have associations in libraryMap */
     if (!save(libraryToSaveList)) {
-        qCritical() << "Error: Failed to save libraries.";
+        QSocConsole::error() << "Failed to save libraries.";
         return false;
     }
 
     /* Remove buses with no remaining associations in libraryMap */
     if (!remove(libraryToRemoveList)) {
-        qCritical() << "Error: Failed to remove buses.";
+        QSocConsole::error() << "Failed to remove buses.";
         return false;
     }
 
@@ -707,7 +708,7 @@ YAML::Node QSocBusManager::getBusYaml(const QString &busName)
 
     /* Check if bus exists in busData */
     if (!isBusExist(busName)) {
-        qWarning() << "Bus does not exist:" << busName;
+        QSocConsole::warn() << "Bus does not exist:" << busName;
         return result;
     }
 
@@ -716,7 +717,7 @@ YAML::Node QSocBusManager::getBusYaml(const QString &busName)
 
     /* Check for required port structure */
     if (!result["port"]) {
-        qWarning() << "Bus" << busName << "has invalid structure (missing 'port' node)";
+        QSocConsole::warn() << "Bus" << busName << "has invalid structure (missing 'port' node)";
     }
 
     return result;
@@ -731,7 +732,7 @@ bool QSocBusManager::isBusExist(const QRegularExpression &busNameRegex)
 {
     /* Check if the regex is valid, if not, return false */
     if (!QStaticRegex::isNameRegexValid(busNameRegex)) {
-        qWarning() << "Invalid regular expression provided.";
+        QSocConsole::warn() << "Invalid regular expression provided.";
         return false;
     }
 
@@ -762,7 +763,7 @@ YAML::Node QSocBusManager::getBusYamls(const QRegularExpression &busNameRegex)
 
     /* Check if the regex is valid, if not, return an empty node */
     if (!QStaticRegex::isNameRegexValid(busNameRegex)) {
-        qWarning() << "Invalid regular expression provided.";
+        QSocConsole::warn() << "Invalid regular expression provided.";
         return result;
     }
 

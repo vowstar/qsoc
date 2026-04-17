@@ -1,4 +1,5 @@
 #include "qsocgenerateprimitiveclock.h"
+#include "common/qsocconsole.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <cmath>
@@ -32,7 +33,7 @@ void QSocClockPrimitive::setForceOverwrite(bool force)
 bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QTextStream &out)
 {
     if (!clockNode || !clockNode.IsMap()) {
-        qWarning() << "Invalid clock node provided";
+        QSocConsole::warn() << "Invalid clock node provided";
         return false;
     }
 
@@ -40,7 +41,7 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
     ClockControllerConfig config = parseClockConfig(clockNode);
 
     if (config.inputs.isEmpty() || config.targets.isEmpty()) {
-        qWarning() << "Clock configuration must have at least one input and target";
+        QSocConsole::warn() << "Clock configuration must have at least one input and target";
         return false;
     }
 
@@ -48,7 +49,7 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
     if (m_parent && m_parent->getProjectManager()) {
         QString outputDir = m_parent->getProjectManager()->getOutputPath();
         if (!generateClockCellFile(outputDir)) {
-            qWarning() << "Failed to generate clock_cell.v file";
+            QSocConsole::warn() << "Failed to generate clock_cell.v file";
             return false;
         }
     }
@@ -68,7 +69,7 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
         QString typstPath = outputDir + QStringLiteral("/") + config.moduleName
                             + QStringLiteral(".typ");
         if (!generateTypstDiagram(config, typstPath)) {
-            qWarning() << "Failed to generate Typst diagram (non-critical):" << typstPath;
+            QSocConsole::warn() << "Failed to generate Typst diagram (non-critical):" << typstPath;
         }
     }
 
@@ -82,8 +83,8 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
 
     // Parse basic properties
     if (!clockNode["name"]) {
-        qCritical() << "Error: 'name' field is required in clock configuration";
-        qCritical() << "Example: clock: { name: my_clk_ctrl, ... }";
+        QSocConsole::error() << "'name' field is required in clock configuration";
+        QSocConsole::err() << "Example: clock: { name: my_clk_ctrl, ... }" << "\n";
         return config;
     }
     config.name       = QString::fromStdString(clockNode["name"].as<std::string>());
@@ -178,15 +179,15 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     // Dynamic mode: width is required
                     target.div.width = it->second["div"]["width"].as<int>(0);
                     if (target.div.width <= 0) {
-                        qWarning() << "ERROR: Dynamic divider for target"
-                                   << QString::fromStdString(it->first.as<std::string>())
-                                   << "requires explicit width specification";
+                        QSocConsole::warn() << "ERROR: Dynamic divider for target"
+                                            << QString::fromStdString(it->first.as<std::string>())
+                                            << "requires explicit width specification";
                         target.div.width = 8; // Default fallback
                     }
                     // Verify default value fits in specified width
                     int maxValue = (1 << target.div.width) - 1;
                     if (target.div.default_value > maxValue) {
-                        qWarning()
+                        QSocConsole::warn()
                             << "ERROR: Default value" << target.div.default_value << "for target"
                             << QString::fromStdString(it->first.as<std::string>())
                             << "exceeds maximum value" << maxValue << "for width"
@@ -374,7 +375,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                             // Dynamic mode: width is required
                             link.div.width = linkIt->second["div"]["width"].as<int>(0);
                             if (link.div.width <= 0) {
-                                qWarning()
+                                QSocConsole::warn()
                                     << "ERROR: Dynamic divider for link"
                                     << QString::fromStdString(it->first.as<std::string>()) << "->"
                                     << QString::fromStdString(linkIt->first.as<std::string>())
@@ -384,7 +385,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                             // Verify default value fits in specified width
                             int maxValue = (1 << link.div.width) - 1;
                             if (link.div.default_value > maxValue) {
-                                qWarning()
+                                QSocConsole::warn()
                                     << "ERROR: Default value" << link.div.default_value
                                     << "for link"
                                     << QString::fromStdString(it->first.as<std::string>()) << "->"
@@ -505,9 +506,11 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
 
                 // Validation: multi-link requires select signal
                 if (target.select.isEmpty()) {
-                    qCritical() << "Error: 'select' signal is required for multi-link target:"
-                                << target.name;
-                    qCritical() << "Example: target: { link: {clk1: ~, clk2: ~}, select: sel_sig }";
+                    QSocConsole::error()
+                        << "'select' signal is required for multi-link target:"
+                        << target.name;
+                    QSocConsole::error()
+                        << "Example: target: { link: {clk1: ~, clk2: ~}, select: sel_sig }";
                     return config;
                 }
             }
@@ -520,8 +523,8 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
     QSet<QString> targetNames;
     for (const auto &target : config.targets) {
         if (targetNames.contains(target.name)) {
-            qCritical() << "ERROR: Duplicate output target name:" << target.name;
-            qCritical() << "Each target must have a unique output signal name";
+            QSocConsole::error() << "ERROR: Duplicate output target name:" << target.name;
+            QSocConsole::err() << "Each target must have a unique output signal name" << "\n";
         } else {
             targetNames.insert(target.name);
         }
@@ -1384,8 +1387,8 @@ QSocClockPrimitive::MuxType QSocClockPrimitive::parseMuxType(const QString &type
         return GF_MUX;
 
     // Validate mux type
-    qCritical() << "Error: Unknown mux type:" << typeStr;
-    qCritical() << "Valid types: STD_MUX, GF_MUX";
+    QSocConsole::error() << "Unknown mux type:" << typeStr;
+    QSocConsole::err() << "Valid types: STD_MUX, GF_MUX" << "\n";
     return STD_MUX; // Still return something for compilation
 }
 
@@ -1420,7 +1423,7 @@ bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
 
     if (!file.exists() || m_forceOverwrite) {
         if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            qWarning() << "Cannot open clock_cell.v for writing:" << file.errorString();
+            QSocConsole::warn() << "Cannot open clock_cell.v for writing:" << file.errorString();
             return false;
         }
 
@@ -1457,7 +1460,7 @@ bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
 
     // File exists. Determine which cells are missing.
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qWarning() << "Cannot open clock_cell.v for reading:" << file.errorString();
+        QSocConsole::warn() << "Cannot open clock_cell.v for reading:" << file.errorString();
         return false;
     }
 
@@ -1479,7 +1482,7 @@ bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
 
     // Append missing cells at the end of the file
     if (!file.open(QIODevice::Append | QIODevice::Text)) {
-        qWarning() << "Cannot open clock_cell.v for appending:" << file.errorString();
+        QSocConsole::warn() << "Cannot open clock_cell.v for appending:" << file.errorString();
         return false;
     }
 
@@ -3026,7 +3029,7 @@ bool QSocClockPrimitive::generateTypstDiagram(
 {
     QFile file(outputPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Failed to open Typst output file:" << outputPath;
+        QSocConsole::warn() << "Failed to open Typst output file:" << outputPath;
         return false;
     }
 
@@ -3072,6 +3075,6 @@ bool QSocClockPrimitive::generateTypstDiagram(
     out << "})\n";
 
     file.close();
-    qInfo() << "Generated Typst clock diagram:" << outputPath;
+    QSocConsole::info() << "Generated Typst clock diagram:" << outputPath;
     return true;
 }

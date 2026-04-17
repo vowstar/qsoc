@@ -6,7 +6,6 @@
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
 #include "common/qstaticdatasedes.h"
-#include "common/qstaticlog.h"
 
 bool QSocCliWorker::parseModuleBus(const QStringList &appArguments)
 {

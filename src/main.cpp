@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoccliworker.h"
+#include "common/qsocconsole.h"
 #include "common/qstaticicontheme.h"
-#include "common/qstaticlog.h"
 #include "common/qstatictranslator.h"
 #include "gui/mainwindow/mainwindow.h"
 
@@ -27,7 +27,7 @@ int main(int argc, char *argv[])
 {
     int result = 0;
     /* Install message handler to direct outputs to appropriate streams */
-    QStaticLog::installMessageHandler();
+    QSocConsole::install();
     /* Check if GUI mode is requested */
     if (isGui(argc, argv)) {
 #ifdef Q_OS_WIN
@@ -50,7 +50,7 @@ int main(int argc, char *argv[])
     }
 
     /* Restore original message handler before exiting */
-    QStaticLog::restoreMessageHandler();
+    QSocConsole::restore();
 
     return result;
 }

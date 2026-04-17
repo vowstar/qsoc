@@ -29,8 +29,8 @@
 #include "common/qlspconfigloader.h"
 #include "common/qlspservice.h"
 #include "common/qlspslangbackend.h"
+#include "common/qsocconsole.h"
 #include "common/qsoclinediff.h"
-#include "common/qstaticlog.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuiinputline.h"
 #include "tui/qtuimenu.h"
@@ -154,7 +154,7 @@ void applyModelSwitch(
             std::ofstream fout(configPath.toStdString());
             fout << root;
         } catch (const YAML::Exception &err) {
-            qWarning() << "Failed to save model to config:" << err.what();
+            QSocConsole::warn() << "Failed to save model to config:" << err.what();
         }
     } else {
         qout << "Unknown model: " << modelId << Qt::endl;
@@ -469,7 +469,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
     /* Create agent configuration */
     QSocAgentConfig config;
-    config.verbose = QStaticLog::getLevel() >= QStaticLog::Level::Debug;
+    config.verbose = QSocConsole::level() >= QSocConsole::Level::Debug;
 
     /* Load config from QSocConfig */
     if (socConfig) {
@@ -717,18 +717,19 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
     /* Connect verbose output signal */
     connect(agent, &QSocAgent::verboseOutput, [](const QString &message) {
-        QStaticLog::logD(Q_FUNC_INFO, message);
+        QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":" << message;
     });
 
     /* Connect tool signals for verbose output */
     connect(agent, &QSocAgent::toolCalled, [](const QString &toolName, const QString &arguments) {
-        QStaticLog::logD(
-            Q_FUNC_INFO, QString("Tool called: %1 with args: %2").arg(toolName, arguments));
+        QSocConsole::debug().noquote().nospace()
+            << Q_FUNC_INFO << ":Tool called: " << toolName << " with args: " << arguments;
     });
 
     connect(agent, &QSocAgent::toolResult, [](const QString &toolName, const QString &result) {
         QString truncated = result.length() > 200 ? result.left(200) + "..." : result;
-        QStaticLog::logD(Q_FUNC_INFO, QString("Tool result: %1 -> %2").arg(toolName, truncated));
+        QSocConsole::debug().noquote().nospace()
+            << Q_FUNC_INFO << ":Tool result: " << toolName << " -> " << truncated;
     });
 
     /* Install SIGINT handler for Ctrl+C support in non-raw-mode states */
@@ -736,8 +737,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
     /* Check if single query mode */
     if (parser.isSet("query")) {
-        QString     query = parser.value("query");
-        QTextStream qout(stdout);
+        QString      query = parser.value("query");
+        QTextStream &qout  = QSocConsole::out();
 
         if (streaming) {
             /* Streaming single query mode */
@@ -748,7 +749,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             });
 
             connect(agent, &QSocAgent::reasoningChunk, [&qout](const QString &chunk) {
-                qout << "\033[2m" << chunk << "\033[0m" << Qt::flush;
+                qout << QSocConsole::dim(chunk) << Qt::flush;
             });
 
             connect(agent, &QSocAgent::runComplete, [&qout, &loop](const QString &) {
@@ -772,7 +773,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             connect(&escMonitor, &QAgentInputMonitor::ctrlCPressed, agent, [agent, &escMonitor]() {
                 if (checkDoubleInterrupt()) {
                     escMonitor.stop();
-                    QTextStream(stderr) << "\n" << Qt::flush;
+                    QSocConsole::err() << "\n" << Qt::flush;
                     std::exit(130);
                 }
                 agent->abort();
@@ -899,7 +900,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
                 .arg(MIN_ROWS));
     }
 
-    QTextStream qout(stdout);
+    QTextStream &qout = QSocConsole::out();
 
     /* Create TUI compositor — enters alt screen immediately */
     QTuiCompositor compositor(this);

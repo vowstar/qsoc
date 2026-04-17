@@ -171,6 +171,9 @@ private slots:
         TestApp::instance();
         /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
+        /* Mirror QSocConsole writes through the message handler so legacy
+         * messageList-based assertions still see them. */
+        QSocConsole::setTeeToMessageHandler(true);
 
         /* Set project name */
         projectName = QFileInfo(__FILE__).baseName() + "_data";

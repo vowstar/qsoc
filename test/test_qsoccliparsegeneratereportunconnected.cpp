@@ -61,6 +61,7 @@ private slots:
 
         /* Install message handler to capture debug output */
         qInstallMessageHandler(messageOutput);
+        QSocConsole::setTeeToMessageHandler(true);
     }
 
     void cleanupTestCase()

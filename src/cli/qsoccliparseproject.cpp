@@ -5,7 +5,6 @@
 
 #include "common/qsocprojectmanager.h"
 #include "common/qstaticdatasedes.h"
-#include "common/qstaticlog.h"
 
 bool QSocCliWorker::parseProject(const QStringList &appArguments)
 {

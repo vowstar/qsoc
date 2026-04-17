@@ -5,9 +5,10 @@
 
 #include "common/config.h"
 #include "common/qslangdriver.h"
-#include "common/qstaticlog.h"
+#include "common/qsocconsole.h"
 
 #include <QString>
+#include <QTextStream>
 #include <QTimer>
 #include <QtGlobal>
 
@@ -65,39 +66,39 @@ void QSocCliWorker::run()
 
 bool QSocCliWorker::showVersion(int exitCode)
 {
-    qInfo().noquote() << QCoreApplication::applicationName()
-                      << QCoreApplication::applicationVersion();
+    QSocConsole::out() << QCoreApplication::applicationName() << ' '
+                       << QCoreApplication::applicationVersion() << Qt::endl;
     this->exitCode = exitCode;
     return true;
 }
 
 bool QSocCliWorker::showHelp(int exitCode)
 {
-    qInfo().noquote() << parser.helpText();
+    QSocConsole::out() << parser.helpText() << Qt::endl;
     this->exitCode = exitCode;
     return true;
 }
 
 bool QSocCliWorker::showErrorWithHelp(int exitCode, const QString &message)
 {
-    qCritical().noquote() << message;
-    qCritical().noquote() << QCoreApplication::applicationName()
-                          << QCoreApplication::applicationVersion();
-    qCritical().noquote() << parser.helpText();
+    QSocConsole::err() << message << Qt::endl;
+    QSocConsole::err() << QCoreApplication::applicationName() << ' '
+                       << QCoreApplication::applicationVersion() << Qt::endl;
+    QSocConsole::err() << parser.helpText() << Qt::endl;
     this->exitCode = exitCode;
     return false;
 }
 
 bool QSocCliWorker::showError(int exitCode, const QString &message)
 {
-    qCritical().noquote() << message;
+    QSocConsole::err() << message << Qt::endl;
     this->exitCode = exitCode;
     return false;
 }
 
 bool QSocCliWorker::showInfo(int exitCode, const QString &message)
 {
-    qInfo().noquote() << message;
+    QSocConsole::out() << message << Qt::endl;
     this->exitCode = exitCode;
     return true;
 }
@@ -126,6 +127,15 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
              "Higher values increase output detail.\n"
              "0=silent, 1=error, 2=warning, 3=info, 4=debug, 5=verbose"),
          "level"},
+        {"color",
+         QCoreApplication::translate(
+             "main",
+             "Colorize output: auto (default), always, never.\n"
+             "auto honors NO_COLOR / FORCE_COLOR / isatty;\n"
+             "always forces ANSI even when piped;\n"
+             "never disables ANSI even on a terminal."),
+         "when",
+         "auto"},
         {{"v", "version"}, QCoreApplication::translate("main", "Displays version information.")},
     });
     parser.addPositionalArgument(
@@ -141,18 +151,38 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
             "agent       Run interactive AI agent mode.\n"),
         "<command> [command options]");
     parser.parse(appArguments);
+    /* Resolve --color before any output-emitting code runs. */
+    if (parser.isSet("color")) {
+        const QString when = parser.value("color");
+        if (when == QStringLiteral("auto")) {
+            QSocConsole::setColorMode(QSocConsole::ColorMode::Auto);
+        } else if (when == QStringLiteral("always")) {
+            QSocConsole::setColorMode(QSocConsole::ColorMode::Always);
+        } else if (when == QStringLiteral("never")) {
+            QSocConsole::setColorMode(QSocConsole::ColorMode::Never);
+        } else {
+            return showErrorWithHelp(
+                1,
+                QCoreApplication::translate(
+                    "main", "Error: invalid --color value: %1 (expected auto, always, never).")
+                    .arg(when));
+        }
+    }
     /* Set verbosity level as early as possible */
     if (parser.isSet("verbose")) {
         const int level = parser.value("verbose").toInt();
-        /* Check if the level is valid */
-        if (level < QStaticLog::Level::Silent || level > QStaticLog::Level::Verbose) {
+        /* Check if the level is valid (Silent=0 .. Verbose=5) */
+        /* Accept legacy --verbose 5 as alias for Debug. */
+        if (level < static_cast<int>(QSocConsole::Level::Silent)
+            || level > static_cast<int>(QSocConsole::Level::Debug) + 1) {
             return showErrorWithHelp(
                 1,
                 QCoreApplication::translate("main", "Error: invalid log level: %1.")
                     .arg(parser.value("verbose")));
         }
-        /* Set log level */
-        QStaticLog::setLevel(static_cast<QStaticLog::Level>(level));
+        /* Set log level (clamp 5 to Debug for backward compat). */
+        const int clamped = std::min(level, static_cast<int>(QSocConsole::Level::Debug));
+        QSocConsole::setLevel(static_cast<QSocConsole::Level>(clamped));
     }
     /* version options have higher priority */
     if (parser.isSet("version")) {
@@ -166,7 +196,7 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
     const QString &command       = cmdArguments.first();
     QStringList    nextArguments = appArguments;
     if (command == "gui") {
-        QStaticLog::logV(Q_FUNC_INFO, "Starting GUI ...");
+        QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":Starting GUI ...";
     } else if (command == "project") {
         nextArguments.removeOne(command);
         if (!parseProject(nextArguments)) {

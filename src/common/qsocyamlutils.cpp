@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "qsocyamlutils.h"
+#include "common/qsocconsole.h"
 
 #include <QDebug>
 #include <QFile>
@@ -100,14 +101,14 @@ YAML::Node QSocYamlUtils::loadAndMergeFiles(
     for (const QString &filePath : filePathList) {
         /* Check if file exists */
         if (!QFile::exists(filePath)) {
-            qCritical() << "Error: YAML file does not exist:" << filePath;
+            QSocConsole::error() << "YAML file does not exist:" << filePath;
             return {}; /* Return null node on error */
         }
 
         /* Load the file */
         std::ifstream fileStream(filePath.toStdString());
         if (!fileStream.is_open()) {
-            qCritical() << "Error: Unable to open YAML file:" << filePath;
+            QSocConsole::error() << "Unable to open YAML file:" << filePath;
             return {}; /* Return null node on error */
         }
 
@@ -124,10 +125,10 @@ YAML::Node QSocYamlUtils::loadAndMergeFiles(
                 mergedResult = mergeNodes(mergedResult, currentNode);
             }
 
-            qDebug() << "Successfully loaded and merged YAML file:" << filePath;
+            QSocConsole::debug() << "Successfully loaded and merged YAML file:" << filePath;
 
         } catch (const YAML::Exception &e) {
-            qCritical() << "Error parsing YAML file:" << filePath << ":" << e.what();
+            QSocConsole::error() << "failed to parse YAML file:" << filePath << ":" << e.what();
             return {}; /* Return null node on error */
         }
     }
@@ -201,7 +202,7 @@ QString QSocYamlUtils::yamlNodeToString(const YAML::Node &yamlNode, int indentSi
 
         return QString::fromStdString(emitter.c_str());
     } catch (const YAML::Exception &e) {
-        qWarning() << "Error converting YAML node to string:" << e.what();
+        QSocConsole::warn() << "failed to convert YAML node to string:" << e.what();
         return {"Error: Failed to convert YAML node to string"};
     }
 }
@@ -216,7 +217,7 @@ YAML::Node QSocYamlUtils::cloneNode(const YAML::Node &original)
 
         return YAML::Load(yamlString);
     } catch (const YAML::Exception &e) {
-        qWarning() << "Error cloning YAML node:" << e.what();
+        QSocConsole::warn() << "failed to clone YAML node:" << e.what();
         return {}; /* Return null node on error */
     }
 }
@@ -243,7 +244,7 @@ bool QSocYamlUtils::hasKeyPath(const YAML::Node &yamlNode, const QString &keyPat
 
         return true;
     } catch (const YAML::Exception &e) {
-        qWarning() << "Error checking key path:" << keyPath << ":" << e.what();
+        QSocConsole::warn() << "failed to check key path:" << keyPath << ":" << e.what();
         return false;
     }
 }
@@ -277,7 +278,7 @@ QString QSocYamlUtils::getValueByKeyPath(
         return yamlNodeToString(currentNode);
 
     } catch (const YAML::Exception &e) {
-        qWarning() << "Error getting value by key path:" << keyPath << ":" << e.what();
+        QSocConsole::warn() << "failed to get value by key path:" << keyPath << ":" << e.what();
         return defaultValue;
     }
 }
@@ -321,7 +322,7 @@ bool QSocYamlUtils::setValueByKeyPath(
         return true;
 
     } catch (const YAML::Exception &e) {
-        qWarning() << "Error setting value by key path:" << keyPath << ":" << e.what();
+        QSocConsole::warn() << "failed to set value by key path:" << keyPath << ":" << e.what();
         return false;
     }
 }

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qslangdriver.h"
-#include "common/qstaticlog.h"
+#include "common/qsocconsole.h"
 #include "common/qstaticstringweaver.h"
 
 #include <QFile>
@@ -67,17 +67,17 @@ bool QSlangDriver::parseArgs(const QString &args, bool silent)
     bool result = false;
     try {
         if (!silent) {
-            QStaticLog::logV(Q_FUNC_INFO, "Arguments:" + args);
+            QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":" << "Arguments:" + args;
         }
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
         if (!driver.parseCommandLine(std::string_view(args.toStdString()))) {
             if (!silent) {
                 if (!slang::OS::capturedStdout.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStdout.c_str();
                 }
                 if (!slang::OS::capturedStderr.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStderr.c_str();
                 }
             }
             throw std::runtime_error("Failed to parse command line");
@@ -87,10 +87,10 @@ bool QSlangDriver::parseArgs(const QString &args, bool silent)
         if (!driver.processOptions()) {
             if (!silent) {
                 if (!slang::OS::capturedStdout.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStdout.c_str();
                 }
                 if (!slang::OS::capturedStderr.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStderr.c_str();
                 }
             }
             throw std::runtime_error("Failed to process options");
@@ -100,10 +100,10 @@ bool QSlangDriver::parseArgs(const QString &args, bool silent)
         if (!driver.parseAllSources()) {
             if (!silent) {
                 if (!slang::OS::capturedStdout.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStdout.c_str();
                 }
                 if (!slang::OS::capturedStderr.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStderr.c_str();
                 }
             }
             throw std::runtime_error("Failed to parse sources");
@@ -112,17 +112,17 @@ bool QSlangDriver::parseArgs(const QString &args, bool silent)
         slang::OS::capturedStderr.clear();
         driver.reportMacros();
         if (!silent) {
-            QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            QSocConsole::infoPlain() << slang::OS::capturedStdout.c_str();
         }
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
         if (!driver.reportParseDiags()) {
             if (!silent) {
                 if (!slang::OS::capturedStdout.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStdout.c_str();
                 }
                 if (!slang::OS::capturedStderr.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStderr.c_str();
                 }
             }
             throw std::runtime_error("Failed to report parse diagnostics");
@@ -134,17 +134,17 @@ bool QSlangDriver::parseArgs(const QString &args, bool silent)
         if (!driver.runFullCompilation(false)) {
             if (!silent) {
                 if (!slang::OS::capturedStdout.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStdout.c_str();
                 }
                 if (!slang::OS::capturedStderr.empty()) {
-                    QStaticLog::logE(Q_FUNC_INFO, slang::OS::capturedStderr.c_str());
+                    QSocConsole::errorPlain() << slang::OS::capturedStderr.c_str();
                 }
             }
             throw std::runtime_error("Failed to report compilation");
         }
         result = true;
         if (!silent) {
-            QStaticLog::logI(Q_FUNC_INFO, slang::OS::capturedStdout.c_str());
+            QSocConsole::infoPlain() << slang::OS::capturedStdout.c_str();
         }
 
         slang::JsonWriter         writer;
@@ -165,12 +165,12 @@ bool QSlangDriver::parseArgs(const QString &args, bool silent)
 
         /* Print partial AST */
         if (!silent) {
-            QStaticLog::logV(Q_FUNC_INFO, ast.dump(4).c_str());
+            QSocConsole::debugPlain() << ast.dump(4).c_str();
         }
     } catch (const std::exception &e) {
         /* Handle error */
         if (!silent) {
-            QStaticLog::logE(Q_FUNC_INFO, e.what());
+            QSocConsole::error().noquote().nospace() << Q_FUNC_INFO << ":" << e.what();
         }
     }
     return result;
@@ -185,25 +185,28 @@ bool QSlangDriver::parseFileList(
     bool    result  = false;
     QString content = "";
     if (!QFileInfo::exists(fileListPath) && filePathList.isEmpty()) {
-        QStaticLog::logE(
-            Q_FUNC_INFO,
-            "File path parameter is empty, also the file list path not exist:" + fileListPath);
+        QSocConsole::error().noquote().nospace()
+            << Q_FUNC_INFO
+            << ":File path parameter is empty, also the file list path not exist:" << fileListPath;
     } else {
         /* Process read file list path */
         if (QFileInfo::exists(fileListPath)) {
-            QStaticLog::logD(Q_FUNC_INFO, "Use file list path:" + fileListPath);
+            QSocConsole::debug().noquote().nospace()
+                << Q_FUNC_INFO << ":" << "Use file list path:" + fileListPath;
             /* Read text from filelist */
             QFile inputFile(fileListPath);
             if (inputFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 QTextStream inputStream(&inputFile);
                 content = inputStream.readAll();
             } else {
-                QStaticLog::logE(Q_FUNC_INFO, "Failed to open file list:" + fileListPath);
+                QSocConsole::error().noquote().nospace()
+                    << Q_FUNC_INFO << ":" << "Failed to open file list:" + fileListPath;
             }
         }
         /* Process append of file path list */
         if (!filePathList.isEmpty()) {
-            QStaticLog::logD(Q_FUNC_INFO, "Use file path list:" + filePathList.join(","));
+            QSocConsole::debug().noquote().nospace()
+                << Q_FUNC_INFO << ":" << "Use file path list:" + filePathList.join(",");
             /* Append file path list to the end of content */
             content.append("\n" + filePathList.join("\n"));
         }
@@ -269,10 +272,12 @@ bool QSlangDriver::parseFileList(
             const QString args = baseArgs;
             /* clang-format on */
 
-            QStaticLog::logV(Q_FUNC_INFO, "TemporaryFile name:" + tempFile.fileName());
-            QStaticLog::logV(Q_FUNC_INFO, "Content list begin");
-            QStaticLog::logV(Q_FUNC_INFO, content.toStdString().c_str());
-            QStaticLog::logV(Q_FUNC_INFO, "Content list end");
+            QSocConsole::debug().noquote().nospace()
+                << Q_FUNC_INFO << ":" << "TemporaryFile name:" + tempFile.fileName();
+            QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":" << "Content list begin";
+            QSocConsole::debug().noquote().nospace()
+                << Q_FUNC_INFO << ":" << content.toStdString().c_str();
+            QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":" << "Content list end";
             result = parseArgs(args);
             /* Delete temporary file */
             tempFile.remove();
@@ -600,7 +605,7 @@ QSet<QString> QSlangDriver::extractSignalReferences(const QSet<QString> &exclude
     QSet<QString> signalSet;
 
     if (!compilation) {
-        QStaticLog::logW(Q_FUNC_INFO, "No compilation available");
+        QSocConsole::warn().noquote().nospace() << Q_FUNC_INFO << ":" << "No compilation available";
         return signalSet;
     }
 

@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "common/qsocconsole.h"
 #include "qsoc_test.h"
 
 #include <QDir>
@@ -45,6 +46,9 @@ private slots:
         TestApp::instance();
         /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
+        /* Mirror QSocConsole writes through the message handler so legacy
+         * messageList-based assertions still see them. */
+        QSocConsole::setTeeToMessageHandler(true);
     }
 
     void cleanupTestCase()

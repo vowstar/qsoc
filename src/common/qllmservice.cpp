@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qllmservice.h"
+#include "common/qsocconsole.h"
 
 #include <QDebug>
 #include <QEventLoop>
@@ -131,7 +132,7 @@ LLMResponse QLLMService::sendRequest(
             return response;
         }
 
-        qWarning() << "Endpoint" << endpoint.name << "failed:" << response.errorMessage;
+        QSocConsole::warn() << "Endpoint" << endpoint.name << "failed:" << response.errorMessage;
         advanceEndpoint();
     }
 
@@ -203,7 +204,8 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
             return mappings;
         }
     } catch (const json::parse_error &e) {
-        qDebug() << "JSON parse error in extractMappingsFromResponse (Method 1):" << e.what();
+        QSocConsole::debug() << "JSON parse error in extractMappingsFromResponse (Method 1):"
+                             << e.what();
     }
 
     /* Method 2: Extract JSON object from text */
@@ -224,7 +226,8 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
                 return mappings;
             }
         } catch (const json::parse_error &e) {
-            qDebug() << "JSON parse error in extractMappingsFromResponse (Method 2):" << e.what();
+            QSocConsole::debug() << "JSON parse error in extractMappingsFromResponse (Method 2):"
+                                 << e.what();
         }
     }
 
@@ -294,7 +297,7 @@ void QLLMService::loadConfigSettings()
 
                 modelConfigs[modelCfg.id] = modelCfg;
             } catch (const YAML::Exception &err) {
-                qWarning() << "Failed to parse model config:" << err.what();
+                QSocConsole::warn() << "Failed to parse model config:" << err.what();
             }
         }
     }
@@ -489,8 +492,8 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
         response.success           = false;
         response.errorMessage      = reply->errorString();
         const QByteArray errorData = reply->readAll();
-        qWarning() << "LLM API request failed:" << reply->errorString();
-        qWarning() << "Error response:" << errorData;
+        QSocConsole::warn() << "LLM API request failed:" << reply->errorString();
+        QSocConsole::warn() << "received error response:" << errorData;
         return response;
     }
 
@@ -522,8 +525,8 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
     } catch (const json::parse_error &e) {
         response.success      = false;
         response.errorMessage = QString("JSON parse error: %1").arg(e.what());
-        qWarning() << "JSON parse error:" << e.what();
-        qWarning() << "Raw response:" << responseData;
+        QSocConsole::warn() << "JSON parse error:" << e.what();
+        QSocConsole::warn() << "Raw response:" << responseData;
     }
 
     return response;
@@ -864,7 +867,7 @@ bool QLLMService::parseStreamLine(
         }
 
     } catch (const json::parse_error &err) {
-        qWarning() << "Failed to parse stream chunk:" << err.what();
+        QSocConsole::warn() << "Failed to parse stream chunk:" << err.what();
     }
 
     return false;
@@ -956,7 +959,7 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
         timer.stop();
 
         if (reply->error() != QNetworkReply::NoError) {
-            qWarning() << "Endpoint" << endpoint.name << "failed:" << reply->errorString();
+            QSocConsole::warn() << "Endpoint" << endpoint.name << "failed:" << reply->errorString();
             reply->deleteLater();
             advanceEndpoint();
             continue;
@@ -968,7 +971,7 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
         try {
             return json::parse(responseData.toStdString());
         } catch (const json::parse_error &e) {
-            qWarning() << "JSON parse error:" << e.what();
+            QSocConsole::warn() << "JSON parse error:" << e.what();
             advanceEndpoint();
             continue;
         }

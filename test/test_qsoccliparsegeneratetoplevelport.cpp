@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
@@ -211,6 +212,7 @@ private slots:
     {
         messageList.clear();
         qInstallMessageHandler(messageOutput);
+        QSocConsole::setTeeToMessageHandler(true);
     }
 
     void cleanup() { qInstallMessageHandler(nullptr); }

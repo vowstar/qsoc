@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "schematicmodule.h"
+#include "common/qsocconsole.h"
 #include "schematicconnector.h"
 
 #include <qschematic/items/connector.hpp>
@@ -156,7 +157,7 @@ void SchematicModule::from_container(const gpds::container &container)
         try {
             m_moduleYaml = YAML::Load(*yamlOpt);
         } catch (const YAML::Exception &e) {
-            qWarning() << "Failed to parse YAML:" << e.what();
+            QSocConsole::warn() << "Failed to parse YAML:" << e.what();
         }
     }
 

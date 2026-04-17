@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocconsole.h"
 #include "gui/mainwindow/mainwindow.h"
 
 #include "./ui_mainwindow.h"
@@ -63,7 +64,7 @@ void MainWindow::on_actionNewProject_triggered()
     /* Create project structure */
     if (!projectManager->mkpath() || !projectManager->save(projectName)) {
         /* Error handling */
-        qCritical() << "Failed to initialize project structure";
+        QSocConsole::error() << "Failed to initialize project structure";
         QMessageBox::critical(
             this,
             tr("Project Creation Error"),
@@ -106,7 +107,7 @@ void MainWindow::on_actionOpenProject_triggered()
     projectManager->setProjectPath(projectDir);
     if (!projectManager->load(projectName)) {
         /* Error handling */
-        qCritical() << "Failed to load project:" << projectName;
+        QSocConsole::error() << "Failed to load project:" << projectName;
         QMessageBox::critical(
             this, tr("Project Loading Error"), tr("Failed to load project: %1").arg(projectName));
         return;

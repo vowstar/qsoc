@@ -1,4 +1,5 @@
 #include "qsocgenerateprimitivereset.h"
+#include "common/qsocconsole.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <cmath>
@@ -19,7 +20,7 @@ void QSocResetPrimitive::setForceOverwrite(bool force)
 bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QTextStream &out)
 {
     if (!resetNode || !resetNode.IsMap()) {
-        qWarning() << "Invalid reset node provided";
+        QSocConsole::warn() << "Invalid reset node provided";
         return false;
     }
 
@@ -27,7 +28,7 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
     ResetControllerConfig config = parseResetConfig(resetNode);
 
     if (config.targets.isEmpty()) {
-        qWarning() << "Reset configuration must have at least one target";
+        QSocConsole::warn() << "Reset configuration must have at least one target";
         return false;
     }
 
@@ -35,7 +36,7 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
     if (m_parent && m_parent->getProjectManager()) {
         QString outputDir = m_parent->getProjectManager()->getOutputPath();
         if (!generateResetCellFile(outputDir)) {
-            qWarning() << "Failed to generate reset_cell.v file";
+            QSocConsole::warn() << "Failed to generate reset_cell.v file";
             return false;
         }
     }
@@ -60,7 +61,7 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
         QString typstPath = outputDir + QStringLiteral("/") + config.moduleName
                             + QStringLiteral(".typ");
         if (!generateTypstDiagram(config, typstPath)) {
-            qWarning() << "Failed to generate Typst diagram (non-critical):" << typstPath;
+            QSocConsole::warn() << "Failed to generate Typst diagram (non-critical):" << typstPath;
         }
     }
 
@@ -74,8 +75,8 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
 
     // Basic configuration
     if (!resetNode["name"]) {
-        qCritical() << "Error: 'name' field is required in reset configuration";
-        qCritical() << "Example: reset: { name: my_reset_ctrl, ... }";
+        QSocConsole::error() << "'name' field is required in reset configuration";
+        QSocConsole::err() << "Example: reset: { name: my_reset_ctrl, ... }" << "\n";
         return config;
     }
     config.name       = QString::fromStdString(resetNode["name"].as<std::string>());
@@ -95,10 +96,11 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             if (it->second.IsMap() && it->second["active"]) {
                 source.active = QString::fromStdString(it->second["active"].as<std::string>());
             } else {
-                qCritical() << "Error: 'active' field is required for source '" << source.name
-                            << "'";
-                qCritical() << "Please specify active level explicitly: 'high' or 'low'";
-                qCritical() << "Example: source: { " << source.name << ": {active: low} }";
+                QSocConsole::error()
+                    << "'active' field is required for source '" << source.name << "'";
+                QSocConsole::err()
+                    << "Please specify active level explicitly: 'high' or 'low'" << "\n";
+                QSocConsole::error() << "Example: source: { " << source.name << ": {active: low} }";
                 return config;
             }
 
@@ -120,8 +122,8 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             if (tgtNode["active"]) {
                 target.active = QString::fromStdString(tgtNode["active"].as<std::string>());
             } else {
-                qCritical() << "Error: 'active' field is required for target '" << target.name
-                            << "'";
+                QSocConsole::error()
+                    << "'active' field is required for target '" << target.name << "'";
                 return config;
             }
 
@@ -129,8 +131,8 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             if (tgtNode["async"]) {
                 const YAML::Node &asyncNode = tgtNode["async"];
                 if (!asyncNode["clock"]) {
-                    qCritical()
-                        << "Error: 'clock' field is required for async component in target '"
+                    QSocConsole::error()
+                        << "'clock' field is required for async component in target '"
                         << target.name << "'";
                     return config;
                 }
@@ -142,8 +144,9 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             if (tgtNode["sync"]) {
                 const YAML::Node &syncNode = tgtNode["sync"];
                 if (!syncNode["clock"]) {
-                    qCritical() << "Error: 'clock' field is required for sync component in target '"
-                                << target.name << "'";
+                    QSocConsole::error()
+                        << "'clock' field is required for sync component in target '"
+                        << target.name << "'";
                     return config;
                 }
                 target.sync.clock = QString::fromStdString(syncNode["clock"].as<std::string>());
@@ -154,8 +157,8 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             if (tgtNode["count"]) {
                 const YAML::Node &countNode = tgtNode["count"];
                 if (!countNode["clock"]) {
-                    qCritical()
-                        << "Error: 'clock' field is required for count component in target '"
+                    QSocConsole::error()
+                        << "'clock' field is required for count component in target '"
                         << target.name << "'";
                     return config;
                 }
@@ -198,8 +201,8 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                     if (linkNode["async"]) {
                         const YAML::Node &asyncNode = linkNode["async"];
                         if (!asyncNode["clock"]) {
-                            qCritical()
-                                << "Error: 'clock' field is required for async component in link '"
+                            QSocConsole::error()
+                                << "'clock' field is required for async component in link '"
                                 << link.source << "' of target '" << target.name << "'";
                             return config;
                         }
@@ -213,8 +216,8 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                     if (linkNode["sync"]) {
                         const YAML::Node &syncNode = linkNode["sync"];
                         if (!syncNode["clock"]) {
-                            qCritical()
-                                << "Error: 'clock' field is required for sync component in link '"
+                            QSocConsole::error()
+                                << "'clock' field is required for sync component in link '"
                                 << link.source << "' of target '" << target.name << "'";
                             return config;
                         }
@@ -227,8 +230,8 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                     if (linkNode["count"]) {
                         const YAML::Node &countNode = linkNode["count"];
                         if (!countNode["clock"]) {
-                            qCritical()
-                                << "Error: 'clock' field is required for count component in link '"
+                            QSocConsole::error()
+                                << "'clock' field is required for count component in link '"
                                 << link.source << "' of target '" << target.name << "'";
                             return config;
                         }
@@ -291,18 +294,21 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             }
 
             if (!rootResetFound) {
-                qCritical() << "Error: Specified root_reset '" << config.reason.rootReset
-                            << "' not found in source list.";
-                qCritical() << "Available sources:";
+                QSocConsole::error() << "Specified root_reset '" << config.reason.rootReset
+                                     << "' not found in source list.";
+                QSocConsole::err() << "Available sources:" << "\n";
                 for (const auto &source : config.sources) {
-                    qCritical() << "  - " << source.name << " (active: " << source.active << ")";
+                    QSocConsole::error()
+                        << "  - " << source.name << " (active: " << source.active << ")";
                 }
                 return config;
             }
         } else {
-            qCritical() << "Error: 'root_reset' field is required in reason configuration.";
-            qCritical() << "Please specify which source signal should be used as the root reset.";
-            qCritical() << "Example: reason: { root_reset: por_rst_n, ... }";
+            QSocConsole::error()
+                << "'root_reset' field is required in reason configuration.";
+            QSocConsole::error()
+                << "Please specify which source signal should be used as the root reset.";
+            QSocConsole::err() << "Example: reason: { root_reset: por_rst_n, ... }" << "\n";
             return config; // Return with error
         }
 
@@ -849,7 +855,7 @@ bool QSocResetPrimitive::generateResetCellFile(const QString &outputDir)
     QFile   file(filePath);
 
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Cannot open reset_cell.v for writing:" << file.errorString();
+        QSocConsole::warn() << "Cannot open reset_cell.v for writing:" << file.errorString();
         return false;
     }
 
@@ -1459,7 +1465,7 @@ bool QSocResetPrimitive::generateTypstDiagram(
 {
     QFile file(outputPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Failed to open Typst output file:" << outputPath;
+        QSocConsole::warn() << "Failed to open Typst output file:" << outputPath;
         return false;
     }
 
@@ -1543,6 +1549,6 @@ bool QSocResetPrimitive::generateTypstDiagram(
     out << "})\n";
 
     file.close();
-    qInfo() << "Generated Typst reset diagram:" << outputPath;
+    QSocConsole::info() << "Generated Typst reset diagram:" << outputPath;
     return true;
 }

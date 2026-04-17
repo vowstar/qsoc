@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qlspprocessbackend.h"
+#include "common/qsocconsole.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -250,8 +251,8 @@ void QLspProcessBackend::handleMessage(const QJsonObject &message)
             } else if (message.contains("error")) {
                 /* Surface the error in logs so failures aren't silent. */
                 QJsonObject err = message["error"].toObject();
-                qWarning() << "LSP error response:" << err["code"].toInt()
-                           << err["message"].toString();
+                QSocConsole::warn()
+                    << "LSP error response:" << err["code"].toInt() << err["message"].toString();
             }
             pending.done = true;
             if (pending.loop)

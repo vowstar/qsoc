@@ -3,8 +3,10 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "common/qsocconsole.h"
 #include "qsoc_test.h"
 
+#include <QBuffer>
 #include <QStringList>
 #include <QThread>
 #include <QtCore>
@@ -30,26 +32,40 @@ class Test : public QObject
     Q_OBJECT
 
 private:
-    static QStringList messageList;
-    static void messageOutput(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+    QBuffer outBuffer;
+    QBuffer errBuffer;
+
+    void resetCapture()
     {
-        Q_UNUSED(type);
-        Q_UNUSED(context);
-        messageList << msg;
+        outBuffer.close();
+        errBuffer.close();
+        outBuffer.setData(QByteArray());
+        errBuffer.setData(QByteArray());
+        outBuffer.open(QIODevice::ReadWrite);
+        errBuffer.open(QIODevice::ReadWrite);
+        QSocConsole::setOutputDevice(&outBuffer);
+        QSocConsole::setErrorDevice(&errBuffer);
+    }
+
+    QString captured()
+    {
+        QSocConsole::out().flush();
+        QSocConsole::err().flush();
+        return QString::fromUtf8(outBuffer.data()) + QString::fromUtf8(errBuffer.data());
     }
 
 private slots:
-    void initTestCase()
-    {
-        TestApp::instance();
-        qInstallMessageHandler(messageOutput);
-    }
+    void initTestCase() { TestApp::instance(); }
 
-    void cleanupTestCase() { /* Do nothing */ }
+    void cleanupTestCase()
+    {
+        QSocConsole::setOutputDevice(nullptr);
+        QSocConsole::setErrorDevice(nullptr);
+    }
 
     void optionH()
     {
-        messageList.clear();
+        resetCapture();
         {
             QSocCliWorker     socCliWorker;
             const QStringList appArguments = {
@@ -59,15 +75,12 @@ private slots:
             socCliWorker.setup(appArguments, true);
             socCliWorker.run();
         }
-
-        /* Check that the message list contains the expected message */
-        QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("Usage: qsoc [options]"));
+        QVERIFY(captured().contains("Usage: qsoc [options]"));
     }
 
     void optionHelp()
     {
-        messageList.clear();
+        resetCapture();
         {
             QSocCliWorker     socCliWorker;
             const QStringList appArguments = {
@@ -77,15 +90,12 @@ private slots:
             socCliWorker.setup(appArguments, true);
             socCliWorker.run();
         }
-
-        /* Check that the message list contains the expected message */
-        QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("Usage: qsoc [options]"));
+        QVERIFY(captured().contains("Usage: qsoc [options]"));
     }
 
     void optionVerbose()
     {
-        messageList.clear();
+        resetCapture();
         {
             QSocCliWorker     socCliWorker;
             const QStringList appArguments = {
@@ -95,15 +105,15 @@ private slots:
             socCliWorker.setup(appArguments, true);
             socCliWorker.run();
         }
-
-        /* Check that the message list contains the expected message */
-        QCOMPARE(messageList.count(), 3);
-        QVERIFY(messageList.first().contains("Error: invalid log level: 10"));
+        const QString text = captured();
+        QVERIFY(text.contains("Error: invalid log level: 10"));
+        QVERIFY(text.contains("QSoC " QSOC_VERSION));
+        QVERIFY(text.contains("Usage: qsoc [options]"));
     }
 
     void optionV()
     {
-        messageList.clear();
+        resetCapture();
         {
             QSocCliWorker     socCliWorker;
             const QStringList appArguments = {
@@ -113,15 +123,12 @@ private slots:
             socCliWorker.setup(appArguments, true);
             socCliWorker.run();
         }
-
-        /* Check that the message list contains the expected message */
-        QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("QSoC " QSOC_VERSION));
+        QVERIFY(captured().contains("QSoC " QSOC_VERSION));
     }
 
     void optionVersion()
     {
-        messageList.clear();
+        resetCapture();
         {
             QSocCliWorker     socCliWorker;
             const QStringList appArguments = {
@@ -131,14 +138,9 @@ private slots:
             socCliWorker.setup(appArguments, true);
             socCliWorker.run();
         }
-
-        /* Check that the message list contains the expected message */
-        QCOMPARE(messageList.count(), 1);
-        QVERIFY(messageList.first().contains("QSoC " QSOC_VERSION));
+        QVERIFY(captured().contains("QSoC " QSOC_VERSION));
     }
 };
-
-QStringList Test::messageList;
 
 QSOC_TEST_MAIN(Test)
 

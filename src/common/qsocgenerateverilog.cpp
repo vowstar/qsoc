@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocconsole.h"
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivecomb.h"
@@ -32,7 +33,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     // Check if instance section exists and is valid when present
     if (netlistData["instance"] && !netlistData["instance"].IsMap()) {
-        qCritical() << "Error: Invalid netlist data, 'instance' section is not a map";
+        QSocConsole::error() << "Invalid netlist data, 'instance' section is not a map";
         return false;
     }
 
@@ -48,25 +49,25 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     && netlistData["power"].size() > 0;
 
     if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock && !hasPower) {
-        qCritical() << "Error: Invalid netlist data, no 'instance' section and no 'comb', "
-                       "'seq', 'fsm', 'reset', 'clock', or 'power' section found";
+        QSocConsole::error() << "Invalid netlist data, no 'instance' section and no 'comb', "
+                                "'seq', 'fsm', 'reset', 'clock', or 'power' section found";
         return false;
     }
 
     /* Check if net section exists and has valid format if present */
     if (netlistData["net"] && !netlistData["net"].IsMap()) {
-        qCritical() << "Error: Invalid netlist data, 'net' section is not a map";
+        QSocConsole::error() << "Invalid netlist data, 'net' section is not a map";
         return false;
     }
 
     /* Check if project manager is valid */
     if (!projectManager) {
-        qCritical() << "Error: Project manager is null";
+        QSocConsole::error() << "Project manager is null";
         return false;
     }
 
     if (!projectManager->isValidOutputPath(true)) {
-        qCritical() << "Error: Invalid output path: " << projectManager->getOutputPath();
+        QSocConsole::error() << "Invalid output path: " << projectManager->getOutputPath();
         return false;
     }
 
@@ -77,7 +78,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* Open output file for writing */
     QFile outputFile(outputFilePath);
     if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qCritical() << "Error: Failed to open output file for writing:" << outputFilePath;
+        QSocConsole::error() << "Failed to open output file for writing:" << outputFilePath;
         return false;
     }
 
@@ -104,12 +105,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             const YAML::Node &resetItem = netlistData["reset"][i];
 
             if (!resetItem.IsMap()) {
-                qWarning() << "Skipping invalid reset item at index" << i;
+                QSocConsole::warn() << "Skipping invalid reset item at index" << i;
                 continue;
             }
 
             if (!generateResetPrimitive(resetItem, out)) {
-                qWarning() << "Failed to generate reset primitive at index" << i;
+                QSocConsole::warn() << "Failed to generate reset primitive at index" << i;
                 continue;
             }
 
@@ -127,12 +128,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             const YAML::Node &clockItem = netlistData["clock"][i];
 
             if (!clockItem.IsMap()) {
-                qWarning() << "Skipping invalid clock item at index" << i;
+                QSocConsole::warn() << "Skipping invalid clock item at index" << i;
                 continue;
             }
 
             if (!generateClockPrimitive(clockItem, out)) {
-                qWarning() << "Failed to generate clock primitive at index" << i;
+                QSocConsole::warn() << "Failed to generate clock primitive at index" << i;
                 continue;
             }
 
@@ -150,12 +151,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             const YAML::Node &powerItem = netlistData["power"][i];
 
             if (!powerItem.IsMap()) {
-                qWarning() << "Skipping invalid power item at index" << i;
+                QSocConsole::warn() << "Skipping invalid power item at index" << i;
                 continue;
             }
 
             if (!generatePowerPrimitive(powerItem, out)) {
-                qWarning() << "Failed to generate power primitive at index" << i;
+                QSocConsole::warn() << "Failed to generate power primitive at index" << i;
                 continue;
             }
 
@@ -175,12 +176,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 || !fsmItem["clk"] || !fsmItem["clk"].IsScalar() || !fsmItem["rst"]
                 || !fsmItem["rst"].IsScalar() || !fsmItem["rst_state"]
                 || !fsmItem["rst_state"].IsScalar()) {
-                qWarning() << "Warning: FSM" << i << "has invalid format, skipping";
+                QSocConsole::warn() << "FSM" << i << "has invalid format, skipping";
                 continue; /* Skip invalid FSM items */
             }
 
             if (!generateFSMPrimitive(fsmItem, out)) {
-                qWarning() << "Failed to generate FSM primitive at index" << i;
+                QSocConsole::warn() << "Failed to generate FSM primitive at index" << i;
                 continue;
             }
 
@@ -208,13 +209,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
             /* Generate combinational logic */
             if (!generateCombPrimitive(netlistData, out)) {
-                qWarning() << "Failed to generate combinational logic primitives";
+                QSocConsole::warn() << "Failed to generate combinational logic primitives";
                 return false;
             }
 
             /* Generate sequential logic */
             if (!generateSeqPrimitive(netlistData, out)) {
-                qWarning() << "Failed to generate sequential logic primitives";
+                QSocConsole::warn() << "Failed to generate sequential logic primitives";
                 return false;
             }
 
@@ -222,7 +223,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         }
 
         outputFile.close();
-        qInfo() << "Successfully generated Verilog file:" << outputFilePath;
+        QSocConsole::info() << "Successfully generated Verilog file:" << outputFilePath;
         formatVerilogFile(outputFilePath);
         return true;
     }
@@ -240,14 +241,15 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
              paramIter != netlistData["parameter"].end();
              ++paramIter) {
             if (!paramIter->first.IsScalar()) {
-                qWarning() << "Warning: Invalid parameter name, skipping";
+                QSocConsole::warn() << "Invalid parameter name, skipping";
                 continue;
             }
 
             const QString paramName = QString::fromStdString(paramIter->first.as<std::string>());
 
             if (!paramIter->second.IsMap()) {
-                qWarning() << "Warning: Parameter" << paramName << "has invalid format, skipping";
+                QSocConsole::warn()
+                    << "Parameter" << paramName << "has invalid format, skipping";
                 continue;
             }
 
@@ -292,14 +294,15 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         for (auto portIter = netlistData["port"].begin(); portIter != netlistData["port"].end();
              ++portIter) {
             if (!portIter->first.IsScalar()) {
-                qWarning() << "Warning: Invalid port name, skipping";
+                QSocConsole::warn() << "Invalid port name, skipping";
                 continue;
             }
 
             const QString portName = QString::fromStdString(portIter->first.as<std::string>());
 
             if (!portIter->second.IsMap()) {
-                qWarning() << "Warning: Port" << portName << "has invalid format, skipping";
+                QSocConsole::warn()
+                    << "Port" << portName << "has invalid format, skipping";
                 continue;
             }
 
@@ -387,14 +390,15 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     /* Process List format connections */
                     for (const auto &connectionNode : netNode) {
                         if (!connectionNode.IsMap()) {
-                            qWarning() << "Warning: Invalid connection node in net" << netName;
+                            QSocConsole::warn()
+                                << "Invalid connection node in net" << netName;
                             continue;
                         }
 
                         /* Get instance name */
                         if (!connectionNode["instance"] || !connectionNode["instance"].IsScalar()) {
-                            qWarning()
-                                << "Warning: No instance name in connection for net" << netName;
+                            QSocConsole::warn()
+                                << "No instance name in connection for net" << netName;
                             continue;
                         }
                         const QString instanceName = QString::fromStdString(
@@ -402,7 +406,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Get port name */
                         if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
-                            qWarning() << "Warning: No port name in connection for net" << netName;
+                            QSocConsole::warn()
+                                << "No port name in connection for net" << netName;
                             continue;
                         }
                         const QString portName = QString::fromStdString(
@@ -456,11 +461,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         }
                     }
                 } else {
-                    qWarning() << "Warning: Net" << netName
-                               << "is not in List format, skipping connections";
+                    QSocConsole::warn()
+                        << "Net" << netName << "is not in List format, skipping connections";
                 }
             } catch (const std::exception &e) {
-                qWarning() << "Error processing net:" << e.what();
+                QSocConsole::warn() << "failed to process net:" << e.what();
             }
         }
     }
@@ -471,9 +476,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* Generate wire declarations FIRST */
     if (netlistData["net"]) {
         if (!netlistData["net"].IsMap()) {
-            qWarning() << "Warning: 'net' section is not a map, skipping wire declarations";
+            QSocConsole::warn()
+                << "'net' section is not a map, skipping wire declarations";
         } else if (netlistData["net"].size() == 0) {
-            qWarning() << "Warning: 'net' section is empty, no wire declarations to generate";
+            QSocConsole::warn()
+                << "'net' section is empty, no wire declarations to generate";
         } else {
             /* Collect comb/seq/fsm signals (inputs and outputs) once before the loop */
             const QList<PortDetailInfo> combSeqFsmSignals = collectCombSeqFsmSignals();
@@ -481,27 +488,29 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             for (auto netIter = netlistData["net"].begin(); netIter != netlistData["net"].end();
                  ++netIter) {
                 if (!netIter->first.IsScalar()) {
-                    qWarning() << "Warning: Invalid net name, skipping";
+                    QSocConsole::warn() << "Invalid net name, skipping";
                     continue;
                 }
 
                 const QString netName = QString::fromStdString(netIter->first.as<std::string>());
 
                 if (!netIter->second) {
-                    qWarning() << "Warning: Net" << netName << "has null data, skipping";
+                    QSocConsole::warn() << "Net" << netName << "has null data, skipping";
                     continue;
                 }
 
                 /* Net connections should be a sequence (list) of instance-port pairs */
                 if (!netIter->second.IsSequence()) {
-                    qWarning() << "Warning: Net" << netName << "is not a sequence, skipping";
+                    QSocConsole::warn()
+                        << "Net" << netName << "is not a sequence, skipping";
                     continue;
                 }
 
                 const YAML::Node &connections = netIter->second;
 
                 if (connections.size() == 0) {
-                    qWarning() << "Warning: Net" << netName << "has no connections, skipping";
+                    QSocConsole::warn()
+                        << "Net" << netName << "has no connections, skipping";
                     continue;
                 }
 
@@ -610,14 +619,15 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 if (netNode.IsSequence()) {
                     for (const auto &connectionNode : netNode) {
                         if (!connectionNode.IsMap()) {
-                            qWarning() << "Warning: Invalid connection node in net" << netName;
+                            QSocConsole::warn()
+                                << "Invalid connection node in net" << netName;
                             continue;
                         }
 
                         /* Get instance name */
                         if (!connectionNode["instance"] || !connectionNode["instance"].IsScalar()) {
-                            qWarning()
-                                << "Warning: No instance name in connection for net" << netName;
+                            QSocConsole::warn()
+                                << "No instance name in connection for net" << netName;
                             continue;
                         }
                         const QString instanceName = QString::fromStdString(
@@ -625,7 +635,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Get port name */
                         if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
-                            qWarning() << "Warning: No port name in connection for net" << netName;
+                            QSocConsole::warn()
+                                << "No port name in connection for net" << netName;
                             continue;
                         }
                         const QString portName = QString::fromStdString(
@@ -748,7 +759,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 /* Check port width consistency */
                 const bool hasWidthMismatch = !checkPortWidthConsistency(portConnections);
                 if (hasWidthMismatch) {
-                    qWarning() << "Warning: Port width mismatch detected for net" << netName;
+                    QSocConsole::warn()
+                        << "Port width mismatch detected for net" << netName;
                 }
 
                 /* Check port direction consistency with bit-level overlap detection */
@@ -758,10 +770,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 const bool isMultidrive = (dirStatus == PortDirectionStatus::Multidrive);
 
                 if (isUndriven) {
-                    qWarning() << "Warning: Net" << netName
-                               << "has only input ports, missing driver";
+                    QSocConsole::warn()
+                        << "Net" << netName << "has only input ports, missing driver";
                 } else if (isMultidrive) {
-                    qWarning() << "Warning: Net" << netName << "has multiple output/inout ports";
+                    QSocConsole::warn()
+                        << "Net" << netName << "has multiple output/inout ports";
                 }
 
                 /* Generate combined warning comments for the net */
@@ -1185,8 +1198,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             out << "\n";
         }
     } else {
-        qWarning()
-            << "Warning: No 'net' section in netlist, no wire declarations will be generated";
+        QSocConsole::warn()
+            << "No 'net' section in netlist, no wire declarations will be generated";
     }
 
     /* Add instances section comment */
@@ -1199,7 +1212,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
              ++instanceIter) {
             /* Check if the instance name is a scalar */
             if (!instanceIter->first.IsScalar()) {
-                qWarning() << "Warning: Invalid instance name, skipping";
+                QSocConsole::warn() << "Invalid instance name, skipping";
                 continue;
             }
 
@@ -1208,15 +1221,15 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
             /* Check if the instance data is valid */
             if (!instanceIter->second || !instanceIter->second.IsMap()) {
-                qWarning() << "Warning: Invalid instance data for" << instanceName
-                           << "(not a map), skipping";
+                QSocConsole::warn()
+                    << "Invalid instance data for" << instanceName << "(not a map), skipping";
                 continue;
             }
 
             const YAML::Node &instanceData = instanceIter->second;
 
             if (!instanceData["module"] || !instanceData["module"].IsScalar()) {
-                qWarning() << "Warning: Invalid module name for instance" << instanceName;
+                QSocConsole::warn() << "Invalid module name for instance" << instanceName;
                 continue;
             }
 
@@ -1242,11 +1255,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             /* Add parameters if they exist */
             if (instanceData["parameter"]) {
                 if (!instanceData["parameter"].IsMap()) {
-                    qWarning() << "Warning: 'parameter' section for instance" << instanceName
-                               << "is not a map, ignoring";
+                    QSocConsole::warn() << "'parameter' section for instance" << instanceName
+                                        << "is not a map, ignoring";
                 } else if (instanceData["parameter"].size() == 0) {
-                    qWarning() << "Warning: 'parameter' section for instance" << instanceName
-                               << "is empty, ignoring";
+                    QSocConsole::warn() << "'parameter' section for instance" << instanceName
+                                        << "is empty, ignoring";
                 } else {
                     out << "#(\n";
 
@@ -1255,16 +1268,17 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                          paramIter != instanceData["parameter"].end();
                          ++paramIter) {
                         if (!paramIter->first.IsScalar()) {
-                            qWarning()
-                                << "Warning: Invalid parameter name in instance" << instanceName;
+                            QSocConsole::warn()
+                                << "Invalid parameter name in instance" << instanceName;
                             continue;
                         }
 
                         if (!paramIter->second.IsScalar()) {
-                            qWarning() << "Warning: Parameter"
-                                       << QString::fromStdString(paramIter->first.as<std::string>())
-                                       << "in instance" << instanceName
-                                       << "has a non-scalar value, skipping";
+                            QSocConsole::warn()
+                                << "Parameter"
+                                << QString::fromStdString(paramIter->first.as<std::string>())
+                                << "in instance" << instanceName
+                                << "has a non-scalar value, skipping";
                             continue;
                         }
 
@@ -1301,7 +1315,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                          portIter != moduleData["port"].end();
                          ++portIter) {
                         if (!portIter->first.IsScalar()) {
-                            qWarning() << "Warning: Invalid port name in module" << moduleName;
+                            QSocConsole::warn()
+                                << "Invalid port name in module" << moduleName;
                             continue;
                         }
 
@@ -1570,10 +1585,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         }
                     }
                 } else {
-                    qWarning() << "Warning: Module" << moduleName << "has no valid port section";
+                    QSocConsole::warn()
+                        << "Module" << moduleName << "has no valid port section";
                 }
             } else {
-                qWarning() << "Warning: Failed to get module definition for" << moduleName;
+                QSocConsole::warn() << "Failed to get module definition for" << moduleName;
 
                 /* Fall back to existing connections if module definition not available */
                 if (instancePortConnections.contains(instanceName)) {
@@ -1605,13 +1621,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     /* Generate combinational logic after module instantiations */
     if (!generateCombPrimitive(netlistData, out)) {
-        qWarning() << "Failed to generate combinational logic primitives";
+        QSocConsole::warn() << "Failed to generate combinational logic primitives";
         return false;
     }
 
     /* Generate sequential logic after combinational logic */
     if (!generateSeqPrimitive(netlistData, out)) {
-        qWarning() << "Failed to generate sequential logic primitives";
+        QSocConsole::warn() << "Failed to generate sequential logic primitives";
         return false;
     }
 
@@ -1622,16 +1638,16 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     out << "\nendmodule\n";
 
     outputFile.close();
-    qInfo() << "Successfully generated Verilog file:" << outputFilePath;
+    QSocConsole::info() << "Successfully generated Verilog file:" << outputFilePath;
 
     /* Generate unconnected port report if we have unconnected ports */
     if (unconnectedPortReporter.getUnconnectedPortCount() > 0) {
         const QString reportOutputPath = projectManager->getOutputPath();
         if (unconnectedPortReporter.generateReport(reportOutputPath, outputFileName)) {
-            qInfo() << "Successfully generated unconnected port report:"
-                    << QDir(reportOutputPath).filePath(outputFileName + ".nc.rpt");
+            QSocConsole::info() << "Successfully generated unconnected port report:"
+                                << QDir(reportOutputPath).filePath(outputFileName + ".nc.rpt");
         } else {
-            qWarning() << "Failed to generate unconnected port report";
+            QSocConsole::warn() << "Failed to generate unconnected port report";
         }
     }
 
@@ -1650,12 +1666,12 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
 
     if (which.exitCode() != 0) {
         /* Tool not found, silently return */
-        qDebug() << "verible-verilog-format not found, skipping formatting";
+        QSocConsole::debug() << "verible-verilog-format not found, skipping formatting";
         return false;
     }
 
     /* Tool found, proceed with formatting */
-    qInfo() << "Formatting Verilog file using verible-verilog-format...";
+    QSocConsole::info() << "Formatting Verilog file using verible-verilog-format...";
 
     QProcess formatter;
     /* clang-format off */
@@ -1688,17 +1704,17 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
     formatter.waitForFinished();
 
     if (formatter.exitCode() == 0) {
-        qInfo() << "Successfully formatted Verilog file";
+        QSocConsole::info() << "Successfully formatted Verilog file";
         return true;
     }
-    qWarning() << "Error formatting Verilog file:" << formatter.errorString();
+    QSocConsole::warn() << "failed to format Verilog file:" << formatter.errorString();
     return false;
 }
 
 bool QSocGenerateManager::generateCombPrimitive(const YAML::Node &netlistData, QTextStream &out)
 {
     if (!combPrimitive) {
-        qWarning() << "Comb primitive generator not initialized";
+        QSocConsole::warn() << "Comb primitive generator not initialized";
         return false;
     }
 
@@ -1713,7 +1729,7 @@ bool QSocGenerateManager::generateCombPrimitive(const YAML::Node &netlistData, Q
 bool QSocGenerateManager::generateFSMPrimitive(const YAML::Node &fsmNode, QTextStream &out)
 {
     if (!fsmPrimitive) {
-        qWarning() << "FSM primitive generator not initialized";
+        QSocConsole::warn() << "FSM primitive generator not initialized";
         return false;
     }
 
@@ -1723,7 +1739,7 @@ bool QSocGenerateManager::generateFSMPrimitive(const YAML::Node &fsmNode, QTextS
 bool QSocGenerateManager::generateResetPrimitive(const YAML::Node &resetNode, QTextStream &out)
 {
     if (!resetPrimitive) {
-        qWarning() << "Reset primitive generator not initialized";
+        QSocConsole::warn() << "Reset primitive generator not initialized";
         return false;
     }
 
@@ -1733,7 +1749,7 @@ bool QSocGenerateManager::generateResetPrimitive(const YAML::Node &resetNode, QT
 bool QSocGenerateManager::generateClockPrimitive(const YAML::Node &clockNode, QTextStream &out)
 {
     if (!clockPrimitive) {
-        qWarning() << "Clock primitive generator not initialized";
+        QSocConsole::warn() << "Clock primitive generator not initialized";
         return false;
     }
 
@@ -1743,7 +1759,7 @@ bool QSocGenerateManager::generateClockPrimitive(const YAML::Node &clockNode, QT
 bool QSocGenerateManager::generatePowerPrimitive(const YAML::Node &powerNode, QTextStream &out)
 {
     if (!powerPrimitive) {
-        qWarning() << "Power primitive generator not initialized";
+        QSocConsole::warn() << "Power primitive generator not initialized";
         return false;
     }
 
@@ -1753,7 +1769,7 @@ bool QSocGenerateManager::generatePowerPrimitive(const YAML::Node &powerNode, QT
 bool QSocGenerateManager::generateSeqPrimitive(const YAML::Node &netlistData, QTextStream &out)
 {
     if (!seqPrimitive) {
-        qWarning() << "Seq primitive generator not initialized";
+        QSocConsole::warn() << "Seq primitive generator not initialized";
         return false;
     }
 
@@ -1775,24 +1791,25 @@ bool QSocGenerateManager::parseMacroCondition(
     /* Parse ifdef list */
     if (instanceData["ifdef"]) {
         if (!instanceData["ifdef"].IsSequence()) {
-            qWarning() << "Warning: 'ifdef' field for instance" << instanceName
-                       << "is not a list, ignoring";
+            QSocConsole::warn() << "'ifdef' field for instance" << instanceName
+                                << "is not a list, ignoring";
         } else {
             for (const auto &node : instanceData["ifdef"]) {
                 if (!node.IsScalar()) {
-                    qWarning() << "Warning: Non-scalar macro in 'ifdef' for instance"
-                               << instanceName << ", skipping";
+                    QSocConsole::warn() << "Non-scalar macro in 'ifdef' for instance"
+                                        << instanceName << ", skipping";
                     continue;
                 }
                 QString macro = QString::fromStdString(node.as<std::string>()).trimmed();
                 if (macro.isEmpty()) {
-                    qWarning() << "Warning: Empty macro in 'ifdef' for instance" << instanceName
-                               << ", skipping";
+                    QSocConsole::warn()
+                        << "Empty macro in 'ifdef' for instance" << instanceName << ", skipping";
                     continue;
                 }
                 if (!idRegex.match(macro).hasMatch()) {
-                    qWarning() << "Warning: Invalid macro identifier" << macro
-                               << "in 'ifdef' for instance" << instanceName << ", skipping";
+                    QSocConsole::warn()
+                        << "Invalid macro identifier" << macro << "in 'ifdef' for instance"
+                        << instanceName << ", skipping";
                     continue;
                 }
                 if (!outIfdef.contains(macro)) {
@@ -1805,24 +1822,25 @@ bool QSocGenerateManager::parseMacroCondition(
     /* Parse ifndef list */
     if (instanceData["ifndef"]) {
         if (!instanceData["ifndef"].IsSequence()) {
-            qWarning() << "Warning: 'ifndef' field for instance" << instanceName
-                       << "is not a list, ignoring";
+            QSocConsole::warn() << "'ifndef' field for instance" << instanceName
+                                << "is not a list, ignoring";
         } else {
             for (const auto &node : instanceData["ifndef"]) {
                 if (!node.IsScalar()) {
-                    qWarning() << "Warning: Non-scalar macro in 'ifndef' for instance"
-                               << instanceName << ", skipping";
+                    QSocConsole::warn() << "Non-scalar macro in 'ifndef' for instance"
+                                        << instanceName << ", skipping";
                     continue;
                 }
                 QString macro = QString::fromStdString(node.as<std::string>()).trimmed();
                 if (macro.isEmpty()) {
-                    qWarning() << "Warning: Empty macro in 'ifndef' for instance" << instanceName
-                               << ", skipping";
+                    QSocConsole::warn()
+                        << "Empty macro in 'ifndef' for instance" << instanceName << ", skipping";
                     continue;
                 }
                 if (!idRegex.match(macro).hasMatch()) {
-                    qWarning() << "Warning: Invalid macro identifier" << macro
-                               << "in 'ifndef' for instance" << instanceName << ", skipping";
+                    QSocConsole::warn()
+                        << "Invalid macro identifier" << macro
+                        << "in 'ifndef' for instance" << instanceName << ", skipping";
                     continue;
                 }
                 if (!outIfndef.contains(macro)) {
@@ -1835,9 +1853,9 @@ bool QSocGenerateManager::parseMacroCondition(
     /* Check conflict: ifdef ∩ ifndef must be empty */
     for (const QString &macro : outIfdef) {
         if (outIfndef.contains(macro)) {
-            qCritical() << "Error: Macro" << macro
-                        << "appears in both 'ifdef' and 'ifndef' for instance" << instanceName
-                        << ", skipping instance";
+            QSocConsole::error() << "Macro" << macro
+                                 << "appears in both 'ifdef' and 'ifndef' for instance"
+                                 << instanceName << ", skipping instance";
             return false;
         }
     }

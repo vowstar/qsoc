@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "./ui_prcwindow.h"
+#include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "gui/prcwindow/prcconfigdialog.h"
 #include "gui/prcwindow/prcprimitiveitem.h"
@@ -703,7 +704,7 @@ bool PrcWindow::exportNetlist(const QString &filePath)
 
         return true;
     } catch (const std::exception &e) {
-        qWarning() << "Failed to export netlist:" << e.what();
+        QSocConsole::warn() << "Failed to export netlist:" << e.what();
         return false;
     }
 }
