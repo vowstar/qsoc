@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "schematiclibrarywidget.h"
+#include "common/qsocconsole.h"
 #include "common/qsocmodulemanager.h"
 #include "schematiclibrarymodel.h"
 #include "schematiclibraryview.h"
@@ -33,10 +34,10 @@ SchematicLibraryWidget::SchematicLibraryWidget(QWidget *parent, QSocModuleManage
         /* Expand all items initially */
         view_->expandAll();
     } catch (const std::exception &e) {
-        qDebug() << "SchematicLibraryWidget: Exception in constructor:" << e.what();
+        QSocConsole::debug() << "SchematicLibraryWidget: Exception in constructor:" << e.what();
         throw;
     } catch (...) {
-        qDebug() << "SchematicLibraryWidget: Unknown exception in constructor";
+        QSocConsole::debug() << "SchematicLibraryWidget: Unknown exception in constructor";
         throw;
     }
 }

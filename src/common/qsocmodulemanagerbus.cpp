@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocconsole.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qstaticmarkdown.h"
 #include "common/qstaticregex.h"
@@ -19,13 +20,13 @@ bool QSocModuleManager::addModuleBus(
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
 
     /* Check if module exists */
     if (!isModuleExist(moduleName)) {
-        qCritical() << "Error: Module does not exist:" << moduleName;
+        QSocConsole::error() << "Module does not exist:" << moduleName;
         return false;
     }
 
@@ -34,14 +35,14 @@ bool QSocModuleManager::addModuleBus(
 
     /* Validate busManager */
     if (!busManager) {
-        qCritical() << "Error: busManager is null.";
+        QSocConsole::error() << "busManager is null.";
         return false;
     }
 
     /* Get bus YAML */
     YAML::Node busYaml = busManager->getBusYaml(busName);
     if (!busManager->isBusExist(busName)) {
-        qCritical() << "Error: Bus does not exist:" << busName;
+        QSocConsole::error() << "Bus does not exist:" << busName;
         return false;
     }
 
@@ -65,13 +66,13 @@ bool QSocModuleManager::addModuleBus(
         }
     } else {
         /* No port node found */
-        qCritical() << "Error: Bus has invalid structure (missing 'port' node):" << busName;
+        QSocConsole::error() << "Bus has invalid structure (missing 'port' node):" << busName;
         return false;
     }
 
     /* Print extracted lists for debugging */
-    qDebug() << "Module ports:" << groupModule;
-    qDebug() << "Bus signals:" << groupBus;
+    QSocConsole::debug() << "Module ports:" << groupModule;
+    QSocConsole::debug() << "Bus signals:" << groupBus;
 
     /* Use QStaticStringWeaver to match bus signals to module ports */
     /* Step 1: Extract candidate substrings for clustering */
@@ -100,11 +101,12 @@ bool QSocModuleManager::addModuleBus(
         = QStaticStringWeaver::findBestGroupMarkerForHint(busInterface, candidateMarkers);
     if (!bestMarker.isEmpty()) {
         bestHintGroupMarkers.append(bestMarker);
-        qDebug() << "Best matching marker:" << bestMarker << "for hint:" << busInterface;
+        QSocConsole::debug() << "Best matching marker:" << bestMarker
+                             << "for hint:" << busInterface;
     } else {
         /* If no marker found, use empty string */
         bestHintGroupMarkers.append("");
-        qDebug() << "No suitable group marker found, using empty string";
+        QSocConsole::debug() << "No suitable group marker found, using empty string";
     }
 
     /* Collect all module ports from groups whose keys match any of the best hint group markers */
@@ -121,7 +123,7 @@ bool QSocModuleManager::addModuleBus(
         }
 
         if (matches) {
-            qDebug() << "Including ports from group:" << groupKey;
+            QSocConsole::debug() << "Including ports from group:" << groupKey;
             for (const QString &portStr : it.value()) {
                 filteredModulePorts.append(portStr);
             }
@@ -130,10 +132,10 @@ bool QSocModuleManager::addModuleBus(
 
     /* If no filtered ports found, fall back to all ports */
     if (filteredModulePorts.isEmpty()) {
-        qDebug() << "No ports found in matching groups, using all ports";
+        QSocConsole::debug() << "No ports found in matching groups, using all ports";
         filteredModulePorts = groupModule;
     } else {
-        qDebug() << "Using filtered ports for matching:" << filteredModulePorts;
+        QSocConsole::debug() << "Using filtered ports for matching:" << filteredModulePorts;
     }
 
     /* Find optimal matching between bus signals and filtered module ports */
@@ -142,7 +144,8 @@ bool QSocModuleManager::addModuleBus(
 
     /* Debug output */
     for (auto it = matching.begin(); it != matching.end(); ++it) {
-        qDebug() << "Bus signal:" << it.key() << "matched with module port:" << it.value();
+        QSocConsole::debug() << "Bus signal:" << it.key()
+                             << "matched with module port:" << it.value();
     }
 
     /* Add bus interface to module YAML */
@@ -167,19 +170,19 @@ bool QSocModuleManager::addModuleBusWithLLM(
 {
     /* Validate llmService */
     if (!llmService) {
-        qCritical() << "Error: llmService is null.";
+        QSocConsole::error() << "llmService is null.";
         return false;
     }
 
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
 
     /* Check if module exists */
     if (!isModuleExist(moduleName)) {
-        qCritical() << "Error: Module does not exist:" << moduleName;
+        QSocConsole::error() << "Module does not exist:" << moduleName;
         return false;
     }
 
@@ -188,14 +191,14 @@ bool QSocModuleManager::addModuleBusWithLLM(
 
     /* Validate busManager */
     if (!busManager) {
-        qCritical() << "Error: busManager is null.";
+        QSocConsole::error() << "busManager is null.";
         return false;
     }
 
     /* Get bus YAML */
     YAML::Node busYaml = busManager->getBusYaml(busName);
     if (!busManager->isBusExist(busName)) {
-        qCritical() << "Error: Bus does not exist:" << busName;
+        QSocConsole::error() << "Bus does not exist:" << busName;
         return false;
     }
 
@@ -230,12 +233,12 @@ bool QSocModuleManager::addModuleBusWithLLM(
         }
     } else {
         /* No port node found */
-        qCritical() << "Error: Bus has invalid structure (missing 'port' node):" << busName;
+        QSocConsole::error() << "Bus has invalid structure (missing 'port' node):" << busName;
         return false;
     }
 
-    qDebug() << "Module ports:" << groupModule;
-    qDebug() << "Bus signals:" << groupBus;
+    QSocConsole::debug() << "Module ports:" << groupModule;
+    QSocConsole::debug() << "Bus signals:" << groupBus;
 
     /* Build prompt */
     /* clang-format off */
@@ -273,7 +276,7 @@ bool QSocModuleManager::addModuleBusWithLLM(
 
     /* Return error if request failed */
     if (!response.success) {
-        qCritical() << "Error: LLM API request failed:" << response.errorMessage;
+        QSocConsole::error() << "LLM API request failed:" << response.errorMessage;
         return false;
     }
 
@@ -281,13 +284,14 @@ bool QSocModuleManager::addModuleBusWithLLM(
     QMap<QString, QString> matching = QLLMService::extractMappingsFromResponse(response);
 
     if (matching.isEmpty()) {
-        qCritical() << "Error: Failed to obtain mapping from LLM provider";
+        QSocConsole::error() << "Failed to obtain mapping from LLM provider";
         return false;
     }
 
     /* Debug output */
     for (auto it = matching.begin(); it != matching.end(); ++it) {
-        qDebug() << "Bus signal:" << it.key() << "matched with module port:" << it.value();
+        QSocConsole::debug() << "Bus signal:" << it.key()
+                             << "matched with module port:" << it.value();
     }
 
     /* Add bus interface to module YAML */
@@ -309,19 +313,19 @@ bool QSocModuleManager::removeModuleBus(
 {
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
 
     /* Check if module exists */
     if (!isModuleExist(moduleName)) {
-        qCritical() << "Error: Module does not exist:" << moduleName;
+        QSocConsole::error() << "Module does not exist:" << moduleName;
         return false;
     }
 
     /* Validate busInterfaceRegex */
     if (!QStaticRegex::isNameRegexValid(busInterfaceRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << busInterfaceRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << busInterfaceRegex.pattern();
         return false;
     }
 
@@ -330,7 +334,7 @@ bool QSocModuleManager::removeModuleBus(
 
     /* Check if the module has any bus interfaces defined */
     if (!moduleYaml["bus"]) {
-        qDebug() << "Module doesn't have any bus interfaces:" << moduleName;
+        QSocConsole::debug() << "Module doesn't have any bus interfaces:" << moduleName;
         return true; /* Return true as there's nothing to remove */
     }
 
@@ -346,7 +350,7 @@ bool QSocModuleManager::removeModuleBus(
         const QString busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
 
         if (QStaticRegex::isNameExactMatch(busInterfaceName, busInterfaceRegex)) {
-            qDebug() << "Found matching bus interface to remove:" << busInterfaceName;
+            QSocConsole::debug() << "Found matching bus interface to remove:" << busInterfaceName;
             interfacesToRemove.push_back(busInterfaceNameStd);
             removedAny = true;
         }
@@ -377,19 +381,19 @@ QStringList QSocModuleManager::listModuleBus(
 
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return result;
     }
 
     /* Check if module exists */
     if (!isModuleExist(moduleName)) {
-        qCritical() << "Error: Module does not exist:" << moduleName;
+        QSocConsole::error() << "Module does not exist:" << moduleName;
         return result;
     }
 
     /* Validate busInterfaceRegex */
     if (!QStaticRegex::isNameRegexValid(busInterfaceRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << busInterfaceRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << busInterfaceRegex.pattern();
         return result;
     }
 
@@ -398,7 +402,7 @@ QStringList QSocModuleManager::listModuleBus(
 
     /* Check if the module has any bus interfaces defined */
     if (!moduleYaml["bus"]) {
-        qDebug() << "Module doesn't have any bus interfaces:" << moduleName;
+        QSocConsole::debug() << "Module doesn't have any bus interfaces:" << moduleName;
         return result;
     }
 
@@ -439,19 +443,19 @@ YAML::Node QSocModuleManager::showModuleBus(
 
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return result;
     }
 
     /* Check if module exists */
     if (!isModuleExist(moduleName)) {
-        qCritical() << "Error: Module does not exist:" << moduleName;
+        QSocConsole::error() << "Module does not exist:" << moduleName;
         return result;
     }
 
     /* Validate busInterfaceRegex */
     if (!QStaticRegex::isNameRegexValid(busInterfaceRegex)) {
-        qCritical() << "Error: Invalid or empty regex:" << busInterfaceRegex.pattern();
+        QSocConsole::error() << "Invalid or empty regex:" << busInterfaceRegex.pattern();
         return result;
     }
 
@@ -460,7 +464,7 @@ YAML::Node QSocModuleManager::showModuleBus(
 
     /* Check if the module has any bus interfaces defined */
     if (!moduleYaml["bus"]) {
-        qDebug() << "Module doesn't have any bus interfaces:" << moduleName;
+        QSocConsole::debug() << "Module doesn't have any bus interfaces:" << moduleName;
         return result;
     }
 
@@ -473,7 +477,7 @@ YAML::Node QSocModuleManager::showModuleBus(
         const QString busInterfaceName    = QString::fromStdString(busInterfaceNameStd);
 
         if (QStaticRegex::isNameExactMatch(busInterfaceName, busInterfaceRegex)) {
-            qDebug() << "Found matching bus interface:" << busInterfaceName;
+            QSocConsole::debug() << "Found matching bus interface:" << busInterfaceName;
             result["bus"][busInterfaceNameStd] = it->second;
         }
     }
@@ -489,7 +493,7 @@ QString QSocModuleManager::formatModuleBusJsonToMarkdownTable(const QString &jso
 
         /* Check if the JSON has the expected structure */
         if (!doc.contains("groups") || !doc["groups"].is_array()) {
-            qWarning() << "Invalid JSON structure: missing or invalid 'groups' array";
+            QSocConsole::warn() << "Invalid JSON structure: missing or invalid 'groups' array";
             return jsonResponse;
         }
 
@@ -601,13 +605,13 @@ QString QSocModuleManager::formatModuleBusJsonToMarkdownTable(const QString &jso
         /* Use the QStaticMarkdown class to render the markdown table */
         return QStaticMarkdown::renderTable(headers, rows, QStaticMarkdown::Alignment::Left);
     } catch (const json::parse_error &e) {
-        qWarning() << "Failed to parse JSON response:" << e.what();
+        QSocConsole::warn() << "Failed to parse JSON response:" << e.what();
         return jsonResponse; /* Return original response if parsing fails */
     } catch (const json::exception &e) {
-        qWarning() << "JSON exception occurred:" << e.what();
+        QSocConsole::warn() << "JSON exception occurred:" << e.what();
         return "Error processing JSON response: " + QString(e.what());
     } catch (const std::exception &e) {
-        qWarning() << "General exception occurred:" << e.what();
+        QSocConsole::warn() << "General exception occurred:" << e.what();
         return "Error: " + QString(e.what());
     }
 }
@@ -617,19 +621,19 @@ bool QSocModuleManager::explainModuleBusWithLLM(
 {
     /* Validate llmService */
     if (!llmService) {
-        qCritical() << "Error: llmService is null.";
+        QSocConsole::error() << "llmService is null.";
         return false;
     }
 
     /* Validate projectManager and its path */
     if (!isModulePathValid()) {
-        qCritical() << "Error: projectManager is null or invalid module path.";
+        QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
 
     /* Check if module exists */
     if (!isModuleExist(moduleName)) {
-        qCritical() << "Error: Module does not exist:" << moduleName;
+        QSocConsole::error() << "Module does not exist:" << moduleName;
         return false;
     }
 
@@ -638,14 +642,14 @@ bool QSocModuleManager::explainModuleBusWithLLM(
 
     /* Validate busManager */
     if (!busManager) {
-        qCritical() << "Error: busManager is null.";
+        QSocConsole::error() << "busManager is null.";
         return false;
     }
 
     /* Get bus YAML */
     YAML::Node busYaml = busManager->getBusYaml(busName);
     if (!busManager->isBusExist(busName)) {
-        qCritical() << "Error: Bus does not exist:" << busName;
+        QSocConsole::error() << "Bus does not exist:" << busName;
         return false;
     }
 
@@ -704,7 +708,7 @@ bool QSocModuleManager::explainModuleBusWithLLM(
         }
     } else {
         /* No port node found */
-        qCritical() << "Error: Bus has invalid structure (missing 'port' node):" << busName;
+        QSocConsole::error() << "Bus has invalid structure (missing 'port' node):" << busName;
         return false;
     }
 
@@ -787,7 +791,7 @@ bool QSocModuleManager::explainModuleBusWithLLM(
 
     /* Return error if request failed */
     if (!response.success) {
-        qCritical() << "Error: LLM API request failed:" << response.errorMessage;
+        QSocConsole::error() << "LLM API request failed:" << response.errorMessage;
         return false;
     }
 

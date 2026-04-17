@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocconsole.h"
 #include "gui/mainwindow/mainwindow.h"
 
 #include "./ui_mainwindow.h"
@@ -46,13 +47,13 @@ void MainWindow::handleTreeDoubleClick(const QModelIndex &index)
 
 void MainWindow::openSchematicEditor(const QString &filePath)
 {
-    qDebug() << "MainWindow: Opening schematic editor"
-             << (filePath.isEmpty() ? "(untitled)" : filePath);
+    QSocConsole::debug() << "MainWindow: Opening schematic editor"
+                         << (filePath.isEmpty() ? "(untitled)" : filePath);
 
     // If window is already visible with unsaved changes, close triggers save prompt
     if (schematicWindow.isVisible()) {
         if (!schematicWindow.close()) {
-            qDebug() << "MainWindow: User cancelled close";
+            QSocConsole::debug() << "MainWindow: User cancelled close";
             return; // User cancelled
         }
     }
@@ -63,10 +64,11 @@ void MainWindow::openSchematicEditor(const QString &filePath)
 
     // Set project manager (ensures module list is loaded)
     if (projectManager && projectManager->isValid()) {
-        qDebug() << "MainWindow: Setting project manager to schematic window";
+        QSocConsole::debug() << "MainWindow: Setting project manager to schematic window";
         schematicWindow.setProjectManager(projectManager);
     } else {
-        qDebug() << "MainWindow: No valid project manager, schematic will use empty model";
+        QSocConsole::debug()
+            << "MainWindow: No valid project manager, schematic will use empty model";
     }
 
     // Open file if specified, otherwise it's a new "untitled" file
@@ -78,17 +80,18 @@ void MainWindow::openSchematicEditor(const QString &filePath)
     schematicWindow.show();
     schematicWindow.raise();
     schematicWindow.activateWindow();
-    qDebug() << "MainWindow: Schematic window opened";
+    QSocConsole::debug() << "MainWindow: Schematic window opened";
 }
 
 void MainWindow::openPrcEditor(const QString &filePath)
 {
-    qDebug() << "MainWindow: Opening PRC editor" << (filePath.isEmpty() ? "(untitled)" : filePath);
+    QSocConsole::debug() << "MainWindow: Opening PRC editor"
+                         << (filePath.isEmpty() ? "(untitled)" : filePath);
 
     // If window is already visible with unsaved changes, close triggers save prompt
     if (prcWindow.isVisible()) {
         if (!prcWindow.close()) {
-            qDebug() << "MainWindow: User cancelled close";
+            QSocConsole::debug() << "MainWindow: User cancelled close";
             return; // User cancelled
         }
     }
@@ -99,10 +102,11 @@ void MainWindow::openPrcEditor(const QString &filePath)
 
     // Set project manager
     if (projectManager && projectManager->isValid()) {
-        qDebug() << "MainWindow: Setting project manager to PRC window";
+        QSocConsole::debug() << "MainWindow: Setting project manager to PRC window";
         prcWindow.setProjectManager(projectManager);
     } else {
-        qDebug() << "MainWindow: No valid project manager, PRC window will use empty model";
+        QSocConsole::debug()
+            << "MainWindow: No valid project manager, PRC window will use empty model";
     }
 
     // Open file if specified, otherwise it's a new "untitled" file
@@ -114,5 +118,5 @@ void MainWindow::openPrcEditor(const QString &filePath)
     prcWindow.show();
     prcWindow.raise();
     prcWindow.activateWindow();
-    qDebug() << "MainWindow: PRC window opened";
+    QSocConsole::debug() << "MainWindow: PRC window opened";
 }

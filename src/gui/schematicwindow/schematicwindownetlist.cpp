@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocconsole.h"
 #include "gui/schematicwindow/schematicconnector.h"
 #include "gui/schematicwindow/schematicmodule.h"
 #include "gui/schematicwindow/schematicwindow.h"
@@ -503,7 +504,7 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
     /* Generate netlist from scene */
     QSchematic::Netlist<QSchematic::Items::Node *, QSchematic::Items::Connector *> netlist;
     if (!QSchematic::NetlistGenerator::generate(netlist, scene)) {
-        qWarning() << "Failed to generate netlist from scene";
+        QSocConsole::warn() << "Failed to generate netlist from scene";
         return false;
     }
 
@@ -621,7 +622,7 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
     /* Write to file */
     std::ofstream fout(filePath.toStdString());
     if (!fout.is_open()) {
-        qWarning() << "Failed to open file for writing:" << filePath;
+        QSocConsole::warn() << "Failed to open file for writing:" << filePath;
         return false;
     }
 
@@ -629,7 +630,7 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
     fout.close();
 
     if (!fout) {
-        qWarning() << "Failed to write netlist to file:" << filePath;
+        QSocConsole::warn() << "Failed to write netlist to file:" << filePath;
         return false;
     }
 

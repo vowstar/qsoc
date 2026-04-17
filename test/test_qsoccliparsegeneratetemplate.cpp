@@ -4,6 +4,7 @@
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
 #include "common/qsocbusmanager.h"
+#include "common/qsocconsole.h"
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
@@ -133,6 +134,9 @@ private slots:
     void initTestCase()
     {
         qInstallMessageHandler(messageOutput);
+        /* Mirror QSocConsole writes through the message handler so legacy
+         * messageList-based assertions still see them. */
+        QSocConsole::setTeeToMessageHandler(true);
         /* Set project name */
         projectName = QFileInfo(__FILE__).baseName() + "_data";
         /* Setup project manager */

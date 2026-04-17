@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocnumberinfo.h"
+#include "common/qsocconsole.h"
 
 #include <QCoreApplication>
 #include <QRegularExpression>
@@ -171,7 +172,7 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
     cleanStr.remove('_');
 
     if (cleanStr.isEmpty()) {
-        qWarning() << "Empty number string";
+        QSocConsole::warn() << "Empty number string";
         return result;
     }
 
@@ -219,8 +220,8 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                 result.value = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 2);
             } catch (const std::exception &e) {
                 result.errorDetected = true;
-                qWarning() << "Binary value error, using original string:" << numStr
-                           << "Error:" << e.what();
+                QSocConsole::warn() << "Binary value error, using original string:" << numStr
+                                    << "Error:" << e.what();
             }
             break;
         case 'o': /* Octal */
@@ -229,8 +230,8 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                 result.value = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 8);
             } catch (const std::exception &e) {
                 result.errorDetected = true;
-                qWarning() << "Octal value error, using original string:" << numStr
-                           << "Error:" << e.what();
+                QSocConsole::warn() << "Octal value error, using original string:" << numStr
+                                    << "Error:" << e.what();
             }
             break;
         case 'd': /* Decimal */
@@ -240,8 +241,8 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                     = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 10);
             } catch (const std::exception &e) {
                 result.errorDetected = true;
-                qWarning() << "Decimal value error, using original string:" << numStr
-                           << "Error:" << e.what();
+                QSocConsole::warn() << "Decimal value error, using original string:" << numStr
+                                    << "Error:" << e.what();
             }
             break;
         case 'h': /* Hexadecimal */
@@ -252,12 +253,12 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                     = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 16);
             } catch (const std::exception &e) {
                 result.errorDetected = true;
-                qWarning() << "Hexadecimal value error, using original string:" << numStr
-                           << "Error:" << e.what();
+                QSocConsole::warn() << "Hexadecimal value error, using original string:" << numStr
+                                    << "Error:" << e.what();
             }
             break;
         default:
-            qWarning() << "Unknown base character in Verilog number:" << baseChar;
+            QSocConsole::warn() << "Unknown base character in Verilog number:" << baseChar;
         }
     } else {
         /* Handle standalone Verilog-style base prefixes (without width): 'b, 'h, 'o, 'd */
@@ -277,8 +278,8 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                         = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 2);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
-                    qWarning() << "Binary value error, using original string:" << numStr
-                               << "Error:" << e.what();
+                    QSocConsole::warn() << "Binary value error, using original string:" << numStr
+                                        << "Error:" << e.what();
                 }
                 break;
             case 'o': /* Octal */
@@ -288,8 +289,8 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                         = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 8);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
-                    qWarning() << "Octal value error, using original string:" << numStr
-                               << "Error:" << e.what();
+                    QSocConsole::warn() << "Octal value error, using original string:" << numStr
+                                        << "Error:" << e.what();
                 }
                 break;
             case 'd': /* Decimal */
@@ -299,8 +300,8 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                         = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 10);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
-                    qWarning() << "Decimal value error, using original string:" << numStr
-                               << "Error:" << e.what();
+                    QSocConsole::warn() << "Decimal value error, using original string:" << numStr
+                                        << "Error:" << e.what();
                 }
                 break;
             case 'h': /* Hexadecimal */
@@ -311,12 +312,13 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                         = QSocNumberInfo::stringToBigIntegerWithBase(valueStr.toStdString(), 16);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
-                    qWarning() << "Hexadecimal value error, using original string:" << numStr
-                               << "Error:" << e.what();
+                    QSocConsole::warn()
+                        << "Hexadecimal value error, using original string:" << numStr
+                        << "Error:" << e.what();
                 }
                 break;
             default:
-                qWarning() << "Unknown base character in Verilog number:" << baseChar;
+                QSocConsole::warn() << "Unknown base character in Verilog number:" << baseChar;
             }
         } else {
             /* Try C-style format */
@@ -328,8 +330,9 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                         cleanStr.mid(2).toStdString(), 16);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
-                    qWarning() << "Hexadecimal value error, using original string:" << numStr
-                               << "Error:" << e.what();
+                    QSocConsole::warn()
+                        << "Hexadecimal value error, using original string:" << numStr
+                        << "Error:" << e.what();
                 }
             } else if (cleanStr.startsWith("0b") || cleanStr.startsWith("0B")) {
                 /* Binary (C++14 style) */
@@ -339,8 +342,8 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                         cleanStr.mid(2).toStdString(), 2);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
-                    qWarning() << "Binary value error, using original string:" << numStr
-                               << "Error:" << e.what();
+                    QSocConsole::warn() << "Binary value error, using original string:" << numStr
+                                        << "Error:" << e.what();
                 }
             } else if (cleanStr.startsWith("0") && cleanStr.length() > 1) {
                 /* Octal */
@@ -350,8 +353,8 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                         = QSocNumberInfo::stringToBigIntegerWithBase(cleanStr.toStdString(), 8);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
-                    qWarning() << "Octal value error, using original string:" << numStr
-                               << "Error:" << e.what();
+                    QSocConsole::warn() << "Octal value error, using original string:" << numStr
+                                        << "Error:" << e.what();
                 }
             } else {
                 /* Decimal */
@@ -361,8 +364,9 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
                         = QSocNumberInfo::stringToBigIntegerWithBase(cleanStr.toStdString(), 10);
                 } catch (const std::exception &e) {
                     result.errorDetected = true;
-                    qWarning() << "Failed to parse decimal number, using original string:"
-                               << cleanStr << "Error:" << e.what();
+                    QSocConsole::warn()
+                        << "Failed to parse decimal number, using original string:" << cleanStr
+                        << "Error:" << e.what();
                 }
             }
         }
@@ -444,7 +448,7 @@ int64_t QSocNumberInfo::toInt64() const
 
             /* Check if magnitude fits in int64_t range */
             if (magnitude > BigUnsigned(std::numeric_limits<int64_t>::max())) {
-                qWarning() << "Value too large for int64_t conversion:" << originalString;
+                QSocConsole::warn() << "Value too large for int64_t conversion:" << originalString;
                 return 0;
             }
 
@@ -458,7 +462,7 @@ int64_t QSocNumberInfo::toInt64() const
 
             /* Check if magnitude fits in int64_t range */
             if (magnitude > BigUnsigned(std::numeric_limits<int64_t>::max())) {
-                qWarning() << "Value too large for int64_t conversion:" << originalString;
+                QSocConsole::warn() << "Value too large for int64_t conversion:" << originalString;
                 return 0;
             }
 
@@ -468,7 +472,8 @@ int64_t QSocNumberInfo::toInt64() const
             return result;
         }
     } catch (const std::exception &e) {
-        qWarning() << "Error converting to int64_t:" << originalString << "Error:" << e.what();
+        QSocConsole::warn() << "failed to convert to int64_t:" << originalString
+                            << "Error:" << e.what();
         return 0;
     }
 }

@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
@@ -61,6 +62,7 @@ private slots:
     {
         TestApp::instance();
         qInstallMessageHandler(messageOutput);
+        QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
         projectManager.setProjectName(projectName);
         projectManager.setCurrentPath(QDir::current().filePath(projectName));

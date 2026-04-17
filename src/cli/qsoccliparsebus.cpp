@@ -7,7 +7,6 @@
 #include "common/qsocbusmanager.h"
 #include "common/qsocprojectmanager.h"
 #include "common/qstaticdatasedes.h"
-#include "common/qstaticlog.h"
 
 bool QSocCliWorker::parseBus(const QStringList &appArguments)
 {

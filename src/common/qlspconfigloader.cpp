@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qlspconfigloader.h"
+#include "common/qsocconsole.h"
 
 #include "common/qlspprocessbackend.h"
 #include "common/qlspservice.h"
@@ -32,11 +33,11 @@ void QLspConfigLoader::loadAndRegister(QLspService *service, QSocConfig *config)
                 continue;
 
             if (!node["command"]) {
-                qWarning() << "LSP server" << name << "missing required 'command'";
+                QSocConsole::warn() << "LSP server" << name << "missing required 'command'";
                 continue;
             }
             if (!node["extensions"] || !node["extensions"].IsSequence()) {
-                qWarning() << "LSP server" << name << "missing required 'extensions' list";
+                QSocConsole::warn() << "LSP server" << name << "missing required 'extensions' list";
                 continue;
             }
 
@@ -52,17 +53,17 @@ void QLspConfigLoader::loadAndRegister(QLspService *service, QSocConfig *config)
                 exts.append(QString::fromStdString(ext.as<std::string>()));
             }
             if (exts.isEmpty()) {
-                qWarning() << "LSP server" << name << "has empty extensions list";
+                QSocConsole::warn() << "LSP server" << name << "has empty extensions list";
                 continue;
             }
 
             auto *backend = new QLspProcessBackend(command, args, exts, service);
             service->addBackend(backend, /* overrideExisting */ true);
 
-            qInfo() << "Registered external LSP server:" << name << "command:" << command
-                    << "extensions:" << exts;
+            QSocConsole::info() << "Registered external LSP server:" << name
+                                << "command:" << command << "extensions:" << exts;
         } catch (const YAML::Exception &err) {
-            qWarning() << "Failed to parse LSP server config" << name << ":" << err.what();
+            QSocConsole::warn() << "Failed to parse LSP server config" << name << ":" << err.what();
         }
     }
 }

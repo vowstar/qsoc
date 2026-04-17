@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocconfig.h"
+#include "common/qsocconsole.h"
 
 #include <QDebug>
 #include <QDir>
@@ -170,14 +171,15 @@ void QSocConfig::loadFromYamlFile(const QString &filePath, bool override)
                                 }
                             }
                         } catch (const YAML::Exception &e) {
-                            qWarning() << "Failed to parse nested config item:" << e.what();
+                            QSocConsole::warn()
+                                << "Failed to parse nested config item:" << e.what();
                         }
                     }
                 }
             }
         }
     } catch (const YAML::Exception &e) {
-        qWarning() << "Failed to load config from" << filePath << ":" << e.what();
+        QSocConsole::warn() << "Failed to load config from" << filePath << ":" << e.what();
     }
 }
 
@@ -276,7 +278,8 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
 
     if (!directory.exists()) {
         if (!directory.mkpath(".")) {
-            qWarning() << "Failed to create directory for config file:" << directory.path();
+            QSocConsole::warn() << "Failed to create directory for config file:"
+                                << directory.path();
             return false;
         }
     }
@@ -284,7 +287,7 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     /* Create template config file with comments */
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Failed to create template config file:" << filePath;
+        QSocConsole::warn() << "Failed to create template config file:" << filePath;
         return false;
     }
 
@@ -362,6 +365,6 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
 
     file.close();
 
-    qDebug() << "Created template config file:" << filePath;
+    QSocConsole::debug() << "Created template config file:" << filePath;
     return true;
 }

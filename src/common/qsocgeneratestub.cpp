@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocconsole.h"
 #include "common/qsocgeneratemanager.h"
 
 #include <QCoreApplication>
@@ -21,18 +22,18 @@ bool QSocGenerateManager::generateStub(
 {
     /* Check if project manager is valid */
     if (!projectManager) {
-        qCritical() << "Error: Project manager is null";
+        QSocConsole::error() << "Project manager is null";
         return false;
     }
 
     if (!projectManager->isValidOutputPath(true)) {
-        qCritical() << "Error: Invalid output path: " << projectManager->getOutputPath();
+        QSocConsole::error() << "Invalid output path: " << projectManager->getOutputPath();
         return false;
     }
 
     /* Check if module manager is valid */
     if (!moduleManager) {
-        qCritical() << "Error: Module manager is null";
+        QSocConsole::error() << "Module manager is null";
         return false;
     }
 
@@ -47,22 +48,22 @@ bool QSocGenerateManager::generateStub(
     }
 
     if (selectedModules.isEmpty()) {
-        qCritical() << "Error: No modules found matching the specified criteria";
+        QSocConsole::error() << "No modules found matching the specified criteria";
         return false;
     }
 
-    qInfo() << "Found" << selectedModules.size()
-            << "modules matching criteria:" << selectedModules.join(", ");
+    QSocConsole::info() << "Found" << selectedModules.size()
+                        << "modules matching criteria:" << selectedModules.join(", ");
 
     /* Generate Verilog stub file */
     if (!generateVerilogStub(stubName, selectedModules)) {
-        qCritical() << "Error: Failed to generate Verilog stub file";
+        QSocConsole::error() << "Failed to generate Verilog stub file";
         return false;
     }
 
     /* Generate Lib stub file */
     if (!generateLibStub(stubName, selectedModules)) {
-        qCritical() << "Error: Failed to generate Lib stub file";
+        QSocConsole::error() << "Failed to generate Lib stub file";
         return false;
     }
 
@@ -77,7 +78,7 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
     /* Open output file for writing */
     QFile outputFile(outputFilePath);
     if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qCritical() << "Error: Failed to open output file for writing:" << outputFilePath;
+        QSocConsole::error() << "Failed to open output file for writing:" << outputFilePath;
         return false;
     }
 
@@ -98,7 +99,7 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
     /* Generate stub for each module */
     for (const QString &moduleName : moduleNames) {
         if (!moduleManager->isModuleExist(moduleName)) {
-            qWarning() << "Warning: Module" << moduleName << "does not exist, skipping";
+            QSocConsole::warn() << "Module" << moduleName << "does not exist, skipping";
             continue;
         }
 
@@ -149,15 +150,15 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
                  paramIter != moduleData["parameter"].end();
                  ++paramIter) {
                 if (!paramIter->first.IsScalar()) {
-                    qWarning() << "Warning: Invalid parameter name, skipping";
+                    QSocConsole::warn() << "Invalid parameter name, skipping";
                     continue;
                 }
 
                 const QString paramName = QString::fromStdString(paramIter->first.as<std::string>());
 
                 if (!paramIter->second.IsMap()) {
-                    qWarning() << "Warning: Parameter" << paramName
-                               << "has invalid format, skipping";
+                    QSocConsole::warn()
+                        << "Parameter" << paramName << "has invalid format, skipping";
                     continue;
                 }
 
@@ -205,14 +206,15 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
             for (auto portIter = moduleData["port"].begin(); portIter != moduleData["port"].end();
                  ++portIter) {
                 if (!portIter->first.IsScalar()) {
-                    qWarning() << "Warning: Invalid port name, skipping";
+                    QSocConsole::warn() << "Invalid port name, skipping";
                     continue;
                 }
 
                 const QString portName = QString::fromStdString(portIter->first.as<std::string>());
 
                 if (!portIter->second.IsMap()) {
-                    qWarning() << "Warning: Port" << portName << "has invalid format, skipping";
+                    QSocConsole::warn()
+                        << "Port" << portName << "has invalid format, skipping";
                     continue;
                 }
 
@@ -274,7 +276,7 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
     }
 
     outputFile.close();
-    qInfo() << "Successfully generated Verilog stub file:" << outputFilePath;
+    QSocConsole::info() << "Successfully generated Verilog stub file:" << outputFilePath;
 
     return true;
 }
@@ -287,7 +289,7 @@ bool QSocGenerateManager::generateLibStub(const QString &stubName, const QString
     /* Open output file for writing */
     QFile outputFile(outputFilePath);
     if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qCritical() << "Error: Failed to open output file for writing:" << outputFilePath;
+        QSocConsole::error() << "Failed to open output file for writing:" << outputFilePath;
         return false;
     }
 
@@ -521,7 +523,7 @@ bool QSocGenerateManager::generateLibStub(const QString &stubName, const QString
     out << "}  /* end of library */\n";
 
     outputFile.close();
-    qInfo() << "Successfully generated Lib stub file:" << outputFilePath;
+    QSocConsole::info() << "Successfully generated Lib stub file:" << outputFilePath;
 
     return true;
 }

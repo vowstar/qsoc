@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qslangdriver.h"
+#include "common/qsocconsole.h"
 #include "common/qsocgeneratemanager.h"
-#include "common/qstaticlog.h"
 #include "common/qstaticstringweaver.h"
 
 #include <QCoreApplication>
@@ -23,14 +23,14 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
 {
     /* Check if the file exists */
     if (!QFile::exists(netlistFilePath)) {
-        qCritical() << "Error: Netlist file does not exist:" << netlistFilePath;
+        QSocConsole::error() << "Netlist file does not exist:" << netlistFilePath;
         return false;
     }
 
     /* Open the YAML file */
     std::ifstream fileStream(netlistFilePath.toStdString());
     if (!fileStream.is_open()) {
-        qCritical() << "Error: Unable to open netlist file:" << netlistFilePath;
+        QSocConsole::error() << "Unable to open netlist file:" << netlistFilePath;
         return false;
     }
 
@@ -41,7 +41,8 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
         /* Validate basic netlist structure */
         // Check if instance section exists and is valid when present
         if (netlistData["instance"] && !netlistData["instance"].IsMap()) {
-            qCritical() << "Error: Invalid netlist format, 'instance' section is not a map";
+            QSocConsole::error()
+                << "Invalid netlist format, 'instance' section is not a map";
             return false;
         }
 
@@ -57,22 +58,23 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
                         && netlistData["power"].size() > 0;
 
         if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock && !hasPower) {
-            qCritical() << "Error: Invalid netlist format, no 'instance' section and no 'comb', "
-                           "'seq', 'fsm', 'reset', 'clock', or 'power' section found";
+            QSocConsole::error()
+                << "Invalid netlist format, no 'instance' section and no 'comb', "
+                   "'seq', 'fsm', 'reset', 'clock', or 'power' section found";
             return false;
         }
 
         /* Validate net and bus sections if they exist */
         if ((netlistData["net"] && !netlistData["net"].IsMap())
             || (netlistData["bus"] && !netlistData["bus"].IsMap())) {
-            qCritical() << "Error: Invalid netlist format, invalid 'net' or 'bus' section";
+            QSocConsole::error() << "Invalid netlist format, invalid 'net' or 'bus' section";
             return false;
         }
 
-        qInfo() << "Successfully loaded netlist file:" << netlistFilePath;
+        QSocConsole::info() << "Successfully loaded netlist file:" << netlistFilePath;
         return true;
     } catch (const YAML::Exception &e) {
-        qCritical() << "Error parsing YAML file:" << netlistFilePath << ":" << e.what();
+        QSocConsole::error() << "failed to parse YAML file:" << netlistFilePath << ":" << e.what();
         return false;
     }
 }
@@ -86,37 +88,40 @@ bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
                              || netlistData["reset"] || netlistData["clock"];
 
         if (!hasInstances && !hasPrimitives) {
-            qCritical() << "Error: Invalid netlist format, missing 'instance' section and no "
-                           "primitives found";
+            QSocConsole::error()
+                << "Invalid netlist format, missing 'instance' section and no "
+                   "primitives found";
             return false;
         }
 
         if (netlistData["instance"] && !netlistData["instance"].IsMap()) {
-            qCritical() << "Error: Invalid netlist format, 'instance' section is not a map";
+            QSocConsole::error()
+                << "Invalid netlist format, 'instance' section is not a map";
             return false;
         }
 
         // Allow empty instance section if any primitives exist
         if (hasInstances && netlistData["instance"].size() == 0 && !hasPrimitives) {
-            qCritical() << "Error: Invalid netlist format, 'instance' section is empty and no "
-                           "primitives found";
+            QSocConsole::error()
+                << "Invalid netlist format, 'instance' section is empty and no "
+                   "primitives found";
             return false;
         }
 
         /* Validate net and bus sections if they exist */
         if ((netlistData["net"] && !netlistData["net"].IsMap())
             || (netlistData["bus"] && !netlistData["bus"].IsMap())) {
-            qCritical() << "Error: Invalid netlist format, invalid 'net' or 'bus' section";
+            QSocConsole::error() << "Invalid netlist format, invalid 'net' or 'bus' section";
             return false;
         }
 
         /* Set the netlist data */
         this->netlistData = netlistData;
 
-        qInfo() << "Successfully set netlist data";
+        QSocConsole::info() << "Successfully set netlist data";
         return true;
     } catch (const YAML::Exception &e) {
-        qCritical() << "Error validating YAML data:" << e.what();
+        QSocConsole::error() << "failed to validate YAML data:" << e.what();
         return false;
     }
 }
@@ -131,20 +136,21 @@ bool QSocGenerateManager::processNetlist()
                              || netlistData["power"];
 
         if (!hasInstances && !hasPrimitives) {
-            qCritical() << "Error: Invalid netlist data, missing 'instance' section and no "
-                           "primitives found, call loadNetlist() first";
+            QSocConsole::error()
+                << "Invalid netlist data, missing 'instance' section and no "
+                   "primitives found, call loadNetlist() first";
             return false;
         }
 
         /* Expand bus links before processing */
         if (!expandBusLink()) {
-            qCritical() << "Error: Failed to expand bus links";
+            QSocConsole::error() << "Failed to expand bus links";
             return false;
         }
 
         /* Expand bus uplinks before processing */
         if (!expandBusUplink()) {
-            qCritical() << "Error: Failed to expand bus uplinks";
+            QSocConsole::error() << "Failed to expand bus uplinks";
             return false;
         }
 
@@ -155,28 +161,28 @@ bool QSocGenerateManager::processNetlist()
 
         /* Process bus section if it exists */
         if (!netlistData["bus"] || !netlistData["bus"].IsMap() || netlistData["bus"].size() == 0) {
-            qInfo() << "No bus section found or empty, skipping bus processing";
+            QSocConsole::info() << "No bus section found or empty, skipping bus processing";
         } else {
             /* Process each bus type (e.g., biu_bus) */
             for (const auto &busTypePair : netlistData["bus"]) {
                 try {
                     /* Get bus type name */
                     if (!busTypePair.first.IsScalar()) {
-                        qWarning() << "Warning: Bus type name is not a scalar, skipping";
+                        QSocConsole::warn() << "Bus type name is not a scalar, skipping";
                         continue;
                     }
                     const auto busTypeName = busTypePair.first.as<std::string>();
-                    qInfo() << "Processing bus:" << busTypeName.c_str();
+                    QSocConsole::info() << "Processing bus:" << busTypeName.c_str();
 
                     /* Get bus connections (should be a sequence/list) */
                     if (!busTypePair.second.IsSequence()) {
-                        qWarning() << "Warning: Bus" << busTypeName.c_str()
-                                   << "is not a sequence, skipping";
+                        QSocConsole::warn()
+                            << "Bus" << busTypeName.c_str() << "is not a sequence, skipping";
                         continue;
                     }
                     const YAML::Node &busConnections = busTypePair.second;
-                    qInfo() << "Found" << busConnections.size() << "connections for bus"
-                            << busTypeName.c_str();
+                    QSocConsole::info() << "Found" << busConnections.size() << "connections for bus"
+                                        << busTypeName.c_str();
 
                     /* Collect all valid connections */
                     struct Connection
@@ -196,33 +202,35 @@ bool QSocGenerateManager::processNetlist()
                         try {
                             if (!connectionNode.IsMap() || !connectionNode["instance"]
                                 || !connectionNode["instance"].IsScalar()) {
-                                qWarning() << "Warning: Invalid instance specification, skipping";
+                                QSocConsole::warn()
+                                    << "Invalid instance specification, skipping";
                                 continue;
                             }
                             const auto instanceName = connectionNode["instance"].as<std::string>();
 
                             if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
-                                qWarning() << "Warning: Invalid port specification for instance"
-                                           << instanceName.c_str();
+                                QSocConsole::warn()
+                                    << "Invalid port specification for instance"
+                                    << instanceName.c_str();
                                 continue;
                             }
                             const auto portName = connectionNode["port"].as<std::string>();
 
-                            qInfo() << "Validating connection:" << instanceName.c_str() << "."
-                                    << portName.c_str();
+                            QSocConsole::info() << "Validating connection:" << instanceName.c_str()
+                                                << "." << portName.c_str();
 
                             /* Validate the instance exists */
                             if (!netlistData["instance"][instanceName]) {
-                                qWarning() << "Warning: Instance" << instanceName.c_str()
-                                           << "not found in netlist";
+                                QSocConsole::warn()
+                                    << "Instance" << instanceName.c_str() << "not found in netlist";
                                 continue;
                             }
 
                             /* Check for module name */
                             if (!netlistData["instance"][instanceName]["module"]
                                 || !netlistData["instance"][instanceName]["module"].IsScalar()) {
-                                qWarning() << "Warning: Invalid module for instance"
-                                           << instanceName.c_str();
+                                QSocConsole::warn()
+                                    << "Invalid module for instance" << instanceName.c_str();
                                 continue;
                             }
 
@@ -233,8 +241,8 @@ bool QSocGenerateManager::processNetlist()
                             if (!moduleManager
                                 || !moduleManager->isModuleExist(
                                     QString::fromStdString(moduleName))) {
-                                qWarning()
-                                    << "Warning: Module" << moduleName.c_str() << "not found";
+                                QSocConsole::warn()
+                                    << "Module" << moduleName.c_str() << "not found";
                                 continue;
                             }
 
@@ -244,14 +252,14 @@ bool QSocGenerateManager::processNetlist()
                                 moduleData = moduleManager->getModuleYaml(
                                     QString::fromStdString(moduleName));
                             } catch (const YAML::Exception &e) {
-                                qWarning() << "Error getting module data:" << e.what();
+                                QSocConsole::warn() << "failed to get module data:" << e.what();
                                 continue;
                             }
 
                             /* Check if port exists in bus section */
                             if (!moduleData["bus"] || !moduleData["bus"].IsMap()) {
-                                qWarning()
-                                    << "Warning: No bus section in module" << moduleName.c_str();
+                                QSocConsole::warn()
+                                    << "No bus section in module" << moduleName.c_str();
                                 continue;
                             }
 
@@ -265,8 +273,8 @@ bool QSocGenerateManager::processNetlist()
                             }
 
                             if (!portFound) {
-                                qWarning() << "Warning: Port" << portName.c_str()
-                                           << "not found in module" << moduleName.c_str();
+                                QSocConsole::warn() << "Port" << portName.c_str()
+                                                    << "not found in module" << moduleName.c_str();
                                 continue;
                             }
 
@@ -292,15 +300,16 @@ bool QSocGenerateManager::processNetlist()
                                 currentBusType
                                     = moduleData["bus"]["pad_" + portName]["bus"].as<std::string>();
                             } else {
-                                qWarning() << "Warning: No bus type for port" << portName.c_str();
+                                QSocConsole::warn()
+                                    << "No bus type for port" << portName.c_str();
                                 continue;
                             }
 
                             /* Check if this bus type exists */
                             if (!busManager
                                 || !busManager->isBusExist(QString::fromStdString(currentBusType))) {
-                                qWarning()
-                                    << "Warning: Bus type" << currentBusType.c_str() << "not found";
+                                QSocConsole::warn()
+                                    << "Bus type" << currentBusType.c_str() << "not found";
                                 continue;
                             }
 
@@ -310,9 +319,9 @@ bool QSocGenerateManager::processNetlist()
                             }
                             /* For subsequent connections, ensure bus type is consistent */
                             else if (currentBusType != busType) {
-                                qWarning() << "Warning: Mixed bus types" << busType.c_str() << "and"
-                                           << currentBusType.c_str()
-                                           << ", skipping inconsistent connection";
+                                QSocConsole::warn() << "Mixed bus types" << busType.c_str()
+                                                    << "and" << currentBusType.c_str()
+                                                    << ", skipping inconsistent connection";
                                 continue;
                             }
 
@@ -325,20 +334,22 @@ bool QSocGenerateManager::processNetlist()
                             validConnections.push_back(conn);
 
                         } catch (const YAML::Exception &e) {
-                            qWarning() << "YAML exception validating connection:" << e.what();
+                            QSocConsole::warn()
+                                << "YAML exception validating connection:" << e.what();
                             continue;
                         } catch (const std::exception &e) {
-                            qWarning() << "Exception validating connection:" << e.what();
+                            QSocConsole::warn() << "Exception validating connection:" << e.what();
                             continue;
                         }
                     }
 
-                    qInfo() << "Found" << validConnections.size() << "valid connections";
+                    QSocConsole::info()
+                        << "Found" << validConnections.size() << "valid connections";
 
                     /* If no valid connections, skip */
                     if (validConnections.empty()) {
-                        qWarning()
-                            << "Warning: No valid connections for bus" << busTypeName.c_str();
+                        QSocConsole::warn()
+                            << "No valid connections for bus" << busTypeName.c_str();
                         continue;
                     }
 
@@ -347,23 +358,24 @@ bool QSocGenerateManager::processNetlist()
                     try {
                         busDefinition = busManager->getBusYaml(QString::fromStdString(busType));
                     } catch (const YAML::Exception &e) {
-                        qWarning() << "Error getting bus definition:" << e.what();
+                        QSocConsole::warn() << "failed to get bus definition:" << e.what();
                         continue;
                     }
 
                     if (!busDefinition["port"] || !busDefinition["port"].IsMap()) {
-                        qWarning() << "Warning: Invalid port section in bus definition for"
-                                   << busType.c_str();
+                        QSocConsole::warn() << "Invalid port section in bus definition for"
+                                            << busType.c_str();
                         continue;
                     }
 
-                    qInfo() << "Processing" << busDefinition["port"].size()
-                            << "signals for bus type" << busType.c_str();
+                    QSocConsole::info() << "Processing" << busDefinition["port"].size()
+                                        << "signals for bus type" << busType.c_str();
 
                     /* Step 3: Create nets for each bus signal */
                     for (const auto &portPair : busDefinition["port"]) {
                         if (!portPair.first.IsScalar()) {
-                            qWarning() << "Warning: Invalid port name in bus definition, skipping";
+                            QSocConsole::warn()
+                                << "Invalid port name in bus definition, skipping";
                             continue;
                         }
 
@@ -372,7 +384,7 @@ bool QSocGenerateManager::processNetlist()
                         netName += "_";
                         netName += signalName;
 
-                        qInfo() << "Creating net for bus signal:" << signalName.c_str();
+                        QSocConsole::info() << "Creating net for bus signal:" << signalName.c_str();
 
                         /* Create a net for this signal using List format for consistency */
                         netlistData["net"][netName] = YAML::Node(YAML::NodeType::Sequence);
@@ -382,8 +394,9 @@ bool QSocGenerateManager::processNetlist()
                             try {
                                 /* Skip if module definition not available */
                                 if (!moduleManager->isModuleExist(conn.moduleName.c_str())) {
-                                    qWarning() << "Warning: Module" << conn.moduleName.c_str()
-                                               << "not found, skipping";
+                                    QSocConsole::warn()
+                                        << "Module" << conn.moduleName.c_str()
+                                        << "not found, skipping";
                                     continue;
                                 }
 
@@ -391,8 +404,8 @@ bool QSocGenerateManager::processNetlist()
                                     QString::fromStdString(conn.moduleName));
 
                                 if (!moduleData["bus"] || !moduleData["bus"].IsMap()) {
-                                    qWarning() << "Warning: No bus section in module"
-                                               << conn.moduleName.c_str() << ", skipping";
+                                    QSocConsole::warn() << "No bus section in module"
+                                                        << conn.moduleName.c_str() << ", skipping";
                                     continue;
                                 }
 
@@ -468,11 +481,12 @@ bool QSocGenerateManager::processNetlist()
                                 netlistData["net"][netName].push_back(connectionNode);
 
                             } catch (const YAML::Exception &e) {
-                                qWarning()
+                                QSocConsole::warn()
                                     << "YAML exception adding connection to net:" << e.what();
                                 continue;
                             } catch (const std::exception &e) {
-                                qWarning() << "Exception adding connection to net:" << e.what();
+                                QSocConsole::warn()
+                                    << "Exception adding connection to net:" << e.what();
                                 continue;
                             }
                         }
@@ -484,10 +498,10 @@ bool QSocGenerateManager::processNetlist()
                     }
 
                 } catch (const YAML::Exception &e) {
-                    qCritical() << "YAML exception processing bus type:" << e.what();
+                    QSocConsole::error() << "YAML exception processing bus type:" << e.what();
                     continue;
                 } catch (const std::exception &e) {
-                    qCritical() << "Standard exception processing bus type:" << e.what();
+                    QSocConsole::error() << "Standard exception processing bus type:" << e.what();
                     continue;
                 }
             }
@@ -498,33 +512,32 @@ bool QSocGenerateManager::processNetlist()
 
         /* Process link and uplink connections */
         if (!processLinkConnections()) {
-            qCritical() << "Error: Failed to process link and uplink connections";
+            QSocConsole::error() << "Failed to process link and uplink connections";
             return false;
         }
 
         /* Process combinational logic section */
         if (!processCombLogic()) {
-            qCritical() << "Error: Failed to process combinational logic";
+            QSocConsole::error() << "Failed to process combinational logic";
             return false;
         }
 
         /* Process sequential logic section */
         if (!processSeqLogic()) {
-            qCritical() << "Error: Failed to process sequential logic";
+            QSocConsole::error() << "Failed to process sequential logic";
             return false;
         }
 
-        qInfo() << "Netlist processed successfully";
-        std::cout << "Expanded Netlist:\n" << netlistData << '\n';
+        QSocConsole::info() << "Netlist processed successfully";
         return true;
     } catch (const YAML::Exception &e) {
-        qCritical() << "YAML exception in processNetlist:" << e.what();
+        QSocConsole::error() << "YAML exception in processNetlist:" << e.what();
         return false;
     } catch (const std::exception &e) {
-        qCritical() << "Standard exception in processNetlist:" << e.what();
+        QSocConsole::error() << "Standard exception in processNetlist:" << e.what();
         return false;
     } catch (...) {
-        qCritical() << "Unknown exception in processNetlist";
+        QSocConsole::error() << "Unknown exception in processNetlist";
         return false;
     }
 }
@@ -572,8 +585,8 @@ bool QSocGenerateManager::expandBusLink()
                 }
 
                 const std::string linkName = busNode["link"].as<std::string>();
-                qInfo() << "Expanding bus link:" << instanceName.c_str() << "."
-                        << busPortName.c_str() << " -> " << linkName.c_str();
+                QSocConsole::info() << "Expanding bus link:" << instanceName.c_str() << "."
+                                    << busPortName.c_str() << " -> " << linkName.c_str();
 
                 /* Create or update the bus in netlist bus section */
                 if (!netlistData["bus"][linkName]) {
@@ -605,17 +618,17 @@ bool QSocGenerateManager::expandBusLink()
             }
         }
 
-        qInfo() << "Bus link expansion completed successfully";
+        QSocConsole::info() << "Bus link expansion completed successfully";
         return true;
 
     } catch (const YAML::Exception &e) {
-        qCritical() << "YAML exception in expandBusLink:" << e.what();
+        QSocConsole::error() << "YAML exception in expandBusLink:" << e.what();
         return false;
     } catch (const std::exception &e) {
-        qCritical() << "Standard exception in expandBusLink:" << e.what();
+        QSocConsole::error() << "Standard exception in expandBusLink:" << e.what();
         return false;
     } catch (...) {
-        qCritical() << "Unknown exception in expandBusLink";
+        QSocConsole::error() << "Unknown exception in expandBusLink";
         return false;
     }
 }
@@ -629,7 +642,7 @@ bool QSocGenerateManager::expandBusUplink()
             return true;
         }
 
-        qInfo() << "Processing bus uplink expansion...";
+        QSocConsole::info() << "Processing bus uplink expansion...";
 
         /* Iterate through all instances */
         for (auto instancePair : netlistData["instance"]) {
@@ -661,7 +674,7 @@ bool QSocGenerateManager::expandBusUplink()
             try {
                 moduleData = moduleManager->getModuleYaml(QString::fromStdString(moduleName));
             } catch (const YAML::Exception &e) {
-                qWarning() << "Error getting module data for bus uplink:" << e.what();
+                QSocConsole::warn() << "failed to get module data for bus uplink:" << e.what();
                 continue;
             }
 
@@ -680,20 +693,20 @@ bool QSocGenerateManager::expandBusUplink()
                 }
 
                 const std::string uplinkName = busNode["uplink"].as<std::string>();
-                qInfo() << "Expanding bus uplink:" << instanceName.c_str() << "."
-                        << busPortName.c_str() << " -> " << uplinkName.c_str();
+                QSocConsole::info() << "Expanding bus uplink:" << instanceName.c_str() << "."
+                                    << busPortName.c_str() << " -> " << uplinkName.c_str();
 
                 /* Get bus type from module definition */
                 if (!moduleData["bus"] || !moduleData["bus"].IsMap()
                     || !moduleData["bus"][busPortName]) {
-                    qWarning() << "Warning: Bus port" << busPortName.c_str()
-                               << "not found in module" << moduleName.c_str();
+                    QSocConsole::warn() << "Bus port" << busPortName.c_str()
+                                        << "not found in module" << moduleName.c_str();
                     continue;
                 }
 
                 const YAML::Node &moduleBusNode = moduleData["bus"][busPortName];
                 if (!moduleBusNode["bus"] || !moduleBusNode["bus"].IsScalar()) {
-                    qWarning() << "Warning: No bus type for port" << busPortName.c_str();
+                    QSocConsole::warn() << "No bus type for port" << busPortName.c_str();
                     continue;
                 }
 
@@ -701,7 +714,7 @@ bool QSocGenerateManager::expandBusUplink()
 
                 /* Get bus definition */
                 if (!busManager || !busManager->isBusExist(QString::fromStdString(busType))) {
-                    qWarning() << "Warning: Bus type" << busType.c_str() << "not found";
+                    QSocConsole::warn() << "Bus type" << busType.c_str() << "not found";
                     continue;
                 }
 
@@ -709,19 +722,20 @@ bool QSocGenerateManager::expandBusUplink()
                 try {
                     busDefinition = busManager->getBusYaml(QString::fromStdString(busType));
                 } catch (const YAML::Exception &e) {
-                    qWarning() << "Error getting bus definition:" << e.what();
+                    QSocConsole::warn() << "failed to get bus definition:" << e.what();
                     continue;
                 }
 
                 if (!busDefinition["port"] || !busDefinition["port"].IsMap()) {
-                    qWarning() << "Warning: Invalid port section in bus definition for"
-                               << busType.c_str();
+                    QSocConsole::warn()
+                        << "Invalid port section in bus definition for" << busType.c_str();
                     continue;
                 }
 
                 /* Get mapping from module bus definition */
                 if (!moduleBusNode["mapping"] || !moduleBusNode["mapping"].IsMap()) {
-                    qWarning() << "Warning: No mapping for bus port" << busPortName.c_str();
+                    QSocConsole::warn()
+                        << "No mapping for bus port" << busPortName.c_str();
                     continue;
                 }
 
@@ -737,16 +751,18 @@ bool QSocGenerateManager::expandBusUplink()
 
                     /* Find mapped port name */
                     if (!mappingNode[signalName] || !mappingNode[signalName].IsScalar()) {
-                        qWarning() << "Warning: No mapping for signal" << signalName.c_str()
-                                   << "in bus port" << busPortName.c_str();
+                        QSocConsole::warn()
+                            << "No mapping for signal" << signalName.c_str()
+                            << "in bus port" << busPortName.c_str();
                         continue;
                     }
 
                     const std::string mappedPortName   = mappingNode[signalName].as<std::string>();
                     const std::string toplevelPortName = uplinkName + "_" + signalName;
 
-                    qInfo() << "Creating port uplink:" << instanceName.c_str() << "."
-                            << mappedPortName.c_str() << " -> " << toplevelPortName.c_str();
+                    QSocConsole::info()
+                        << "Creating port uplink:" << instanceName.c_str() << "."
+                        << mappedPortName.c_str() << " -> " << toplevelPortName.c_str();
 
                     /* Create or update the port uplink in instance */
                     if (!instanceNode["port"]) {
@@ -765,17 +781,17 @@ bool QSocGenerateManager::expandBusUplink()
             }
         }
 
-        qInfo() << "Bus uplink expansion completed successfully";
+        QSocConsole::info() << "Bus uplink expansion completed successfully";
         return true;
 
     } catch (const YAML::Exception &e) {
-        qCritical() << "YAML exception in expandBusUplink:" << e.what();
+        QSocConsole::error() << "YAML exception in expandBusUplink:" << e.what();
         return false;
     } catch (const std::exception &e) {
-        qCritical() << "Standard exception in expandBusUplink:" << e.what();
+        QSocConsole::error() << "Standard exception in expandBusUplink:" << e.what();
         return false;
     } catch (...) {
-        qCritical() << "Unknown exception in expandBusUplink";
+        QSocConsole::error() << "Unknown exception in expandBusUplink";
         return false;
     }
 }
@@ -1378,7 +1394,7 @@ bool QSocGenerateManager::processLinkConnections()
             netlistData["port"] = YAML::Node(YAML::NodeType::Map);
         }
 
-        qInfo() << "Processing link and uplink connections...";
+        QSocConsole::info() << "Processing link and uplink connections...";
 
         /* Process each instance */
         for (const auto &instancePair : netlistData["instance"]) {
@@ -1409,8 +1425,8 @@ bool QSocGenerateManager::processLinkConnections()
             try {
                 moduleData = moduleManager->getModuleYaml(QString::fromStdString(moduleName));
             } catch (const YAML::Exception &e) {
-                qWarning() << "Error getting module data for" << moduleName.c_str() << ":"
-                           << e.what();
+                QSocConsole::warn()
+                    << "Error getting module data for" << moduleName.c_str() << ":" << e.what();
                 continue;
             }
 
@@ -1444,16 +1460,16 @@ bool QSocGenerateManager::processLinkConnections()
             }
         }
 
-        qInfo() << "Successfully processed link and uplink connections";
+        QSocConsole::info() << "Successfully processed link and uplink connections";
         return true;
     } catch (const YAML::Exception &e) {
-        qCritical() << "YAML exception in processLinkConnections:" << e.what();
+        QSocConsole::error() << "YAML exception in processLinkConnections:" << e.what();
         return false;
     } catch (const std::exception &e) {
-        qCritical() << "Standard exception in processLinkConnections:" << e.what();
+        QSocConsole::error() << "Standard exception in processLinkConnections:" << e.what();
         return false;
     } catch (...) {
-        qCritical() << "Unknown exception in processLinkConnections";
+        QSocConsole::error() << "Unknown exception in processLinkConnections";
         return false;
     }
 }
@@ -1475,19 +1491,19 @@ bool QSocGenerateManager::processLinkConnection(
     const YAML::Node & /*moduleData*/)
 {
     try {
-        qInfo() << "Processing link connection:" << instanceName.c_str() << "." << portName.c_str()
-                << "-> link:" << netName.c_str();
+        QSocConsole::info() << "Processing link connection:" << instanceName.c_str() << "."
+                            << portName.c_str() << "-> link:" << netName.c_str();
 
         /* Parse the link value to extract net name and bit selection */
         const auto [cleanNetName, bitSelection] = parseLinkValue(netName);
 
-        qInfo() << "Parsed link - net:" << cleanNetName.c_str()
-                << (bitSelection.empty() ? "" : (", bits:" + bitSelection).c_str());
+        QSocConsole::info() << "Parsed link - net:" << cleanNetName.c_str()
+                            << (bitSelection.empty() ? "" : (", bits:" + bitSelection).c_str());
 
         /* Step 1: Check if net exists, create if not */
         if (!netlistData["net"][cleanNetName]) {
             netlistData["net"][cleanNetName] = YAML::Node(YAML::NodeType::Sequence);
-            qInfo() << "Created new net:" << cleanNetName.c_str();
+            QSocConsole::info() << "Created new net:" << cleanNetName.c_str();
         }
 
         /* Step 2: Check if net is empty or has existing connections */
@@ -1515,7 +1531,7 @@ bool QSocGenerateManager::processLinkConnection(
                         if (existingBits == bitSelection) {
                             /* Exact duplicate - ignore */
                             isDuplicate = true;
-                            qInfo()
+                            QSocConsole::info()
                                 << "Ignoring duplicate connection:" << instanceName.c_str() << "."
                                 << portName.c_str() << " to net:" << cleanNetName.c_str();
                             break;
@@ -1546,18 +1562,20 @@ bool QSocGenerateManager::processLinkConnection(
             /* Add to the net's connection list */
             netlistData["net"][cleanNetName].push_back(connectionNode);
 
-            qInfo() << "Added connection:" << instanceName.c_str() << "." << portName.c_str()
-                    << " to net:" << cleanNetName.c_str()
-                    << (bitSelection.empty() ? "" : (" with bits:" + bitSelection).c_str());
+            QSocConsole::info() << "Added connection:" << instanceName.c_str() << "."
+                                << portName.c_str() << " to net:" << cleanNetName.c_str()
+                                << (bitSelection.empty() ? ""
+                                                         : (" with bits:" + bitSelection).c_str());
         }
 
-        qInfo() << "Successfully created link connection for net:" << cleanNetName.c_str();
+        QSocConsole::info() << "Successfully created link connection for net:"
+                            << cleanNetName.c_str();
         return true;
     } catch (const YAML::Exception &e) {
-        qCritical() << "YAML exception in processLinkConnection:" << e.what();
+        QSocConsole::error() << "YAML exception in processLinkConnection:" << e.what();
         return false;
     } catch (const std::exception &e) {
-        qCritical() << "Standard exception in processLinkConnection:" << e.what();
+        QSocConsole::error() << "Standard exception in processLinkConnection:" << e.what();
         return false;
     }
 }
@@ -1579,18 +1597,18 @@ bool QSocGenerateManager::processUplinkConnection(
     const YAML::Node  &moduleData)
 {
     try {
-        qInfo() << "Processing uplink connection:" << instanceName.c_str() << "."
-                << portName.c_str() << "-> top-level port:" << netName.c_str();
+        QSocConsole::info() << "Processing uplink connection:" << instanceName.c_str() << "."
+                            << portName.c_str() << "-> top-level port:" << netName.c_str();
 
         /* Get port information from module */
         if (!moduleData["port"] || !moduleData["port"].IsMap()) {
-            qWarning() << "Warning: No port section in module" << moduleName.c_str();
+            QSocConsole::warn() << "No port section in module" << moduleName.c_str();
             return false;
         }
 
         if (!moduleData["port"][portName] || !moduleData["port"][portName].IsMap()) {
-            qWarning() << "Warning: Port" << portName.c_str() << "not found in module"
-                       << moduleName.c_str();
+            QSocConsole::warn() << "Port" << portName.c_str() << "not found in module"
+                                << moduleName.c_str();
             return false;
         }
 
@@ -1598,8 +1616,8 @@ bool QSocGenerateManager::processUplinkConnection(
 
         /* Get port direction */
         if (!modulePortNode["direction"] || !modulePortNode["direction"].IsScalar()) {
-            qWarning() << "Warning: No direction for port" << portName.c_str() << "in module"
-                       << moduleName.c_str();
+            QSocConsole::warn() << "No direction for port" << portName.c_str() << "in module"
+                                << moduleName.c_str();
             return false;
         }
         auto modulePortDirection = modulePortNode["direction"].as<std::string>();
@@ -1626,8 +1644,8 @@ bool QSocGenerateManager::processUplinkConnection(
         } else if (modulePortDirection == "inout") {
             topLevelDirection = "inout";
         } else {
-            qWarning() << "Warning: Unknown port direction" << modulePortDirection.c_str()
-                       << "for port" << portName.c_str();
+            QSocConsole::warn() << "Unknown port direction" << modulePortDirection.c_str()
+                                << "for port" << portName.c_str();
             return false;
         }
 
@@ -1652,9 +1670,10 @@ bool QSocGenerateManager::processUplinkConnection(
                    || topLevelDirection == existingDirection);
 
             if (!directionCompatible) {
-                qCritical() << "Error: Direction mismatch for uplink port" << netName.c_str()
-                            << ". Expected:" << topLevelDirection.c_str()
-                            << ", existing:" << existingDirection.c_str();
+                QSocConsole::error()
+                    << "Direction mismatch for uplink port" << netName.c_str()
+                    << ". Expected:" << topLevelDirection.c_str()
+                    << ", existing:" << existingDirection.c_str();
                 return false;
             }
 
@@ -1670,14 +1689,15 @@ bool QSocGenerateManager::processUplinkConnection(
                 const int existingWidth = calculatePortWidth(existingType);
 
                 if (moduleWidth > 0 && existingWidth > 0 && moduleWidth != existingWidth) {
-                    qCritical() << "Error: Type/width mismatch for uplink port" << netName.c_str()
-                                << ". Expected width:" << moduleWidth
-                                << ", existing width:" << existingWidth;
+                    QSocConsole::error() << "Type/width mismatch for uplink port" << netName.c_str()
+                                         << ". Expected width:" << moduleWidth
+                                         << ", existing width:" << existingWidth;
                     return false;
                 }
             }
 
-            qInfo() << "Uplink port" << netName.c_str() << "already exists and is compatible";
+            QSocConsole::info() << "Uplink port" << netName.c_str()
+                                << "already exists and is compatible";
         } else {
             /* Create new top-level port */
             YAML::Node topLevelPortNode   = YAML::Node(YAML::NodeType::Map);
@@ -1687,10 +1707,10 @@ bool QSocGenerateManager::processUplinkConnection(
 
             netlistData["port"][netName] = topLevelPortNode;
 
-            qInfo() << "Created new top-level port:" << netName.c_str()
-                    << ", direction:" << topLevelDirection.c_str()
-                    << ", type:" << modulePortType.c_str()
-                    << ", connected to net:" << netName.c_str();
+            QSocConsole::info() << "Created new top-level port:" << netName.c_str()
+                                << ", direction:" << topLevelDirection.c_str()
+                                << ", type:" << modulePortType.c_str()
+                                << ", connected to net:" << netName.c_str();
         }
 
         /* For uplink, directly connect module port to top-level port - NO intermediate net */
@@ -1708,13 +1728,14 @@ bool QSocGenerateManager::processUplinkConnection(
         /* The top-level port is implicitly connected to the net with the same name */
         /* We don't add an explicit "top_level" connection since the net name matches the port name */
 
-        qInfo() << "Successfully created uplink connection for port:" << netName.c_str();
+        QSocConsole::info() << "Successfully created uplink connection for port:"
+                            << netName.c_str();
         return true;
     } catch (const YAML::Exception &e) {
-        qCritical() << "YAML exception in processUplinkConnection:" << e.what();
+        QSocConsole::error() << "YAML exception in processUplinkConnection:" << e.what();
         return false;
     } catch (const std::exception &e) {
-        qCritical() << "Standard exception in processUplinkConnection:" << e.what();
+        QSocConsole::error() << "Standard exception in processUplinkConnection:" << e.what();
         return false;
     }
 }
@@ -1790,30 +1811,31 @@ bool QSocGenerateManager::processCombLogic()
     try {
         /* Check if comb section exists */
         if (!netlistData["comb"]) {
-            qInfo() << "No combinational logic section found, skipping";
+            QSocConsole::info() << "No combinational logic section found, skipping";
             return true;
         }
 
         if (!netlistData["comb"].IsSequence()) {
-            qCritical() << "Error: 'comb' section must be a sequence/list";
+            QSocConsole::error() << "'comb' section must be a sequence/list";
             return false;
         }
 
-        qInfo() << "Processing combinational logic section...";
+        QSocConsole::info() << "Processing combinational logic section...";
 
         /* Iterate through each combinational logic item */
         for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
             const YAML::Node &combItem = netlistData["comb"][i];
 
             if (!combItem.IsMap()) {
-                qWarning() << "Warning: Combinational logic item" << i << "is not a map, skipping";
+                QSocConsole::warn()
+                    << "Combinational logic item" << i << "is not a map, skipping";
                 continue;
             }
 
             /* Validate that 'out' field exists */
             if (!combItem["out"] || !combItem["out"].IsScalar()) {
-                qWarning() << "Warning: Combinational logic item" << i
-                           << "missing required 'out' field, skipping";
+                QSocConsole::warn()
+                    << "Combinational logic item" << i << "missing required 'out' field, skipping";
                 continue;
             }
 
@@ -1829,31 +1851,31 @@ bool QSocGenerateManager::processCombLogic()
                 logicTypeCount++;
 
             if (logicTypeCount == 0) {
-                qWarning() << "Warning: Combinational logic item" << i << "for output"
-                           << outputSignal
-                           << "has no logic specification (expr, if, or case), skipping";
+                QSocConsole::warn()
+                    << "Combinational logic item" << i << "for output" << outputSignal
+                    << "has no logic specification (expr, if, or case), skipping";
                 continue;
             }
 
             if (logicTypeCount > 1) {
-                qWarning() << "Warning: Combinational logic item" << i << "for output"
-                           << outputSignal
-                           << "has multiple logic types specified, using first found";
+                QSocConsole::warn()
+                    << "Combinational logic item" << i << "for output" << outputSignal
+                    << "has multiple logic types specified, using first found";
             }
 
             /* Validate logic types */
             if (combItem["expr"]) {
                 /* Simple assignment - validate expr field */
                 if (!combItem["expr"].IsScalar()) {
-                    qWarning() << "Warning: 'expr' field for output" << outputSignal
-                               << "is not a scalar, skipping";
+                    QSocConsole::warn()
+                        << "'expr' field for output" << outputSignal << "is not a scalar, skipping";
                     continue;
                 }
             } else if (combItem["if"]) {
                 /* Conditional logic - validate if field */
                 if (!combItem["if"].IsSequence()) {
-                    qWarning() << "Warning: 'if' field for output" << outputSignal
-                               << "is not a sequence, skipping";
+                    QSocConsole::warn()
+                        << "'if' field for output" << outputSignal << "is not a sequence, skipping";
                     continue;
                 }
 
@@ -1861,23 +1883,25 @@ bool QSocGenerateManager::processCombLogic()
                 bool validIfBlock = true;
                 for (const auto &ifCondition : combItem["if"]) {
                     if (!ifCondition.IsMap() || !ifCondition["cond"] || !ifCondition["then"]) {
-                        qWarning() << "Warning: Invalid if condition for output" << outputSignal
-                                   << ", each condition must have 'cond' and 'then' fields";
+                        QSocConsole::warn()
+                            << "Invalid if condition for output" << outputSignal
+                            << ", each condition must have 'cond' and 'then' fields";
                         validIfBlock = false;
                         break;
                     }
 
                     if (!ifCondition["cond"].IsScalar()) {
-                        qWarning()
-                            << "Warning: 'cond' field must be a scalar for output" << outputSignal;
+                        QSocConsole::warn()
+                            << "'cond' field must be a scalar for output" << outputSignal;
                         validIfBlock = false;
                         break;
                     }
 
                     /* 'then' can be either scalar (simple value) or map (nested structure) */
                     if (!ifCondition["then"].IsScalar() && !ifCondition["then"].IsMap()) {
-                        qWarning() << "Warning: 'then' field must be scalar or map for output"
-                                   << outputSignal;
+                        QSocConsole::warn()
+                            << "'then' field must be scalar or map for output"
+                            << outputSignal;
                         validIfBlock = false;
                         break;
                     }
@@ -1889,17 +1913,18 @@ bool QSocGenerateManager::processCombLogic()
                         /* Check if it's a nested case structure */
                         if (thenNode["case"]) {
                             if (!thenNode["case"].IsScalar()) {
-                                qWarning()
-                                    << "Warning: Nested 'case' field must be scalar for output"
+                                QSocConsole::warn()
+                                    << "Nested 'case' field must be scalar for output"
                                     << outputSignal;
                                 validIfBlock = false;
                                 break;
                             }
 
                             if (!thenNode["cases"] || !thenNode["cases"].IsMap()) {
-                                qWarning() << "Warning: Nested 'cases' field missing or not a map "
-                                              "for output"
-                                           << outputSignal;
+                                QSocConsole::warn()
+                                    << "Nested 'cases' field missing or not a map "
+                                       "for output"
+                                    << outputSignal;
                                 validIfBlock = false;
                                 break;
                             }
@@ -1907,17 +1932,19 @@ bool QSocGenerateManager::processCombLogic()
                             /* Validate nested case entries */
                             for (const auto &caseEntry : thenNode["cases"]) {
                                 if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
-                                    qWarning() << "Warning: Nested case entries must have scalar "
-                                                  "keys and values for output"
-                                               << outputSignal;
+                                    QSocConsole::warn()
+                                        << "Nested case entries must have scalar "
+                                           "keys and values for output"
+                                        << outputSignal;
                                     validIfBlock = false;
                                     break;
                                 }
                             }
                         } else {
-                            qWarning() << "Warning: Nested structure in 'then' field not supported "
-                                          "for output"
-                                       << outputSignal;
+                            QSocConsole::warn()
+                                << "Nested structure in 'then' field not supported "
+                                   "for output"
+                                << outputSignal;
                             validIfBlock = false;
                             break;
                         }
@@ -1930,20 +1957,21 @@ bool QSocGenerateManager::processCombLogic()
 
                 /* Check for default value */
                 if (!combItem["default"]) {
-                    qWarning() << "Warning: Missing 'default' field for conditional logic output"
-                               << outputSignal << ", may cause latches";
+                    QSocConsole::warn()
+                        << "Missing 'default' field for conditional logic output"
+                        << outputSignal << ", may cause latches";
                 }
             } else if (combItem["case"]) {
                 /* Case statement - validate case and cases fields */
                 if (!combItem["case"].IsScalar()) {
-                    qWarning() << "Warning: 'case' field for output" << outputSignal
-                               << "is not a scalar, skipping";
+                    QSocConsole::warn()
+                        << "'case' field for output" << outputSignal << "is not a scalar, skipping";
                     continue;
                 }
 
                 if (!combItem["cases"] || !combItem["cases"].IsMap()) {
-                    qWarning() << "Warning: 'cases' field for output" << outputSignal
-                               << "is missing or not a map, skipping";
+                    QSocConsole::warn() << "'cases' field for output" << outputSignal
+                                        << "is missing or not a map, skipping";
                     continue;
                 }
 
@@ -1951,8 +1979,8 @@ bool QSocGenerateManager::processCombLogic()
                 bool validCaseBlock = true;
                 for (const auto &caseEntry : combItem["cases"]) {
                     if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
-                        qWarning()
-                            << "Warning: Case entries must have scalar keys and values for output"
+                        QSocConsole::warn()
+                            << "Case entries must have scalar keys and values for output"
                             << outputSignal;
                         validCaseBlock = false;
                         break;
@@ -1965,24 +1993,26 @@ bool QSocGenerateManager::processCombLogic()
 
                 /* Check for default value */
                 if (!combItem["default"]) {
-                    qWarning() << "Warning: Missing 'default' field for case statement output"
-                               << outputSignal << ", may cause latches";
+                    QSocConsole::warn()
+                        << "Missing 'default' field for case statement output"
+                        << outputSignal << ", may cause latches";
                 }
             }
 
-            qInfo() << "Validated combinational logic item" << i << "for output" << outputSignal;
+            QSocConsole::info() << "Validated combinational logic item" << i << "for output"
+                                << outputSignal;
         }
 
-        qInfo() << "Successfully processed combinational logic section";
+        QSocConsole::info() << "Successfully processed combinational logic section";
         return true;
     } catch (const YAML::Exception &e) {
-        qCritical() << "YAML exception in processCombLogic:" << e.what();
+        QSocConsole::error() << "YAML exception in processCombLogic:" << e.what();
         return false;
     } catch (const std::exception &e) {
-        qCritical() << "Standard exception in processCombLogic:" << e.what();
+        QSocConsole::error() << "Standard exception in processCombLogic:" << e.what();
         return false;
     } catch (...) {
-        qCritical() << "Unknown exception in processCombLogic";
+        QSocConsole::error() << "Unknown exception in processCombLogic";
         return false;
     }
 }
@@ -1991,47 +2021,48 @@ bool QSocGenerateManager::processSeqLogic()
 {
     try {
         if (!netlistData["seq"]) {
-            qInfo() << "No sequential logic section found, skipping";
+            QSocConsole::info() << "No sequential logic section found, skipping";
             return true;
         }
 
         if (!netlistData["seq"].IsSequence()) {
-            qCritical() << "Error: 'seq' section must be a sequence";
+            QSocConsole::error() << "'seq' section must be a sequence";
             return false;
         }
 
-        qInfo() << "Processing sequential logic section...";
+        QSocConsole::info() << "Processing sequential logic section...";
 
         for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
             const YAML::Node &seqItem = netlistData["seq"][i];
 
             /* Validate that each item is a map */
             if (!seqItem.IsMap()) {
-                qWarning() << "Warning: Sequential logic item" << i << "is not a map, skipping";
+                QSocConsole::warn()
+                    << "Sequential logic item" << i << "is not a map, skipping";
                 continue;
             }
 
             /* Validate required fields */
             if (!seqItem["reg"]) {
-                qWarning() << "Warning: Sequential logic item" << i
-                           << "has no 'reg' field, skipping";
+                QSocConsole::warn()
+                    << "Sequential logic item" << i << "has no 'reg' field, skipping";
                 continue;
             }
 
             if (!seqItem["clk"]) {
-                qWarning() << "Warning: Sequential logic item" << i
-                           << "has no 'clk' field, skipping";
+                QSocConsole::warn()
+                    << "Sequential logic item" << i << "has no 'clk' field, skipping";
                 continue;
             }
 
             /* Check that reg and clk are scalar values */
             if (!seqItem["reg"].IsScalar()) {
-                qWarning() << "Warning: 'reg' field must be a scalar for item" << i;
+                QSocConsole::warn() << "'reg' field must be a scalar for item" << i;
                 continue;
             }
 
             if (!seqItem["clk"].IsScalar()) {
-                qWarning() << "Warning: 'clk' field must be a scalar for item" << i;
+                QSocConsole::warn() << "'clk' field must be a scalar for item" << i;
                 continue;
             }
 
@@ -2040,13 +2071,15 @@ bool QSocGenerateManager::processSeqLogic()
             /* Validate edge type (if present) */
             if (seqItem["edge"]) {
                 if (!seqItem["edge"].IsScalar()) {
-                    qWarning() << "Warning: 'edge' field must be a scalar for register" << regName;
+                    QSocConsole::warn()
+                        << "'edge' field must be a scalar for register" << regName;
                     continue;
                 }
                 const QString edge = QString::fromStdString(seqItem["edge"].as<std::string>());
                 if (edge != "pos" && edge != "neg") {
-                    qWarning() << "Warning: 'edge' field must be 'pos' or 'neg' for register"
-                               << regName << ", got:" << edge;
+                    QSocConsole::warn()
+                        << "'edge' field must be 'pos' or 'neg' for register" << regName
+                        << ", got:" << edge;
                     continue;
                 }
             }
@@ -2054,28 +2087,30 @@ bool QSocGenerateManager::processSeqLogic()
             /* Validate reset fields (if present) */
             if (seqItem["rst"]) {
                 if (!seqItem["rst"].IsScalar()) {
-                    qWarning() << "Warning: 'rst' field must be a scalar for register" << regName;
+                    QSocConsole::warn()
+                        << "'rst' field must be a scalar for register" << regName;
                     continue;
                 }
 
                 /* Reset value is required when reset is present */
                 if (!seqItem["rst_val"]) {
-                    qWarning()
-                        << "Warning: 'rst_val' is required when 'rst' is present for register"
+                    QSocConsole::warn()
+                        << "'rst_val' is required when 'rst' is present for register"
                         << regName;
                     continue;
                 }
 
                 if (!seqItem["rst_val"].IsScalar()) {
-                    qWarning() << "Warning: 'rst_val' field must be a scalar for register"
-                               << regName;
+                    QSocConsole::warn()
+                        << "'rst_val' field must be a scalar for register" << regName;
                     continue;
                 }
             }
 
             /* Validate enable field (if present) */
             if (seqItem["enable"] && !seqItem["enable"].IsScalar()) {
-                qWarning() << "Warning: 'enable' field must be a scalar for register" << regName;
+                QSocConsole::warn()
+                    << "'enable' field must be a scalar for register" << regName;
                 continue;
             }
 
@@ -2084,14 +2119,14 @@ bool QSocGenerateManager::processSeqLogic()
             bool hasIf   = seqItem["if"] && seqItem["if"].IsSequence();
 
             if (!hasNext && !hasIf) {
-                qWarning() << "Warning: Register" << regName
-                           << "has no logic specification ('next' or 'if'), skipping";
+                QSocConsole::warn() << "Register" << regName
+                                    << "has no logic specification ('next' or 'if'), skipping";
                 continue;
             }
 
             if (hasNext && hasIf) {
-                qWarning() << "Warning: Register" << regName
-                           << "has both 'next' and 'if' specifications, skipping";
+                QSocConsole::warn()
+                    << "Register" << regName << "has both 'next' and 'if' specifications, skipping";
                 continue;
             }
 
@@ -2100,16 +2135,17 @@ bool QSocGenerateManager::processSeqLogic()
                 bool validIfBlock = true;
                 for (const auto &ifEntry : seqItem["if"]) {
                     if (!ifEntry.IsMap() || !ifEntry["cond"] || !ifEntry["then"]) {
-                        qWarning() << "Warning: 'if' entries must have 'cond' and 'then' fields "
-                                      "for register"
-                                   << regName;
+                        QSocConsole::warn()
+                            << "'if' entries must have 'cond' and 'then' fields "
+                               "for register"
+                            << regName;
                         validIfBlock = false;
                         break;
                     }
 
                     if (!ifEntry["cond"].IsScalar() || !ifEntry["then"].IsScalar()) {
-                        qWarning()
-                            << "Warning: 'cond' and 'then' fields must be scalars for register"
+                        QSocConsole::warn()
+                            << "'cond' and 'then' fields must be scalars for register"
                             << regName;
                         validIfBlock = false;
                         break;
@@ -2122,24 +2158,26 @@ bool QSocGenerateManager::processSeqLogic()
 
                 /* Check for default value */
                 if (!seqItem["default"]) {
-                    qWarning() << "Warning: Missing 'default' field for 'if' logic register"
-                               << regName << ", may cause latches";
+                    QSocConsole::warn()
+                        << "Missing 'default' field for 'if' logic register" << regName
+                        << ", may cause latches";
                 }
             }
 
-            qInfo() << "Validated sequential logic item" << i << "for register" << regName;
+            QSocConsole::info() << "Validated sequential logic item" << i << "for register"
+                                << regName;
         }
 
-        qInfo() << "Successfully processed sequential logic section";
+        QSocConsole::info() << "Successfully processed sequential logic section";
         return true;
     } catch (const YAML::Exception &e) {
-        qCritical() << "YAML exception in processSeqLogic:" << e.what();
+        QSocConsole::error() << "YAML exception in processSeqLogic:" << e.what();
         return false;
     } catch (const std::exception &e) {
-        qCritical() << "Standard exception in processSeqLogic:" << e.what();
+        QSocConsole::error() << "Standard exception in processSeqLogic:" << e.what();
         return false;
     } catch (...) {
-        qCritical() << "Unknown exception in processSeqLogic";
+        QSocConsole::error() << "Unknown exception in processSeqLogic";
         return false;
     }
 }
@@ -2179,8 +2217,8 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                     // Check if bits attribute exists and override bitSelect if present
                     if (combItem["bits"] && combItem["bits"].IsScalar()) {
                         bitSelect = QString::fromStdString(combItem["bits"].as<std::string>());
-                        qDebug() << "Using bits attribute for comb output:" << baseName
-                                 << "bits:" << bitSelect;
+                        QSocConsole::debug() << "Using bits attribute for comb output:" << baseName
+                                             << "bits:" << bitSelect;
                     }
 
                     // Find port width for this output
@@ -2245,9 +2283,9 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                             }
                         } else {
                             /* Graceful degradation: log warning but continue */
-                            QStaticLog::logW(
-                                Q_FUNC_INFO,
-                                "Failed to parse comb expr for input extraction: " + expr);
+                            QSocConsole::warn().noquote().nospace()
+                                << Q_FUNC_INFO
+                                << ":Failed to parse comb expr for input extraction: " << expr;
                         }
                     }
                 }
@@ -2268,8 +2306,8 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                     // Check if bits attribute exists and override bitSelect if present
                     if (seqItem["bits"] && seqItem["bits"].IsScalar()) {
                         bitSelect = QString::fromStdString(seqItem["bits"].as<std::string>());
-                        qDebug() << "Using bits attribute for seq output:" << baseName
-                                 << "bits:" << bitSelect;
+                        QSocConsole::debug() << "Using bits attribute for seq output:" << baseName
+                                             << "bits:" << bitSelect;
                     }
 
                     // Find port width for this output
@@ -2334,9 +2372,10 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
                             }
                         } else {
                             /* Graceful degradation: log warning but continue */
-                            QStaticLog::logW(
-                                Q_FUNC_INFO,
-                                "Failed to parse seq next expr for input extraction: " + nextExpr);
+                            QSocConsole::warn().noquote().nospace()
+                                << Q_FUNC_INFO
+                                << ":Failed to parse seq next expr for input extraction: "
+                                << nextExpr;
                         }
                     }
 
@@ -2411,11 +2450,11 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
         }
 
     } catch (const YAML::Exception &e) {
-        qWarning() << "YAML exception in collectCombSeqFsmSignals:" << e.what();
+        QSocConsole::warn() << "YAML exception in collectCombSeqFsmSignals:" << e.what();
     } catch (const std::exception &e) {
-        qWarning() << "Standard exception in collectCombSeqFsmSignals:" << e.what();
+        QSocConsole::warn() << "Standard exception in collectCombSeqFsmSignals:" << e.what();
     } catch (...) {
-        qWarning() << "Unknown exception in collectCombSeqFsmSignals";
+        QSocConsole::warn() << "Unknown exception in collectCombSeqFsmSignals";
     }
 
     return signalList;

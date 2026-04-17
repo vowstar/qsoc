@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocprojectmanager.h"
+#include "common/qsocconsole.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -88,7 +89,7 @@ bool QSocProjectManager::isExist(const QString &projectName)
     bool result = false;
     /* Check project name */
     if (projectName.isEmpty()) {
-        qCritical() << "Error: project name is empty.";
+        QSocConsole::error() << "project name is empty.";
         return false;
     }
     /* Check project file */
@@ -104,7 +105,7 @@ bool QSocProjectManager::mkpath()
 {
     /* Check and create project directory */
     if (!QDir().mkpath(projectPath)) {
-        qCritical() << "Error: Failed to create project directory.";
+        QSocConsole::error() << "Failed to create project directory.";
         return false;
     }
 
@@ -117,34 +118,35 @@ bool QSocProjectManager::mkpath()
             out << "qsoc.fl.*" << Qt::endl;
             gitignoreFile.close();
         } else {
-            qWarning() << "Warning: Failed to create .gitignore file in project directory.";
+            QSocConsole::warn()
+                << "Failed to create .gitignore file in project directory.";
         }
     }
 
     /* Check and create bus directory */
     if (!QDir().mkpath(busPath)) {
-        qCritical() << "Error: Failed to create bus directory.";
+        QSocConsole::error() << "Failed to create bus directory.";
         return false;
     }
     QFile(QDir(busPath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
 
     /* Check and create module directory */
     if (!QDir().mkpath(modulePath)) {
-        qCritical() << "Error: Failed to create module directory.";
+        QSocConsole::error() << "Failed to create module directory.";
         return false;
     }
     QFile(QDir(modulePath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
 
     /* Check and create schematic directory */
     if (!QDir().mkpath(schematicPath)) {
-        qCritical() << "Error: Failed to create schematic directory.";
+        QSocConsole::error() << "Failed to create schematic directory.";
         return false;
     }
     QFile(QDir(schematicPath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
 
     /* Check and create output directory */
     if (!QDir().mkpath(outputPath)) {
-        qCritical() << "Error: Failed to create output directory.";
+        QSocConsole::error() << "Failed to create output directory.";
         return false;
     }
     QFile(QDir(outputPath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
@@ -155,13 +157,13 @@ bool QSocProjectManager::save(const QString &projectName)
 {
     /* Check project name */
     if (projectName.isEmpty()) {
-        qCritical() << "Error: project name is empty.";
+        QSocConsole::error() << "project name is empty.";
         return false;
     }
     setProjectName(projectName);
     /* Create project directories */
     if (!mkpath()) {
-        qCritical() << "Error: failed to create project directories.";
+        QSocConsole::error() << "failed to create project directories.";
         return false;
     }
     /* Save project file */
@@ -178,14 +180,14 @@ bool QSocProjectManager::load(const QString &projectName)
 {
     /* Check project name */
     if (projectName.isEmpty()) {
-        qCritical() << "Error: project name is empty.";
+        QSocConsole::error() << "project name is empty.";
         return false;
     }
     /* Load project file */
     const QString &filePath = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
     /* Check the existence of project files */
     if (!QFile::exists(filePath)) {
-        qCritical() << "Error: project file not found.";
+        QSocConsole::error() << "project file not found.";
         return false;
     }
     /* Load project file */
@@ -196,7 +198,7 @@ bool QSocProjectManager::load(const QString &projectName)
     const QVersionNumber appVersion = QVersionNumber::fromString(
         QCoreApplication::applicationVersion());
     if (projectVersion > appVersion) {
-        qCritical() << "Error: project file version is newer than application version.";
+        QSocConsole::error() << "project file version is newer than application version.";
         return false;
     }
     /* Set project name */
@@ -221,7 +223,7 @@ bool QSocProjectManager::loadFirst(bool silent)
             QDir::Files | QDir::NoDotAndDotDot);
         if (projectDir.count() == 0) {
             if (!silent) {
-                qCritical() << "Error: project file not found.";
+                QSocConsole::error() << "project file not found.";
             }
             return false;
         }
@@ -231,7 +233,7 @@ bool QSocProjectManager::loadFirst(bool silent)
     /* Check the existence of project files */
     if (!QFile::exists(filePath)) {
         if (!silent) {
-            qCritical() << "Error: project file not found.";
+            QSocConsole::error() << "project file not found.";
         }
         return false;
     }
@@ -246,18 +248,18 @@ bool QSocProjectManager::remove(const QString &projectName)
 {
     /* Check project name */
     if (projectName.isEmpty()) {
-        qCritical() << "Error: project name is empty.";
+        QSocConsole::error() << "project name is empty.";
         return false;
     }
     /* Check the existence of project files */
     if (!isExist(projectName)) {
-        qCritical() << "Error: project file not found.";
+        QSocConsole::error() << "project file not found.";
         return false;
     }
     /* Remove project file */
     const QString &filePath = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
     if (!QFile::remove(filePath)) {
-        qCritical() << "Error: failed to remove project file.";
+        QSocConsole::error() << "failed to remove project file.";
         return false;
     }
     return true;
@@ -268,7 +270,7 @@ QStringList QSocProjectManager::list(const QRegularExpression &projectNameRegex)
     QStringList result;
     /* Check project path */
     if (!QDir(projectPath).exists()) {
-        qCritical() << "Error: project path is not a directory.";
+        QSocConsole::error() << "project path is not a directory.";
         return result;
     }
     /* QDir object for '.soc_pro' files in 'projectPath', sorted by name. */
@@ -290,43 +292,43 @@ bool QSocProjectManager::isValid(bool writable)
 {
     /* Validate project node */
     if (!isValidProjectNode()) {
-        qCritical() << "Error: Invalid project node.";
+        QSocConsole::error() << "Invalid project node.";
         return false;
     }
 
     /* Validate project name */
     if (!isValidProjectName()) {
-        qCritical() << "Error: Invalid project name.";
+        QSocConsole::error() << "Invalid project name.";
         return false;
     }
 
     /* Validate project path */
     if (!isValidProjectPath(writable)) {
-        qCritical() << "Error: Invalid project path.";
+        QSocConsole::error() << "Invalid project path.";
         return false;
     }
 
     /* Validate bus path */
     if (!isValidBusPath(writable)) {
-        qCritical() << "Error: Invalid bus path.";
+        QSocConsole::error() << "Invalid bus path.";
         return false;
     }
 
     /* Validate module path */
     if (!isValidModulePath(writable)) {
-        qCritical() << "Error: Invalid module path.";
+        QSocConsole::error() << "Invalid module path.";
         return false;
     }
 
     /* Validate schematic path */
     if (!isValidSchematicPath(writable)) {
-        qCritical() << "Error: Invalid schematic path.";
+        QSocConsole::error() << "Invalid schematic path.";
         return false;
     }
 
     /* Validate output path */
     if (!isValidOutputPath(writable)) {
-        qCritical() << "Error: Invalid output path.";
+        QSocConsole::error() << "Invalid output path.";
         return false;
     }
 
@@ -343,7 +345,7 @@ bool QSocProjectManager::isValidProjectName()
     const QString &projectName = getProjectName();
     /* Check if project name is empty */
     if (projectName.isEmpty()) {
-        qCritical() << "Error: Project name is empty.";
+        QSocConsole::error() << "Project name is empty.";
         return false;
     }
 
@@ -353,7 +355,7 @@ bool QSocProjectManager::isValidProjectName()
     /* Check if project name contains any invalid characters */
     for (const QChar invalidChar : invalidChars) {
         if (projectName.contains(invalidChar)) {
-            qCritical() << "Error: Project name contains invalid characters: " << invalidChar;
+            QSocConsole::error() << "Project name contains invalid characters: " << invalidChar;
             return false;
         }
     }
@@ -364,16 +366,16 @@ bool QSocProjectManager::isValidProjectName()
 bool QSocProjectManager::isValidPath(const QString &path, bool writable)
 {
     if (path.isEmpty()) {
-        qCritical() << "Error: Path is empty";
+        QSocConsole::error() << "Path is empty";
         return false;
     }
     const QFileInfo pathInfo(path);
     if (!pathInfo.exists() || !pathInfo.isDir()) {
-        qCritical() << "Error: Path does not exist or is not a directory: " << path;
+        QSocConsole::error() << "Path does not exist or is not a directory: " << path;
         return false;
     }
     if (writable && !pathInfo.isWritable()) {
-        qCritical() << "Error: Path is not writable: " << path;
+        QSocConsole::error() << "Path is not writable: " << path;
         return false;
     }
     return true;

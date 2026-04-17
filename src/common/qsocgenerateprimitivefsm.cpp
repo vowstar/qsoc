@@ -1,4 +1,5 @@
 #include "qsocgenerateprimitivefsm.h"
+#include "common/qsocconsole.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <QDebug>
@@ -13,7 +14,7 @@ QSocFSMPrimitive::QSocFSMPrimitive(QSocGenerateManager *parent)
 bool QSocFSMPrimitive::generateFSMVerilog(const YAML::Node &fsmNode, QTextStream &out)
 {
     if (!fsmNode || !fsmNode.IsMap()) {
-        qWarning() << "Invalid FSM node provided";
+        QSocConsole::warn() << "Invalid FSM node provided";
         return false;
     }
 
