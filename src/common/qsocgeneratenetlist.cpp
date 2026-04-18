@@ -1502,7 +1502,20 @@ bool QSocGenerateManager::processLinkConnections()
 
                 /* Check for link attribute */
                 if (portNode["link"] && portNode["link"].IsScalar()) {
-                    const auto netName = portNode["link"].as<std::string>();
+                    auto netName = portNode["link"].as<std::string>();
+
+                    /* Per-port `bits:` lives next to `link:` in the YAML and
+                       used to be silently dropped by the link processor.
+                       Append it to the link string when the link itself does
+                       not already carry a bit-select, so the canonical
+                       parseLinkValue path picks it up. */
+                    if (portNode["bits"] && portNode["bits"].IsScalar()
+                        && netName.find('[') == std::string::npos) {
+                        const std::string bits = portNode["bits"].as<std::string>();
+                        if (!bits.empty()) {
+                            netName += bits;
+                        }
+                    }
 
                     if (!processLinkConnection(
                             instanceName, portName, netName, moduleName, moduleData)) {
@@ -1560,6 +1573,16 @@ bool QSocGenerateManager::processLinkConnection(
         auto [cleanNetName, bitSelection] = parseLinkValue(netName);
         bitSelection = QSocVerilogUtils::normalizeBitSelect(QString::fromStdString(bitSelection))
                            .toStdString();
+
+        /* An empty link target used to synthesise a `wire ;` declaration
+           and a connection to a nameless net. Reject upfront. */
+        QString cleanNetQ = QString::fromStdString(cleanNetName).trimmed();
+        if (cleanNetQ.isEmpty()) {
+            QSocConsole::warn() << "Empty 'link' on" << instanceName.c_str() << "."
+                                << portName.c_str() << "ignored";
+            return true;
+        }
+        cleanNetName = cleanNetQ.toStdString();
 
         QSocConsole::info() << "Parsed link - net:" << cleanNetName.c_str()
                             << (bitSelection.empty() ? "" : (", bits:" + bitSelection).c_str());

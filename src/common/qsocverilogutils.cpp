@@ -159,5 +159,13 @@ QString QSocVerilogUtils::normalizeBitSelect(const QString &bitSelect)
             return QString("[%1]").arg(idx);
         }
     }
+    /* Anything that begins with '[' but does not match the canonical forms
+       (e.g. "[]", "[abc]", "[3:]") would otherwise leak verbatim into the
+       Verilog and the synth tool would reject it. Drop the malformed
+       bracket and let the rest of the pipeline treat the connection as
+       full-width. */
+    if (bitSelect.trimmed().startsWith('[')) {
+        return {};
+    }
     return bitSelect;
 }
