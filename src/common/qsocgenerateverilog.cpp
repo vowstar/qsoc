@@ -248,8 +248,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             const QString paramName = QString::fromStdString(paramIter->first.as<std::string>());
 
             if (!paramIter->second.IsMap()) {
-                QSocConsole::warn()
-                    << "Parameter" << paramName << "has invalid format, skipping";
+                QSocConsole::warn() << "Parameter" << paramName << "has invalid format, skipping";
                 continue;
             }
 
@@ -301,8 +300,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             const QString portName = QString::fromStdString(portIter->first.as<std::string>());
 
             if (!portIter->second.IsMap()) {
-                QSocConsole::warn()
-                    << "Port" << portName << "has invalid format, skipping";
+                QSocConsole::warn() << "Port" << portName << "has invalid format, skipping";
                 continue;
             }
 
@@ -390,8 +388,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     /* Process List format connections */
                     for (const auto &connectionNode : netNode) {
                         if (!connectionNode.IsMap()) {
-                            QSocConsole::warn()
-                                << "Invalid connection node in net" << netName;
+                            QSocConsole::warn() << "Invalid connection node in net" << netName;
                             continue;
                         }
 
@@ -406,8 +403,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Get port name */
                         if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
-                            QSocConsole::warn()
-                                << "No port name in connection for net" << netName;
+                            QSocConsole::warn() << "No port name in connection for net" << netName;
                             continue;
                         }
                         const QString portName = QString::fromStdString(
@@ -476,11 +472,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* Generate wire declarations FIRST */
     if (netlistData["net"]) {
         if (!netlistData["net"].IsMap()) {
-            QSocConsole::warn()
-                << "'net' section is not a map, skipping wire declarations";
+            QSocConsole::warn() << "'net' section is not a map, skipping wire declarations";
         } else if (netlistData["net"].size() == 0) {
-            QSocConsole::warn()
-                << "'net' section is empty, no wire declarations to generate";
+            QSocConsole::warn() << "'net' section is empty, no wire declarations to generate";
         } else {
             /* Collect comb/seq/fsm signals (inputs and outputs) once before the loop */
             const QList<PortDetailInfo> combSeqFsmSignals = collectCombSeqFsmSignals();
@@ -501,16 +495,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                 /* Net connections should be a sequence (list) of instance-port pairs */
                 if (!netIter->second.IsSequence()) {
-                    QSocConsole::warn()
-                        << "Net" << netName << "is not a sequence, skipping";
+                    QSocConsole::warn() << "Net" << netName << "is not a sequence, skipping";
                     continue;
                 }
 
                 const YAML::Node &connections = netIter->second;
 
                 if (connections.size() == 0) {
-                    QSocConsole::warn()
-                        << "Net" << netName << "has no connections, skipping";
+                    QSocConsole::warn() << "Net" << netName << "has no connections, skipping";
                     continue;
                 }
 
@@ -619,8 +611,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 if (netNode.IsSequence()) {
                     for (const auto &connectionNode : netNode) {
                         if (!connectionNode.IsMap()) {
-                            QSocConsole::warn()
-                                << "Invalid connection node in net" << netName;
+                            QSocConsole::warn() << "Invalid connection node in net" << netName;
                             continue;
                         }
 
@@ -635,8 +626,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Get port name */
                         if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
-                            QSocConsole::warn()
-                                << "No port name in connection for net" << netName;
+                            QSocConsole::warn() << "No port name in connection for net" << netName;
                             continue;
                         }
                         const QString portName = QString::fromStdString(
@@ -759,8 +749,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 /* Check port width consistency */
                 const bool hasWidthMismatch = !checkPortWidthConsistency(portConnections);
                 if (hasWidthMismatch) {
-                    QSocConsole::warn()
-                        << "Port width mismatch detected for net" << netName;
+                    QSocConsole::warn() << "Port width mismatch detected for net" << netName;
                 }
 
                 /* Check port direction consistency with bit-level overlap detection */
@@ -773,8 +762,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     QSocConsole::warn()
                         << "Net" << netName << "has only input ports, missing driver";
                 } else if (isMultidrive) {
-                    QSocConsole::warn()
-                        << "Net" << netName << "has multiple output/inout ports";
+                    QSocConsole::warn() << "Net" << netName << "has multiple output/inout ports";
                 }
 
                 /* Generate combined warning comments for the net */
@@ -1026,96 +1014,81 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     QString netWidth = "";
                     int     maxWidth = 0;
 
-                    /* First check if any connection has preserved type information with range format */
-                    QString preservedRangeType = "";
+                    /* Compute the highest bit index any port detail places on this net.
+                       For each port detail the requirement is the larger of:
+                         - the port's native MSB (when the port drives the whole net), and
+                         - the bit-select MSB (when the port lands on a slice of a wider net).
+                       Net width is then [maxBitIndex:0]. This is order-independent and
+                       handles concatenation patterns like two 4-bit drivers covering an
+                       8-bit net via bits "[3:0]" and "[7:4]". */
+                    int maxBitIndex = -1;
+
+                    /* Track an explicit non-canonical range like [21:2] so cases that need
+                       to preserve the LSB offset still work. Recorded only when its MSB
+                       equals the final maxBitIndex; otherwise inferred [maxBitIndex:0] is
+                       used so bit-selects can extend the net beyond any single port. */
+                    QString preservedRangeType;
+                    int     preservedRangeMsb = -1;
+
+                    const QRegularExpression widthRegex(R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+
                     for (const auto &detail : portDetails) {
+                        int requiredMaxBit = -1;
+
+                        /* Port's native width contributes its MSB. */
                         if (!detail.width.isEmpty()) {
-                            /* Check if this looks like a preserved range type [X:Y] format */
-                            const QRegularExpression rangeRegex(
-                                R"(logic\s*\[\s*(\d+)\s*:\s*(\d+)\s*\])");
-                            const QRegularExpressionMatch rangeMatch = rangeRegex.match(
-                                detail.width);
-                            if (rangeMatch.hasMatch()) {
-                                /* Found preserved range type - use it directly */
-                                preservedRangeType = detail.width;
-                                break;
+                            if (detail.width == "logic" || detail.width == "wire") {
+                                requiredMaxBit = 0;
+                            } else {
+                                const QRegularExpressionMatch match = widthRegex.match(detail.width);
+                                if (match.hasMatch()) {
+                                    bool      msbOk = false;
+                                    bool      lsbOk = false;
+                                    const int msb   = match.captured(1).toInt(&msbOk);
+                                    const int lsb   = match.captured(2).toInt(&lsbOk);
+                                    if (msbOk) {
+                                        requiredMaxBit = msb;
+                                        /* Remember non-canonical range like logic[21:2]. */
+                                        if (lsbOk && lsb > 0 && msb > preservedRangeMsb) {
+                                            preservedRangeType = detail.width;
+                                            preservedRangeMsb  = msb;
+                                        }
+                                    }
+                                }
                             }
+                        }
+
+                        /* Bit-select MSB places the port at a position on the net and may
+                           extend the required net width beyond the port's native width.
+                           Take the larger of the two. */
+                        if (!detail.bitSelect.isEmpty()) {
+                            const QRegularExpressionMatch bitMatch = widthRegex.match(
+                                detail.bitSelect);
+                            if (bitMatch.hasMatch()) {
+                                bool      msbOk = false;
+                                const int msb   = bitMatch.captured(1).toInt(&msbOk);
+                                if (msbOk && msb > requiredMaxBit) {
+                                    requiredMaxBit = msb;
+                                }
+                            }
+                        }
+
+                        if (requiredMaxBit > maxBitIndex) {
+                            maxBitIndex = requiredMaxBit;
                         }
                     }
 
-                    /* If we found preserved range type, use it directly */
-                    if (!preservedRangeType.isEmpty()) {
-                        netWidth = preservedRangeType;
-                    } else {
-                        /* Find the maximum bit index needed for this net based on port widths */
-                        int maxBitIndex = -1;
-
-                        for (const auto &detail : portDetails) {
-                            int requiredMaxBit = -1;
-
-                            /* Always check the port's original width first */
-                            if (!detail.width.isEmpty()) {
-                                /* Check if it's a single bit type (logic, wire) */
-                                if (detail.width == "logic" || detail.width == "wire") {
-                                    /* Single bit port - wire should be single bit regardless of bit selection */
-                                    requiredMaxBit = 0;
-                                } else {
-                                    /* Attempt to extract width value from format like [31:0] or [7] */
-                                    const QRegularExpression widthRegex(
-                                        R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
-                                    const QRegularExpressionMatch match = widthRegex.match(
-                                        detail.width);
-                                    if (match.hasMatch()) {
-                                        bool      msb_ok = false;
-                                        const int msb    = match.captured(1).toInt(&msb_ok);
-
-                                        if (msb_ok) {
-                                            requiredMaxBit = msb;
-                                        }
-                                    }
-                                }
-                            }
-
-                            /* If no port width found, fall back to bit selection */
-                            /* Note: This fallback should only be used when port width is unknown */
-                            if (requiredMaxBit == -1 && !detail.bitSelect.isEmpty()) {
-                                /* Parse bit selection like [7:4], [3:0], or [5] */
-                                const QRegularExpression bitSelectRegex(
-                                    R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
-                                const QRegularExpressionMatch bitMatch = bitSelectRegex.match(
-                                    detail.bitSelect);
-                                if (bitMatch.hasMatch()) {
-                                    bool      msb_ok = false;
-                                    const int msb    = bitMatch.captured(1).toInt(&msb_ok);
-                                    if (msb_ok) {
-                                        if (bitMatch.capturedLength(2) > 0) {
-                                            /* Range selection like [7:4] - we need up to MSB */
-                                            requiredMaxBit = msb;
-                                        } else {
-                                            /* Single bit selection like [5] - we need up to that bit */
-                                            requiredMaxBit = msb;
-                                        }
-                                    }
-                                }
-                            }
-
-                            /* Update the maximum bit index needed */
-                            if (requiredMaxBit > maxBitIndex) {
-                                maxBitIndex = requiredMaxBit;
-                            }
+                    /* Pick the wire range. If a non-canonical preserved range fits exactly,
+                       keep it; otherwise emit canonical [maxBitIndex:0]. */
+                    if (maxBitIndex >= 0) {
+                        if (!preservedRangeType.isEmpty() && preservedRangeMsb == maxBitIndex) {
+                            netWidth = preservedRangeType;
+                        } else if (maxBitIndex == 0) {
+                            netWidth = "";
+                        } else {
+                            netWidth = QString("[%1:0]").arg(maxBitIndex);
                         }
-
-                        /* Generate the net width specification */
-                        if (maxBitIndex >= 0) {
-                            if (maxBitIndex == 0) {
-                                /* Single bit, no range needed */
-                                netWidth = "";
-                            } else {
-                                /* Multi-bit, generate [msb:0] format */
-                                netWidth = QString("[%1:0]").arg(maxBitIndex);
-                            }
-                            maxWidth = maxBitIndex + 1;
-                        }
+                        maxWidth = maxBitIndex + 1;
                     }
 
                     /* If no width found from ports, try from net type as fallback */
@@ -1315,8 +1288,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                          portIter != moduleData["port"].end();
                          ++portIter) {
                         if (!portIter->first.IsScalar()) {
-                            QSocConsole::warn()
-                                << "Invalid port name in module" << moduleName;
+                            QSocConsole::warn() << "Invalid port name in module" << moduleName;
                             continue;
                         }
 
@@ -1585,8 +1557,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         }
                     }
                 } else {
-                    QSocConsole::warn()
-                        << "Module" << moduleName << "has no valid port section";
+                    QSocConsole::warn() << "Module" << moduleName << "has no valid port section";
                 }
             } else {
                 QSocConsole::warn() << "Failed to get module definition for" << moduleName;
@@ -1839,8 +1810,8 @@ bool QSocGenerateManager::parseMacroCondition(
                 }
                 if (!idRegex.match(macro).hasMatch()) {
                     QSocConsole::warn()
-                        << "Invalid macro identifier" << macro
-                        << "in 'ifndef' for instance" << instanceName << ", skipping";
+                        << "Invalid macro identifier" << macro << "in 'ifndef' for instance"
+                        << instanceName << ", skipping";
                     continue;
                 }
                 if (!outIfndef.contains(macro)) {
