@@ -1165,14 +1165,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         maxWidth = maxBitIndex + 1;
                     }
 
-                    /* If no width found from ports, try from net type as fallback */
-                    if (netWidth.isEmpty() && netlistData["net"]
-                        && netlistData["net"][netName.toStdString()]
-                        && netlistData["net"][netName.toStdString()]["type"]
-                        && netlistData["net"][netName.toStdString()]["type"].IsScalar()) {
-                        netWidth = QString::fromStdString(
-                            netlistData["net"][netName.toStdString()]["type"].as<std::string>());
-                    }
+                    /* The schema requires `net.<name>` to be a sequence of
+                       connection maps, so a sibling `type:` key on the net
+                       is unreachable here. Width must come from port details
+                       or the inferred bit-select MSB above. */
 
                     /* Add wire declaration for this net with width information if available.
                        A net whose name matches a top-level port is already declared as
@@ -1232,13 +1228,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         }
                     }
 
-                    /* Get net width */
-                    if (netlistData["net"] && netlistData["net"][netName.toStdString()]
-                        && netlistData["net"][netName.toStdString()]["type"]
-                        && netlistData["net"][netName.toStdString()]["type"].IsScalar()) {
-                        netWidth = QString::fromStdString(
-                            netlistData["net"][netName.toStdString()]["type"].as<std::string>());
-                    }
+                    /* Net width fallback was a no-op: `net.<name>` is required
+                       to be a sequence so the sibling `type:` key never exists. */
 
                     /* Check width compatibility */
                     const bool widthMismatch = !portWidth.isEmpty() && !netWidth.isEmpty()

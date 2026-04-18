@@ -16,27 +16,60 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
         return true;
     }
 
-    /* First pass: collect all outputs that need internal reg declarations */
-    QSet<QString> seqRegOutputs;
+    /* First pass: collect base names that need internal reg declarations.
+       A `reg: counter[3]` form historically formed `counter[3]_reg`, an
+       illegal Verilog identifier. Strip the bit-select for the reg name
+       and emit a full-width reg per base; the bit-select stays on the
+       always-block target so each item still writes the right bit. */
+    QSet<QString> seqRegBases;
     for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
         const YAML::Node &seqItem = netlistData["seq"][i];
         if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["reg"].IsScalar()) {
             continue;
         }
         const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
-        seqRegOutputs.insert(regName);
+        const auto    parsed  = QSocGenerateManager::parseSignalBitSelect(regName);
+        seqRegBases.insert(parsed.first);
+    }
+
+    /* For each base, also remember the highest bit index any seq item
+       writes via `reg: base[bits]`. When there is no top-level port to
+       borrow a width from, the reg must still be wide enough to carry
+       every bit-selected target. */
+    QMap<QString, int> seqRegMaxBit;
+    for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
+        const YAML::Node &seqItem = netlistData["seq"][i];
+        if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["reg"].IsScalar()) {
+            continue;
+        }
+        const QString regName   = QString::fromStdString(seqItem["reg"].as<std::string>());
+        const auto    parsed    = QSocGenerateManager::parseSignalBitSelect(regName);
+        const QString bitSelect = parsed.second;
+        if (bitSelect.isEmpty()) {
+            continue;
+        }
+        const QRegularExpression      widthRegex(R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
+        const QRegularExpressionMatch match = widthRegex.match(bitSelect);
+        if (!match.hasMatch()) {
+            continue;
+        }
+        bool      ok  = false;
+        const int idx = match.captured(1).toInt(&ok);
+        if (ok && idx > seqRegMaxBit.value(parsed.first, -1)) {
+            seqRegMaxBit.insert(parsed.first, idx);
+        }
     }
 
     /* Generate internal reg declarations for sequential outputs */
-    if (!seqRegOutputs.isEmpty()) {
+    if (!seqRegBases.isEmpty()) {
         out << "\n    /* Internal reg declarations for sequential logic */\n";
-        for (const QString &regName : seqRegOutputs) {
+        for (const QString &baseName : seqRegBases) {
             /* Find the port width for this output signal */
             QString regWidth = "";
             if (netlistData["port"] && netlistData["port"].IsMap()) {
                 for (const auto &portEntry : netlistData["port"]) {
                     if (portEntry.first.IsScalar()
-                        && QString::fromStdString(portEntry.first.as<std::string>()) == regName) {
+                        && QString::fromStdString(portEntry.first.as<std::string>()) == baseName) {
                         if (portEntry.second.IsMap() && portEntry.second["type"]
                             && portEntry.second["type"].IsScalar()) {
                             QString portType = QString::fromStdString(
@@ -56,11 +89,18 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
                     }
                 }
             }
-            out << "    reg " << regWidth << regName << "_reg;\n";
+            /* No port type found: size the reg from the highest bit-select
+               we saw, otherwise it would be scalar and any [N] write would
+               be a part-select on a non-vector reg. */
+            if (regWidth.isEmpty() && seqRegMaxBit.contains(baseName)
+                && seqRegMaxBit.value(baseName) > 0) {
+                regWidth = QString("[%1:0] ").arg(seqRegMaxBit.value(baseName));
+            }
+            out << "    reg " << regWidth << baseName << "_reg;\n";
         }
         out << "\n    /* Assign internal regs to outputs */\n";
-        for (const QString &regName : seqRegOutputs) {
-            out << "    assign " << regName << " = " << regName << "_reg;\n";
+        for (const QString &baseName : seqRegBases) {
+            out << "    assign " << baseName << " = " << baseName << "_reg;\n";
         }
     }
 
@@ -74,9 +114,12 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
             continue; /* Skip invalid items */
         }
 
-        const QString regName   = QString::fromStdString(seqItem["reg"].as<std::string>());
-        const QString regSignal = regName + "_reg";
-        const QString clkSignal = QString::fromStdString(seqItem["clk"].as<std::string>());
+        const QString regName     = QString::fromStdString(seqItem["reg"].as<std::string>());
+        const auto    parsedReg   = QSocGenerateManager::parseSignalBitSelect(regName);
+        const QString regBase     = parsedReg.first;
+        const QString regBitSlice = parsedReg.second;
+        const QString regSignal   = regBase + "_reg" + regBitSlice;
+        const QString clkSignal   = QString::fromStdString(seqItem["clk"].as<std::string>());
 
         /* Get edge type (default to posedge) */
         QString edgeType = "posedge";
