@@ -4149,6 +4149,227 @@ seq:
         QVERIFY(rawBytes.contains("counter_reg[3] <= 1'b0"));
         QVERIFY(!rawBytes.contains("counter[3]_reg"));
     }
+
+    /**
+     * `bits: ""` and `bits: "[]"` used to leak verbatim into the Verilog
+     * (`signal[]`). normalizeBitSelect now recognises malformed brackets
+     * and treats them as no bit-select.
+     */
+    void testGenerateBitSelectMalformedDropped()
+    {
+        const QString drvContent = R"(
+narrow4_drv:
+  port:
+    out4:
+      type: "logic[3:0]"
+      direction: out
+)";
+        const QString rcvContent = R"(
+wide8_rcv:
+  port:
+    in8:
+      type: "logic[7:0]"
+      direction: in
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("narrow4_drv.soc_mod"));
+        QFile         rcvMod(moduleDir.filePath("wide8_rcv.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+        QVERIFY(rcvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        rcvMod.write(rcvContent.toUtf8());
+        rcvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_bits_malformed"
+instance:
+  u_drv: { module: "narrow4_drv" }
+  u_rcv: { module: "wide8_rcv" }
+net:
+  data_bus:
+    - { instance: u_drv, port: out4, bits: "" }
+    - { instance: u_rcv, port: in8,  bits: "[]" }
+)";
+        const QString filePath   = createTempFile("test_bits_malformed.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        const QString outPath
+            = QDir(projectManager.getOutputPath()).filePath("test_bits_malformed.v");
+        QFile rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        QVERIFY(rawBytes.contains("u_drv (.out4(data_bus))"));
+        QVERIFY(rawBytes.contains("u_rcv (.in8(data_bus))"));
+        QVERIFY(!rawBytes.contains("data_bus[]"));
+    }
+
+    /**
+     * `tie: data_a + data_b` and `tie: "{8{1'b1}}"` used to silently
+     * collapse to `4'd0` because the number parser failed to recognise
+     * the expression. Detect non-numeric tie strings and pass them
+     * through verbatim.
+     */
+    void testGenerateTieAcceptsExpression()
+    {
+        const QString drvContent = R"(
+expr_dut:
+  port:
+    data_in:
+      type: "logic[3:0]"
+      direction: input
+    wide_in:
+      type: "logic[7:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("expr_dut.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_tie_expression"
+port:
+  data_a:
+    type: "logic[3:0]"
+    direction: in
+  data_b:
+    type: "logic[3:0]"
+    direction: in
+instance:
+  u0:
+    module: "expr_dut"
+    port:
+      data_in:  { tie: "data_a + data_b" }
+      wide_in:  { tie: "{8{1'b1}}" }
+)";
+        const QString filePath   = createTempFile("test_tie_expression.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogContent("test_tie_expression", ".data_in (data_a + data_b)"));
+        QVERIFY(verifyVerilogContent("test_tie_expression", ".wide_in  ({8{1'b1}})"));
+        QVERIFY(!verifyVerilogContent("test_tie_expression", "4'd0"));
+    }
+
+    /**
+     * `tie: ""` (empty string) used to feed an uninitialised
+     * QSocNumberInfo into the formatter and produce garbage like
+     * `.data_in(40)`. Empty tie / empty link must be ignored at parse
+     * time so the port falls through to the unconnected FIXME.
+     */
+    void testGenerateEmptyTieAndLinkIgnored()
+    {
+        const QString drvContent = R"(
+empty_dut:
+  port:
+    data_in:
+      type: "logic[3:0]"
+      direction: input
+    scalar_in:
+      type: "logic"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("empty_dut.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_empty_tie_link"
+instance:
+  u0:
+    module: "empty_dut"
+    port:
+      data_in:   { tie: "" }
+      scalar_in: { link: "" }
+)";
+        const QString filePath   = createTempFile("test_empty_tie_link.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        const QString outPath
+            = QDir(projectManager.getOutputPath()).filePath("test_empty_tie_link.v");
+        QFile rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        QVERIFY(!rawBytes.contains(".data_in(40)"));
+        QVERIFY(!rawBytes.contains("wire ;"));
+        QVERIFY(rawBytes.contains("FIXME"));
+    }
+
+    /**
+     * `link: bus_w` paired with separate `bits: "[7]"` and `invert: true`
+     * keys used to drop the bit-select, producing `.scalar_in(~bus_w)`
+     * (an 8-bit expression on a 1-bit input). The link processor now
+     * folds the per-port `bits:` into the link string so the canonical
+     * parse path picks it up.
+     */
+    void testGenerateLinkBitsInvertCombination()
+    {
+        const QString drvContent = R"(
+inv_dut:
+  port:
+    scalar_in:
+      type: "logic"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("inv_dut.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_link_bits_invert"
+port:
+  bus_w:
+    type: "logic[7:0]"
+    direction: in
+instance:
+  u0:
+    module: "inv_dut"
+    port:
+      scalar_in:
+        link: bus_w
+        bits: "[7]"
+        invert: true
+)";
+        const QString filePath   = createTempFile("test_link_bits_invert.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogContent("test_link_bits_invert", ".scalar_in (~bus_w[7])"));
+    }
 };
 
 QStringList Test::messageList;

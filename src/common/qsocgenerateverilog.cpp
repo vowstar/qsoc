@@ -1500,9 +1500,38 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                                     /* Check for tie attribute (only if portNode is a map) */
                                     if (portNode.IsMap() && portNode["tie"]
-                                        && portNode["tie"].IsScalar()) {
+                                        && portNode["tie"].IsScalar()
+                                        && !QString::fromStdString(portNode["tie"].as<std::string>())
+                                                .trimmed()
+                                                .isEmpty()) {
                                         const QString tieStr = QString::fromStdString(
-                                            portNode["tie"].as<std::string>());
+                                                                   portNode["tie"].as<std::string>())
+                                                                   .trimmed();
+
+                                        /* Recognise non-numeric Verilog expressions
+                                           (e.g. `data_a + data_b`, `{8{1'b1}}`) and
+                                           pass them through verbatim. The number
+                                           parser otherwise silently collapses them
+                                           to 4'd0. Allow digits, single-quote, the
+                                           hex/binary digits and the Verilog base
+                                           letters (b, d, h, o + uppercase, plus x/z
+                                           for don't-care). */
+                                        const QRegularExpression numericRegex(
+                                            R"(^[\s0-9'a-fA-FhHoOxXzZ_\?]+$)");
+                                        const bool tieIsExpression
+                                            = !numericRegex.match(tieStr).hasMatch();
+                                        if (tieIsExpression) {
+                                            hasTie   = true;
+                                            tieValue = tieStr;
+                                            if (portNode["invert"] && portNode["invert"].IsScalar()
+                                                && portNode["invert"].as<bool>()) {
+                                                tieValue = QString("~(%1)").arg(tieValue);
+                                            }
+                                            portConnections.append(QString("        .%1(%2)")
+                                                                       .arg(portName)
+                                                                       .arg(tieValue));
+                                            continue;
+                                        }
 
                                         /* Parse the tie value using our number parser */
                                         const QSocNumberInfo numInfo = QSocNumberInfo::parseNumber(
