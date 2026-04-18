@@ -3858,7 +3858,162 @@ net:
         QVERIFY(verifyVerilogContent("test_net_duplicate_port", "u_drv (.out8(data_bus[3:0]))"));
         QVERIFY(!verifyVerilogContent("test_net_duplicate_port", "data_bus[7:4]"));
         QVERIFY(verifyVerilogContent(
-            "test_net_duplicate_port", "FIXME: Net data_bus has duplicate instance.port entries"));
+            "test_net_duplicate_port", "FIXME: Net data_bus has port-routing conflicts"));
+    }
+
+    /**
+     * The same instance.port routed across two different nets used to
+     * silently keep only the last one (QMap overwrite in
+     * instancePortConnections), leaving the first net dangling. The cross-net
+     * check now warns and keeps the first net.
+     */
+    void testGenerateRejectsCrossNetDuplicatePort()
+    {
+        const QString drvContent = R"(
+wide8_drv:
+  port:
+    out8:
+      type: "logic[7:0]"
+      direction: out
+)";
+        const QString rcvContent = R"(
+wide8_rcv:
+  port:
+    in8:
+      type: "logic[7:0]"
+      direction: in
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("wide8_drv.soc_mod"));
+        QFile         rcvMod(moduleDir.filePath("wide8_rcv.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+        QVERIFY(rcvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        rcvMod.write(rcvContent.toUtf8());
+        rcvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_net_cross_dup"
+instance:
+  u_drv:   { module: "wide8_drv" }
+  u_rcv_a: { module: "wide8_rcv" }
+  u_rcv_b: { module: "wide8_rcv" }
+net:
+  net_a:
+    - { instance: u_drv,   port: out8 }
+    - { instance: u_rcv_a, port: in8 }
+  net_b:
+    - { instance: u_drv,   port: out8 }
+    - { instance: u_rcv_b, port: in8 }
+)";
+        const QString filePath   = createTempFile("test_net_cross_dup.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogContent("test_net_cross_dup", "u_drv (.out8(net_a))"));
+        QVERIFY(verifyVerilogContent("test_net_cross_dup", "u_rcv_a (.in8(net_a))"));
+        QVERIFY(verifyVerilogContent("test_net_cross_dup", "u_rcv_b (.in8(net_b))"));
+        QVERIFY(verifyVerilogContent("test_net_cross_dup", "FIXME: Net net_a has port-routing"));
+        QVERIFY(verifyVerilogContent("test_net_cross_dup", "FIXME: Net net_b has port-routing"));
+    }
+
+    /**
+     * A net whose name matches a top-level port is served by the port itself.
+     * Pre-fix the generator emitted both `output wire [7:0] data_bus` (port)
+     * and `wire [7:0] data_bus` (net), a duplicate identifier and illegal
+     * Verilog. The wire-decl pass now skips emission and warns the user to
+     * add `connect:` for clarity.
+     */
+    void testGenerateSkipsWireDeclWhenNetNameMatchesTopPort()
+    {
+        const QString drvContent = R"(
+wide8_drv:
+  port:
+    out8:
+      type: "logic[7:0]"
+      direction: out
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("wide8_drv.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_net_top_collision"
+instance:
+  u_drv: { module: "wide8_drv" }
+port:
+  data_bus:
+    type: "logic[7:0]"
+    direction: out
+net:
+  data_bus:
+    - { instance: u_drv, port: out8 }
+)";
+        const QString filePath   = createTempFile("test_net_top_collision.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        const QString outPath
+            = QDir(projectManager.getOutputPath()).filePath("test_net_top_collision.v");
+        QFile rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        QVERIFY(rawBytes.contains("output wire [7:0] data_bus"));
+        QVERIFY(!rawBytes.contains("wire [7:0] data_bus;"));
+        QVERIFY(rawBytes.contains("u_drv (.out8(data_bus))"));
+    }
+
+    /**
+     * `out: signal[0:3]` in a comb block used to leak straight into
+     * `assign signal[0:3] = ...`, illegal Verilog because `signal` is
+     * declared `[N:0]`. Normalize must apply on the comb output side too.
+     */
+    void testGenerateCombOutputBitSelectNormalized()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_comb_reversed_out"
+port:
+  data_rev:
+    type: "logic[3:0]"
+    direction: out
+comb:
+  - out: data_rev[0:3]
+    expr: "4'b1010"
+)";
+        const QString filePath   = createTempFile("test_comb_reversed_out.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        const QString outPath
+            = QDir(projectManager.getOutputPath()).filePath("test_comb_reversed_out.v");
+        QFile rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        QVERIFY(rawBytes.contains("assign data_rev[3:0] = 4'b1010"));
+        QVERIFY(!rawBytes.contains("data_rev[0:3]"));
     }
 };
 
