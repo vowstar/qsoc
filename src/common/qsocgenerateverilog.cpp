@@ -303,6 +303,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             const QString portName = QString::fromStdString(portIter->first.as<std::string>());
+            if (!QSocVerilogUtils::isValidVerilogIdentifier(portName)) {
+                QSocConsole::warn()
+                    << "Top-level port name" << portName
+                    << "is not a valid Verilog identifier (reserved keyword or illegal character)";
+            }
 
             if (!portIter->second.IsMap()) {
                 QSocConsole::warn() << "Port" << portName << "has invalid format, skipping";
@@ -552,6 +557,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 }
 
                 const QString netName = QString::fromStdString(netIter->first.as<std::string>());
+                if (!QSocVerilogUtils::isValidVerilogIdentifier(netName)) {
+                    QSocConsole::warn() << "Net name" << netName
+                                        << "is not a valid Verilog identifier "
+                                           "(reserved keyword or illegal character)";
+                }
 
                 if (!netIter->second) {
                     QSocConsole::warn() << "Net" << netName << "has null data, skipping";
@@ -1287,6 +1297,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
             const QString instanceName = QString::fromStdString(
                 instanceIter->first.as<std::string>());
+            if (!QSocVerilogUtils::isValidVerilogIdentifier(instanceName)) {
+                QSocConsole::warn() << "Instance name" << instanceName
+                                    << "is not a valid Verilog identifier "
+                                       "(reserved keyword or illegal character)";
+            }
 
             /* Check if the instance data is valid */
             if (!instanceIter->second || !instanceIter->second.IsMap()) {
