@@ -1,4 +1,5 @@
 #include "qsocgenerateprimitivecomb.h"
+#include "qsocconsole.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <QDebug>
@@ -74,6 +75,11 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
 
     out << "\n    /* Combinational logic */\n";
 
+    /* Track which (target, bit-slice) we have already emitted an assign for.
+       Duplicate `out:` lines silently produced two `assign foo[3:0] = ...;`
+       statements, a guaranteed multi-driver conflict. Keep the first. */
+    QSet<QString> seenAssignTargets;
+
     for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
         const YAML::Node &combItem = netlistData["comb"][i];
 
@@ -99,6 +105,15 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
                     QString::fromStdString(combItem["bits"].as<std::string>()));
             }
             const QString fullOutputSignal = baseName + bitSelect;
+
+            if (seenAssignTargets.contains(fullOutputSignal)) {
+                QSocConsole::warn() << "comb has duplicate driver for" << fullOutputSignal
+                                    << "; keeping the first - check the source netlist";
+                out << "    /* FIXME: duplicate comb driver for " << fullOutputSignal
+                    << " skipped - check the source netlist */\n";
+                continue;
+            }
+            seenAssignTargets.insert(fullOutputSignal);
 
             out << "    assign " << fullOutputSignal << " = " << expression << ";\n";
         } else if (combItem["if"] && combItem["if"].IsSequence()) {
