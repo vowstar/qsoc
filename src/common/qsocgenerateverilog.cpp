@@ -1418,7 +1418,30 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                         /* Check if this port has a connection */
                         if (portMap.contains(portName)) {
-                            const QString wireConnection = portMap[portName];
+                            QString wireConnection = portMap[portName];
+
+                            /* `invert: true` on an output (or inout) port
+                               would emit `.port(~wire)` - illegal because
+                               you cannot invert an output destination, and
+                               nonsensical because the value comes FROM the
+                               instance. Strip the `~` and warn. */
+                            if (wireConnection.startsWith('~') && portIter->second
+                                && portIter->second["direction"]
+                                && portIter->second["direction"].IsScalar()) {
+                                const QString portDir
+                                    = QString::fromStdString(
+                                          portIter->second["direction"].as<std::string>())
+                                          .toLower();
+                                if (portDir == "out" || portDir == "output" || portDir == "inout") {
+                                    QSocConsole::warn()
+                                        << "'invert: true' on" << instanceName << "." << portName
+                                        << "(direction:" << portDir
+                                        << ") cannot be applied to an output destination; "
+                                           "ignoring the invert";
+                                    wireConnection.remove(0, 1);
+                                }
+                            }
+
                             portConnections.append(
                                 QString("        .%1(%2)").arg(portName).arg(wireConnection));
                         } else {
