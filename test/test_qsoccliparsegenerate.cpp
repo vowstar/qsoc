@@ -4145,7 +4145,9 @@ seq:
         const QByteArray rawBytes = rawOut.readAll();
         rawOut.close();
         QVERIFY(rawBytes.contains("reg [7:0] counter_reg"));
-        QVERIFY(rawBytes.contains("assign counter = counter_reg"));
+        /* Slice-aware assign: blanket `assign counter = counter_reg` would
+           silently override any comb that drives a different slice. */
+        QVERIFY(rawBytes.contains("assign counter[3] = counter_reg[3]"));
         QVERIFY(rawBytes.contains("counter_reg[3] <= 1'b0"));
         QVERIFY(!rawBytes.contains("counter[3]_reg"));
     }
@@ -4369,6 +4371,158 @@ instance:
         socCliWorker.run();
 
         QVERIFY(verifyVerilogContent("test_link_bits_invert", ".scalar_in (~bus_w[7])"));
+    }
+
+    /**
+     * Instances with a `parameter:` block used to crash qsoc with an
+     * unrecoverable yaml-cpp `BadSubscript`. Hoist the node and wrap the
+     * loop in try/catch so the run completes.
+     */
+    void testGenerateInstanceParameterDoesNotCrash()
+    {
+        const QString modContent = R"(
+widget:
+  parameter:
+    WIDTH:
+      type: integer
+      default: 32
+  port:
+    data_in:
+      type: "logic[7:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         mod(moduleDir.filePath("widget.soc_mod"));
+        QVERIFY(mod.open(QIODevice::WriteOnly | QIODevice::Text));
+        mod.write(modContent.toUtf8());
+        mod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_param_no_crash"
+instance:
+  u_a:
+    module: widget
+    parameter:
+      WIDTH: "32"
+)";
+        const QString filePath   = createTempFile("test_param_no_crash.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogOutputExistence("test_param_no_crash"));
+        QVERIFY(verifyVerilogContent("test_param_no_crash", "widget"));
+        QVERIFY(verifyVerilogContent("test_param_no_crash", ".WIDTH(32)"));
+    }
+
+    /**
+     * A `seq` item with a bit-selected reg used to emit a blanket
+     * `assign port = port_reg;` that silently overrode any comb item
+     * driving a different slice of the same port. Emit per-slice
+     * assigns when bit-selects are present.
+     */
+    void testGenerateSeqSliceAwareAssignCoexistsWithComb()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_seq_slice_coexist"
+port:
+  data:
+    type: "logic[7:0]"
+    direction: out
+  clk:
+    type: logic
+    direction: in
+comb:
+  - out: data[7:4]
+    expr: "4'hF"
+seq:
+  - reg: data[3:0]
+    clk: clk
+    next: "4'h0"
+)";
+        const QString filePath   = createTempFile("test_seq_slice_coexist.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        const QString outPath
+            = QDir(projectManager.getOutputPath()).filePath("test_seq_slice_coexist.v");
+        QFile rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        QVERIFY(rawBytes.contains("assign data[7:4] = 4'hF"));
+        QVERIFY(rawBytes.contains("assign data[3:0] = data_reg[3:0]"));
+        /* The pre-fix blanket form must NOT appear, otherwise it would
+           silently override the comb assign on bits [7:4]. */
+        QVERIFY(!rawBytes.contains("assign data = data_reg"));
+    }
+
+    /**
+     * Setting `link:` and `tie:` together used to be silently resolved
+     * as link-wins-tie-ignored. Surface the conflict via a console
+     * warning so the user can pick one.
+     */
+    void testGenerateWarnsOnLinkAndTieTogether()
+    {
+        const QString modContent = R"(
+sink_dut:
+  port:
+    data_in:
+      type: "logic[3:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         mod(moduleDir.filePath("sink_dut.soc_mod"));
+        QVERIFY(mod.open(QIODevice::WriteOnly | QIODevice::Text));
+        mod.write(modContent.toUtf8());
+        mod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_link_tie_conflict"
+port:
+  data_bus:
+    type: "logic[3:0]"
+    direction: in
+instance:
+  u0:
+    module: "sink_dut"
+    port:
+      data_in:
+        link: data_bus
+        tie: "4'hA"
+)";
+        const QString filePath   = createTempFile("test_link_tie_conflict.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warned = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("Both 'link:' and 'tie:'")) {
+                warned = true;
+                break;
+            }
+        }
+        QVERIFY(warned);
+        /* link still wins, tie is dropped. */
+        QVERIFY(verifyVerilogContent("test_link_tie_conflict", ".data_in(data_bus)"));
     }
 };
 

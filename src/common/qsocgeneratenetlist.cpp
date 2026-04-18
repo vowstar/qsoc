@@ -465,6 +465,29 @@ bool QSocGenerateManager::processNetlist()
                                     continue;
                                 }
 
+                                /* Mirror the bus uplink fix: a per-port `tie:`
+                                   or `link:` override means the user wants this
+                                   specific signal routed elsewhere. Without
+                                   this guard the bus expansion would race the
+                                   override into a cross-net duplicate. */
+                                if (netlistData["instance"][conn.instanceName]
+                                    && netlistData["instance"][conn.instanceName]["port"]
+                                    && netlistData["instance"][conn.instanceName]["port"]
+                                                  [mappedPortName]
+                                    && netlistData["instance"][conn.instanceName]["port"]
+                                                  [mappedPortName]
+                                                      .IsMap()) {
+                                    const auto &existing = netlistData["instance"][conn.instanceName]
+                                                                      ["port"][mappedPortName];
+                                    if (existing["tie"] || existing["link"]) {
+                                        QSocConsole::info() << "Skipping bus link expansion for"
+                                                            << conn.instanceName.c_str() << "."
+                                                            << mappedPortName.c_str()
+                                                            << "(already has tie/link override)";
+                                        continue;
+                                    }
+                                }
+
                                 /* Create the connection node with proper structure */
                                 YAML::Node connectionNode  = YAML::Node(YAML::NodeType::Map);
                                 connectionNode["instance"] = conn.instanceName;
@@ -478,6 +501,31 @@ bool QSocGenerateManager::processNetlist()
                                     connectionNode["type"]
                                         = moduleData["port"][mappedPortName]["type"]
                                               .as<std::string>();
+                                }
+
+                                /* Forward a per-port `bits:` override from the
+                                   instance YAML. Pre-fix the bus expander built
+                                   the connection from the bus mapping alone and
+                                   silently dropped any user-specified slice. */
+                                if (netlistData["instance"][conn.instanceName]
+                                    && netlistData["instance"][conn.instanceName]["port"]
+                                    && netlistData["instance"][conn.instanceName]["port"]
+                                                  [mappedPortName]
+                                    && netlistData["instance"][conn.instanceName]["port"]
+                                                  [mappedPortName]
+                                                      .IsMap()
+                                    && netlistData["instance"][conn.instanceName]["port"]
+                                                  [mappedPortName]["bits"]
+                                    && netlistData["instance"][conn.instanceName]["port"]
+                                                  [mappedPortName]["bits"]
+                                                      .IsScalar()) {
+                                    const std::string portBits
+                                        = netlistData["instance"][conn.instanceName]["port"]
+                                                     [mappedPortName]["bits"]
+                                                         .as<std::string>();
+                                    if (!portBits.empty()) {
+                                        connectionNode["bits"] = portBits;
+                                    }
                                 }
 
                                 /* Add connection to the net using List format */
@@ -1503,6 +1551,18 @@ bool QSocGenerateManager::processLinkConnections()
                 /* Check for link attribute */
                 if (portNode["link"] && portNode["link"].IsScalar()) {
                     auto netName = portNode["link"].as<std::string>();
+
+                    /* `link:` and `tie:` together is ambiguous - link wins
+                       silently, the tie is dropped. Surface the conflict so
+                       the user can pick one. */
+                    if (portNode["tie"] && portNode["tie"].IsScalar()
+                        && !QString::fromStdString(portNode["tie"].as<std::string>())
+                                .trimmed()
+                                .isEmpty()) {
+                        QSocConsole::warn()
+                            << "Both 'link:' and 'tie:' set on" << instanceName.c_str() << "."
+                            << portName.c_str() << "- the link wins and the tie is ignored";
+                    }
 
                     /* Per-port `bits:` lives next to `link:` in the YAML and
                        used to be silently dropped by the link processor.
