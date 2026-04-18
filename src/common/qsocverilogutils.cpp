@@ -138,16 +138,26 @@ QString QSocVerilogUtils::normalizeBitSelect(const QString &bitSelect)
         return bitSelect;
     }
     static const QRegularExpression rangeRegex(R"(^\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*$)");
-    const QRegularExpressionMatch   match = rangeRegex.match(bitSelect);
-    if (!match.hasMatch()) {
-        return bitSelect;
+    const QRegularExpressionMatch   rangeMatch = rangeRegex.match(bitSelect);
+    if (rangeMatch.hasMatch()) {
+        bool      leftOk   = false;
+        bool      rightOk  = false;
+        const int leftIdx  = rangeMatch.captured(1).toInt(&leftOk);
+        const int rightIdx = rangeMatch.captured(2).toInt(&rightOk);
+        if (leftOk && rightOk) {
+            const int hi = leftIdx >= rightIdx ? leftIdx : rightIdx;
+            const int lo = leftIdx >= rightIdx ? rightIdx : leftIdx;
+            return QString("[%1:%2]").arg(hi).arg(lo);
+        }
     }
-    bool      leftOk   = false;
-    bool      rightOk  = false;
-    const int leftIdx  = match.captured(1).toInt(&leftOk);
-    const int rightIdx = match.captured(2).toInt(&rightOk);
-    if (!leftOk || !rightOk || leftIdx >= rightIdx) {
-        return bitSelect;
+    static const QRegularExpression singleRegex(R"(^\s*\[\s*(\d+)\s*\]\s*$)");
+    const QRegularExpressionMatch   singleMatch = singleRegex.match(bitSelect);
+    if (singleMatch.hasMatch()) {
+        bool      ok  = false;
+        const int idx = singleMatch.captured(1).toInt(&ok);
+        if (ok) {
+            return QString("[%1]").arg(idx);
+        }
     }
-    return QString("[%1:%2]").arg(rightIdx).arg(leftIdx);
+    return bitSelect;
 }

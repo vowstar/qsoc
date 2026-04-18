@@ -359,6 +359,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* Build a mapping of all connections for each instance and port */
     QMap<QString, QMap<QString, QString>> instancePortConnections;
 
+    /* Nets where a single instance.port appeared more than once. Carries
+       across to wire-decl emission so a FIXME comment surfaces in the .v. */
+    QSet<QString> duplicateConnectionNets;
+
     /* First, create the instancePortConnections map with port connections */
     /* This needs to be done before wire generation to ensure port names are used */
     if (netlistData["net"] && netlistData["net"].IsMap()) {
@@ -386,6 +390,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 /* Build connections using List format only */
                 const YAML::Node &netNode = netIter->second;
                 if (netNode.IsSequence()) {
+                    /* Per-net guard: a single instance.port can connect to a net at
+                       most once. A second entry would silently overwrite the first
+                       in instancePortConnections (a QMap), losing the user's wiring. */
+                    QSet<QPair<QString, QString>> seenInstancePort;
+
                     /* Process List format connections */
                     for (const auto &connectionNode : netNode) {
                         if (!connectionNode.IsMap()) {
@@ -409,6 +418,16 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         }
                         const QString portName = QString::fromStdString(
                             connectionNode["port"].as<std::string>());
+
+                        const auto instancePortKey = qMakePair(instanceName, portName);
+                        if (seenInstancePort.contains(instancePortKey)) {
+                            QSocConsole::warn()
+                                << "Net" << netName << "lists" << instanceName << "." << portName
+                                << "more than once; only the first connection is kept";
+                            duplicateConnectionNets.insert(netName);
+                            continue;
+                        }
+                        seenInstancePort.insert(instancePortKey);
 
                         /* If this is a top-level port connection, add it to portToNetConnections */
                         if (instanceName == "top") {
@@ -768,6 +787,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         << "Net" << netName << "has only input ports, missing driver";
                 } else if (isMultidrive) {
                     QSocConsole::warn() << "Net" << netName << "has multiple output/inout ports";
+                }
+
+                const bool hasDuplicateConnection = duplicateConnectionNets.contains(netName);
+                if (hasDuplicateConnection) {
+                    out << "    /* FIXME: Net " << netName
+                        << " has duplicate instance.port entries; "
+                        << "only the first is wired - check the source netlist */\n";
                 }
 
                 /* Generate combined warning comments for the net */
