@@ -204,6 +204,36 @@ The `generate verilog` command generates Verilog code from netlist files.
   kind: table,
 )
 
+==== Netlist Merge Semantics (`-m` / `--merge`)
+<netlist-merge-semantics>
+The `--merge` option loads two or more netlist files in command-line order
+and folds them into a single netlist before generation. It is the standard
+pattern for SoC top-level integration where each peripheral block lives in
+its own `<block>_inst.soc_net` and the top is assembled from all of them.
+
+Merge rules (applied recursively, file-by-file):
+
+- *Map sections* (`instance`, `net`, `port`, `parameter`, `bus`):
+  union of keys. When the same key appears in two files the values are
+  merged recursively (deep merge).
+- *List sections* (the connection list under each `net.<name>`):
+  concatenation. A net listed in two files ends up with all connections
+  from both files in the order they were loaded.
+- *Scalar values*: the later file overrides the earlier one.
+
+The output filename is derived from the *first* file's basename. Order
+matters: pass the top-level / framework file first, then peripheral
+instances, so any conflicting scalar in a later file is the override.
+
+Example:
+
+```sh
+qsoc generate verilog --merge \
+  output/soc_top.soc_net    \
+  output/cpu_inst.soc_net   \
+  output/peri_inst.soc_net
+```
+
 ==== Unconnected Port Report
 <unconnected-port-report>
 The Verilog generation automatically creates an unconnected port report when unconnected ports are detected. The report is saved as `<module_name>.nc.rpt` in YAML format containing:

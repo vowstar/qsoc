@@ -2,6 +2,24 @@
 <power-format>
 The power section defines power controller primitives that manage voltage domain sequencing with dependency tracking and automatic fault recovery. Power primitives provide comprehensive power management with support for multiple domain types, hard/soft dependencies, and DFT override capabilities.
 
+#block(
+  fill: rgb("#fffce8"),
+  inset: 8pt,
+  radius: 4pt,
+  stroke: rgb("#a08410") + 0.5pt,
+)[
+  *Standalone module:* a `power:` block generates a self-contained
+  Verilog module named after `power.name`. The generated module is NOT
+  auto-instantiated by any parent netlist - the user instantiates it
+  manually (or via `qsoc module import` followed by an `_inst.soc_net`
+  entry) at the top level. This is by design.
+
+  Unlike clock/reset, the power controller's `depend:` field
+  references *only* declared domain names (no auto-input pattern). A
+  typo in `depend.name` is caught at parse time and reported as a
+  warning.
+]
+
 == POWER OVERVIEW
 <soc-net-power-overview>
 Power controllers manage voltage domain sequencing through a three-domain architecture: AO (always-on), root (controllable without dependencies), and normal (controllable with dependencies). Each domain follows a strict power-up sequence: switch → pgood → clock enable → reset release, with configurable timing and automatic fault recovery.

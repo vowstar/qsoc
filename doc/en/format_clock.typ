@@ -2,6 +2,26 @@
 <clock-format>
 The clock section defines clock controller primitives using a simplified format that eliminates complex type configurations. Clock operations are specified through direct attributes, with automatic selection of mux types based on signal presence.
 
+#block(
+  fill: rgb("#fffce8"),
+  inset: 8pt,
+  radius: 4pt,
+  stroke: rgb("#a08410") + 0.5pt,
+)[
+  *Standalone module:* a `clock:` block generates a self-contained
+  Verilog module named after `clock.name`. The generated module is NOT
+  auto-instantiated by any parent netlist - the user instantiates it
+  manually (or via `qsoc module import` followed by an `_inst.soc_net`
+  entry) at the top level. This is by design.
+
+  *Auto-input pattern:* a target's `link:` source that is neither a
+  declared input nor another target gets auto-promoted to a fresh
+  input port on the controller. This is how you wire software
+  controlled signals (e.g. `*_sw_en`, `pll_lockout`) from outside the
+  controller. A typo in the source name surfaces downstream as an
+  unwired controller pin, not as a qsoc warning.
+]
+
 == CLOCK OVERVIEW
 <soc-net-clock-overview>
 Clock controllers manage clock distribution with two processing levels: link-level and target-level. Each level supports specific operations in a defined order, providing clear signal flow without explicit type enumeration.
