@@ -103,8 +103,16 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
     // Parse clock inputs
     if (clockNode["input"] && clockNode["input"].IsMap()) {
         for (auto it = clockNode["input"].begin(); it != clockNode["input"].end(); ++it) {
-            ClockInput input;
-            input.name = QString::fromStdString(it->first.as<std::string>());
+            ClockInput    input;
+            const QString rawName = QString::fromStdString(it->first.as<std::string>());
+            /* Bracket characters in a primitive identifier name leak straight
+               into wire/instance/port identifiers and produce illegal
+               Verilog. Sanitize the name here and warn the user. */
+            input.name = QSocVerilogUtils::sanitizeBitSelectInName(rawName);
+            if (input.name != rawName) {
+                QSocConsole::warn() << "Clock input name" << rawName
+                                    << "contains bracket characters; sanitized to" << input.name;
+            }
 
             if (it->second.IsMap()) {
                 if (it->second["freq"]) {
@@ -121,8 +129,13 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
     // Parse clock targets
     if (clockNode["target"] && clockNode["target"].IsMap()) {
         for (auto it = clockNode["target"].begin(); it != clockNode["target"].end(); ++it) {
-            ClockTarget target;
-            target.name = QString::fromStdString(it->first.as<std::string>());
+            ClockTarget   target;
+            const QString rawName = QString::fromStdString(it->first.as<std::string>());
+            target.name           = QSocVerilogUtils::sanitizeBitSelectInName(rawName);
+            if (target.name != rawName) {
+                QSocConsole::warn() << "Clock target name" << rawName
+                                    << "contains bracket characters; sanitized to" << target.name;
+            }
 
             if (it->second["freq"]) {
                 target.freq = QString::fromStdString(it->second["freq"].as<std::string>());
@@ -285,8 +298,15 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
             if (it->second["link"] && it->second["link"].IsMap()) {
                 for (auto linkIt = it->second["link"].begin(); linkIt != it->second["link"].end();
                      ++linkIt) {
-                    ClockLink link;
-                    link.source = QString::fromStdString(linkIt->first.as<std::string>());
+                    ClockLink     link;
+                    const QString rawSource = QString::fromStdString(
+                        linkIt->first.as<std::string>());
+                    link.source = QSocVerilogUtils::sanitizeBitSelectInName(rawSource);
+                    if (link.source != rawSource) {
+                        QSocConsole::warn()
+                            << "Clock link source name" << rawSource
+                            << "contains bracket characters; sanitized to" << link.source;
+                    }
 
                     // Link-level inverter
                     if (linkIt->second.IsMap() && linkIt->second["inv"]) {

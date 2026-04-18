@@ -4639,6 +4639,96 @@ net:
         QVERIFY(warnedOnInst);
         QVERIFY(warnedOnNet);
     }
+
+    /**
+     * Bracket characters in clock/reset target names used to leak straight
+     * into wire/instance/port identifiers, producing illegal Verilog like
+     * `wire clk_clk_out[3]_from_osc_24m;` and `output wire clk_out[3]`.
+     * The sanitizer rewrites them to safe identifiers and warns.
+     */
+    void testGenerateClockResetSanitizesBracketNames()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_clk_rst_sanitize"
+port:
+  osc_24m:
+    type: logic
+    direction: in
+  clk_out:
+    type: "logic[7:0]"
+    direction: out
+  clk_sys:
+    type: logic
+    direction: in
+  por_rst_n:
+    type: logic
+    direction: in
+  rst_n:
+    type: "logic[3:0]"
+    direction: out
+instance: {}
+clock:
+  - name: clk_ctrl
+    input:
+      osc_24m:
+        freq: 24MHz
+    target:
+      "clk_out[3]":
+        freq: 24MHz
+        link:
+          osc_24m:
+reset:
+  - name: rst_ctrl
+    clock: clk_sys
+    test_enable: 1'b0
+    source:
+      por_rst_n:
+        active: low
+    target:
+      "rst_n[3:0]":
+        active: low
+        async:
+          clock: clk_sys
+          stage: 4
+          link:
+            por_rst_n:
+)";
+        const QString filePath   = createTempFile("test_clk_rst_sanitize.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warnedClkTarget = false;
+        bool warnedRstTarget = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("Clock target name") && msg.contains("clk_out[3]")) {
+                warnedClkTarget = true;
+            }
+            if (msg.contains("Reset target name") && msg.contains("rst_n[3:0]")) {
+                warnedRstTarget = true;
+            }
+        }
+        QVERIFY(warnedClkTarget);
+        QVERIFY(warnedRstTarget);
+
+        const QString outPath
+            = QDir(projectManager.getOutputPath()).filePath("test_clk_rst_sanitize.v");
+        QFile rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        /* Sanitized identifiers must NOT carry any leftover bracket/colon. */
+        QVERIFY(!rawBytes.contains("clk_clk_out[3]"));
+        QVERIFY(!rawBytes.contains("rst_n[3:0]_link"));
+        QVERIFY(rawBytes.contains("clk_out_3"));
+        QVERIFY(rawBytes.contains("rst_n_3_0"));
+    }
 };
 
 QStringList Test::messageList;
