@@ -4575,6 +4575,70 @@ comb:
         QVERIFY(verifyVerilogContent("test_comb_topport_redirect", "assign data_out[7:4] = 4'hA"));
         QVERIFY(!verifyVerilogContent("test_comb_topport_redirect", "assign data_bus[7:4]"));
     }
+
+    /**
+     * Reserved Verilog keywords and illegal identifier chars in net,
+     * instance, and top-level port names used to leak verbatim into the
+     * generated `.v` (e.g., `wire 12345;`, `widget my-instance ...`).
+     * The validator now warns the user.
+     */
+    void testGenerateWarnsOnInvalidIdentifiers()
+    {
+        const QString modContent = R"(
+widget:
+  port:
+    data_in:
+      type: "logic[3:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         mod(moduleDir.filePath("widget.soc_mod"));
+        QVERIFY(mod.open(QIODevice::WriteOnly | QIODevice::Text));
+        mod.write(modContent.toUtf8());
+        mod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_invalid_ids"
+port:
+  wire:
+    type: "logic[3:0]"
+    direction: in
+instance:
+  "my-instance":
+    module: widget
+net:
+  "12345":
+    - { instance: "my-instance", port: data_in }
+)";
+        const QString filePath   = createTempFile("test_invalid_ids.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warnedOnPort = false;
+        bool warnedOnInst = false;
+        bool warnedOnNet  = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("Top-level port name") && msg.contains("wire")) {
+                warnedOnPort = true;
+            }
+            if (msg.contains("Instance name") && msg.contains("my-instance")) {
+                warnedOnInst = true;
+            }
+            if (msg.contains("Net name") && msg.contains("12345")) {
+                warnedOnNet = true;
+            }
+        }
+        QVERIFY(warnedOnPort);
+        QVERIFY(warnedOnInst);
+        QVERIFY(warnedOnNet);
+    }
 };
 
 QStringList Test::messageList;
