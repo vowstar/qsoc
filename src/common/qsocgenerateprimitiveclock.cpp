@@ -507,8 +507,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 // Validation: multi-link requires select signal
                 if (target.select.isEmpty()) {
                     QSocConsole::error()
-                        << "'select' signal is required for multi-link target:"
-                        << target.name;
+                        << "'select' signal is required for multi-link target:" << target.name;
                     QSocConsole::error()
                         << "Example: target: { link: {clk1: ~, clk2: ~}, select: sel_sig }";
                     return config;

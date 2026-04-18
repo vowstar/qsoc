@@ -118,8 +118,7 @@ bool QSocProjectManager::mkpath()
             out << "qsoc.fl.*" << Qt::endl;
             gitignoreFile.close();
         } else {
-            QSocConsole::warn()
-                << "Failed to create .gitignore file in project directory.";
+            QSocConsole::warn() << "Failed to create .gitignore file in project directory.";
         }
     }
 

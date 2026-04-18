@@ -263,9 +263,9 @@ bool QSocGenerateManager::renderTemplate(
             /* Read JSON file */
             QFile jsonFile(jsonFilePath);
             if (!jsonFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QSocConsole::error() << QCoreApplication::translate(
-                                            "generate", "Could not open JSON file \"%1\"")
-                                            .arg(jsonFilePath);
+                QSocConsole::error()
+                    << QCoreApplication::translate("generate", "Could not open JSON file \"%1\"")
+                           .arg(jsonFilePath);
                 return false;
             }
 
@@ -277,8 +277,7 @@ bool QSocGenerateManager::renderTemplate(
             const QJsonDocument jsonDoc = QJsonDocument::fromJson(jsonData, &parseError);
             if (parseError.error != QJsonParseError::NoError) {
                 QSocConsole::error()
-                    << QCoreApplication::translate(
-                           "generate", "failed to parse JSON file \"%1\": %2")
+                    << QCoreApplication::translate("generate", "failed to parse JSON file \"%1\": %2")
                            .arg(jsonFilePath)
                            .arg(parseError.errorString());
                 return false;
@@ -351,8 +350,7 @@ bool QSocGenerateManager::renderTemplate(
 
         } catch (const std::exception &e) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate",
-                                        "Failed to process SystemRDL file \"%1\": %2")
+                                        "generate", "Failed to process SystemRDL file \"%1\": %2")
                                         .arg(rdlFilePath)
                                         .arg(e.what());
             return false;
@@ -374,11 +372,10 @@ bool QSocGenerateManager::renderTemplate(
                 rcsvFilePath.toStdString());
 
             if (!csvToRdlResult.ok()) {
-                QSocConsole::error()
-                    << QCoreApplication::translate(
-                           "generate", "failed to convert RCSV file \"%1\": %2")
-                           .arg(rcsvFilePath)
-                           .arg(QString::fromStdString(csvToRdlResult.error()));
+                QSocConsole::error() << QCoreApplication::translate(
+                                            "generate", "failed to convert RCSV file \"%1\": %2")
+                                            .arg(rcsvFilePath)
+                                            .arg(QString::fromStdString(csvToRdlResult.error()));
                 return false;
             }
 
@@ -386,11 +383,10 @@ bool QSocGenerateManager::renderTemplate(
             const systemrdl::Result result = systemrdl::elaborate_simplified(csvToRdlResult.value());
 
             if (!result.ok()) {
-                QSocConsole::error()
-                    << QCoreApplication::translate(
-                           "generate", "failed to elaborate RCSV file \"%1\": %2")
-                           .arg(rcsvFilePath)
-                           .arg(QString::fromStdString(result.error()));
+                QSocConsole::error() << QCoreApplication::translate(
+                                            "generate", "failed to elaborate RCSV file \"%1\": %2")
+                                            .arg(rcsvFilePath)
+                                            .arg(QString::fromStdString(result.error()));
                 return false;
             }
 

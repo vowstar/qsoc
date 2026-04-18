@@ -213,8 +213,7 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
                 const QString portName = QString::fromStdString(portIter->first.as<std::string>());
 
                 if (!portIter->second.IsMap()) {
-                    QSocConsole::warn()
-                        << "Port" << portName << "has invalid format, skipping";
+                    QSocConsole::warn() << "Port" << portName << "has invalid format, skipping";
                     continue;
                 }
 
