@@ -403,9 +403,25 @@ bool QSocModuleManager::load(const QString &libraryName)
         /* Load YAML content into a temporary node */
         YAML::Node tempNode = YAML::Load(fileStream);
 
+        /* When a library overlays modules already defined by another
+           library (a common pattern: `hlmc28_io` overlays `hlmc22_io`
+           in tape-out kits), emit ONE summary per (loser, winner) pair
+           instead of N per-module lines. Per-module is too noisy to be
+           actionable when libraries replace thousands of cells. */
+        QMap<QString, int> overlayCounts; /* losing-library -> count */
+
         /* Iterate through the temporary node and add to moduleData */
         for (YAML::const_iterator it = tempNode.begin(); it != tempNode.end(); ++it) {
             const auto key = it->first.as<std::string>();
+
+            if (moduleData[key] && moduleData[key]["library"]
+                && moduleData[key]["library"].IsScalar()) {
+                const QString existingLib = QString::fromStdString(
+                    moduleData[key]["library"].as<std::string>());
+                if (existingLib != libraryName) {
+                    overlayCounts[existingLib]++;
+                }
+            }
 
             /* Add to moduleData */
             moduleData[key]            = it->second;
@@ -413,6 +429,12 @@ bool QSocModuleManager::load(const QString &libraryName)
 
             /* Update libraryMap with libraryName to key mapping */
             libraryMapAdd(libraryName, QString::fromStdString(key));
+        }
+
+        for (auto overlayIt = overlayCounts.constBegin(); overlayIt != overlayCounts.constEnd();
+             ++overlayIt) {
+            QSocConsole::warn() << "Library" << libraryName << "overwrites" << overlayIt.value()
+                                << "module(s) previously loaded from library" << overlayIt.key();
         }
     } catch (const YAML::Exception &e) {
         QSocConsole::error() << "failed to parse YAML file:" << filePath << ":" << e.what();

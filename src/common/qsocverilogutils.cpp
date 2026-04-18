@@ -8,6 +8,11 @@ QString QSocVerilogUtils::cleanTypeForWireDeclaration(const QString &typeStr)
 
     QString cleaned = typeStr;
 
+    /* Strip NUL and other control characters first. Pre-fix a YAML
+       `type: "logic\x00 [7:0]"` would leak NUL bytes into the generated
+       Verilog, breaking diff/grep tools and many synth flows. */
+    cleaned.remove(QRegularExpression("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]"));
+
     /* Remove leading whitespace + keyword + keyword trailing whitespace */
     static const QRegularExpression regularExpression(R"(\s*[A-Za-z_]+\s*(?=\[|\s*$))");
     /* Explanation:
