@@ -57,6 +57,15 @@ public:
      * @return Escaped text safe for Verilog comments
      */
     static QString escapeVerilogComment(const QString &text);
+
+    /**
+     * @brief Normalize a bit-select to canonical descending form
+     * @param bitSelect Raw bit-select like "[0:3]", "[3:0]", "[5]" or empty
+     * @return If "[lo:hi]" with lo<hi, returns "[hi:lo]"; otherwise the input
+     *         is returned unchanged. Wires are emitted as `[msb:0]` so a
+     *         reversed slice would generate illegal Verilog.
+     */
+    static QString normalizeBitSelect(const QString &bitSelect);
 };
 
 #endif // QSOCVERILOGUTILS_H

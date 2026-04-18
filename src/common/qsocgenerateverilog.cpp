@@ -8,6 +8,7 @@
 #include "common/qsocgenerateprimitivepower.h"
 #include "common/qsocgenerateprimitiveseq.h"
 #include "common/qsocgeneratereportunconnected.h"
+#include "common/qsocverilogutils.h"
 #include "common/qstaticstringweaver.h"
 #include "qsocgenerateprimitivefsm.h"
 #include "qsocgenerateprimitivereset.h"
@@ -435,8 +436,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         /* Check if this port has bits selection attribute */
                         QString bitSelect = "";
                         if (connectionNode["bits"] && connectionNode["bits"].IsScalar()) {
-                            bitSelect = QString::fromStdString(
-                                connectionNode["bits"].as<std::string>());
+                            bitSelect = QSocVerilogUtils::normalizeBitSelect(
+                                QString::fromStdString(connectionNode["bits"].as<std::string>()));
                         }
 
                         /* If connected to top-level port, use the port name instead of net name */
@@ -478,6 +479,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         } else {
             /* Collect comb/seq/fsm signals (inputs and outputs) once before the loop */
             const QList<PortDetailInfo> combSeqFsmSignals = collectCombSeqFsmSignals();
+
+            /* Track nets that resolved to scalar wires so per-port [0] / [0:0]
+               selects on those nets can be scrubbed before instantiation. */
+            QSet<QString> scalarNets;
 
             for (auto netIter = netlistData["net"].begin(); netIter != netlistData["net"].end();
                  ++netIter) {
@@ -654,8 +659,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         /* Check if this port has bits selection attribute */
                         QString bitSelection = "";
                         if (connectionNode["bits"] && connectionNode["bits"].IsScalar()) {
-                            bitSelection = QString::fromStdString(
-                                connectionNode["bits"].as<std::string>());
+                            bitSelection = QSocVerilogUtils::normalizeBitSelect(
+                                QString::fromStdString(connectionNode["bits"].as<std::string>()));
                         }
 
                         /* Get instance's module */
@@ -1085,6 +1090,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             netWidth = preservedRangeType;
                         } else if (maxBitIndex == 0) {
                             netWidth = "";
+                            scalarNets.insert(netName);
                         } else {
                             netWidth = QString("[%1:0]").arg(maxBitIndex);
                         }
@@ -1109,9 +1115,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             out << "    wire " << cleanedWidth << " " << netName << ";\n";
                         } else {
                             out << "    wire " << netName << ";\n";
+                            scalarNets.insert(netName);
                         }
                     } else {
                         out << "    wire " << netName << ";\n";
+                        scalarNets.insert(netName);
                     }
                 } else {
                     /* Check for width mismatches between port and net */
@@ -1169,6 +1177,25 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 }
             }
             out << "\n";
+
+            /* Strip [0] / [0:0] selects on scalar wires; otherwise the
+               instantiation would emit `scalar_wire[0]` which is illegal
+               part-select on a non-vector net. */
+            if (!scalarNets.isEmpty()) {
+                for (auto instIt = instancePortConnections.begin();
+                     instIt != instancePortConnections.end();
+                     ++instIt) {
+                    QMap<QString, QString>         &portMap = instIt.value();
+                    static const QRegularExpression scrubRegex(
+                        R"(^(~?)([A-Za-z_][A-Za-z0-9_]*)\[\s*0\s*(?::\s*0\s*)?\]$)");
+                    for (auto portIt = portMap.begin(); portIt != portMap.end(); ++portIt) {
+                        const QRegularExpressionMatch match = scrubRegex.match(portIt.value());
+                        if (match.hasMatch() && scalarNets.contains(match.captured(2))) {
+                            portIt.value() = match.captured(1) + match.captured(2);
+                        }
+                    }
+                }
+            }
         }
     } else {
         QSocConsole::warn()
