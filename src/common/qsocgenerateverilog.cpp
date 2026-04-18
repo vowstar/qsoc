@@ -1323,40 +1323,50 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
             /* Add parameters if they exist */
             if (instanceData["parameter"]) {
-                if (!instanceData["parameter"].IsMap()) {
+                /* Hoist the node so a yaml-cpp re-subscription on a scalar
+                   value cannot abort the run with `BadSubscript`. Pre-fix any
+                   instance with a `parameter:` section crashed the generator. */
+                const YAML::Node parameterNode = instanceData["parameter"];
+                if (!parameterNode.IsMap()) {
                     QSocConsole::warn() << "'parameter' section for instance" << instanceName
                                         << "is not a map, ignoring";
-                } else if (instanceData["parameter"].size() == 0) {
+                } else if (parameterNode.size() == 0) {
                     QSocConsole::warn() << "'parameter' section for instance" << instanceName
                                         << "is empty, ignoring";
                 } else {
                     out << "#(\n";
 
                     QStringList paramList;
-                    for (auto paramIter = instanceData["parameter"].begin();
-                         paramIter != instanceData["parameter"].end();
-                         ++paramIter) {
-                        if (!paramIter->first.IsScalar()) {
-                            QSocConsole::warn()
-                                << "Invalid parameter name in instance" << instanceName;
-                            continue;
+                    try {
+                        for (auto paramIter = parameterNode.begin();
+                             paramIter != parameterNode.end();
+                             ++paramIter) {
+                            if (!paramIter->first.IsScalar()) {
+                                QSocConsole::warn()
+                                    << "Invalid parameter name in instance" << instanceName;
+                                continue;
+                            }
+
+                            if (!paramIter->second.IsScalar()) {
+                                QSocConsole::warn()
+                                    << "Parameter"
+                                    << QString::fromStdString(paramIter->first.as<std::string>())
+                                    << "in instance" << instanceName
+                                    << "has a non-scalar value, skipping";
+                                continue;
+                            }
+
+                            const QString paramName = QString::fromStdString(
+                                paramIter->first.as<std::string>());
+                            const QString paramValue = QString::fromStdString(
+                                paramIter->second.as<std::string>());
+
+                            paramList.append(
+                                QString("        .%1(%2)").arg(paramName).arg(paramValue));
                         }
-
-                        if (!paramIter->second.IsScalar()) {
-                            QSocConsole::warn()
-                                << "Parameter"
-                                << QString::fromStdString(paramIter->first.as<std::string>())
-                                << "in instance" << instanceName
-                                << "has a non-scalar value, skipping";
-                            continue;
-                        }
-
-                        const QString paramName = QString::fromStdString(
-                            paramIter->first.as<std::string>());
-                        const QString paramValue = QString::fromStdString(
-                            paramIter->second.as<std::string>());
-
-                        paramList.append(QString("        .%1(%2)").arg(paramName).arg(paramValue));
+                    } catch (const YAML::Exception &e) {
+                        QSocConsole::warn() << "Failed to read parameters for instance"
+                                            << instanceName << ":" << e.what();
                     }
 
                     out << paramList.join(",\n") << "\n    ) ";

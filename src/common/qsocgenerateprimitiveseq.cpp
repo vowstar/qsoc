@@ -35,8 +35,13 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
     /* For each base, also remember the highest bit index any seq item
        writes via `reg: base[bits]`. When there is no top-level port to
        borrow a width from, the reg must still be wide enough to carry
-       every bit-selected target. */
-    QMap<QString, int> seqRegMaxBit;
+       every bit-selected target. Also remember the union of bit-selects
+       so the assigns can target the same slices instead of blanket-
+       assigning the whole port (the blanket form silently overrides any
+       comb that drives a different slice of the same port). */
+    QMap<QString, int>           seqRegMaxBit;
+    QMap<QString, QSet<QString>> seqRegBitSelects;
+    QMap<QString, bool>          seqRegHasFullWrite;
     for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
         const YAML::Node &seqItem = netlistData["seq"][i];
         if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["reg"].IsScalar()) {
@@ -46,8 +51,10 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
         const auto    parsed    = QSocGenerateManager::parseSignalBitSelect(regName);
         const QString bitSelect = parsed.second;
         if (bitSelect.isEmpty()) {
+            seqRegHasFullWrite.insert(parsed.first, true);
             continue;
         }
+        seqRegBitSelects[parsed.first].insert(bitSelect);
         const QRegularExpression      widthRegex(R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
         const QRegularExpressionMatch match = widthRegex.match(bitSelect);
         if (!match.hasMatch()) {
@@ -100,7 +107,21 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
         }
         out << "\n    /* Assign internal regs to outputs */\n";
         for (const QString &baseName : seqRegBases) {
-            out << "    assign " << baseName << " = " << baseName << "_reg;\n";
+            const bool           hasFullWrite = seqRegHasFullWrite.value(baseName, false);
+            const QSet<QString> &slices       = seqRegBitSelects[baseName];
+            if (hasFullWrite || slices.isEmpty()) {
+                out << "    assign " << baseName << " = " << baseName << "_reg;\n";
+            } else {
+                /* Per-slice assigns. A blanket `assign base = base_reg;` would
+                   over-drive any comb that targets a different slice of the
+                   same port. */
+                QStringList sortedSlices = slices.values();
+                sortedSlices.sort();
+                for (const QString &slice : sortedSlices) {
+                    out << "    assign " << baseName << slice << " = " << baseName << "_reg"
+                        << slice << ";\n";
+                }
+            }
         }
     }
 
