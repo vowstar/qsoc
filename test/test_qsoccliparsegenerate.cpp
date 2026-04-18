@@ -4831,6 +4831,218 @@ comb:
             "test_comb_drives_input", "FIXME: comb tried to drive top-level input in_only"));
         QVERIFY(!verifyVerilogContent("test_comb_drives_input", "assign in_only ="));
     }
+
+    /**
+     * Reserved Verilog keywords as parameter names used to leak verbatim
+     * (`parameter module = 1`). Warn at both the top-level `parameter:`
+     * block and per-instance overrides.
+     */
+    void testGenerateWarnsOnInvalidParameterName()
+    {
+        const QString modContent = R"(
+widget:
+  parameter:
+    WIDTH:
+      type: integer
+      default: 32
+  port:
+    data_in:
+      type: "logic[7:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         mod(moduleDir.filePath("widget.soc_mod"));
+        QVERIFY(mod.open(QIODevice::WriteOnly | QIODevice::Text));
+        mod.write(modContent.toUtf8());
+        mod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_param_invalid_name"
+parameter:
+  module:
+    type: integer
+    value: 1
+instance:
+  u0:
+    module: widget
+    parameter:
+      begin: "32"
+)";
+        const QString filePath   = createTempFile("test_param_invalid_name.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warnedTop      = false;
+        bool warnedInstance = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("Parameter name") && msg.contains("module")
+                && !msg.contains("instance")) {
+                warnedTop = true;
+            }
+            if (msg.contains("Parameter name") && msg.contains("begin")
+                && msg.contains("instance")) {
+                warnedInstance = true;
+            }
+        }
+        QVERIFY(warnedTop);
+        QVERIFY(warnedInstance);
+    }
+
+    /**
+     * `seq` referencing a clk/rst signal that is not declared anywhere
+     * used to silently emit `always @(posedge unknown_clk)`. Warn.
+     */
+    void testGenerateWarnsOnSeqUndefinedClkRst()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_seq_undef_clk"
+port:
+  d:
+    type: logic
+    direction: in
+  q:
+    type: logic
+    direction: out
+instance: {}
+seq:
+  - reg: q
+    clk: nonexistent_clk
+    rst: nonexistent_rst
+    rst_val: "1'b0"
+    next: d
+)";
+        const QString filePath   = createTempFile("test_seq_undef_clk.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warnedClk = false;
+        bool warnedRst = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("uses clk nonexistent_clk")) {
+                warnedClk = true;
+            }
+            if (msg.contains("uses rst nonexistent_rst")) {
+                warnedRst = true;
+            }
+        }
+        QVERIFY(warnedClk);
+        QVERIFY(warnedRst);
+    }
+
+    /**
+     * yaml-cpp may iterate duplicate `instance:` keys, producing two
+     * `module inst (...)` blocks with the same identifier - illegal
+     * Verilog. Track emitted instance names and skip duplicates.
+     */
+    void testGenerateDeduplicatesInstanceNames()
+    {
+        const QString modContent = R"(
+baseline:
+  port:
+    clk:
+      type: logic
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         mod(moduleDir.filePath("baseline.soc_mod"));
+        QVERIFY(mod.open(QIODevice::WriteOnly | QIODevice::Text));
+        mod.write(modContent.toUtf8());
+        mod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_dup_inst"
+port:
+  clk:
+    type: logic
+    direction: in
+instance:
+  u_dup: { module: baseline }
+  u_dup: { module: baseline }
+net:
+  clk:
+    - { instance: u_dup, port: clk }
+)";
+        const QString filePath   = createTempFile("test_dup_inst.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        const QString outPath = QDir(projectManager.getOutputPath()).filePath("test_dup_inst.v");
+        QFile         rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        /* Must NOT have two `baseline u_dup` blocks. */
+        const int count = rawBytes.count("baseline u_dup");
+        QVERIFY(count <= 1);
+    }
+
+    /**
+     * `comb` writing to the same target as a `seq` `reg:` produces two
+     * `assign foo = ...;` lines on the same signal - guaranteed
+     * multi-driver in synth. The seq pass now warns and emits a FIXME.
+     */
+    void testGenerateCombSeqCrossDriverConflict()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_comb_seq_conflict"
+port:
+  q:
+    type: logic
+    direction: out
+  clk:
+    type: logic
+    direction: in
+instance: {}
+comb:
+  - out: q
+    expr: "1'b1"
+seq:
+  - reg: q
+    clk: clk
+    next: "1'b0"
+)";
+        const QString filePath   = createTempFile("test_comb_seq_conflict.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warned = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("seq and comb both drive q")) {
+                warned = true;
+                break;
+            }
+        }
+        QVERIFY(warned);
+        QVERIFY(verifyVerilogContent(
+            "test_comb_seq_conflict", "FIXME: comb also drives q - multi-driver conflict"));
+    }
 };
 
 QStringList Test::messageList;

@@ -1,4 +1,5 @@
 #include "qsocgenerateprimitiveseq.h"
+#include "qsocconsole.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <QDebug>
@@ -105,11 +106,39 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
             }
             out << "    reg " << regWidth << baseName << "_reg;\n";
         }
+        /* Build the set of (base, slice) targets the comb section already
+           drives. Two `assign foo = ...;` lines on the same target are a
+           Verilog multi-driver conflict, and pre-fix this seq vs comb
+           split silently emitted both. */
+        QSet<QString> combTargets;
+        if (netlistData["comb"] && netlistData["comb"].IsSequence()) {
+            for (size_t combIdx = 0; combIdx < netlistData["comb"].size(); ++combIdx) {
+                const YAML::Node &combItem = netlistData["comb"][combIdx];
+                if (!combItem.IsMap() || !combItem["out"] || !combItem["out"].IsScalar()) {
+                    continue;
+                }
+                const QString outSig = QString::fromStdString(combItem["out"].as<std::string>());
+                const auto    parsed = QSocGenerateManager::parseSignalBitSelect(outSig);
+                QString       slice  = parsed.second;
+                if (combItem["bits"] && combItem["bits"].IsScalar()) {
+                    slice = QSocVerilogUtils::normalizeBitSelect(
+                        QString::fromStdString(combItem["bits"].as<std::string>()));
+                }
+                combTargets.insert(parsed.first + slice);
+            }
+        }
+
         out << "\n    /* Assign internal regs to outputs */\n";
         for (const QString &baseName : seqRegBases) {
             const bool           hasFullWrite = seqRegHasFullWrite.value(baseName, false);
             const QSet<QString> &slices       = seqRegBitSelects[baseName];
             if (hasFullWrite || slices.isEmpty()) {
+                if (combTargets.contains(baseName)) {
+                    QSocConsole::warn() << "seq and comb both drive" << baseName
+                                        << "- multi-driver conflict in synth";
+                    out << "    /* FIXME: comb also drives " << baseName
+                        << " - multi-driver conflict */\n";
+                }
                 out << "    assign " << baseName << " = " << baseName << "_reg;\n";
             } else {
                 /* Per-slice assigns. A blanket `assign base = base_reg;` would
@@ -118,6 +147,12 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
                 QStringList sortedSlices = slices.values();
                 sortedSlices.sort();
                 for (const QString &slice : sortedSlices) {
+                    if (combTargets.contains(baseName + slice)) {
+                        QSocConsole::warn() << "seq and comb both drive" << baseName << slice
+                                            << "- multi-driver conflict in synth";
+                        out << "    /* FIXME: comb also drives " << baseName << slice
+                            << " - multi-driver conflict */\n";
+                    }
                     out << "    assign " << baseName << slice << " = " << baseName << "_reg"
                         << slice << ";\n";
                 }
@@ -126,6 +161,26 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
     }
 
     out << "\n    /* Sequential logic */\n";
+
+    /* Build a set of known signal names so we can warn when seq references
+       a clk/rst that is not declared anywhere in the netlist. The synth
+       tool would catch this, but the qsoc warning points the user back to
+       the source line. */
+    QSet<QString> knownSignals;
+    if (netlistData["port"] && netlistData["port"].IsMap()) {
+        for (const auto &portEntry : netlistData["port"]) {
+            if (portEntry.first.IsScalar()) {
+                knownSignals.insert(QString::fromStdString(portEntry.first.as<std::string>()));
+            }
+        }
+    }
+    if (netlistData["net"] && netlistData["net"].IsMap()) {
+        for (const auto &netEntry : netlistData["net"]) {
+            if (netEntry.first.IsScalar()) {
+                knownSignals.insert(QString::fromStdString(netEntry.first.as<std::string>()));
+            }
+        }
+    }
 
     for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
         const YAML::Node &seqItem = netlistData["seq"][i];
@@ -141,6 +196,17 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
         const QString regBitSlice = parsedReg.second;
         const QString regSignal   = regBase + "_reg" + regBitSlice;
         const QString clkSignal   = QString::fromStdString(seqItem["clk"].as<std::string>());
+        if (!knownSignals.contains(clkSignal)) {
+            QSocConsole::warn() << "seq for" << regName << "uses clk" << clkSignal
+                                << "which is not declared as a port or net";
+        }
+        if (seqItem["rst"] && seqItem["rst"].IsScalar()) {
+            const QString rstSignal = QString::fromStdString(seqItem["rst"].as<std::string>());
+            if (!knownSignals.contains(rstSignal)) {
+                QSocConsole::warn() << "seq for" << regName << "uses rst" << rstSignal
+                                    << "which is not declared as a port or net";
+            }
+        }
 
         /* Get edge type (default to posedge) */
         QString edgeType = "posedge";
