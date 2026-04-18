@@ -2181,7 +2181,7 @@ QPair<QString, QString> QSocGenerateManager::parseSignalBitSelect(const QString 
 
     if (match.hasMatch()) {
         QString baseName  = match.captured(1).trimmed();
-        QString bitSelect = match.captured(2);
+        QString bitSelect = QSocVerilogUtils::normalizeBitSelect(match.captured(2));
         return qMakePair(baseName, bitSelect);
     }
 
@@ -2208,7 +2208,8 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
 
                     // Check if bits attribute exists and override bitSelect if present
                     if (combItem["bits"] && combItem["bits"].IsScalar()) {
-                        bitSelect = QString::fromStdString(combItem["bits"].as<std::string>());
+                        bitSelect = QSocVerilogUtils::normalizeBitSelect(
+                            QString::fromStdString(combItem["bits"].as<std::string>()));
                         QSocConsole::debug() << "Using bits attribute for comb output:" << baseName
                                              << "bits:" << bitSelect;
                     }

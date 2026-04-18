@@ -87,13 +87,18 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
             /* Generate assign statement */
             const QString expression = QString::fromStdString(combItem["expr"].as<std::string>());
 
-            /* Check if bits attribute exists for bit selection */
-            QString fullOutputSignal = outputSignal;
+            /* Normalize the bit-select on the output side. A raw `out:
+               data_rev[0:3]` would otherwise leak an illegal reversed
+               slice and a `bits: "[ 7 : 4 ]"` would carry whitespace into
+               the assign statement. */
+            const auto    parsedOut = QSocGenerateManager::parseSignalBitSelect(outputSignal);
+            const QString baseName  = parsedOut.first;
+            QString       bitSelect = parsedOut.second;
             if (combItem["bits"] && combItem["bits"].IsScalar()) {
-                const QString bitSelection = QString::fromStdString(
-                    combItem["bits"].as<std::string>());
-                fullOutputSignal = outputSignal + bitSelection;
+                bitSelect = QSocVerilogUtils::normalizeBitSelect(
+                    QString::fromStdString(combItem["bits"].as<std::string>()));
             }
+            const QString fullOutputSignal = baseName + bitSelect;
 
             out << "    assign " << fullOutputSignal << " = " << expression << ";\n";
         } else if (combItem["if"] && combItem["if"].IsSequence()) {

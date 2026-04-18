@@ -363,6 +363,24 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
        across to wire-decl emission so a FIXME comment surfaces in the .v. */
     QSet<QString> duplicateConnectionNets;
 
+    /* Track which net first claimed each (instance, port) pair so cross-net
+       duplicates can be flagged. A port is a single signal; routing it to
+       two different nets silently leaves all but one net dangling. */
+    QMap<QPair<QString, QString>, QString> instancePortToFirstNet;
+
+    /* Top-level port names. A net whose name matches a top-level port is
+       served by the port itself; emitting an extra `wire` produces a
+       duplicate identifier. */
+    QSet<QString> topLevelPortNames;
+    if (netlistData["port"] && netlistData["port"].IsMap()) {
+        for (auto portIter = netlistData["port"].begin(); portIter != netlistData["port"].end();
+             ++portIter) {
+            if (portIter->first.IsScalar()) {
+                topLevelPortNames.insert(QString::fromStdString(portIter->first.as<std::string>()));
+            }
+        }
+    }
+
     /* First, create the instancePortConnections map with port connections */
     /* This needs to be done before wire generation to ensure port names are used */
     if (netlistData["net"] && netlistData["net"].IsMap()) {
@@ -428,6 +446,24 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             continue;
                         }
                         seenInstancePort.insert(instancePortKey);
+
+                        /* Top-level pseudo-instance "top" is a routing alias and
+                           may legitimately appear on several nets simultaneously. */
+                        if (instanceName != "top") {
+                            const auto firstNetIt = instancePortToFirstNet.constFind(
+                                instancePortKey);
+                            if (firstNetIt != instancePortToFirstNet.constEnd()
+                                && firstNetIt.value() != netName) {
+                                QSocConsole::warn()
+                                    << instanceName << "." << portName << "is wired to both nets"
+                                    << firstNetIt.value() << "and" << netName
+                                    << "; only the first net keeps the connection";
+                                duplicateConnectionNets.insert(netName);
+                                duplicateConnectionNets.insert(firstNetIt.value());
+                                continue;
+                            }
+                            instancePortToFirstNet.insert(instancePortKey, netName);
+                        }
 
                         /* If this is a top-level port connection, add it to portToNetConnections */
                         if (instanceName == "top") {
@@ -792,8 +828,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 const bool hasDuplicateConnection = duplicateConnectionNets.contains(netName);
                 if (hasDuplicateConnection) {
                     out << "    /* FIXME: Net " << netName
-                        << " has duplicate instance.port entries; "
-                        << "only the first is wired - check the source netlist */\n";
+                        << " has port-routing conflicts (duplicate within the net "
+                        << "or the same instance.port wired to multiple nets); "
+                        << "only the first connection is kept - check the source netlist */\n";
                 }
 
                 /* Generate combined warning comments for the net */
@@ -1132,8 +1169,18 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             netlistData["net"][netName.toStdString()]["type"].as<std::string>());
                     }
 
-                    /* Add wire declaration for this net with width information if available */
-                    if (!netWidth.isEmpty()) {
+                    /* Add wire declaration for this net with width information if available.
+                       A net whose name matches a top-level port is already declared as
+                       part of the module header; emitting another `wire` would duplicate
+                       the identifier. */
+                    if (topLevelPortNames.contains(netName)) {
+                        if (!connectedToTopPort) {
+                            QSocConsole::warn()
+                                << "Net" << netName
+                                << "shares a name with a top-level port; using the port "
+                                   "directly. Add 'connect:' to silence this warning";
+                        }
+                    } else if (!netWidth.isEmpty()) {
                         /* Clean the type string to remove unwanted keywords like 'reg', 'logic', etc. */
                         const QString cleanedWidth
                             = QSocGenerateManager::cleanTypeForWireDeclaration(netWidth);
