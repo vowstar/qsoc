@@ -1821,7 +1821,9 @@ mixer_core:
         QVERIFY(verifyVerilogContent("test_link_bits", "wire [7:0] vout_amp_e1"));
         QVERIFY(verifyVerilogContent("test_link_bits", "wire [15:0] iref_signal"));
         QVERIFY(verifyVerilogContent("test_link_bits", "wire [31:0] data_path_c0"));
-        QVERIFY(verifyVerilogContent("test_link_bits", "wire vin_comp_s0"));
+        /* Single-bit input port with bit-select [2] requires the net to be at
+           least 3 bits wide so the bit-select index is valid. */
+        QVERIFY(verifyVerilogContent("test_link_bits", "wire [ 2:0] vin_comp_s0"));
 
         /* Verify bit selection in port connections */
         QVERIFY(verifyVerilogContent("test_link_bits", ".A1P0_VOUTP(vout_amp_e0[3:0])"));
@@ -3317,6 +3319,181 @@ instance: {}
         QVERIFY2(
             !verilogContent.contains("FIXME: Net seq_out"),
             "seq_out should not have undriven warning");
+    }
+
+    /**
+     * Net width must be the maximum of every connected port's bit-select MSB,
+     * not just the first port's native width. Two narrow drivers landing on
+     * disjoint slices of a wider net (cargo-style concatenation) used to leak
+     * the first port's narrow width because of a "first-port-wins" early-break.
+     */
+    void testGenerateNetWidthCoversBitSelectMsb()
+    {
+        const QString driverContent   = R"(
+narrow4_drv:
+  port:
+    out4:
+      type: "logic[3:0]"
+      direction: out
+)";
+        const QString receiverContent = R"(
+wide8_rcv:
+  port:
+    in8:
+      type: "logic[7:0]"
+      direction: in
+)";
+        QVERIFY(createTempFile("module/narrow4_drv.soc_mod", driverContent) != "");
+        QVERIFY(createTempFile("module/wide8_rcv.soc_mod", receiverContent) != "");
+
+        const QString netlistContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_concat_inferred_width"
+instance:
+  u_drv_lo: { module: "narrow4_drv" }
+  u_drv_hi: { module: "narrow4_drv" }
+  u_rcv:    { module: "wide8_rcv" }
+net:
+  data_bus:
+    - { instance: u_drv_lo, port: out4, bits: "[3:0]" }
+    - { instance: u_drv_hi, port: out4, bits: "[7:4]" }
+    - { instance: u_rcv,    port: in8 }
+)";
+        const QString filePath
+            = createTempFile("test_bitsel_concat_inferred_width.soc_net", netlistContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker     socCliWorker;
+        const QStringList args
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(args, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogContent("test_bitsel_concat_inferred_width", "wire [7:0] data_bus"));
+        QVERIFY(verifyVerilogContent(
+            "test_bitsel_concat_inferred_width", "u_drv_lo (.out4(data_bus[3:0]))"));
+        QVERIFY(verifyVerilogContent(
+            "test_bitsel_concat_inferred_width", "u_drv_hi (.out4(data_bus[7:4]))"));
+        QVERIFY(verifyVerilogContent("test_bitsel_concat_inferred_width", "u_rcv (.in8(data_bus))"));
+    }
+
+    /**
+     * Same logical netlist must produce the same Verilog regardless of YAML
+     * ordering. Pre-fix the algorithm broke order-independence.
+     */
+    void testGenerateNetWidthOrderIndependent()
+    {
+        const QString driverContent   = R"(
+narrow4_drv:
+  port:
+    out4:
+      type: "logic[3:0]"
+      direction: out
+)";
+        const QString receiverContent = R"(
+wide8_rcv:
+  port:
+    in8:
+      type: "logic[7:0]"
+      direction: in
+)";
+        QVERIFY(createTempFile("module/narrow4_drv.soc_mod", driverContent) != "");
+        QVERIFY(createTempFile("module/wide8_rcv.soc_mod", receiverContent) != "");
+
+        const QString drvFirstContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_order_drv_first"
+instance:
+  u_drv_lo: { module: "narrow4_drv" }
+  u_drv_hi: { module: "narrow4_drv" }
+  u_rcv:    { module: "wide8_rcv" }
+net:
+  data_bus:
+    - { instance: u_drv_lo, port: out4, bits: "[3:0]" }
+    - { instance: u_drv_hi, port: out4, bits: "[7:4]" }
+    - { instance: u_rcv,    port: in8 }
+)";
+        const QString rcvFirstContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_order_rcv_first"
+instance:
+  u_drv_lo: { module: "narrow4_drv" }
+  u_drv_hi: { module: "narrow4_drv" }
+  u_rcv:    { module: "wide8_rcv" }
+net:
+  data_bus:
+    - { instance: u_rcv,    port: in8 }
+    - { instance: u_drv_lo, port: out4, bits: "[3:0]" }
+    - { instance: u_drv_hi, port: out4, bits: "[7:4]" }
+)";
+
+        const QString drvFirstPath
+            = createTempFile("test_bitsel_order_drv_first.soc_net", drvFirstContent);
+        const QString rcvFirstPath
+            = createTempFile("test_bitsel_order_rcv_first.soc_net", rcvFirstContent);
+        QVERIFY(drvFirstPath != "" && rcvFirstPath != "");
+
+        QSocCliWorker socCliWorker1;
+        socCliWorker1.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), drvFirstPath},
+            false);
+        socCliWorker1.run();
+
+        QSocCliWorker socCliWorker2;
+        socCliWorker2.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), rcvFirstPath},
+            false);
+        socCliWorker2.run();
+
+        QVERIFY(verifyVerilogContent("test_bitsel_order_drv_first", "wire [7:0] data_bus"));
+        QVERIFY(verifyVerilogContent("test_bitsel_order_rcv_first", "wire [7:0] data_bus"));
+    }
+
+    /**
+     * Single-bit driver landing on bit N of a wider net requires the net to be
+     * at least N+1 bits wide.
+     */
+    void testGenerateNetWidthFromSingleBitSelect()
+    {
+        const QString driverContent = R"(
+single_drv:
+  port:
+    out1:
+      type: "logic"
+      direction: out
+)";
+        QVERIFY(createTempFile("module/single_drv.soc_mod", driverContent) != "");
+
+        const QString netlistContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_single_high"
+instance:
+  u_b0:  { module: "single_drv" }
+  u_b15: { module: "single_drv" }
+port:
+  data_bus_top:
+    type: "logic[15:0]"
+    direction: out
+    connect: data_bus
+net:
+  data_bus:
+    - { instance: u_b0,  port: out1, bits: "[0]" }
+    - { instance: u_b15, port: out1, bits: "[15]" }
+)";
+        const QString filePath = createTempFile("test_bitsel_single_high.soc_net", netlistContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogContent("test_bitsel_single_high", "u_b0 (.out1(data_bus_top[0]))"));
+        QVERIFY(verifyVerilogContent("test_bitsel_single_high", "u_b15 (.out1(data_bus_top[15]))"));
     }
 };
 
