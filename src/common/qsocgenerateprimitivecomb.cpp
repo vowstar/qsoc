@@ -21,18 +21,34 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
     /* Build a net-name -> top-port-name redirect. When a top-level port
        declares `connect: <net>`, the wire-decl pass skips emitting `<net>`
        as a wire; the port itself serves as the wire. A comb item that
-       writes to `<net>` would otherwise reference an undefined identifier. */
+       writes to `<net>` would otherwise reference an undefined identifier.
+       Also remember top-port direction so we can warn when comb tries to
+       drive an input port (illegal Verilog). */
     QMap<QString, QString> netToTopPort;
+    QMap<QString, QString> portDirection;
+    QSet<QString>          inputTopPortNames;
     if (netlistData["port"] && netlistData["port"].IsMap()) {
         for (const auto &portEntry : netlistData["port"]) {
             if (!portEntry.first.IsScalar() || !portEntry.second.IsMap()) {
                 continue;
             }
             const QString portName = QString::fromStdString(portEntry.first.as<std::string>());
+            QString       dir;
+            if (portEntry.second["direction"] && portEntry.second["direction"].IsScalar()) {
+                dir = QString::fromStdString(portEntry.second["direction"].as<std::string>())
+                          .toLower();
+                portDirection.insert(portName, dir);
+                if (dir == "in" || dir == "input") {
+                    inputTopPortNames.insert(portName);
+                }
+            }
             if (portEntry.second["connect"] && portEntry.second["connect"].IsScalar()) {
                 const QString netName = QString::fromStdString(
                     portEntry.second["connect"].as<std::string>());
                 netToTopPort.insert(netName, portName);
+                if (dir == "in" || dir == "input") {
+                    inputTopPortNames.insert(netName);
+                }
             }
         }
     }
@@ -129,6 +145,19 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
             if (netToTopPort.contains(baseName)) {
                 baseName = netToTopPort.value(baseName);
             }
+
+            /* Driving a top-level INPUT port from inside the module is
+               illegal Verilog. Warn and skip the assign so the offending
+               line is not emitted. */
+            if (inputTopPortNames.contains(baseName)) {
+                QSocConsole::warn() << "comb writes to top-level input port" << baseName
+                                    << "; cannot drive an input from inside the module - "
+                                       "skipping the assign";
+                out << "    /* FIXME: comb tried to drive top-level input " << baseName
+                    << " - check the source netlist */\n";
+                continue;
+            }
+
             const QString fullOutputSignal = baseName + bitSelect;
 
             if (seenAssignTargets.contains(fullOutputSignal)) {

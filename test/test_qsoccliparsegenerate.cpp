@@ -1176,12 +1176,12 @@ instance:
 port:
   ctrl_data_i:
     type: logic[63:0]
-    direction: input
+    direction: output
 
 net:
   # This net should NOT have width mismatch - bit selections provide complete coverage
   ctrl_data_i:
-    - port: ctrl_data_i              # 64-bit input port [63:0]
+    - port: ctrl_data_i              # 64-bit output port [63:0]
     - instance: u_ctrl_unit
       port: data_in                  # 64-bit input port [63:0]
     - instance: u_phase_block
@@ -4787,6 +4787,49 @@ net:
         QVERIFY(warned);
         QVERIFY(verifyVerilogContent("test_invert_on_output", ".out_flag(flag_net)"));
         QVERIFY(!verifyVerilogContent("test_invert_on_output", ".out_flag(~"));
+    }
+
+    /**
+     * `comb` writing to a name that resolves to a top-level INPUT port
+     * used to emit `assign in_only = 8'h11;` - illegal Verilog: an input
+     * port cannot be driven from inside the module. Warn and skip.
+     */
+    void testGenerateCombRefusesToDriveTopInputPort()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_comb_drives_input"
+port:
+  in_only:
+    type: "logic[7:0]"
+    direction: in
+    connect: int_net
+instance: {}
+comb:
+  - out: int_net
+    expr: "8'h11"
+)";
+        const QString filePath   = createTempFile("test_comb_drives_input.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warned = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("comb writes to top-level input port") && msg.contains("in_only")) {
+                warned = true;
+                break;
+            }
+        }
+        QVERIFY(warned);
+        QVERIFY(verifyVerilogContent(
+            "test_comb_drives_input", "FIXME: comb tried to drive top-level input in_only"));
+        QVERIFY(!verifyVerilogContent("test_comb_drives_input", "assign in_only ="));
     }
 };
 
