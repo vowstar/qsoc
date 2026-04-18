@@ -145,8 +145,8 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                 const YAML::Node &syncNode = tgtNode["sync"];
                 if (!syncNode["clock"]) {
                     QSocConsole::error()
-                        << "'clock' field is required for sync component in target '"
-                        << target.name << "'";
+                        << "'clock' field is required for sync component in target '" << target.name
+                        << "'";
                     return config;
                 }
                 target.sync.clock = QString::fromStdString(syncNode["clock"].as<std::string>());
@@ -304,8 +304,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                 return config;
             }
         } else {
-            QSocConsole::error()
-                << "'root_reset' field is required in reason configuration.";
+            QSocConsole::error() << "'root_reset' field is required in reason configuration.";
             QSocConsole::error()
                 << "Please specify which source signal should be used as the root reset.";
             QSocConsole::err() << "Example: reason: { root_reset: por_rst_n, ... }" << "\n";
