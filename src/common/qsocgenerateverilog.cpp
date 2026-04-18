@@ -233,53 +233,65 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     out << "module " << outputFileName;
 
     /* Add module parameters if they exist */
-    if (netlistData["parameter"] && netlistData["parameter"].IsMap()
-        && netlistData["parameter"].size() > 0) {
-        out << " #(\n";
-        QStringList paramDeclarations;
+    if (netlistData["parameter"]) {
+        if (!netlistData["parameter"].IsMap()) {
+            QSocConsole::warn() << "Top-level 'parameter' section is not a map, ignoring";
+        } else if (netlistData["parameter"].size() == 0) {
+            /* Empty map -> no parameters; not an error. */
+        } else {
+            out << " #(\n";
+            QStringList paramDeclarations;
 
-        for (auto paramIter = netlistData["parameter"].begin();
-             paramIter != netlistData["parameter"].end();
-             ++paramIter) {
-            if (!paramIter->first.IsScalar()) {
-                QSocConsole::warn() << "Invalid parameter name, skipping";
-                continue;
-            }
-
-            const QString paramName = QString::fromStdString(paramIter->first.as<std::string>());
-
-            if (!paramIter->second.IsMap()) {
-                QSocConsole::warn() << "Parameter" << paramName << "has invalid format, skipping";
-                continue;
-            }
-
-            /* Default to empty for Verilog 2001 */
-            QString paramType  = "";
-            QString paramValue = "";
-
-            if (paramIter->second["type"] && paramIter->second["type"].IsScalar()) {
-                paramType = QString::fromStdString(paramIter->second["type"].as<std::string>());
-                /* Clean type for Verilog 2001 compatibility */
-                paramType = QSocGenerateManager::cleanTypeForWireDeclaration(paramType);
-
-                /* Add a space if type isn't empty after processing */
-                if (!paramType.isEmpty() && !paramType.endsWith(" ")) {
-                    paramType += " ";
+            for (auto paramIter = netlistData["parameter"].begin();
+                 paramIter != netlistData["parameter"].end();
+                 ++paramIter) {
+                if (!paramIter->first.IsScalar()) {
+                    QSocConsole::warn() << "Invalid parameter name, skipping";
+                    continue;
                 }
+
+                const QString paramName = QString::fromStdString(paramIter->first.as<std::string>());
+                if (!QSocVerilogUtils::isValidVerilogIdentifier(paramName)) {
+                    QSocConsole::warn() << "Parameter name" << paramName
+                                        << "is not a valid Verilog identifier "
+                                           "(reserved keyword or illegal character)";
+                }
+
+                if (!paramIter->second.IsMap()) {
+                    QSocConsole::warn()
+                        << "Parameter" << paramName << "has invalid format, skipping";
+                    continue;
+                }
+
+                /* Default to empty for Verilog 2001 */
+                QString paramType  = "";
+                QString paramValue = "";
+
+                if (paramIter->second["type"] && paramIter->second["type"].IsScalar()) {
+                    paramType = QString::fromStdString(paramIter->second["type"].as<std::string>());
+                    /* Clean type for Verilog 2001 compatibility */
+                    paramType = QSocGenerateManager::cleanTypeForWireDeclaration(paramType);
+
+                    /* Add a space if type isn't empty after processing */
+                    if (!paramType.isEmpty() && !paramType.endsWith(" ")) {
+                        paramType += " ";
+                    }
+                }
+
+                if (paramIter->second["value"] && paramIter->second["value"].IsScalar()) {
+                    paramValue = QString::fromStdString(
+                        paramIter->second["value"].as<std::string>());
+                }
+
+                paramDeclarations.append(
+                    QString("    parameter %1%2 = %3").arg(paramType).arg(paramName).arg(paramValue));
             }
 
-            if (paramIter->second["value"] && paramIter->second["value"].IsScalar()) {
-                paramValue = QString::fromStdString(paramIter->second["value"].as<std::string>());
+            if (!paramDeclarations.isEmpty()) {
+                out << paramDeclarations.join(",\n") << "\n";
             }
-
-            paramDeclarations.append(
-                QString("    parameter %1%2 = %3").arg(paramType).arg(paramName).arg(paramValue));
+            out << ")";
         }
-
-        if (!paramDeclarations.isEmpty()) {
-            out << paramDeclarations.join(",\n") << "\n";
-        }
-        out << ")";
     }
 
     /* Start port list */
@@ -1286,6 +1298,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     /* Generate instance declarations after wire declarations */
     if (netlistData["instance"] && netlistData["instance"].IsMap()) {
+        /* yaml-cpp's iterator may visit duplicate keys without merging.
+           Track emitted instance names so we never produce two `module
+           inst (...)` blocks with the same identifier (illegal Verilog). */
+        QSet<QString> emittedInstances;
         for (auto instanceIter = netlistData["instance"].begin();
              instanceIter != netlistData["instance"].end();
              ++instanceIter) {
@@ -1302,6 +1318,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     << "is not a valid Verilog identifier "
                                        "(reserved keyword or illegal character)";
             }
+            if (emittedInstances.contains(instanceName)) {
+                QSocConsole::warn() << "Duplicate instance name" << instanceName
+                                    << "; only the first definition is emitted";
+                continue;
+            }
+            emittedInstances.insert(instanceName);
 
             /* Check if the instance data is valid */
             if (!instanceIter->second || !instanceIter->second.IsMap()) {
@@ -1373,6 +1395,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
                             const QString paramName = QString::fromStdString(
                                 paramIter->first.as<std::string>());
+                            if (!QSocVerilogUtils::isValidVerilogIdentifier(paramName)) {
+                                QSocConsole::warn() << "Parameter name" << paramName
+                                                    << "in instance" << instanceName
+                                                    << "is not a valid Verilog identifier "
+                                                       "(reserved keyword or illegal character)";
+                            }
                             const QString paramValue = QString::fromStdString(
                                 paramIter->second.as<std::string>());
 
