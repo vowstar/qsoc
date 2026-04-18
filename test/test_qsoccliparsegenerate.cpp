@@ -4108,6 +4108,47 @@ comb:
         QVERIFY(!rawBytes.contains("assign out_bus[3:0] = 4'hA"));
         QVERIFY(rawBytes.contains("FIXME: duplicate comb driver"));
     }
+
+    /**
+     * `reg: counter[3]` used to form `counter[3]_reg`, an illegal Verilog
+     * identifier. Strip the bit-select for the reg name, size the reg
+     * from the highest bit-select index, and route writes through
+     * `counter_reg[3]` instead.
+     */
+    void testGenerateSeqRegBitSelectIdentifier()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_seq_reg_bitsel"
+port:
+  counter:
+    type: "logic[7:0]"
+    direction: out
+seq:
+  - reg: counter[3]
+    clk: clk
+    next: "1'b0"
+)";
+        const QString filePath   = createTempFile("test_seq_reg_bitsel.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        const QString outPath
+            = QDir(projectManager.getOutputPath()).filePath("test_seq_reg_bitsel.v");
+        QFile rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        QVERIFY(rawBytes.contains("reg [7:0] counter_reg"));
+        QVERIFY(rawBytes.contains("assign counter = counter_reg"));
+        QVERIFY(rawBytes.contains("counter_reg[3] <= 1'b0"));
+        QVERIFY(!rawBytes.contains("counter[3]_reg"));
+    }
 };
 
 QStringList Test::messageList;

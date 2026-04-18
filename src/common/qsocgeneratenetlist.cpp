@@ -377,6 +377,19 @@ bool QSocGenerateManager::processNetlist()
 
                         QSocConsole::info() << "Creating net for bus signal:" << signalName.c_str();
 
+                        /* If a manually written net already claims this name, the
+                           bus expansion would otherwise wipe it. Refuse to overwrite
+                           and surface the collision so the user can rename. */
+                        if (netlistData["net"][netName] && netlistData["net"][netName].IsSequence()
+                            && netlistData["net"][netName].size() > 0) {
+                            QSocConsole::warn()
+                                << "Bus signal" << signalName.c_str() << "would synthesize net"
+                                << netName.c_str()
+                                << "but a manual net of the same name already exists; "
+                                   "skipping bus expansion for this signal";
+                            continue;
+                        }
+
                         /* Create a net for this signal using List format for consistency */
                         netlistData["net"][netName] = YAML::Node(YAML::NodeType::Sequence);
 
@@ -748,6 +761,20 @@ bool QSocGenerateManager::expandBusUplink()
                     const std::string mappedPortName   = mappingNode[signalName].as<std::string>();
                     const std::string toplevelPortName = uplinkName + "_" + signalName;
 
+                    /* Honor a pre-existing tie/link/invert on the mapped port:
+                       expanding the bus uplink would otherwise clobber the
+                       user's explicit override silently. */
+                    if (instanceNode["port"] && instanceNode["port"][mappedPortName]
+                        && instanceNode["port"][mappedPortName].IsMap()) {
+                        const auto &existing = instanceNode["port"][mappedPortName];
+                        if (existing["tie"] || existing["link"]) {
+                            QSocConsole::info()
+                                << "Skipping bus uplink for" << instanceName.c_str() << "."
+                                << mappedPortName.c_str() << "(already has tie/link override)";
+                            continue;
+                        }
+                    }
+
                     QSocConsole::info()
                         << "Creating port uplink:" << instanceName.c_str() << "."
                         << mappedPortName.c_str() << " -> " << toplevelPortName.c_str();
@@ -1088,6 +1115,34 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
         }
         const int selectBits = calculateBitSelectWidth(info.bitSelect);
         if (selectBits > info.portNativeBits) {
+            return false;
+        }
+    }
+
+    /* For top-level ports the wire IS the port, so a bit-select INDEX
+       larger than the port MSB will emit `port[7]` on a `[3:0]` port -
+       guaranteed out-of-range in synth. Module-port bit-selects index
+       the WIRE side, not the port, so they get a pass here. */
+    static const QRegularExpression bitSelectMsbRegex(R"(\[\s*(\d+))");
+    for (const auto &conn : connections) {
+        if (conn.type != PortType::TopLevel) {
+            continue;
+        }
+        const auto it = portWidthInfos.constFind(qMakePair(conn.instanceName, conn.portName));
+        if (it == portWidthInfos.constEnd()) {
+            continue;
+        }
+        const PortWidthInfo &info = it.value();
+        if (info.bitSelect.isEmpty() || info.portNativeBits <= 0) {
+            continue;
+        }
+        const QRegularExpressionMatch match = bitSelectMsbRegex.match(info.bitSelect);
+        if (!match.hasMatch()) {
+            continue;
+        }
+        bool      ok        = false;
+        const int selectIdx = match.captured(1).toInt(&ok);
+        if (ok && selectIdx >= info.portNativeBits) {
             return false;
         }
     }
