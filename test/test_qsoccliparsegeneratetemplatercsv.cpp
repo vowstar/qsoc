@@ -384,7 +384,7 @@ metadata:
         /* Check error messages */
         bool foundError = false;
         for (const QString &msg : messageList) {
-            if (msg.contains("Error: RCSV file does not exist")) {
+            if (msg.contains("RCSV file does not exist")) {
                 foundError = true;
                 break;
             }
@@ -425,9 +425,9 @@ incomplete,csv,format)";
         /* Check error messages */
         bool foundError = false;
         for (const QString &msg : messageList) {
-            if (msg.contains("Error: Failed to convert RCSV file")
-                || msg.contains("Error: Failed to elaborate RCSV file")
-                || msg.contains("Error: Failed to process RCSV file")) {
+            if (msg.contains("failed to convert RCSV file")
+                || msg.contains("failed to elaborate RCSV file")
+                || msg.contains("failed to process RCSV file")) {
                 foundError = true;
                 break;
             }
