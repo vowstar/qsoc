@@ -288,6 +288,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* Collect all ports for module interface */
     QStringList            ports;
     QMap<QString, QString> portToNetConnections; /* Map of port name to connected net name */
+    /* Reverse lookup with full membership: a net may be claimed by several
+       top-level ports via `connect:`. Pre-fix only the first port saw the
+       internal driver; the others were declared but never wired. */
+    QMap<QString, QStringList> netToTopPortAliases;
 
     /* Process port section if it exists */
     if (netlistData["port"] && netlistData["port"].IsMap()) {
@@ -335,6 +339,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 const QString connectedNet = QString::fromStdString(
                     portIter->second["connect"].as<std::string>());
                 portToNetConnections[portName] = connectedNet;
+                netToTopPortAliases[connectedNet].append(portName);
             }
 
             /* Add port declaration */
@@ -1704,6 +1709,66 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     /* NOTE: FSM, reset, and clock primitive modules are now generated
      * at file level before the top-level module. No inline generation needed. */
+
+    /* When several top-level ports `connect:` to the same internal net,
+       only one of them sees the driver via portToNetConnections. Wire the
+       remaining output ports as aliases of the chosen one so they are not
+       left silently dangling. Mixed direction or inout aliases are not
+       expressible via `assign`, so those just get a FIXME. */
+    auto topPortDirection = [&](const QString &portName) -> QString {
+        if (!netlistData["port"] || !netlistData["port"][portName.toStdString()]) {
+            return {};
+        }
+        const auto &node = netlistData["port"][portName.toStdString()];
+        if (!node["direction"] || !node["direction"].IsScalar()) {
+            return {};
+        }
+        const QString dir = QString::fromStdString(node["direction"].as<std::string>()).toLower();
+        if (dir == "out" || dir == "output") {
+            return "output";
+        }
+        if (dir == "in" || dir == "input") {
+            return "input";
+        }
+        if (dir == "inout") {
+            return "inout";
+        }
+        return dir;
+    };
+
+    bool aliasHeaderEmitted = false;
+    for (auto aliasIt = netToTopPortAliases.constBegin(); aliasIt != netToTopPortAliases.constEnd();
+         ++aliasIt) {
+        const QStringList &aliases = aliasIt.value();
+        if (aliases.size() < 2) {
+            continue;
+        }
+        const QString primary    = aliases.first();
+        const QString primaryDir = topPortDirection(primary);
+        bool          allOutputs = (primaryDir == "output");
+        for (int aliasIdx = 1; aliasIdx < aliases.size() && allOutputs; ++aliasIdx) {
+            if (topPortDirection(aliases.at(aliasIdx)) != "output") {
+                allOutputs = false;
+            }
+        }
+        if (!aliasHeaderEmitted) {
+            out << "\n    /* Top-level port aliases (multiple ports share one net) */\n";
+            aliasHeaderEmitted = true;
+        }
+        if (allOutputs) {
+            for (int aliasIdx = 1; aliasIdx < aliases.size(); ++aliasIdx) {
+                out << "    assign " << aliases.at(aliasIdx) << " = " << primary << ";\n";
+            }
+        } else {
+            out << "    /* FIXME: net " << aliasIt.key() << " is connect:'d by " << aliases.size()
+                << " ports of mixed direction or inout; "
+                << "automatic aliasing only handles all-output cases - "
+                << "review the source netlist */\n";
+            QSocConsole::warn() << "Net" << aliasIt.key() << "is connect:'d by" << aliases.size()
+                                << "top-level ports of mixed direction; "
+                                   "review the netlist";
+        }
+    }
 
     /* Close module */
     out << "\nendmodule\n";

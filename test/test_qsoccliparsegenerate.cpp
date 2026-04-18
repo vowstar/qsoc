@@ -4015,6 +4015,99 @@ comb:
         QVERIFY(rawBytes.contains("assign data_rev[3:0] = 4'b1010"));
         QVERIFY(!rawBytes.contains("data_rev[0:3]"));
     }
+
+    /**
+     * Two top-level ports both `connect:`-ing to one internal net used to
+     * silently drop all but the first. The fix emits `assign secondary =
+     * primary;` aliases for the all-output case so every declared port is
+     * actually driven.
+     */
+    void testGenerateAliasesMultipleTopPortsToSameNet()
+    {
+        const QString drvContent = R"(
+wide8_drv:
+  port:
+    out8:
+      type: "logic[7:0]"
+      direction: out
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("wide8_drv.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_top_port_alias"
+instance:
+  u_drv: { module: "wide8_drv" }
+port:
+  pad_a:
+    type: "logic[7:0]"
+    direction: out
+    connect: shared_net
+  pad_b:
+    type: "logic[7:0]"
+    direction: out
+    connect: shared_net
+net:
+  shared_net:
+    - { instance: u_drv, port: out8 }
+)";
+        const QString filePath   = createTempFile("test_top_port_alias.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogContent("test_top_port_alias", "u_drv (.out8(pad_a))"));
+        QVERIFY(verifyVerilogContent("test_top_port_alias", "assign pad_b = pad_a"));
+    }
+
+    /**
+     * Two `comb` items targeting the same `out: signal[3:0]` used to emit
+     * both `assign signal[3:0] = ...;` lines, a guaranteed multi-driver
+     * conflict in synth. Detect the duplicate target, keep the first, and
+     * emit a FIXME for the second.
+     */
+    void testGenerateCombRejectsDuplicateAssignTarget()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_comb_dup_target"
+port:
+  out_bus:
+    type: "logic[7:0]"
+    direction: out
+comb:
+  - out: out_bus[3:0]
+    expr: "4'h5"
+  - out: out_bus[3:0]
+    expr: "4'hA"
+)";
+        const QString filePath   = createTempFile("test_comb_dup_target.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        const QString outPath
+            = QDir(projectManager.getOutputPath()).filePath("test_comb_dup_target.v");
+        QFile rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        QVERIFY(rawBytes.contains("assign out_bus[3:0] = 4'h5"));
+        QVERIFY(!rawBytes.contains("assign out_bus[3:0] = 4'hA"));
+        QVERIFY(rawBytes.contains("FIXME: duplicate comb driver"));
+    }
 };
 
 QStringList Test::messageList;
