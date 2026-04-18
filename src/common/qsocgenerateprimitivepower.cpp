@@ -35,6 +35,26 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
         return false;
     }
 
+    /* Cross-check that every `depend:` references a declared domain.
+       Pre-fix a typo emitted `wire dep_hard_all_lp = rdy_ghost_dom;`
+       referencing an undeclared signal in the controller. */
+    {
+        QSet<QString> declaredDomains;
+        for (const auto &domain : config.domains) {
+            declaredDomains.insert(domain.name);
+        }
+        for (const auto &domain : config.domains) {
+            for (const auto &dep : domain.depends) {
+                if (!declaredDomains.contains(dep.name)) {
+                    QSocConsole::warn()
+                        << "Power domain" << domain.name << "depends on" << dep.name
+                        << "which is not declared in the `domain:` list - "
+                           "the generated controller will reference an undeclared signal";
+                }
+            }
+        }
+    }
+
     // Generate or update power_cell.v file
     if (m_parent && m_parent->getProjectManager()) {
         QString outputDir = m_parent->getProjectManager()->getOutputPath();

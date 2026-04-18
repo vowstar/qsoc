@@ -41,6 +41,12 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
         return false;
     }
 
+    /* By design, a link source that is neither a declared source nor
+       another target gets auto-promoted to a fresh input port on the
+       controller (so the parent can wire software-controlled signals
+       like `rst_sw_dcmi_n`). Do NOT warn about undeclared sources here;
+       the typo case surfaces downstream as an unwired controller pin. */
+
     // Generate or update reset_cell.v file
     if (m_parent && m_parent->getProjectManager()) {
         QString outputDir = m_parent->getProjectManager()->getOutputPath();
