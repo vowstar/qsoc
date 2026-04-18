@@ -5043,6 +5043,91 @@ seq:
         QVERIFY(verifyVerilogContent(
             "test_comb_seq_conflict", "FIXME: comb also drives q - multi-driver conflict"));
     }
+
+    /**
+     * When an instance pin carries `bus.<name>.uplink:` AND per-port
+     * `link:` simultaneously, the per-port override wins and the bus
+     * uplink for THAT signal is dropped. Pre-fix the drop was logged at
+     * info-level and easy to miss; the user expected the synthesized top
+     * port `<uplinkName>_<signalName>` and instead got nothing. Promote
+     * to a warning.
+     */
+    void testGenerateWarnsWhenBusUplinkOverriddenByLink()
+    {
+        const QString busContent = R"(
+test_bus:
+  port:
+    valid:
+      direction: master output
+    data:
+      direction: master output
+)";
+        const QDir    busDir(QDir(projectManager.getCurrentPath()).filePath("bus"));
+        QDir().mkpath(busDir.absolutePath());
+        QFile bus(busDir.filePath("test_bus.soc_bus"));
+        QVERIFY(bus.open(QIODevice::WriteOnly | QIODevice::Text));
+        bus.write(busContent.toUtf8());
+        bus.close();
+
+        const QString modContent = R"(
+bus_master:
+  port:
+    m_valid:
+      type: logic
+      direction: out
+    m_data:
+      type: "logic[7:0]"
+      direction: out
+  bus:
+    m_if:
+      bus: test_bus
+      mode: master
+      mapping:
+        valid: m_valid
+        data: m_data
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         mod(moduleDir.filePath("bus_master.soc_mod"));
+        QVERIFY(mod.open(QIODevice::WriteOnly | QIODevice::Text));
+        mod.write(modContent.toUtf8());
+        mod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_uplink_override"
+instance:
+  M:
+    module: bus_master
+    bus:
+      m_if:
+        uplink: TOP_BUS
+    port:
+      m_data:
+        link: extra_net
+net:
+  extra_net:
+    - { instance: M, port: m_data }
+)";
+        const QString filePath   = createTempFile("test_uplink_override.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warned = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("Bus uplink for") && msg.contains("m_data")
+                && msg.contains("overridden")) {
+                warned = true;
+                break;
+            }
+        }
+        QVERIFY(warned);
+    }
 };
 
 QStringList Test::messageList;

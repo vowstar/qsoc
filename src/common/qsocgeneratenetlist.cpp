@@ -480,10 +480,11 @@ bool QSocGenerateManager::processNetlist()
                                     const auto &existing = netlistData["instance"][conn.instanceName]
                                                                       ["port"][mappedPortName];
                                     if (existing["tie"] || existing["link"]) {
-                                        QSocConsole::info() << "Skipping bus link expansion for"
-                                                            << conn.instanceName.c_str() << "."
-                                                            << mappedPortName.c_str()
-                                                            << "(already has tie/link override)";
+                                        QSocConsole::warn()
+                                            << "Bus link expansion for" << conn.instanceName.c_str()
+                                            << "." << mappedPortName.c_str()
+                                            << "is overridden by per-port tie/link;"
+                                            << "this signal will not join the synthesized bus net";
                                         continue;
                                     }
                                 }
@@ -811,14 +812,20 @@ bool QSocGenerateManager::expandBusUplink()
 
                     /* Honor a pre-existing tie/link/invert on the mapped port:
                        expanding the bus uplink would otherwise clobber the
-                       user's explicit override silently. */
+                       user's explicit override silently. The user asked
+                       for both an uplink AND a tie/link on the same pin,
+                       which is contradictory; surface it as a warning so
+                       they know the uplink for THIS signal is gone (the
+                       expected `<uplinkName>_<signalName>` top port will
+                       not exist). */
                     if (instanceNode["port"] && instanceNode["port"][mappedPortName]
                         && instanceNode["port"][mappedPortName].IsMap()) {
                         const auto &existing = instanceNode["port"][mappedPortName];
                         if (existing["tie"] || existing["link"]) {
-                            QSocConsole::info()
-                                << "Skipping bus uplink for" << instanceName.c_str() << "."
-                                << mappedPortName.c_str() << "(already has tie/link override)";
+                            QSocConsole::warn()
+                                << "Bus uplink for" << instanceName.c_str() << "."
+                                << mappedPortName.c_str() << "is overridden by per-port tie/link;"
+                                << "no top port will be created for this signal";
                             continue;
                         }
                     }
