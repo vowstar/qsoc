@@ -5128,6 +5128,105 @@ net:
         }
         QVERIFY(warned);
     }
+
+    /**
+     * `comb out:` and `seq reg:` writing to a name that is not a port
+     * or net used to silently emit `assign ghost = ...;` against an
+     * undeclared identifier. Warn the user.
+     */
+    void testGenerateWarnsOnCombSeqUndeclaredTarget()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_undeclared_target"
+port:
+  in1:
+    type: logic
+    direction: in
+  clk:
+    type: logic
+    direction: in
+instance: {}
+comb:
+  - out: phantom
+    expr: in1
+seq:
+  - reg: ghost_reg
+    clk: clk
+    next: in1
+)";
+        const QString filePath   = createTempFile("test_undeclared_target.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warnedComb = false;
+        bool warnedSeq  = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("comb writes to phantom")) {
+                warnedComb = true;
+            }
+            if (msg.contains("seq reg ghost_reg")) {
+                warnedSeq = true;
+            }
+        }
+        QVERIFY(warnedComb);
+        QVERIFY(warnedSeq);
+    }
+
+    /**
+     * A reset primitive with no `source:` block used to silently emit a
+     * controller that ties every target inactive (`assign rst = 1'b1`).
+     * Refuse to generate so the user knows the reset is misconfigured.
+     */
+    void testGenerateRefusesResetWithNoSource()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_reset_no_source"
+port:
+  clk_sys:
+    type: logic
+    direction: in
+  cpu_rst_n:
+    type: logic
+    direction: out
+instance: {}
+reset:
+  - name: rst_ctrl
+    clock: clk_sys
+    test_enable: 1'b0
+    target:
+      cpu_rst_n:
+        active: low
+)";
+        const QString filePath   = createTempFile("test_reset_no_source.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warned = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("rst_ctrl") && msg.contains("no `source:`")) {
+                warned = true;
+                break;
+            }
+        }
+        QVERIFY(warned);
+        /* The pre-fix `assign cpu_rst_n = 1'b1;` must NOT appear; the
+           controller should not have been emitted at all. */
+        QVERIFY(!verifyVerilogContent("test_reset_no_source", "assign cpu_rst_n = 1'b1"));
+    }
 };
 
 QStringList Test::messageList;

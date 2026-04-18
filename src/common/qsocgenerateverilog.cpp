@@ -240,7 +240,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             /* Empty map -> no parameters; not an error. */
         } else {
             out << " #(\n";
-            QStringList paramDeclarations;
+            QStringList   paramDeclarations;
+            QSet<QString> seenParamNames;
 
             for (auto paramIter = netlistData["parameter"].begin();
                  paramIter != netlistData["parameter"].end();
@@ -256,6 +257,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                         << "is not a valid Verilog identifier "
                                            "(reserved keyword or illegal character)";
                 }
+                if (seenParamNames.contains(paramName)) {
+                    QSocConsole::warn() << "Duplicate parameter name" << paramName
+                                        << "; only the first definition is emitted";
+                    continue;
+                }
+                seenParamNames.insert(paramName);
 
                 if (!paramIter->second.IsMap()) {
                     QSocConsole::warn()
@@ -307,6 +314,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     /* Process port section if it exists */
     if (netlistData["port"] && netlistData["port"].IsMap()) {
+        QSet<QString> seenPortNames;
         for (auto portIter = netlistData["port"].begin(); portIter != netlistData["port"].end();
              ++portIter) {
             if (!portIter->first.IsScalar()) {
@@ -320,6 +328,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     << "Top-level port name" << portName
                     << "is not a valid Verilog identifier (reserved keyword or illegal character)";
             }
+            if (seenPortNames.contains(portName)) {
+                QSocConsole::warn() << "Duplicate top-level port name" << portName
+                                    << "; only the first definition is emitted";
+                continue;
+            }
+            seenPortNames.insert(portName);
 
             if (!portIter->second.IsMap()) {
                 QSocConsole::warn() << "Port" << portName << "has invalid format, skipping";

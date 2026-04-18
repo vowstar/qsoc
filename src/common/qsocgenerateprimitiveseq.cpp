@@ -68,6 +68,36 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
         }
     }
 
+    /* Warn when a seq reg targets a name that is neither a top-level
+       port nor a declared net. Pre-fix the assign emitted
+       `assign ghost_reg = ghost_reg_reg;` against an undeclared
+       identifier. */
+    {
+        QSet<QString> seqKnownTargets;
+        if (netlistData["port"] && netlistData["port"].IsMap()) {
+            for (const auto &portEntry : netlistData["port"]) {
+                if (portEntry.first.IsScalar()) {
+                    seqKnownTargets.insert(
+                        QString::fromStdString(portEntry.first.as<std::string>()));
+                }
+            }
+        }
+        if (netlistData["net"] && netlistData["net"].IsMap()) {
+            for (const auto &netEntry : netlistData["net"]) {
+                if (netEntry.first.IsScalar()) {
+                    seqKnownTargets.insert(QString::fromStdString(netEntry.first.as<std::string>()));
+                }
+            }
+        }
+        for (const QString &baseName : seqRegBases) {
+            if (!seqKnownTargets.contains(baseName)) {
+                QSocConsole::warn() << "seq reg" << baseName
+                                    << "is not declared as a port or net - the assign will "
+                                       "reference an undeclared identifier";
+            }
+        }
+    }
+
     /* Generate internal reg declarations for sequential outputs */
     if (!seqRegBases.isEmpty()) {
         out << "\n    /* Internal reg declarations for sequential logic */\n";
