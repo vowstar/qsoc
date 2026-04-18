@@ -18,8 +18,11 @@ LLM tool calling to execute multi-step workflows through natural language.
     [`--max-tokens <n>`], [Maximum context tokens (default: 128000)],
     [`--temperature <n>`], [LLM temperature 0.0--1.0 (default: 0.2)],
     [`--no-stream`], [Disable streaming output],
-    [`--thinking <level>`], [Reasoning effort: low, medium, high],
-    [`--model-reasoning <model>`], [Model to use when thinking is enabled],
+    [`--effort <level>`], [Reasoning effort: low, medium, high],
+    [`--model-reasoning <model>`], [Model to use when effort is set],
+    [`--resume [id]`],
+    [Resume a previous session; pick from list if id omitted],
+    [`--continue`], [Continue the most recent session for this project],
   )],
   caption: [AGENT COMMAND OPTIONS],
   kind: table,
@@ -31,7 +34,9 @@ LLM tool calling to execute multi-step workflows through natural language.
 ```bash
 qsoc agent
 qsoc agent -d /path/to/project -p myproject
-qsoc agent --thinking high --model-reasoning deepseek-reasoner
+qsoc agent --effort high --model-reasoning deepseek-reasoner
+qsoc agent --continue
+qsoc agent --resume abc123
 ```
 
 === Single Query Mode
@@ -53,14 +58,55 @@ The following commands are available during an interactive session:
     table.header([Command], [Description]),
     table.hline(),
     [`exit`, `/exit`], [Exit the agent],
+    [`/branch [name]`], [Fork the current session into a new one],
     [`/clear`], [Clear conversation history],
-    [`/compact`], [Compact conversation context and report tokens saved],
-    [`/thinking [level]`], [Show or set thinking level (off/low/medium/high)],
+    [`/compact`], [Compact context and report tokens saved],
+    [`/context`], [Show token usage breakdown and suggestions],
+    [`/cost`], [Show session token totals and cost (if rates configured)],
+    [`/diff`], [Review file edits turn-by-turn],
+    [`/effort [level]`], [Show or set effort (off/low/medium/high)],
+    [`/model [id]`], [Show or switch the active model],
+    [`/rename <title>`], [Set session title for the resume picker],
+    [`/status`], [Show model, session, and endpoint info],
     [`/help`], [Show help message],
+    [`!<command>`], [Execute a shell command directly],
   )],
   caption: [INTERACTIVE COMMANDS],
   kind: table,
 )
+
+== KEYBOARD AND INPUT
+<agent-keyboard>
+Editing and navigation in the prompt:
+
+- *Left/Right*, *Ctrl+A/E* -- Move cursor / jump to start or end of line
+- *Up/Down* -- Browse prompt history
+- *Ctrl+K*, *Ctrl+U*, *Ctrl+W* -- Delete to end of line / start of line / previous word
+- *Backspace* -- Delete character before cursor (CJK/emoji aware)
+- *Ctrl+\_* -- Undo the last edit
+- *`\` + Enter* -- Continue on next line; multi-line paste is preserved as one input
+
+External editor and search:
+
+- *Ctrl+X Ctrl+E* or *Ctrl+G* -- Edit current input in `$EDITOR`
+- *Ctrl+R* -- Reverse-i-search through prompt history
+
+View and selection:
+
+- *Ctrl+T* -- Toggle TODO list visibility
+- *Ctrl+L* -- Force a full screen repaint
+- *Mouse drag* -- Select and auto-copy to clipboard (OSC 52)
+- *Shift + drag* -- Native terminal selection (fallback)
+
+Completion and interrupt:
+
+- *`@<name>`* -- Fuzzy-complete a project file path
+- *ESC* -- Abort the current operation
+
+While the agent is executing, you can keep typing. Press *Enter* to submit; the
+agent consumes queued requests at the start of the next iteration. Pressing
+*ESC* aborts the current LLM stream, tool execution, and any pending tool
+calls; conversation history is preserved.
 
 == DECISION FLOW
 <agent-decision-flow>
@@ -99,36 +145,42 @@ FSM, etc.) and routes them through Tier 2 automatically.
 <agent-capabilities>
 The agent provides the following tools through natural language:
 
-- *Project & Module* -- Create projects, import Verilog/SystemVerilog, configure bus interfaces
-- *Bus Interfaces* -- Import and manage bus definitions (AXI, APB, Wishbone, etc.)
-- *Code Generation* -- Generate Verilog RTL from `.soc_net` netlist files, render Jinja2 templates
-- *File Operations* -- Read any file; write/edit within allowed directories
-- *Shell Execution* -- Run bash commands with timeout; manage background processes
-- *Path Management* -- Configure allowed directories for file write access
-- *Memory & Tasks* -- Persistent notes across sessions; todo list for multi-step workflows
-- *Documentation* -- Query built-in QSoC docs by topic (15 topics including clock, reset, power, fsm)
-- *Skills* -- User-defined prompt templates (`SKILL.md`) in `.qsoc/skills/` or `~/.config/qsoc/skills/`
-- *Web Access* -- Search the web via SearXNG (`web_search`) and fetch URL content (`web_fetch`)
+- *Project* -- `project_list`, `project_show`, `project_create`
+- *Module* -- `module_list`, `module_show`, `module_import`, `module_bus_add`
+- *Bus* -- `bus_list`, `bus_show`, `bus_import` (AXI, APB, Wishbone, etc.)
+- *Generation* -- `generate_verilog` (RTL from `.soc_net`), `generate_template`
+  (Jinja2 rendering)
+- *Files* -- `read_file`, `list_files`, `write_file`, `edit_file`; `path_context`
+  reports and adjusts allowed write directories
+- *Shell* -- `bash` with timeout, `bash_manage` for background processes
+- *Documentation* -- `query_docs` by topic (about, commands, config, bus, clock,
+  fsm, logic, netlist, power, reset, template, validation, overview, ...)
+- *Memory* -- `memory_read`, `memory_write` for persistent notes across sessions
+- *Todo* -- `todo_list`, `todo_add`, `todo_update`, `todo_delete` for multi-step
+  workflows
+- *Skills* -- `skill_find`, `skill_create` for user-defined prompt templates in
+  `.qsoc/skills/` or `~/.config/qsoc/skills/`
+- *LSP* -- `lsp` for language server diagnostics and symbol lookup
+- *Web* -- `web_fetch` for URL content, `web_search` via SearXNG (when configured)
 
-== THINKING / REASONING
-<agent-thinking>
-The `--thinking` option enables extended reasoning for complex tasks. When set,
+== REASONING EFFORT
+<agent-effort>
+The `--effort` option enables extended reasoning for complex tasks. When set,
 a `reasoning_effort` parameter is sent to the LLM API.
 
 If `llm.model_reasoning` is configured, the agent automatically switches to that
-model when thinking is enabled, and switches back when thinking is off. This
-allows pairing a fast model for normal use with a reasoning model for hard
-problems.
+model when effort is set, and switches back when effort is off. This allows
+pairing a fast model for normal use with a reasoning model for hard problems.
 
 The receiving side always parses `reasoning_content` and `reasoning_details`
-fields from the SSE stream, regardless of the `--thinking` setting. Reasoning
+fields from the SSE stream, regardless of the `--effort` setting. Reasoning
 output is displayed in dim text.
 
 #figure(
   align(center)[#table(
     columns: (0.3fr, 0.3fr, 1fr),
     align: (auto, auto, left),
-    table.header([`--thinking`], [`model_reasoning`], [Behavior]),
+    table.header([`--effort`], [`model_reasoning`], [Behavior]),
     table.hline(),
     [not set], [not set], [Primary model, no reasoning parameter],
     [not set], [set], [Primary model; reasoning model idle],
@@ -152,26 +204,23 @@ Long conversations are managed by a three-layer compaction system:
 + *Auto-Continue* -- After compaction during streaming, the agent automatically
   resumes the current task.
 
-Use `/compact` to trigger compaction manually.
+Use `/compact` to trigger compaction manually, and `/context` to inspect the
+per-category token breakdown.
 
-== INPUT QUEUING
-<agent-input-queuing>
-While the agent is executing, you can type follow-up requests. The input line
-appears below the status bar. Press *Enter* to submit; the agent consumes queued
-requests at the start of the next iteration.
+== SYSTEM PROMPT SOURCES
+<agent-system-prompt>
+On every turn, the system prompt is composed from:
 
-Keyboard shortcuts:
-- *Enter* -- Submit input to queue
-- *Backspace* -- Delete last character (CJK/emoji aware)
-- *Ctrl-U* -- Clear line
-- *Ctrl-W* -- Delete last word
-- *ESC* -- Clear line and interrupt the agent
+- *Modular sections* -- built-in role, decision flow, and tool usage guidance
+- *Project instructions* -- `AGENTS.md` and `AGENTS.local.md` in the project
+  directory, injected verbatim
+- *Memory* -- entries from the auto-memory store (see `memory_read` /
+  `memory_write`), capped by `agent.memory_max_chars`
+- *Skill listing* -- names and descriptions of installed skills so the agent
+  can route to them via `skill_find`
 
-== INTERRUPT HANDLING
-<agent-interrupt>
-Press *ESC* to abort the current operation. The interrupt cascades through LLM
-streaming, tool execution, and pending tool calls. Conversation history is
-preserved.
+Set `agent.system_prompt` in the config to replace the modular base with a
+literal string (useful for testing or custom deployments).
 
 == SECURITY
 <agent-security>
@@ -181,10 +230,17 @@ The agent uses a read-unrestricted, write-restricted permission model:
 - *Write*: Project directory, working directory, user-added directories, `/tmp`
 - *Shell*: Configurable timeout, no upper limit
 
-== CONVERSATION PERSISTENCE
+== SESSIONS
 <agent-persistence>
-Session state is saved to `.qsoc/conversation.json` in the project directory,
-allowing conversations to resume across sessions.
+Each session is persisted as `.qsoc/sessions/<id>.jsonl` under the project
+directory, one JSON event per line (messages plus metadata). This enables:
+
+- `qsoc agent --continue` -- resume the most recent session
+- `qsoc agent --resume [id]` -- pick a session from a list, or load one by id /
+  unique prefix
+- `/branch [name]` -- fork the current session into a new id, preserving the
+  original
+- `/rename <title>` -- set a human-readable title shown by the resume picker
 
 == USAGE EXAMPLES
 <agent-examples>

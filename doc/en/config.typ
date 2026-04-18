@@ -56,8 +56,13 @@ so you only need to configure the endpoint URL, API key, and model name.
     [llm.url], [API endpoint URL (OpenAI Chat Completions format)],
     [llm.key], [API key for authentication (optional for local services)],
     [llm.model], [Model name to use],
-    [llm.model_reasoning], [Model for reasoning/thinking mode (optional)],
+    [llm.model_reasoning], [Model for reasoning/effort mode (optional)],
     [llm.timeout], [Request timeout in milliseconds (default: 30000)],
+    [llm.cost_input_per_mtok],
+    [Input price per million tokens (used by `/cost`)],
+    [llm.cost_output_per_mtok],
+    [Output price per million tokens (used by `/cost`)],
+    [llm.cost_currency], [Currency label for cost display (default: USD)],
   )],
   caption: [LLM CONFIGURATION OPTIONS],
   kind: table,
@@ -147,7 +152,7 @@ These settings can also be overridden by command-line options (see @agent-comman
     [agent.temperature], [LLM temperature 0.0--1.0 (default: 0.2)],
     [agent.max_tokens], [Maximum context tokens (default: 128000)],
     [agent.max_iterations], [Maximum agent iterations (default: 100)],
-    [agent.thinking], [Thinking level: off, low, medium, high],
+    [agent.effort], [Reasoning effort: off, low, medium, high],
     [agent.stream], [Enable streaming output: true/false (default: true)],
     [agent.prune_threshold],
     [Token ratio to trigger tool output pruning (default: 0.6)],
@@ -155,6 +160,10 @@ These settings can also be overridden by command-line options (see @agent-comman
     [Token ratio to trigger LLM compaction (default: 0.8)],
     [agent.compaction_model],
     [Model for compaction (empty = use primary model)],
+    [agent.auto_load_memory],
+    [Auto-inject memory into the system prompt (default: true)],
+    [agent.memory_max_chars],
+    [Max characters of memory to inject (default: 24000)],
     [agent.system_prompt], [Custom system prompt override],
   )],
   caption: [AGENT CONFIGURATION OPTIONS],
@@ -173,7 +182,8 @@ configuration.
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [web.search_api_url], [SearXNG instance URL (e.g., `http://localhost:8080`). Required for `web_search`.],
+    [web.search_api_url],
+    [SearXNG instance URL (e.g., `http://localhost:8080`). Required for `web_search`.],
     [web.search_api_key], [SearXNG API key (optional)],
   )],
   caption: [WEB CONFIGURATION OPTIONS],
@@ -204,7 +214,7 @@ llm:
 
 # Agent Configuration
 agent:
-  thinking: high
+  effort: high
   max_tokens: 128000
 
 # Network Proxy (if needed)
