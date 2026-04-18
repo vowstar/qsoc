@@ -23,17 +23,20 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
        as a wire; the port itself serves as the wire. A comb item that
        writes to `<net>` would otherwise reference an undefined identifier.
        Also remember top-port direction so we can warn when comb tries to
-       drive an input port (illegal Verilog). */
+       drive an input port (illegal Verilog), and collect every name that
+       could legally appear on a comb assign LHS so we can warn on typos. */
     QMap<QString, QString> netToTopPort;
     QMap<QString, QString> portDirection;
     QSet<QString>          inputTopPortNames;
+    QSet<QString>          knownTargets;
     if (netlistData["port"] && netlistData["port"].IsMap()) {
         for (const auto &portEntry : netlistData["port"]) {
             if (!portEntry.first.IsScalar() || !portEntry.second.IsMap()) {
                 continue;
             }
             const QString portName = QString::fromStdString(portEntry.first.as<std::string>());
-            QString       dir;
+            knownTargets.insert(portName);
+            QString dir;
             if (portEntry.second["direction"] && portEntry.second["direction"].IsScalar()) {
                 dir = QString::fromStdString(portEntry.second["direction"].as<std::string>())
                           .toLower();
@@ -46,9 +49,17 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
                 const QString netName = QString::fromStdString(
                     portEntry.second["connect"].as<std::string>());
                 netToTopPort.insert(netName, portName);
+                knownTargets.insert(netName);
                 if (dir == "in" || dir == "input") {
                     inputTopPortNames.insert(netName);
                 }
+            }
+        }
+    }
+    if (netlistData["net"] && netlistData["net"].IsMap()) {
+        for (const auto &netEntry : netlistData["net"]) {
+            if (netEntry.first.IsScalar()) {
+                knownTargets.insert(QString::fromStdString(netEntry.first.as<std::string>()));
             }
         }
     }
@@ -156,6 +167,17 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
                 out << "    /* FIXME: comb tried to drive top-level input " << baseName
                     << " - check the source netlist */\n";
                 continue;
+            }
+
+            /* Writing to a name that is neither a top port nor a declared
+               net used to silently emit `assign <name> = ...;` against an
+               undeclared identifier. Surface the typo. */
+            if (!knownTargets.contains(baseName) && !knownTargets.contains(parsedOut.first)) {
+                QSocConsole::warn() << "comb writes to" << baseName
+                                    << "which is not declared as a port or net - "
+                                       "the assign will reference an undeclared identifier";
+                out << "    /* FIXME: comb target " << baseName
+                    << " is not declared as a port or net */\n";
             }
 
             const QString fullOutputSignal = baseName + bitSelect;

@@ -31,6 +31,15 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
         QSocConsole::warn() << "Reset configuration must have at least one target";
         return false;
     }
+    if (config.sources.isEmpty()) {
+        /* Pre-fix the controller still emitted, falling back to
+           `assign <target> = 1'b1;` for every target - the system would
+           never actually reset. Refuse to generate so the user notices. */
+        QSocConsole::warn() << "Reset controller" << config.name
+                            << "has no `source:` declared; refusing to emit a controller "
+                               "that ties every target inactive";
+        return false;
+    }
 
     // Generate or update reset_cell.v file
     if (m_parent && m_parent->getProjectManager()) {
