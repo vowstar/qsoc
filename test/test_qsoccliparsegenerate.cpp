@@ -4524,6 +4524,57 @@ instance:
         /* link still wins, tie is dropped. */
         QVERIFY(verifyVerilogContent("test_link_tie_conflict", ".data_in(data_bus)"));
     }
+
+    /**
+     * `comb` writing to a net that was redirected to a top-level port via
+     * `connect:` used to leak an undefined identifier - the wire `data_bus`
+     * was elided in favour of port `data_out`, but the assign still
+     * referenced `data_bus`. The comb primitive now redirects.
+     */
+    void testGenerateCombRespectsTopPortConnect()
+    {
+        const QString modContent = R"(
+half_drv:
+  port:
+    out4:
+      type: "logic[3:0]"
+      direction: out
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         mod(moduleDir.filePath("half_drv.soc_mod"));
+        QVERIFY(mod.open(QIODevice::WriteOnly | QIODevice::Text));
+        mod.write(modContent.toUtf8());
+        mod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_comb_topport_redirect"
+instance:
+  u_drv: { module: half_drv }
+port:
+  data_out:
+    type: "logic[7:0]"
+    direction: out
+    connect: data_bus
+net:
+  data_bus:
+    - { instance: u_drv, port: out4, bits: "[3:0]" }
+comb:
+  - out: data_bus[7:4]
+    expr: "4'hA"
+)";
+        const QString filePath   = createTempFile("test_comb_topport_redirect.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogContent("test_comb_topport_redirect", "assign data_out[7:4] = 4'hA"));
+        QVERIFY(!verifyVerilogContent("test_comb_topport_redirect", "assign data_bus[7:4]"));
+    }
 };
 
 QStringList Test::messageList;

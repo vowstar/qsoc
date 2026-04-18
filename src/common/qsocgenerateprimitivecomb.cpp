@@ -18,6 +18,25 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
         return true;
     }
 
+    /* Build a net-name -> top-port-name redirect. When a top-level port
+       declares `connect: <net>`, the wire-decl pass skips emitting `<net>`
+       as a wire; the port itself serves as the wire. A comb item that
+       writes to `<net>` would otherwise reference an undefined identifier. */
+    QMap<QString, QString> netToTopPort;
+    if (netlistData["port"] && netlistData["port"].IsMap()) {
+        for (const auto &portEntry : netlistData["port"]) {
+            if (!portEntry.first.IsScalar() || !portEntry.second.IsMap()) {
+                continue;
+            }
+            const QString portName = QString::fromStdString(portEntry.first.as<std::string>());
+            if (portEntry.second["connect"] && portEntry.second["connect"].IsScalar()) {
+                const QString netName = QString::fromStdString(
+                    portEntry.second["connect"].as<std::string>());
+                netToTopPort.insert(netName, portName);
+            }
+        }
+    }
+
     /* First pass: collect all outputs that need internal reg declarations */
     QSet<QString> alwaysBlockOutputs;
     for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
@@ -97,12 +116,18 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
                data_rev[0:3]` would otherwise leak an illegal reversed
                slice and a `bits: "[ 7 : 4 ]"` would carry whitespace into
                the assign statement. */
-            const auto    parsedOut = QSocGenerateManager::parseSignalBitSelect(outputSignal);
-            const QString baseName  = parsedOut.first;
-            QString       bitSelect = parsedOut.second;
+            const auto parsedOut = QSocGenerateManager::parseSignalBitSelect(outputSignal);
+            QString    baseName  = parsedOut.first;
+            QString    bitSelect = parsedOut.second;
             if (combItem["bits"] && combItem["bits"].IsScalar()) {
                 bitSelect = QSocVerilogUtils::normalizeBitSelect(
                     QString::fromStdString(combItem["bits"].as<std::string>()));
+            }
+            /* Redirect to the top-level port when the net was elided in
+               favour of the port (via `connect:`). Without this the assign
+               would reference an undefined identifier. */
+            if (netToTopPort.contains(baseName)) {
+                baseName = netToTopPort.value(baseName);
             }
             const QString fullOutputSignal = baseName + bitSelect;
 
