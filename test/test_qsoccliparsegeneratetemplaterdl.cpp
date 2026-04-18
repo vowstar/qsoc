@@ -395,7 +395,7 @@ metadata:
         /* Check error messages */
         bool foundError = false;
         for (const QString &msg : messageList) {
-            if (msg.contains("Error: SystemRDL file does not exist")) {
+            if (msg.contains("SystemRDL file does not exist")) {
                 foundError = true;
                 break;
             }
@@ -439,8 +439,8 @@ metadata:
         /* Check error messages */
         bool foundError = false;
         for (const QString &msg : messageList) {
-            if (msg.contains("Error: Failed to elaborate SystemRDL file")
-                || msg.contains("Error: Failed to process SystemRDL file")) {
+            if (msg.contains("failed to elaborate SystemRDL file")
+                || msg.contains("failed to process SystemRDL file")) {
                 foundError = true;
                 break;
             }

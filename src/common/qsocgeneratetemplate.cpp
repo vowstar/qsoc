@@ -41,7 +41,7 @@ bool QSocGenerateManager::renderTemplate(
     for (const QString &csvFilePath : csvFiles) {
         if (!QFile::exists(csvFilePath)) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: CSV file does not exist: \"%1\"")
+                                        "generate", "CSV file does not exist: \"%1\"")
                                         .arg(csvFilePath);
             return false;
         }
@@ -51,7 +51,7 @@ bool QSocGenerateManager::renderTemplate(
             QFile file(csvFilePath);
             if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 QSocConsole::error()
-                    << QCoreApplication::translate("generate", "Error: Could not open CSV file \"%1\"")
+                    << QCoreApplication::translate("generate", "Could not open CSV file \"%1\"")
                            .arg(csvFilePath);
                 return false;
             }
@@ -151,7 +151,7 @@ bool QSocGenerateManager::renderTemplate(
 
         } catch (const std::exception &e) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: Failed to parse CSV file \"%1\": %2")
+                                        "generate", "failed to parse CSV file \"%1\": %2")
                                         .arg(csvFilePath)
                                         .arg(e.what());
             return false;
@@ -165,7 +165,7 @@ bool QSocGenerateManager::renderTemplate(
     for (const QString &yamlFilePath : yamlFiles) {
         if (!QFile::exists(yamlFilePath)) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: YAML file does not exist: \"%1\"")
+                                        "generate", "YAML file does not exist: \"%1\"")
                                         .arg(yamlFilePath);
             return false;
         }
@@ -243,7 +243,7 @@ bool QSocGenerateManager::renderTemplate(
 
         } catch (const std::exception &e) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: Failed to parse YAML file \"%1\": %2")
+                                        "generate", "failed to parse YAML file \"%1\": %2")
                                         .arg(yamlFilePath)
                                         .arg(e.what());
             return false;
@@ -254,7 +254,7 @@ bool QSocGenerateManager::renderTemplate(
     for (const QString &jsonFilePath : jsonFiles) {
         if (!QFile::exists(jsonFilePath)) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: JSON file does not exist: \"%1\"")
+                                        "generate", "JSON file does not exist: \"%1\"")
                                         .arg(jsonFilePath);
             return false;
         }
@@ -264,7 +264,7 @@ bool QSocGenerateManager::renderTemplate(
             QFile jsonFile(jsonFilePath);
             if (!jsonFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 QSocConsole::error() << QCoreApplication::translate(
-                                            "generate", "Error: Could not open JSON file \"%1\"")
+                                            "generate", "Could not open JSON file \"%1\"")
                                             .arg(jsonFilePath);
                 return false;
             }
@@ -278,7 +278,7 @@ bool QSocGenerateManager::renderTemplate(
             if (parseError.error != QJsonParseError::NoError) {
                 QSocConsole::error()
                     << QCoreApplication::translate(
-                           "generate", "Error: Failed to parse JSON file \"%1\": %2")
+                           "generate", "failed to parse JSON file \"%1\": %2")
                            .arg(jsonFilePath)
                            .arg(parseError.errorString());
                 return false;
@@ -309,7 +309,7 @@ bool QSocGenerateManager::renderTemplate(
 
         } catch (const std::exception &e) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: Failed to process JSON file \"%1\": %2")
+                                        "generate", "failed to process JSON file \"%1\": %2")
                                         .arg(jsonFilePath)
                                         .arg(e.what());
             return false;
@@ -320,7 +320,7 @@ bool QSocGenerateManager::renderTemplate(
     for (const QString &rdlFilePath : rdlFiles) {
         if (!QFile::exists(rdlFilePath)) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: SystemRDL file does not exist: \"%1\"")
+                                        "generate", "SystemRDL file does not exist: \"%1\"")
                                         .arg(rdlFilePath);
             return false;
         }
@@ -333,7 +333,7 @@ bool QSocGenerateManager::renderTemplate(
             if (!result.ok()) {
                 QSocConsole::error()
                     << QCoreApplication::translate(
-                           "generate", "Error: Failed to elaborate SystemRDL file \"%1\": %2")
+                           "generate", "failed to elaborate SystemRDL file \"%1\": %2")
                            .arg(rdlFilePath)
                            .arg(QString::fromStdString(result.error()));
                 return false;
@@ -352,7 +352,7 @@ bool QSocGenerateManager::renderTemplate(
         } catch (const std::exception &e) {
             QSocConsole::error() << QCoreApplication::translate(
                                         "generate",
-                                        "Error: Failed to process SystemRDL file \"%1\": %2")
+                                        "Failed to process SystemRDL file \"%1\": %2")
                                         .arg(rdlFilePath)
                                         .arg(e.what());
             return false;
@@ -363,7 +363,7 @@ bool QSocGenerateManager::renderTemplate(
     for (const QString &rcsvFilePath : rcsvFiles) {
         if (!QFile::exists(rcsvFilePath)) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: RCSV file does not exist: \"%1\"")
+                                        "generate", "RCSV file does not exist: \"%1\"")
                                         .arg(rcsvFilePath);
             return false;
         }
@@ -376,7 +376,7 @@ bool QSocGenerateManager::renderTemplate(
             if (!csvToRdlResult.ok()) {
                 QSocConsole::error()
                     << QCoreApplication::translate(
-                           "generate", "Error: Failed to convert RCSV file \"%1\": %2")
+                           "generate", "failed to convert RCSV file \"%1\": %2")
                            .arg(rcsvFilePath)
                            .arg(QString::fromStdString(csvToRdlResult.error()));
                 return false;
@@ -388,7 +388,7 @@ bool QSocGenerateManager::renderTemplate(
             if (!result.ok()) {
                 QSocConsole::error()
                     << QCoreApplication::translate(
-                           "generate", "Error: Failed to elaborate RCSV file \"%1\": %2")
+                           "generate", "failed to elaborate RCSV file \"%1\": %2")
                            .arg(rcsvFilePath)
                            .arg(QString::fromStdString(result.error()));
                 return false;
@@ -406,7 +406,7 @@ bool QSocGenerateManager::renderTemplate(
 
         } catch (const std::exception &e) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: Failed to process RCSV file \"%1\": %2")
+                                        "generate", "failed to process RCSV file \"%1\": %2")
                                         .arg(rcsvFilePath)
                                         .arg(e.what());
             return false;
@@ -419,7 +419,7 @@ bool QSocGenerateManager::renderTemplate(
         QFile templateFile(templateFilePath);
         if (!templateFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: Could not open template file \"%1\"")
+                                        "generate", "Could not open template file \"%1\"")
                                         .arg(templateFilePath);
             return false;
         }
@@ -665,7 +665,7 @@ bool QSocGenerateManager::renderTemplate(
         QFile outputFile(outputPath);
         if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QSocConsole::error() << QCoreApplication::translate(
-                                        "generate", "Error: Could not create output file \"%1\"")
+                                        "generate", "Could not create output file \"%1\"")
                                         .arg(outputPath);
             return false;
         }
@@ -704,7 +704,7 @@ bool QSocGenerateManager::renderTemplate(
 
     } catch (const std::exception &e) {
         QSocConsole::error() << QCoreApplication::translate(
-                                    "generate", "Error: Failed to render template \"%1\": %2")
+                                    "generate", "failed to render template \"%1\": %2")
                                     .arg(templateFilePath)
                                     .arg(e.what());
         return false;
