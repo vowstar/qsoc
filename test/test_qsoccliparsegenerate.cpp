@@ -3495,6 +3495,243 @@ net:
         QVERIFY(verifyVerilogContent("test_bitsel_single_high", "u_b0 (.out1(data_bus_top[0]))"));
         QVERIFY(verifyVerilogContent("test_bitsel_single_high", "u_b15 (.out1(data_bus_top[15]))"));
     }
+
+    /**
+     * `bits: "[0:3]"` (ascending) on a descending wire `[7:0]` would emit
+     * an illegal `signal[0:3]` slice. The parse path normalizes any
+     * reversed range to canonical `[hi:lo]`.
+     */
+    void testGenerateBitSelectReversedNormalized()
+    {
+        const QString driverContent   = R"(
+narrow4_drv:
+  port:
+    out4:
+      type: "logic[3:0]"
+      direction: out
+)";
+        const QString receiverContent = R"(
+wide8_rcv:
+  port:
+    in8:
+      type: "logic[7:0]"
+      direction: in
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("narrow4_drv.soc_mod"));
+        QFile         rcvMod(moduleDir.filePath("wide8_rcv.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(driverContent.toUtf8());
+        drvMod.close();
+        QVERIFY(rcvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        rcvMod.write(receiverContent.toUtf8());
+        rcvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_reversed_net"
+instance:
+  u_drv_lo: { module: "narrow4_drv" }
+  u_drv_hi: { module: "narrow4_drv" }
+  u_rcv:    { module: "wide8_rcv" }
+net:
+  data_bus:
+    - { instance: u_drv_lo, port: out4, bits: "[0:3]" }
+    - { instance: u_drv_hi, port: out4, bits: "[4:7]" }
+    - { instance: u_rcv,    port: in8 }
+)";
+        const QString netPath    = createTempFile("test_bitsel_reversed_net.soc_net", netContent);
+        QVERIFY(netPath != "");
+
+        QSocCliWorker socCliWorker1;
+        socCliWorker1.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netPath}, false);
+        socCliWorker1.run();
+
+        QVERIFY(verifyVerilogContent("test_bitsel_reversed_net", "wire [7:0] data_bus"));
+        QVERIFY(verifyVerilogContent("test_bitsel_reversed_net", "u_drv_lo (.out4(data_bus[3:0]))"));
+        QVERIFY(verifyVerilogContent("test_bitsel_reversed_net", "u_drv_hi (.out4(data_bus[7:4]))"));
+        QVERIFY(!verifyVerilogContent("test_bitsel_reversed_net", "data_bus[0:3]"));
+        QVERIFY(!verifyVerilogContent("test_bitsel_reversed_net", "data_bus[4:7]"));
+
+        const QString linkContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_reversed_link"
+instance:
+  u_drv_lo:
+    module: "narrow4_drv"
+    port:
+      out4:
+        link: data_bus[0:3]
+  u_drv_hi:
+    module: "narrow4_drv"
+    port:
+      out4:
+        link: data_bus[4:7]
+  u_rcv:
+    module: "wide8_rcv"
+    port:
+      in8:
+        link: data_bus
+)";
+        const QString linkPath = createTempFile("test_bitsel_reversed_link.soc_net", linkContent);
+        QVERIFY(linkPath != "");
+
+        QSocCliWorker socCliWorker2;
+        socCliWorker2.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), linkPath}, false);
+        socCliWorker2.run();
+
+        QVERIFY(verifyVerilogContent("test_bitsel_reversed_link", "wire [7:0] data_bus"));
+        QVERIFY(
+            verifyVerilogContent("test_bitsel_reversed_link", "u_drv_lo (.out4(data_bus[3:0]))"));
+        QVERIFY(
+            verifyVerilogContent("test_bitsel_reversed_link", "u_drv_hi (.out4(data_bus[7:4]))"));
+    }
+
+    /**
+     * `bits: "[0:0]"` on a 1-bit driver and 1-bit receiver collapses the wire
+     * to a scalar. The leftover `[0:0]` part-select on a non-vector wire is
+     * illegal Verilog, so it must be stripped from the instantiations.
+     */
+    void testGenerateBitSelectScrubScalarPartSelect()
+    {
+        const QString drv1Content = R"(
+single_drv:
+  port:
+    out1:
+      type: "logic"
+      direction: out
+)";
+        const QString rcv1Content = R"(
+single_rcv:
+  port:
+    in1:
+      type: "logic"
+      direction: in
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("single_drv.soc_mod"));
+        QFile         rcvMod(moduleDir.filePath("single_rcv.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drv1Content.toUtf8());
+        drvMod.close();
+        QVERIFY(rcvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        rcvMod.write(rcv1Content.toUtf8());
+        rcvMod.close();
+
+        const QString netlistContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_scalar_scrub"
+instance:
+  u_drv: { module: "single_drv" }
+  u_rcv: { module: "single_rcv" }
+net:
+  bit0_link:
+    - { instance: u_drv, port: out1, bits: "[0:0]" }
+    - { instance: u_rcv, port: in1,  bits: "[0:0]" }
+)";
+        const QString filePath = createTempFile("test_bitsel_scalar_scrub.soc_net", netlistContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogContent("test_bitsel_scalar_scrub", "wire bit0_link"));
+        QVERIFY(verifyVerilogContent("test_bitsel_scalar_scrub", "u_drv (.out1(bit0_link))"));
+        QVERIFY(verifyVerilogContent("test_bitsel_scalar_scrub", "u_rcv (.in1(bit0_link))"));
+        QVERIFY(!verifyVerilogContent("test_bitsel_scalar_scrub", "bit0_link[0]"));
+        QVERIFY(!verifyVerilogContent("test_bitsel_scalar_scrub", "bit0_link[0:0]"));
+    }
+
+    /**
+     * `bits: "[7:0]"` on a 4-bit port silently slices an 8-bit selection out
+     * of a 4-bit pin: the resulting wire becomes 8b and no other check fires.
+     * The width-consistency check must reject any bit-select that exceeds
+     * the port's own width so the FIXME comment surfaces.
+     */
+    void testGenerateBitSelectExceedsPortWidthFlagged()
+    {
+        const QString drvContent = R"(
+narrow4_drv:
+  port:
+    out4:
+      type: "logic[3:0]"
+      direction: out
+)";
+        const QString rcvContent = R"(
+wide8_rcv:
+  port:
+    in8:
+      type: "logic[7:0]"
+      direction: in
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("narrow4_drv.soc_mod"));
+        QFile         rcvMod(moduleDir.filePath("wide8_rcv.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+        QVERIFY(rcvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        rcvMod.write(rcvContent.toUtf8());
+        rcvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_exceed_port_net"
+instance:
+  u_drv: { module: "narrow4_drv" }
+  u_rcv: { module: "wide8_rcv" }
+net:
+  data_bus:
+    - { instance: u_drv, port: out4, bits: "[7:0]" }
+    - { instance: u_rcv, port: in8 }
+)";
+        const QString netPath = createTempFile("test_bitsel_exceed_port_net.soc_net", netContent);
+        QVERIFY(netPath != "");
+
+        QSocCliWorker socCliWorker1;
+        socCliWorker1.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netPath}, false);
+        socCliWorker1.run();
+
+        QVERIFY(verifyVerilogContent("test_bitsel_exceed_port_net", "wire [7:0] data_bus"));
+        QVERIFY(
+            verifyVerilogContent("test_bitsel_exceed_port_net", "FIXME: Net data_bus width mismatch"));
+
+        const QString linkContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_exceed_port_link"
+instance:
+  u_drv:
+    module: "narrow4_drv"
+    port:
+      out4:
+        link: data_bus[7:0]
+  u_rcv:
+    module: "wide8_rcv"
+    port:
+      in8:
+        link: data_bus
+)";
+        const QString linkPath = createTempFile("test_bitsel_exceed_port_link.soc_net", linkContent);
+        QVERIFY(linkPath != "");
+
+        QSocCliWorker socCliWorker2;
+        socCliWorker2.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), linkPath}, false);
+        socCliWorker2.run();
+
+        QVERIFY(verifyVerilogContent(
+            "test_bitsel_exceed_port_link", "FIXME: Net data_bus width mismatch"));
+    }
 };
 
 QStringList Test::messageList;

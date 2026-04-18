@@ -4,6 +4,7 @@
 #include "common/qslangdriver.h"
 #include "common/qsocconsole.h"
 #include "common/qsocgeneratemanager.h"
+#include "common/qsocverilogutils.h"
 #include "common/qstaticstringweaver.h"
 
 #include <QCoreApplication>
@@ -41,8 +42,7 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
         /* Validate basic netlist structure */
         // Check if instance section exists and is valid when present
         if (netlistData["instance"] && !netlistData["instance"].IsMap()) {
-            QSocConsole::error()
-                << "Invalid netlist format, 'instance' section is not a map";
+            QSocConsole::error() << "Invalid netlist format, 'instance' section is not a map";
             return false;
         }
 
@@ -58,9 +58,8 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
                         && netlistData["power"].size() > 0;
 
         if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock && !hasPower) {
-            QSocConsole::error()
-                << "Invalid netlist format, no 'instance' section and no 'comb', "
-                   "'seq', 'fsm', 'reset', 'clock', or 'power' section found";
+            QSocConsole::error() << "Invalid netlist format, no 'instance' section and no 'comb', "
+                                    "'seq', 'fsm', 'reset', 'clock', or 'power' section found";
             return false;
         }
 
@@ -88,23 +87,20 @@ bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
                              || netlistData["reset"] || netlistData["clock"];
 
         if (!hasInstances && !hasPrimitives) {
-            QSocConsole::error()
-                << "Invalid netlist format, missing 'instance' section and no "
-                   "primitives found";
+            QSocConsole::error() << "Invalid netlist format, missing 'instance' section and no "
+                                    "primitives found";
             return false;
         }
 
         if (netlistData["instance"] && !netlistData["instance"].IsMap()) {
-            QSocConsole::error()
-                << "Invalid netlist format, 'instance' section is not a map";
+            QSocConsole::error() << "Invalid netlist format, 'instance' section is not a map";
             return false;
         }
 
         // Allow empty instance section if any primitives exist
         if (hasInstances && netlistData["instance"].size() == 0 && !hasPrimitives) {
-            QSocConsole::error()
-                << "Invalid netlist format, 'instance' section is empty and no "
-                   "primitives found";
+            QSocConsole::error() << "Invalid netlist format, 'instance' section is empty and no "
+                                    "primitives found";
             return false;
         }
 
@@ -136,9 +132,8 @@ bool QSocGenerateManager::processNetlist()
                              || netlistData["power"];
 
         if (!hasInstances && !hasPrimitives) {
-            QSocConsole::error()
-                << "Invalid netlist data, missing 'instance' section and no "
-                   "primitives found, call loadNetlist() first";
+            QSocConsole::error() << "Invalid netlist data, missing 'instance' section and no "
+                                    "primitives found, call loadNetlist() first";
             return false;
         }
 
@@ -202,16 +197,14 @@ bool QSocGenerateManager::processNetlist()
                         try {
                             if (!connectionNode.IsMap() || !connectionNode["instance"]
                                 || !connectionNode["instance"].IsScalar()) {
-                                QSocConsole::warn()
-                                    << "Invalid instance specification, skipping";
+                                QSocConsole::warn() << "Invalid instance specification, skipping";
                                 continue;
                             }
                             const auto instanceName = connectionNode["instance"].as<std::string>();
 
                             if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
-                                QSocConsole::warn()
-                                    << "Invalid port specification for instance"
-                                    << instanceName.c_str();
+                                QSocConsole::warn() << "Invalid port specification for instance"
+                                                    << instanceName.c_str();
                                 continue;
                             }
                             const auto portName = connectionNode["port"].as<std::string>();
@@ -300,8 +293,7 @@ bool QSocGenerateManager::processNetlist()
                                 currentBusType
                                     = moduleData["bus"]["pad_" + portName]["bus"].as<std::string>();
                             } else {
-                                QSocConsole::warn()
-                                    << "No bus type for port" << portName.c_str();
+                                QSocConsole::warn() << "No bus type for port" << portName.c_str();
                                 continue;
                             }
 
@@ -319,8 +311,8 @@ bool QSocGenerateManager::processNetlist()
                             }
                             /* For subsequent connections, ensure bus type is consistent */
                             else if (currentBusType != busType) {
-                                QSocConsole::warn() << "Mixed bus types" << busType.c_str()
-                                                    << "and" << currentBusType.c_str()
+                                QSocConsole::warn() << "Mixed bus types" << busType.c_str() << "and"
+                                                    << currentBusType.c_str()
                                                     << ", skipping inconsistent connection";
                                 continue;
                             }
@@ -363,8 +355,8 @@ bool QSocGenerateManager::processNetlist()
                     }
 
                     if (!busDefinition["port"] || !busDefinition["port"].IsMap()) {
-                        QSocConsole::warn() << "Invalid port section in bus definition for"
-                                            << busType.c_str();
+                        QSocConsole::warn()
+                            << "Invalid port section in bus definition for" << busType.c_str();
                         continue;
                     }
 
@@ -374,8 +366,7 @@ bool QSocGenerateManager::processNetlist()
                     /* Step 3: Create nets for each bus signal */
                     for (const auto &portPair : busDefinition["port"]) {
                         if (!portPair.first.IsScalar()) {
-                            QSocConsole::warn()
-                                << "Invalid port name in bus definition, skipping";
+                            QSocConsole::warn() << "Invalid port name in bus definition, skipping";
                             continue;
                         }
 
@@ -394,9 +385,8 @@ bool QSocGenerateManager::processNetlist()
                             try {
                                 /* Skip if module definition not available */
                                 if (!moduleManager->isModuleExist(conn.moduleName.c_str())) {
-                                    QSocConsole::warn()
-                                        << "Module" << conn.moduleName.c_str()
-                                        << "not found, skipping";
+                                    QSocConsole::warn() << "Module" << conn.moduleName.c_str()
+                                                        << "not found, skipping";
                                     continue;
                                 }
 
@@ -734,8 +724,7 @@ bool QSocGenerateManager::expandBusUplink()
 
                 /* Get mapping from module bus definition */
                 if (!moduleBusNode["mapping"] || !moduleBusNode["mapping"].IsMap()) {
-                    QSocConsole::warn()
-                        << "No mapping for bus port" << busPortName.c_str();
+                    QSocConsole::warn() << "No mapping for bus port" << busPortName.c_str();
                     continue;
                 }
 
@@ -751,9 +740,8 @@ bool QSocGenerateManager::expandBusUplink()
 
                     /* Find mapped port name */
                     if (!mappingNode[signalName] || !mappingNode[signalName].IsScalar()) {
-                        QSocConsole::warn()
-                            << "No mapping for signal" << signalName.c_str()
-                            << "in bus port" << busPortName.c_str();
+                        QSocConsole::warn() << "No mapping for signal" << signalName.c_str()
+                                            << "in bus port" << busPortName.c_str();
                         continue;
                     }
 
@@ -854,6 +842,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
         QString bitSelect;      /**< Bit selection if any (e.g. "[3:2]") */
         QString direction;      /**< Port direction (input/output/inout) */
         int     effectiveWidth; /**< Calculated effective width considering bit selection */
+        int     portNativeBits; /**< Width of the port itself, ignoring bit selection */
     };
     QMap<QPair<QString, QString>, PortWidthInfo> portWidthInfos;
 
@@ -865,6 +854,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
         widthInfo.bitSelect      = "";
         widthInfo.direction      = "";
         widthInfo.effectiveWidth = 0;
+        widthInfo.portNativeBits = 0;
 
         if (conn.type == PortType::TopLevel) {
             /* Handle top-level port */
@@ -902,6 +892,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                         /* Default to 1-bit if no width specified */
                         widthInfo.effectiveWidth = 1;
                     }
+                    widthInfo.portNativeBits = widthInfo.effectiveWidth;
                 }
 
                 /* Get port direction from netlist data */
@@ -957,8 +948,9 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                     && netlistData["port"][baseName.toStdString()]["type"].IsScalar()) {
                     QString width = QString::fromStdString(
                         netlistData["port"][baseName.toStdString()]["type"].as<std::string>());
-                    width                   = cleanTypeForWireDeclaration(width);
-                    widthInfo.originalWidth = width;
+                    width                    = cleanTypeForWireDeclaration(width);
+                    widthInfo.originalWidth  = width;
+                    widthInfo.portNativeBits = calculatePortWidth(width.toStdString());
 
                     /* Calculate effective width based on bit selection */
                     if (!bitSelect.isEmpty()) {
@@ -1036,6 +1028,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                             /* Default to 1-bit if no width specified */
                             widthInfo.effectiveWidth = 1;
                         }
+                        widthInfo.portNativeBits = widthInfo.effectiveWidth;
 
                         /* Get port direction from module definition */
                         if (moduleData["port"][portName.toStdString()]["direction"]
@@ -1083,6 +1076,20 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
         }
 
         portWidthInfos[qMakePair(instanceName, portName)] = widthInfo;
+    }
+
+    /* Reject bit-selects that exceed the port's own width: writing
+       `bits: "[7:0]"` on a 4-bit port would otherwise emit an 8-bit slice
+       into a 4-bit pin and silently survive every other check. */
+    for (auto it = portWidthInfos.constBegin(); it != portWidthInfos.constEnd(); ++it) {
+        const PortWidthInfo &info = it.value();
+        if (info.bitSelect.isEmpty() || info.portNativeBits <= 0) {
+            continue;
+        }
+        const int selectBits = calculateBitSelectWidth(info.bitSelect);
+        if (selectBits > info.portNativeBits) {
+            return false;
+        }
     }
 
     /* Use original width comparison logic but add special handling for bit selections */
@@ -1495,7 +1502,9 @@ bool QSocGenerateManager::processLinkConnection(
                             << portName.c_str() << "-> link:" << netName.c_str();
 
         /* Parse the link value to extract net name and bit selection */
-        const auto [cleanNetName, bitSelection] = parseLinkValue(netName);
+        auto [cleanNetName, bitSelection] = parseLinkValue(netName);
+        bitSelection = QSocVerilogUtils::normalizeBitSelect(QString::fromStdString(bitSelection))
+                           .toStdString();
 
         QSocConsole::info() << "Parsed link - net:" << cleanNetName.c_str()
                             << (bitSelection.empty() ? "" : (", bits:" + bitSelection).c_str());
@@ -1670,10 +1679,9 @@ bool QSocGenerateManager::processUplinkConnection(
                    || topLevelDirection == existingDirection);
 
             if (!directionCompatible) {
-                QSocConsole::error()
-                    << "Direction mismatch for uplink port" << netName.c_str()
-                    << ". Expected:" << topLevelDirection.c_str()
-                    << ", existing:" << existingDirection.c_str();
+                QSocConsole::error() << "Direction mismatch for uplink port" << netName.c_str()
+                                     << ". Expected:" << topLevelDirection.c_str()
+                                     << ", existing:" << existingDirection.c_str();
                 return false;
             }
 
@@ -1827,8 +1835,7 @@ bool QSocGenerateManager::processCombLogic()
             const YAML::Node &combItem = netlistData["comb"][i];
 
             if (!combItem.IsMap()) {
-                QSocConsole::warn()
-                    << "Combinational logic item" << i << "is not a map, skipping";
+                QSocConsole::warn() << "Combinational logic item" << i << "is not a map, skipping";
                 continue;
             }
 
@@ -1900,8 +1907,7 @@ bool QSocGenerateManager::processCombLogic()
                     /* 'then' can be either scalar (simple value) or map (nested structure) */
                     if (!ifCondition["then"].IsScalar() && !ifCondition["then"].IsMap()) {
                         QSocConsole::warn()
-                            << "'then' field must be scalar or map for output"
-                            << outputSignal;
+                            << "'then' field must be scalar or map for output" << outputSignal;
                         validIfBlock = false;
                         break;
                     }
@@ -1921,10 +1927,9 @@ bool QSocGenerateManager::processCombLogic()
                             }
 
                             if (!thenNode["cases"] || !thenNode["cases"].IsMap()) {
-                                QSocConsole::warn()
-                                    << "Nested 'cases' field missing or not a map "
-                                       "for output"
-                                    << outputSignal;
+                                QSocConsole::warn() << "Nested 'cases' field missing or not a map "
+                                                       "for output"
+                                                    << outputSignal;
                                 validIfBlock = false;
                                 break;
                             }
@@ -1932,19 +1937,17 @@ bool QSocGenerateManager::processCombLogic()
                             /* Validate nested case entries */
                             for (const auto &caseEntry : thenNode["cases"]) {
                                 if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
-                                    QSocConsole::warn()
-                                        << "Nested case entries must have scalar "
-                                           "keys and values for output"
-                                        << outputSignal;
+                                    QSocConsole::warn() << "Nested case entries must have scalar "
+                                                           "keys and values for output"
+                                                        << outputSignal;
                                     validIfBlock = false;
                                     break;
                                 }
                             }
                         } else {
-                            QSocConsole::warn()
-                                << "Nested structure in 'then' field not supported "
-                                   "for output"
-                                << outputSignal;
+                            QSocConsole::warn() << "Nested structure in 'then' field not supported "
+                                                   "for output"
+                                                << outputSignal;
                             validIfBlock = false;
                             break;
                         }
@@ -1957,9 +1960,8 @@ bool QSocGenerateManager::processCombLogic()
 
                 /* Check for default value */
                 if (!combItem["default"]) {
-                    QSocConsole::warn()
-                        << "Missing 'default' field for conditional logic output"
-                        << outputSignal << ", may cause latches";
+                    QSocConsole::warn() << "Missing 'default' field for conditional logic output"
+                                        << outputSignal << ", may cause latches";
                 }
             } else if (combItem["case"]) {
                 /* Case statement - validate case and cases fields */
@@ -1993,9 +1995,8 @@ bool QSocGenerateManager::processCombLogic()
 
                 /* Check for default value */
                 if (!combItem["default"]) {
-                    QSocConsole::warn()
-                        << "Missing 'default' field for case statement output"
-                        << outputSignal << ", may cause latches";
+                    QSocConsole::warn() << "Missing 'default' field for case statement output"
+                                        << outputSignal << ", may cause latches";
                 }
             }
 
@@ -2037,8 +2038,7 @@ bool QSocGenerateManager::processSeqLogic()
 
             /* Validate that each item is a map */
             if (!seqItem.IsMap()) {
-                QSocConsole::warn()
-                    << "Sequential logic item" << i << "is not a map, skipping";
+                QSocConsole::warn() << "Sequential logic item" << i << "is not a map, skipping";
                 continue;
             }
 
@@ -2071,15 +2071,13 @@ bool QSocGenerateManager::processSeqLogic()
             /* Validate edge type (if present) */
             if (seqItem["edge"]) {
                 if (!seqItem["edge"].IsScalar()) {
-                    QSocConsole::warn()
-                        << "'edge' field must be a scalar for register" << regName;
+                    QSocConsole::warn() << "'edge' field must be a scalar for register" << regName;
                     continue;
                 }
                 const QString edge = QString::fromStdString(seqItem["edge"].as<std::string>());
                 if (edge != "pos" && edge != "neg") {
-                    QSocConsole::warn()
-                        << "'edge' field must be 'pos' or 'neg' for register" << regName
-                        << ", got:" << edge;
+                    QSocConsole::warn() << "'edge' field must be 'pos' or 'neg' for register"
+                                        << regName << ", got:" << edge;
                     continue;
                 }
             }
@@ -2087,16 +2085,14 @@ bool QSocGenerateManager::processSeqLogic()
             /* Validate reset fields (if present) */
             if (seqItem["rst"]) {
                 if (!seqItem["rst"].IsScalar()) {
-                    QSocConsole::warn()
-                        << "'rst' field must be a scalar for register" << regName;
+                    QSocConsole::warn() << "'rst' field must be a scalar for register" << regName;
                     continue;
                 }
 
                 /* Reset value is required when reset is present */
                 if (!seqItem["rst_val"]) {
                     QSocConsole::warn()
-                        << "'rst_val' is required when 'rst' is present for register"
-                        << regName;
+                        << "'rst_val' is required when 'rst' is present for register" << regName;
                     continue;
                 }
 
@@ -2109,8 +2105,7 @@ bool QSocGenerateManager::processSeqLogic()
 
             /* Validate enable field (if present) */
             if (seqItem["enable"] && !seqItem["enable"].IsScalar()) {
-                QSocConsole::warn()
-                    << "'enable' field must be a scalar for register" << regName;
+                QSocConsole::warn() << "'enable' field must be a scalar for register" << regName;
                 continue;
             }
 
@@ -2135,18 +2130,16 @@ bool QSocGenerateManager::processSeqLogic()
                 bool validIfBlock = true;
                 for (const auto &ifEntry : seqItem["if"]) {
                     if (!ifEntry.IsMap() || !ifEntry["cond"] || !ifEntry["then"]) {
-                        QSocConsole::warn()
-                            << "'if' entries must have 'cond' and 'then' fields "
-                               "for register"
-                            << regName;
+                        QSocConsole::warn() << "'if' entries must have 'cond' and 'then' fields "
+                                               "for register"
+                                            << regName;
                         validIfBlock = false;
                         break;
                     }
 
                     if (!ifEntry["cond"].IsScalar() || !ifEntry["then"].IsScalar()) {
                         QSocConsole::warn()
-                            << "'cond' and 'then' fields must be scalars for register"
-                            << regName;
+                            << "'cond' and 'then' fields must be scalars for register" << regName;
                         validIfBlock = false;
                         break;
                     }
@@ -2158,9 +2151,8 @@ bool QSocGenerateManager::processSeqLogic()
 
                 /* Check for default value */
                 if (!seqItem["default"]) {
-                    QSocConsole::warn()
-                        << "Missing 'default' field for 'if' logic register" << regName
-                        << ", may cause latches";
+                    QSocConsole::warn() << "Missing 'default' field for 'if' logic register"
+                                        << regName << ", may cause latches";
                 }
             }
 

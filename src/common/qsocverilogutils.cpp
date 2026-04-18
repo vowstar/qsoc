@@ -131,3 +131,23 @@ QString QSocVerilogUtils::escapeVerilogComment(const QString &text)
     escaped.replace("//", "/ /"); // Avoid line comments within comments
     return escaped;
 }
+
+QString QSocVerilogUtils::normalizeBitSelect(const QString &bitSelect)
+{
+    if (bitSelect.isEmpty()) {
+        return bitSelect;
+    }
+    static const QRegularExpression rangeRegex(R"(^\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*$)");
+    const QRegularExpressionMatch   match = rangeRegex.match(bitSelect);
+    if (!match.hasMatch()) {
+        return bitSelect;
+    }
+    bool      leftOk   = false;
+    bool      rightOk  = false;
+    const int leftIdx  = match.captured(1).toInt(&leftOk);
+    const int rightIdx = match.captured(2).toInt(&rightOk);
+    if (!leftOk || !rightOk || leftIdx >= rightIdx) {
+        return bitSelect;
+    }
+    return QString("[%1:%2]").arg(rightIdx).arg(leftIdx);
+}
