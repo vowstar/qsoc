@@ -3732,6 +3732,134 @@ instance:
         QVERIFY(verifyVerilogContent(
             "test_bitsel_exceed_port_link", "FIXME: Net data_bus width mismatch"));
     }
+
+    /**
+     * `bits: "[ 7 : 4 ]"` (with embedded whitespace) used to leak straight
+     * into the instantiation as `data_bus[7 : 4]`, which strict synth tools
+     * reject and which breaks string-based dedup. Normalize must always
+     * emit canonical `[hi:lo]` regardless of input spacing.
+     */
+    void testGenerateBitSelectStripsWhitespace()
+    {
+        const QString drvContent = R"(
+narrow4_drv:
+  port:
+    out4:
+      type: "logic[3:0]"
+      direction: out
+)";
+        const QString rcvContent = R"(
+wide8_rcv:
+  port:
+    in8:
+      type: "logic[7:0]"
+      direction: in
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("narrow4_drv.soc_mod"));
+        QFile         rcvMod(moduleDir.filePath("wide8_rcv.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+        QVERIFY(rcvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        rcvMod.write(rcvContent.toUtf8());
+        rcvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_bitsel_whitespace"
+instance:
+  u_drv: { module: "narrow4_drv" }
+  u_rcv: { module: "wide8_rcv" }
+net:
+  data_bus:
+    - { instance: u_drv, port: out4, bits: "[ 7 : 4 ]" }
+    - { instance: u_rcv, port: in8 }
+)";
+        const QString filePath   = createTempFile("test_bitsel_whitespace.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        QVERIFY(verifyVerilogContent("test_bitsel_whitespace", "u_drv (.out4(data_bus[7:4]))"));
+
+        /* verifyVerilogContent collapses whitespace, so re-read the raw file
+           to confirm canonical form is emitted byte-for-byte. */
+        const QString outPath
+            = QDir(projectManager.getOutputPath()).filePath("test_bitsel_whitespace.v");
+        QFile rawOut(outPath);
+        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray rawBytes = rawOut.readAll();
+        rawOut.close();
+        QVERIFY(rawBytes.contains("data_bus[7:4]"));
+        QVERIFY(!rawBytes.contains("data_bus[7 : 4]"));
+        QVERIFY(!rawBytes.contains("data_bus[ 7"));
+    }
+
+    /**
+     * The same instance.port appearing twice on the same net is invalid:
+     * a port is a single signal and cannot drive two different slices.
+     * Pre-fix the second entry silently overwrote the first via QMap
+     * assignment, losing the user's wiring without any warning. The fix
+     * keeps the first connection and surfaces a FIXME comment.
+     */
+    void testGenerateNetRejectsDuplicateInstancePort()
+    {
+        const QString drvContent = R"(
+wide8_drv:
+  port:
+    out8:
+      type: "logic[7:0]"
+      direction: out
+)";
+        const QString rcvContent = R"(
+wide8_rcv:
+  port:
+    in8:
+      type: "logic[7:0]"
+      direction: in
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("wide8_drv.soc_mod"));
+        QFile         rcvMod(moduleDir.filePath("wide8_rcv.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+        QVERIFY(rcvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        rcvMod.write(rcvContent.toUtf8());
+        rcvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_net_duplicate_port"
+instance:
+  u_drv: { module: "wide8_drv" }
+  u_rcv: { module: "wide8_rcv" }
+net:
+  data_bus:
+    - { instance: u_drv, port: out8, bits: "[3:0]" }
+    - { instance: u_drv, port: out8, bits: "[7:4]" }
+    - { instance: u_rcv, port: in8 }
+)";
+        const QString filePath   = createTempFile("test_net_duplicate_port.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        /* First entry kept, second discarded. */
+        QVERIFY(verifyVerilogContent("test_net_duplicate_port", "u_drv (.out8(data_bus[3:0]))"));
+        QVERIFY(!verifyVerilogContent("test_net_duplicate_port", "data_bus[7:4]"));
+        QVERIFY(verifyVerilogContent(
+            "test_net_duplicate_port", "FIXME: Net data_bus has duplicate instance.port entries"));
+    }
 };
 
 QStringList Test::messageList;
