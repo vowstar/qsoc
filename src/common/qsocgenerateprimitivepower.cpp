@@ -112,7 +112,15 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfig(
                 QSocConsole::error() << "'name' field is required for each domain";
                 continue;
             }
-            domain.name = QString::fromStdString(domainNode["name"].as<std::string>());
+            const QString rawName = QString::fromStdString(domainNode["name"].as<std::string>());
+            /* Bracket characters in a domain name leak into wire/instance/
+               port identifiers and produce illegal Verilog (matches the
+               clock/reset bracket-leak fix). Sanitize and warn. */
+            domain.name = QSocVerilogUtils::sanitizeBitSelectInName(rawName);
+            if (domain.name != rawName) {
+                QSocConsole::warn() << "Power domain name" << rawName
+                                    << "contains bracket characters; sanitized to" << domain.name;
+            }
 
             // Cache YAML node for type inference
             m_domainYamlCache[domain.name] = domainNode;

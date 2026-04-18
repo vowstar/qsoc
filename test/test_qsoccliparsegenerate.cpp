@@ -579,12 +579,15 @@ net:
         /* Verify invert logic for cpu0 */
         QVERIFY(verifyVerilogContent("invert_test", "cpu0"));
         QVERIFY(verifyVerilogContent("invert_test", ".axim_clk_en(1'd0)"));
-        QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid(~arvalid_net)"));
+        /* `biu_pad_arvalid` is an OUTPUT port; `invert: true` cannot apply
+           to an output destination. The fix strips the invert and warns. */
+        QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid(arvalid_net)"));
+        QVERIFY(!verifyVerilogContent("invert_test", ".biu_pad_arvalid(~"));
 
         /* Verify invert logic for cpu1 */
         QVERIFY(verifyVerilogContent("invert_test", "cpu1"));
         QVERIFY(verifyVerilogContent("invert_test", ".axim_clk_en(~(1'd1))"));
-        QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid(~arvalid_net)"));
+        QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid(arvalid_net)"));
 
         /* Verify net connections */
         QVERIFY(verifyVerilogContent("invert_test", "wire clk_net"));
@@ -4728,6 +4731,62 @@ reset:
         QVERIFY(!rawBytes.contains("rst_n[3:0]_link"));
         QVERIFY(rawBytes.contains("clk_out_3"));
         QVERIFY(rawBytes.contains("rst_n_3_0"));
+    }
+
+    /**
+     * `invert: true` on an output (or inout) port used to emit
+     * `.port(~wire)` which is illegal Verilog: you cannot invert an output
+     * destination. Strip the invert and warn.
+     */
+    void testGenerateStripsInvertOnOutputPort()
+    {
+        const QString modContent = R"(
+flag_drv:
+  port:
+    out_flag:
+      type: "logic"
+      direction: out
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         mod(moduleDir.filePath("flag_drv.soc_mod"));
+        QVERIFY(mod.open(QIODevice::WriteOnly | QIODevice::Text));
+        mod.write(modContent.toUtf8());
+        mod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_invert_on_output"
+instance:
+  u_drv:
+    module: flag_drv
+    port:
+      out_flag:
+        invert: true
+net:
+  flag_net:
+    - { instance: u_drv, port: out_flag }
+)";
+        const QString filePath   = createTempFile("test_invert_on_output.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool warned = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("'invert: true'") && msg.contains("u_drv")
+                && msg.contains("out_flag")) {
+                warned = true;
+                break;
+            }
+        }
+        QVERIFY(warned);
+        QVERIFY(verifyVerilogContent("test_invert_on_output", ".out_flag(flag_net)"));
+        QVERIFY(!verifyVerilogContent("test_invert_on_output", ".out_flag(~"));
     }
 };
 
