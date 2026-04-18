@@ -66,6 +66,17 @@ public:
      *         reversed slice would generate illegal Verilog.
      */
     static QString normalizeBitSelect(const QString &bitSelect);
+
+    /**
+     * @brief Convert a Verilog signal-with-bit-select into a safe identifier
+     * @param name Raw name possibly containing `[`, `]`, `:` like `clk_out[3]`
+     *             or `data[7:4]`
+     * @return The brackets and colons replaced with underscores so the
+     *         result is a legal Verilog identifier (e.g. `clk_out_3`,
+     *         `data_7_4`). Other characters pass through unchanged. Empty
+     *         input returns empty.
+     */
+    static QString sanitizeBitSelectInName(const QString &name);
 };
 
 #endif // QSOCVERILOGUTILS_H

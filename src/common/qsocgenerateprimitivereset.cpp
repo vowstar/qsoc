@@ -90,8 +90,16 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
     // Parse sources (source: {name: {polarity: ...}})
     if (resetNode["source"] && resetNode["source"].IsMap()) {
         for (auto it = resetNode["source"].begin(); it != resetNode["source"].end(); ++it) {
-            ResetSource source;
-            source.name = QString::fromStdString(it->first.as<std::string>());
+            ResetSource   source;
+            const QString rawName = QString::fromStdString(it->first.as<std::string>());
+            /* Bracket characters in a source name leak into wire/instance/
+               port identifiers and produce illegal Verilog. Sanitize and
+               warn so the user knows to use plain identifier names. */
+            source.name = QSocVerilogUtils::sanitizeBitSelectInName(rawName);
+            if (source.name != rawName) {
+                QSocConsole::warn() << "Reset source name" << rawName
+                                    << "contains bracket characters; sanitized to" << source.name;
+            }
 
             if (it->second.IsMap() && it->second["active"]) {
                 source.active = QString::fromStdString(it->second["active"].as<std::string>());
@@ -115,8 +123,13 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
             if (!tgtNode.IsMap())
                 continue;
 
-            ResetTarget target;
-            target.name = QString::fromStdString(tgtIt->first.as<std::string>());
+            ResetTarget   target;
+            const QString rawName = QString::fromStdString(tgtIt->first.as<std::string>());
+            target.name           = QSocVerilogUtils::sanitizeBitSelectInName(rawName);
+            if (target.name != rawName) {
+                QSocConsole::warn() << "Reset target name" << rawName
+                                    << "contains bracket characters; sanitized to" << target.name;
+            }
 
             // Parse target active level
             if (tgtNode["active"]) {
@@ -184,8 +197,14 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
                 for (const auto &key : linkKeys) {
                     YAML::Node linkNode = linkMap[key];
 
-                    ResetLink link;
-                    link.source = QString::fromStdString(key);
+                    ResetLink     link;
+                    const QString rawSource = QString::fromStdString(key);
+                    link.source             = QSocVerilogUtils::sanitizeBitSelectInName(rawSource);
+                    if (link.source != rawSource) {
+                        QSocConsole::warn()
+                            << "Reset link source name" << rawSource
+                            << "contains bracket characters; sanitized to" << link.source;
+                    }
 
                     // Handle null/empty links (direct connections)
                     if (!linkNode || linkNode.IsNull()) {

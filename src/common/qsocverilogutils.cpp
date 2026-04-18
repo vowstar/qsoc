@@ -169,3 +169,17 @@ QString QSocVerilogUtils::normalizeBitSelect(const QString &bitSelect)
     }
     return bitSelect;
 }
+
+QString QSocVerilogUtils::sanitizeBitSelectInName(const QString &name)
+{
+    if (name.isEmpty()) {
+        return name;
+    }
+    QString sanitized = name;
+    sanitized.replace('[', '_');
+    sanitized.replace(':', '_');
+    /* Drop the closing bracket entirely so `clk_out[3]` becomes `clk_out_3`
+       rather than `clk_out_3_`. */
+    sanitized.remove(']');
+    return sanitized;
+}
