@@ -2,6 +2,26 @@
 <reset-format>
 The reset section defines reset controller primitives that generate proper reset signaling throughout the SoC. Reset primitives provide comprehensive reset management with support for multiple reset sources, component-based processing, signal polarity handling, and standardized module generation.
 
+#block(
+  fill: rgb("#fffce8"),
+  inset: 8pt,
+  radius: 4pt,
+  stroke: rgb("#a08410") + 0.5pt,
+)[
+  *Standalone module:* a `reset:` block generates a self-contained
+  Verilog module named after `reset.name`. The generated module is NOT
+  auto-instantiated by any parent netlist - the user instantiates it
+  manually (or via `qsoc module import` followed by an `_inst.soc_net`
+  entry) at the top level. This is by design.
+
+  *Auto-input pattern:* a target's `link:` source that is neither a
+  declared `source:` nor another target gets auto-promoted to a fresh
+  input port on the controller. This is how you wire software
+  controlled resets (e.g. `rst_sw_*_n`) from outside the controller.
+  A typo in the source name surfaces downstream as an unwired
+  controller pin, not as a qsoc warning.
+]
+
 == RESET OVERVIEW
 <soc-net-reset-overview>
 Reset controllers are essential for proper SoC operation, ensuring that all logic blocks start in a known state and can be reset reliably. QSoC supports sophisticated reset topologies with multiple reset sources mapping to multiple reset targets through a clear source → target → link relationship structure.
