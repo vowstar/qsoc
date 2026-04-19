@@ -78,6 +78,12 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
     }
 }
 
+void QSocGenerateManager::resetGenerateData()
+{
+    netlistData = YAML::Node();
+    QSocConsole::debug() << "Generate data has been reset.";
+}
+
 bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
 {
     try {

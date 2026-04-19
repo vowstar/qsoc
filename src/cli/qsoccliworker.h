@@ -19,6 +19,7 @@
 
 class QSocAgent;
 class QAgentReadline;
+class QSocPathContext;
 
 /**
  * @brief The QSocCliWorker class.
@@ -383,7 +384,10 @@ private:
      * @retval false Run failed.
      */
     bool runAgentLoop(
-        QSocAgent *agent, bool streaming = false, const QString &resumeSessionId = QString());
+        QSocAgent       *agent,
+        bool             streaming       = false,
+        const QString   &resumeSessionId = QString(),
+        QSocPathContext *pathContext     = nullptr);
 
     /**
      * @brief Show application name and version and emit exit with exitCode.

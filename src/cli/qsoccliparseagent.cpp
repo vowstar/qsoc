@@ -857,10 +857,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             resumeSessionId = sessions.first().id;
         }
     }
-    return runAgentLoop(agent, streaming, resumeSessionId);
+    return runAgentLoop(agent, streaming, resumeSessionId, pathContext);
 }
 
-bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString &resumeSessionId)
+bool QSocCliWorker::runAgentLoop(
+    QSocAgent *agent, bool streaming, const QString &resumeSessionId, QSocPathContext *pathContext)
 {
     /* Require interactive terminal for TUI */
     QTerminalCapability termCap;
@@ -1157,36 +1158,64 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
     int       popupAtPos = -1; /* '@' position for AtFile, 0 for SlashCommand */
 
     /* Slash command table for tab completion. Built-in commands plus
-     * user-invocable skills discovered at startup. */
-    QStringList slashCommands
+     * user-invocable skills discovered at startup. The builtins are kept
+     * in a fixed list so /project can rebuild the full table (builtins +
+     * new project's skills) without accumulating stale entries. */
+    const QStringList slashCommandBuiltins
         = {QStringLiteral("help"),
            QStringLiteral("branch"),
            QStringLiteral("clear"),
            QStringLiteral("compact"),
            QStringLiteral("context"),
            QStringLiteral("cost"),
+           QStringLiteral("cwd"),
            QStringLiteral("diff"),
            QStringLiteral("effort"),
            QStringLiteral("model"),
+           QStringLiteral("project"),
            QStringLiteral("rename"),
            QStringLiteral("status"),
            QStringLiteral("exit"),
            QStringLiteral("quit")};
-
-    /* Discover user-invocable skills and register them as slash commands.
-     * skillPaths maps "/skill-name" → SKILL.md file path for dispatch. */
+    QStringList            slashCommands = slashCommandBuiltins;
     QMap<QString, QString> skillPaths;
-    if (auto *reg = agent->getToolRegistry()) {
-        if (auto *skillTool = dynamic_cast<QSocToolSkillFind *>(
-                reg->getTool(QStringLiteral("skill_find")))) {
-            for (const auto &skill : skillTool->scanAllSkills()) {
-                if (skill.userInvocable && !slashCommands.contains(skill.name)) {
-                    slashCommands.append(skill.name);
-                    skillPaths.insert(QStringLiteral("/") + skill.name, skill.path);
+
+    /* Rebuild the skill dispatch table and agent system-prompt listing from
+     * the current projectManager state. Called at startup and on /project. */
+    auto reloadSkills = [&]() {
+        slashCommands = slashCommandBuiltins;
+        skillPaths.clear();
+        QString listing;
+        if (auto *reg = agent->getToolRegistry()) {
+            if (auto *skillTool = dynamic_cast<QSocToolSkillFind *>(
+                    reg->getTool(QStringLiteral("skill_find")))) {
+                const auto skills = skillTool->scanAllSkills();
+                if (!skills.isEmpty()) {
+                    listing += QStringLiteral(
+                        "The following skills are installed. Use skill_find(action:\"read\", "
+                        "query:\"<name>\") to load the full prompt, or the user can invoke "
+                        "user-invocable ones directly as /<name> slash commands.\n\n");
+                    for (const auto &skill : skills) {
+                        listing += QStringLiteral("- **") + skill.name + QStringLiteral("** [")
+                                   + skill.scope + QStringLiteral("]: ") + skill.description;
+                        if (skill.userInvocable) {
+                            listing += QStringLiteral(" (user-invocable: /") + skill.name
+                                       + QStringLiteral(")");
+                            if (!slashCommands.contains(skill.name)) {
+                                slashCommands.append(skill.name);
+                                skillPaths.insert(QStringLiteral("/") + skill.name, skill.path);
+                            }
+                        }
+                        listing += QStringLiteral("\n");
+                    }
                 }
             }
         }
-    }
+        QSocAgentConfig cfg = agent->getConfig();
+        cfg.skillListing    = listing;
+        agent->setConfig(cfg);
+    };
+    reloadSkills();
 
     /* Helper: detect '/<word>' at start of buffer with cursor inside the
      * command word (no whitespace between '/' and cursor). Returns the
@@ -1367,6 +1396,123 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
     /* Cumulative session token accounting for /cost. */
     qint64 sessionInputTokens  = 0;
     qint64 sessionOutputTokens = 0;
+
+    /* Wire the per-session file-history store into the file-writing tools so
+     * their next execute() captures pre-edit backups. Registry was populated
+     * in parseAgent() long before runAgentLoop runs, so we fish tools out by
+     * name. Called any time currentFileHistory is rebound. */
+    auto wireFileHistoryTools = [&]() {
+        if (auto *registry = agent->getToolRegistry()) {
+            if (auto *tool = dynamic_cast<QSocToolFileWrite *>(
+                    registry->getTool(QStringLiteral("write_file")))) {
+                tool->setFileHistory(currentFileHistory.get());
+            }
+            if (auto *tool = dynamic_cast<QSocToolFileEdit *>(
+                    registry->getTool(QStringLiteral("edit_file")))) {
+                tool->setFileHistory(currentFileHistory.get());
+            }
+        }
+    };
+
+    /* Create a fresh session + file history rooted at projectPath, stamp
+     * creation meta, and rewire the file-writing tools. Used by /project
+     * switch; startup uses the same building blocks inline to interleave
+     * with the resume path. */
+    auto startFreshSessionAt = [&](const QString &projectPath) {
+        const QString newId = QSocSession::generateId();
+        const QString sessionPath
+            = QDir(QSocSession::sessionsDir(projectPath)).filePath(newId + ".jsonl");
+        currentSession     = std::make_unique<QSocSession>(newId, sessionPath);
+        currentFileHistory = std::make_unique<QSocFileHistory>(projectPath, newId);
+        currentSession->appendMeta(
+            QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+        currentSession->appendMeta(QStringLiteral("cwd"), projectPath);
+        wireFileHistoryTools();
+    };
+
+    /* Replace the TODO widget contents with the pending items in
+     * <projectPath>/.qsoc/todos.md. Clears on missing/empty file so a
+     * /project switch doesn't leave old project's TODOs visible. */
+    auto loadTodoWidget = [&](const QString &projectPath) {
+        QList<QTuiTodoList::TodoItem> widgetItems;
+        if (!projectPath.isEmpty()) {
+            const QString todoPath = QDir(projectPath).filePath(QStringLiteral(".qsoc/todos.md"));
+            QFile         todoFile(todoPath);
+            if (todoFile.exists() && todoFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                const QStringList lines = QTextStream(&todoFile).readAll().split(QLatin1Char('\n'));
+                todoFile.close();
+                QRegularExpression todoRe(QStringLiteral(R"(^-\s*\[([ xX])\]\s*#(\d+)\s+(.+)$)"));
+                QString            curPri = QStringLiteral("medium");
+                for (const QString &line : lines) {
+                    if (line.startsWith(QStringLiteral("## High"))) {
+                        curPri = QStringLiteral("high");
+                    } else if (line.startsWith(QStringLiteral("## Medium"))) {
+                        curPri = QStringLiteral("medium");
+                    } else if (line.startsWith(QStringLiteral("## Low"))) {
+                        curPri = QStringLiteral("low");
+                    }
+                    auto match = todoRe.match(line);
+                    if (!match.hasMatch()) {
+                        continue;
+                    }
+                    if (match.captured(1) != QStringLiteral(" ")) {
+                        continue; /* skip done items */
+                    }
+                    QTuiTodoList::TodoItem item;
+                    item.id       = match.captured(2).toInt();
+                    item.title    = match.captured(3).trimmed();
+                    item.priority = curPri;
+                    item.status   = QStringLiteral("pending");
+                    widgetItems.append(item);
+                }
+            }
+        }
+        todoWidget.setItems(widgetItems);
+    };
+
+    /* Clear and reload the input history + paste maps from the given
+     * project's <projectPath>/.qsoc/history.jsonl. Silent on missing /
+     * malformed lines: history is advisory, not authoritative. */
+    auto loadInputHistory = [&](const QString &projectPath) {
+        inputHistory.clear();
+        inputHistoryPastes.clear();
+        if (projectPath.isEmpty()) {
+            return;
+        }
+        QFile histFile(QDir(projectPath).filePath(QStringLiteral(".qsoc/history.jsonl")));
+        if (!histFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            return;
+        }
+        QTextStream stream(&histFile);
+        while (!stream.atEnd()) {
+            QString line = stream.readLine();
+            if (line.isEmpty()) {
+                continue;
+            }
+            QJsonParseError err{};
+            QJsonDocument   doc = QJsonDocument::fromJson(line.toUtf8(), &err);
+            if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+                continue;
+            }
+            QJsonObject obj     = doc.object();
+            QString     display = obj.value(QStringLiteral("display")).toString();
+            if (display.isEmpty()) {
+                continue;
+            }
+            QMap<int, QString> pastes;
+            QJsonObject        pastesObj = obj.value(QStringLiteral("pastes")).toObject();
+            for (auto pIt = pastesObj.begin(); pIt != pastesObj.end(); ++pIt) {
+                bool parseOk = false;
+                int  pasteId = pIt.key().toInt(&parseOk);
+                if (parseOk) {
+                    pastes[pasteId] = pIt.value().toString();
+                }
+            }
+            inputHistory.append(display);
+            inputHistoryPastes.append(pastes);
+        }
+    };
+
     {
         const QString projectPath = sessionProjectPath(projectManager);
         QString       sessionId   = resumeSessionId;
@@ -1451,45 +1597,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
 
                 /* Restore pending TODOs from .qsoc/todos.md so the user
                  * sees what was in progress when the session was saved. */
-                {
-                    const QString todoPath
-                        = QDir(projectPath).filePath(QStringLiteral(".qsoc/todos.md"));
-                    QFile todoFile(todoPath);
-                    if (todoFile.exists() && todoFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                        const QStringList lines = QTextStream(&todoFile).readAll().split(
-                            QLatin1Char('\n'));
-                        todoFile.close();
-                        QRegularExpression todoRe(
-                            QStringLiteral(R"(^-\s*\[([ xX])\]\s*#(\d+)\s+(.+)$)"));
-                        QList<QTuiTodoList::TodoItem> widgetItems;
-                        QString                       curPri = QStringLiteral("medium");
-                        for (const QString &line : lines) {
-                            if (line.startsWith(QStringLiteral("## High"))) {
-                                curPri = QStringLiteral("high");
-                            } else if (line.startsWith(QStringLiteral("## Medium"))) {
-                                curPri = QStringLiteral("medium");
-                            } else if (line.startsWith(QStringLiteral("## Low"))) {
-                                curPri = QStringLiteral("low");
-                            }
-                            auto match = todoRe.match(line);
-                            if (!match.hasMatch()) {
-                                continue;
-                            }
-                            if (match.captured(1) != QStringLiteral(" ")) {
-                                continue; /* skip done items */
-                            }
-                            QTuiTodoList::TodoItem item;
-                            item.id       = match.captured(2).toInt();
-                            item.title    = match.captured(3).trimmed();
-                            item.priority = curPri;
-                            item.status   = QStringLiteral("pending");
-                            widgetItems.append(item);
-                        }
-                        if (!widgetItems.isEmpty()) {
-                            todoWidget.setItems(widgetItems);
-                        }
-                    }
-                }
+                loadTodoWidget(projectPath);
             }
         } else {
             currentSession->appendMeta(
@@ -1499,20 +1607,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             compositor.printContent(QString("(New session %1)\n\n").arg(sessionId.left(8)));
         }
 
-        /* Inject the per-session file history store into the file-writing
-         * tools so their next execute() captures pre-edit backups. The
-         * registry was populated in parseAgent() long before runAgentLoop
-         * runs, so we fish the tools back out by name. */
-        if (auto *registry = agent->getToolRegistry()) {
-            if (auto *tool = dynamic_cast<QSocToolFileWrite *>(
-                    registry->getTool(QStringLiteral("write_file")))) {
-                tool->setFileHistory(currentFileHistory.get());
-            }
-            if (auto *tool = dynamic_cast<QSocToolFileEdit *>(
-                    registry->getTool(QStringLiteral("edit_file")))) {
-                tool->setFileHistory(currentFileHistory.get());
-            }
-        }
+        wireFileHistoryTools();
     }
 
     /* Input history navigation position (inputHistory itself is declared above
@@ -1520,46 +1615,7 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
     int     historyPos = -1; /* -1 = not browsing, 0 = most recent */
     QString savedInput;      /* Input buffer before browsing */
 
-    /* Load history from .qsoc/history.jsonl. Each line is a JSON object
-     * {"display": "<chip form>", "pastes": {"<id>": "<content>"}}. Missing
-     * or malformed lines are skipped silently — history is advisory, not a
-     * source of truth we want to hard-fail on. */
-    {
-        QString projectPath = projectManager->getProjectPath();
-        if (!projectPath.isEmpty()) {
-            QFile histFile(QDir(projectPath).filePath(".qsoc/history.jsonl"));
-            if (histFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QTextStream stream(&histFile);
-                while (!stream.atEnd()) {
-                    QString line = stream.readLine();
-                    if (line.isEmpty()) {
-                        continue;
-                    }
-                    QJsonParseError err{};
-                    QJsonDocument   doc = QJsonDocument::fromJson(line.toUtf8(), &err);
-                    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
-                        continue;
-                    }
-                    QJsonObject obj     = doc.object();
-                    QString     display = obj.value(QStringLiteral("display")).toString();
-                    if (display.isEmpty()) {
-                        continue;
-                    }
-                    QMap<int, QString> pastes;
-                    QJsonObject        pastesObj = obj.value(QStringLiteral("pastes")).toObject();
-                    for (auto pIt = pastesObj.begin(); pIt != pastesObj.end(); ++pIt) {
-                        bool ok      = false;
-                        int  pasteId = pIt.key().toInt(&ok);
-                        if (ok) {
-                            pastes[pasteId] = pIt.value().toString();
-                        }
-                    }
-                    inputHistory.append(display);
-                    inputHistoryPastes.append(pastes);
-                }
-            }
-        }
-    }
+    loadInputHistory(projectManager->getProjectPath());
 
     /* Connect arrow keys: when completion popup is visible, Up/Down navigate
      * the popup (wrapping); otherwise they walk the input history. Arrow
@@ -2814,10 +2870,15 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             compositor.printContent("  /compact     - Compact conversation context\n");
             compositor.printContent("  /context     - Show token usage breakdown + suggestions\n");
             compositor.printContent("  /cost        - Show session token/cost totals\n");
+            compositor.printContent(
+                "  /cwd [path]  - Show or change the agent working directory (same project)\n");
             compositor.printContent("  /diff        - Review file edits turn-by-turn\n");
             compositor.printContent(
                 "  /effort    - Show/set reasoning effort (off/low/medium/high)\n");
             compositor.printContent("  /model       - Show/switch model\n");
+            compositor.printContent(
+                "  /project <p> - Switch to another project (reloads config, clears caches,\n"
+                "                 starts a new session; current session is saved)\n");
             compositor.printContent("  /rename <t>  - Set session title for resume picker\n");
             compositor.printContent("  /status      - Show model, session, endpoint info\n");
             compositor.printContent("  !<command>   - Execute a shell command directly\n");
@@ -3102,6 +3163,135 @@ bool QSocCliWorker::runAgentLoop(QSocAgent *agent, bool streaming, const QString
             }
             compositor.invalidate();
             compositor.render();
+            continue;
+        }
+        if (cmd == QStringLiteral("/cwd") || cmd.startsWith(QStringLiteral("/cwd "))) {
+            const QString arg = input.mid(4).trimmed();
+            if (arg.isEmpty()) {
+                const QString workingDir = pathContext ? pathContext->getWorkingDir()
+                                                       : QDir::currentPath();
+                compositor.printContent(QString("Working dir: %1\n").arg(workingDir));
+                const QString projectDir = projectManager->getProjectPath();
+                if (!projectDir.isEmpty()) {
+                    compositor.printContent(
+                        QString("Project dir: %1\n").arg(projectDir), QTuiScrollView::Dim);
+                }
+                continue;
+            }
+            /* Resolve relative paths against the current agent working dir,
+             * not the launch-time process cwd — that matches user intent
+             * after they've already switched with /cwd once. */
+            const QString   base = pathContext ? pathContext->getWorkingDir() : QDir::currentPath();
+            const QString   resolved = QFileInfo(arg).isAbsolute() ? arg
+                                                                   : QDir(base).absoluteFilePath(arg);
+            const QFileInfo info(resolved);
+            if (!info.exists() || !info.isDir()) {
+                compositor.printContent(QString("Not a directory: %1\n").arg(resolved));
+                continue;
+            }
+            const QString canonical = info.canonicalFilePath();
+            if (pathContext) {
+                pathContext->setWorkingDir(canonical);
+            }
+            compositor.printContent(QString("Working dir: %1\n").arg(canonical));
+            continue;
+        }
+        if (cmd == QStringLiteral("/project") || cmd.startsWith(QStringLiteral("/project "))) {
+            const QString arg = input.mid(8).trimmed();
+            if (arg.isEmpty()) {
+                const QString projectDir = projectManager->getProjectPath();
+                compositor.printContent(
+                    QString("Project: %1\n")
+                        .arg(projectDir.isEmpty() ? QStringLiteral("(none)") : projectDir));
+                continue;
+            }
+            const QString   base = pathContext ? pathContext->getWorkingDir() : QDir::currentPath();
+            const QString   resolved = QFileInfo(arg).isAbsolute() ? arg
+                                                                   : QDir(base).absoluteFilePath(arg);
+            const QFileInfo info(resolved);
+            if (!info.exists() || !info.isDir()) {
+                compositor.printContent(QString("Not a directory: %1\n").arg(resolved));
+                continue;
+            }
+            const QString canonical = info.canonicalFilePath();
+
+            /* Short-circuit: switching to the project we're already on is a
+             * no-op. Doing the full teardown would needlessly clear history
+             * and spawn a new session. */
+            if (canonical == projectManager->getProjectPath()) {
+                compositor.printContent(QString("Already on project: %1\n").arg(canonical));
+                continue;
+            }
+
+            /* Persist any outstanding session delta before we switch away from
+             * the current project; the new project gets a brand-new session. */
+            if (currentSession) {
+                lastPersistedIndex
+                    = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
+            }
+
+            /* Drop all in-memory state tied to the old project. Skipping any
+             * of these lets old buses/modules/netlists/LSP diagnostics leak
+             * into the new project's agent view. */
+            busManager->resetBusData();
+            moduleManager->resetModuleData();
+            generateManager->resetGenerateData();
+            QSocToolShellBash::killAllActive();
+            if (auto *lsp = QLspService::instance()) {
+                lsp->stopAll();
+            }
+            if (pathContext) {
+                pathContext->clearUserDirs();
+            }
+
+            /* Swap projectManager over to the new directory and re-run the
+             * same init sequence the startup path uses. */
+            projectManager->setProjectPath(canonical);
+            socConfig->loadConfig();
+            llmService->setConfig(socConfig);
+            const bool loaded = projectManager->loadFirst(true);
+
+            if (auto *lsp = QLspService::instance()) {
+                lsp->startAll(projectManager->getProjectPath());
+            }
+
+            /* Agent config carries projectPath into the system prompt, so
+             * AGENTS.md / skill listing from the new project only get picked
+             * up after we feed the updated config back in. */
+            {
+                QSocAgentConfig cfg = agent->getConfig();
+                cfg.projectPath     = projectManager->getProjectPath();
+                agent->setConfig(cfg);
+            }
+            reloadSkills();
+
+            if (pathContext) {
+                pathContext->setWorkingDir(projectManager->getProjectPath());
+            }
+
+            /* Reset per-session counters so /cost and the status bar don't
+             * show cumulative totals across two different projects. */
+            sessionInputTokens  = 0;
+            sessionOutputTokens = 0;
+            statusBarWidget.updateTokens(0, 0);
+
+            /* The previous conversation is about the previous project; its
+             * JSONL stays on disk but the in-memory agent starts clean. */
+            agent->clearHistory();
+            startFreshSessionAt(sessionProjectPath(projectManager));
+            lastPersistedIndex = 0;
+            turnCounter        = 0;
+
+            /* Reload per-project UI state: TODO widget and input history. */
+            loadTodoWidget(projectManager->getProjectPath());
+            loadInputHistory(projectManager->getProjectPath());
+
+            compositor.printContent(
+                QString("Project: %1 (new session %2)%3\n")
+                    .arg(
+                        canonical,
+                        currentSession->id().left(8),
+                        loaded ? QString() : QStringLiteral(" [no *.soc_pro found]")));
             continue;
         }
 
