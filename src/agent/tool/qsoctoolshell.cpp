@@ -26,6 +26,11 @@ QSocToolShellBash::QSocToolShellBash(QObject *parent, QSocProjectManager *projec
 
 QSocToolShellBash::~QSocToolShellBash()
 {
+    killAllActive();
+}
+
+void QSocToolShellBash::killAllActive()
+{
     for (auto &info : activeProcesses) {
         if (info.process) {
             info.process->kill();
@@ -46,7 +51,9 @@ QString QSocToolShellBash::getDescription() const
 {
     return "Execute a bash command in the project directory. "
            "Returns stdout and stderr. Set timeout as needed (no upper limit). "
-           "If command times out, process keeps running and can be managed via bash_manage tool.";
+           "If command times out, process keeps running and can be managed via bash_manage tool. "
+           "Each call starts a fresh process in the project directory; cwd does not persist "
+           "across calls. Use absolute paths or chain with && (e.g. 'cd build && make').";
 }
 
 json QSocToolShellBash::getParametersSchema() const

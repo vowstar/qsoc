@@ -326,6 +326,13 @@ public slots:
     bool loadNetlist(const QString &netlistFilePath);
 
     /**
+     * @brief Reset the in-memory generate state.
+     * @details Clears the cached netlist data so a subsequent load starts
+     *          from a clean slate. Safe to call when no netlist is loaded.
+     */
+    void resetGenerateData();
+
+    /**
      * @brief Set netlist data directly.
      * @details Sets the netlist data directly from a YAML node, useful for
      *          processing merged netlists.

@@ -53,6 +53,13 @@ bool QSocBusManager::isBusPathValid()
     return true;
 }
 
+void QSocBusManager::resetBusData()
+{
+    libraryMap.clear();
+    busData = YAML::Node();
+    QSocConsole::debug() << "Bus data has been reset.";
+}
+
 bool QSocBusManager::importFromFileList(
     const QString &libraryName, const QString &busName, const QStringList &filePathList)
 {

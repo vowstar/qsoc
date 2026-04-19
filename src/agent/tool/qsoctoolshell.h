@@ -44,6 +44,15 @@ public:
 
     void setProjectManager(QSocProjectManager *projectManager);
 
+    /**
+     * @brief Kill every background process tracked by bash_manage.
+     * @details Iterates activeProcesses, sends kill + deletes QProcess objects,
+     *          removes their capture files, and clears the map. Called on
+     *          project switch so orphaned processes from the old project
+     *          don't surface in the new session's bash_manage list.
+     */
+    static void killAllActive();
+
 private:
     QSocProjectManager *projectManager = nullptr;
 

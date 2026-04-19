@@ -60,6 +60,15 @@ public slots:
     bool isBusPathValid();
 
     /**
+     * @brief Reset the bus data in memory.
+     * @details Clears the libraryMap and busData members, providing a fresh
+     *          environment for the next load operation. This method does not
+     *          physically delete any files on disk, only clearing the in-memory
+     *          representation of bus data.
+     */
+    void resetBusData();
+
+    /**
      * @brief Import CSV files into bus library.
      * @details Imports CSV files, specified in filePathList, into the
      *          bus library. This function creates or updates bus data
