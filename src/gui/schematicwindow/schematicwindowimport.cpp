@@ -32,24 +32,6 @@
 
 namespace {
 
-/* Top-level sections that describe inferred connections (clock tree, reset
- * tree, power, combinational / sequential / fsm helpers). Schematic view is
- * a purely structural representation, so these auto-generation helpers get
- * discarded on import. Instance port links to nets declared only in these
- * sections simply become dangling labels, which is fine. */
-const QStringList &strippedSections()
-{
-    static const QStringList sections = {
-        QStringLiteral("clock"),
-        QStringLiteral("reset"),
-        QStringLiteral("power"),
-        QStringLiteral("comb"),
-        QStringLiteral("seq"),
-        QStringLiteral("fsm"),
-    };
-    return sections;
-}
-
 /* Direction heuristic for synthesized port specs when the referenced module
  * is not present in the library. We only see port names from the netlist's
  * `instance.<name>.port.<p>: { link: net }` entries, not directions. The
@@ -220,13 +202,7 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
         return false;
     }
 
-    /* Strip sections that only exist for RTL auto-generation. */
-    YAML::Node work = QSocYamlUtils::cloneNode(merged);
-    for (const QString &key : strippedSections()) {
-        work.remove(key.toStdString());
-    }
-
-    if (!work["instance"] || !work["instance"].IsMap()) {
+    if (!merged["instance"] || !merged["instance"].IsMap()) {
         QMessageBox::warning(
             this,
             tr("Import Netlist"),
@@ -246,7 +222,7 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
      * pass positions them by layer, with column width computed from the
      * widest module plus widest net-label width plus stub length, so
      * labels from adjacent columns do not overlap. */
-    const YAML::Node &instances     = work["instance"];
+    const YAML::Node &instances     = merged["instance"];
     const int         instanceCount = static_cast<int>(instances.size());
     if (instanceCount == 0) {
         return false;
@@ -354,6 +330,21 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
         return false;
     }
 
+    /* Large-net (broadcast) classification, following NLView's `largenet`
+     * property. Nets whose fanout exceeds the threshold do not constrain
+     * the DAG: they collapse the layering (clock/reset pull every module
+     * into the same layer) and they render as per-endpoint stubs later
+     * anyway. Threshold scales with design size so small projects still
+     * see a sensible grid. */
+    const int largeNetThreshold
+        = std::max(8, static_cast<int>(std::round(std::sqrt(instanceCount))));
+    QSet<QString> largeNets;
+    for (auto netIt = netToEndpoints.constBegin(); netIt != netToEndpoints.constEnd(); ++netIt) {
+        if (netIt.value().size() >= largeNetThreshold) {
+            largeNets.insert(netIt.key());
+        }
+    }
+
     /* Layer assignment. Build an instance-level DAG where an edge
      * (driver -> consumer) exists whenever `driver` has an output linked
      * to some net that `consumer` reads as input. Longest-path layer
@@ -364,6 +355,9 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
     QHash<QString, QString> netDriver;
     for (const Prepared &pre : prepared) {
         for (const QString &netName : pre.outgoingNets) {
+            if (largeNets.contains(netName)) {
+                continue;
+            }
             if (!netDriver.contains(netName)) {
                 netDriver.insert(netName, pre.instanceName);
             }
@@ -374,6 +368,9 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
     for (const Prepared &pre : prepared) {
         QSet<QString> &set = upstream[pre.instanceName];
         for (const QString &netName : pre.incomingNets) {
+            if (largeNets.contains(netName)) {
+                continue;
+            }
             const auto it = netDriver.constFind(netName);
             if (it != netDriver.constEnd() && it.value() != pre.instanceName) {
                 set.insert(it.value());
