@@ -581,36 +581,70 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
         layerMaxModuleH.insert(layerKey, tallest);
     }
 
+    /* In-layer 2D packing. Hub-and-spoke SoCs concentrate peripherals
+     * in one layer; a 100-node single column is unreadable. Wrap into
+     * sub-columns of bounded height. The barycenter order within the
+     * layer is preserved within each sub-column so adjacent peripherals
+     * stay near each other. */
+    constexpr int       maxRowsPerColumn = 12;
+    QHash<int, int>     layerSubColCount;
+    QHash<QString, int> instanceSubCol;
+    QHash<QString, int> instanceRowInCol;
+    for (int layerKey : layerKeys) {
+        const QStringList &members = byLayer.value(layerKey);
+        const int          total   = members.size();
+        const int          cols    = std::max(1, (total + maxRowsPerColumn - 1) / maxRowsPerColumn);
+        const int          rowsPerCol = (total + cols - 1) / cols;
+        layerSubColCount.insert(layerKey, cols);
+        for (int i = 0; i < total; ++i) {
+            instanceSubCol.insert(members.at(i), i / rowsPerCol);
+            instanceRowInCol.insert(members.at(i), i % rowsPerCol);
+        }
+    }
+
     QHash<int, qreal> layerX;
     qreal             xCursor = 0.0;
     for (int i = 0; i < layerKeys.size(); ++i) {
-        const int layerKey = layerKeys.at(i);
+        const int   layerKey     = layerKeys.at(i);
+        const int   subCols      = layerSubColCount.value(layerKey, 1);
+        const qreal widthPerCol  = layerWidth.value(layerKey);
+        const qreal thisOutLabel = outLabelPxForLayer(layerKey);
+        const qreal thisInLabel  = inLabelPxForLayer(layerKey);
+        /* Gap between sub-columns within the same layer must fit
+         * right-side stubs of the left sub-col + left-side stubs of the
+         * right sub-col (same formula as between adjacent layers). */
+        const qreal subColGap = (2.0 * stubLength) + thisOutLabel + thisInLabel + horizPadding;
         layerX.insert(layerKey, xCursor);
-        const qreal widthHere = layerWidth.value(layerKey);
+        const qreal layerSpan = (subCols * widthPerCol) + ((subCols - 1) * subColGap);
         if (i + 1 < layerKeys.size()) {
-            const int   nextKey      = layerKeys.at(i + 1);
-            const qreal thisOutLabel = outLabelPxForLayer(layerKey);
-            const qreal nextInLabel  = inLabelPxForLayer(nextKey);
-            xCursor += widthHere + (2.0 * stubLength) + thisOutLabel + nextInLabel + horizPadding;
+            const int   nextKey     = layerKeys.at(i + 1);
+            const qreal nextInLabel = inLabelPxForLayer(nextKey);
+            xCursor += layerSpan + (2.0 * stubLength) + thisOutLabel + nextInLabel + horizPadding;
         } else {
-            xCursor += widthHere;
+            xCursor += layerSpan;
         }
     }
 
     /* Position modules. */
     QHash<QString, SchematicModule *> placedByInstance;
     for (int layerKey : layerKeys) {
-        const qreal xHere   = layerX.value(layerKey);
-        qreal       yCursor = 0.0;
+        const qreal xBase        = layerX.value(layerKey);
+        const qreal widthPerCol  = layerWidth.value(layerKey);
+        const qreal thisOutLabel = outLabelPxForLayer(layerKey);
+        const qreal thisInLabel  = inLabelPxForLayer(layerKey);
+        const qreal subColStride = widthPerCol + (2.0 * stubLength) + thisOutLabel + thisInLabel
+                                   + horizPadding;
+        const qreal rowHeight = layerMaxModuleH.value(layerKey) + vertPadding;
         for (const QString &inst : byLayer.value(layerKey)) {
             const Prepared *pre = byInstance.value(inst, nullptr);
             if (!pre) {
                 continue;
             }
-            pre->module->setPos(QPointF(xHere, yCursor));
+            const int subCol = instanceSubCol.value(inst, 0);
+            const int row    = instanceRowInCol.value(inst, 0);
+            pre->module->setPos(QPointF(xBase + (subCol * subColStride), row * rowHeight));
             scene.addItem(pre->module);
             placedByInstance.insert(pre->instanceName, pre->module.get());
-            yCursor += pre->module->size().height() + vertPadding;
         }
     }
 
