@@ -17,6 +17,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QtMath>
 
@@ -198,6 +199,16 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
     if (filePaths.isEmpty()) {
         return false;
     }
+
+    /* autoNameWires() runs on every netlistChanged signal, which fires
+     * per scene.addItem / scene.addWire. During bulk import it would
+     * rescan all nodes/connectors/nets for every wire added, turning
+     * the loop into O(W^3). Disconnect it for the duration and call
+     * it once at the end. */
+    disconnect(&scene, &QSchematic::Scene::netlistChanged, this, &SchematicWindow::autoNameWires);
+    auto restoreAutoName = qScopeGuard([this]() {
+        connect(&scene, &QSchematic::Scene::netlistChanged, this, &SchematicWindow::autoNameWires);
+    });
 
     /* Merge the selected soc_net YAML files. The merge prefers later
      * files over earlier ones, using the same utility that
@@ -963,45 +974,31 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
         if (!wm) {
             continue;
         }
-        for (const auto &netBase : wm->nets()) {
-            auto wireNet = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(netBase);
-            if (!wireNet) {
-                continue;
-            }
-            bool owns = false;
-            for (const auto &existing : wireNet->wires()) {
-                if (existing.get() == wire.get()) {
-                    owns = true;
-                    break;
-                }
-            }
-            if (owns) {
-                wireNet->set_name(netName);
-
-                /* Position the label on the wire itself. For a forward
-                 * L the first horizontal segment midpoint is the most
-                 * readable spot; for a backward U we use the top
-                 * crossing segment midpoint. Offset the label upwards
-                 * by half its height so it sits just above the line. */
-                QPointF labelCenter;
-                if (plan.isBackward) {
-                    labelCenter = {(plan.rightPort.x() + plan.leftPort.x()) / 2.0, plan.detourY};
-                } else if (qFuzzyCompare(plan.rightPort.y(), plan.leftPort.y())) {
-                    labelCenter
-                        = {(plan.rightPort.x() + plan.leftPort.x()) / 2.0, plan.rightPort.y()};
-                } else {
-                    const qreal midX = (plan.rightPort.x() + plan.leftPort.x()) / 2.0;
-                    labelCenter      = {(plan.rightPort.x() + midX) / 2.0, plan.rightPort.y()};
-                }
-                /* Shift slightly above the segment so the text does not
-                 * overlap the wire itself. */
-                if (auto tmpLabel = wireNet->label()) {
-                    labelCenter.ry() -= tmpLabel->boundingRect().height();
-                }
-                placeWireLabel(wireNet, netName, labelCenter);
-                break;
-            }
+        /* scene.addWire always appends a fresh net at the tail of
+         * wm->nets(), so the just-added wire's net is the last one. */
+        const auto allNets = wm->nets();
+        if (allNets.empty()) {
+            continue;
         }
+        auto wireNet = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(allNets.back());
+        if (!wireNet) {
+            continue;
+        }
+        wireNet->set_name(netName);
+
+        QPointF labelCenter;
+        if (plan.isBackward) {
+            labelCenter = {(plan.rightPort.x() + plan.leftPort.x()) / 2.0, plan.detourY};
+        } else if (qFuzzyCompare(plan.rightPort.y(), plan.leftPort.y())) {
+            labelCenter = {(plan.rightPort.x() + plan.leftPort.x()) / 2.0, plan.rightPort.y()};
+        } else {
+            const qreal midX = (plan.rightPort.x() + plan.leftPort.x()) / 2.0;
+            labelCenter      = {(plan.rightPort.x() + midX) / 2.0, plan.rightPort.y()};
+        }
+        if (auto tmpLabel = wireNet->label()) {
+            labelCenter.ry() -= tmpLabel->boundingRect().height();
+        }
+        placeWireLabel(wireNet, netName, labelCenter);
     }
 
     /* Fanin / fanout trunk routing. For nets with ≥3 non-bus endpoints
@@ -1152,42 +1149,32 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
             realWireByNet[netName].append(branch);
         }
 
-        /* Name the resulting WireNet. Any shared-endpoint merging by
-         * the wire system should already have unified all branches into
-         * one net; we still iterate in case merging produced more than
-         * one container. */
         auto wm = scene.wire_manager();
         if (!wm) {
             realWireNets.insert(netName, WirePlan{});
             continue;
         }
-        for (const auto &netBase : wm->nets()) {
-            auto wireNet = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(netBase);
+        /* Each scene.addWire call above appended exactly one fresh net
+         * at the tail of wm->nets(); name the trailing createdWires.size()
+         * nets (net-by-name grouping then merges them logically). */
+        const auto allNets   = wm->nets();
+        const int  tailCount = std::min<int>(allNets.size(), createdWires.size());
+        bool       placed    = false;
+        for (int i = static_cast<int>(allNets.size()) - tailCount;
+             i < static_cast<int>(allNets.size());
+             ++i) {
+            auto wireNet = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(allNets.at(i));
             if (!wireNet) {
                 continue;
             }
-            bool owns = false;
-            for (const auto &existing : wireNet->wires()) {
-                for (const auto &created : createdWires) {
-                    if (existing.get() == created.get()) {
-                        owns = true;
-                        break;
-                    }
-                }
-                if (owns) {
-                    break;
-                }
-            }
-            if (owns) {
-                wireNet->set_name(netName);
-                /* Place label next to the vertical trunk midpoint, offset
-                 * a little to the right of the trunk X so the text does
-                 * not sit on top of the trunk line. */
+            wireNet->set_name(netName);
+            if (!placed) {
                 QPointF labelCenter(trunkX, (minY + maxY) / 2.0);
                 if (auto tmpLabel = wireNet->label()) {
                     labelCenter.rx() += (tmpLabel->boundingRect().width() / 2.0) + 4.0;
                 }
                 placeWireLabel(wireNet, netName, labelCenter);
+                placed = true;
             }
         }
         realWireNets.insert(netName, WirePlan{});
@@ -1387,54 +1374,48 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
         if (!wm) {
             continue;
         }
-        for (const auto &netBase : wm->nets()) {
-            auto wireNet = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(netBase);
-            if (!wireNet) {
-                continue;
-            }
-            bool owns = false;
-            for (const auto &w : wireNet->wires()) {
-                if (w.get() == wire.get()) {
-                    owns = true;
+        /* scene.addWire always appends a fresh net at the tail of
+         * wm->nets(), so the just-added stub's net is the last one. */
+        const auto allNets = wm->nets();
+        if (allNets.empty()) {
+            continue;
+        }
+        auto wireNet = std::dynamic_pointer_cast<QSchematic::Items::WireNet>(allNets.back());
+        if (!wireNet) {
+            continue;
+        }
+        wireNet->set_name(netName);
+        const bool showLabel = (netStubCount.value(netName, 1) <= 1)
+                               || !netLabelShown.value(netName, false);
+        if (auto label = wireNet->label()) {
+            if (!showLabel) {
+                label->setVisible(false);
+            } else {
+                netLabelShown[netName] = true;
+                label->setText(netName);
+                const qreal labelW = label->boundingRect().width();
+                const qreal labelH = label->boundingRect().height();
+                QPointF     labelPos;
+                switch (se.side) {
+                case SchematicConnector::Left:
+                    labelPos.setX(stubEnd.x() - labelW);
+                    labelPos.setY(stubEnd.y() - labelH / 2);
+                    break;
+                case SchematicConnector::Right:
+                    labelPos.setX(stubEnd.x());
+                    labelPos.setY(stubEnd.y() - labelH / 2);
+                    break;
+                case SchematicConnector::Top:
+                    labelPos.setX(stubEnd.x() - labelW / 2);
+                    labelPos.setY(stubEnd.y() - labelH);
+                    break;
+                case SchematicConnector::Bottom:
+                    labelPos.setX(stubEnd.x() - labelW / 2);
+                    labelPos.setY(stubEnd.y());
                     break;
                 }
-            }
-            if (owns) {
-                wireNet->set_name(netName);
-                const bool showLabel = (netStubCount.value(netName, 1) <= 1)
-                                       || !netLabelShown.value(netName, false);
-                if (auto label = wireNet->label()) {
-                    if (!showLabel) {
-                        label->setVisible(false);
-                    } else {
-                        netLabelShown[netName] = true;
-                        label->setText(netName);
-                        const qreal labelW = label->boundingRect().width();
-                        const qreal labelH = label->boundingRect().height();
-                        QPointF     labelPos;
-                        switch (se.side) {
-                        case SchematicConnector::Left:
-                            labelPos.setX(stubEnd.x() - labelW);
-                            labelPos.setY(stubEnd.y() - labelH / 2);
-                            break;
-                        case SchematicConnector::Right:
-                            labelPos.setX(stubEnd.x());
-                            labelPos.setY(stubEnd.y() - labelH / 2);
-                            break;
-                        case SchematicConnector::Top:
-                            labelPos.setX(stubEnd.x() - labelW / 2);
-                            labelPos.setY(stubEnd.y() - labelH);
-                            break;
-                        case SchematicConnector::Bottom:
-                            labelPos.setX(stubEnd.x() - labelW / 2);
-                            labelPos.setY(stubEnd.y());
-                            break;
-                        }
-                        label->setRotation(0.0);
-                        label->setPos(labelPos);
-                    }
-                }
-                break;
+                label->setRotation(0.0);
+                label->setPos(labelPos);
             }
         }
     }
@@ -1447,6 +1428,10 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
         const qreal sceneMargin = 500.0;
         scene.setSceneRect(itemsRect.adjusted(-sceneMargin, -sceneMargin, sceneMargin, sceneMargin));
     }
+
+    /* autoNameWires runs once here; the scope guard will re-hook it to
+     * netlistChanged for subsequent interactive edits. */
+    autoNameWires();
 
     QSocConsole::info().noquote() << QStringLiteral(
                                          "Imported %1 instance(s), %2 net(s) from %3 file(s)")
