@@ -9,6 +9,7 @@
 #include <QIcon>
 
 #include <qschematic/scene.hpp>
+#include <qschematic/view.hpp>
 
 void SchematicWindow::on_actionQuit_triggered()
 {
@@ -23,6 +24,11 @@ void SchematicWindow::on_actionShowGrid_triggered(bool checked)
     settings.showGrid = checked;
     scene.setSettings(settings);
     ui->schematicView->setSettings(settings);
+}
+
+void SchematicWindow::on_actionFitAll_triggered()
+{
+    ui->schematicView->fitInView();
 }
 
 void SchematicWindow::on_actionSelectItem_triggered()
