@@ -144,6 +144,12 @@ private slots:
      */
     void on_actionShowGrid_triggered(bool checked);
 
+    /**
+     * @brief Fit all content in view.
+     * @details Zooms and recenters so the entire scene fits the viewport.
+     */
+    void on_actionFitAll_triggered();
+
     /* Tool Actions */
 
     /**
@@ -163,6 +169,23 @@ private slots:
      * @details Exports the current schematic to .soc_net format.
      */
     void on_actionExportNetlist_triggered();
+
+    /**
+     * @brief Import netlist.
+     * @details Imports one or more .soc_net files, merges them, strips
+     *          clock/reset/power/comb/seq/fsm sections, and places the
+     *          resulting instances on the schematic with stub wires for
+     *          each net (net-by-name connections).
+     */
+    void on_actionImportNetlist_triggered();
+
+    /**
+     * @brief Auto arrange action.
+     * @details Re-runs the layered layout on the last imported set of
+     *          .soc_net files, wiping and rebuilding the scene. Does
+     *          nothing if no netlist has been imported this session.
+     */
+    void on_actionAutoArrange_triggered();
 
 protected:
     /**
@@ -307,6 +330,20 @@ private:
      */
     bool exportNetlist(const QString &filePath);
 
+    /**
+     * @brief Import one or more .soc_net files into the current scene.
+     * @details Merges the files, strips clock/reset/power/comb/seq/fsm
+     *          top-level sections, looks up each instance's module YAML
+     *          from the module manager (or synthesizes a placeholder when
+     *          missing), grid-places SchematicModule items, and creates
+     *          short stub wires per port labeled with the net name so the
+     *          net-by-name grouping in WireNet::global_nets() performs the
+     *          electrical connection.
+     * @param[in] filePaths list of absolute paths to .soc_net files
+     * @return true if at least one instance was placed
+     */
+    bool importNetlistFiles(const QStringList &filePaths);
+
     /* Member Variables */
 
     /* Main window UI */
@@ -329,6 +366,10 @@ private:
 
     /* Current file path (empty string means untitled) */
     QString m_currentFilePath;
+
+    /* Last imported .soc_net file list, used by Auto Arrange to re-run
+     * layout on the same input. */
+    QStringList m_lastImportedFiles;
 
     /* Status bar permanent label */
     QLabel *statusBarPermanentLabel = nullptr;
