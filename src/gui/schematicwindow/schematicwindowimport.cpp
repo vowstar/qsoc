@@ -330,19 +330,32 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
         return false;
     }
 
-    /* Large-net (broadcast) classification, following NLView's `largenet`
-     * property. Nets whose fanout exceeds the threshold do not constrain
-     * the DAG: they collapse the layering (clock/reset pull every module
-     * into the same layer) and they render as per-endpoint stubs later
-     * anyway. Threshold scales with design size so small projects still
-     * see a sensible grid. */
+    /* Large-net (broadcast) classification. High-fanout scalar nets
+     * (clock/reset/enable) collapse the layering and render as
+     * per-endpoint stubs anyway, so we drop them from the DAG. Buses
+     * are aggregated topology (AHB/AXI/APB bundle many signals into
+     * one wide wire) and remain in the DAG even when their endpoint
+     * count is high: a peripheral APB with 15 slaves is a legitimate
+     * structural backbone, not a broadcast. */
     const int largeNetThreshold
         = std::max(8, static_cast<int>(std::round(std::sqrt(instanceCount))));
     QSet<QString> largeNets;
     for (auto netIt = netToEndpoints.constBegin(); netIt != netToEndpoints.constEnd(); ++netIt) {
-        if (netIt.value().size() >= largeNetThreshold) {
-            largeNets.insert(netIt.key());
+        const QList<PortRef> &eps = netIt.value();
+        if (eps.size() < largeNetThreshold) {
+            continue;
         }
+        bool anyBus = false;
+        for (const PortRef &ep : eps) {
+            if (ep.isBus) {
+                anyBus = true;
+                break;
+            }
+        }
+        if (anyBus) {
+            continue;
+        }
+        largeNets.insert(netIt.key());
     }
 
     /* Layer assignment. Build an instance-level DAG where an edge
