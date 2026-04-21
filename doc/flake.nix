@@ -12,11 +12,17 @@
         version = builtins.head
           (builtins.match ''.*QSOC_VERSION "([0-9]+\.[0-9]+\.[0-9]+)".*''
             (builtins.readFile ../src/common/config.h));
+        # self.lastModifiedDate is "YYYYMMDDHHMMSS" UTC from the HEAD commit
+        rawDate = self.lastModifiedDate or "19700101000000";
+        publishDate =
+          "${builtins.substring 0 4 rawDate}-"
+          + "${builtins.substring 4 2 rawDate}-"
+          + "${builtins.substring 6 2 rawDate}";
       in {
         packages = {
           ${pkgName} = pkgs.stdenv.mkDerivation {
             pname = pkgName;
-            inherit version;
+            inherit version publishDate;
             src = pkgs.lib.cleanSource ./en;
             buildInputs = [
               pkgs.typst
@@ -57,6 +63,11 @@
               # Update version in cover.svg
               if [ -f "image/cover.svg" ]; then
                 sed -i 's/Version [0-9]\+\.[0-9]\+\.[0-9]\+/Version '"$version"'/g' image/cover.svg
+              fi
+              # Sync revision with version and publish_date with commit date
+              if [ -f "main.typ" ]; then
+                sed -i 's/revision: \[v[0-9]\+\.[0-9]\+\.[0-9]\+\]/revision: [v'"$version"']/g' main.typ
+                sed -i 's/publish_date: \[[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\]/publish_date: ['"$publishDate"']/g' main.typ
               fi
               # Convert Markdown files to Typst
               for md in *.md; do

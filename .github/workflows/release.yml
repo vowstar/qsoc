@@ -269,8 +269,50 @@ jobs:
         name: macos-dmg
         path: QSoC-*.dmg
 
+  build-docs:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v30
+      with:
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+          accept-flake-config = true
+
+    - name: Cache Nix store
+      uses: nix-community/cache-nix-action@v6
+      with:
+        primary-key: nix-${{ runner.os }}-${{ hashFiles('doc/flake.lock', 'doc/flake.nix') }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-
+        gc-max-store-size-linux: 5G
+        purge: true
+        purge-prefixes: nix-${{ runner.os }}-
+        purge-created: 0
+        purge-last-accessed: 0
+        purge-primary-key: never
+
+    - name: Build documentation PDF
+      run: nix build ./doc#qsoc-manual --print-build-logs
+
+    - name: Collect PDF
+      run: |
+        mkdir -p doc-pdf
+        cp -L result/*.pdf doc-pdf/
+        ls -la doc-pdf/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: docs-pdf
+        path: doc-pdf/*.pdf
+
   release:
-    needs: [build-linux, build-windows, build-macos]
+    needs: [build-linux, build-windows, build-macos, build-docs]
     runs-on: ubuntu-22.04
 
     steps:
@@ -287,6 +329,7 @@ jobs:
         ls -la linux-appimage/
         ls -la QSoC-*-windows-x64.zip
         ls -la macos-dmg/
+        ls -la docs-pdf/
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
@@ -295,6 +338,7 @@ jobs:
           linux-appimage/QSoC-*-x86_64.AppImage
           QSoC-*-windows-x64.zip
           macos-dmg/QSoC-*-macos-arm64.dmg
+          docs-pdf/*.pdf
         body: |
           **Full Changelog**: https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}
         draft: false
