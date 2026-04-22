@@ -9,8 +9,10 @@
 
 /**
  * @brief Tool to discover, search, and read user-defined skills (SKILL.md)
- * @details Skills are markdown prompt templates stored in project (.qsoc/skills/)
- *          or user (~/.config/qsoc/skills/) directories.
+ * @details Skills are markdown prompt templates resolved across four layers
+ *          (high to low priority): $QSOC_HOME/skills, <project>/.qsoc/skills,
+ *          ~/.config/qsoc/skills, and a platform-native system skills dir.
+ *          Same-name skills in higher layers shadow lower ones.
  */
 class QSocToolSkillFind : public QSocTool
 {
