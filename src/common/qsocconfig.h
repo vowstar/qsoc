@@ -22,13 +22,11 @@ class QSocConfig : public QObject
 {
     Q_OBJECT
 public:
-    /* System-level configuration file path (Linux only) */
-    static const QString CONFIG_FILE_SYSTEM;
+    /* Filename used for the config file at every layer */
+    static const QString CONFIG_FILE_NAME;
 
-    /* User-level configuration file path */
-    static const QString CONFIG_FILE_USER;
-
-    /* Project-level configuration file name */
+    /* Project-level configuration file name (legacy; still written at
+     * <projectPath>/.qsoc.yml rather than <projectPath>/.qsoc/qsoc.yml) */
     static const QString CONFIG_FILE_PROJECT;
 
     /**
@@ -64,11 +62,14 @@ public slots:
     /**
      * @brief Load configuration from all sources.
      * @details This function loads configuration from environment variables and
-     *          YAML files according to priority order:
-     *          1. Environment variables (highest priority)
-     *          2. Project-level config: getProjectPath()/.qsoc.yml
-     *          3. User-level config: ~/.config/qsoc/qsoc.yml
-     *          4. System-level config: /etc/qsoc/qsoc.yml (Linux only)
+     *          YAML files according to priority order (highest to lowest):
+     *          1. Environment variables
+     *          2. Project-level config: <projectPath>/.qsoc.yml
+     *          3. $QSOC_HOME/qsoc.yml (if set)
+     *          4. User-level config: ~/.config/qsoc/qsoc.yml
+     *          5. System-level config: platform-native /qsoc/qsoc.yml
+     *             (Linux /etc/qsoc, macOS /Library/Application Support/qsoc,
+     *              Windows %PROGRAMDATA%/qsoc)
      */
     void loadConfig();
 
