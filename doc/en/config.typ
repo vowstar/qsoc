@@ -11,18 +11,30 @@ system-level root follows platform conventions.
 
 #figure(
   align(center)[#table(
-    columns: (0.2fr, 0.5fr, 0.4fr, 1fr),
-    align: (auto, left, left, left),
-    table.header([Layer], [Root (all platforms)], [Platform], [System root]),
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Layer], [Root (all platforms)]),
     table.hline(),
-    [Env], [`$QSOC_HOME`], [any], [(same as root)],
-    [Project], [`<projectPath>/.qsoc`], [any], [(same as root)],
-    [User], [`~/.config/qsoc`], [any], [(same as root)],
-    [System], [], [Linux], [`/etc/qsoc`],
-    [], [], [macOS], [`/Library/Application Support/qsoc`],
-    [], [], [Windows], [`%PROGRAMDATA%\qsoc`],
+    [Env], [`$QSOC_HOME` (when set)],
+    [Project], [`<projectPath>/.qsoc`],
+    [User], [`~/.config/qsoc`],
+    [System], [platform-specific, see below],
   )],
   caption: [RESOURCE ROOTS PER LAYER],
+  kind: table,
+)
+
+#figure(
+  align(center)[#table(
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Platform], [System root]),
+    table.hline(),
+    [Linux], [`/etc/qsoc`],
+    [macOS], [`/Library/Application Support/qsoc`],
+    [Windows], [`%PROGRAMDATA%\qsoc`],
+  )],
+  caption: [SYSTEM ROOT BY PLATFORM],
   kind: table,
 )
 
@@ -67,7 +79,7 @@ so you only need to configure the endpoint URL, API key, and model name.
 <llm-options>
 #figure(
   align(center)[#table(
-    columns: (0.3fr, 1fr),
+    columns: (0.55fr, 1fr),
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
@@ -163,7 +175,7 @@ These settings can also be overridden by command-line options (see @agent-comman
 
 #figure(
   align(center)[#table(
-    columns: (0.4fr, 1fr),
+    columns: (0.55fr, 1fr),
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
