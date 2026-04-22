@@ -31,6 +31,7 @@
 #include "common/qlspslangbackend.h"
 #include "common/qsocconsole.h"
 #include "common/qsoclinediff.h"
+#include "common/qsocpaths.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuiinputline.h"
 #include "tui/qtuimenu.h"
@@ -145,7 +146,7 @@ void applyModelSwitch(
         if (QFile::exists(QDir::currentPath() + "/.qsoc.yml")) {
             configPath = QDir::currentPath() + "/.qsoc.yml";
         } else {
-            configPath = QDir::home().absoluteFilePath(".config/qsoc/qsoc.yml");
+            configPath = QDir(QSocPaths::userRoot()).filePath("qsoc.yml");
         }
         /* Read, update llm.model, write back */
         try {

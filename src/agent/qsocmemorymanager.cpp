@@ -3,12 +3,13 @@
 
 #include "agent/qsocmemorymanager.h"
 
+#include "common/qsocpaths.h"
+
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QStandardPaths>
 #include <QTextStream>
 
 #include <algorithm>
@@ -36,8 +37,7 @@ void QSocMemoryManager::setProjectManager(QSocProjectManager *projectManager)
 
 QString QSocMemoryManager::userMemoryDir() const
 {
-    QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    return QDir(configPath).filePath("qsoc/memory");
+    return QDir(QSocPaths::userRoot()).filePath("memory");
 }
 
 QString QSocMemoryManager::projectMemoryDir() const
@@ -51,7 +51,8 @@ QString QSocMemoryManager::projectMemoryDir() const
         projectPath = QDir::currentPath();
     }
 
-    return QDir(projectPath).filePath(".qsoc/memory");
+    const QString root = QSocPaths::projectRoot(projectPath);
+    return root.isEmpty() ? QString() : QDir(root).filePath("memory");
 }
 
 QString QSocMemoryManager::userIndexPath() const

@@ -3,12 +3,13 @@
 
 #include "agent/tool/qsoctoolskill.h"
 
+#include "common/qsocpaths.h"
+
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QStandardPaths>
 #include <QTextStream>
 
 /* QSocToolSkillFind Implementation */
@@ -47,15 +48,14 @@ json QSocToolSkillFind::getParametersSchema() const
              "For 'read': exact skill name to retrieve."}}},
           {"scope",
            {{"type", "string"},
-            {"enum", {"user", "project", "all"}},
-            {"description", "Which scope to search: 'user', 'project', or 'all' (default: all)"}}}}},
+            {"enum", {"user", "project", "system", "all"}},
+            {"description",
+             "Which scope to search: 'user', 'project', 'system', or 'all' (default: all)"}}}}},
         {"required", json::array({"action"})}};
 }
 
 QStringList QSocToolSkillFind::allSkillsDirs() const
 {
-    QStringList dirs;
-    /* Project-local paths (searched first → higher priority). */
     QString projectPath;
     if (projectManager) {
         projectPath = projectManager->getProjectPath();
@@ -63,15 +63,7 @@ QStringList QSocToolSkillFind::allSkillsDirs() const
     if (projectPath.isEmpty()) {
         projectPath = QDir::currentPath();
     }
-    dirs.append(QDir(projectPath).filePath(QStringLiteral(".qsoc/skills")));
-    dirs.append(QDir(projectPath).filePath(QStringLiteral(".agents/skills")));
-
-    /* Global / user-level paths. */
-    const QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    dirs.append(QDir(configPath).filePath(QStringLiteral("qsoc/skills")));
-    const QString homePath = QDir::homePath();
-    dirs.append(QDir(homePath).filePath(QStringLiteral(".agents/skills")));
-    return dirs;
+    return QSocPaths::resourceDirs(QStringLiteral("skills"), projectPath);
 }
 
 QSocToolSkillFind::SkillInfo QSocToolSkillFind::parseSkillFile(
@@ -168,14 +160,42 @@ QString QSocToolSkillFind::readSkillContent(const QString &filePath) const
 
 QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkills() const
 {
+    /* Classify each candidate dir by which layer root it originates from.
+     * Same iteration order as resourceDirs(): env → project → user → system. */
+    QString projectPath;
+    if (projectManager) {
+        projectPath = projectManager->getProjectPath();
+    }
+    if (projectPath.isEmpty()) {
+        projectPath = QDir::currentPath();
+    }
+
+    const QString envPrefix     = QSocPaths::envRoot();
+    const QString projectPrefix = QSocPaths::projectRoot(projectPath);
+    const QString userPrefix    = QSocPaths::userRoot();
+    const QString systemPrefix  = QSocPaths::systemRoot();
+
+    auto classify = [&](const QString &dir) -> QString {
+        if (!projectPrefix.isEmpty() && dir.startsWith(projectPrefix)) {
+            return QStringLiteral("project");
+        }
+        if (!envPrefix.isEmpty() && dir.startsWith(envPrefix)) {
+            return QStringLiteral("user");
+        }
+        if (dir.startsWith(userPrefix)) {
+            return QStringLiteral("user");
+        }
+        if (dir.startsWith(systemPrefix)) {
+            return QStringLiteral("system");
+        }
+        return QStringLiteral("user");
+    };
+
     const QStringList dirs = allSkillsDirs();
     QList<SkillInfo>  result;
-    QSet<QString>     seen; /* dedup by name, first-found wins (project > user) */
+    QSet<QString>     seen; /* dedup by name, first-found wins (higher layer shadows lower) */
     for (const QString &dir : dirs) {
-        const QString scope = dir.contains(QLatin1String(".qsoc/"))
-                                      || dir.contains(QLatin1String(".agents/"))
-                                  ? QStringLiteral("project")
-                                  : QStringLiteral("user");
+        const QString scope = classify(dir);
         for (const SkillInfo &skill : scanSkillsDir(dir, scope)) {
             if (!seen.contains(skill.name)) {
                 seen.insert(skill.name);
@@ -316,14 +336,14 @@ json QSocToolSkillCreate::getParametersSchema() const
             {"enum", {"user", "project"}},
             {"description",
              "Where to create: 'user' (~/.config/qsoc/skills/) or "
-             "'project' (<project>/.qsoc/skills/)"}}}}},
+             "'project' (<project>/.qsoc/skills/). "
+             "System-level skills are installed via packaging, not this tool."}}}}},
         {"required", json::array({"name", "description", "instructions", "scope"})}};
 }
 
 QString QSocToolSkillCreate::userSkillsPath() const
 {
-    const QString configPath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    return QDir(configPath).filePath(QStringLiteral("qsoc/skills"));
+    return QDir(QSocPaths::userRoot()).filePath(QStringLiteral("skills"));
 }
 
 QString QSocToolSkillCreate::projectSkillsPath() const
@@ -337,7 +357,8 @@ QString QSocToolSkillCreate::projectSkillsPath() const
         projectPath = QDir::currentPath();
     }
 
-    return QDir(projectPath).filePath(QStringLiteral(".qsoc/skills"));
+    const QString root = QSocPaths::projectRoot(projectPath);
+    return root.isEmpty() ? QString() : QDir(root).filePath(QStringLiteral("skills"));
 }
 
 bool QSocToolSkillCreate::isValidSkillName(const QString &name) const
