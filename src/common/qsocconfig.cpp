@@ -3,6 +3,7 @@
 
 #include "common/qsocconfig.h"
 #include "common/qsocconsole.h"
+#include "common/qsocpaths.h"
 
 #include <QDebug>
 #include <QDir>
@@ -17,8 +18,7 @@
 #include <yaml-cpp/yaml.h>
 
 /* Define static constants */
-const QString QSocConfig::CONFIG_FILE_SYSTEM  = "/etc/qsoc/qsoc.yml";
-const QString QSocConfig::CONFIG_FILE_USER    = ".config/qsoc/qsoc.yml";
+const QString QSocConfig::CONFIG_FILE_NAME    = "qsoc.yml";
 const QString QSocConfig::CONFIG_FILE_PROJECT = ".qsoc.yml";
 
 QSocConfig::QSocConfig(QObject *parent, QSocProjectManager *projectManager)
@@ -53,22 +53,23 @@ void QSocConfig::loadConfig()
     /* Clear existing configuration */
     configValues.clear();
 
-    /* Check if user config file exists and create template if needed */
-    const QString userConfigPath = QDir::home().absoluteFilePath(CONFIG_FILE_USER);
+    /* Seed user config template if missing, so first-run users have a
+     * commented starting point at ~/.config/qsoc/qsoc.yml. */
+    const QString userConfigPath = QDir(QSocPaths::userRoot()).filePath(CONFIG_FILE_NAME);
     if (!QFile::exists(userConfigPath)) {
         createTemplateConfig(userConfigPath);
     }
 
-    /* Load in order of priority (lowest to highest) */
-#ifdef Q_OS_LINUX
-    /* System-level config (Linux only) - lowest priority */
-    loadFromYamlFile(CONFIG_FILE_SYSTEM);
-#endif
+    /* Walk candidate roots in reverse (low to high priority) so later
+     * layers override earlier keys via override=true. Project override is
+     * handled separately below because its file lives at .qsoc.yml, not
+     * .qsoc/qsoc.yml. */
+    const QStringList roots = QSocPaths::resourceDirs(QString());
+    for (qsizetype i = roots.size() - 1; i >= 0; --i) {
+        loadFromYamlFile(QDir(roots.at(i)).filePath(CONFIG_FILE_NAME), true);
+    }
 
-    /* User-level config */
-    loadFromYamlFile(userConfigPath);
-
-    /* Project-level config - overrides user config */
+    /* Project-level config - overrides all resource-dir layers */
     loadFromProjectYaml(true);
 
     /* Environment variables - highest priority */
@@ -261,10 +262,13 @@ YAML::Node QSocConfig::getYamlNode(const QString &dotPath) const
         }
     }
 
-    /* Fall back to user config */
-    YAML::Node node = resolve(QDir::home().absoluteFilePath(CONFIG_FILE_USER));
-    if (node.IsDefined() && !node.IsNull()) {
-        return node;
+    /* Walk the remaining layers (env → user → system) in priority order. */
+    const QStringList roots = QSocPaths::resourceDirs(QString());
+    for (const QString &root : roots) {
+        YAML::Node node = resolve(QDir(root).filePath(CONFIG_FILE_NAME));
+        if (node.IsDefined() && !node.IsNull()) {
+            return node;
+        }
     }
 
     return {};
