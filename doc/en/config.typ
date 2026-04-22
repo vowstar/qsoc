@@ -5,21 +5,33 @@ This document describes the available configuration options and how they are man
 
 == CONFIGURATION FILES
 <config-files>
-QSoC uses YAML-based configuration files at three different levels of priority:
+QSoC resolves configuration, skills, and memory across four layered roots.
+User-level and project-level roots are identical on all platforms; only the
+system-level root follows platform conventions.
 
 #figure(
   align(center)[#table(
-    columns: (0.2fr, 0.7fr, 1fr),
-    align: (auto, left, left),
-    table.header([Level], [Path], [Description]),
+    columns: (0.2fr, 0.5fr, 0.4fr, 1fr),
+    align: (auto, left, left, left),
+    table.header([Layer], [Root (all platforms)], [Platform], [System root]),
     table.hline(),
-    [System], [`/etc/qsoc/qsoc.yml`], [System-wide configuration],
-    [User], [`~/.config/qsoc/qsoc.yml`], [User-specific configuration],
-    [Project], [`.qsoc.yml`], [Project-specific configuration],
+    [Env], [`$QSOC_HOME`], [any], [(same as root)],
+    [Project], [`<projectPath>/.qsoc`], [any], [(same as root)],
+    [User], [`~/.config/qsoc`], [any], [(same as root)],
+    [System], [], [Linux], [`/etc/qsoc`],
+    [], [], [macOS], [`/Library/Application Support/qsoc`],
+    [], [], [Windows], [`%PROGRAMDATA%\qsoc`],
   )],
-  caption: [CONFIGURATION FILE LOCATIONS],
+  caption: [RESOURCE ROOTS PER LAYER],
   kind: table,
 )
+
+Config files live at `<root>/qsoc.yml` in every layer, except the project
+layer which uses the legacy `<projectPath>/.qsoc.yml` filename. Skills and
+memory live at `<root>/skills/` and `<root>/memory/` respectively.
+
+`$XDG_CONFIG_HOME` is honored on every platform: if set, the user root
+becomes `$XDG_CONFIG_HOME/qsoc` instead of `~/.config/qsoc`.
 
 == CONFIGURATION PRIORITY
 <config-priority>
@@ -31,14 +43,20 @@ QSoC applies configuration settings in the following order of precedence (highes
     align: (auto, left),
     table.header([Priority], [Source]),
     table.hline(),
-    [1 (Highest)],
-    [Project-level configuration (`.qsoc.yml` in project directory)],
-    [2], [User-level configuration (`~/.config/qsoc/qsoc.yml`)],
-    [3 (Lowest)], [System-level configuration (`/etc/qsoc/qsoc.yml`)],
+    [1 (Highest)], [Environment variables (`QSOC_*`)],
+    [2], [Project-level configuration (`.qsoc.yml` in project directory)],
+    [3], [Environment root (`$QSOC_HOME/qsoc.yml` when set)],
+    [4], [User-level configuration (`~/.config/qsoc/qsoc.yml`)],
+    [5 (Lowest)], [System-level configuration (platform-specific)],
   )],
   caption: [CONFIGURATION PRIORITY ORDER],
   kind: table,
 )
+
+Same-name skills in higher layers shadow lower ones. Listings and
+`skill_find` with the default `scope: "all"` show the effective (unshadowed)
+set; pass `scope: "system"` / `"user"` / `"project"` to inspect a specific
+layer for debugging.
 
 == LLM CONFIGURATION
 <llm-config>

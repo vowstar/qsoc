@@ -161,8 +161,10 @@ The agent provides the following tools through natural language:
 - *Memory* -- `memory_read`, `memory_write` for persistent notes across sessions
 - *Todo* -- `todo_list`, `todo_add`, `todo_update`, `todo_delete` for multi-step
   workflows
-- *Skills* -- `skill_find`, `skill_create` for user-defined prompt templates in
-  `.qsoc/skills/` or `~/.config/qsoc/skills/`
+- *Skills* -- `skill_find`, `skill_create` for user-defined prompt templates
+  resolved across four layers (`$QSOC_HOME/skills`, `<project>/.qsoc/skills`,
+  `~/.config/qsoc/skills`, and a platform-native system skills dir);
+  see @config-files for the full layout
 - *LSP* -- `lsp` for language server diagnostics and symbol lookup
 - *Web* -- `web_fetch` for URL content, `web_search` via SearXNG (when configured)
 
