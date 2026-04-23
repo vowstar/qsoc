@@ -488,9 +488,15 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
     /* Try ssh-agent first whenever the config does not explicitly forbid it
      * via IdentitiesOnly + a concrete IdentityFile list. An agent may hold
      * keys that are absent on disk, and skipping it means losing that
-     * route even when the user intended the agent to sign. */
+     * route even when the user intended the agent to sign.
+     *
+     * ProxyJump children are the one exception: libssh2_agent_* routes
+     * agent-protocol bytes through the session's send/recv callbacks,
+     * which for a tunneled child end up in the remote SSH channel
+     * instead of the local Unix socket. The call then EAGAIN-loops
+     * forever, so we skip it and drop straight to file-based auth. */
     const bool restrictToFiles = host.identitiesOnly && !host.identityFiles.isEmpty();
-    if (!restrictToFiles && tryAgentAuth(user)) {
+    if (!restrictToFiles && m_parent == nullptr && tryAgentAuth(user)) {
         return ConnectStatus::Ok;
     }
 
@@ -709,6 +715,13 @@ long long QSocSshSession::sendOverChannel(
     if (n == LIBSSH2_ERROR_EAGAIN) {
         return -EAGAIN;
     }
+    /* libssh2_channel_write_ex returns 0 when the remote window is closed,
+     * not EOF. Returning 0 to libssh2's send path would surface the same
+     * cascade as a half-open socket, so we normalize to EAGAIN and let
+     * the retry loop pump the parent. */
+    if (n == 0) {
+        return -EAGAIN;
+    }
     if (n < 0) {
         return -1;
     }
@@ -724,9 +737,28 @@ long long QSocSshSession::recvOverChannel(
     if (self == nullptr || self->m_parentChannel == nullptr) {
         return -1;
     }
+    /* A zero-length read on the parent forces libssh2 to pump the parent
+     * session's transport: that is what processes any pending
+     * SSH_MSG_CHANNEL_WINDOW_ADJUST or keepalive before we try to pull
+     * real bytes for the child. Without this the child can deadlock
+     * waiting for a window grant that has already arrived but never
+     * been drained. */
+    char drain = 0;
+    (void) libssh2_channel_read_ex(self->m_parentChannel, 0, &drain, 0);
+
     const ssize_t n
         = libssh2_channel_read_ex(self->m_parentChannel, 0, static_cast<char *>(buf), len);
     if (n == LIBSSH2_ERROR_EAGAIN) {
+        return -EAGAIN;
+    }
+    /* A zero count here is "no data available yet" unless the parent
+     * channel is actually at EOF. Returning 0 to libssh2 without a real
+     * EOF makes the child misread the state as a half-open socket and
+     * fail userauth with LIBSSH2_ERROR_PUBLICKEY_UNVERIFIED. */
+    if (n == 0) {
+        if (libssh2_channel_eof(self->m_parentChannel) != 0) {
+            return 0;
+        }
         return -EAGAIN;
     }
     if (n < 0) {
