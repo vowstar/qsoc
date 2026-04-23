@@ -20,9 +20,11 @@ namespace {
 
 constexpr int BG_NORMAL    = 237;
 constexpr int BG_HIGHLIGHT = 239;
+constexpr int BG_PREVIEW   = 235;
 constexpr int FG_TITLE     = 214;
 constexpr int FG_NORMAL    = 223;
-constexpr int FG_DIM       = 246;
+constexpr int FG_DIM       = 245;
+constexpr int FG_PREVIEW   = 108;
 constexpr int FG_HIGHLIGHT = 214;
 
 constexpr int MIN_COL_WIDTH = 24;
@@ -196,6 +198,10 @@ QString QTuiPathPicker::exec()
     auto renderOverlay = [&]() {
         ensureVisible();
 
+        /* Wipe the full screen so the picker reliably paints over any
+         * underlying compositor content regardless of alt-screen state. */
+        fputs("\033[2J\033[H", stdout);
+
         for (int row = 0; row < menuH && (startY + row) < termH; row++) {
             fprintf(stdout, "\033[%d;1H\033[2K", startY + row + 1);
         }
@@ -240,7 +246,8 @@ QString QTuiPathPicker::exec()
                 continue;
             }
 
-            /* Gutter between columns stays in normal background. */
+            /* Gutter keeps the left column background so the two panels
+             * visibly separate at the seam. */
             fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_DIM, BG_NORMAL);
             fputs(QString(gutter, QLatin1Char(' ')).toUtf8().constData(), stdout);
 
@@ -249,7 +256,10 @@ QString QTuiPathPicker::exec()
                 rightCell = QStringLiteral("  ") + rightPreview[row];
             }
             rightCell = padTo(rightCell, rightW);
-            fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_DIM, BG_NORMAL);
+            /* Preview column uses a darker background and softer foreground
+             * so the user sees it as read-only context rather than another
+             * interactive menu. */
+            fprintf(stdout, "\033[3m\033[38;5;%d;48;5;%dm", FG_PREVIEW, BG_PREVIEW);
             fputs(rightCell.toUtf8().constData(), stdout);
             fputs("\033[0m", stdout);
         }
@@ -437,8 +447,8 @@ QString QTuiPathPicker::exec()
 
         if (byte == 0x1B) {
             char seq[2] = {};
-            if (readByte(&seq[0], 50) && seq[0] == '[') {
-                if (readByte(&seq[1], 50)) {
+            if (readByte(&seq[0], 500) && seq[0] == '[') {
+                if (readByte(&seq[1], 500)) {
                     if (seq[1] == 'A') {
                         moveUp();
                         renderOverlay();
