@@ -1133,7 +1133,19 @@ bool QSocAgent::compactWithLLM(bool force)
     bool                 llmSuccess         = false;
     static constexpr int maxCompactFailures = 3;
 
-    if (compactFailureCount < maxCompactFailures && llmService && llmService->hasEndpoint()) {
+    /* If the conversation we want summarized is itself larger than the
+     * model can accept in a single request, the LLM call would be
+     * rejected outright. Skip straight to the mechanical fallback so
+     * compaction still makes forward progress instead of crashing with
+     * "Request Entity Too Large". Leaves 20% headroom for the summary
+     * system prompt, completion tokens, and protocol overhead. */
+    const int summaryInputTokens = estimateTokens(oldContent);
+    const int compactBudget      = static_cast<int>(
+        static_cast<double>(agentConfig.maxContextTokens) * 0.8);
+    const bool llmCallable = compactFailureCount < maxCompactFailures && llmService
+                             && llmService->hasEndpoint() && summaryInputTokens < compactBudget;
+
+    if (llmCallable) {
         QString summaryPrompt
             = QString(
                   "You are a conversation summarizer. Produce a structured summary of the "
@@ -1181,15 +1193,25 @@ bool QSocAgent::compactWithLLM(bool force)
         }
     }
 
-    /* Fallback: mechanical truncation if LLM failed or circuit-broken */
+    /* Fallback: mechanical truncation if LLM failed, circuit-broken, or
+     * the conversation was too large to even submit. Cap the summary at
+     * a fraction of the context budget so the post-compact messages
+     * still fit inside the model's window. */
     if (!llmSuccess) {
         if (agentConfig.verbose) {
             emit verboseOutput(QString("[Layer 2: Using mechanical summary (failures: %1/%2)]")
                                    .arg(compactFailureCount)
                                    .arg(maxCompactFailures));
         }
-        summary = "[Previous conversation summary: ";
+        const int summaryBudgetTokens
+            = qMax(2048, static_cast<int>(agentConfig.maxContextTokens / 4));
+        const int summaryBudgetChars = summaryBudgetTokens * 4; /* coarse token->char */
+        summary                      = "[Previous conversation summary: ";
         for (int i = 0; i < boundary; i++) {
+            if (summary.size() >= summaryBudgetChars) {
+                summary += "...(truncated)";
+                break;
+            }
             const auto &msg = messages[static_cast<size_t>(i)];
             if (msg.contains("role") && msg.contains("content") && msg["content"].is_string()) {
                 QString role    = QString::fromStdString(msg["role"].get<std::string>());
