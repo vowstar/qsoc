@@ -265,7 +265,7 @@ void SchematicWindow::autoNameWires()
                     /* Check if wire connects to this bus connector */
                     QPointF connectorPos = connector->scenePos();
                     QPointF wireStart    = customWire->scenePos()
-                                        + customWire->pointsRelative().first();
+                                           + customWire->pointsRelative().first();
                     QPointF wireEnd = customWire->scenePos() + customWire->pointsRelative().last();
 
                     if (QLineF(connectorPos, wireStart).length() < tolerance
@@ -604,8 +604,7 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
         if (!info.ports.isEmpty()) {
             for (const auto &portConn : info.ports) {
                 root["instance"][instanceName.toStdString()]["port"]
-                    [portConn.portName.toStdString()]["link"]
-                    = portConn.netName.toStdString();
+                    [portConn.portName.toStdString()]["link"] = portConn.netName.toStdString();
             }
         }
 
@@ -613,8 +612,7 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
         if (!info.buses.isEmpty()) {
             for (const auto &busConn : info.buses) {
                 root["instance"][instanceName.toStdString()]["bus"][busConn.portName.toStdString()]
-                    ["link"]
-                    = busConn.netName.toStdString();
+                    ["link"] = busConn.netName.toStdString();
             }
         }
     }

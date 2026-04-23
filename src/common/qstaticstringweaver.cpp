@@ -27,8 +27,8 @@ qsizetype QStaticStringWeaver::levenshteinDistance(const QString &string1, const
             const qsizetype editCost = (string1[i - 1] == string2[j - 1]) ? 0 : 1;
             distanceMatrix[i][j]     = std::min(
                 {distanceMatrix[i - 1][j] + 1,              /* Delete */
-                     distanceMatrix[i][j - 1] + 1,              /* Insert */
-                     distanceMatrix[i - 1][j - 1] + editCost}); /* Replace */
+                 distanceMatrix[i][j - 1] + 1,              /* Insert */
+                 distanceMatrix[i - 1][j - 1] + editCost}); /* Replace */
         }
     }
     return distanceMatrix[string1Length][string2Length];
@@ -808,9 +808,9 @@ QString QStaticStringWeaver::findBestGroupMarkerForHint(
         /* Calculate parts similarity score */
         const double partMatchRatio = static_cast<double>(matchedParts)
                                       / static_cast<double>(parts1.size());
-        const double avgPartSim = matchedParts > 0
-                                      ? totalPartSim / static_cast<double>(matchedParts)
-                                      : 0.0;
+        const double avgPartSim     = matchedParts > 0
+                                          ? totalPartSim / static_cast<double>(matchedParts)
+                                          : 0.0;
 
         /* Get the more meaningful of direct similarity vs. part-based similarity */
         const double partBasedScore = (partMatchRatio * 0.7) + (avgPartSim * 0.3);

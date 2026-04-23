@@ -39,15 +39,15 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     }
 
     // Allow empty or missing instance section if comb, seq, or fsm section exists
-    bool hasInstances = netlistData["instance"] && netlistData["instance"].IsMap()
-                        && netlistData["instance"].size() > 0;
+    bool hasInstances  = netlistData["instance"] && netlistData["instance"].IsMap()
+                         && netlistData["instance"].size() > 0;
     bool hasCombSeqFsm = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"];
     bool hasReset      = netlistData["reset"] && netlistData["reset"].IsSequence()
-                    && netlistData["reset"].size() > 0;
-    bool hasClock = netlistData["clock"] && netlistData["clock"].IsSequence()
-                    && netlistData["clock"].size() > 0;
-    bool hasPower = netlistData["power"] && netlistData["power"].IsSequence()
-                    && netlistData["power"].size() > 0;
+                         && netlistData["reset"].size() > 0;
+    bool hasClock      = netlistData["clock"] && netlistData["clock"].IsSequence()
+                         && netlistData["clock"].size() > 0;
+    bool hasPower      = netlistData["power"] && netlistData["power"].IsSequence()
+                         && netlistData["power"].size() > 0;
 
     if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock && !hasPower) {
         QSocConsole::error() << "Invalid netlist data, no 'instance' section and no 'comb', "
@@ -196,8 +196,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* Check if we need to generate a top-level module */
     bool hasPorts = netlistData["port"] && netlistData["port"].IsMap()
                     && netlistData["port"].size() > 0;
-    bool hasNets = netlistData["net"] && netlistData["net"].IsMap()
-                   && netlistData["net"].size() > 0;
+    bool hasNets  = netlistData["net"] && netlistData["net"].IsMap()
+                    && netlistData["net"].size() > 0;
     bool hasBus = netlistData["bus"] && netlistData["bus"].IsMap() && netlistData["bus"].size() > 0;
 
     bool needsTopLevelModule = hasInstances || hasPorts || hasNets || hasBus;

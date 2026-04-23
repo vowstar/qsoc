@@ -3278,7 +3278,7 @@ instance: {}
         /* Read generated Verilog content */
         const QString verilogFile = projectManager.getCurrentPath()
                                     + "/output/test_comb_seq_input_extraction.v";
-        QFile file(verilogFile);
+        QFile         file(verilogFile);
         QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
         QString verilogContent = file.readAll();
         file.close();

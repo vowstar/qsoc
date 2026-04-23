@@ -713,9 +713,9 @@ QString QSocToolWebFetch::htmlToMarkdown(const QString &html)
             }
             QString tagBody   = html.mid(tagEnd, tagClosePos - tagEnd);
             bool    selfClose = (!tagBody.isEmpty() && tagBody.endsWith('/')) || tagName == "br"
-                             || tagName == "hr" || tagName == "img" || tagName == "input"
-                             || tagName == "meta" || tagName == "link" || tagName == "wbr";
-            i = tagClosePos;
+                                || tagName == "hr" || tagName == "img" || tagName == "input"
+                                || tagName == "meta" || tagName == "link" || tagName == "wbr";
+            i                 = tagClosePos;
             if (i < len) {
                 i++; /* skip '>' */
             }

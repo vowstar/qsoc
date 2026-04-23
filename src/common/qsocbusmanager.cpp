@@ -180,18 +180,15 @@ bool QSocBusManager::importFromFileList(
                 /* Create nested structure: busName -> port -> signalName -> mode -> properties */
                 if (!direction.isEmpty()) {
                     busYaml[busName.toStdString()]["port"][signalName.toStdString()]
-                           [mode.toStdString()]["direction"]
-                        = direction.toStdString();
+                           [mode.toStdString()]["direction"] = direction.toStdString();
                 }
                 if (!width.isEmpty()) {
                     busYaml[busName.toStdString()]["port"][signalName.toStdString()]
-                           [mode.toStdString()]["width"]
-                        = width.toStdString();
+                           [mode.toStdString()]["width"] = width.toStdString();
                 }
                 if (!qualifier.isEmpty()) {
                     busYaml[busName.toStdString()]["port"][signalName.toStdString()]
-                           [mode.toStdString()]["qualifier"]
-                        = qualifier.toStdString();
+                           [mode.toStdString()]["qualifier"] = qualifier.toStdString();
                 }
             }
         }

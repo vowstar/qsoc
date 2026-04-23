@@ -374,8 +374,8 @@ void QSocFileHistory::saveSnapshots(const QList<Snapshot> &snapshots) const
         json doc;
         doc["turn"] = snap.turn;
         doc["ts"]   = (snap.timestamp.isValid() ? snap.timestamp : QDateTime::currentDateTimeUtc())
-                        .toString(Qt::ISODateWithMs)
-                        .toStdString();
+                          .toString(Qt::ISODateWithMs)
+                          .toStdString();
         json filesObj = json::object();
         for (auto it = snap.files.begin(); it != snap.files.end(); ++it) {
             if (it.value().isEmpty()) {
