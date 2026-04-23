@@ -28,6 +28,13 @@ constexpr int FG_PREVIEW   = 108;
 constexpr int FG_HIGHLIGHT = 214;
 
 constexpr int MIN_COL_WIDTH = 24;
+/* Upper bound on a single column's width. Wide terminals (120+ cols) get
+ * a picker that covers half the screen otherwise, with most of that real
+ * estate being trailing whitespace. Capping the column makes the picker
+ * feel like a focused dialog rather than a full-screen takeover. */
+constexpr int MAX_COL_WIDTH = 48;
+/* Upper bound on visible item rows, same rationale as the width cap. */
+constexpr int MAX_PICKER_ROWS = 20;
 
 QString parentOf(const QString &path)
 {
@@ -151,19 +158,27 @@ QString QTuiPathPicker::exec()
     rebuildLeft();
     rebuildRight();
 
-    const int menuH    = qMax(6, termH - 5);
+    /* Height cap: wide terminals should not get a full-screen picker. */
+    const int menuH    = qMin(qMax(6, termH - 5), MAX_PICKER_ROWS + 2);
     const int bodyRows = menuH - 2;
     int       startY   = termH - 3 - menuH;
     if (startY < 1) {
         startY = 1;
     }
 
+    /* Width cap: each column is bounded by MAX_COL_WIDTH so labels have
+     * headroom without the picker eating the whole terminal width. The
+     * picker hugs the left edge, the remaining width on the right stays
+     * as BG_NORMAL so wide terminals do not feel like they are wasting
+     * half the screen on blank space. */
     const int gutter = 2;
-    int       leftW  = qMax(MIN_COL_WIDTH, (termW - gutter) / 2);
-    int       rightW = qMax(0, termW - leftW - gutter);
+    int       leftW  = qMin(MAX_COL_WIDTH, qMax(MIN_COL_WIDTH, (termW - gutter) / 2));
+    int       rightW = qMin(MAX_COL_WIDTH, qMax(0, termW - leftW - gutter));
     if (rightW < MIN_COL_WIDTH) {
         rightW = 0;
     }
+    const int pickerW    = leftW + (rightW > 0 ? gutter + rightW : 0);
+    const int leftMargin = 0;
 
     int scrollOffset = 0;
 
@@ -195,22 +210,35 @@ QString QTuiPathPicker::exec()
         return line.left(width);
     };
 
+    auto writeMargin = [&](int width) {
+        if (width <= 0) {
+            return;
+        }
+        fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_DIM, BG_NORMAL);
+        fputs(QString(width, QLatin1Char(' ')).toUtf8().constData(), stdout);
+    };
+
     auto renderOverlay = [&]() {
         ensureVisible();
 
-        /* Wipe the full screen so the picker reliably paints over any
-         * underlying compositor content regardless of alt-screen state. */
-        fputs("\033[2J\033[H", stdout);
-
+        /* Only wipe the rows the picker occupies. Leaving everything else
+         * alone avoids a visible flash of the cleared alt-screen while
+         * keeping the picker's own area fully under our control. */
         for (int row = 0; row < menuH && (startY + row) < termH; row++) {
             fprintf(stdout, "\033[%d;1H\033[2K", startY + row + 1);
         }
 
-        /* Title row shows current absolute path so the user always knows
-         * where the view is anchored. */
+        const int rightMargin = qMax(0, termW - leftMargin - pickerW);
+
+        /* Title row shows the current absolute path so the user always
+         * knows where the view is anchored. */
+        fprintf(stdout, "\033[%d;1H", startY + 1);
+        writeMargin(leftMargin);
         QString titleLine = QStringLiteral("  ") + m_title + QStringLiteral("  ") + currentPath;
-        fprintf(stdout, "\033[%d;1H\033[38;5;%d;48;5;%dm", startY + 1, FG_TITLE, BG_NORMAL);
-        fputs(padTo(titleLine, termW).toUtf8().constData(), stdout);
+        fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_TITLE, BG_NORMAL);
+        fputs(padTo(titleLine, pickerW).toUtf8().constData(), stdout);
+        fputs("\033[0m", stdout);
+        writeMargin(rightMargin);
         fputs("\033[0m", stdout);
 
         /* Body rows: left column interactive, right column passive preview. */
@@ -218,6 +246,8 @@ QString QTuiPathPicker::exec()
         const int visible = qMin(count, bodyRows);
         for (int row = 0; row < bodyRows; row++) {
             fprintf(stdout, "\033[%d;1H", startY + 2 + row);
+            writeMargin(leftMargin);
+            fputs("\033[0m", stdout);
 
             int     leftIdx = scrollOffset + row;
             QString leftCell;
@@ -242,32 +272,37 @@ QString QTuiPathPicker::exec()
             fputs(leftCell.toUtf8().constData(), stdout);
             fputs("\033[0m", stdout);
 
-            if (rightW <= 0) {
-                continue;
+            if (rightW > 0) {
+                /* Gutter keeps the left column background so the two
+                 * panels visibly separate at the seam. */
+                fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_DIM, BG_NORMAL);
+                fputs(QString(gutter, QLatin1Char(' ')).toUtf8().constData(), stdout);
+
+                QString rightCell;
+                if (row < rightPreview.size()) {
+                    rightCell = QStringLiteral("  ") + rightPreview[row];
+                }
+                rightCell = padTo(rightCell, rightW);
+                /* Preview column uses a darker background and softer
+                 * foreground so the user sees it as read-only context
+                 * rather than another interactive menu. */
+                fprintf(stdout, "\033[3m\033[38;5;%d;48;5;%dm", FG_PREVIEW, BG_PREVIEW);
+                fputs(rightCell.toUtf8().constData(), stdout);
+                fputs("\033[0m", stdout);
             }
 
-            /* Gutter keeps the left column background so the two panels
-             * visibly separate at the seam. */
-            fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_DIM, BG_NORMAL);
-            fputs(QString(gutter, QLatin1Char(' ')).toUtf8().constData(), stdout);
-
-            QString rightCell;
-            if (row < rightPreview.size()) {
-                rightCell = QStringLiteral("  ") + rightPreview[row];
-            }
-            rightCell = padTo(rightCell, rightW);
-            /* Preview column uses a darker background and softer foreground
-             * so the user sees it as read-only context rather than another
-             * interactive menu. */
-            fprintf(stdout, "\033[3m\033[38;5;%d;48;5;%dm", FG_PREVIEW, BG_PREVIEW);
-            fputs(rightCell.toUtf8().constData(), stdout);
+            writeMargin(rightMargin);
             fputs("\033[0m", stdout);
         }
 
         /* Footer row documents the navigation keys. */
+        fprintf(stdout, "\033[%d;1H", startY + menuH);
+        writeMargin(leftMargin);
         QString footer = QStringLiteral("  Enter/Right: open   Left: up   ESC: cancel");
-        fprintf(stdout, "\033[%d;1H\033[38;5;%d;48;5;%dm", startY + menuH, FG_DIM, BG_NORMAL);
-        fputs(padTo(footer, termW).toUtf8().constData(), stdout);
+        fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_DIM, BG_NORMAL);
+        fputs(padTo(footer, pickerW).toUtf8().constData(), stdout);
+        fputs("\033[0m", stdout);
+        writeMargin(rightMargin);
         fputs("\033[0m", stdout);
 
         fputs("\033[?25l", stdout);
