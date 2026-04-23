@@ -326,6 +326,36 @@ else()
     message(STATUS "Use existing fmt target: ${FMT_LIBRARIES}")
 endif()
 
+# MBEDTLS (bundled, always static, drives libssh2 crypto backend)
+set(ENABLE_TESTING              OFF CACHE BOOL "disable mbedtls tests"    FORCE)
+set(ENABLE_PROGRAMS             OFF CACHE BOOL "disable mbedtls programs" FORCE)
+set(MBEDTLS_FATAL_WARNINGS      OFF CACHE BOOL "no -Werror for mbedtls"   FORCE)
+set(USE_STATIC_MBEDTLS_LIBRARY  ON  CACHE BOOL "mbedtls static"           FORCE)
+set(USE_SHARED_MBEDTLS_LIBRARY  OFF CACHE BOOL "mbedtls no shared"        FORCE)
+set(DISABLE_PACKAGE_CONFIG_AND_INSTALL OFF CACHE BOOL "mbedtls export set" FORCE)
+add_subdirectory(external/mbedtls)
+set(MBEDTLS_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/external/mbedtls/include")
+set(MBEDTLS_LIBRARIES    mbedcrypto)
+message(STATUS "Use local mbedtls library: ${MBEDTLS_LIBRARIES} ${MBEDTLS_INCLUDE_DIRS}")
+
+# LIBSSH2 (bundled, always static, mbedTLS backend)
+set(MBEDTLS_INCLUDE_DIR      "${MBEDTLS_INCLUDE_DIRS}" CACHE PATH     "libssh2 mbedtls include" FORCE)
+set(MBEDCRYPTO_LIBRARY       "${MBEDTLS_LIBRARIES}"    CACHE FILEPATH "libssh2 mbedtls lib"     FORCE)
+set(CRYPTO_BACKEND           "mbedTLS" CACHE STRING "libssh2 crypto backend"  FORCE)
+set(BUILD_SHARED_LIBS        OFF       CACHE BOOL   "libssh2 no shared"       FORCE)
+set(BUILD_STATIC_LIBS        ON        CACHE BOOL   "libssh2 static"          FORCE)
+set(BUILD_EXAMPLES           OFF       CACHE BOOL   "libssh2 no examples"     FORCE)
+set(BUILD_TESTING            OFF       CACHE BOOL   "libssh2 no tests"        FORCE)
+set(LIBSSH2_BUILD_DOCS       OFF       CACHE BOOL   "libssh2 no docs"         FORCE)
+set(LIBSSH2_USE_PKGCONFIG    OFF       CACHE BOOL   "libssh2 no pkg-config"   FORCE)
+set(ENABLE_ZLIB_COMPRESSION  OFF       CACHE BOOL   "libssh2 no zlib"         FORCE)
+add_subdirectory(external/libssh2)
+set(LIBSSH2_INCLUDE_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/external/libssh2/include"
+)
+set(LIBSSH2_LIBRARIES libssh2::libssh2_static)
+message(STATUS "Use local libssh2 library: ${LIBSSH2_LIBRARIES} ${LIBSSH2_INCLUDE_DIRS}")
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "resource/*.qrc")
@@ -412,6 +442,8 @@ target_include_directories(qsoc_core SYSTEM PUBLIC
     "${SYSTEMRDL_INCLUDE_DIRS}"
     "${FMT_INCLUDE_DIRS}"
     "${REPLXX_INCLUDE_DIRS}"
+    "${MBEDTLS_INCLUDE_DIRS}"
+    "${LIBSSH2_INCLUDE_DIRS}"
 )
 
 target_link_libraries(qsoc_core PUBLIC
@@ -434,6 +466,7 @@ target_link_libraries(qsoc_core PUBLIC
     ${SYSTEMRDL_LIBRARIES}
     ${FMT_LIBRARIES}
     ${REPLXX_LIBRARIES}
+    ${LIBSSH2_LIBRARIES}
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE

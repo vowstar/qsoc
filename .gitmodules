@@ -31,3 +31,9 @@
 [submodule "external/replxx"]
 	path = external/replxx
 	url = https://github.com/AmokHuginnsson/replxx.git
+[submodule "external/libssh2"]
+	path = external/libssh2
+	url = https://github.com/libssh2/libssh2.git
+[submodule "external/mbedtls"]
+	path = external/mbedtls
+	url = https://github.com/Mbed-TLS/mbedtls.git
