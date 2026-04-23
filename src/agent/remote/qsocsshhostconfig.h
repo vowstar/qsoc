@@ -48,6 +48,13 @@ struct QSocSshHostConfig
     /** Parsed value of the AddKeysToAgent directive. */
     bool addKeysToAgent = false;
 
+    /**
+     * Ordered list of ProxyJump hop aliases. Empty means a direct connect.
+     * Each entry is a raw alias; the caller resolves it through the same
+     * QSocSshConfigParser to get hostname/port/user for the hop.
+     */
+    QStringList proxyJump;
+
     /** True when this host resolution came from an explicit config match. */
     bool fromConfig = false;
 };

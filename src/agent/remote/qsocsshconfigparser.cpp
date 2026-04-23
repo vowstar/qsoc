@@ -411,6 +411,7 @@ QSocSshHostConfig QSocSshConfigParser::resolve(const QString &alias) const
     bool identitiesOnlySet = false;
     bool knownHostsSet     = false;
     bool addKeysToAgentSet = false;
+    bool proxyJumpSet      = false;
     bool matchedAnyBlock   = false;
 
     /* Raw IdentityFile values deferred until scalars are resolved, so token
@@ -465,6 +466,21 @@ QSocSshHostConfig QSocSshConfigParser::resolve(const QString &alias) const
                     = (v == QLatin1String("yes") || v == QLatin1String("ask")
                        || v == QLatin1String("confirm"));
                 addKeysToAgentSet = true;
+            } else if (keyword == QLatin1String("proxyjump") && !proxyJumpSet) {
+                /* ProxyJump values are comma-separated hop aliases. We keep
+                 * the raw aliases here so the caller can feed each one back
+                 * through resolve() to pick up a hop-specific HostName,
+                 * Port, User, and IdentityFile. "none" explicitly disables. */
+                const QString trimmed = raw.trimmed();
+                if (!trimmed.isEmpty() && trimmed.toLower() != QLatin1String("none")) {
+                    for (const QString &hop : trimmed.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+                        const QString cleaned = hop.trimmed();
+                        if (!cleaned.isEmpty()) {
+                            cfg.proxyJump.append(cleaned);
+                        }
+                    }
+                }
+                proxyJumpSet = true;
             }
         }
     }
