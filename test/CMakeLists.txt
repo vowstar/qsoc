@@ -22,22 +22,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-list(TRANSFORM PROJECT_CPP_FILES PREPEND "${CMAKE_CURRENT_LIST_DIR}/../")
-list(TRANSFORM PROJECT_H_FILES PREPEND "${CMAKE_CURRENT_LIST_DIR}/../")
 list(TRANSFORM PROJECT_QRC_FILES PREPEND "${CMAKE_CURRENT_LIST_DIR}/../")
-list(TRANSFORM PROJECT_UI_FILES PREPEND "${CMAKE_CURRENT_LIST_DIR}/../")
 list(TRANSFORM PROJECT_TS_FILES PREPEND "${CMAKE_CURRENT_LIST_DIR}/../")
-list(TRANSFORM APPONLY_TS_FILES PREPEND "${CMAKE_CURRENT_LIST_DIR}/../")
-
-list(FILTER PROJECT_CPP_FILES EXCLUDE REGEX "src/main\\.cpp$")
-
-set(PROJECT_SOURCES
-    "${PROJECT_CPP_FILES}"
-    "${PROJECT_H_FILES}"
-    "${PROJECT_UI_FILES}"
-    "${PROJECT_TS_FILES}"
-    "${PROJECT_QRC_FILES}"
-)
 
 set(CMAKE_AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_LIST_DIR}/../ui"
@@ -60,62 +46,23 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         )
     endif()
 
+    set(_TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/${TARGET_NAME}.cpp")
+
     if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
-        qt_add_resources(PROJECT_SOURCES "${PROJECT_QRC_FILES}")
-        qt_add_executable(${TARGET_NAME} MANUAL_FINALIZATION "${PROJECT_SOURCES}" "${CMAKE_CURRENT_LIST_DIR}/${TARGET_NAME}.cpp")
-        # Don't use lupdate in tests
+        qt_add_resources(_TEST_SOURCES "${PROJECT_QRC_FILES}")
+        qt_add_executable(${TARGET_NAME} MANUAL_FINALIZATION "${_TEST_SOURCES}")
         qt_add_lrelease(${TARGET_NAME} TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
         qt_add_resources(${TARGET_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
     else()
-        qt5_add_resources(PROJECT_SOURCES "${PROJECT_QRC_FILES}")
-        add_executable(${TARGET_NAME} "${PROJECT_SOURCES}" "${CMAKE_CURRENT_LIST_DIR}/${TARGET_NAME}.cpp")
-        # Don't use lupdate in tests
+        qt5_add_resources(_TEST_SOURCES "${PROJECT_QRC_FILES}")
+        add_executable(${TARGET_NAME} "${_TEST_SOURCES}")
         qt5_add_lrelease(${TARGET_NAME} TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
         qt5_add_resources(${TARGET_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
     endif()
 
-    target_include_directories(${TARGET_NAME} PRIVATE
-        "${CMAKE_CURRENT_LIST_DIR}"
-        "${CMAKE_CURRENT_LIST_DIR}/../src"
-        "${CMAKE_CURRENT_SOURCE_DIR}"
-    )
-
-    target_include_directories(${TARGET_NAME} SYSTEM PRIVATE
-        "${SVLANG_INCLUDE_DIRS}"
-        "${JSON_INCLUDE_DIRS}"
-        "${INJA_INCLUDE_DIRS}"
-        "${YAML_INCLUDE_DIRS}"
-        "${CSV_INCLUDE_DIRS}"
-        "${GPDS_INCLUDE_DIRS}"
-        "${QSCHEMATIC_INCLUDE_DIRS}"
-        "${BIGINT_INCLUDE_DIRS}"
-        "${ANTLR4_INCLUDE_DIRS}"
-        "${SYSTEMRDL_INCLUDE_DIRS}"
-        "${FMT_INCLUDE_DIRS}"
-        "${REPLXX_INCLUDE_DIRS}"
-    )
-
     target_link_libraries(${TARGET_NAME} PRIVATE
-        Qt${QT_VERSION_MAJOR}::Core
-        Qt${QT_VERSION_MAJOR}::Gui
-        Qt${QT_VERSION_MAJOR}::Network
-        Qt${QT_VERSION_MAJOR}::PrintSupport
-        Qt${QT_VERSION_MAJOR}::Svg
+        qsoc_core
         Qt${QT_VERSION_MAJOR}::Test
-        Qt${QT_VERSION_MAJOR}::Widgets
-        ${QT_LIBRARIES}
-        ${SVLANG_LIBRARIES}
-        ${JSON_LIBRARIES}
-        ${INJA_LIBRARIES}
-        ${YAML_LIBRARIES}
-        ${CSV_LIBRARIES}
-        ${GPDS_LIBRARIES}
-        ${QSCHEMATIC_LIBRARIES}
-        ${BIGINT_LIBRARIES}
-        ${ANTLR4_LIBRARIES}
-        ${SYSTEMRDL_LIBRARIES}
-        ${FMT_LIBRARIES}
-        ${REPLXX_LIBRARIES}
     )
 endfunction()
 

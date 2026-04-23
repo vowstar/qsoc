@@ -334,14 +334,8 @@ file(GLOB_RECURSE PROJECT_UI_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "ui/*.u
 file(GLOB_RECURSE PROJECT_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/*.ts")
 file(GLOB_RECURSE APPONLY_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/app_*.ts")
 
-set(PROJECT_SOURCES
-    "${PROJECT_CPP_FILES}"
-    "${PROJECT_H_FILES}"
-    "${PROJECT_UI_FILES}"
-    "${PROJECT_TS_FILES}"
-    "${PROJECT_QRC_FILES}"
-    "${PROJECT_DOC_QRC_FILES}"
-)
+set(PROJECT_CORE_CPP_FILES "${PROJECT_CPP_FILES}")
+list(FILTER PROJECT_CORE_CPP_FILES EXCLUDE REGEX "src/main\\.cpp$")
 
 set(CMAKE_AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_LIST_DIR}/ui"
@@ -350,6 +344,18 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
+    qt_add_library(qsoc_core STATIC
+        "${PROJECT_CORE_CPP_FILES}"
+        "${PROJECT_H_FILES}"
+        "${PROJECT_UI_FILES}"
+    )
+
+    set(PROJECT_SOURCES
+        "src/main.cpp"
+        "${PROJECT_TS_FILES}"
+        "${PROJECT_QRC_FILES}"
+        "${PROJECT_DOC_QRC_FILES}"
+    )
     qt_add_resources(PROJECT_SOURCES "${PROJECT_QRC_FILES}" "${PROJECT_DOC_QRC_FILES}")
     qt_add_executable(${PROJECT_NAME}
         MANUAL_FINALIZATION
@@ -359,6 +365,18 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_lrelease(${PROJECT_NAME} TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
     qt_add_resources(${PROJECT_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
 else()
+    add_library(qsoc_core STATIC
+        "${PROJECT_CORE_CPP_FILES}"
+        "${PROJECT_H_FILES}"
+        "${PROJECT_UI_FILES}"
+    )
+
+    set(PROJECT_SOURCES
+        "src/main.cpp"
+        "${PROJECT_TS_FILES}"
+        "${PROJECT_QRC_FILES}"
+        "${PROJECT_DOC_QRC_FILES}"
+    )
     qt5_add_resources(PROJECT_SOURCES "${PROJECT_QRC_FILES}" "${PROJECT_DOC_QRC_FILES}")
     if(ANDROID)
         add_library(${PROJECT_NAME} SHARED
@@ -375,13 +393,13 @@ else()
     qt5_add_resources(${PROJECT_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
 endif()
 
-target_include_directories(${PROJECT_NAME} PRIVATE
+target_include_directories(qsoc_core PUBLIC
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
+target_include_directories(qsoc_core SYSTEM PUBLIC
     "${SVLANG_INCLUDE_DIRS}"
     "${JSON_INCLUDE_DIRS}"
     "${INJA_INCLUDE_DIRS}"
@@ -396,7 +414,7 @@ target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     "${REPLXX_INCLUDE_DIRS}"
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE
+target_link_libraries(qsoc_core PUBLIC
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Gui
     Qt${QT_VERSION_MAJOR}::Network
@@ -416,6 +434,16 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${SYSTEMRDL_LIBRARIES}
     ${FMT_LIBRARIES}
     ${REPLXX_LIBRARIES}
+)
+
+target_include_directories(${PROJECT_NAME} PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_LIST_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    qsoc_core
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
