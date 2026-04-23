@@ -137,19 +137,44 @@ int QTuiMenu::exec()
 #endif
     }
 
-    int menuH  = lineCount();
-    int startY = termH - 3 - menuH;
+    /* Clamp item rows so the menu fits on screen; remaining items scroll into
+     * view as the highlight moves past the viewport edge. Reserve 5 rows for
+     * the input line, status bar, and title/footer of the menu itself. */
+    const int itemsTotal      = static_cast<int>(items.size());
+    const int maxVisibleItems = qMax(1, termH - 5);
+    const int visibleCount    = qMin(itemsTotal, maxVisibleItems);
+    const int menuH           = visibleCount + 2;
+    int       startY          = termH - 3 - menuH;
     if (startY < 1) {
         startY = 1;
     }
 
+    int scrollOffset = 0;
+
+    auto ensureHighlightVisible = [&]() {
+        if (highlighted < scrollOffset) {
+            scrollOffset = highlighted;
+        } else if (highlighted >= scrollOffset + visibleCount) {
+            scrollOffset = highlighted - visibleCount + 1;
+        }
+        if (scrollOffset < 0) {
+            scrollOffset = 0;
+        }
+        if (scrollOffset > itemsTotal - visibleCount) {
+            scrollOffset = qMax(0, itemsTotal - visibleCount);
+        }
+    };
+
     /* Render overlay using 256-palette background colours directly. */
     auto renderOverlay = [&]() {
+        ensureHighlightVisible();
         int menuW = qMin(computeBoxWidth(), termW);
 
         for (int row = 0; row < menuH && (startY + row) < termH; row++) {
             fprintf(stdout, "\033[%d;1H\033[2K", startY + row + 1);
         }
+
+        const bool scrollable = itemsTotal > visibleCount;
 
         for (int row = 0; row < menuH; row++) {
             fprintf(stdout, "\033[%d;1H", startY + row + 1);
@@ -165,7 +190,7 @@ int QTuiMenu::exec()
                 fgColor = FG_HINT;
             } else {
                 /* Item row */
-                int itemIdx = row - 1;
+                int itemIdx = scrollOffset + row - 1;
                 if (itemIdx == highlighted) {
                     bgColor = BG_HIGHLIGHT;
                     fgColor = FG_HIGHLIGHT;
@@ -178,14 +203,25 @@ int QTuiMenu::exec()
             QString line;
             if (row == 0) {
                 line = QStringLiteral("  ") + title;
+                if (scrollable) {
+                    line += QString(" [%1/%2]").arg(highlighted + 1).arg(itemsTotal);
+                }
             } else if (row == menuH - 1) {
-                line = QString("  1-%1/Up/Down+Enter/Click/ESC").arg(items.size());
+                if (scrollable) {
+                    line = QStringLiteral("  Up/Down/Wheel+Enter/ESC");
+                } else {
+                    line = QString("  1-%1/Up/Down+Enter/Click/ESC").arg(items.size());
+                }
             } else {
-                int             itemIdx = row - 1;
-                const MenuItem &item    = items[itemIdx];
-                line                    = QString("  %1 %2").arg(itemIdx + 1, 2).arg(item.label);
-                if (!item.hint.isEmpty()) {
-                    line += QStringLiteral(" ") + item.hint;
+                const int itemIdx = scrollOffset + row - 1;
+                if (itemIdx < 0 || itemIdx >= itemsTotal) {
+                    line = QString();
+                } else {
+                    const MenuItem &item = items[itemIdx];
+                    line                 = QString("  %1 %2").arg(itemIdx + 1, 2).arg(item.label);
+                    if (!item.hint.isEmpty()) {
+                        line += QStringLiteral(" ") + item.hint;
+                    }
                 }
             }
 
@@ -318,9 +354,10 @@ int QTuiMenu::exec()
                             int mouseRow = parts[2].toInt(); /* 1-based */
                             /* Left-click press on an item row → select */
                             if ((btnFlags & 3) == 0 && !(btnFlags & 64)) {
-                                int clickedItem = mouseRow - startY - 1; /* 0-based */
-                                if (clickedItem >= 0
-                                    && clickedItem < static_cast<int>(items.size())) {
+                                int visibleRow  = mouseRow - startY - 1; /* 0-based */
+                                int clickedItem = scrollOffset + visibleRow;
+                                if (visibleRow >= 0 && visibleRow < visibleCount && clickedItem >= 0
+                                    && clickedItem < itemsTotal) {
                                     result = clickedItem;
                                     done   = true;
                                 }
