@@ -63,13 +63,24 @@ The following commands are available during an interactive session:
     [`/compact`], [Compact context and report tokens saved],
     [`/context`], [Show token usage breakdown and suggestions],
     [`/cost`], [Show session token totals and cost (if rates configured)],
-    [`/cwd [path]`], [Show or change the agent working directory],
+    [`/cwd [path]`],
+    [Show or change the working directory. Empty opens a picker. In remote
+     mode, drives the remote cwd clamped to the workspace root.],
     [`/diff`], [Review file edits turn-by-turn],
     [`/effort [level]`], [Show or set effort (off/low/medium/high)],
+    [`/local`],
+    [Leave SSH remote mode and return to local workspace. The sticky binding
+     stays on disk so the next `/ssh <same target>` or next startup can
+     auto-reuse it.],
     [`/model [id]`], [Show or switch the active model],
     [`/project <path>`],
     [Switch project root (reloads config, starts a new session)],
     [`/rename <title>`], [Set session title for the resume picker],
+    [`/ssh [user\@host[:port][:/workspace]]`],
+    [Connect to an SSH remote workspace. Empty opens a picker of
+     `~/.ssh/config` aliases plus the saved binding. On first connect to a
+     target, `:/workspace` is required; it is remembered in
+     `<project>/.qsoc/remote.yml` and reused thereafter.],
     [`/status`], [Show model, session, and endpoint info],
     [`/help`], [Show help message],
     [`!<command>`], [Execute a shell command directly],
@@ -226,6 +237,93 @@ On every turn, the system prompt is composed from:
 
 Set `agent.system_prompt` in the config to replace the modular base with a
 literal string (useful for testing or custom deployments).
+
+== REMOTE WORKSPACE
+<agent-remote>
+QSoC can drive a workspace on a remote host over SSH without installing
+anything on that host. The transport is `libssh2` linked statically against
+`mbedTLS 3.6 LTS` (shipped as git submodules); mbedTLS 4.x is not yet
+supported by libssh2.
+
+=== Connecting
+<agent-remote-connect>
+
+Use `/ssh` from the interactive REPL:
+
+```bash
+/ssh user@host
+/ssh user@host:2222
+/ssh user@host:2222:/remote/workspace/path
+```
+
+The trailing `:/workspace` selects the remote directory used as the initial
+cwd and as the sole writable root for remote file tools. On first connect to
+a given target, the workspace *must* be supplied. It is written to
+`<project>/.qsoc/remote.yml` and reused on subsequent `/ssh <same target>`
+invocations without path.
+
+Bare `/ssh` opens a picker listing the saved binding plus concrete aliases
+parsed from `~/.ssh/config`. `/local` returns to local mode but keeps the
+binding on disk so the next session can auto-connect.
+
+=== What Runs Where
+<agent-remote-where>
+
+Workspace tools operate on the remote host (SFTP + SSH exec):
+
+- `read_file`, `write_file`, `list_files`, `edit_file`
+- `bash` (with optional `background=true` for detached jobs)
+- `bash_manage` (status/output/terminate/kill for backgrounded jobs)
+- `path_context` (remote root, cwd, writable dirs)
+
+Control-plane tools stay on the local machine regardless of mode:
+
+- `query_docs`
+- `web_fetch`, `web_search`
+
+The following tools are intentionally unavailable in remote mode because
+they depend on local QSoC managers:
+
+- `project_*`, `module_*`, `bus_*`, `generate_*`, `lsp`
+
+=== Authentication and Host Keys
+<agent-remote-auth>
+
+QSoC parses a deliberately small subset of `~/.ssh/config`: `Host`,
+`HostName`, `User`, `Port`, `IdentityFile`, `IdentitiesOnly`,
+`UserKnownHostsFile`, `StrictHostKeyChecking`, `AddKeysToAgent`, and bounded
+`Include`. `Match`, `ProxyCommand`, port forwarding, certificates, and
+complex token expansion are not supported.
+
+Authentication order:
+
++ `ssh-agent` if available (unless `IdentitiesOnly=yes`)
++ Each `IdentityFile` from the config in order
++ If none configured, QSoC enumerates `~/.ssh/id_*` by filename and lets
+  libssh2 try each key in turn
+
+Host key verification uses `~/.ssh/known_hosts` by default with strict
+checking enabled. `accept-new` is honored for first-contact hosts.
+
+=== Private Key Safety
+<agent-remote-keys>
+
+QSoC code never opens, reads, copies, logs, or displays SSH private key
+contents. IdentityFile paths are handed to libssh2 and only libssh2 (or
+ssh-agent) reads the key material internally during authentication. Logs
+refer to "configured IdentityFile" rather than literal paths where
+practical, and passphrases are kept in memory only for the duration needed
+to authenticate.
+
+=== Background Jobs
+<agent-remote-bg>
+
+`bash` with `background=true` launches the command detached under
+`<workspace>/.qsoc-agent/jobs/<id>/` and returns `job_id` immediately. The
+wrapper writes `pid`, `output.log`, and `exit_code` files; `bash_manage`
+reads those state files over SSH exec to report status, tail output, or
+send `SIGTERM`/`SIGKILL`. Jobs survive SSH channel closes; QSoC does not
+auto-kill them when the agent exits.
 
 == SECURITY
 <agent-security>
