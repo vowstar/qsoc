@@ -107,6 +107,31 @@ private:
     QSocSshExec           *m_running = nullptr;
 };
 
+/**
+ * @brief Remote bash_manage: inspect and control backgrounded remote commands.
+ * @details Jobs are directories under `<workspace>/.qsoc-agent/jobs/<id>/`
+ *          created by the background mode of QSocToolRemoteShellBash. State
+ *          lives in `pid`, `exit_code`, `output.log`, `command`. `kill -0`
+ *          via SSH exec probes liveness.
+ */
+class QSocToolRemoteBashManage : public QSocTool
+{
+    Q_OBJECT
+
+public:
+    QSocToolRemoteBashManage(
+        QObject *parent, QSocSshSession *session, QSocRemotePathContext *pathCtx);
+
+    QString getName() const override;
+    QString getDescription() const override;
+    json    getParametersSchema() const override;
+    QString execute(const json &arguments) override;
+
+private:
+    QSocSshSession        *m_session = nullptr;
+    QSocRemotePathContext *m_pathCtx = nullptr;
+};
+
 /** @brief Remote path_context: report/change remote cwd, root, writable dirs. */
 class QSocToolRemotePath : public QSocTool
 {
