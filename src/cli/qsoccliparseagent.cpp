@@ -11,6 +11,7 @@
 #include "agent/remote/qsocremotebinding.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
+#include "agent/remote/qsocsshconfigparser.h"
 #include "agent/remote/qsocsshexec.h"
 #include "agent/remote/qsocsshsession.h"
 #include "agent/remote/qsoctoolremote.h"
@@ -3185,17 +3186,69 @@ bool QSocCliWorker::runAgentLoop(
             continue;
         }
         if (cmd.startsWith(QStringLiteral("/ssh"))) {
-            const QString arg = input.mid(4).trimmed();
+            QString arg = input.mid(4).trimmed();
+
+            /* Bare /ssh pops a picker built from the sticky binding target
+             * plus concrete aliases in ~/.ssh/config. The selection feeds
+             * back into `arg` so the parser below does the actual work. */
             if (arg.isEmpty()) {
-                compositor.printContent(
-                    "Usage: /ssh <user@host[:port][:/workspace]>\n"
-                    "  Connects to a remote host and switches the agent to remote workspace mode.\n"
-                    "  Workspace is the remote directory used as the initial cwd AND the only\n"
-                    "  writable root for remote file tools. On first connect to a target, the\n"
-                    "  workspace must be specified. It is saved to <project>/.qsoc/remote.yml\n"
-                    "  and reused on subsequent /ssh <same target> without path.\n"
-                    "  Use /local to return to the local workspace.\n");
-                continue;
+                QList<QTuiMenu::MenuItem> items;
+                QStringList               targets;
+                auto addItem = [&](const QString &label, const QString &hint, const QString &value) {
+                    QTuiMenu::MenuItem item;
+                    item.label  = label;
+                    item.hint   = hint;
+                    item.marked = false;
+                    items.append(item);
+                    targets.append(value);
+                };
+
+                const QString projectRootLocal = pathContext ? pathContext->getProjectDir()
+                                                             : QString();
+                if (!projectRootLocal.isEmpty()) {
+                    const auto bound = QSocRemoteBinding::read(projectRootLocal);
+                    if (!bound.target.isEmpty()) {
+                        const QString saved = bound.workspace.isEmpty()
+                                                  ? bound.target
+                                                  : bound.target + QStringLiteral(":")
+                                                        + bound.workspace;
+                        addItem(bound.target, QStringLiteral("saved"), saved);
+                    }
+                }
+
+                const QString sshConfigPath = QDir::homePath() + QStringLiteral("/.ssh/config");
+                if (QFileInfo::exists(sshConfigPath)) {
+                    QSocSshConfigParser parser;
+                    parser.parse(sshConfigPath);
+                    for (const QString &alias : parser.listMenuHosts()) {
+                        addItem(alias, QStringLiteral(".ssh/config"), alias);
+                    }
+                }
+                addItem(
+                    QStringLiteral("(type /ssh user@host[:port][:/workspace])"),
+                    QString(),
+                    QString());
+
+                QTuiMenu menu;
+                menu.setTitle(QStringLiteral("Remote target"));
+                menu.setItems(items);
+                const int selected = menu.exec();
+                inputMonitor.resetEscState();
+                compositor.invalidate();
+                compositor.render();
+                if (selected < 0 || selected >= targets.size()) {
+                    continue;
+                }
+                const QString picked = targets.at(selected);
+                if (picked.isEmpty()) {
+                    compositor.printContent(
+                        "Usage: /ssh <user@host[:port][:/workspace]>\n"
+                        "  Workspace must be supplied on first connect to a target; it is\n"
+                        "  stored in <project>/.qsoc/remote.yml and reused next time.\n"
+                        "  Use /local to return to the local workspace.\n");
+                    continue;
+                }
+                arg = picked;
             }
 
             /* Parse `user@host[:port][:/workspace]`. Workspace is detected by
@@ -3411,15 +3464,92 @@ bool QSocCliWorker::runAgentLoop(
             continue;
         }
         if (cmd == QStringLiteral("/cwd") || cmd.startsWith(QStringLiteral("/cwd "))) {
-            const QString arg = input.mid(4).trimmed();
+            QString arg = input.mid(4).trimmed();
 
-            if (remoteSession != nullptr) {
-                if (arg.isEmpty()) {
-                    compositor.printContent(
-                        QString("Remote workspace: %1\n").arg(remotePath.root()));
-                    compositor.printContent(QString("Remote cwd      : %1\n").arg(remotePath.cwd()));
+            if (arg.isEmpty()) {
+                QList<QTuiMenu::MenuItem> items;
+                QStringList               paths;
+                auto addItem = [&](const QString &label, const QString &hint, const QString &path) {
+                    QTuiMenu::MenuItem item;
+                    item.label  = label;
+                    item.hint   = hint;
+                    item.marked = false;
+                    items.append(item);
+                    paths.append(path);
+                };
+
+                QString title;
+                if (remoteSession != nullptr) {
+                    title = QStringLiteral("Remote cwd");
+                    addItem(QStringLiteral("(workspace root)"), remotePath.root(), remotePath.root());
+                    if (remoteSftp != nullptr) {
+                        QString    err;
+                        const auto entries = remoteSftp->listDir(remotePath.cwd(), 100, &err);
+                        for (const auto &entry : entries) {
+                            if (entry.isDirectory) {
+                                addItem(
+                                    entry.name + QStringLiteral("/"),
+                                    QStringLiteral("dir"),
+                                    entry.name);
+                            }
+                        }
+                    }
+                } else {
+                    title                 = QStringLiteral("Local cwd");
+                    const QString project = projectManager ? projectManager->getProjectPath()
+                                                           : QString();
+                    if (!project.isEmpty()) {
+                        addItem(QStringLiteral("(project root)"), project, project);
+                    }
+                    addItem(QStringLiteral(".."), QStringLiteral("parent"), QStringLiteral(".."));
+                    addItem(QStringLiteral("$HOME"), QDir::homePath(), QDir::homePath());
+                    addItem(QStringLiteral("/tmp"), QString(), QStringLiteral("/tmp"));
+                    const QString base = pathContext ? pathContext->getWorkingDir()
+                                                     : QDir::currentPath();
+                    const auto    subdirs
+                        = QDir(base).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+                    for (const QString &name : subdirs) {
+                        addItem(name + QStringLiteral("/"), QStringLiteral("dir"), name);
+                    }
+                }
+                addItem(
+                    QStringLiteral("(show current; type /cwd <path> to set)"), QString(), QString());
+
+                QTuiMenu menu;
+                menu.setTitle(title);
+                menu.setItems(items);
+                const int selected = menu.exec();
+                inputMonitor.resetEscState();
+                compositor.invalidate();
+                compositor.render();
+                if (selected < 0 || selected >= paths.size()) {
                     continue;
                 }
+                const QString picked = paths.at(selected);
+                if (picked.isEmpty()) {
+                    if (remoteSession != nullptr) {
+                        compositor.printContent(
+                            QString("Remote workspace: %1\n").arg(remotePath.root()));
+                        compositor.printContent(
+                            QString("Remote cwd      : %1\n").arg(remotePath.cwd()));
+                    } else {
+                        const QString workingDir = pathContext ? pathContext->getWorkingDir()
+                                                               : QDir::currentPath();
+                        compositor.printContent(QString("Working dir: %1\n").arg(workingDir));
+                        const QString projectDir = projectManager->getProjectPath();
+                        if (!projectDir.isEmpty()) {
+                            compositor.printContent(
+                                QString("Project dir: %1\n").arg(projectDir), QTuiScrollView::Dim);
+                        }
+                    }
+                    continue;
+                }
+                arg = picked;
+            }
+
+            /* Remote workspace: /cwd updates the remote cwd via
+             * QSocRemotePathContext, clamped to the workspace root. */
+            if (remoteSession != nullptr) {
                 const QString resolved = remotePath.resolveCwdRequest(arg);
                 remotePath.setCwd(resolved);
                 {
@@ -3428,18 +3558,6 @@ bool QSocCliWorker::runAgentLoop(
                     agent->setConfig(newCfg);
                 }
                 compositor.printContent(QString("Remote cwd: %1\n").arg(resolved));
-                continue;
-            }
-
-            if (arg.isEmpty()) {
-                const QString workingDir = pathContext ? pathContext->getWorkingDir()
-                                                       : QDir::currentPath();
-                compositor.printContent(QString("Working dir: %1\n").arg(workingDir));
-                const QString projectDir = projectManager->getProjectPath();
-                if (!projectDir.isEmpty()) {
-                    compositor.printContent(
-                        QString("Project dir: %1\n").arg(projectDir), QTuiScrollView::Dim);
-                }
                 continue;
             }
             /* Resolve relative paths against the current agent working dir,
