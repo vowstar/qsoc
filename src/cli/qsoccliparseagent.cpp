@@ -1317,6 +1317,8 @@ bool QSocCliWorker::runAgentLoop(
          &popupAtPos,
          &dismissedFor,
          &slashCommands,
+         &remoteSession,
+         &remotePath,
          detectSlashCommand,
          detectAtToken](const QString &text) {
             /* Helper: close whichever popup is currently showing. */
@@ -1383,11 +1385,17 @@ bool QSocCliWorker::runAgentLoop(
                 return;
             }
 
-            QString projectPath = projectManager->getProjectPath();
-            if (projectPath.isEmpty()) {
-                projectPath = QDir::currentPath();
+            QStringList matches;
+            if (remoteSession != nullptr) {
+                matches
+                    = completionEngine.completeRemote(remoteSession, remotePath.root(), query, 50);
+            } else {
+                QString projectPath = projectManager->getProjectPath();
+                if (projectPath.isEmpty()) {
+                    projectPath = QDir::currentPath();
+                }
+                matches = completionEngine.complete(projectPath, query, 50);
             }
-            QStringList matches = completionEngine.complete(projectPath, query, 50);
             if (matches.isEmpty()) {
                 closePopup();
                 return;
@@ -1803,15 +1811,18 @@ bool QSocCliWorker::runAgentLoop(
             QString rebuilt = QLatin1Char('/') + picked + QLatin1Char(' ') + after;
             inputMonitor.setInputBuffer(rebuilt);
         } else {
-            /* AtFile: decide trailing char: '/' if directory, else ' '. */
-            QChar   trailing    = QLatin1Char(' ');
-            QString projectPath = projectManager->getProjectPath();
-            if (projectPath.isEmpty()) {
-                projectPath = QDir::currentPath();
-            }
-            QFileInfo info(QDir(projectPath).filePath(picked));
-            if (info.isDir()) {
-                trailing = QLatin1Char('/');
+            /* AtFile: decide trailing char: '/' if directory, else ' '. Remote
+             * listings only contain files so we never need to probe over SFTP. */
+            QChar trailing = QLatin1Char(' ');
+            if (remoteSession == nullptr) {
+                QString projectPath = projectManager->getProjectPath();
+                if (projectPath.isEmpty()) {
+                    projectPath = QDir::currentPath();
+                }
+                QFileInfo info(QDir(projectPath).filePath(picked));
+                if (info.isDir()) {
+                    trailing = QLatin1Char('/');
+                }
             }
             inputMonitor.insertCompletion(popupAtPos, picked, trailing);
         }
