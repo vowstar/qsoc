@@ -10,26 +10,68 @@
 #include <QDir>
 #include <QFileInfo>
 
+#ifdef Q_OS_WIN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+using socket_fd_t = SOCKET;
+#else
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+using socket_fd_t = int;
+#endif
 
 #include <cerrno>
 #include <cstring>
-#include <fcntl.h>
 
 namespace {
 
-int setNonBlocking(int sockFd)
+#ifdef Q_OS_WIN
+constexpr socket_fd_t kInvalidSocket = INVALID_SOCKET;
+#else
+constexpr socket_fd_t kInvalidSocket = -1;
+#endif
+
+void closeSocketFd(socket_fd_t sockFd)
 {
+#ifdef Q_OS_WIN
+    ::closesocket(sockFd);
+#else
+    ::close(sockFd);
+#endif
+}
+
+int setNonBlocking(socket_fd_t sockFd)
+{
+#ifdef Q_OS_WIN
+    u_long nonblocking = 1;
+    return ::ioctlsocket(sockFd, FIONBIO, &nonblocking) == 0 ? 0 : -1;
+#else
     const int flags = fcntl(sockFd, F_GETFL, 0);
     if (flags < 0) {
         return -1;
     }
     return fcntl(sockFd, F_SETFL, flags | O_NONBLOCK);
+#endif
+}
+
+int pollSocket(socket_fd_t sockFd, short events, int timeoutMs)
+{
+#ifdef Q_OS_WIN
+    WSAPOLLFD pfd{};
+    pfd.fd     = sockFd;
+    pfd.events = events;
+    return ::WSAPoll(&pfd, 1, timeoutMs);
+#else
+    struct pollfd pfd{};
+    pfd.fd     = sockFd;
+    pfd.events = events;
+    return ::poll(&pfd, 1, timeoutMs);
+#endif
 }
 
 QString libssh2ErrorString(LIBSSH2_SESSION *session)
@@ -69,20 +111,19 @@ int QSocSshSession::waitSocket(int sockFd, LIBSSH2_SESSION *session, int timeout
     if (sockFd < 0 || session == nullptr) {
         return -1;
     }
-    const int     dir = libssh2_session_block_directions(session);
-    struct pollfd pfd{};
-    pfd.fd = sockFd;
+    const int dir    = libssh2_session_block_directions(session);
+    short     events = 0;
     if ((dir & LIBSSH2_SESSION_BLOCK_INBOUND) != 0) {
-        pfd.events |= POLLIN;
+        events |= POLLIN;
     }
     if ((dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) != 0) {
-        pfd.events |= POLLOUT;
+        events |= POLLOUT;
     }
-    if (pfd.events == 0) {
-        /* libssh2 did not give a direction hint yet; wait for either. */
-        pfd.events = POLLIN | POLLOUT;
+    if (events == 0) {
+        events = POLLIN | POLLOUT;
     }
-    const int rc = poll(&pfd, 1, timeoutMs <= 0 ? -1 : timeoutMs);
+    const int rc
+        = pollSocket(static_cast<socket_fd_t>(sockFd), events, timeoutMs <= 0 ? -1 : timeoutMs);
     if (rc > 0) {
         return 1;
     }
@@ -114,7 +155,7 @@ void QSocSshSession::clearConnection()
     /* Only close the socket when it is ours. Tunneled sessions borrow the
      * parent's fd for polling and must not close it. */
     if (m_parent == nullptr && m_socket >= 0) {
-        ::close(m_socket);
+        closeSocketFd(static_cast<socket_fd_t>(m_socket));
     }
     m_socket = -1;
     m_parent = nullptr;
@@ -133,8 +174,12 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
     const QByteArray portBytes = QByteArray::number(port);
     const int rc = getaddrinfo(hostBytes.constData(), portBytes.constData(), &hints, &result);
     if (rc != 0 || result == nullptr) {
-        const QString msg = QStringLiteral("Failed to resolve %1: %2")
-                                .arg(host, QString::fromLocal8Bit(gai_strerror(rc)));
+#ifdef Q_OS_WIN
+        const QString errText = QString::fromWCharArray(gai_strerror(rc));
+#else
+        const QString errText = QString::fromLocal8Bit(gai_strerror(rc));
+#endif
+        const QString msg = QStringLiteral("Failed to resolve %1: %2").arg(host, errText);
         setError(msg);
         if (errorMessage != nullptr) {
             *errorMessage = msg;
@@ -142,21 +187,21 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
         return ConnectStatus::NetworkError;
     }
 
-    int fd = -1;
+    socket_fd_t sockFd = kInvalidSocket;
     for (struct addrinfo *ai = result; ai != nullptr; ai = ai->ai_next) {
-        fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) {
+        sockFd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (sockFd == kInvalidSocket) {
             continue;
         }
-        if (::connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+        if (::connect(sockFd, ai->ai_addr, static_cast<int>(ai->ai_addrlen)) == 0) {
             break;
         }
-        ::close(fd);
-        fd = -1;
+        closeSocketFd(sockFd);
+        sockFd = kInvalidSocket;
     }
     freeaddrinfo(result);
 
-    if (fd < 0) {
+    if (sockFd == kInvalidSocket) {
         const QString msg = QStringLiteral("TCP connect to %1:%2 failed: %3")
                                 .arg(host)
                                 .arg(port)
@@ -168,8 +213,8 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
         return ConnectStatus::NetworkError;
     }
 
-    setNonBlocking(fd);
-    m_socket = fd;
+    setNonBlocking(sockFd);
+    m_socket = static_cast<int>(sockFd);
     return ConnectStatus::Ok;
 }
 

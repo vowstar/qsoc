@@ -5,6 +5,11 @@
 
 #include <libssh2.h>
 
+#ifdef Q_OS_WIN
+#include <winsock2.h>
+#include <QtGlobal>
+#endif
+
 #include <atomic>
 #include <cstdlib>
 #include <mutex>
@@ -19,6 +24,9 @@ void atexitShutdown()
 {
     if (g_initialized.load()) {
         libssh2_exit();
+#ifdef Q_OS_WIN
+        ::WSACleanup();
+#endif
         g_initialized.store(false);
     }
 }
@@ -28,6 +36,10 @@ void atexitShutdown()
 void QSocLibSsh2Init::ensure()
 {
     std::call_once(g_initOnce, []() {
+#ifdef Q_OS_WIN
+        WSADATA wsaData;
+        ::WSAStartup(MAKEWORD(2, 2), &wsaData);
+#endif
         libssh2_init(0);
         g_initialized.store(true);
         std::atexit(&atexitShutdown);
