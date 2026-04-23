@@ -361,6 +361,52 @@ QString runShellEscape(const QString &command)
 }
 
 /**
+ * @brief Run a `!` shell-escape command on a connected remote session.
+ * @details The command runs as `cd <cwd> && /bin/bash -lc <cmd>` so working
+ *          directory matches the agent's view. Stdout+stderr are concatenated
+ *          the same way as the local variant, and a non-zero exit code (or
+ *          abort / timeout) is appended as a footer line.
+ */
+QString runRemoteShellEscape(QSocSshSession &session, const QString &cwd, const QString &command)
+{
+    auto shellEscape = [](const QString &value) {
+        QString out = QStringLiteral("'");
+        for (const QChar chr : value) {
+            if (chr == QLatin1Char('\'')) {
+                out += QStringLiteral("'\\''");
+            } else {
+                out += chr;
+            }
+        }
+        out += QLatin1Char('\'');
+        return out;
+    };
+
+    const QString wrapped = QStringLiteral("cd %1 && /bin/bash -lc %2")
+                                .arg(shellEscape(cwd.isEmpty() ? QStringLiteral("/") : cwd))
+                                .arg(shellEscape(command));
+
+    QSocSshExec         exec(session);
+    QSocSshExec::Result res = exec.run(wrapped, 0);
+
+    QString result = QString::fromUtf8(res.stdoutBytes);
+    if (!res.stderrBytes.isEmpty()) {
+        result += QString::fromUtf8(res.stderrBytes);
+    }
+    if (res.timedOut) {
+        result += QStringLiteral("(timed out)\n");
+    } else if (res.aborted) {
+        result += QStringLiteral("(aborted)\n");
+    } else if (res.exitCode != 0) {
+        result += QStringLiteral("(exit code: %1)\n").arg(res.exitCode);
+    }
+    if (!res.errorText.isEmpty()) {
+        result += QStringLiteral("(%1)\n").arg(res.errorText);
+    }
+    return result;
+}
+
+/**
  * @brief Resolve the project path for session storage.
  * @details Sessions live under <projectPath>/.qsoc/sessions so they move with
  *          the project when the user copies / renames the directory. Falls
@@ -2324,7 +2370,10 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                 compositor.pause();
                 inputMonitor.stop();
-                const QString output = runShellEscape(shellCmd);
+                const QString output
+                    = remoteSession != nullptr
+                          ? runRemoteShellEscape(*remoteSession, remotePath.cwd(), shellCmd)
+                          : runShellEscape(shellCmd);
                 inputMonitor.start();
                 compositor.resume();
                 if (!output.isEmpty()) {
@@ -4065,13 +4114,20 @@ bool QSocCliWorker::runAgentLoop(
                  &inputWidget,
                  &escMonitor,
                  &qout,
+                 &remoteSession,
+                 &remotePath,
                  llm = this->llmService](const QString &text) {
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
                             compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                             compositor.pause();
-                            const QString output = runShellEscape(shellCmd);
+                            const QString output = remoteSession != nullptr
+                                                       ? runRemoteShellEscape(
+                                                             *remoteSession,
+                                                             remotePath.cwd(),
+                                                             shellCmd)
+                                                       : runShellEscape(shellCmd);
                             compositor.resume();
                             if (!output.isEmpty()) {
                                 compositor.printContent(output, QTuiScrollView::Dim);
@@ -4519,13 +4575,20 @@ bool QSocCliWorker::runAgentLoop(
                  &inputWidget,
                  &escMonitor,
                  &qout,
+                 &remoteSession,
+                 &remotePath,
                  llm = this->llmService](const QString &text) {
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
                             compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                             compositor.pause();
-                            const QString output = runShellEscape(shellCmd);
+                            const QString output = remoteSession != nullptr
+                                                       ? runRemoteShellEscape(
+                                                             *remoteSession,
+                                                             remotePath.cwd(),
+                                                             shellCmd)
+                                                       : runShellEscape(shellCmd);
                             compositor.resume();
                             if (!output.isEmpty()) {
                                 compositor.printContent(output, QTuiScrollView::Dim);
