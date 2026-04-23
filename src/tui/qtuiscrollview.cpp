@@ -4,6 +4,58 @@
 #include "tui/qtuiscrollview.h"
 #include "tui/qtuiwidget.h"
 
+namespace {
+
+/* Visual-width-aware soft wrap. Breaks preferentially on spaces, falls
+ * back to hard breaks for tokens wider than the available width. Leaves
+ * the first-segment indentation alone so paragraphs keep their shape. */
+QList<QString> softWrap(const QString &text, int maxWidth)
+{
+    QList<QString> out;
+    if (maxWidth <= 0) {
+        out.append(text);
+        return out;
+    }
+    QString current;
+    int     currentWidth = 0;
+    int     lastBreak    = -1; /* last space index in current buffer */
+    for (int idx = 0; idx < text.size(); ++idx) {
+        const QChar ch    = text.at(idx);
+        const int   chWid = QTuiText::isWideChar(ch.unicode()) ? 2 : 1;
+        if (currentWidth + chWid > maxWidth && !current.isEmpty()) {
+            if (lastBreak > 0) {
+                /* Break at the last space, carry the tail forward. */
+                QString head = current.left(lastBreak);
+                QString tail = current.mid(lastBreak + 1);
+                out.append(head);
+                current      = tail;
+                currentWidth = 0;
+                for (const QChar tc : tail) {
+                    currentWidth += QTuiText::isWideChar(tc.unicode()) ? 2 : 1;
+                }
+                lastBreak = -1;
+            } else {
+                /* Token wider than the row: hard-break. */
+                out.append(current);
+                current.clear();
+                currentWidth = 0;
+                lastBreak    = -1;
+            }
+        }
+        if (ch == QLatin1Char(' ')) {
+            lastBreak = current.size();
+        }
+        current.append(ch);
+        currentWidth += chWid;
+    }
+    if (!current.isEmpty() || out.isEmpty()) {
+        out.append(current);
+    }
+    return out;
+}
+
+} // namespace
+
 void QTuiScrollView::appendLine(const QString &text, LineStyle style)
 {
     lines.append({.text = text, .style = style});
@@ -44,36 +96,58 @@ void QTuiScrollView::appendPartial(const QString &text, LineStyle style)
 
 void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int width)
 {
-    int totalVisible = static_cast<int>(lines.size()) + (partialLine.isEmpty() ? 0 : 1);
-
     /* Reserve 1 column for scrollbar */
     int contentWidth = width - 1;
     if (contentWidth < 1) {
         contentWidth = width;
     }
 
-    /* Calculate viewport */
+    /* Flatten every stored line (plus the active streaming partial) into
+     * wrapped display rows so long paragraphs and CJK text spill onto
+     * additional rows instead of being truncated at the edge. Each
+     * source line may contribute one or more display rows. */
+    struct DisplayRow
+    {
+        QString   text;
+        LineStyle style;
+    };
+    QList<DisplayRow> displayRows;
+    displayRows.reserve(lines.size() + 8);
+
+    auto pushWrapped = [&](const QString &text, LineStyle style) {
+        if (text.isEmpty()) {
+            displayRows.append({QString(), style});
+            return;
+        }
+        for (const QString &chunk : softWrap(text, contentWidth)) {
+            displayRows.append({chunk, style});
+        }
+    };
+
+    for (const Line &line : lines) {
+        pushWrapped(line.text, line.style);
+    }
+    if (!partialLine.isEmpty()) {
+        pushWrapped(partialLine, partialStyle);
+    }
+
+    const int totalVisible = displayRows.size();
+
+    /* Calculate viewport in display-row space so scrolling is smooth
+     * even when a single source line spans many rows. */
     int viewBottom = totalVisible - scrollOffset;
     int viewTop    = viewBottom - height;
 
     for (int viewRow = 0; viewRow < height; viewRow++) {
-        int lineIdx = viewTop + viewRow;
+        int rowIdx  = viewTop + viewRow;
         int screenY = startRow + viewRow;
 
-        if (lineIdx < 0 || lineIdx >= totalVisible) {
+        if (rowIdx < 0 || rowIdx >= totalVisible) {
             continue;
         }
 
-        QString   text;
-        LineStyle style;
-
-        if (lineIdx < lines.size()) {
-            text  = lines[lineIdx].text;
-            style = lines[lineIdx].style;
-        } else {
-            text  = partialLine;
-            style = partialStyle;
-        }
+        const QString  &text  = displayRows[rowIdx].text;
+        const LineStyle style = displayRows[rowIdx].style;
 
         bool        isDim   = (style == Dim) || (style == DiffContext);
         bool        isBold  = (style == Bold) || (style == DiffHunk);
@@ -95,16 +169,7 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
         default:
             break;
         }
-        /* Truncate by visual width (not char count) to prevent CJK overflow into scrollbar */
-        QString truncated = text;
-        if (QTuiText::visualWidth(truncated) > contentWidth) {
-            /* Use visual-width-aware truncation without "..." suffix */
-            truncated = truncated.left(contentWidth); /* rough cut */
-            while (QTuiText::visualWidth(truncated) > contentWidth && !truncated.isEmpty()) {
-                truncated.chop(1);
-            }
-        }
-        screen.putString(0, screenY, truncated, isBold, isDim, /*inverted=*/false, fgColor);
+        screen.putString(0, screenY, text, isBold, isDim, /*inverted=*/false, fgColor);
     }
 
     /* Render ASCII scrollbar on the right column */
@@ -144,8 +209,11 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
 
 void QTuiScrollView::scrollUp(int count)
 {
-    int totalVisible = static_cast<int>(lines.size()) + (partialLine.isEmpty() ? 0 : 1);
-    scrollOffset     = qMin(scrollOffset + count, qMax(0, totalVisible - 1));
+    /* Display-row count varies with terminal width, so clamp loosely here
+     * against a pessimistic upper bound and let render()'s viewport math
+     * ignore rows past the top of the wrapped content. */
+    const int softCap = (static_cast<int>(lines.size()) + 1) * 8;
+    scrollOffset      = qMin(scrollOffset + count, qMax(0, softCap));
 }
 
 void QTuiScrollView::scrollDown(int count)
