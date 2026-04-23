@@ -816,7 +816,7 @@ bool QLLMService::parseStreamLine(
         }
 
         /* Handle tool calls */
-        if (delta.contains("tool_calls")) {
+        if (delta.contains("tool_calls") && delta["tool_calls"].is_array()) {
             for (const auto &toolCall : delta["tool_calls"]) {
                 int index = toolCall.value("index", 0);
 
@@ -828,20 +828,24 @@ bool QLLMService::parseStreamLine(
                            {"function", {{"name", ""}, {"arguments", ""}}}};
                 }
 
-                /* Update ID if present */
-                if (toolCall.contains("id")) {
+                /* Update ID if present. Some endpoints (e.g. Qwen3 streaming)
+                 * emit `"id": null` in continuation chunks; only copy when it
+                 * is a real string so accumulated values stay string-typed. */
+                if (toolCall.contains("id") && toolCall["id"].is_string()) {
                     accumulatedToolCalls[index]["id"] = toolCall["id"];
                 }
 
                 /* Update function info */
-                if (toolCall.contains("function")) {
+                if (toolCall.contains("function") && toolCall["function"].is_object()) {
                     auto &accFunc = accumulatedToolCalls[index]["function"];
 
-                    if (toolCall["function"].contains("name")) {
+                    if (toolCall["function"].contains("name")
+                        && toolCall["function"]["name"].is_string()) {
                         accFunc["name"] = toolCall["function"]["name"];
                     }
 
-                    if (toolCall["function"].contains("arguments")) {
+                    if (toolCall["function"].contains("arguments")
+                        && toolCall["function"]["arguments"].is_string()) {
                         std::string args = accFunc["arguments"].get<std::string>();
                         args += toolCall["function"]["arguments"].get<std::string>();
                         accFunc["arguments"] = args;
