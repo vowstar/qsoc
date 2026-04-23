@@ -3188,16 +3188,23 @@ bool QSocCliWorker::runAgentLoop(
             const QString arg = input.mid(4).trimmed();
             if (arg.isEmpty()) {
                 compositor.printContent(
-                    "Usage: /ssh <user@host[:port]>\n"
-                    "  Connects to remote host and switches the agent to remote workspace mode.\n"
+                    "Usage: /ssh <user@host[:port][:/workspace]>\n"
+                    "  Connects to a remote host and switches the agent to remote workspace mode.\n"
+                    "  Workspace is the remote directory used as the initial cwd AND the only\n"
+                    "  writable root for remote file tools. On first connect to a target, the\n"
+                    "  workspace must be specified. It is saved to <project>/.qsoc/remote.yml\n"
+                    "  and reused on subsequent /ssh <same target> without path.\n"
                     "  Use /local to return to the local workspace.\n");
                 continue;
             }
 
-            /* Parse `user@host[:port]`. */
+            /* Parse `user@host[:port][:/workspace]`. Workspace is detected by
+             * the first '/' after the @ (unambiguous: ports are numeric and
+             * workspace paths are POSIX-absolute). */
             QString user;
             QString hostname;
             int     port = 22;
+            QString workspaceArg;
             {
                 QString   rest    = arg;
                 const int atIndex = rest.indexOf(QLatin1Char('@'));
@@ -3205,18 +3212,29 @@ bool QSocCliWorker::runAgentLoop(
                     user = rest.left(atIndex);
                     rest = rest.mid(atIndex + 1);
                 }
-                const int colonIndex = rest.lastIndexOf(QLatin1Char(':'));
+                const int slashIndex = rest.indexOf(QLatin1Char('/'));
+                QString   hostPortPart;
+                if (slashIndex >= 0) {
+                    hostPortPart = rest.left(slashIndex);
+                    if (hostPortPart.endsWith(QLatin1Char(':'))) {
+                        hostPortPart.chop(1);
+                    }
+                    workspaceArg = rest.mid(slashIndex);
+                } else {
+                    hostPortPart = rest;
+                }
+                const int colonIndex = hostPortPart.lastIndexOf(QLatin1Char(':'));
                 if (colonIndex >= 0) {
-                    hostname     = rest.left(colonIndex);
+                    hostname     = hostPortPart.left(colonIndex);
                     bool      ok = false;
-                    const int p  = rest.mid(colonIndex + 1).toInt(&ok);
+                    const int p  = hostPortPart.mid(colonIndex + 1).toInt(&ok);
                     if (ok && p > 0 && p < 65536) {
                         port = p;
                     } else {
-                        hostname = rest;
+                        hostname = hostPortPart;
                     }
                 } else {
-                    hostname = rest;
+                    hostname = hostPortPart;
                 }
             }
             if (hostname.isEmpty()) {
@@ -3227,8 +3245,32 @@ bool QSocCliWorker::runAgentLoop(
                 user = QString::fromLocal8Bit(qgetenv("USER"));
             }
 
+            /* Normalise the stored target identifier to user@host:port so
+             * binding lookups match regardless of whether workspace is
+             * typed on the command line. */
+            const QString targetKey = QStringLiteral("%1@%2:%3").arg(user, hostname).arg(port);
+
+            const QString projectRoot = pathContext ? pathContext->getProjectDir() : QString();
+            QString       workspace   = workspaceArg;
+            if (workspace.isEmpty() && !projectRoot.isEmpty()) {
+                const auto bound = QSocRemoteBinding::read(projectRoot);
+                if (bound.target == targetKey) {
+                    workspace = bound.workspace;
+                }
+            }
+            if (workspace.isEmpty()) {
+                compositor.printContent(
+                    QString(
+                        "First connect to %1 requires a workspace path.\n"
+                        "  /ssh %1:/your/remote/path\n"
+                        "The path is stored in <project>/.qsoc/remote.yml and reused next "
+                        "time.\n")
+                        .arg(targetKey));
+                continue;
+            }
+
             QSocSshHostConfig host;
-            host.alias         = arg;
+            host.alias         = targetKey;
             host.hostname      = hostname;
             host.port          = port;
             host.user          = user;
@@ -3236,7 +3278,7 @@ bool QSocCliWorker::runAgentLoop(
             /* Leave identityFiles empty so the session enumerates ~/.ssh/id_*. */
 
             compositor.printContent(
-                QString("Connecting to %1@%2:%3 ...\n").arg(user, hostname).arg(port));
+                QString("Connecting to %1 (workspace: %2) ...\n").arg(targetKey, workspace));
             compositor.render();
 
             auto      *newSession = new QSocSshSession(this);
@@ -3257,21 +3299,18 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
 
-            /* Probe remote home for root/cwd. */
-            QString remoteHome;
-            {
-                QSocSshExec probeExec(*newSession);
-                const auto  probe = probeExec.run(QStringLiteral("printf %s \"$HOME\""), 5000);
-                remoteHome        = QString::fromUtf8(probe.stdoutBytes).trimmed();
-                if (remoteHome.isEmpty()) {
-                    remoteHome = QStringLiteral("/");
-                }
+            if (!newSftp->mkdirP(workspace, &err)) {
+                compositor.printContent(QString("Workspace mkdir failed: %1\n").arg(err));
+                newSftp->close();
+                delete newSftp;
+                newSession->disconnectFromHost();
+                delete newSession;
+                continue;
             }
 
-            remotePath.setRoot(remoteHome);
-            remotePath.setCwd(remoteHome);
-            remotePath.setWritableDirs(
-                {remoteHome, QStringLiteral("/tmp"), QStringLiteral("/dev/shm")});
+            remotePath.setRoot(workspace);
+            remotePath.setCwd(workspace);
+            remotePath.setWritableDirs({workspace});
 
             /* Tear down any previous remote session. */
             if (remoteRegistry != nullptr) {
@@ -3309,27 +3348,28 @@ bool QSocCliWorker::runAgentLoop(
             {
                 auto newCfg               = agent->getConfig();
                 newCfg.remoteMode         = true;
-                newCfg.remoteName         = arg;
-                newCfg.remoteDisplay      = QString("%1@%2:%3").arg(user, hostname).arg(port)
-                                            + QStringLiteral(":") + remoteHome;
-                newCfg.remoteRoot         = remoteHome;
-                newCfg.remoteWorkingDir   = remoteHome;
+                newCfg.remoteName         = targetKey;
+                newCfg.remoteDisplay      = targetKey + QStringLiteral(":") + workspace;
+                newCfg.remoteWorkspace    = workspace;
+                newCfg.remoteWorkingDir   = workspace;
                 newCfg.remoteWritableDirs = remotePath.writableDirs();
                 agent->setConfig(newCfg);
             }
 
             /* Sticky binding. */
-            const QString projectRoot = pathContext ? pathContext->getProjectDir() : QString();
             if (!projectRoot.isEmpty()) {
+                QSocRemoteBinding::Entry toStore;
+                toStore.target    = targetKey;
+                toStore.workspace = workspace;
                 QString bindErr;
-                QSocRemoteBinding::writeTarget(projectRoot, arg, &bindErr);
+                QSocRemoteBinding::write(projectRoot, toStore, &bindErr);
                 if (!bindErr.isEmpty()) {
                     compositor.printContent(QString("Binding write warning: %1\n").arg(bindErr));
                 }
             }
 
-            statusBarWidget.setStatus(QString("Remote: %1").arg(arg));
-            compositor.printContent(QString("Connected. Remote root: %1\n").arg(remoteHome));
+            statusBarWidget.setStatus(QString("Remote: %1").arg(targetKey));
+            compositor.printContent(QString("Connected. Remote workspace: %1\n").arg(workspace));
             continue;
         }
         if (cmd == QStringLiteral("/local")) {
@@ -3360,19 +3400,14 @@ bool QSocCliWorker::runAgentLoop(
                 newCfg.remoteMode = false;
                 newCfg.remoteName.clear();
                 newCfg.remoteDisplay.clear();
-                newCfg.remoteRoot.clear();
+                newCfg.remoteWorkspace.clear();
                 newCfg.remoteWorkingDir.clear();
                 newCfg.remoteWritableDirs.clear();
                 agent->setConfig(newCfg);
             }
 
-            const QString projectRoot = pathContext ? pathContext->getProjectDir() : QString();
-            if (!projectRoot.isEmpty()) {
-                QSocRemoteBinding::removeTarget(projectRoot, nullptr);
-            }
-
             statusBarWidget.setStatus("Ready");
-            compositor.printContent("Returned to local workspace.\n");
+            compositor.printContent("Returned to local workspace (binding kept).\n");
             continue;
         }
         if (cmd == QStringLiteral("/cwd") || cmd.startsWith(QStringLiteral("/cwd "))) {

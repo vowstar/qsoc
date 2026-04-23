@@ -8,8 +8,13 @@
 
 /**
  * @brief Persistent per-project remote target binding.
- * @details Stored at `<project>/.qsoc/remote.yml` as a single YAML file
- *          with one leading field: `target: <profile-or-user@host:port>`.
+ * @details Stored at `<project>/.qsoc/remote.yml`:
+ *
+ *          ```
+ *          target: user@host:port
+ *          workspace: /home/user/work
+ *          ```
+ *
  *          Writes go through a temporary file + rename so a crash midway
  *          cannot leave a truncated config. No credentials or private key
  *          paths are persisted here - the target is either a profile name
@@ -18,27 +23,31 @@
 class QSocRemoteBinding
 {
 public:
+    /** @brief Parsed binding entry; either field may be empty when absent. */
+    struct Entry
+    {
+        QString target;
+        QString workspace;
+    };
+
     /** @brief Return `<projectRoot>/.qsoc/remote.yml`. */
     static QString pathFor(const QString &projectRoot);
 
-    /**
-     * @brief Read the `target:` field from the binding file.
-     * @return Target string, or empty if the file is missing or has no target.
-     */
-    static QString readTarget(const QString &projectRoot);
+    /** @brief Read the full binding. Fields are empty when missing. */
+    static Entry read(const QString &projectRoot);
 
     /**
-     * @brief Atomically write or update the `target:` field.
-     * @details Preserves any unknown siblings already present in the file.
+     * @brief Atomically write or update the binding.
+     * @details Preserves unrelated sibling keys. Either field may be empty
+     *          to drop just that field from the file.
      */
-    static bool writeTarget(
-        const QString &projectRoot, const QString &target, QString *errorMessage = nullptr);
+    static bool write(
+        const QString &projectRoot, const Entry &entry, QString *errorMessage = nullptr);
 
     /**
-     * @brief Remove the `target:` field (or delete the file when it only had
-     *        that field).
+     * @brief Remove both `target` and `root` (delete file if no siblings).
      */
-    static bool removeTarget(const QString &projectRoot, QString *errorMessage = nullptr);
+    static bool clear(const QString &projectRoot, QString *errorMessage = nullptr);
 
 private:
     QSocRemoteBinding()  = delete;
