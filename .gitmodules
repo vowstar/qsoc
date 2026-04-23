@@ -1,33 +1,33 @@
 [submodule "external/slang"]
 	path = external/slang
-	url = git@github.com:MikePopoloski/slang.git
+	url = https://github.com/MikePopoloski/slang.git
 [submodule "external/json"]
 	path = external/json
-	url = git@github.com:nlohmann/json.git
+	url = https://github.com/nlohmann/json.git
 [submodule "external/yaml"]
 	path = external/yaml
-	url = git@github.com:jbeder/yaml-cpp.git
+	url = https://github.com/jbeder/yaml-cpp.git
 [submodule "external/qschematic"]
 	path = external/qschematic
-	url = git@github.com:simulton/QSchematic.git
+	url = https://github.com/simulton/QSchematic.git
 [submodule "external/gpds"]
 	path = external/gpds
-	url = git@github.com:simulton/gpds.git
+	url = https://github.com/simulton/gpds.git
 [submodule "external/csv"]
 	path = external/csv
-	url = git@github.com:d99kris/rapidcsv.git
+	url = https://github.com/d99kris/rapidcsv.git
 [submodule "external/inja"]
 	path = external/inja
-	url = git@github.com:pantor/inja.git
+	url = https://github.com/pantor/inja.git
 [submodule "external/antlr4"]
 	path = external/antlr4
-	url = git@github.com:antlr/antlr4.git
+	url = https://github.com/antlr/antlr4.git
 [submodule "external/systemrdl"]
 	path = external/systemrdl
-	url = git@github.com:vowstar/systemrdl-toolkit.git
+	url = https://github.com/vowstar/systemrdl-toolkit.git
 [submodule "external/fmt"]
 	path = external/fmt
-	url = git@github.com:fmtlib/fmt.git
+	url = https://github.com/fmtlib/fmt.git
 [submodule "external/replxx"]
 	path = external/replxx
 	url = https://github.com/AmokHuginnsson/replxx.git
