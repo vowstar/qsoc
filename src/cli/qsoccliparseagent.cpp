@@ -952,6 +952,23 @@ bool QSocCliWorker::runAgentLoop(
         compositor.printContent("(Enhanced mode, streaming enabled)\n");
     }
 
+    /* If a sticky remote binding exists for this project, inject the matching
+     * /ssh line so the next REPL iteration auto-connects. Cleared on first
+     * consumption; users can still /local out or override manually. */
+    QString pendingAutoInput;
+    if (pathContext != nullptr) {
+        const QString projectRootOnStart = pathContext->getProjectDir();
+        if (!projectRootOnStart.isEmpty()) {
+            const auto binding = QSocRemoteBinding::read(projectRootOnStart);
+            if (!binding.target.isEmpty() && !binding.workspace.isEmpty()) {
+                pendingAutoInput = QStringLiteral("/ssh ") + binding.target + QLatin1Char(':')
+                                   + binding.workspace;
+                compositor.printContent(QString("Auto-connecting remote target %1 (workspace %2)\n")
+                                            .arg(binding.target, binding.workspace));
+            }
+        }
+    }
+
     /* Connect mouse wheel from input monitor to compositor scroll */
     QAgentInputMonitor inputMonitor(this);
     /* Teach the monitor to treat "[Pasted text #N +M lines]" chip labels as
@@ -2215,7 +2232,12 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.render();
             });
 
-        promptLoop.exec();
+        if (!pendingAutoInput.isEmpty()) {
+            input = pendingAutoInput;
+            pendingAutoInput.clear();
+        } else {
+            promptLoop.exec();
+        }
 
         QObject::disconnect(connInput);
         QObject::disconnect(connCtrlC);
