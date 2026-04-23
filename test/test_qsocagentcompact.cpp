@@ -451,13 +451,13 @@ private slots:
 
     void testConfigBackwardCompat()
     {
-        /* Default config should have same effective compaction threshold as old default */
+        /* Defaults were lowered once the token estimator stopped
+         * under-counting CJK text; the margin between prune and compact
+         * still holds so the two-layer cascade is preserved. */
         QSocAgentConfig config;
 
-        /* Old compressionThreshold was 0.8, new compactThreshold defaults to 0.8 */
-        QCOMPARE(config.compactThreshold, 0.8);
-
-        /* New pruneThreshold at 0.6 means pruning kicks in earlier - strictly better */
+        QCOMPARE(config.compactThreshold, 0.6);
+        QCOMPARE(config.pruneThreshold, 0.4);
         QVERIFY(config.pruneThreshold < config.compactThreshold);
     }
 

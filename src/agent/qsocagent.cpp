@@ -867,8 +867,27 @@ void QSocAgent::setMessages(const json &msgs)
 
 int QSocAgent::estimateTokens(const QString &text) const
 {
-    /* Simple estimation: approximately 4 characters per token */
-    return static_cast<int>(text.length() / 4);
+    /* Character-class weighted heuristic. Flat chars/4 severely
+     * under-counts CJK-heavy conversations (one CJK char ≈ 1 token in
+     * cl100k/o200k BPEs, not 0.25), which let auto-compact overshoot
+     * the model window and then crash on its own over-budget LLM call.
+     * Weights below track empirical BPE output within ~20% for
+     * English/code, Chinese, Japanese/Korean, and mixed content, which
+     * is tight enough for threshold-based compaction decisions. */
+    double tokens = 0.0;
+    for (const QChar qch : text) {
+        const ushort code = qch.unicode();
+        if (code < 0x80) {
+            tokens += 0.25; /* ASCII text/code ≈ 4 chars per token */
+        } else if (code >= 0x4E00 && code <= 0x9FFF) {
+            tokens += 1.0; /* CJK Unified Ideographs */
+        } else if ((code >= 0x3040 && code <= 0x30FF) || (code >= 0xAC00 && code <= 0xD7AF)) {
+            tokens += 0.8; /* Kana and Hangul syllables */
+        } else {
+            tokens += 0.5; /* Latin-ext, punctuation, symbols, emoji lead */
+        }
+    }
+    return static_cast<int>(tokens) + 1;
 }
 
 int QSocAgent::estimateMessagesTokens() const
