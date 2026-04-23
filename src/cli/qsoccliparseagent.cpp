@@ -42,6 +42,7 @@
 #include "tui/qtuicompositor.h"
 #include "tui/qtuiinputline.h"
 #include "tui/qtuimenu.h"
+#include "tui/qtuipathpicker.h"
 #include "tui/qtuiqueuedlist.h"
 #include "tui/qtuistatusbar.h"
 #include "tui/qtuitodolist.h"
@@ -3295,11 +3296,7 @@ bool QSocCliWorker::runAgentLoop(
                 if (!projectRootLocal.isEmpty()) {
                     const auto bound = QSocRemoteBinding::read(projectRootLocal);
                     if (!bound.target.isEmpty()) {
-                        const QString saved = bound.workspace.isEmpty()
-                                                  ? bound.target
-                                                  : bound.target + QStringLiteral(":")
-                                                        + bound.workspace;
-                        addItem(bound.target, QStringLiteral("saved"), saved);
+                        addItem(bound.target, QStringLiteral("saved"), bound.target);
                     }
                 }
 
@@ -3311,10 +3308,7 @@ bool QSocCliWorker::runAgentLoop(
                         addItem(alias, QStringLiteral(".ssh/config"), alias);
                     }
                 }
-                addItem(
-                    QStringLiteral("(type /ssh user@host[:port][:/workspace])"),
-                    QString(),
-                    QString());
+                addItem(QStringLiteral("(type /ssh [user@]host[:port])"), QString(), QString());
 
                 QTuiMenu menu;
                 menu.setTitle(QStringLiteral("Remote target"));
@@ -3330,22 +3324,24 @@ bool QSocCliWorker::runAgentLoop(
                 const QString picked = targets.at(selected);
                 if (picked.isEmpty()) {
                     compositor.printContent(
-                        "Usage: /ssh <user@host[:port][:/workspace]>\n"
-                        "  Workspace must be supplied on first connect to a target; it is\n"
-                        "  stored in <project>/.qsoc/remote.yml and reused next time.\n"
-                        "  Use /local to return to the local workspace.\n");
+                        "Usage: /ssh [user@]host[:port]\n"
+                        "  User defaults to the current OS user and port defaults to 22.\n"
+                        "  After connect a directory browser asks for the remote workspace;\n"
+                        "  the choice is stored in <project>/.qsoc/remote.yml and reused\n"
+                        "  on the next connect. Use /local to return to the local workspace.\n");
                     continue;
                 }
                 arg = picked;
             }
 
-            /* Parse `user@host[:port][:/workspace]`. Workspace is detected by
-             * the first '/' after the @ (unambiguous: ports are numeric and
-             * workspace paths are POSIX-absolute). */
+            /* Parse `[user@]host[:port]`. The workspace used to ride on
+             * this argument separated by ':/', but that overloaded the
+             * colon with port numbers; the picker after connect now
+             * handles workspace selection for both first connect and
+             * subsequent changes, so the UX is uniform. */
             QString user;
             QString hostname;
             int     port = 22;
-            QString workspaceArg;
             {
                 QString   rest    = arg;
                 const int atIndex = rest.indexOf(QLatin1Char('@'));
@@ -3353,16 +3349,16 @@ bool QSocCliWorker::runAgentLoop(
                     user = rest.left(atIndex);
                     rest = rest.mid(atIndex + 1);
                 }
-                const int slashIndex = rest.indexOf(QLatin1Char('/'));
-                QString   hostPortPart;
-                if (slashIndex >= 0) {
-                    hostPortPart = rest.left(slashIndex);
+                QString hostPortPart = rest;
+                if (hostPortPart.contains(QLatin1Char('/'))) {
+                    compositor.printContent(
+                        "Ignoring workspace path in /ssh argument. Pick the workspace "
+                        "from the directory browser that opens after connecting, or use "
+                        "/cwd later to change it.\n");
+                    hostPortPart = hostPortPart.section(QLatin1Char('/'), 0, 0);
                     if (hostPortPart.endsWith(QLatin1Char(':'))) {
                         hostPortPart.chop(1);
                     }
-                    workspaceArg = rest.mid(slashIndex);
-                } else {
-                    hostPortPart = rest;
                 }
                 const int colonIndex = hostPortPart.lastIndexOf(QLatin1Char(':'));
                 if (colonIndex >= 0) {
@@ -3383,31 +3379,33 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
             if (user.isEmpty()) {
-                user = QString::fromLocal8Bit(qgetenv("USER"));
+#ifdef Q_OS_WIN
+                user = qEnvironmentVariable("USERNAME");
+#else
+                user = qEnvironmentVariable("USER");
+                if (user.isEmpty()) {
+                    user = qEnvironmentVariable("LOGNAME");
+                }
+#endif
+            }
+            if (user.isEmpty()) {
+                compositor.printContent(
+                    "Could not determine a default username; please write "
+                    "/ssh <user>@<host>.\n");
+                continue;
             }
 
-            /* Normalise the stored target identifier to user@host:port so
-             * binding lookups match regardless of whether workspace is
-             * typed on the command line. */
+            /* Stable identifier used for bindings regardless of how the
+             * user typed the target on the command line. */
             const QString targetKey = QStringLiteral("%1@%2:%3").arg(user, hostname).arg(port);
 
             const QString projectRoot = pathContext ? pathContext->getProjectDir() : QString();
-            QString       workspace   = workspaceArg;
-            if (workspace.isEmpty() && !projectRoot.isEmpty()) {
+            QString       workspace;
+            if (!projectRoot.isEmpty()) {
                 const auto bound = QSocRemoteBinding::read(projectRoot);
                 if (bound.target == targetKey) {
                     workspace = bound.workspace;
                 }
-            }
-            if (workspace.isEmpty()) {
-                compositor.printContent(
-                    QString(
-                        "First connect to %1 requires a workspace path.\n"
-                        "  /ssh %1:/your/remote/path\n"
-                        "The path is stored in <project>/.qsoc/remote.yml and reused next "
-                        "time.\n")
-                        .arg(targetKey));
-                continue;
             }
 
             QSocSshHostConfig host;
@@ -3418,8 +3416,7 @@ bool QSocCliWorker::runAgentLoop(
             host.strictHostKey = QSocSshHostConfig::StrictHostKey::AcceptNew;
             /* Leave identityFiles empty so the session enumerates ~/.ssh/id_*. */
 
-            compositor.printContent(
-                QString("Connecting to %1 (workspace: %2) ...\n").arg(targetKey, workspace));
+            compositor.printContent(QString("Connecting to %1 ...\n").arg(targetKey));
             compositor.render();
 
             auto      *newSession = new QSocSshSession(this);
@@ -3438,6 +3435,50 @@ bool QSocCliWorker::runAgentLoop(
                 newSession->disconnectFromHost();
                 delete newSession;
                 continue;
+            }
+
+            /* First connect or binding unavailable. Launch the remote path
+             * picker so the user browses the live server and selects the
+             * workspace, keeping the experience identical to a later
+             * /cwd change. */
+            if (workspace.isEmpty()) {
+                QString homeHint = QStringLiteral("/");
+                {
+                    QSocSshExec   homeExec(*newSession);
+                    const auto    homeResult = homeExec.run(QStringLiteral("echo $HOME"), 5000);
+                    const QString raw        = QString::fromUtf8(homeResult.stdoutBytes).trimmed();
+                    if (!raw.isEmpty() && raw.startsWith(QLatin1Char('/'))) {
+                        homeHint = raw;
+                    }
+                }
+                QTuiPathPicker picker;
+                picker.setTitle(QStringLiteral("Remote workspace"));
+                picker.setStartPath(homeHint);
+                picker.setListDirs([newSftp](const QString &path) -> QStringList {
+                    QString     ignored;
+                    const auto  entries = newSftp->listDir(path, 500, &ignored);
+                    QStringList names;
+                    names.reserve(entries.size());
+                    for (const auto &entry : entries) {
+                        if (entry.isDirectory) {
+                            names.append(entry.name);
+                        }
+                    }
+                    std::sort(names.begin(), names.end());
+                    return names;
+                });
+                workspace = picker.exec();
+                inputMonitor.resetEscState();
+                compositor.invalidate();
+                compositor.render();
+                if (workspace.isEmpty()) {
+                    compositor.printContent("No workspace selected. Disconnecting.\n");
+                    newSftp->close();
+                    delete newSftp;
+                    newSession->disconnectFromHost();
+                    delete newSession;
+                    continue;
+                }
             }
 
             if (!newSftp->mkdirP(workspace, &err)) {
