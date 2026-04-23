@@ -312,17 +312,25 @@ QSocSshSession::ConnectStatus QSocSshSession::verifyHostKey(
 
 bool QSocSshSession::tryAgentAuth(const QString &user)
 {
+    /* libssh2's agent API is documented as blocking-only. When our session
+     * runs in non-blocking mode (needed for waitSocket polling elsewhere)
+     * the agent calls return EAGAIN and auth never completes. Flip to
+     * blocking for the agent exchange and restore afterwards. */
+    libssh2_session_set_blocking(m_session, 1);
     LIBSSH2_AGENT *agent = libssh2_agent_init(m_session);
     if (agent == nullptr) {
+        libssh2_session_set_blocking(m_session, 0);
         return false;
     }
     if (libssh2_agent_connect(agent) != 0) {
         libssh2_agent_free(agent);
+        libssh2_session_set_blocking(m_session, 0);
         return false;
     }
     if (libssh2_agent_list_identities(agent) != 0) {
         libssh2_agent_disconnect(agent);
         libssh2_agent_free(agent);
+        libssh2_session_set_blocking(m_session, 0);
         return false;
     }
 
@@ -335,14 +343,7 @@ bool QSocSshSession::tryAgentAuth(const QString &user)
         if (next != 0 || identity == nullptr) {
             break;
         }
-        int rc = 0;
-        while ((rc = libssh2_agent_userauth(agent, userBytes.constData(), identity))
-               == LIBSSH2_ERROR_EAGAIN) {
-            if (waitSocket(m_socket, m_session, m_timeoutMs) <= 0) {
-                rc = LIBSSH2_ERROR_TIMEOUT;
-                break;
-            }
-        }
+        const int rc = libssh2_agent_userauth(agent, userBytes.constData(), identity);
         if (rc == 0) {
             authOk = true;
             break;
@@ -352,6 +353,7 @@ bool QSocSshSession::tryAgentAuth(const QString &user)
 
     libssh2_agent_disconnect(agent);
     libssh2_agent_free(agent);
+    libssh2_session_set_blocking(m_session, 0);
     return authOk;
 }
 
@@ -363,13 +365,20 @@ bool QSocSshSession::tryIdentityFileAuth(
      * into any log or error message. */
     const QByteArray userBytes = user.toUtf8();
     const QByteArray keyBytes  = privateKeyPath.toUtf8();
-    const QByteArray phBytes   = passphrase.toUtf8();
-    int              rc        = 0;
+    /* The mbedTLS crypto backend does not derive a public key from the
+     * private key the way OpenSSL does, so we must point libssh2 at the
+     * companion .pub file. Without it, every auth attempt fails with a
+     * PK parser error even for perfectly valid PEM keys. */
+    const QString    pubPath      = privateKeyPath + QStringLiteral(".pub");
+    const QByteArray pubPathBytes = pubPath.toUtf8();
+    const char      *pubArg       = QFileInfo::exists(pubPath) ? pubPathBytes.constData() : nullptr;
+    const QByteArray phBytes      = passphrase.toUtf8();
+    int              rc           = 0;
     while ((rc = libssh2_userauth_publickey_fromfile_ex(
                 m_session,
                 userBytes.constData(),
                 static_cast<unsigned int>(userBytes.size()),
-                nullptr, /* pubkey: let libssh2 derive */
+                pubArg,
                 keyBytes.constData(),
                 phBytes.isEmpty() ? nullptr : phBytes.constData()))
            == LIBSSH2_ERROR_EAGAIN) {
@@ -393,7 +402,12 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
         return ConnectStatus::AuthFailed;
     }
 
-    if (!host.identitiesOnly && tryAgentAuth(user)) {
+    /* Try ssh-agent first whenever the config does not explicitly forbid it
+     * via IdentitiesOnly + a concrete IdentityFile list. An agent may hold
+     * keys that are absent on disk, and skipping it means losing that
+     * route even when the user intended the agent to sign. */
+    const bool restrictToFiles = host.identitiesOnly && !host.identityFiles.isEmpty();
+    if (!restrictToFiles && tryAgentAuth(user)) {
         return ConnectStatus::Ok;
     }
 
@@ -403,7 +417,7 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
      * without bespoke config. Only paths are touched here; libssh2 reads
      * the key material internally during auth. */
     QStringList identityPaths = host.identityFiles;
-    if (identityPaths.isEmpty() && !host.identitiesOnly) {
+    if (identityPaths.isEmpty()) {
         const QDir        sshDir(QDir::homePath() + QStringLiteral("/.ssh"));
         const QStringList entries
             = sshDir.entryList({QStringLiteral("id_*")}, QDir::Files | QDir::NoSymLinks, QDir::Name);
@@ -415,14 +429,22 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
         }
     }
 
+    QStringList triedKeys;
     for (const QString &identity : identityPaths) {
         if (tryIdentityFileAuth(user, identity, QString())) {
             return ConnectStatus::Ok;
         }
+        triedKeys.append(QFileInfo(identity).fileName());
     }
 
-    const QString msg = QStringLiteral(
-        "Authentication failed using ssh-agent and configured IdentityFile");
+    const QString hint = triedKeys.isEmpty()
+                             ? QStringLiteral(" (no identity keys found in ~/.ssh)")
+                             : QStringLiteral(" (tried: ") + triedKeys.join(QStringLiteral(", "))
+                                   + QStringLiteral(")");
+    const QString msg  = QStringLiteral("Authentication failed as %1@%2:%3%4")
+                             .arg(user, host.hostname)
+                             .arg(host.port)
+                             .arg(hint);
     setError(msg);
     if (errorMessage != nullptr) {
         *errorMessage = msg;
