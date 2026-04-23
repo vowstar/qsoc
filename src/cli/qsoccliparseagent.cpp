@@ -8,6 +8,12 @@
 #include "agent/qsocfilehistory.h"
 #include "agent/qsocsession.h"
 #include "agent/qsoctool.h"
+#include "agent/remote/qsocremotebinding.h"
+#include "agent/remote/qsocremotepathcontext.h"
+#include "agent/remote/qsocsftpclient.h"
+#include "agent/remote/qsocsshexec.h"
+#include "agent/remote/qsocsshsession.h"
+#include "agent/remote/qsoctoolremote.h"
 #include "agent/tool/qsoctoolbus.h"
 #include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolfile.h"
@@ -108,8 +114,8 @@ QString formatModelList(QLLMService *llmService)
         QString        marker = (modelId == current) ? "* " : "  ";
         QString        name   = cfg.name.isEmpty() ? cfg.id : cfg.name;
         QString        info   = QString("(%1K ctx, %2K out)")
-                           .arg(cfg.contextTokens / 1000)
-                           .arg(cfg.maxOutputTokens > 0 ? cfg.maxOutputTokens / 1000 : 0);
+                                    .arg(cfg.contextTokens / 1000)
+                                    .arg(cfg.maxOutputTokens > 0 ? cfg.maxOutputTokens / 1000 : 0);
         if (cfg.reasoning) {
             info += " [reasoning]";
         }
@@ -903,6 +909,15 @@ bool QSocCliWorker::runAgentLoop(
     }
 
     QTextStream &qout = QSocConsole::out();
+
+    /* Remote workspace state. A single session at a time; created by
+     * `/ssh <target>` and torn down by `/local`. Local tool registry is
+     * cached here so `/local` can restore it in O(1). */
+    QSocToolRegistry     *localRegistry  = agent->getToolRegistry();
+    QSocSshSession       *remoteSession  = nullptr;
+    QSocSftpClient       *remoteSftp     = nullptr;
+    QSocToolRegistry     *remoteRegistry = nullptr;
+    QSocRemotePathContext remotePath;
 
     /* Create TUI compositor — enters alt screen immediately */
     QTuiCompositor compositor(this);
@@ -2094,7 +2109,7 @@ bool QSocCliWorker::runAgentLoop(
                      * the baseline (turn 0) or some prior turn snapshot. */
                     const bool fileRestorable = turnsWithSnapshots.contains(ref.turn - 1)
                                                 || ref.turn == 1;
-                    item.label = QString("#%1%2").arg(ref.turn).arg(
+                    item.label                = QString("#%1%2").arg(ref.turn).arg(
                         fileRestorable ? QStringLiteral(" [files]") : QString());
                     item.hint = preview;
                     items.append(item);
@@ -2115,7 +2130,7 @@ bool QSocCliWorker::runAgentLoop(
 
                 const UserMsgRef &pick            = userMsgs[selected];
                 const bool        hasFileSnapshot = turnsWithSnapshots.contains(pick.turn - 1)
-                                             || pick.turn == 1;
+                                                    || pick.turn == 1;
 
                 /* Second picker: choose mode. Only shown when a file
                  * snapshot exists; otherwise we implicitly fall through to
@@ -2554,10 +2569,10 @@ bool QSocCliWorker::runAgentLoop(
                     Suggestion{
                         .isWarning = true,
                         .title     = QString("%1 using %2 tokens (%3%)")
-                                     .arg(it.key(), fmtTokens(total))
-                                     .arg(toolPct),
-                        .detail  = detail,
-                        .savings = savingsEst});
+                                         .arg(it.key(), fmtTokens(total))
+                                         .arg(toolPct),
+                        .detail    = detail,
+                        .savings   = savingsEst});
             }
 
             /* 3. Read result bloat (>= 5% and >= 10k, not already flagged) */
@@ -2571,9 +2586,9 @@ bool QSocCliWorker::runAgentLoop(
                         Suggestion{
                             .isWarning = false,
                             .title     = QString("File reads using %1 tokens (%2%)")
-                                         .arg(fmtTokens(rb.results))
-                                         .arg(readPct),
-                            .detail = QStringLiteral(
+                                             .arg(fmtTokens(rb.results))
+                                             .arg(readPct),
+                            .detail    = QStringLiteral(
                                 "Consider referencing earlier reads. Use offset/limit for "
                                 "large files."),
                             .savings = rb.results * 3 / 10});
@@ -2588,10 +2603,10 @@ bool QSocCliWorker::runAgentLoop(
                         Suggestion{
                             .isWarning = false,
                             .title     = QString("Memory using %1 tokens (%2%)")
-                                         .arg(fmtTokens(memoryTokens))
-                                         .arg(memPct),
-                            .detail  = QStringLiteral("Review and prune stale memory entries."),
-                            .savings = memoryTokens * 3 / 10});
+                                             .arg(fmtTokens(memoryTokens))
+                                             .arg(memPct),
+                            .detail    = QStringLiteral("Review and prune stale memory entries."),
+                            .savings   = memoryTokens * 3 / 10});
                 }
             }
 
@@ -2603,7 +2618,7 @@ bool QSocCliWorker::runAgentLoop(
                         .title     = QStringLiteral("Context is over 50% — consider /compact"),
                         .detail    = QStringLiteral(
                             "Running /compact now preserves recent messages and frees "
-                               "space for more turns."),
+                            "space for more turns."),
                         .savings = 0});
             }
 
@@ -2704,10 +2719,10 @@ bool QSocCliWorker::runAgentLoop(
                     const QString before = shaBefore.isEmpty()
                                                ? QString()
                                                : currentFileHistory->contentAt(path, entry.turn - 1);
-                    const QString after  = shaAfter.isEmpty()
-                                               ? QString()
-                                               : currentFileHistory->contentAt(path, entry.turn);
-                    const auto    diff   = QSocLineDiff::computeLineDiff(before, after);
+                    const QString after = shaAfter.isEmpty()
+                                              ? QString()
+                                              : currentFileHistory->contentAt(path, entry.turn);
+                    const auto    diff  = QSocLineDiff::computeLineDiff(before, after);
                     for (const auto &line : diff) {
                         if (line.kind == QSocLineDiff::Kind::Add) {
                             linesAdded++;
@@ -2719,10 +2734,10 @@ bool QSocCliWorker::runAgentLoop(
                 QTuiMenu::MenuItem item;
                 item.label = QString("Turn #%1").arg(entry.turn);
                 item.hint  = QString("%1 file%2  +%3 -%4")
-                                .arg(filesChanged)
-                                .arg(filesChanged == 1 ? "" : "s")
-                                .arg(linesAdded)
-                                .arg(linesRemoved);
+                                 .arg(filesChanged)
+                                 .arg(filesChanged == 1 ? "" : "s")
+                                 .arg(linesAdded)
+                                 .arg(linesRemoved);
                 turnItems.append(item);
             }
 
@@ -2774,9 +2789,9 @@ bool QSocCliWorker::runAgentLoop(
                     const QString after = entry.shaAfter.isEmpty()
                                               ? QString()
                                               : currentFileHistory->contentAt(path, chosenTurn.turn);
-                    const auto    diff  = QSocLineDiff::computeLineDiff(before, after);
-                    entry.added         = 0;
-                    entry.removed       = 0;
+                    const auto diff = QSocLineDiff::computeLineDiff(before, after);
+                    entry.added     = 0;
+                    entry.removed   = 0;
                     for (const auto &line : diff) {
                         if (line.kind == QSocLineDiff::Kind::Add) {
                             entry.added++;
@@ -3166,6 +3181,197 @@ bool QSocCliWorker::runAgentLoop(
             compositor.render();
             continue;
         }
+        if (cmd.startsWith(QStringLiteral("/ssh"))) {
+            const QString arg = input.mid(4).trimmed();
+            if (arg.isEmpty()) {
+                compositor.printContent(
+                    "Usage: /ssh <user@host[:port]>\n"
+                    "  Connects to remote host and switches the agent to remote workspace mode.\n"
+                    "  Use /local to return to the local workspace.\n");
+                continue;
+            }
+
+            /* Parse `user@host[:port]`. */
+            QString user;
+            QString hostname;
+            int     port = 22;
+            {
+                QString   rest    = arg;
+                const int atIndex = rest.indexOf(QLatin1Char('@'));
+                if (atIndex >= 0) {
+                    user = rest.left(atIndex);
+                    rest = rest.mid(atIndex + 1);
+                }
+                const int colonIndex = rest.lastIndexOf(QLatin1Char(':'));
+                if (colonIndex >= 0) {
+                    hostname     = rest.left(colonIndex);
+                    bool      ok = false;
+                    const int p  = rest.mid(colonIndex + 1).toInt(&ok);
+                    if (ok && p > 0 && p < 65536) {
+                        port = p;
+                    } else {
+                        hostname = rest;
+                    }
+                } else {
+                    hostname = rest;
+                }
+            }
+            if (hostname.isEmpty()) {
+                compositor.printContent("Invalid /ssh target.\n");
+                continue;
+            }
+            if (user.isEmpty()) {
+                user = QString::fromLocal8Bit(qgetenv("USER"));
+            }
+
+            QSocSshHostConfig host;
+            host.alias         = arg;
+            host.hostname      = hostname;
+            host.port          = port;
+            host.user          = user;
+            host.strictHostKey = QSocSshHostConfig::StrictHostKey::AcceptNew;
+            /* Leave identityFiles empty so the session enumerates ~/.ssh/id_*. */
+
+            compositor.printContent(
+                QString("Connecting to %1@%2:%3 ...\n").arg(user, hostname).arg(port));
+            compositor.render();
+
+            auto      *newSession = new QSocSshSession(this);
+            QString    err;
+            const auto status = newSession->connectTo(host, &err);
+            if (status != QSocSshSession::ConnectStatus::Ok) {
+                compositor.printContent(QString("SSH connect failed: %1\n").arg(err));
+                delete newSession;
+                continue;
+            }
+
+            auto *newSftp = new QSocSftpClient(*newSession);
+            if (!newSftp->open(&err)) {
+                compositor.printContent(QString("SFTP open failed: %1\n").arg(err));
+                delete newSftp;
+                newSession->disconnectFromHost();
+                delete newSession;
+                continue;
+            }
+
+            /* Probe remote home for root/cwd. */
+            QString remoteHome;
+            {
+                QSocSshExec probeExec(*newSession);
+                const auto  probe = probeExec.run(QStringLiteral("printf %s \"$HOME\""), 5000);
+                remoteHome        = QString::fromUtf8(probe.stdoutBytes).trimmed();
+                if (remoteHome.isEmpty()) {
+                    remoteHome = QStringLiteral("/");
+                }
+            }
+
+            remotePath.setRoot(remoteHome);
+            remotePath.setCwd(remoteHome);
+            remotePath.setWritableDirs(
+                {remoteHome, QStringLiteral("/tmp"), QStringLiteral("/dev/shm")});
+
+            /* Tear down any previous remote session. */
+            if (remoteRegistry != nullptr) {
+                remoteRegistry->deleteLater();
+                remoteRegistry = nullptr;
+            }
+            if (remoteSftp != nullptr) {
+                remoteSftp->close();
+                delete remoteSftp;
+                remoteSftp = nullptr;
+            }
+            if (remoteSession != nullptr) {
+                remoteSession->disconnectFromHost();
+                delete remoteSession;
+                remoteSession = nullptr;
+            }
+            remoteSession = newSession;
+            remoteSftp    = newSftp;
+
+            /* Build the remote tool registry with same-named tools. */
+            remoteRegistry = new QSocToolRegistry(this);
+            remoteRegistry->registerTool(new QSocToolRemoteFileRead(this, remoteSftp, &remotePath));
+            remoteRegistry->registerTool(new QSocToolRemoteFileList(this, remoteSftp, &remotePath));
+            remoteRegistry->registerTool(new QSocToolRemoteFileWrite(this, remoteSftp, &remotePath));
+            remoteRegistry->registerTool(new QSocToolRemoteFileEdit(this, remoteSftp, &remotePath));
+            remoteRegistry->registerTool(
+                new QSocToolRemoteShellBash(this, remoteSession, &remotePath));
+            remoteRegistry->registerTool(new QSocToolRemotePath(this, &remotePath));
+            /* Control-plane tools stay on the local side (docs/web). */
+            remoteRegistry->registerTool(new QSocToolDocQuery(this));
+
+            agent->setToolRegistry(remoteRegistry);
+
+            /* Update agent config so the system prompt reflects remote mode. */
+            {
+                auto newCfg               = agent->getConfig();
+                newCfg.remoteMode         = true;
+                newCfg.remoteName         = arg;
+                newCfg.remoteDisplay      = QString("%1@%2:%3").arg(user, hostname).arg(port)
+                                            + QStringLiteral(":") + remoteHome;
+                newCfg.remoteRoot         = remoteHome;
+                newCfg.remoteWorkingDir   = remoteHome;
+                newCfg.remoteWritableDirs = remotePath.writableDirs();
+                agent->setConfig(newCfg);
+            }
+
+            /* Sticky binding. */
+            const QString projectRoot = pathContext ? pathContext->getProjectDir() : QString();
+            if (!projectRoot.isEmpty()) {
+                QString bindErr;
+                QSocRemoteBinding::writeTarget(projectRoot, arg, &bindErr);
+                if (!bindErr.isEmpty()) {
+                    compositor.printContent(QString("Binding write warning: %1\n").arg(bindErr));
+                }
+            }
+
+            statusBarWidget.setStatus(QString("Remote: %1").arg(arg));
+            compositor.printContent(QString("Connected. Remote root: %1\n").arg(remoteHome));
+            continue;
+        }
+        if (cmd == QStringLiteral("/local")) {
+            if (remoteSession == nullptr) {
+                compositor.printContent("Already in local mode.\n");
+                continue;
+            }
+            /* Restore local tool registry and drop remote state. */
+            agent->setToolRegistry(localRegistry);
+            if (remoteRegistry != nullptr) {
+                remoteRegistry->deleteLater();
+                remoteRegistry = nullptr;
+            }
+            if (remoteSftp != nullptr) {
+                remoteSftp->close();
+                delete remoteSftp;
+                remoteSftp = nullptr;
+            }
+            if (remoteSession != nullptr) {
+                remoteSession->disconnectFromHost();
+                delete remoteSession;
+                remoteSession = nullptr;
+            }
+            remotePath = QSocRemotePathContext{};
+
+            {
+                auto newCfg       = agent->getConfig();
+                newCfg.remoteMode = false;
+                newCfg.remoteName.clear();
+                newCfg.remoteDisplay.clear();
+                newCfg.remoteRoot.clear();
+                newCfg.remoteWorkingDir.clear();
+                newCfg.remoteWritableDirs.clear();
+                agent->setConfig(newCfg);
+            }
+
+            const QString projectRoot = pathContext ? pathContext->getProjectDir() : QString();
+            if (!projectRoot.isEmpty()) {
+                QSocRemoteBinding::removeTarget(projectRoot, nullptr);
+            }
+
+            statusBarWidget.setStatus("Ready");
+            compositor.printContent("Returned to local workspace.\n");
+            continue;
+        }
         if (cmd == QStringLiteral("/cwd") || cmd.startsWith(QStringLiteral("/cwd "))) {
             const QString arg = input.mid(4).trimmed();
             if (arg.isEmpty()) {
@@ -3182,9 +3388,9 @@ bool QSocCliWorker::runAgentLoop(
             /* Resolve relative paths against the current agent working dir,
              * not the launch-time process cwd — that matches user intent
              * after they've already switched with /cwd once. */
-            const QString   base = pathContext ? pathContext->getWorkingDir() : QDir::currentPath();
-            const QString   resolved = QFileInfo(arg).isAbsolute() ? arg
-                                                                   : QDir(base).absoluteFilePath(arg);
+            const QString base = pathContext ? pathContext->getWorkingDir() : QDir::currentPath();
+            const QString resolved = QFileInfo(arg).isAbsolute() ? arg
+                                                                 : QDir(base).absoluteFilePath(arg);
             const QFileInfo info(resolved);
             if (!info.exists() || !info.isDir()) {
                 compositor.printContent(QString("Not a directory: %1\n").arg(resolved));
@@ -3206,9 +3412,9 @@ bool QSocCliWorker::runAgentLoop(
                         .arg(projectDir.isEmpty() ? QStringLiteral("(none)") : projectDir));
                 continue;
             }
-            const QString   base = pathContext ? pathContext->getWorkingDir() : QDir::currentPath();
-            const QString   resolved = QFileInfo(arg).isAbsolute() ? arg
-                                                                   : QDir(base).absoluteFilePath(arg);
+            const QString base = pathContext ? pathContext->getWorkingDir() : QDir::currentPath();
+            const QString resolved = QFileInfo(arg).isAbsolute() ? arg
+                                                                 : QDir(base).absoluteFilePath(arg);
             const QFileInfo info(resolved);
             if (!info.exists() || !info.isDir()) {
                 compositor.printContent(QString("Not a directory: %1\n").arg(resolved));
