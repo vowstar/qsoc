@@ -4,10 +4,12 @@
 #include "agent/remote/qsocsshsession.h"
 
 #include "agent/remote/qsoclibssh2init.h"
+#include "agent/remote/qsocsshpubderive.h"
 
 #include <libssh2.h>
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 
 #ifdef Q_OS_WIN
@@ -72,6 +74,35 @@ int pollSocket(socket_fd_t sockFd, short events, int timeoutMs)
     pfd.events = events;
     return ::poll(&pfd, 1, timeoutMs);
 #endif
+}
+
+/* Materialize the public half of a private key alongside the private
+ * file so libssh2 (on the mbedTLS backend, which cannot derive one in
+ * memory) has a concrete path to feed to the server. The derivation
+ * itself happens in QSocSshPubDerive via mbedTLS; we only write the
+ * resulting line. Returns the .pub path on success, empty on failure. */
+QString derivePubkeyPath(const QString &privateKeyPath)
+{
+    const QString pubPath = privateKeyPath + QStringLiteral(".pub");
+    if (QFileInfo::exists(pubPath)) {
+        return pubPath;
+    }
+    const QString line = QSocSshPubDerive::fromPrivateKeyFile(privateKeyPath);
+    if (line.isEmpty()) {
+        return {};
+    }
+    QFile file(pubPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return {};
+    }
+    file.write(line.toUtf8());
+    file.write("\n");
+    file.close();
+    QFile::setPermissions(
+        pubPath,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup
+            | QFileDevice::ReadOther);
+    return pubPath;
 }
 
 QString libssh2ErrorString(LIBSSH2_SESSION *session)
@@ -410,13 +441,13 @@ bool QSocSshSession::tryIdentityFileAuth(
      * into any log or error message. */
     const QByteArray userBytes = user.toUtf8();
     const QByteArray keyBytes  = privateKeyPath.toUtf8();
-    /* The mbedTLS crypto backend does not derive a public key from the
-     * private key the way OpenSSL does, so we must point libssh2 at the
-     * companion .pub file. Without it, every auth attempt fails with a
-     * PK parser error even for perfectly valid PEM keys. */
-    const QString    pubPath      = privateKeyPath + QStringLiteral(".pub");
+    /* The mbedTLS crypto backend cannot derive a public key from an EC or
+     * Ed25519 private-key file (NULL pubkey works only for classic PEM
+     * RSA), so we ask ssh-keygen to emit the sibling .pub when missing.
+     * ssh-keygen, not QSoC, is the one that reads the private-key bytes. */
+    const QString    pubPath      = derivePubkeyPath(privateKeyPath);
     const QByteArray pubPathBytes = pubPath.toUtf8();
-    const char      *pubArg       = QFileInfo::exists(pubPath) ? pubPathBytes.constData() : nullptr;
+    const char      *pubArg       = pubPath.isEmpty() ? nullptr : pubPathBytes.constData();
     const QByteArray phBytes      = passphrase.toUtf8();
     int              rc           = 0;
     while ((rc = libssh2_userauth_publickey_fromfile_ex(
