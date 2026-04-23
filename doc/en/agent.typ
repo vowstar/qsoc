@@ -330,7 +330,9 @@ auto-kill them when the agent exits.
 The agent uses a read-unrestricted, write-restricted permission model:
 
 - *Read*: Any path on the system
-- *Write*: Project directory, working directory, user-added directories, `/tmp`
+- *Write*: Project directory, working directory, user-added directories,
+  and the OS temp directory (`/tmp` on Linux, `/var/folders/...` on macOS,
+  `%TEMP%` on Windows; resolved via Qt `QDir::tempPath()`)
 - *Shell*: Configurable timeout, no upper limit
 
 == SESSIONS

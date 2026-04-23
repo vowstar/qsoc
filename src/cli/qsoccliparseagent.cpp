@@ -3531,7 +3531,11 @@ bool QSocCliWorker::runAgentLoop(
                     }
                     addItem(QStringLiteral(".."), QStringLiteral("parent"), QStringLiteral(".."));
                     addItem(QStringLiteral("$HOME"), QDir::homePath(), QDir::homePath());
-                    addItem(QStringLiteral("/tmp"), QString(), QStringLiteral("/tmp"));
+                    /* QDir::tempPath() resolves to the OS-correct location:
+                     * /tmp on Linux/BSD, /var/folders/... on macOS, %TEMP%
+                     * on Windows. */
+                    const QString tempDir = QDir::tempPath();
+                    addItem(QStringLiteral("(system temp)"), tempDir, tempDir);
                     const QString base = pathContext ? pathContext->getWorkingDir()
                                                      : QDir::currentPath();
                     const auto    subdirs
