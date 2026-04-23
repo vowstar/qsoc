@@ -3413,6 +3413,8 @@ bool QSocCliWorker::runAgentLoop(
             remoteRegistry->registerTool(new QSocToolRemoteFileEdit(this, remoteSftp, &remotePath));
             remoteRegistry->registerTool(
                 new QSocToolRemoteShellBash(this, remoteSession, &remotePath));
+            remoteRegistry->registerTool(
+                new QSocToolRemoteBashManage(this, remoteSession, &remotePath));
             remoteRegistry->registerTool(new QSocToolRemotePath(this, &remotePath));
             /* Control-plane tools stay on the local side (docs/web). */
             remoteRegistry->registerTool(new QSocToolDocQuery(this));

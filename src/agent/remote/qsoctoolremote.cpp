@@ -8,6 +8,7 @@
 #include "agent/remote/qsocsshexec.h"
 #include "agent/remote/qsocsshsession.h"
 
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 
@@ -379,7 +380,11 @@ json QSocToolRemoteShellBash::getParametersSchema() const
          {{"command", {{"type", "string"}, {"description", "Shell command to execute on remote"}}},
           {"timeout_ms",
            {{"type", "integer"},
-            {"description", "Per-call timeout in milliseconds (default 60000)"}}}}},
+            {"description", "Per-call timeout in milliseconds (default 60000)"}}},
+          {"background",
+           {{"type", "boolean"},
+            {"description",
+             "Run detached; return job_id. Use bash_manage for status/output/kill."}}}}},
         {"required", json::array({"command"})}};
 }
 
@@ -402,6 +407,53 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
 
     const QString cwd = (m_pathCtx != nullptr && !m_pathCtx->cwd().isEmpty()) ? m_pathCtx->cwd()
                                                                               : QStringLiteral("/");
+
+    /* Background mode: spawn a detached job under
+     * `<workspace>/.qsoc-agent/jobs/<id>/`, return job_id immediately. The
+     * wrapper writes `pid`, `output.log`, and `exit_code`; bash_manage reads
+     * them back later. */
+    const bool background = arguments.contains("background") && arguments["background"].is_boolean()
+                            && arguments["background"].get<bool>();
+    if (background) {
+        if (m_pathCtx == nullptr || m_pathCtx->root().isEmpty()) {
+            return QStringLiteral("Error: workspace root is not configured");
+        }
+        const QString jobsRoot = m_pathCtx->root() + QStringLiteral("/.qsoc-agent/jobs");
+        const QString jobId    = QString::number(QDateTime::currentMSecsSinceEpoch());
+        const QString jobDir   = jobsRoot + QLatin1Char('/') + jobId;
+        const QString wrapper
+            = QStringLiteral(
+                  "set -e; "
+                  "mkdir -p %1; "
+                  "cd %2; "
+                  "printf %s %3 > %1/command; "
+                  "date +%s > %1/start_time; "
+                  "nohup /bin/bash -lc %3 > %1/output.log 2>&1 & "
+                  "echo $! > %1/pid; "
+                  "wait $! ; printf %d $? > %1/exit_code")
+                  .arg(jobDir)
+                  .arg(cwd)
+                  .arg(
+                      QStringLiteral("'")
+                      + QString(cmd).replace(QLatin1Char('\''), QStringLiteral("'\\''"))
+                      + QStringLiteral("'"));
+        /* Fire-and-forget the wrapper: disown the background pipeline so the
+         * SSH exec channel closes immediately after the shell writes the pid. */
+        const QString launch
+            = QStringLiteral("mkdir -p %1 && (%2) >/dev/null 2>&1 & disown").arg(jobDir, wrapper);
+
+        QSocSshExec exec(*m_session);
+        m_running         = &exec;
+        const auto result = exec.run(launch, 10000);
+        m_running         = nullptr;
+        if (result.exitCode != 0 || !result.errorText.isEmpty()) {
+            return QStringLiteral("Error: job launch failed (exit %1) %2")
+                .arg(result.exitCode)
+                .arg(result.errorText);
+        }
+        return QStringLiteral("job_id: %1\njob_dir: %2\n").arg(jobId, jobDir);
+    }
+
     const QString wrapped = buildBashCommand(cwd, cmd);
 
     QSocSshExec exec(*m_session);
@@ -498,4 +550,121 @@ QString QSocToolRemotePath::execute(const json &arguments)
         out += QStringLiteral("  - ") + dir + QLatin1Char('\n');
     }
     return out;
+}
+
+/* bash_manage */
+
+QSocToolRemoteBashManage::QSocToolRemoteBashManage(
+    QObject *parent, QSocSshSession *session, QSocRemotePathContext *pathCtx)
+    : QSocTool(parent)
+    , m_session(session)
+    , m_pathCtx(pathCtx)
+{}
+
+QString QSocToolRemoteBashManage::getName() const
+{
+    return QStringLiteral("bash_manage");
+}
+
+QString QSocToolRemoteBashManage::getDescription() const
+{
+    return QStringLiteral(
+        "Manage a backgrounded remote command by job_id from bash(background=true). "
+        "Actions: status, output, terminate (SIGTERM), kill (SIGKILL).");
+}
+
+json QSocToolRemoteBashManage::getParametersSchema() const
+{
+    return {
+        {"type", "object"},
+        {"properties",
+         {{"job_id",
+           {{"type", "string"}, {"description", "Job id returned by bash tool in background mode"}}},
+          {"action",
+           {{"type", "string"},
+            {"enum", json::array({"status", "output", "terminate", "kill"})},
+            {"description", "status / output / terminate / kill"}}},
+          {"max_lines",
+           {{"type", "integer"},
+            {"description", "Max output lines to return for action=output (default 200)"}}}}},
+        {"required", json::array({"job_id", "action"})}};
+}
+
+QString QSocToolRemoteBashManage::execute(const json &arguments)
+{
+    if (m_session == nullptr || !m_session->isConnected()) {
+        return QStringLiteral("Error: SSH session is not connected");
+    }
+    if (m_pathCtx == nullptr || m_pathCtx->root().isEmpty()) {
+        return QStringLiteral("Error: workspace root is not configured");
+    }
+    if (!arguments.contains("job_id") || !arguments["job_id"].is_string()) {
+        return QStringLiteral("Error: job_id is required");
+    }
+    if (!arguments.contains("action") || !arguments["action"].is_string()) {
+        return QStringLiteral("Error: action is required");
+    }
+    const QString jobId  = QString::fromStdString(arguments["job_id"].get<std::string>());
+    const QString action = QString::fromStdString(arguments["action"].get<std::string>());
+
+    /* Reject path-escape attempts. Job ids are opaque tokens; a legitimate
+     * id has no '/' or '..'. */
+    if (jobId.contains(QLatin1Char('/')) || jobId.contains(QStringLiteral(".."))) {
+        return QStringLiteral("Error: invalid job_id");
+    }
+    const QString jobDir = m_pathCtx->root() + QStringLiteral("/.qsoc-agent/jobs/") + jobId;
+
+    auto runShell = [&](const QString &shell, int timeoutMs) {
+        QSocSshExec exec(*m_session);
+        return exec.run(shell, timeoutMs);
+    };
+
+    if (action == QStringLiteral("status")) {
+        const QString script
+            = QStringLiteral(
+                  "cd %1 2>/dev/null || { echo 'no_job'; exit 0; }; "
+                  "pid=$(cat pid 2>/dev/null); "
+                  "start=$(cat start_time 2>/dev/null); "
+                  "exit_code=$(cat exit_code 2>/dev/null); "
+                  "bytes=$(stat -c%s output.log 2>/dev/null || echo 0); "
+                  "running=no; "
+                  "[ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null && running=yes; "
+                  "printf "
+                  "'pid=%s\\nstart_time=%s\\nrunning=%s\\nexit_code=%s\\noutput_bytes=%s\\n' "
+                  "\"$pid\" \"$start\" \"$running\" \"$exit_code\" \"$bytes\"")
+                  .arg(jobDir);
+        const auto result = runShell(script, 5000);
+        return QString::fromUtf8(result.stdoutBytes)
+               + (result.stderrBytes.isEmpty()
+                      ? QString()
+                      : QStringLiteral("stderr:\n") + QString::fromUtf8(result.stderrBytes));
+    }
+    if (action == QStringLiteral("output")) {
+        int maxLines = 200;
+        if (arguments.contains("max_lines") && arguments["max_lines"].is_number_integer()) {
+            maxLines = arguments["max_lines"].get<int>();
+            if (maxLines <= 0) {
+                maxLines = 200;
+            }
+        }
+        const QString script
+            = QStringLiteral("tail -n %1 %2/output.log 2>&1 || true").arg(maxLines).arg(jobDir);
+        const auto result = runShell(script, 10000);
+        return QString::fromUtf8(result.stdoutBytes);
+    }
+    if (action == QStringLiteral("terminate") || action == QStringLiteral("kill")) {
+        const QString signal = action == QStringLiteral("kill") ? QStringLiteral("-KILL")
+                                                                : QStringLiteral("-TERM");
+        const QString script = QStringLiteral(
+                                   "pid=$(cat %1/pid 2>/dev/null); "
+                                   "if [ -n \"$pid\" ]; then kill %2 \"$pid\" 2>&1; fi; "
+                                   "echo done")
+                                   .arg(jobDir, signal);
+        const auto    result = runShell(script, 5000);
+        return QString::fromUtf8(result.stdoutBytes)
+               + (result.stderrBytes.isEmpty()
+                      ? QString()
+                      : QStringLiteral("stderr:\n") + QString::fromUtf8(result.stderrBytes));
+    }
+    return QStringLiteral("Error: unknown action '%1'").arg(action);
 }
