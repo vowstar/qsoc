@@ -5,6 +5,7 @@
 #define QSOCAGENTCONFIG_H
 
 #include <QString>
+#include <QStringList>
 
 /**
  * @brief Configuration structure for QSocAgent
@@ -72,6 +73,17 @@ struct QSocAgentConfig
 
     /* Retry settings */
     int maxRetries = 3; /* Maximum retry attempts for timeout/network errors */
+
+    /* Remote workspace state (populated by the REPL when a remote target
+     * is active). When remoteMode is true the agent system prompt declares
+     * the remote workspace and the tool registry swaps file/shell/path
+     * implementations for SSH/SFTP-backed versions. */
+    bool        remoteMode = false;
+    QString     remoteName;       /* Profile name or raw "user@host:port". */
+    QString     remoteDisplay;    /* Human-readable target, no credentials. */
+    QString     remoteRoot;       /* Absolute remote project root. */
+    QString     remoteWorkingDir; /* Absolute remote cwd. */
+    QStringList remoteWritableDirs;
 };
 
 #endif // QSOCAGENTCONFIG_H
