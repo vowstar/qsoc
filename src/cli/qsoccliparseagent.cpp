@@ -2373,14 +2373,17 @@ bool QSocCliWorker::runAgentLoop(
             QString shellCmd = input.mid(1).trimmed();
             if (!shellCmd.isEmpty()) {
                 compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
-                compositor.pause();
-                inputMonitor.stop();
+                /* Both runShellEscape and runRemoteShellEscape buffer
+                 * stdout/stderr into a string and return it; nothing is
+                 * written to the terminal during exec. That means the
+                 * compositor can keep painting normally. A pause/resume
+                 * here briefly swaps buffers and exposes whatever the
+                 * previous alt-screen frame held (for example the last
+                 * path picker), which reads as a flash. */
                 const QString output
                     = remoteSession != nullptr
                           ? runRemoteShellEscape(*remoteSession, remotePath.cwd(), shellCmd)
                           : runShellEscape(shellCmd);
-                inputMonitor.start();
-                compositor.resume();
                 if (!output.isEmpty()) {
                     compositor.printContent(output, QTuiScrollView::Dim);
                     if (!output.endsWith(QLatin1Char('\n'))) {
