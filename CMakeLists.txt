@@ -469,6 +469,11 @@ target_link_libraries(qsoc_core PUBLIC
     ${LIBSSH2_LIBRARIES}
 )
 
+if(WIN32)
+    target_link_libraries(qsoc_core PUBLIC ws2_32)
+    target_compile_definitions(qsoc_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/src"
