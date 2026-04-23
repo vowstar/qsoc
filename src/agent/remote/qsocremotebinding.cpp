@@ -5,7 +5,6 @@
 
 #include <yaml-cpp/yaml.h>
 
-#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -18,6 +17,18 @@ QString bindingRelativePath()
     return QStringLiteral(".qsoc/remote.yml");
 }
 
+QByteArray emitYaml(const YAML::Node &node)
+{
+    YAML::Emitter emitter;
+    emitter.SetIndent(2);
+    emitter << node;
+    QByteArray payload(emitter.c_str(), static_cast<int>(emitter.size()));
+    if (!payload.endsWith('\n')) {
+        payload.append('\n');
+    }
+    return payload;
+}
+
 } // namespace
 
 QString QSocRemoteBinding::pathFor(const QString &projectRoot)
@@ -28,25 +39,30 @@ QString QSocRemoteBinding::pathFor(const QString &projectRoot)
     return QDir(projectRoot).absoluteFilePath(bindingRelativePath());
 }
 
-QString QSocRemoteBinding::readTarget(const QString &projectRoot)
+QSocRemoteBinding::Entry QSocRemoteBinding::read(const QString &projectRoot)
 {
+    Entry         entry;
     const QString path = pathFor(projectRoot);
     if (path.isEmpty() || !QFileInfo::exists(path)) {
-        return {};
+        return entry;
     }
     try {
         const YAML::Node node = YAML::LoadFile(path.toStdString());
-        if (node && node.IsMap() && node["target"]) {
-            return QString::fromStdString(node["target"].as<std::string>());
+        if (node && node.IsMap()) {
+            if (node["target"]) {
+                entry.target = QString::fromStdString(node["target"].as<std::string>());
+            }
+            if (node["workspace"]) {
+                entry.workspace = QString::fromStdString(node["workspace"].as<std::string>());
+            }
         }
     } catch (const YAML::Exception &) {
-        /* Malformed file: treat as absent. Caller can re-write cleanly. */
+        /* Malformed file: treat as absent so the caller can rewrite cleanly. */
     }
-    return {};
+    return entry;
 }
 
-bool QSocRemoteBinding::writeTarget(
-    const QString &projectRoot, const QString &target, QString *errorMessage)
+bool QSocRemoteBinding::write(const QString &projectRoot, const Entry &entry, QString *errorMessage)
 {
     const QString path = pathFor(projectRoot);
     if (path.isEmpty()) {
@@ -56,8 +72,7 @@ bool QSocRemoteBinding::writeTarget(
         return false;
     }
     const QString dirPath = QFileInfo(path).absolutePath();
-    QDir          dir;
-    if (!dir.mkpath(dirPath)) {
+    if (!QDir().mkpath(dirPath)) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Cannot create %1").arg(dirPath);
         }
@@ -78,15 +93,20 @@ bool QSocRemoteBinding::writeTarget(
     } else {
         node = YAML::Node(YAML::NodeType::Map);
     }
-    node["target"] = target.toStdString();
 
-    YAML::Emitter emitter;
-    emitter.SetIndent(2);
-    emitter << node;
-    const QByteArray payload = QByteArray(emitter.c_str(), emitter.size()) + "\n";
+    if (entry.target.isEmpty()) {
+        node.remove("target");
+    } else {
+        node["target"] = entry.target.toStdString();
+    }
+    if (entry.workspace.isEmpty()) {
+        node.remove("workspace");
+    } else {
+        node["workspace"] = entry.workspace.toStdString();
+    }
 
-    /* Atomic write via QSaveFile (temp + rename). */
-    QSaveFile saver(path);
+    const QByteArray payload = emitYaml(node);
+    QSaveFile        saver(path);
     if (!saver.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Cannot open %1 for write").arg(path);
@@ -103,7 +123,7 @@ bool QSocRemoteBinding::writeTarget(
     return true;
 }
 
-bool QSocRemoteBinding::removeTarget(const QString &projectRoot, QString *errorMessage)
+bool QSocRemoteBinding::clear(const QString &projectRoot, QString *errorMessage)
 {
     const QString path = pathFor(projectRoot);
     if (path.isEmpty() || !QFileInfo::exists(path)) {
@@ -119,6 +139,7 @@ bool QSocRemoteBinding::removeTarget(const QString &projectRoot, QString *errorM
         node = YAML::Node(YAML::NodeType::Map);
     }
     node.remove("target");
+    node.remove("workspace");
 
     /* If nothing else is left, delete the file to keep the project tree tidy. */
     if (node.size() == 0) {
@@ -132,12 +153,8 @@ bool QSocRemoteBinding::removeTarget(const QString &projectRoot, QString *errorM
         return true;
     }
 
-    YAML::Emitter emitter;
-    emitter.SetIndent(2);
-    emitter << node;
-    const QByteArray payload = QByteArray(emitter.c_str(), emitter.size()) + "\n";
-
-    QSaveFile saver(path);
+    const QByteArray payload = emitYaml(node);
+    QSaveFile        saver(path);
     if (!saver.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Cannot open %1 for write").arg(path);

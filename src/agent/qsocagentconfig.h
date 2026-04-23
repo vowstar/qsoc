@@ -81,8 +81,8 @@ struct QSocAgentConfig
     bool        remoteMode = false;
     QString     remoteName;       /* Profile name or raw "user@host:port". */
     QString     remoteDisplay;    /* Human-readable target, no credentials. */
-    QString     remoteRoot;       /* Absolute remote project root. */
-    QString     remoteWorkingDir; /* Absolute remote cwd. */
+    QString     remoteWorkspace;  /* Absolute remote workspace root. */
+    QString     remoteWorkingDir; /* Absolute remote cwd (initially = workspace). */
     QStringList remoteWritableDirs;
 };
 

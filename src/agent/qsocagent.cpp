@@ -85,7 +85,7 @@ QString QSocAgent::run(const QString &userQuery)
                                .arg(agentConfig.maxContextTokens)
                                .arg(100.0 * currentTokens / agentConfig.maxContextTokens, 0, 'f', 1)
                                .arg(messages.size());
-            emit verboseOutput(info);
+            emit    verboseOutput(info);
         }
 
         /* Process one iteration */
@@ -276,13 +276,13 @@ void QSocAgent::processStreamIteration()
 
     if (agentConfig.verbose) {
         int     currentTokens = estimateTotalTokens();
-        QString info          = QString("[Iteration %1 | Tokens: %2/%3 (%4%) | Messages: %5]")
+        QString info = QString("[Iteration %1 | Tokens: %2/%3 (%4%) | Messages: %5]")
                            .arg(streamIteration)
                            .arg(currentTokens)
                            .arg(agentConfig.maxContextTokens)
                            .arg(100.0 * currentTokens / agentConfig.maxContextTokens, 0, 'f', 1)
                            .arg(messages.size());
-        emit verboseOutput(info);
+        emit    verboseOutput(info);
     }
 
     /* Build messages with system prompt (includes auto-injected memory) */
@@ -656,6 +656,60 @@ QString QSocAgent::buildSystemPromptWithMemory() const
             }
         }
         prompt += envSection;
+    }
+
+    /* Remote workspace environment, emitted only when an SSH remote is active. */
+    if (agentConfig.remoteMode) {
+        QString remoteSection = QStringLiteral("\n# Remote Workspace\n");
+        remoteSection += QStringLiteral("- Mode: SSH remote workspace\n");
+        if (!agentConfig.remoteDisplay.isEmpty()) {
+            remoteSection += QStringLiteral("- Target: ") + agentConfig.remoteDisplay
+                             + QStringLiteral("\n");
+        }
+        if (!agentConfig.remoteWorkspace.isEmpty()) {
+            remoteSection += QStringLiteral("- Remote workspace: ") + agentConfig.remoteWorkspace
+                             + QStringLiteral("\n");
+        }
+        if (!agentConfig.remoteWorkingDir.isEmpty()) {
+            remoteSection += QStringLiteral("- Working directory: ") + agentConfig.remoteWorkingDir
+                             + QStringLiteral("\n");
+        }
+        if (!agentConfig.remoteWritableDirs.isEmpty()) {
+            remoteSection += QStringLiteral("- Writable directories:\n");
+            for (const QString &dir : agentConfig.remoteWritableDirs) {
+                remoteSection += QStringLiteral("  - ") + dir + QStringLiteral("\n");
+            }
+        }
+        remoteSection += QStringLiteral(
+            "\n"
+            "All workspace tools operate on the remote host:\n"
+            "- read_file, list_files, write_file, edit_file use remote SFTP.\n"
+            "- bash and bash_manage execute on the remote host.\n"
+            "- path_context reports and changes remote paths.\n"
+            "- todo tools read/write the remote workspace .qsoc/todos.md.\n"
+            "- project memory, project skills, and project instructions are loaded from the\n"
+            "  remote project when available.\n"
+            "\n"
+            "The following QSoC business tools are intentionally unavailable in remote mode:\n"
+            "project_*, module_*, bus_*, generate_*, lsp.\n"
+            "If a task requires these tools, explain that remote mode currently supports file,\n"
+            "shell, docs, web, project memory, project skills, skill creation in remote\n"
+            "project scope, and todo operations only.\n"
+            "\n"
+            "Use absolute remote paths in tool calls. Do not refer to local paths unless the\n"
+            "user explicitly asks for local-machine information.\n"
+            "\n"
+            "Local QSoC configuration remains authoritative for LLM endpoints, API keys,\n"
+            "proxy, remote profiles, SSH policy, tool policy, model selection, and safety\n"
+            "rules. Remote .qsoc.yml is project metadata only and must not override local\n"
+            "control configuration.\n"
+            "\n"
+            "# SSH Secret Handling\n"
+            "Never request, display, summarize, copy, or store SSH private key contents.\n"
+            "QSoC authenticates through ssh-agent or by passing an IdentityFile path to\n"
+            "libssh2; the private key file content is never exposed to tools, prompts, logs,\n"
+            "or memory.\n");
+        prompt += remoteSection;
     }
 
     /* Section 9: Project instructions (AGENTS.md / AGENTS.local.md) */
