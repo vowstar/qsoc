@@ -3412,6 +3412,25 @@ bool QSocCliWorker::runAgentLoop(
         }
         if (cmd == QStringLiteral("/cwd") || cmd.startsWith(QStringLiteral("/cwd "))) {
             const QString arg = input.mid(4).trimmed();
+
+            if (remoteSession != nullptr) {
+                if (arg.isEmpty()) {
+                    compositor.printContent(
+                        QString("Remote workspace: %1\n").arg(remotePath.root()));
+                    compositor.printContent(QString("Remote cwd      : %1\n").arg(remotePath.cwd()));
+                    continue;
+                }
+                const QString resolved = remotePath.resolveCwdRequest(arg);
+                remotePath.setCwd(resolved);
+                {
+                    auto newCfg             = agent->getConfig();
+                    newCfg.remoteWorkingDir = resolved;
+                    agent->setConfig(newCfg);
+                }
+                compositor.printContent(QString("Remote cwd: %1\n").arg(resolved));
+                continue;
+            }
+
             if (arg.isEmpty()) {
                 const QString workingDir = pathContext ? pathContext->getWorkingDir()
                                                        : QDir::currentPath();
@@ -3424,8 +3443,7 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
             /* Resolve relative paths against the current agent working dir,
-             * not the launch-time process cwd — that matches user intent
-             * after they've already switched with /cwd once. */
+             * not the launch-time process cwd, so user intent is preserved. */
             const QString base = pathContext ? pathContext->getWorkingDir() : QDir::currentPath();
             const QString resolved = QFileInfo(arg).isAbsolute() ? arg
                                                                  : QDir(base).absoluteFilePath(arg);
