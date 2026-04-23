@@ -962,11 +962,12 @@ bool QSocCliWorker::runAgentLoop(
     /* Remote workspace state. A single session at a time; created by
      * `/ssh <target>` and torn down by `/local`. Local tool registry is
      * cached here so `/local` can restore it in O(1). */
-    QSocToolRegistry     *localRegistry  = agent->getToolRegistry();
-    QSocSshSession       *remoteSession  = nullptr;
-    QSocSftpClient       *remoteSftp     = nullptr;
-    QSocToolRegistry     *remoteRegistry = nullptr;
-    QSocRemotePathContext remotePath;
+    QSocToolRegistry       *localRegistry  = agent->getToolRegistry();
+    QSocSshSession         *remoteSession  = nullptr;
+    QSocSftpClient         *remoteSftp     = nullptr;
+    QSocToolRegistry       *remoteRegistry = nullptr;
+    QList<QSocSshSession *> remoteJumps; /* ProxyJump chain, outlives target */
+    QSocRemotePathContext   remotePath;
 
     /* Create TUI compositor — enters alt screen immediately */
     QTuiCompositor compositor(this);
@@ -3378,6 +3379,34 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.printContent("Invalid /ssh target.\n");
                 continue;
             }
+
+            /* Remember the alias as typed so the binding key and status line
+             * stay human-readable. Actual TCP connect uses resolved values. */
+            const QString rawAlias     = hostname;
+            const bool    explicitUser = !user.isEmpty();
+            const bool    explicitPort = port != 22 || arg.contains(QLatin1Char(':'));
+
+            /* Pull ~/.ssh/config (with Include chains) so aliases like
+             * r9pro resolve to the real HostName/Port/User/IdentityFile. */
+            QSocSshConfigParser parser;
+            {
+                const QString cfg = QDir::homePath() + QStringLiteral("/.ssh/config");
+                if (QFileInfo::exists(cfg)) {
+                    parser.parse(cfg);
+                }
+            }
+            const QSocSshHostConfig resolvedCfg = parser.resolve(rawAlias);
+            if (resolvedCfg.fromConfig) {
+                if (!resolvedCfg.hostname.isEmpty()) {
+                    hostname = resolvedCfg.hostname;
+                }
+                if (!explicitPort && resolvedCfg.port > 0) {
+                    port = resolvedCfg.port;
+                }
+                if (!explicitUser && !resolvedCfg.user.isEmpty()) {
+                    user = resolvedCfg.user;
+                }
+            }
             if (user.isEmpty()) {
 #ifdef Q_OS_WIN
                 user = qEnvironmentVariable("USERNAME");
@@ -3395,9 +3424,9 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
 
-            /* Stable identifier used for bindings regardless of how the
-             * user typed the target on the command line. */
-            const QString targetKey = QStringLiteral("%1@%2:%3").arg(user, hostname).arg(port);
+            /* Binding key tracks the alias the user typed so lookups stay
+             * stable even if the config file later switches HostName. */
+            const QString targetKey = QStringLiteral("%1@%2:%3").arg(user, rawAlias).arg(port);
 
             const QString projectRoot = pathContext ? pathContext->getProjectDir() : QString();
             QString       workspace;
@@ -3413,18 +3442,98 @@ bool QSocCliWorker::runAgentLoop(
             host.hostname      = hostname;
             host.port          = port;
             host.user          = user;
+            host.identityFiles = resolvedCfg.identityFiles;
+            /* IdentitiesOnly=yes without any configured IdentityFile would
+             * starve auth of keys because our parser does not synthesize the
+             * default id_* list. Flip to no so the session's default key
+             * enumeration kicks in, matching first-connect UX. */
+            host.identitiesOnly = resolvedCfg.identitiesOnly && !host.identityFiles.isEmpty();
+            host.proxyJump      = resolvedCfg.proxyJump;
+            /* Default to accept-new so first-time connects and ProxyJump
+             * hops work without a pre-populated known_hosts. Mismatches
+             * still abort the connect. */
             host.strictHostKey = QSocSshHostConfig::StrictHostKey::AcceptNew;
-            /* Leave identityFiles empty so the session enumerates ~/.ssh/id_*. */
 
             compositor.printContent(QString("Connecting to %1 ...\n").arg(targetKey));
             compositor.render();
 
-            auto      *newSession = new QSocSshSession(this);
-            QString    err;
-            const auto status = newSession->connectTo(host, &err);
-            if (status != QSocSshSession::ConnectStatus::Ok) {
+            /* OS default user reused for any ProxyJump hop that lacks a
+             * matching User directive in ~/.ssh/config. */
+            QString osDefaultUser;
+#ifdef Q_OS_WIN
+            osDefaultUser = qEnvironmentVariable("USERNAME");
+#else
+            osDefaultUser = qEnvironmentVariable("USER");
+            if (osDefaultUser.isEmpty()) {
+                osDefaultUser = qEnvironmentVariable("LOGNAME");
+            }
+#endif
+
+            /* Resolve a hop alias into a QSocSshHostConfig, filling in
+             * sensible defaults when the alias is not in the config file. */
+            auto hopConfig = [&](const QString &hopAlias) -> QSocSshHostConfig {
+                QSocSshHostConfig cfg = parser.resolve(hopAlias);
+                if (!cfg.fromConfig) {
+                    cfg.hostname = hopAlias;
+                    cfg.port     = 22;
+                }
+                if (cfg.user.isEmpty()) {
+                    cfg.user = osDefaultUser;
+                }
+                cfg.alias = hopAlias;
+                /* Same first-time policy as the final target, an unknown
+                 * jump host with strict Yes would abort a connect that is
+                 * otherwise valid. */
+                cfg.strictHostKey = QSocSshHostConfig::StrictHostKey::AcceptNew;
+                /* Avoid starving auth when config sets IdentitiesOnly=yes
+                 * but lists no IdentityFile entries. */
+                cfg.identitiesOnly = cfg.identitiesOnly && !cfg.identityFiles.isEmpty();
+                return cfg;
+            };
+
+            /* Build the ProxyJump chain. connectChain returns the final
+             * session on success and collects every intermediate hop in
+             * outJumps so the caller can tear them down later. */
+            QList<QSocSshSession *> localJumps;
+            std::function<QSocSshSession *(const QSocSshHostConfig &, QSocSshSession *, QString *)>
+                connectChain;
+            connectChain = [&](const QSocSshHostConfig &cfg,
+                               QSocSshSession          *parentSession,
+                               QString                 *errOut) -> QSocSshSession                 *{
+                QSocSshSession *currentParent = parentSession;
+                for (const QString &hopAlias : cfg.proxyJump) {
+                    const QSocSshHostConfig hopCfg = hopConfig(hopAlias);
+                    QString                 hopErr;
+                    QSocSshSession *hopSession = connectChain(hopCfg, currentParent, &hopErr);
+                    if (hopSession == nullptr) {
+                        if (errOut != nullptr) {
+                            *errOut = QStringLiteral("ProxyJump via %1 failed: %2")
+                                          .arg(hopAlias, hopErr);
+                        }
+                        return nullptr;
+                    }
+                    localJumps.append(hopSession);
+                    currentParent = hopSession;
+                }
+                auto                         *session = new QSocSshSession(this);
+                QSocSshSession::ConnectStatus status
+                    = (currentParent != nullptr) ? session->connectToVia(cfg, currentParent, errOut)
+                                                 : session->connectTo(cfg, errOut);
+                if (status != QSocSshSession::ConnectStatus::Ok) {
+                    delete session;
+                    return nullptr;
+                }
+                return session;
+            };
+
+            QString err;
+            auto   *newSession = connectChain(host, nullptr, &err);
+            if (newSession == nullptr) {
                 compositor.printContent(QString("SSH connect failed: %1\n").arg(err));
-                delete newSession;
+                for (auto it = localJumps.rbegin(); it != localJumps.rend(); ++it) {
+                    (*it)->disconnectFromHost();
+                    delete *it;
+                }
                 continue;
             }
 
@@ -3477,6 +3586,10 @@ bool QSocCliWorker::runAgentLoop(
                     delete newSftp;
                     newSession->disconnectFromHost();
                     delete newSession;
+                    for (auto it = localJumps.rbegin(); it != localJumps.rend(); ++it) {
+                        (*it)->disconnectFromHost();
+                        delete *it;
+                    }
                     continue;
                 }
             }
@@ -3487,6 +3600,10 @@ bool QSocCliWorker::runAgentLoop(
                 delete newSftp;
                 newSession->disconnectFromHost();
                 delete newSession;
+                for (auto it = localJumps.rbegin(); it != localJumps.rend(); ++it) {
+                    (*it)->disconnectFromHost();
+                    delete *it;
+                }
                 continue;
             }
 
@@ -3509,8 +3626,16 @@ bool QSocCliWorker::runAgentLoop(
                 delete remoteSession;
                 remoteSession = nullptr;
             }
+            /* Tear down any previous ProxyJump chain in reverse order so
+             * children disconnect before their parents. */
+            for (auto it = remoteJumps.rbegin(); it != remoteJumps.rend(); ++it) {
+                (*it)->disconnectFromHost();
+                delete *it;
+            }
+            remoteJumps.clear();
             remoteSession = newSession;
             remoteSftp    = newSftp;
+            remoteJumps   = localJumps;
 
             /* Build the remote tool registry with same-named tools. */
             remoteRegistry = new QSocToolRegistry(this);
@@ -3581,6 +3706,13 @@ bool QSocCliWorker::runAgentLoop(
                 delete remoteSession;
                 remoteSession = nullptr;
             }
+            /* Close ProxyJump hops in reverse order so each child channel
+             * is freed before its parent session tears down its TCP. */
+            for (auto it = remoteJumps.rbegin(); it != remoteJumps.rend(); ++it) {
+                (*it)->disconnectFromHost();
+                delete *it;
+            }
+            remoteJumps.clear();
             remotePath = QSocRemotePathContext{};
 
             {
