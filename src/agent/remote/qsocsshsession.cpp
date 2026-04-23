@@ -263,6 +263,13 @@ QSocSshSession::ConnectStatus QSocSshSession::performHandshake(QString *errorMes
 
     libssh2_session_set_blocking(m_session, 0);
 
+    /* Modern OpenSSH (>= 8.8) drops ssh-rsa (SHA-1) from its default
+     * PubkeyAcceptedAlgorithms. Explicitly order rsa-sha2-512 ahead of
+     * rsa-sha2-256 (and the legacy ssh-rsa as a last resort) so RSA
+     * userauth negotiates a SHA-2 signature the server still accepts. */
+    libssh2_session_method_pref(
+        m_session, LIBSSH2_METHOD_SIGN_ALGO, "rsa-sha2-512,rsa-sha2-256,ssh-rsa");
+
     int rc = 0;
     while ((rc = libssh2_session_handshake(m_session, m_socket)) == LIBSSH2_ERROR_EAGAIN) {
         if (waitSocket(m_socket, m_session, m_timeoutMs) <= 0) {
@@ -638,6 +645,10 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
         return ConnectStatus::HandshakeFailed;
     }
     libssh2_session_set_blocking(m_session, 0);
+    /* Same SHA-2 ordering as the direct path so tunneled userauth also
+     * works against servers that dropped ssh-rsa (SHA-1). */
+    libssh2_session_method_pref(
+        m_session, LIBSSH2_METHOD_SIGN_ALGO, "rsa-sha2-512,rsa-sha2-256,ssh-rsa");
     libssh2_session_callback_set2(
         m_session,
         LIBSSH2_CALLBACK_SEND,
