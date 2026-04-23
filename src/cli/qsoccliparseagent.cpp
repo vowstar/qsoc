@@ -3467,10 +3467,10 @@ bool QSocCliWorker::runAgentLoop(
                     std::sort(names.begin(), names.end());
                     return names;
                 });
+                compositor.pause();
                 workspace = picker.exec();
+                compositor.resume();
                 inputMonitor.resetEscState();
-                compositor.invalidate();
-                compositor.render();
                 if (workspace.isEmpty()) {
                     compositor.printContent("No workspace selected. Disconnecting.\n");
                     newSftp->close();
@@ -3601,86 +3601,70 @@ bool QSocCliWorker::runAgentLoop(
         if (cmd == QStringLiteral("/cwd") || cmd.startsWith(QStringLiteral("/cwd "))) {
             QString arg = input.mid(4).trimmed();
 
-            if (arg.isEmpty()) {
-                QList<QTuiMenu::MenuItem> items;
-                QStringList               paths;
-                auto addItem = [&](const QString &label, const QString &hint, const QString &path) {
-                    QTuiMenu::MenuItem item;
-                    item.label  = label;
-                    item.hint   = hint;
-                    item.marked = false;
-                    items.append(item);
-                    paths.append(path);
-                };
-
-                QString title;
-                if (remoteSession != nullptr) {
-                    title = QStringLiteral("Remote cwd");
-                    addItem(QStringLiteral("(workspace root)"), remotePath.root(), remotePath.root());
-                    if (remoteSftp != nullptr) {
-                        QString    err;
-                        const auto entries = remoteSftp->listDir(remotePath.cwd(), 100, &err);
-                        for (const auto &entry : entries) {
-                            if (entry.isDirectory) {
-                                addItem(
-                                    entry.name + QStringLiteral("/"),
-                                    QStringLiteral("dir"),
-                                    entry.name);
-                            }
+            /* Bare /cwd on a remote session opens the same two-column
+             * directory browser that /ssh uses for the workspace, so the
+             * user gets parent navigation and consistent UX. */
+            if (arg.isEmpty() && remoteSession != nullptr && remoteSftp != nullptr) {
+                QTuiPathPicker picker;
+                picker.setTitle(QStringLiteral("Remote cwd"));
+                picker.setStartPath(remotePath.cwd());
+                QSocSftpClient *sftp = remoteSftp;
+                picker.setListDirs([sftp](const QString &path) -> QStringList {
+                    QString     ignored;
+                    const auto  entries = sftp->listDir(path, 500, &ignored);
+                    QStringList names;
+                    names.reserve(entries.size());
+                    for (const auto &entry : entries) {
+                        if (entry.isDirectory) {
+                            names.append(entry.name);
                         }
                     }
-                } else {
-                    title                 = QStringLiteral("Local cwd");
-                    const QString project = projectManager ? projectManager->getProjectPath()
-                                                           : QString();
-                    if (!project.isEmpty()) {
-                        addItem(QStringLiteral("(project root)"), project, project);
-                    }
-                    addItem(QStringLiteral(".."), QStringLiteral("parent"), QStringLiteral(".."));
-                    addItem(QStringLiteral("$HOME"), QDir::homePath(), QDir::homePath());
-                    /* QDir::tempPath() resolves to the OS-correct location:
-                     * /tmp on Linux/BSD, /var/folders/... on macOS, %TEMP%
-                     * on Windows. */
-                    const QString tempDir = QDir::tempPath();
-                    addItem(QStringLiteral("(system temp)"), tempDir, tempDir);
-                    const QString base = pathContext ? pathContext->getWorkingDir()
-                                                     : QDir::currentPath();
-                    const auto    subdirs
-                        = QDir(base).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-                    for (const QString &name : subdirs) {
-                        addItem(name + QStringLiteral("/"), QStringLiteral("dir"), name);
-                    }
-                }
-                addItem(
-                    QStringLiteral("(show current; type /cwd <path> to set)"), QString(), QString());
-
-                QTuiMenu menu;
-                menu.setTitle(title);
-                menu.setItems(items);
-                menu.setSearchable(true);
-                const int selected = menu.exec();
+                    std::sort(names.begin(), names.end());
+                    return names;
+                });
+                compositor.pause();
+                const QString picked = picker.exec();
+                compositor.resume();
                 inputMonitor.resetEscState();
-                compositor.invalidate();
-                compositor.render();
-                if (selected < 0 || selected >= paths.size()) {
+                if (picked.isEmpty()) {
                     continue;
                 }
-                const QString picked = paths.at(selected);
+                const QString resolved = remotePath.resolveCwdRequest(picked);
+                remotePath.setCwd(resolved);
+                {
+                    auto newCfg             = agent->getConfig();
+                    newCfg.remoteWorkingDir = resolved;
+                    agent->setConfig(newCfg);
+                }
+                compositor.printContent(QString("Remote cwd: %1\n").arg(resolved));
+                continue;
+            }
+
+            if (arg.isEmpty()) {
+                /* Local mode uses the same picker as remote so both modes
+                 * share navigation keys and layout. */
+                QTuiPathPicker picker;
+                picker.setTitle(QStringLiteral("Local cwd"));
+                const QString base = pathContext ? pathContext->getWorkingDir()
+                                                 : QDir::currentPath();
+                picker.setStartPath(base);
+                picker.setListDirs([](const QString &path) -> QStringList {
+                    QStringList names = QDir(path).entryList(
+                        QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks, QDir::Name);
+                    return names;
+                });
+                compositor.pause();
+                const QString picked = picker.exec();
+                compositor.resume();
+                inputMonitor.resetEscState();
                 if (picked.isEmpty()) {
-                    if (remoteSession != nullptr) {
+                    const QString workingDir = pathContext ? pathContext->getWorkingDir()
+                                                           : QDir::currentPath();
+                    compositor.printContent(QString("Working dir: %1\n").arg(workingDir));
+                    const QString projectDir = projectManager->getProjectPath();
+                    if (!projectDir.isEmpty()) {
                         compositor.printContent(
-                            QString("Remote workspace: %1\n").arg(remotePath.root()));
-                        compositor.printContent(
-                            QString("Remote cwd      : %1\n").arg(remotePath.cwd()));
-                    } else {
-                        const QString workingDir = pathContext ? pathContext->getWorkingDir()
-                                                               : QDir::currentPath();
-                        compositor.printContent(QString("Working dir: %1\n").arg(workingDir));
-                        const QString projectDir = projectManager->getProjectPath();
-                        if (!projectDir.isEmpty()) {
-                            compositor.printContent(
-                                QString("Project dir: %1\n").arg(projectDir), QTuiScrollView::Dim);
-                        }
+                            QString("Project dir: %1\n").arg(projectDir), QTuiScrollView::Dim);
                     }
                     continue;
                 }
