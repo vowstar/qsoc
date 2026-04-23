@@ -3416,6 +3416,10 @@ bool QSocCliWorker::runAgentLoop(
             remoteRegistry->registerTool(new QSocToolRemotePath(this, &remotePath));
             /* Control-plane tools stay on the local side (docs/web). */
             remoteRegistry->registerTool(new QSocToolDocQuery(this));
+            remoteRegistry->registerTool(new QSocToolWebFetch(this, socConfig));
+            if (socConfig != nullptr && !socConfig->getValue("web.search_api_url").isEmpty()) {
+                remoteRegistry->registerTool(new QSocToolWebSearch(this, socConfig));
+            }
 
             agent->setToolRegistry(remoteRegistry);
 
