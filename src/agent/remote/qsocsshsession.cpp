@@ -321,11 +321,19 @@ bool QSocSshSession::tryAgentAuth(const QString &user)
     bool                            authOk    = false;
     const QByteArray                userBytes = user.toUtf8();
     while (true) {
-        const int rc = libssh2_agent_get_identity(agent, &identity, prev);
-        if (rc != 0 || identity == nullptr) {
+        const int next = libssh2_agent_get_identity(agent, &identity, prev);
+        if (next != 0 || identity == nullptr) {
             break;
         }
-        if (libssh2_agent_userauth(agent, userBytes.constData(), identity) == 0) {
+        int rc = 0;
+        while ((rc = libssh2_agent_userauth(agent, userBytes.constData(), identity))
+               == LIBSSH2_ERROR_EAGAIN) {
+            if (waitSocket(m_socket, m_session, m_timeoutMs) <= 0) {
+                rc = LIBSSH2_ERROR_TIMEOUT;
+                break;
+            }
+        }
+        if (rc == 0) {
             authOk = true;
             break;
         }
@@ -378,7 +386,26 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
     if (!host.identitiesOnly && tryAgentAuth(user)) {
         return ConnectStatus::Ok;
     }
-    for (const QString &identity : host.identityFiles) {
+
+    /* Identity file fallback: honour the config-supplied paths when present
+     * (the user's explicit choice wins); otherwise enumerate the common
+     * ~/.ssh/id_* names the way OpenSSH would, so first connections work
+     * without bespoke config. Only paths are touched here; libssh2 reads
+     * the key material internally during auth. */
+    QStringList identityPaths = host.identityFiles;
+    if (identityPaths.isEmpty() && !host.identitiesOnly) {
+        const QDir        sshDir(QDir::homePath() + QStringLiteral("/.ssh"));
+        const QStringList entries
+            = sshDir.entryList({QStringLiteral("id_*")}, QDir::Files | QDir::NoSymLinks, QDir::Name);
+        for (const QString &name : entries) {
+            if (name.endsWith(QStringLiteral(".pub"))) {
+                continue;
+            }
+            identityPaths.push_back(sshDir.absoluteFilePath(name));
+        }
+    }
+
+    for (const QString &identity : identityPaths) {
         if (tryIdentityFileAuth(user, identity, QString())) {
             return ConnectStatus::Ok;
         }
