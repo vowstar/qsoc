@@ -76,11 +76,13 @@ The following commands are available during an interactive session:
     [`/project <path>`],
     [Switch project root (reloads config, starts a new session)],
     [`/rename <title>`], [Set session title for the resume picker],
-    [`/ssh [user\@host[:port][:/workspace]]`],
+    [`/ssh [[user\@]host[:port]]`],
     [Connect to an SSH remote workspace. Empty opens a picker of
-     `~/.ssh/config` aliases plus the saved binding. On first connect to a
-     target, `:/workspace` is required; it is remembered in
-     `<project>/.qsoc/remote.yml` and reused thereafter.],
+     `~/.ssh/config` aliases plus the saved binding. The user defaults
+     to the current OS user, the port defaults to 22. After the session
+     comes up a two-column directory browser asks for the workspace; the
+     choice is remembered in `<project>/.qsoc/remote.yml` and reused on
+     later connects.],
     [`/status`], [Show model, session, and endpoint info],
     [`/help`], [Show help message],
     [`!<command>`], [Execute a shell command directly],
@@ -253,14 +255,17 @@ Use `/ssh` from the interactive REPL:
 ```bash
 /ssh user@host
 /ssh user@host:2222
-/ssh user@host:2222:/remote/workspace/path
+/ssh host
 ```
 
-The trailing `:/workspace` selects the remote directory used as the initial
-cwd and as the sole writable root for remote file tools. On first connect to
-a given target, the workspace *must* be supplied. It is written to
-`<project>/.qsoc/remote.yml` and reused on subsequent `/ssh <same target>`
-invocations without path.
+User and port are optional: if omitted, user falls back to the current
+OS user (`USERNAME` on Windows, `USER`/`LOGNAME` on POSIX) and port falls
+back to 22. The workspace is never part of the command line; after the
+session comes up a two-column directory browser opens starting at the
+remote home directory, and the chosen path becomes both the initial cwd
+and the sole writable root for remote file tools. The selection is
+written to `<project>/.qsoc/remote.yml` and reused on subsequent
+`/ssh <same target>` invocations without prompting the picker.
 
 Bare `/ssh` opens a picker listing the saved binding plus concrete aliases
 parsed from `~/.ssh/config`. `/local` returns to local mode but keeps the
