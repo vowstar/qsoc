@@ -2896,6 +2896,9 @@ bool QSocCliWorker::runAgentLoop(
                 "  /project <p> - Switch to another project (reloads config, clears caches,\n"
                 "                 starts a new session; current session is saved)\n");
             compositor.printContent("  /rename <t>  - Set session title for resume picker\n");
+            compositor.printContent(
+                "  /ssh <u@host:port> - Switch to SSH remote workspace; /local to return\n");
+            compositor.printContent("  /local       - Leave remote workspace, back to local mode\n");
             compositor.printContent("  /status      - Show model, session, endpoint info\n");
             compositor.printContent("  !<command>   - Execute a shell command directly\n");
             compositor.printContent("  /help        - Show this help message\n");
