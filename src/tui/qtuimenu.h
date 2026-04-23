@@ -32,6 +32,12 @@ public:
     void setHighlight(int index);
     void setColorEnabled(bool enabled);
 
+    /* Opt in to live fuzzy-search input. When enabled the digit shortcuts
+     * go away so labels like "host05" or "foo-4-6" do not clash with
+     * numeric selection. Printable keys feed a search buffer that
+     * filters the visible list instead. */
+    void setSearchable(bool enable);
+
     /* Blocking interactive loop. Returns selected index or -1 on cancel. */
     int exec();
 
@@ -40,6 +46,7 @@ private:
     QList<MenuItem> items;
     int             highlighted  = 0;
     bool            colorEnabled = true;
+    bool            searchable   = false;
 
     int computeBoxWidth() const;
 };

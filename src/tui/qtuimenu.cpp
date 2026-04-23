@@ -98,6 +98,10 @@ void QTuiMenu::setColorEnabled(bool enabled)
 {
     colorEnabled = enabled;
 }
+void QTuiMenu::setSearchable(bool enable)
+{
+    searchable = enable;
+}
 
 int QTuiMenu::computeBoxWidth() const
 {
@@ -137,9 +141,9 @@ int QTuiMenu::exec()
 #endif
     }
 
-    /* Clamp item rows so the menu fits on screen; remaining items scroll into
-     * view as the highlight moves past the viewport edge. Reserve 5 rows for
-     * the input line, status bar, and title/footer of the menu itself. */
+    /* Clamp item rows so the menu fits on screen. Remaining items scroll
+     * into view as the highlight moves past the viewport edge. Reserve 5
+     * rows for the input line, status bar, and title/footer of the menu. */
     const int itemsTotal      = static_cast<int>(items.size());
     const int maxVisibleItems = qMax(1, termH - 5);
     const int visibleCount    = qMin(itemsTotal, maxVisibleItems);
@@ -149,19 +153,46 @@ int QTuiMenu::exec()
         startY = 1;
     }
 
-    int scrollOffset = 0;
+    int        scrollOffset = 0;
+    QString    searchQuery;
+    QList<int> filteredIndices;
+
+    auto rebuildFilter = [&]() {
+        filteredIndices.clear();
+        const QString lowerQuery = searchQuery.toLower();
+        for (int idx = 0; idx < itemsTotal; idx++) {
+            if (searchQuery.isEmpty()) {
+                filteredIndices.append(idx);
+                continue;
+            }
+            QString hay = items[idx].label;
+            if (!items[idx].hint.isEmpty()) {
+                hay += QLatin1Char(' ') + items[idx].hint;
+            }
+            if (hay.toLower().contains(lowerQuery)) {
+                filteredIndices.append(idx);
+            }
+        }
+    };
+    rebuildFilter();
 
     auto ensureHighlightVisible = [&]() {
+        const int visRows = qMin(filteredIndices.size(), static_cast<qsizetype>(visibleCount));
+        if (visRows <= 0) {
+            scrollOffset = 0;
+            return;
+        }
         if (highlighted < scrollOffset) {
             scrollOffset = highlighted;
-        } else if (highlighted >= scrollOffset + visibleCount) {
-            scrollOffset = highlighted - visibleCount + 1;
+        } else if (highlighted >= scrollOffset + visRows) {
+            scrollOffset = highlighted - visRows + 1;
         }
         if (scrollOffset < 0) {
             scrollOffset = 0;
         }
-        if (scrollOffset > itemsTotal - visibleCount) {
-            scrollOffset = qMax(0, itemsTotal - visibleCount);
+        const int maxOffset = static_cast<int>(filteredIndices.size()) - visRows;
+        if (scrollOffset > maxOffset) {
+            scrollOffset = qMax(0, maxOffset);
         }
     };
 
@@ -174,7 +205,9 @@ int QTuiMenu::exec()
             fprintf(stdout, "\033[%d;1H\033[2K", startY + row + 1);
         }
 
-        const bool scrollable = itemsTotal > visibleCount;
+        const int  filteredCount = static_cast<int>(filteredIndices.size());
+        const bool scrollable    = filteredCount > visibleCount;
+        const bool searching     = searchable && !searchQuery.isEmpty();
 
         for (int row = 0; row < menuH; row++) {
             fprintf(stdout, "\033[%d;1H", startY + row + 1);
@@ -183,15 +216,12 @@ int QTuiMenu::exec()
             int fgColor = FG_NORMAL;
 
             if (row == 0) {
-                /* Title */
                 fgColor = FG_TITLE;
             } else if (row == menuH - 1) {
-                /* Footer */
                 fgColor = FG_HINT;
             } else {
-                /* Item row */
-                int itemIdx = scrollOffset + row - 1;
-                if (itemIdx == highlighted) {
+                const int visIdx = scrollOffset + row - 1;
+                if (visIdx == highlighted && visIdx < filteredCount) {
                     bgColor = BG_HIGHLIGHT;
                     fgColor = FG_HIGHLIGHT;
                 }
@@ -203,24 +233,36 @@ int QTuiMenu::exec()
             QString line;
             if (row == 0) {
                 line = QStringLiteral("  ") + title;
-                if (scrollable) {
+                if (searching) {
+                    line += QString(" [%1/%2 of %3]")
+                                .arg(filteredCount == 0 ? 0 : highlighted + 1)
+                                .arg(filteredCount)
+                                .arg(itemsTotal);
+                } else if (scrollable) {
                     line += QString(" [%1/%2]").arg(highlighted + 1).arg(itemsTotal);
                 }
             } else if (row == menuH - 1) {
-                if (scrollable) {
+                if (searchable) {
+                    line = QStringLiteral("  Search: ") + searchQuery + QStringLiteral("_");
+                } else if (scrollable) {
                     line = QStringLiteral("  Up/Down/Wheel+Enter/ESC");
                 } else {
                     line = QString("  1-%1/Up/Down+Enter/Click/ESC").arg(items.size());
                 }
             } else {
-                const int itemIdx = scrollOffset + row - 1;
-                if (itemIdx < 0 || itemIdx >= itemsTotal) {
+                const int visIdx = scrollOffset + row - 1;
+                if (visIdx < 0 || visIdx >= filteredCount) {
                     line = QString();
                 } else {
-                    const MenuItem &item = items[itemIdx];
-                    line                 = QString("  %1 %2").arg(itemIdx + 1, 2).arg(item.label);
+                    const int       rawIdx = filteredIndices[visIdx];
+                    const MenuItem &item   = items[rawIdx];
+                    if (searchable) {
+                        line = QStringLiteral("  ") + item.label;
+                    } else {
+                        line = QString("  %1 %2").arg(rawIdx + 1, 2).arg(item.label);
+                    }
                     if (!item.hint.isEmpty()) {
-                        line += QStringLiteral(" ") + item.hint;
+                        line += QStringLiteral("  ") + item.hint;
                     }
                 }
             }
@@ -305,6 +347,27 @@ int QTuiMenu::exec()
 #endif
     };
 
+    auto moveUp = [&]() {
+        const int count = static_cast<int>(filteredIndices.size());
+        if (count <= 0) {
+            return;
+        }
+        highlighted = (highlighted <= 0) ? count - 1 : highlighted - 1;
+    };
+    auto moveDown = [&]() {
+        const int count = static_cast<int>(filteredIndices.size());
+        if (count <= 0) {
+            return;
+        }
+        highlighted = (highlighted + 1) % count;
+    };
+    auto acceptCurrent = [&]() {
+        if (highlighted >= 0 && highlighted < filteredIndices.size()) {
+            result = filteredIndices[highlighted];
+            done   = true;
+        }
+    };
+
     while (!done) {
         char byte = 0;
         if (!readByte(&byte, -1)) {
@@ -313,13 +376,13 @@ int QTuiMenu::exec()
 
 #ifdef Q_OS_WIN
         /* Handle virtual key codes for arrow keys */
-        if (byte == 0) { /* Up */
-            highlighted = (highlighted <= 0) ? static_cast<int>(items.size()) - 1 : highlighted - 1;
+        if (byte == 0) {
+            moveUp();
             renderOverlay();
             continue;
         }
-        if (byte == 1) { /* Down */
-            highlighted = (highlighted + 1) % static_cast<int>(items.size());
+        if (byte == 1) {
+            moveDown();
             renderOverlay();
             continue;
         }
@@ -329,12 +392,11 @@ int QTuiMenu::exec()
             char seq[2] = {};
             if (readByte(&seq[0], 50) && seq[0] == '[') {
                 if (readByte(&seq[1], 50)) {
-                    if (seq[1] == 'A') { /* Up */
-                        highlighted = (highlighted <= 0) ? static_cast<int>(items.size()) - 1
-                                                         : highlighted - 1;
+                    if (seq[1] == 'A') {
+                        moveUp();
                         renderOverlay();
-                    } else if (seq[1] == 'B') { /* Down */
-                        highlighted = (highlighted + 1) % static_cast<int>(items.size());
+                    } else if (seq[1] == 'B') {
+                        moveDown();
                         renderOverlay();
                     }
                     /* SGR mouse: ESC [ < params M/m */
@@ -352,26 +414,21 @@ int QTuiMenu::exec()
                         if (parts.size() == 3 && mch == 'M') {
                             int btnFlags = parts[0].toInt();
                             int mouseRow = parts[2].toInt(); /* 1-based */
-                            /* Left-click press on an item row → select */
                             if ((btnFlags & 3) == 0 && !(btnFlags & 64)) {
-                                int visibleRow  = mouseRow - startY - 1; /* 0-based */
-                                int clickedItem = scrollOffset + visibleRow;
-                                if (visibleRow >= 0 && visibleRow < visibleCount && clickedItem >= 0
-                                    && clickedItem < itemsTotal) {
-                                    result = clickedItem;
-                                    done   = true;
+                                int visibleRow = mouseRow - startY - 1;
+                                int visIdx     = scrollOffset + visibleRow;
+                                if (visibleRow >= 0 && visibleRow < visibleCount && visIdx >= 0
+                                    && visIdx < filteredIndices.size()) {
+                                    highlighted = visIdx;
+                                    acceptCurrent();
                                 }
                             }
-                            /* Scroll wheel */
                             if (btnFlags & 64) {
                                 int dir = btnFlags & 1;
-                                if (dir == 0) { /* up */
-                                    highlighted = (highlighted <= 0)
-                                                      ? static_cast<int>(items.size()) - 1
-                                                      : highlighted - 1;
-                                } else { /* down */
-                                    highlighted = (highlighted + 1)
-                                                  % static_cast<int>(items.size());
+                                if (dir == 0) {
+                                    moveUp();
+                                } else {
+                                    moveDown();
                                 }
                                 renderOverlay();
                             }
@@ -379,18 +436,50 @@ int QTuiMenu::exec()
                     }
                 }
             } else {
-                done = true; /* Bare ESC = cancel */
+                /* Bare ESC: clear query first when searching, else cancel. */
+                if (searchable && !searchQuery.isEmpty()) {
+                    searchQuery.clear();
+                    rebuildFilter();
+                    highlighted  = 0;
+                    scrollOffset = 0;
+                    renderOverlay();
+                } else {
+                    done = true;
+                }
             }
         } else if (byte == 0x0D || byte == 0x0A) {
-            result = highlighted;
-            done   = true;
-        } else if (byte >= '1' && byte <= '9') {
+            acceptCurrent();
+        } else if (searchable && (byte == 0x7F || byte == 0x08)) {
+            if (!searchQuery.isEmpty()) {
+                searchQuery.chop(1);
+                rebuildFilter();
+                highlighted  = 0;
+                scrollOffset = 0;
+                renderOverlay();
+            }
+        } else if (searchable && byte == 0x15) {
+            if (!searchQuery.isEmpty()) {
+                searchQuery.clear();
+                rebuildFilter();
+                highlighted  = 0;
+                scrollOffset = 0;
+                renderOverlay();
+            }
+        } else if (searchable && byte >= 0x20 && byte < 0x7F) {
+            searchQuery.append(QLatin1Char(byte));
+            rebuildFilter();
+            highlighted  = 0;
+            scrollOffset = 0;
+            renderOverlay();
+        } else if (!searchable && byte >= '1' && byte <= '9') {
             int idx = byte - '1';
-            if (idx < items.size()) {
-                result = idx;
+            if (idx < filteredIndices.size()) {
+                result = filteredIndices[idx];
             }
             done = true;
-        } else if (byte == 'q' || byte == 0x03) {
+        } else if (byte == 0x03) {
+            done = true;
+        } else if (!searchable && byte == 'q') {
             done = true;
         }
     }
