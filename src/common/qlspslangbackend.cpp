@@ -129,8 +129,8 @@ public:
         for (auto expIt = diag.expansionLocs.rbegin(); expIt != diag.expansionLocs.rend(); ++expIt) {
             slang::SourceLocation expLoc    = *expIt;
             std::string_view      macroName = srcMgr.getMacroName(expLoc);
-            QString               expMsg = macroName.empty() ? QStringLiteral("expanded from here")
-                                                             : QString("expanded from macro '%1'")
+            QString expMsg = macroName.empty() ? QStringLiteral("expanded from here")
+                                               : QString("expanded from macro '%1'")
                                                      .arg(
                                                          QString::fromUtf8(
                                                              macroName.data(),

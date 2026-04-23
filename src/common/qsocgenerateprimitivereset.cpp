@@ -1108,8 +1108,8 @@ QString QSocResetPrimitive::typstSourceTable(
     for (int i = 0; i < numSources; i += 2) {
         const ResetSource &src1    = sources[i];
         QString            active1 = (src1.active == QStringLiteral("high")) ? "H" : "L";
-        QString srcColor1          = (src1.active == QStringLiteral("high")) ? QStringLiteral("red")
-                                                                             : QStringLiteral("blue");
+        QString srcColor1 = (src1.active == QStringLiteral("high")) ? QStringLiteral("red")
+                                                                    : QStringLiteral("blue");
 
         s << "  [#text(fill: " << srcColor1 << ")[" << src1.name << "]], ";
         s << "[#text(fill: " << srcColor1 << ")[" << active1 << "]], ";

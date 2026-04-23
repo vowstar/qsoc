@@ -658,7 +658,7 @@ bool QSocGenerateManager::renderTemplate(
         /* Create output file */
         const QString outputPath = projectManager->getOutputPath() + QDir::separator()
                                    + outputFileName;
-        QFile outputFile(outputPath);
+        QFile         outputFile(outputPath);
         if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QSocConsole::error() << QCoreApplication::translate(
                                         "generate", "Could not create output file \"%1\"")

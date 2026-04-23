@@ -634,7 +634,7 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
         const qreal thisInLabel  = inLabelPxForLayer(layerKey);
         const qreal subColStride = widthPerCol + (2.0 * stubLength) + thisOutLabel + thisInLabel
                                    + horizPadding;
-        const qreal rowHeight = layerMaxModuleH.value(layerKey) + vertPadding;
+        const qreal rowHeight    = layerMaxModuleH.value(layerKey) + vertPadding;
         for (const QString &inst : byLayer.value(layerKey)) {
             const Prepared *pre = byInstance.value(inst, nullptr);
             if (!pre) {
@@ -950,7 +950,7 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
              * horizontal segment sits clearly above the bodies. */
             const qreal topY = std::min(rightModule->pos().y(), leftModule->pos().y())
                                - detourMargin;
-            plan.detourY = topY;
+            plan.detourY     = topY;
         }
 
         realWireNets.insert(netIt.key(), plan);

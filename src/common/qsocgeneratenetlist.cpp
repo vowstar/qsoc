@@ -47,15 +47,15 @@ bool QSocGenerateManager::loadNetlist(const QString &netlistFilePath)
         }
 
         // Allow empty or missing instance section if comb, seq, or fsm section exists
-        bool hasInstances = netlistData["instance"] && netlistData["instance"].IsMap()
-                            && netlistData["instance"].size() > 0;
+        bool hasInstances  = netlistData["instance"] && netlistData["instance"].IsMap()
+                             && netlistData["instance"].size() > 0;
         bool hasCombSeqFsm = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"];
         bool hasReset      = netlistData["reset"] && netlistData["reset"].IsSequence()
-                        && netlistData["reset"].size() > 0;
-        bool hasClock = netlistData["clock"] && netlistData["clock"].IsSequence()
-                        && netlistData["clock"].size() > 0;
-        bool hasPower = netlistData["power"] && netlistData["power"].IsSequence()
-                        && netlistData["power"].size() > 0;
+                             && netlistData["reset"].size() > 0;
+        bool hasClock      = netlistData["clock"] && netlistData["clock"].IsSequence()
+                             && netlistData["clock"].size() > 0;
+        bool hasPower      = netlistData["power"] && netlistData["power"].IsSequence()
+                             && netlistData["power"].size() > 0;
 
         if (!hasInstances && !hasCombSeqFsm && !hasReset && !hasClock && !hasPower) {
             QSocConsole::error() << "Invalid netlist format, no 'instance' section and no 'comb', "
@@ -448,7 +448,7 @@ bool QSocGenerateManager::processNetlist()
                                     mappedPortName = moduleData["bus"][conn.portName.substr(4)]
                                                                ["mapping"][signalName]
                                                                    .as<std::string>();
-                                    mappingFound = true;
+                                    mappingFound   = true;
                                 }
                                 /* Try with prefixed port name (with pad_ prefix) */
                                 else if (
@@ -463,7 +463,7 @@ bool QSocGenerateManager::processNetlist()
                                     mappedPortName = moduleData["bus"]["pad_" + conn.portName]
                                                                ["mapping"][signalName]
                                                                    .as<std::string>();
-                                    mappingFound = true;
+                                    mappingFound   = true;
                                 }
 
                                 if (!mappingFound || mappedPortName.empty()) {
