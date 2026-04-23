@@ -209,6 +209,7 @@ bool handleModelCommand(
         QTuiMenu menu;
         menu.setTitle("Model Selection");
         menu.setItems(items);
+        menu.setSearchable(true);
 
         int currentIdx = models.indexOf(current);
         if (currentIdx >= 0) {
@@ -1634,6 +1635,7 @@ bool QSocCliWorker::runAgentLoop(
                 QTuiMenu menu;
                 menu.setTitle("Resume session");
                 menu.setItems(items);
+                menu.setSearchable(true);
                 menu.setHighlight(0);
                 const int selected = menu.exec();
                 compositor.invalidate();
@@ -2193,6 +2195,7 @@ bool QSocCliWorker::runAgentLoop(
                 QTuiMenu menu;
                 menu.setTitle("Rewind to earlier message");
                 menu.setItems(items);
+                menu.setSearchable(true);
                 menu.setHighlight(static_cast<int>(items.size()) - 1);
                 const int selected = menu.exec();
                 inputMonitor.resetEscState();
@@ -2827,6 +2830,7 @@ bool QSocCliWorker::runAgentLoop(
             QTuiMenu turnMenu;
             turnMenu.setTitle("Diff: pick a turn");
             turnMenu.setItems(turnItems);
+            turnMenu.setSearchable(true);
             turnMenu.setHighlight(static_cast<int>(turnItems.size()) - 1);
             const int turnSel = turnMenu.exec();
             inputMonitor.resetEscState();
@@ -2917,6 +2921,7 @@ bool QSocCliWorker::runAgentLoop(
             QTuiMenu fileMenu;
             fileMenu.setTitle(QString("Diff: turn #%1 files").arg(chosenTurn.turn));
             fileMenu.setItems(fileItems);
+            fileMenu.setSearchable(true);
             fileMenu.setHighlight(0);
             const int fileSel = fileMenu.exec();
             inputMonitor.resetEscState();
@@ -3314,6 +3319,7 @@ bool QSocCliWorker::runAgentLoop(
                 QTuiMenu menu;
                 menu.setTitle(QStringLiteral("Remote target"));
                 menu.setItems(items);
+                menu.setSearchable(true);
                 const int selected = menu.exec();
                 inputMonitor.resetEscState();
                 compositor.invalidate();
@@ -3610,6 +3616,7 @@ bool QSocCliWorker::runAgentLoop(
                 QTuiMenu menu;
                 menu.setTitle(title);
                 menu.setItems(items);
+                menu.setSearchable(true);
                 const int selected = menu.exec();
                 inputMonitor.resetEscState();
                 compositor.invalidate();
