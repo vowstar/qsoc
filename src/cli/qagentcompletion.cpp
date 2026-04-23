@@ -3,6 +3,9 @@
 
 #include "cli/qagentcompletion.h"
 
+#include "agent/remote/qsocsshexec.h"
+#include "agent/remote/qsocsshsession.h"
+
 #include <algorithm>
 #include <QDir>
 #include <QDirIterator>
@@ -90,6 +93,80 @@ void QAgentCompletionEngine::scan(const QString &projectPath)
     cacheTimer.restart();
 }
 
+void QAgentCompletionEngine::scanRemote(QSocSshSession *session, const QString &remoteRoot)
+{
+    cachedFiles.clear();
+    cachedProjectPath = QStringLiteral("remote:") + remoteRoot;
+    if (session == nullptr || remoteRoot.isEmpty()) {
+        cacheValid = false;
+        return;
+    }
+
+    auto shellEscape = [](const QString &value) {
+        QString out = QStringLiteral("'");
+        for (const QChar chr : value) {
+            if (chr == QLatin1Char('\'')) {
+                out += QStringLiteral("'\\''");
+            } else {
+                out += chr;
+            }
+        }
+        out += QLatin1Char('\'');
+        return out;
+    };
+
+    QString pruneExpr;
+    for (const QString &dir : ignoreDirs) {
+        if (!pruneExpr.isEmpty()) {
+            pruneExpr += QStringLiteral(" -o ");
+        }
+        pruneExpr += QStringLiteral("-name ") + shellEscape(dir);
+    }
+    if (pruneExpr.isEmpty()) {
+        pruneExpr = QStringLiteral("-false");
+    }
+
+    const QString cmd = QStringLiteral(
+                            "find %1 -type d \\( %2 \\) -prune -o -type f -print 2>/dev/null "
+                            "| head -n %3")
+                            .arg(shellEscape(remoteRoot))
+                            .arg(pruneExpr)
+                            .arg(DEFAULT_SCAN_LIMIT);
+
+    QSocSshExec         exec(*session);
+    QSocSshExec::Result res = exec.run(cmd, 15000);
+    if (res.stdoutBytes.isEmpty()) {
+        cacheValid = false;
+        return;
+    }
+
+    QString prefix = remoteRoot;
+    if (!prefix.endsWith(QLatin1Char('/'))) {
+        prefix += QLatin1Char('/');
+    }
+
+    const QList<QByteArray> lines = res.stdoutBytes.split('\n');
+    cachedFiles.reserve(lines.size());
+    for (const QByteArray &line : lines) {
+        if (line.isEmpty()) {
+            continue;
+        }
+        QString path = QString::fromUtf8(line);
+        if (path.startsWith(prefix)) {
+            path = path.mid(prefix.size());
+        } else if (path == remoteRoot) {
+            continue;
+        }
+        if (!path.isEmpty()) {
+            cachedFiles.append(path);
+        }
+    }
+
+    std::sort(cachedFiles.begin(), cachedFiles.end());
+    cacheValid = true;
+    cacheTimer.restart();
+}
+
 int QAgentCompletionEngine::fuzzyScore(const QString &path, const QString &query)
 {
     if (query.isEmpty()) {
@@ -139,7 +216,21 @@ QStringList QAgentCompletionEngine::complete(
     if (shouldRescan(projectPath)) {
         scan(projectPath);
     }
+    return rank(query, maxResults);
+}
 
+QStringList QAgentCompletionEngine::completeRemote(
+    QSocSshSession *session, const QString &remoteRoot, const QString &query, int maxResults)
+{
+    const QString key = QStringLiteral("remote:") + remoteRoot;
+    if (shouldRescan(key)) {
+        scanRemote(session, remoteRoot);
+    }
+    return rank(query, maxResults);
+}
+
+QStringList QAgentCompletionEngine::rank(const QString &query, int maxResults) const
+{
     QList<QPair<int, QString>> scored;
     scored.reserve(cachedFiles.size());
     for (const QString &path : cachedFiles) {
