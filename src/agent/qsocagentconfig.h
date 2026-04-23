@@ -17,13 +17,15 @@ struct QSocAgentConfig
     /* Maximum context tokens before compression */
     int maxContextTokens = 128000;
 
-    /* Layer 1: Tool output pruning */
-    double pruneThreshold      = 0.6;   /* 60% triggers pruning */
+    /* Layer 1: Tool output pruning. Threshold sits well below the model
+     * window so the weighted token estimator's ~20% error margin still
+     * leaves comfortable headroom before the model rejects the request. */
+    double pruneThreshold      = 0.4;   /* 40% triggers pruning */
     int    pruneProtectTokens  = 40000; /* Protect recent 40k tokens of tool output */
     int    pruneMinimumSavings = 20000; /* Minimum savings to justify pruning */
 
     /* Layer 2: LLM compaction */
-    double  compactThreshold = 0.8; /* 80% triggers LLM summary */
+    double  compactThreshold = 0.6; /* 60% triggers LLM summary */
     QString compactionModel;        /* Empty = use primary model */
 
     /* Number of recent messages to keep during compression */
