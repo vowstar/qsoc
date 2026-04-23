@@ -104,10 +104,20 @@ void QSocSshSession::clearConnection()
         libssh2_session_free(m_session);
         m_session = nullptr;
     }
-    if (m_socket >= 0) {
-        ::close(m_socket);
-        m_socket = -1;
+    if (m_parentChannel != nullptr) {
+        /* Free the direct-tcpip channel on the parent session. The parent
+         * owns its own socket and stays alive until the caller destroys
+         * it; we only release the hop we opened. */
+        libssh2_channel_free(m_parentChannel);
+        m_parentChannel = nullptr;
     }
+    /* Only close the socket when it is ours. Tunneled sessions borrow the
+     * parent's fd for polling and must not close it. */
+    if (m_parent == nullptr && m_socket >= 0) {
+        ::close(m_socket);
+    }
+    m_socket = -1;
+    m_parent = nullptr;
 }
 
 QSocSshSession::ConnectStatus QSocSshSession::openSocket(
@@ -460,4 +470,158 @@ QSocSshSession::ConnectStatus QSocSshSession::connectTo(
 void QSocSshSession::disconnectFromHost()
 {
     clearConnection();
+}
+
+QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
+    const QSocSshHostConfig &host, QSocSshSession *parent, QString *errorMessage)
+{
+    if (isConnected()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Session is already connected");
+        }
+        return ConnectStatus::AlreadyConnected;
+    }
+    if (parent == nullptr || !parent->isConnected()) {
+        const QString msg = QStringLiteral("Parent ProxyJump session is not connected");
+        setError(msg);
+        if (errorMessage != nullptr) {
+            *errorMessage = msg;
+        }
+        return ConnectStatus::NetworkError;
+    }
+
+    m_parent = parent;
+    /* Borrow the parent's socket for waitSocket polling; we never close it. */
+    m_socket = parent->socketFd();
+
+    const QByteArray hostBytes = host.hostname.toUtf8();
+    LIBSSH2_CHANNEL *channel   = nullptr;
+    LIBSSH2_SESSION *parentSes = parent->rawSession();
+    while ((channel = libssh2_channel_direct_tcpip_ex(
+                parentSes, hostBytes.constData(), host.port, "127.0.0.1", 0))
+           == nullptr) {
+        const int err = libssh2_session_last_errno(parentSes);
+        if (err != LIBSSH2_ERROR_EAGAIN) {
+            const QString msg = QStringLiteral("Failed to open ProxyJump channel to %1:%2: %3")
+                                    .arg(host.hostname)
+                                    .arg(host.port)
+                                    .arg(libssh2ErrorString(parentSes));
+            setError(msg);
+            if (errorMessage != nullptr) {
+                *errorMessage = msg;
+            }
+            m_parent = nullptr;
+            m_socket = -1;
+            return ConnectStatus::NetworkError;
+        }
+        if (waitSocket(parent->socketFd(), parentSes, m_timeoutMs) <= 0) {
+            const QString msg = QStringLiteral("Timed out opening ProxyJump channel");
+            setError(msg);
+            if (errorMessage != nullptr) {
+                *errorMessage = msg;
+            }
+            m_parent = nullptr;
+            m_socket = -1;
+            return ConnectStatus::Timeout;
+        }
+    }
+    m_parentChannel = channel;
+
+    /* Build the child session and wire the send/recv callbacks before the
+     * handshake so every byte flows through the jump channel. */
+    m_session = libssh2_session_init();
+    if (m_session == nullptr) {
+        const QString msg = QStringLiteral("libssh2 session init failed");
+        setError(msg);
+        if (errorMessage != nullptr) {
+            *errorMessage = msg;
+        }
+        clearConnection();
+        return ConnectStatus::HandshakeFailed;
+    }
+    libssh2_session_set_blocking(m_session, 0);
+    libssh2_session_callback_set2(
+        m_session,
+        LIBSSH2_CALLBACK_SEND,
+        reinterpret_cast<libssh2_cb_generic *>(&QSocSshSession::sendOverChannel));
+    libssh2_session_callback_set2(
+        m_session,
+        LIBSSH2_CALLBACK_RECV,
+        reinterpret_cast<libssh2_cb_generic *>(&QSocSshSession::recvOverChannel));
+    *libssh2_session_abstract(m_session) = this;
+
+    int rc = 0;
+    while ((rc = libssh2_session_handshake(m_session, m_socket)) == LIBSSH2_ERROR_EAGAIN) {
+        if (waitSocket(m_socket, m_session, m_timeoutMs) <= 0) {
+            const QString msg = QStringLiteral("SSH handshake over ProxyJump timed out");
+            setError(msg);
+            if (errorMessage != nullptr) {
+                *errorMessage = msg;
+            }
+            clearConnection();
+            return ConnectStatus::Timeout;
+        }
+    }
+    if (rc != 0) {
+        const QString msg = QStringLiteral("SSH handshake over ProxyJump failed: %1")
+                                .arg(libssh2ErrorString(m_session));
+        setError(msg);
+        if (errorMessage != nullptr) {
+            *errorMessage = msg;
+        }
+        clearConnection();
+        return ConnectStatus::HandshakeFailed;
+    }
+
+    auto status = verifyHostKey(host, errorMessage);
+    if (status != ConnectStatus::Ok) {
+        clearConnection();
+        return status;
+    }
+    status = authenticate(host, errorMessage);
+    if (status != ConnectStatus::Ok) {
+        clearConnection();
+        return status;
+    }
+    return ConnectStatus::Ok;
+}
+
+long long QSocSshSession::sendOverChannel(
+    int sockFd, const void *buf, size_t len, int flags, void **abstract)
+{
+    (void) sockFd;
+    (void) flags;
+    auto *self = static_cast<QSocSshSession *>(*abstract);
+    if (self == nullptr || self->m_parentChannel == nullptr) {
+        return -1;
+    }
+    const ssize_t n
+        = libssh2_channel_write_ex(self->m_parentChannel, 0, static_cast<const char *>(buf), len);
+    if (n == LIBSSH2_ERROR_EAGAIN) {
+        return -EAGAIN;
+    }
+    if (n < 0) {
+        return -1;
+    }
+    return n;
+}
+
+long long QSocSshSession::recvOverChannel(
+    int sockFd, void *buf, size_t len, int flags, void **abstract)
+{
+    (void) sockFd;
+    (void) flags;
+    auto *self = static_cast<QSocSshSession *>(*abstract);
+    if (self == nullptr || self->m_parentChannel == nullptr) {
+        return -1;
+    }
+    const ssize_t n
+        = libssh2_channel_read_ex(self->m_parentChannel, 0, static_cast<char *>(buf), len);
+    if (n == LIBSSH2_ERROR_EAGAIN) {
+        return -EAGAIN;
+    }
+    if (n < 0) {
+        return -1;
+    }
+    return n;
 }

@@ -49,6 +49,17 @@ public:
      */
     ConnectStatus connectTo(const QSocSshHostConfig &host, QString *errorMessage = nullptr);
 
+    /**
+     * @brief Connect through a parent session's direct-tcpip channel.
+     * @details Implements one hop of ProxyJump: opens a direct-tcpip channel
+     *          from @p parent to @p host, then runs the SSH handshake over
+     *          that channel via libssh2 send/recv callbacks. @p parent must
+     *          outlive this session because its TCP socket is the real
+     *          transport underneath. Nest calls to chain multiple hops.
+     */
+    ConnectStatus connectToVia(
+        const QSocSshHostConfig &host, QSocSshSession *parent, QString *errorMessage = nullptr);
+
     /** @brief Tear down the session and close the underlying socket. */
     void disconnectFromHost();
 
@@ -85,9 +96,18 @@ private:
     void clearConnection();
     void setError(const QString &msg);
 
-    LIBSSH2_SESSION *m_session   = nullptr;
-    int              m_socket    = -1;
-    int              m_timeoutMs = 30000;
+    /* libssh2 transport callbacks for ProxyJump tunneling. When a parent
+     * channel is set, the child session's bytes ride on top of it instead
+     * of the TCP socket. */
+    static long long sendOverChannel(
+        int sockFd, const void *buf, size_t len, int flags, void **abstract);
+    static long long recvOverChannel(int sockFd, void *buf, size_t len, int flags, void **abstract);
+
+    LIBSSH2_SESSION *m_session       = nullptr;
+    int              m_socket        = -1;
+    int              m_timeoutMs     = 30000;
+    QSocSshSession  *m_parent        = nullptr; /* non-owning */
+    LIBSSH2_CHANNEL *m_parentChannel = nullptr;
     QString          m_lastError;
 };
 
