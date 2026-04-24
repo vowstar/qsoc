@@ -24,7 +24,7 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
         if (!modelId.isEmpty()) {
             line += " [" + modelId + "]";
         }
-        screen.putString(0, startY, line.left(width), false, true); /* dim */
+        screen.putString(0, startY, QTuiText::truncate(line, width), false, true); /* dim */
         return;
     }
 
@@ -71,7 +71,7 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     }
     line += warning;
 
-    screen.putString(0, startY, line.left(width));
+    screen.putString(0, startY, QTuiText::truncate(line, width));
 }
 
 void QTuiStatusBar::setStatus(const QString &status)
