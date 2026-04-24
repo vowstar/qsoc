@@ -91,11 +91,11 @@ private:
     /* Terminal management */
     void enterAltScreen();
     void exitAltScreen();
-    int  getTerminalWidth() const;
-    int  getTerminalHeight() const;
 
     /* Scroll control (called from external mouse/key events) */
 public:
+    int  getTerminalWidth() const;
+    int  getTerminalHeight() const;
     void scrollContentUp(int lines = 3);
     void scrollContentDown(int lines = 3);
 

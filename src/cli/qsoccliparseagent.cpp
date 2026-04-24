@@ -1032,6 +1032,17 @@ bool QSocCliWorker::runAgentLoop(
         }
     });
 
+    connect(&inputMonitor, &QAgentInputMonitor::pageKey, [&compositor](int direction) {
+        /* Half-screen steps so the last line of the previous view stays
+         * visible as an anchor between pages. */
+        const int step = qMax(1, compositor.getTerminalHeight() / 2);
+        if (direction == 0) {
+            compositor.scrollContentUp(step);
+        } else {
+            compositor.scrollContentDown(step);
+        }
+    });
+
     /* Mouse click-drag text selection: press starts, drag updates, release
      * copies to clipboard via OSC 52 and clears the highlight. SGR coords
      * are 1-based; screen buffer is 0-based. */
@@ -3032,6 +3043,7 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent("  Ctrl+R      - Reverse-i-search through prompt history\n");
             compositor.printContent("  Ctrl+T      - Toggle TODO list visibility\n");
             compositor.printContent("  Ctrl+L      - Force a full screen repaint\n");
+            compositor.printContent("  PgUp/PgDn   - Scroll scrollback by half a screen\n");
             compositor.printContent("  Ctrl+_      - Undo the last edit\n");
             compositor.printContent("  Mouse drag  - Select + auto-copy to clipboard (OSC 52)\n");
             compositor.printContent("  Shift+drag  - Native terminal selection (fallback)\n");

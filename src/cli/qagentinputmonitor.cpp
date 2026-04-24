@@ -393,6 +393,21 @@ void QAgentInputMonitor::processEscSequence()
                 resetEscBuffer();
                 return;
             }
+            /* ESC [ 5 ~ = PageUp, ESC [ 6 ~ = PageDown. REPL binds these
+             * to the scrollback viewport so long output (/help, diffs,
+             * context dumps) is reachable without mouse wheel. */
+            if (escBuffer == QByteArray("\033[5~")) {
+                emit pageKey(0);
+                cancelDoubleEscArming();
+                resetEscBuffer();
+                return;
+            }
+            if (escBuffer == QByteArray("\033[6~")) {
+                emit pageKey(1);
+                cancelDoubleEscArming();
+                resetEscBuffer();
+                return;
+            }
             /* ESC [ 4 ~ = End */
             if (escBuffer == QByteArray("\033[4~")) {
                 int oldPos = cursorPos;

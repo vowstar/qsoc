@@ -81,6 +81,15 @@ signals:
     void arrowKey(int key); /* 'A'=up, 'B'=down, 'C'=right, 'D'=left */
 
     /**
+     * @brief Emitted when PageUp / PageDown is pressed. REPL uses this to
+     *        scroll the scrollback buffer from the keyboard so users on
+     *        terminals without mouse wheel support (or with mouse capture
+     *        disabled) can still page through long output like /help.
+     * @param direction 0 for PageUp (scroll content up), 1 for PageDown.
+     */
+    void pageKey(int direction);
+
+    /**
      * @brief Emitted when Enter or Tab is pressed while submit is blocked
      *        (e.g. completion popup is open). REPL can use this to confirm
      *        the popup selection without the input buffer being wiped.
