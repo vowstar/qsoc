@@ -1856,6 +1856,20 @@ bool QSocCliWorker::runAgentLoop(
                    && current[end] != QLatin1Char('\n')) {
                 end++;
             }
+            const QString typedWord = current.mid(1, end - 1);
+            /* Shortcut: if the user already typed the full command word,
+             * auto-completing just appends a trailing space and forces a
+             * second Enter. Close the popup and submit the buffer now so
+             * argument-less commands like /status fire on the first Enter. */
+            if (typedWord == picked && end == current.size()) {
+                popupWidget.setVisible(false);
+                popupKind  = PopupKind::None;
+                popupAtPos = -1;
+                inputMonitor.setSubmitBlocked(false);
+                compositor.invalidate();
+                inputMonitor.submitNow();
+                return;
+            }
             QString before  = current.left(0); /* buffer up to '/' == "" */
             QString after   = current.mid(end);
             QString rebuilt = QLatin1Char('/') + picked + QLatin1Char(' ') + after;
@@ -2074,8 +2088,16 @@ bool QSocCliWorker::runAgentLoop(
                     return;
                 }
                 /* If popup is open, Esc closes the popup and remembers this
-                 * input so it doesn't auto-reopen until the user types more. */
+                 * input so it doesn't auto-reopen until the user types more.
+                 * For AtFile, also drop the '@query' so the next '/cmd' is
+                 * not swallowed as part of a chat message. */
                 if (popupWidget.isVisible()) {
+                    if (popupKind == PopupKind::AtFile && popupAtPos >= 0) {
+                        const QString current = inputWidget.getText();
+                        if (popupAtPos <= current.size()) {
+                            inputMonitor.setInputBuffer(current.left(popupAtPos));
+                        }
+                    }
                     dismissedFor = inputWidget.getText();
                     popupWidget.setVisible(false);
                     popupKind  = PopupKind::None;
@@ -3309,7 +3331,7 @@ bool QSocCliWorker::runAgentLoop(
                     QSocSshConfigParser parser;
                     parser.parse(sshConfigPath);
                     for (const QString &alias : parser.listMenuHosts()) {
-                        addItem(alias, QStringLiteral(".ssh/config"), alias);
+                        addItem(alias, QString(), alias);
                     }
                 }
                 addItem(QStringLiteral("(type /ssh [user@]host[:port])"), QString(), QString());

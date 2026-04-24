@@ -183,6 +183,19 @@ void QAgentInputMonitor::setSubmitBlocked(bool blocked)
     submitBlocked = blocked;
 }
 
+void QAgentInputMonitor::submitNow()
+{
+    if (inputBuffer.isEmpty()) {
+        return;
+    }
+    QString text = inputBuffer;
+    inputBuffer.clear();
+    cursorPos = 0;
+    clearUndoStack();
+    emit inputChanged(inputBuffer);
+    emit inputReady(text);
+}
+
 void QAgentInputMonitor::insertText(const QString &text)
 {
     if (!text.isEmpty()) {
@@ -610,14 +623,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                 continue;
             }
             /* Normal submit */
-            if (!inputBuffer.isEmpty()) {
-                QString text = inputBuffer;
-                inputBuffer.clear();
-                cursorPos = 0;
-                clearUndoStack();
-                emit inputChanged(inputBuffer);
-                emit inputReady(text);
-            }
+            submitNow();
             continue;
         }
 

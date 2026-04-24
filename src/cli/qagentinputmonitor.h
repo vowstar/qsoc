@@ -256,6 +256,14 @@ public:
     void setSubmitBlocked(bool blocked);
     bool isSubmitBlocked() const { return submitBlocked; }
 
+    /**
+     * @brief Submit the current buffer immediately as if Enter were pressed
+     *        with submit unblocked. Used by popup handlers when the already
+     *        typed text is a complete command and auto-completion would be
+     *        a no-op, so the REPL can avoid the "press Enter twice" gotcha.
+     */
+    void submitNow();
+
 private:
     void resetEscBuffer();
 };
