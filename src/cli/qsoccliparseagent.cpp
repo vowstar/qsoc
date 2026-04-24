@@ -987,7 +987,7 @@ bool QSocCliWorker::runAgentLoop(
     /* Set title and start full-screen TUI */
     {
         QString mid = llmService->getCurrentModelId();
-        compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+        compositor.setTitle("QSoC Agent · " + (mid.isEmpty() ? "default" : mid));
     }
     statusBarWidget.setStatus("Ready");
     statusBarWidget.setModel(llmService->getCurrentModelId());
@@ -3293,7 +3293,7 @@ bool QSocCliWorker::runAgentLoop(
                 QString mid = llmService->getCurrentModelId();
                 statusBarWidget.setModel(mid);
                 statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
-                compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+                compositor.setTitle("QSoC Agent · " + (mid.isEmpty() ? "default" : mid));
             }
             compositor.invalidate();
             compositor.render();
@@ -4385,7 +4385,7 @@ bool QSocCliWorker::runAgentLoop(
             statusBarWidget.startTimers();
             {
                 QString mid = llmService->getCurrentModelId();
-                compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+                compositor.setTitle("QSoC Agent · " + (mid.isEmpty() ? "default" : mid));
             }
             compositor.start();
             agent->runStream(input);
@@ -4846,7 +4846,7 @@ bool QSocCliWorker::runAgentLoop(
             statusBarWidget.startTimers();
             {
                 QString mid = llmService->getCurrentModelId();
-                compositor.setTitle("QSoC Agent -- " + (mid.isEmpty() ? "default" : mid));
+                compositor.setTitle("QSoC Agent · " + (mid.isEmpty() ? "default" : mid));
             }
             compositor.start();
             agent->runStream(input);
