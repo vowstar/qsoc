@@ -117,10 +117,25 @@ QString QSocToolFileRead::execute(const json &arguments)
         lineNum++;
     }
 
+    /* Count remaining lines so the caller can tell silent truncation
+     * from a clean end-of-file. The agent uses this marker to decide
+     * whether a follow-up read with a larger offset is warranted. */
+    int truncatedLines = 0;
+    while (!in.atEnd()) {
+        in.readLine();
+        truncatedLines++;
+    }
+
     file.close();
 
     if (result.isEmpty()) {
         return QString("File is empty or offset beyond file length: %1").arg(filePath);
+    }
+
+    if (truncatedLines > 0) {
+        result += QString("[truncated: %1 more line(s) omitted; rerun with offset=%2 to continue]\n")
+                      .arg(truncatedLines)
+                      .arg(offset + linesRead);
     }
 
     return result;
