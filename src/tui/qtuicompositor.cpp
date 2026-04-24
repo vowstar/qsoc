@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "tui/qtuicompositor.h"
+#include "tui/qtuiwidget.h"
 
 #include <cstdio>
 
@@ -295,7 +296,7 @@ void QTuiCompositor::renderTitle()
 
     /* Title text */
     QString titleText = " " + title;
-    screen.putString(0, 0, titleText.left(width), true, false, true);
+    screen.putString(0, 0, QTuiText::truncate(titleText, width), true, false, true);
 }
 
 void QTuiCompositor::renderContent()

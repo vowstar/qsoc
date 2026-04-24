@@ -75,7 +75,7 @@ void QTuiInputLine::render(QTuiScreen &screen, int startY, int width)
             screen.putString(
                 2,
                 startY,
-                hint.left(available),
+                QTuiText::truncate(hint, available),
                 /*bold=*/false,
                 /*dim=*/true);
         }
