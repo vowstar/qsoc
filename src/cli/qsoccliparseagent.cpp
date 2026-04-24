@@ -753,12 +753,16 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     auto *lspTool = new QSocToolLsp(this);
     toolRegistry->registerTool(lspTool);
 
-    /* Sync context budget and effort from model registry */
+    /* Sync context budget and effort from model registry. The CLI flag
+     * takes precedence: when --max-tokens is explicitly set we keep it,
+     * otherwise the registry value wins so each model gets its native
+     * window. */
+    const bool userSetMaxTokens = parser.isSet("max-tokens");
     {
         QString modelId = llmService->getCurrentModelId();
         if (!modelId.isEmpty()) {
             LLMModelConfig modelCfg = llmService->getModelConfig(modelId);
-            if (modelCfg.contextTokens > 0) {
+            if (modelCfg.contextTokens > 0 && !userSetMaxTokens) {
                 config.maxContextTokens = modelCfg.contextTokens;
             }
             if (!modelCfg.effort.isEmpty()) {
