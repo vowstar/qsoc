@@ -170,6 +170,19 @@ private slots:
         delete agent;
     }
 
+    /* Returns true if any compacting() emission carried the given layer
+     * (1=prune, 2=LLM compact). Used to assert which layers fired
+     * regardless of how much each layer saved. */
+    static bool layerFired(const QSignalSpy &spy, int layer)
+    {
+        for (const auto &call : spy) {
+            if (!call.isEmpty() && call.at(0).toInt() == layer) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void testPruneProtectsRecent()
     {
         QSocAgentConfig config;
@@ -178,15 +191,17 @@ private slots:
         config.pruneProtectTokens  = 100000; /* Protect all */
         config.pruneMinimumSavings = 100;
         config.compactThreshold    = 0.99;
-        config.keepRecentMessages  = 100; /* Prevent L2 from firing */
+        config.keepRecentMessages  = 100;
 
         auto *agent = createAgent(config);
         populateWithToolMessages(agent, 10, 2000);
 
-        int saved = agent->compact();
+        QSignalSpy spy(agent, &QSocAgent::compacting);
+        agent->compact();
 
-        /* With high protection, nothing should be pruned (savings < minimum) */
-        QCOMPARE(saved, 0);
+        /* With high protection, L1 must not have fired. L2 is allowed
+         * to compact under force regardless of message count. */
+        QVERIFY(!layerFired(spy, 1));
 
         delete agent;
     }
@@ -199,15 +214,16 @@ private slots:
         config.pruneProtectTokens  = 1000;
         config.pruneMinimumSavings = 999999; /* Unreachably high */
         config.compactThreshold    = 0.99;
-        config.keepRecentMessages  = 100; /* Prevent L2 from firing */
+        config.keepRecentMessages  = 100;
 
         auto *agent = createAgent(config);
         populateWithToolMessages(agent, 5, 500);
 
-        int saved = agent->compact();
+        QSignalSpy spy(agent, &QSocAgent::compacting);
+        agent->compact();
 
-        /* Minimum savings too high, nothing saved */
-        QCOMPARE(saved, 0);
+        /* Minimum savings unreachable so L1 is suppressed. */
+        QVERIFY(!layerFired(spy, 1));
 
         delete agent;
     }
