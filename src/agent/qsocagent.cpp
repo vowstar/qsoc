@@ -1129,15 +1129,21 @@ bool QSocAgent::compactWithLLM(bool force)
 
     int msgCount = static_cast<int>(messages.size());
 
-    if (msgCount <= agentConfig.keepRecentMessages) {
+    /* A handful of huge tool results can push tokens past the threshold
+     * with fewer than keepRecentMessages messages total. Shrink the keep
+     * window dynamically so something is always available to summarize,
+     * and only bail when there genuinely is not enough to split. */
+    const int minToSummarize = 3;
+    if (msgCount < minToSummarize + 1) {
         if (agentConfig.verbose) {
             emit verboseOutput(QString("[Layer 2: Cannot compact, only %1 messages]").arg(msgCount));
         }
         return false;
     }
+    const int effectiveKeep = qMin(agentConfig.keepRecentMessages, msgCount - minToSummarize);
 
     /* Determine boundary: keep recent messages */
-    int proposedBoundary = msgCount - agentConfig.keepRecentMessages;
+    int proposedBoundary = msgCount - effectiveKeep;
     int boundary         = findSafeBoundary(proposedBoundary);
 
     if (boundary <= 0) {
