@@ -2613,11 +2613,16 @@ bool QSocCliWorker::runAgentLoop(
                 std::sort(toolNames.begin(), toolNames.end());
                 for (const QString &name : toolNames) {
                     const ToolBucket &bucket = toolBuckets[name];
+                    /* Both columns are token totals — the historical
+                     * "calls" wording made the call-side bucket read
+                     * as an invocation count. Spell out "tokens" so
+                     * neither side is mistaken for a counter. */
                     compositor.printContent(
                         QStringLiteral("  ") + name.leftJustified(20)
-                            + fmtTokens(bucket.calls).rightJustified(6) + QStringLiteral(" calls + ")
+                            + fmtTokens(bucket.calls).rightJustified(6)
+                            + QStringLiteral(" call tokens + ")
                             + fmtTokens(bucket.results).rightJustified(6)
-                            + QStringLiteral(" results\n"),
+                            + QStringLiteral(" result tokens\n"),
                         QTuiScrollView::Dim);
                 }
             }
