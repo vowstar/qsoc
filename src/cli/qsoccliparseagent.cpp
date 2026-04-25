@@ -64,7 +64,12 @@
 #include <cstdlib>
 #include <fstream>
 #ifdef Q_OS_UNIX
+#include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <unistd.h>
+#endif
+#ifdef Q_OS_WIN
+#include <windows.h>
 #endif
 #include <yaml-cpp/yaml.h>
 
@@ -475,6 +480,125 @@ public:
 private:
     bool atLineStart = true;
 };
+
+/* Reduce a saved user prompt to a single readable line for picker labels.
+ * Collapses whitespace, replaces newlines with spaces, and substitutes a
+ * placeholder when the prompt is effectively empty. Slash/bash escapes
+ * never reach the message stream, but defensive fallback covers paste-only
+ * prompts and historic data. */
+QString cleanPromptForLabel(const QString &raw)
+{
+    QString text = raw;
+    text.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    text.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    text.replace(QLatin1Char('\t'), QLatin1Char(' '));
+    /* Collapse runs of spaces. */
+    QString collapsed;
+    collapsed.reserve(text.size());
+    bool prevSpace = true;
+    for (const QChar chr : text) {
+        if (chr == QLatin1Char(' ')) {
+            if (!prevSpace) {
+                collapsed.append(chr);
+                prevSpace = true;
+            }
+        } else {
+            collapsed.append(chr);
+            prevSpace = false;
+        }
+    }
+    while (collapsed.endsWith(QLatin1Char(' '))) {
+        collapsed.chop(1);
+    }
+    if (collapsed.isEmpty()) {
+        return QStringLiteral("(empty)");
+    }
+    return collapsed;
+}
+
+/* Cell-width-aware tail truncation with single-character ellipsis (U+2026,
+ * width 1). Drops one cell of budget for the ellipsis when truncation
+ * happens; never returns wider than maxCols cells. */
+QString truncateVisual(const QString &text, int maxCols)
+{
+    if (maxCols <= 0) {
+        return QString();
+    }
+    if (QTuiText::visualWidth(text) <= maxCols) {
+        return text;
+    }
+    const int budget = maxCols - 1; /* room for the ellipsis cell */
+    int       width  = 0;
+    int       idx    = 0;
+    const int len    = text.length();
+    while (idx < len) {
+        const QChar firstUnit = text.at(idx);
+        uint        codePoint = firstUnit.unicode();
+        int         charLen   = 1;
+        if (firstUnit.isHighSurrogate() && idx + 1 < len && text[idx + 1].isLowSurrogate()) {
+            codePoint = QChar::surrogateToUcs4(firstUnit, text[idx + 1]);
+            charLen   = 2;
+        }
+        const int chWid = QTuiText::isWideChar(codePoint) ? 2 : 1;
+        if (width + chWid > budget) {
+            break;
+        }
+        width += chWid;
+        idx += charLen;
+    }
+    return text.left(idx) + QChar(0x2026);
+}
+
+/* Short relative-time string ("just now", "5m ago", "3h ago", "2d ago",
+ * "Apr 23", "2025-12-01"). Rolls over to absolute date past one week so
+ * the picker stays scannable for older sessions without lying about how
+ * stale they are. */
+QString formatRelativeTime(const QDateTime &when)
+{
+    if (!when.isValid()) {
+        return QStringLiteral("?");
+    }
+    const QDateTime now  = QDateTime::currentDateTime();
+    const qint64    secs = when.secsTo(now);
+    if (secs < 0) {
+        return when.toString(QStringLiteral("MM-dd HH:mm"));
+    }
+    if (secs < 60) {
+        return QStringLiteral("just now");
+    }
+    if (secs < 3600) {
+        return QString::number(secs / 60) + QStringLiteral("m ago");
+    }
+    if (secs < 86400) {
+        return QString::number(secs / 3600) + QStringLiteral("h ago");
+    }
+    constexpr qint64 oneWeek = qint64{86400} * 7;
+    if (secs < oneWeek) {
+        return QString::number(secs / 86400) + QStringLiteral("d ago");
+    }
+    if (when.date().year() == now.date().year()) {
+        return when.toString(QStringLiteral("MMM dd"));
+    }
+    return when.toString(QStringLiteral("yyyy-MM-dd"));
+}
+
+/* Read terminal width once, conservatively defaulting to 80 if ioctl
+ * fails. Picker code uses this to budget label width. */
+int currentTerminalWidth()
+{
+#ifdef Q_OS_WIN
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        return csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    }
+#else
+    struct winsize winsz = {};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) == 0 && winsz.ws_col > 0) {
+        return winsz.ws_col;
+    }
+#endif
+    return 80;
+}
 
 } /* namespace */
 
@@ -1678,19 +1802,39 @@ bool QSocCliWorker::runAgentLoop(
             } else {
                 QList<QTuiMenu::MenuItem> items;
                 items.reserve(sessions.size());
+                const int termW = currentTerminalWidth();
                 for (const QSocSession::Info &info : sessions) {
                     QTuiMenu::MenuItem item;
-                    QString label = info.lastModified.toString(QStringLiteral("MM-dd HH:mm"));
-                    label += QString(" (%1 msgs)").arg(info.messageCount);
-                    /* Show user-assigned title if present, otherwise first prompt. */
-                    QString prompt = !info.title.isEmpty()         ? info.title
-                                     : !info.firstPrompt.isEmpty() ? info.firstPrompt
-                                                                   : QStringLiteral("(no prompt)");
-                    if (prompt.size() > 50) {
-                        prompt = prompt.left(47) + QStringLiteral("...");
+                    /* Title fallback chain: rename → first prompt → branch
+                     * label → "(empty)". Cleaned of newlines so wide
+                     * pasted prompts collapse onto one row. */
+                    QString primary = !info.title.isEmpty()         ? info.title
+                                      : !info.firstPrompt.isEmpty() ? info.firstPrompt
+                                      : !info.branch.isEmpty()      ? info.branch
+                                                                    : QString();
+                    primary         = cleanPromptForLabel(primary);
+                    /* Hint carries the always-on metadata. Keep it short
+                     * so the label gets the wide budget; render leading
+                     * separator inside the hint so single-line layouts
+                     * stay readable. */
+                    QString hint = QString::fromUtf8("\xc2\xb7 %1 \xc2\xb7 %2 msg")
+                                       .arg(formatRelativeTime(info.lastModified))
+                                       .arg(info.messageCount);
+                    if (info.messageCount != 1) {
+                        hint.append(QLatin1Char('s'));
                     }
-                    item.label = label;
-                    item.hint  = prompt;
+                    /* Width-aware label budget: leave the hint intact
+                     * since it is short and load-bearing, then give the
+                     * label whatever cells remain after subtracting menu
+                     * chrome ("  " + label + "  " + hint = 4 cells of
+                     * gutter, plus 1 cell cushion). Floor of 8 keeps the
+                     * label visible at extreme narrow widths instead of
+                     * overflowing the terminal and overwriting the hint. */
+                    const int hintW    = QTuiText::visualWidth(hint);
+                    const int chrome   = 5;
+                    const int labelMax = qMax(8, termW - hintW - chrome);
+                    item.label         = truncateVisual(primary, labelMax);
+                    item.hint          = hint;
                     items.append(item);
                 }
                 QTuiMenu menu;
@@ -2244,34 +2388,54 @@ bool QSocCliWorker::runAgentLoop(
                     return;
                 }
 
-                /* Build the first picker: pick which user message to rewind
-                 * to. We annotate each item with [files] when a snapshot
-                 * exists for its turn so the user can see at a glance
-                 * whether the files will follow. */
-                QSet<int> turnsWithSnapshots;
+                /* Build per-turn change counts from snapshot diffs so the
+                 * picker can show "this turn touched N files" instead of
+                 * a featureless [files] flag. */
+                QMap<int, QMap<QString, QString>> snapshotFiles;
+                QSet<int>                         turnsWithSnapshots;
                 if (currentFileHistory) {
                     for (const auto &snap : currentFileHistory->listSnapshots()) {
                         turnsWithSnapshots.insert(snap.turn);
+                        snapshotFiles.insert(snap.turn, snap.files);
                     }
                 }
+                auto turnChangeCount = [&](int turn) -> int {
+                    if (!snapshotFiles.contains(turn)) {
+                        return 0;
+                    }
+                    const QMap<QString, QString> &cur  = snapshotFiles[turn];
+                    const QMap<QString, QString> &prev = snapshotFiles.value(turn - 1);
+                    int                           diff = 0;
+                    for (auto it = cur.constBegin(); it != cur.constEnd(); ++it) {
+                        if (prev.value(it.key()) != it.value()) {
+                            diff++;
+                        }
+                    }
+                    return diff;
+                };
 
                 QList<QTuiMenu::MenuItem> items;
                 items.reserve(userMsgs.size());
+                const int rewindTermW = currentTerminalWidth();
                 for (const UserMsgRef &ref : userMsgs) {
                     QTuiMenu::MenuItem item;
-                    QString            preview = ref.content;
-                    preview.replace(QLatin1Char('\n'), QLatin1Char(' '));
-                    if (preview.size() > 60) {
-                        preview = preview.left(57) + QStringLiteral("...");
+                    const QString      cleaned = cleanPromptForLabel(ref.content);
+                    /* Hint carries turn index plus per-turn file-change
+                     * count so the user knows exactly how much they are
+                     * rolling back without scrolling horizontally. */
+                    QString   hint    = QString::fromUtf8("\xc2\xb7 #%1").arg(ref.turn);
+                    const int changed = turnChangeCount(ref.turn);
+                    if (changed > 0) {
+                        hint += QString::fromUtf8(" \xc2\xb7 %1 file").arg(changed);
+                        if (changed != 1) {
+                            hint.append(QLatin1Char('s'));
+                        }
                     }
-                    /* "pre-state" for turn N is snapshot (N-1). A user
-                     * message is file-restorable as long as we have either
-                     * the baseline (turn 0) or some prior turn snapshot. */
-                    const bool fileRestorable = turnsWithSnapshots.contains(ref.turn - 1)
-                                                || ref.turn == 1;
-                    item.label                = QString("#%1%2").arg(ref.turn).arg(
-                        fileRestorable ? QStringLiteral(" [files]") : QString());
-                    item.hint = preview;
+                    const int hintW    = QTuiText::visualWidth(hint);
+                    const int chrome   = 5;
+                    const int labelMax = qMax(8, rewindTermW - hintW - chrome);
+                    item.label         = truncateVisual(cleaned, labelMax);
+                    item.hint          = hint;
                     items.append(item);
                 }
 
@@ -2299,14 +2463,14 @@ bool QSocCliWorker::runAgentLoop(
                 bool restoreFiles = false;
                 if (hasFileSnapshot && currentFileHistory) {
                     QList<QTuiMenu::MenuItem> modeItems;
-                    QTuiMenu::MenuItem        a;
-                    a.label = QStringLiteral("Context + Files");
-                    a.hint  = QStringLiteral("revert edited files to this point");
-                    modeItems.append(a);
-                    QTuiMenu::MenuItem b;
-                    b.label = QStringLiteral("Context Only");
-                    b.hint  = QStringLiteral("truncate messages, keep files as-is");
-                    modeItems.append(b);
+                    QTuiMenu::MenuItem        withFiles;
+                    withFiles.label = QStringLiteral("Restore conversation and files");
+                    withFiles.hint  = QStringLiteral("revert edits made after this turn");
+                    modeItems.append(withFiles);
+                    QTuiMenu::MenuItem convOnly;
+                    convOnly.label = QStringLiteral("Restore conversation only");
+                    convOnly.hint  = QStringLiteral("keep current files on disk");
+                    modeItems.append(convOnly);
 
                     QTuiMenu modeMenu;
                     modeMenu.setTitle("Rewind mode");
