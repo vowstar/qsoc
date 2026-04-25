@@ -375,6 +375,11 @@ private:
     bool            streamCompleted = false;
     QString         streamAccumulatedReasoning;
     bool            reasoningModeActive = false;
+    /* Token usage reported by the server in the final stream chunk
+     * (when stream_options.include_usage is set). buildStreamResponse
+     * forwards this verbatim so callers can anchor their estimates on
+     * real numbers instead of recomputing the conversation tail. */
+    json streamAccumulatedUsage;
 };
 
 #endif // QLLMSERVICE_H

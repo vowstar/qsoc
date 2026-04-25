@@ -604,6 +604,10 @@ void QLLMService::sendChatCompletionStream(
     payload["messages"]    = messages;
     payload["temperature"] = temperature;
     payload["stream"]      = true;
+    /* Ask the server to emit a final chunk carrying token usage so
+     * downstream code can anchor estimates on the real prompt size
+     * instead of recomputing from scratch each turn. */
+    payload["stream_options"] = {{"include_usage", true}};
 
     if (!reasoningEffort.isEmpty()) {
         /* Direct OpenAI/DeepSeek format */
@@ -637,7 +641,8 @@ void QLLMService::sendChatCompletionStream(
     streamAccumulatedContent.clear();
     streamAccumulatedToolCalls.clear();
     streamAccumulatedReasoning.clear();
-    streamCompleted = false;
+    streamAccumulatedUsage = json::object();
+    streamCompleted        = false;
 
     currentStreamReply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
 
@@ -783,6 +788,14 @@ bool QLLMService::parseStreamLine(
     try {
         json chunk = json::parse(line.toStdString());
 
+        /* Some servers (and the final include_usage chunk) carry
+         * `usage` at the chunk root with an empty `choices` array.
+         * Capture it before the empty-choices early-return so
+         * buildStreamResponse can include the real numbers. */
+        if (chunk.contains("usage") && chunk["usage"].is_object()) {
+            streamAccumulatedUsage = chunk["usage"];
+        }
+
         if (!chunk.contains("choices") || chunk["choices"].empty()) {
             return false;
         }
@@ -911,7 +924,11 @@ json QLLMService::buildStreamResponse(const QString &content, const QMap<int, js
         message["tool_calls"] = toolCallsArray;
     }
 
-    return {{"choices", json::array({{{"message", message}}})}};
+    json response = {{"choices", json::array({{{"message", message}}})}};
+    if (streamAccumulatedUsage.is_object() && !streamAccumulatedUsage.empty()) {
+        response["usage"] = streamAccumulatedUsage;
+    }
+    return response;
 }
 
 json QLLMService::sendChatCompletion(const json &messages, const json &tools, double temperature)
