@@ -1299,6 +1299,10 @@ bool QSocAgent::compactWithLLM(bool force)
                   "### Errors and Fixes\n"
                   "### Decisions Made\n"
                   "### Important Context\n"
+                  "### Actions Already Completed\n"
+                  "Enumerate every tool call already executed and its outcome "
+                  "(file read, command run, file written) so the agent does not "
+                  "redo work after compaction. One bullet per action.\n"
                   "### All User Messages\n"
                   "Reproduce every user message verbatim - they are short and critical.\n"
                   "### Next Steps\n\n"
@@ -1371,14 +1375,30 @@ bool QSocAgent::compactWithLLM(bool force)
         newMessages.push_back(messages[static_cast<size_t>(i)]);
     }
 
-    messages = newMessages;
+    /* Compute savings before swapping so we can warn the user when the
+     * compact accomplished nothing meaningful. The "recent kept zone
+     * dominates" pattern shows up as `before == after`: the LLM call
+     * burned latency for no reason. Surfacing it lets users decide to
+     * /clear or shrink keepRecentMessages instead of looping. */
+    const int beforeTokens = estimateMessagesTokens();
+    messages               = newMessages;
+    const int afterTokens  = estimateMessagesTokens();
 
     if (agentConfig.verbose) {
-        emit verboseOutput(QString("[Layer 2 Compact: %1 -> %2 messages, ~%3 tokens%4]")
+        const int    saved   = beforeTokens - afterTokens;
+        const double savedPc = beforeTokens > 0 ? (100.0 * saved / beforeTokens) : 0.0;
+        QString      tag;
+        if (saved <= 0) {
+            tag = " — no-op, recent zone already dominates; consider /clear";
+        } else if (savedPc < 10.0) {
+            tag = QString(" — only %1% saved, recent zone dominates").arg(savedPc, 0, 'f', 0);
+        }
+        emit verboseOutput(QString("[Layer 2 Compact: %1 -> %2 messages, ~%3 tokens%4%5]")
                                .arg(msgCount)
                                .arg(messages.size())
-                               .arg(estimateMessagesTokens())
-                               .arg(llmSuccess ? "" : " (fallback)"));
+                               .arg(afterTokens)
+                               .arg(llmSuccess ? "" : " (fallback)")
+                               .arg(tag));
     }
 
     return true;

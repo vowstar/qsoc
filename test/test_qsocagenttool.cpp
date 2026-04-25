@@ -218,6 +218,49 @@ private slots:
         QVERIFY(result.contains("Files in") || result.contains("No files"));
     }
 
+    /* P25 regression: a file with EXACTLY maxLines (default 500) lines
+     * must not produce a truncation marker, while 501 lines must. */
+    void testFileReadTruncationBoundary()
+    {
+        QSocToolFileRead readTool(this, pathContext);
+
+        QString exact500 = tempDir.path() + "/exact500.txt";
+        QFile   f1(exact500);
+        QVERIFY(f1.open(QIODevice::WriteOnly | QIODevice::Text));
+        for (int i = 0; i < 500; ++i) {
+            f1.write("line\n");
+        }
+        f1.close();
+
+        QString result500 = readTool.execute(json{{"file_path", exact500.toStdString()}});
+        QVERIFY(!result500.contains("[truncated"));
+
+        QString plus1 = tempDir.path() + "/plus1.txt";
+        QFile   f2(plus1);
+        QVERIFY(f2.open(QIODevice::WriteOnly | QIODevice::Text));
+        for (int i = 0; i < 501; ++i) {
+            f2.write("line\n");
+        }
+        f2.close();
+
+        QString result501 = readTool.execute(json{{"file_path", plus1.toStdString()}});
+        QVERIFY(result501.contains("[truncated"));
+        QVERIFY(result501.contains("offset=500"));
+
+        /* Without trailing newline: 500 lines exactly should still NOT mark. */
+        QString noTrail = tempDir.path() + "/no_trail.txt";
+        QFile   f3(noTrail);
+        QVERIFY(f3.open(QIODevice::WriteOnly | QIODevice::Text));
+        for (int i = 0; i < 499; ++i) {
+            f3.write("line\n");
+        }
+        f3.write("line"); /* no newline on last line */
+        f3.close();
+
+        QString resultNoTrail = readTool.execute(json{{"file_path", noTrail.toStdString()}});
+        QVERIFY(!resultNoTrail.contains("[truncated"));
+    }
+
     void testFileWriteAndRead()
     {
         /* Write a file */
