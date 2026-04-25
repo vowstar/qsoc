@@ -1014,8 +1014,13 @@ bool QSocCliWorker::runAgentLoop(
         if (!projectRootOnStart.isEmpty()) {
             const auto binding = QSocRemoteBinding::read(projectRootOnStart);
             if (!binding.target.isEmpty() && !binding.workspace.isEmpty()) {
-                pendingAutoInput = QStringLiteral("/ssh ") + binding.target + QLatin1Char(':')
-                                   + binding.workspace;
+                /* The /ssh handler re-reads remote.yml for the workspace,
+                 * so dispatch with the bare target. Appending the
+                 * workspace here used to produce a contradictory log
+                 * pair: the parser printed "Ignoring workspace path"
+                 * even though the binding's workspace was correctly
+                 * applied moments later. */
+                pendingAutoInput = QStringLiteral("/ssh ") + binding.target;
                 compositor.printContent(QString("Auto-connecting remote target %1 (workspace %2)\n")
                                             .arg(binding.target, binding.workspace));
             }
