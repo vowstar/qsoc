@@ -348,7 +348,8 @@ private:
     std::atomic<qint64> totalOutputTokens{0};
 
     /* Retry tracking */
-    int currentRetryCount = 0;
+    int currentRetryCount         = 0;
+    int contextOverflowRetryCount = 0;
 
     /**
      * @brief Layer 1: Prune old tool outputs to reduce token usage
