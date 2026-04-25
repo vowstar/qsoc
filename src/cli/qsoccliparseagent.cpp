@@ -3089,6 +3089,17 @@ bool QSocCliWorker::runAgentLoop(
                     .arg(tokBefore)
                     .arg(tokAfter)
                     .arg(saved));
+            /* The summarizer can produce a 0% reduction when the recent
+             * kept zone already exceeds the budget. Tell users why so
+             * they pick /clear or trim keepRecentMessages instead of
+             * burning more LLM calls. */
+            if (saved <= 0 && tokBefore > 0) {
+                compositor.printContent(
+                    QString(
+                        "  Note: 0 tokens saved — recent kept zone dominates the "
+                        "budget. Use /clear to reset history if compaction loops.\n"),
+                    QTuiScrollView::Dim);
+            }
             statusBarWidget.setStatus("Ready");
             lastPersistedIndex
                 = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
@@ -4450,6 +4461,11 @@ bool QSocCliWorker::runAgentLoop(
                             QTuiScrollView::Dim);
                     } else {
                         autoCompactFailures++;
+                        compositor.printContent(
+                            QString(
+                                "(auto-compact saved 0 tokens; recent kept zone "
+                                "dominates — consider /clear)\n"),
+                            QTuiScrollView::Dim);
                     }
                 }
             }
@@ -4903,6 +4919,11 @@ bool QSocCliWorker::runAgentLoop(
                             QTuiScrollView::Dim);
                     } else {
                         autoCompactFailures++;
+                        compositor.printContent(
+                            QString(
+                                "(auto-compact saved 0 tokens; recent kept zone "
+                                "dominates — consider /clear)\n"),
+                            QTuiScrollView::Dim);
                     }
                 }
             }

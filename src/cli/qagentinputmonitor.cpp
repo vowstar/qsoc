@@ -703,7 +703,11 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
-        /* Ctrl-U: kill from start of current line to cursor */
+        /* Ctrl-U: kill from start of current line to cursor.
+         * When the cursor is already at the start of a line (i.e. there
+         * is nothing to kill on this row), eat the preceding newline
+         * instead so repeated Ctrl-U presses peel off one line at a
+         * time and eventually empty a multi-line buffer. */
         if (byte == 0x15) {
             int start = cursorPos;
             while (start > 0 && inputBuffer[start - 1] != QLatin1Char('\n')) {
@@ -713,6 +717,11 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                 pushUndoSnapshot(/*fromPrintable=*/false);
                 inputBuffer.remove(start, cursorPos - start);
                 cursorPos = start;
+                emit inputChanged(inputBuffer);
+            } else if (cursorPos > 0 && inputBuffer[cursorPos - 1] == QLatin1Char('\n')) {
+                pushUndoSnapshot(/*fromPrintable=*/false);
+                inputBuffer.remove(cursorPos - 1, 1);
+                cursorPos--;
                 emit inputChanged(inputBuffer);
             }
             continue;
