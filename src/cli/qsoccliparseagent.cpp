@@ -444,6 +444,38 @@ int persistSessionDelta(QSocAgent *agent, QSocSession *session, int lastIndex)
     return total;
 }
 
+/* qwen3 thinking streams emit `\n\n` between every paragraph, which would
+ * otherwise render as a blank dim row after every step. */
+class ReasoningNewlineCollapser
+{
+public:
+    QString feed(const QString &chunk)
+    {
+        QString out;
+        out.reserve(chunk.size());
+        for (const QChar chr : chunk) {
+            /* Drop CR so CRLF degrades to LF and bare CR cannot
+             * carriage-return the scrollback row. */
+            if (chr == QLatin1Char('\r')) {
+                continue;
+            }
+            if (chr == QLatin1Char('\n')) {
+                if (atLineStart) {
+                    continue;
+                }
+                atLineStart = true;
+            } else {
+                atLineStart = false;
+            }
+            out.append(chr);
+        }
+        return out;
+    }
+
+private:
+    bool atLineStart = true;
+};
+
 } /* namespace */
 
 bool QSocCliWorker::parseAgent(const QStringList &appArguments)
@@ -808,9 +840,16 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                 qout << chunk << Qt::flush;
             });
 
-            connect(agent, &QSocAgent::reasoningChunk, [&qout](const QString &chunk) {
-                qout << QSocConsole::dim(chunk) << Qt::flush;
-            });
+            auto reasoningCollapser = std::make_shared<ReasoningNewlineCollapser>();
+            connect(
+                agent,
+                &QSocAgent::reasoningChunk,
+                [&qout, reasoningCollapser](const QString &chunk) {
+                    const QString filtered = reasoningCollapser->feed(chunk);
+                    if (!filtered.isEmpty()) {
+                        qout << QSocConsole::dim(filtered) << Qt::flush;
+                    }
+                });
 
             connect(agent, &QSocAgent::runComplete, [&qout, &loop](const QString &) {
                 qout << Qt::endl;
@@ -4325,9 +4364,16 @@ bool QSocCliWorker::runAgentLoop(
                 });
 
             /* Connect reasoning chunk display */
-            auto connReasoning = QObject::connect(
-                agent, &QSocAgent::reasoningChunk, &compositor, [&compositor](const QString &chunk) {
-                    compositor.printContent(chunk, QTuiScrollView::Dim);
+            auto reasoningCollapser = std::make_shared<ReasoningNewlineCollapser>();
+            auto connReasoning      = QObject::connect(
+                agent,
+                &QSocAgent::reasoningChunk,
+                &compositor,
+                [&compositor, reasoningCollapser](const QString &chunk) {
+                    const QString filtered = reasoningCollapser->feed(chunk);
+                    if (!filtered.isEmpty()) {
+                        compositor.printContent(filtered, QTuiScrollView::Dim);
+                    }
                 });
 
             /* Connect input queuing signals */
