@@ -118,9 +118,10 @@ void QSocAgent::runStream(const QString &userQuery)
     addMessage("user", userQuery);
 
     /* Setup streaming */
-    isStreaming       = true;
-    streamIteration   = 0;
-    currentRetryCount = 0;
+    isStreaming               = true;
+    streamIteration           = 0;
+    currentRetryCount         = 0;
+    contextOverflowRetryCount = 0;
     streamFinalContent.clear();
     abortRequested   = false;
     lastProgressTime = QDateTime::currentMSecsSinceEpoch();
@@ -196,6 +197,33 @@ void QSocAgent::handleStreamError(const QString &error)
         return;
     }
 
+    /* Reactive compaction: when the server rejects the request because
+     * the prompt overshoots the context window, force a compact and
+     * retry once. Beats letting the user re-trigger manually because
+     * our estimator was off (CJK + base64 tool results are the usual
+     * culprit). Capped at maxCompactRetries to avoid infinite loops
+     * when even the post-compact prompt still does not fit. */
+    static constexpr int maxCompactRetries = 2;
+    const bool isContextOverflow = error.contains("Entity Too Large", Qt::CaseInsensitive)
+                                   || error.contains("context_length_exceeded", Qt::CaseInsensitive)
+                                   || error.contains("maximum context length", Qt::CaseInsensitive)
+                                   || error.contains("prompt is too long", Qt::CaseInsensitive)
+                                   || error.contains("400", Qt::CaseSensitive); /* DeepSeek's 400 */
+    if (isContextOverflow && contextOverflowRetryCount < maxCompactRetries) {
+        contextOverflowRetryCount++;
+        if (agentConfig.verbose) {
+            emit verboseOutput(QString("[Context overflow %1/%2 — forcing compact and retrying]")
+                                   .arg(contextOverflowRetryCount)
+                                   .arg(maxCompactRetries));
+        }
+        emit compacting(2, estimateMessagesTokens(), 0);
+        compact();
+        emit compacting(2, 0, estimateMessagesTokens());
+        lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+        processStreamIteration();
+        return;
+    }
+
     /* Check if error is retryable (timeout or network error) */
     bool isRetryable = error.contains("timeout", Qt::CaseInsensitive)
                        || error.contains("network", Qt::CaseInsensitive)
@@ -225,7 +253,8 @@ void QSocAgent::handleStreamError(const QString &error)
     /* No more retries or non-retryable error */
     isStreaming = false;
     heartbeatTimer->stop();
-    currentRetryCount = 0;
+    currentRetryCount         = 0;
+    contextOverflowRetryCount = 0;
     emit runError(error);
 }
 
