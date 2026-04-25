@@ -295,7 +295,12 @@ void QSocAgent::processStreamIteration()
     }
 
     for (const auto &msg : messages) {
-        messagesWithSystem.push_back(msg);
+        json sanitized = msg;
+        /* The internal `_usage` annotation is for our token estimator
+         * only; OpenAI / DeepSeek reject unknown top-level fields on
+         * messages, so strip it before the wire. */
+        sanitized.erase("_usage");
+        messagesWithSystem.push_back(sanitized);
     }
 
     /* Get tool definitions */
@@ -340,6 +345,16 @@ void QSocAgent::handleStreamComplete(const json &response)
     }
 
     auto message = response["choices"][0]["message"];
+
+    /* Embed the server-reported usage on the assistant message itself
+     * (private `_usage` field). The token estimator scans backwards
+     * for the most recent record carrying this and treats it as
+     * ground truth, then only estimates the tail added since. The
+     * field is stripped before each outgoing request so OpenAI-style
+     * APIs never see it. */
+    if (response.contains("usage") && response["usage"].is_object()) {
+        message["_usage"] = response["usage"];
+    }
 
     /* Check for tool calls */
     if (message.contains("tool_calls") && !message["tool_calls"].empty()) {
@@ -410,9 +425,12 @@ bool QSocAgent::processIteration()
             {{"role", "system"}, {"content", fullSystemPrompt.toStdString()}});
     }
 
-    /* Add conversation history */
+    /* Add conversation history (strip the internal `_usage` annotation
+     * so the wire stays standard chat completion shape). */
     for (const auto &msg : messages) {
-        messagesWithSystem.push_back(msg);
+        json sanitized = msg;
+        sanitized.erase("_usage");
+        messagesWithSystem.push_back(sanitized);
     }
 
     /* Get tool definitions */
@@ -438,6 +456,9 @@ bool QSocAgent::processIteration()
     }
 
     auto message = response["choices"][0]["message"];
+    if (response.contains("usage") && response["usage"].is_object()) {
+        message["_usage"] = response["usage"];
+    }
 
     /* Check for tool calls */
     if (message.contains("tool_calls") && !message["tool_calls"].empty()) {
@@ -903,18 +924,59 @@ int QSocAgent::effectiveContextTokens() const
 
 int QSocAgent::estimateMessagesTokens() const
 {
+    /* Anchor on the most recent assistant message that carries server
+     * usage. Everything up to and including that message is already
+     * accounted for by `prompt_tokens`; only the tail added since needs
+     * a heuristic estimate. Fall back to full-walk estimation when no
+     * usage anchor exists yet (first turn, or non-streaming endpoints
+     * that strip the usage field). */
+    const int msgCount           = static_cast<int>(messages.size());
+    int       anchorIdx          = -1;
+    int       anchorPromptTokens = 0;
+    for (int i = msgCount - 1; i >= 0; --i) {
+        const auto &msg = messages[static_cast<size_t>(i)];
+        if (!msg.contains("_usage") || !msg["_usage"].is_object()) {
+            continue;
+        }
+        const auto &usage = msg["_usage"];
+        /* Use prompt_tokens (input only) since the agent is asking
+         * "what would the next request weigh"; output_tokens belong
+         * to the reply slice, not the input window. The assistant's
+         * own reply contributes to the next request's input — count
+         * it via the per-message tail walk below. */
+        int promptTok = 0;
+        if (usage.contains("prompt_tokens") && usage["prompt_tokens"].is_number_integer()) {
+            promptTok = usage["prompt_tokens"].get<int>();
+        } else if (usage.contains("input_tokens") && usage["input_tokens"].is_number_integer()) {
+            promptTok = usage["input_tokens"].get<int>();
+        }
+        if (promptTok > 0) {
+            anchorIdx          = i;
+            anchorPromptTokens = promptTok;
+            break;
+        }
+    }
+
     int total = 0;
-    for (const auto &msg : messages) {
-        /* Estimate content */
+    int start = 0;
+    if (anchorIdx >= 0) {
+        total = anchorPromptTokens;
+        /* Anchor's prompt covers messages [0, anchorIdx); the assistant
+         * message at anchorIdx is the reply to that prompt, so it is
+         * NOT in prompt_tokens but WILL be in the next request's
+         * prompt. Estimate from anchorIdx forward. */
+        start = anchorIdx;
+    }
+
+    for (int i = start; i < msgCount; ++i) {
+        const auto &msg = messages[static_cast<size_t>(i)];
         if (msg.contains("content") && msg["content"].is_string()) {
             total += estimateTokens(QString::fromStdString(msg["content"].get<std::string>()));
         }
-        /* Estimate tool calls (rough) */
         if (msg.contains("tool_calls")) {
             total += estimateTokens(QString::fromStdString(msg["tool_calls"].dump()));
         }
-        /* Add overhead for message structure (~10 tokens per message) */
-        total += 10;
+        total += 10; /* per-message structural overhead */
     }
     return total;
 }
@@ -923,14 +985,24 @@ int QSocAgent::estimateTotalTokens() const
 {
     int tokens = estimateMessagesTokens();
 
-    /* System prompt + memory injection */
-    tokens += estimateTokens(buildSystemPromptWithMemory());
-
-    /* Tool definitions */
-    if (toolRegistry) {
-        json tools = toolRegistry->getToolDefinitions();
-        if (!tools.empty()) {
-            tokens += estimateTokens(QString::fromStdString(tools.dump()));
+    /* When estimateMessagesTokens fell back to anchorless walking (no
+     * server usage seen yet), system prompt + tool defs aren't covered;
+     * add them. When anchored, prompt_tokens already includes them and
+     * we'd be double-counting. Detect anchor by scanning for `_usage`. */
+    bool anchored = false;
+    for (const auto &msg : messages) {
+        if (msg.contains("_usage") && msg["_usage"].is_object()) {
+            anchored = true;
+            break;
+        }
+    }
+    if (!anchored) {
+        tokens += estimateTokens(buildSystemPromptWithMemory());
+        if (toolRegistry) {
+            json tools = toolRegistry->getToolDefinitions();
+            if (!tools.empty()) {
+                tokens += estimateTokens(QString::fromStdString(tools.dump()));
+            }
         }
     }
 
