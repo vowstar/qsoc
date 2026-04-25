@@ -55,10 +55,23 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
         warning = " [Slow]";
     }
 
+    /* Surface a short detail (e.g. the file path for read_file or the
+     * shell command for bash) so a 60s tool call does not look like a
+     * frozen "Working" line. Cap detail length so the right-side meta
+     * (tokens, time, tools, model) still has room to render. */
+    QString status = currentStatus;
+    if (!lastToolDetail.isEmpty()) {
+        const int detailCap = 40;
+        QString   trimmed   = lastToolDetail.simplified();
+        if (trimmed.size() > detailCap) {
+            trimmed = trimmed.left(detailCap - 1) + QStringLiteral("…");
+        }
+        status += QStringLiteral(" ") + trimmed;
+    }
     if (tokenStr.isEmpty()) {
-        line = QString("%1 %2%3 (%4)").arg(spinner, currentStatus, dots, timeStr);
+        line = QString("%1 %2%3 (%4)").arg(spinner, status, dots, timeStr);
     } else {
-        line = QString("%1 %2%3 (%4 %5)").arg(spinner, currentStatus, dots, tokenStr, timeStr);
+        line = QString("%1 %2%3 (%4 %5)").arg(spinner, status, dots, tokenStr, timeStr);
     }
     if (!toolInfo.isEmpty()) {
         line += " " + toolInfo;
@@ -77,6 +90,12 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
 void QTuiStatusBar::setStatus(const QString &status)
 {
     currentStatus = status;
+    /* Drop the per-tool detail when the caller swaps to a generic
+     * status (e.g. "Reasoning", "Compacting", "Ready"). Keeping the
+     * stale tool argument visible after the tool has finished is
+     * confusing — the user just saw the command they ran linger
+     * across the next phase of the loop. */
+    lastToolDetail.clear();
 }
 
 void QTuiStatusBar::toolCalled(const QString &toolName, const QString &detail)

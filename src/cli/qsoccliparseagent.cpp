@@ -4215,13 +4215,16 @@ bool QSocCliWorker::runAgentLoop(
                     }
                 });
 
-            /* Connect heartbeat - updates status and token display */
+            /* Connect heartbeat - keeps the tick alive but does not
+             * overwrite the status text. Earlier code unconditionally
+             * set "Working" here, which clobbered tool-name labels
+             * (e.g. "bash", "read_file") set by toolCalled, leaving
+             * users with a generic status during long tool calls. */
             auto connHeartbeat = QObject::connect(
                 agent,
                 &QSocAgent::heartbeat,
                 &loop,
                 [&compositor, &statusBarWidget, &todoWidget, &queueWidget, &inputWidget](int, int) {
-                    statusBarWidget.setStatus("Working");
                 });
 
             /* Connect token usage update + session cost accumulator */
@@ -4687,13 +4690,16 @@ bool QSocCliWorker::runAgentLoop(
                     }
                 });
 
-            /* Connect heartbeat - updates status and token display */
+            /* Connect heartbeat - keeps the tick alive but does not
+             * overwrite the status text. Earlier code unconditionally
+             * set "Working" here, which clobbered tool-name labels
+             * (e.g. "bash", "read_file") set by toolCalled, leaving
+             * users with a generic status during long tool calls. */
             auto connHeartbeat = QObject::connect(
                 agent,
                 &QSocAgent::heartbeat,
                 &loop,
                 [&compositor, &statusBarWidget, &todoWidget, &queueWidget, &inputWidget](int, int) {
-                    statusBarWidget.setStatus("Working");
                 });
 
             /* Connect token usage update + session cost accumulator */
