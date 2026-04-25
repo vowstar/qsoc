@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qstringutils.h"
+#include "qsoc_test.h"
 
 #include <QtTest>
 
@@ -61,5 +62,5 @@ void TestQStringUtils::truncateMiddle_edgeCase()
     QCOMPARE(result, QString("...g"));
 }
 
-QTEST_APPLESS_MAIN(TestQStringUtils)
+QSOC_TEST_MAIN(TestQStringUtils)
 #include "test_qsoccommonqstringutils.moc"

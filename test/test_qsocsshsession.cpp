@@ -86,5 +86,5 @@ private slots:
     }
 };
 
-QTEST_GUILESS_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 #include "test_qsocsshsession.moc"

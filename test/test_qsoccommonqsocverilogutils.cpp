@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocverilogutils.h"
+#include "qsoc_test.h"
 
 #include <QtTest>
 
@@ -236,5 +237,5 @@ void TestQSocVerilogUtils::escapeVerilogComment_normalText()
     QCOMPARE(result, QString("Normal comment text"));
 }
 
-QTEST_APPLESS_MAIN(TestQSocVerilogUtils)
+QSOC_TEST_MAIN(TestQSocVerilogUtils)
 #include "test_qsoccommonqsocverilogutils.moc"

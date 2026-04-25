@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocpaths.h"
+#include "qsoc_test.h"
 
 #include <QDir>
 #include <QtTest>
@@ -159,5 +160,5 @@ void TestQSocPaths::resourceDirs_skipsEmptyLayers()
     QCOMPARE(dirs.at(1), QSocPaths::systemRoot() + "/memory");
 }
 
-QTEST_APPLESS_MAIN(TestQSocPaths)
+QSOC_TEST_MAIN(TestQSocPaths)
 #include "test_qsoccommonqsocpaths.moc"

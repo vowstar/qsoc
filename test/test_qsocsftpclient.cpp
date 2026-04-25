@@ -77,5 +77,5 @@ private slots:
 
 } // namespace
 
-QTEST_GUILESS_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 #include "test_qsocsftpclient.moc"

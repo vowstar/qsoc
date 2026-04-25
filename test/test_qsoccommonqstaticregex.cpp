@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qstaticregex.h"
+#include "qsoc_test.h"
 
 #include <QtTest>
 
@@ -173,5 +174,5 @@ void TestQStaticRegex::isNameExactMatch_partialMatch()
     QVERIFY(!QStaticRegex::isNameExactMatch("mycounter", regex));
 }
 
-QTEST_APPLESS_MAIN(TestQStaticRegex)
+QSOC_TEST_MAIN(TestQStaticRegex)
 #include "test_qsoccommonqstaticregex.moc"

@@ -550,5 +550,5 @@ void Test::diagnostics_persistentSourceManager()
     backend.stop();
 }
 
-QTEST_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 #include "test_qlspslangbackend.moc"

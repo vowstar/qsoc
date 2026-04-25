@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qstaticmarkdown.h"
+#include "qsoc_test.h"
 
 #include <QtTest>
 
@@ -265,5 +266,5 @@ void TestQStaticMarkdown::renderTable_longContent()
     }
 }
 
-QTEST_APPLESS_MAIN(TestQStaticMarkdown)
+QSOC_TEST_MAIN(TestQStaticMarkdown)
 #include "test_qsoccommonqstaticmarkdown.moc"
