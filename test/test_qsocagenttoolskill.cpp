@@ -339,5 +339,5 @@ private slots:
     }
 };
 
-QTEST_APPLESS_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 #include "test_qsocagenttoolskill.moc"

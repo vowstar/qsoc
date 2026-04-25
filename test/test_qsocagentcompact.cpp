@@ -4,6 +4,7 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
 #include "agent/qsoctool.h"
+#include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
 #include <QSignalSpy>
@@ -543,5 +544,5 @@ private slots:
     }
 };
 
-QTEST_APPLESS_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 #include "test_qsocagentcompact.moc"

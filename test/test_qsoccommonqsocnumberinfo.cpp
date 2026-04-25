@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocnumberinfo.h"
+#include "qsoc_test.h"
 
 #include <QtTest>
 
@@ -298,5 +299,5 @@ void TestQSocNumberInfo::parseNumber_vectorRange()
     QCOMPARE(info.hasExplicitWidth, true);
 }
 
-QTEST_APPLESS_MAIN(TestQSocNumberInfo)
+QSOC_TEST_MAIN(TestQSocNumberInfo)
 #include "test_qsoccommonqsocnumberinfo.moc"

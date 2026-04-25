@@ -334,5 +334,5 @@ void Test::diagnosticsUpdated_signalEmitted()
     service->stopAll();
 }
 
-QTEST_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 #include "test_qlspservice.moc"
