@@ -14,8 +14,12 @@
  */
 struct QSocAgentConfig
 {
-    /* Maximum context tokens before compression */
-    int maxContextTokens = 128000;
+    /* Maximum context tokens before compression. The model window covers
+     * input + output combined, so the effective input budget is
+     * maxContextTokens - reservedOutputTokens. Threshold math should run
+     * against the effective figure, not the raw window. */
+    int maxContextTokens     = 128000;
+    int reservedOutputTokens = 16384; /* Reserved for the assistant reply */
 
     /* Layer 1: Tool output pruning. Threshold sits well below the model
      * window so the weighted token estimator's ~20% error margin still

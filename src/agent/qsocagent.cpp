@@ -890,6 +890,17 @@ int QSocAgent::estimateTokens(const QString &text) const
     return static_cast<int>(tokens) + 1;
 }
 
+int QSocAgent::effectiveContextTokens() const
+{
+    /* Model windows cover input + output combined; the assistant reply
+     * carves a slice off the same pool. Threshold math must run against
+     * the input budget alone, otherwise the request can clear the
+     * compact threshold and still get rejected when the reply lands. */
+    const int reserved
+        = qBound(0, agentConfig.reservedOutputTokens, agentConfig.maxContextTokens / 2);
+    return qMax(1024, agentConfig.maxContextTokens - reserved);
+}
+
 int QSocAgent::estimateMessagesTokens() const
 {
     int total = 0;
@@ -951,8 +962,7 @@ bool QSocAgent::pruneToolOutputs(bool force)
 {
     if (!force) {
         int currentTokens = estimateTotalTokens();
-        int pruneTokens   = static_cast<int>(
-            agentConfig.maxContextTokens * agentConfig.pruneThreshold);
+        int pruneTokens   = static_cast<int>(effectiveContextTokens() * agentConfig.pruneThreshold);
         if (currentTokens <= pruneTokens) {
             return false;
         }
@@ -1121,7 +1131,7 @@ bool QSocAgent::compactWithLLM(bool force)
     if (!force) {
         int currentTokens = estimateTotalTokens();
         int compactTokens = static_cast<int>(
-            agentConfig.maxContextTokens * agentConfig.compactThreshold);
+            effectiveContextTokens() * agentConfig.compactThreshold);
         if (currentTokens <= compactTokens) {
             return false;
         }
@@ -1278,8 +1288,8 @@ void QSocAgent::compressHistoryIfNeeded()
     int originalTokens = estimateTotalTokens();
     int tokens         = originalTokens;
 
-    /* Layer 1: Prune tool outputs (60% threshold) */
-    int pruneTokens = static_cast<int>(agentConfig.maxContextTokens * agentConfig.pruneThreshold);
+    /* Layer 1: Prune tool outputs */
+    int pruneTokens = static_cast<int>(effectiveContextTokens() * agentConfig.pruneThreshold);
     if (tokens > pruneTokens) {
         if (pruneToolOutputs()) {
             tokens = estimateTotalTokens();
@@ -1287,9 +1297,8 @@ void QSocAgent::compressHistoryIfNeeded()
         }
     }
 
-    /* Layer 2: LLM compaction (80% threshold) */
-    int compactTokens = static_cast<int>(
-        agentConfig.maxContextTokens * agentConfig.compactThreshold);
+    /* Layer 2: LLM compaction */
+    int compactTokens = static_cast<int>(effectiveContextTokens() * agentConfig.compactThreshold);
     if (tokens > compactTokens) {
         int beforeCompact = tokens;
         if (compactWithLLM()) {
