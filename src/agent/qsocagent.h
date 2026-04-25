@@ -212,6 +212,13 @@ public:
     int estimateMessagesTokens() const;
 
     /**
+     * @brief Effective input-side context budget after subtracting the
+     *        slice reserved for the assistant reply. Threshold checks
+     *        should always run against this, never raw maxContextTokens.
+     */
+    int effectiveContextTokens() const;
+
+    /**
      * @brief Build the full system prompt from modular sections + dynamic
      *        context (project instructions, skills, memory).
      */
