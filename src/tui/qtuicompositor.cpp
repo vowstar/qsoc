@@ -183,9 +183,14 @@ void QTuiCompositor::render()
 
     /* Park real cursor at input line for IME support.
      * Terminal emulators render IME preedit at the physical cursor.
-     * Disable auto-wrap to prevent IME preedit from causing line wrap. */
-    int cursorCol = inputWidget.cursorColumn() + 1;                 /* 1-based */
-    int cursorRow = layout.inputRow + inputWidget.cursorLine() + 1; /* 1-based */
+     * Disable auto-wrap to prevent IME preedit from causing line wrap.
+     * Clamp the column to the screen width so a long pasted/typed
+     * line does not push the cursor past the right edge — when the
+     * cursor sits past the boundary, terminals clamp to the last
+     * column and any subsequent typed character lingers there,
+     * producing the column-of-stray-glyphs artifact during streams. */
+    int cursorCol = qBound(1, inputWidget.cursorColumn() + 1, screen.width());
+    int cursorRow = qBound(1, layout.inputRow + inputWidget.cursorLine() + 1, screen.height());
     fprintf(stdout, "\033[?7l\033[%d;%dH\033[?25h", cursorRow, cursorCol);
 
     fflush(stdout);
