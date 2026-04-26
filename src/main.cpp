@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/qsocconsole.h"
+#include "common/qsocproxy.h"
 #include "common/qstaticicontheme.h"
 #include "common/qstatictranslator.h"
 #include "gui/mainwindow/mainwindow.h"
@@ -28,6 +29,11 @@ int main(int argc, char *argv[])
     int result = 0;
     /* Install message handler to direct outputs to appropriate streams */
     QSocConsole::install();
+    /* Bootstrap QNetworkProxyFactory once so QNetworkProxy::DefaultProxy
+     * resolves to the system / environment proxy across every later
+     * QNetworkAccessManager (LLM, MCP, web tools). Per-target overrides
+     * still win via QSocProxy::resolve(). */
+    QSocProxy::ensureSystemBootstrap();
     /* Check if GUI mode is requested */
     if (isGui(argc, argv)) {
 #ifdef Q_OS_WIN
