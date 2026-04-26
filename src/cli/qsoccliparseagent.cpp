@@ -42,6 +42,7 @@
 #include "common/qsocconsole.h"
 #include "common/qsoclinediff.h"
 #include "common/qsocpaths.h"
+#include "common/qsocproxy.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuiinputline.h"
 #include "tui/qtuimenu.h"
@@ -667,6 +668,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         /* Reload LLM endpoints from updated config */
         llmService->setConfig(socConfig);
     }
+
+    /* Refresh the qsoc-wide proxy fallback whenever config reloads. The
+     * legacy {type,host,port,user,password} schema is honoured for
+     * backwards compatibility; per-target subsystems (LLM endpoints,
+     * MCP servers) override via their own `proxy:` field. */
+    QSocProxy::setQsocWideDefault(QSocProxy::fromLegacyConfig(socConfig));
 
     /* Load project if specified */
     if (parser.isSet("project")) {

@@ -147,6 +147,7 @@ QList<McpServerConfig> McpServerConfig::parseList(const YAML::Node &node)
         cfg.env              = yamlMapToQStringMap(entry["env"]);
         cfg.url              = yamlScalarToQString(entry["url"]);
         cfg.headers          = yamlMapToQStringMap(entry["headers"]);
+        cfg.proxy            = yamlScalarToQString(entry["proxy"]);
         cfg.connectTimeoutMs = yamlIntOrDefault(entry["connect_timeout_ms"], cfg.connectTimeoutMs);
         cfg.requestTimeoutMs = yamlIntOrDefault(entry["request_timeout_ms"], cfg.requestTimeoutMs);
         cfg.enabled          = yamlBoolOrDefault(entry["enabled"], true);
