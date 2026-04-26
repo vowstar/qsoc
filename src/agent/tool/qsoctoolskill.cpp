@@ -9,6 +9,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QTextStream>
 
@@ -63,7 +64,28 @@ QStringList QSocToolSkillFind::allSkillsDirs() const
     if (projectPath.isEmpty()) {
         projectPath = QDir::currentPath();
     }
-    return QSocPaths::resourceDirs(QStringLiteral("skills"), projectPath);
+    QStringList dirs = QSocPaths::resourceDirs(QStringLiteral("skills"), projectPath);
+
+    /* QSOC_SKILLS_PATH lets the user (or sysadmin) point at extra skill
+     * collections, e.g. a shared team-wide library on /opt or NFS. Each
+     * entry is a directory that directly contains <skill>/SKILL.md. */
+    const QString extra = QProcessEnvironment::systemEnvironment().value(
+        QStringLiteral("QSOC_SKILLS_PATH"));
+    if (!extra.isEmpty()) {
+#if defined(Q_OS_WIN)
+        const QChar sep = QLatin1Char(';');
+#else
+        const QChar sep = QLatin1Char(':');
+#endif
+        const QStringList parts = extra.split(sep, Qt::SkipEmptyParts);
+        for (const QString &part : parts) {
+            const QString trimmed = part.trimmed();
+            if (!trimmed.isEmpty() && !dirs.contains(trimmed)) {
+                dirs.append(trimmed);
+            }
+        }
+    }
+    return dirs;
 }
 
 QSocToolSkillFind::SkillInfo QSocToolSkillFind::parseSkillFile(
