@@ -212,6 +212,36 @@ QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkills() const
     return result;
 }
 
+QString QSocToolSkillFind::formatPromptListing(const QList<SkillInfo> &skills)
+{
+    if (skills.isEmpty()) {
+        return {};
+    }
+
+    /* Cap each description so a single noisy SKILL.md cannot blow past the
+     * prompt cache prefix budget. 200 chars is enough for one full line. */
+    constexpr int kDescriptionCap = 200;
+
+    QString listing = QStringLiteral(
+        "The following skills are installed. Use skill_find(action:\"read\", "
+        "query:\"<name>\") to load the full prompt, or the user can invoke "
+        "user-invocable ones directly as /<name> slash commands.\n\n");
+
+    for (const auto &skill : skills) {
+        QString desc = skill.description;
+        if (desc.size() > kDescriptionCap) {
+            desc = desc.left(kDescriptionCap - 3) + QStringLiteral("...");
+        }
+        listing += QStringLiteral("- **") + skill.name + QStringLiteral("** [") + skill.scope
+                   + QStringLiteral("]: ") + desc;
+        if (skill.userInvocable) {
+            listing += QStringLiteral(" (user-invocable: /") + skill.name + QStringLiteral(")");
+        }
+        listing += QStringLiteral("\n");
+    }
+    return listing;
+}
+
 QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkillFiles() const
 {
     QString projectPath;
