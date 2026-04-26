@@ -3,11 +3,10 @@
 
 #include "common/qllmservice.h"
 #include "common/qsocconsole.h"
+#include "common/qsocproxy.h"
 
 #include <QDebug>
 #include <QEventLoop>
-#include <QNetworkProxy>
-#include <QNetworkProxyFactory>
 #include <QNetworkRequest>
 #include <QRandomGenerator>
 #include <QRegularExpression>
@@ -354,53 +353,11 @@ void QLLMService::setupNetworkProxy()
     if (!networkManager) {
         return;
     }
-
-    if (!config) {
-        /* No config, respect environment variables (system proxy) */
-        QNetworkProxyFactory::setUseSystemConfiguration(true);
-        networkManager->setProxy(QNetworkProxy::DefaultProxy);
-        return;
-    }
-
-    /* Get proxy type - default to "system" to respect environment variables */
-    QString proxyType = config->getValue("proxy.type", "system").toLower();
-
-    QNetworkProxy proxy;
-
-    if (proxyType == "none") {
-        /* Explicitly disable all proxies including environment variables */
-        QNetworkProxyFactory::setUseSystemConfiguration(false);
-        proxy.setType(QNetworkProxy::NoProxy);
-    } else if (proxyType == "socks5") {
-        QNetworkProxyFactory::setUseSystemConfiguration(false);
-        proxy.setType(QNetworkProxy::Socks5Proxy);
-        proxy.setHostName(config->getValue("proxy.host", "127.0.0.1"));
-        proxy.setPort(config->getValue("proxy.port", "1080").toUInt());
-
-        QString user = config->getValue("proxy.user");
-        if (!user.isEmpty()) {
-            proxy.setUser(user);
-            proxy.setPassword(config->getValue("proxy.password"));
-        }
-    } else if (proxyType == "http") {
-        QNetworkProxyFactory::setUseSystemConfiguration(false);
-        proxy.setType(QNetworkProxy::HttpProxy);
-        proxy.setHostName(config->getValue("proxy.host", "127.0.0.1"));
-        proxy.setPort(config->getValue("proxy.port", "8080").toUInt());
-
-        QString user = config->getValue("proxy.user");
-        if (!user.isEmpty()) {
-            proxy.setUser(user);
-            proxy.setPassword(config->getValue("proxy.password"));
-        }
-    } else {
-        /* "system" or unrecognized: respect environment variables */
-        QNetworkProxyFactory::setUseSystemConfiguration(true);
-        networkManager->setProxy(QNetworkProxy::DefaultProxy);
-        return;
-    }
-
-    networkManager->setProxy(proxy);
+    /* Honour the qsoc-wide spec; per-endpoint LLM `proxy:` overrides
+     * are applied per-request when an endpoint carries one. The system
+     * bootstrap is owned by main.cpp / QSocProxy so DefaultProxy still
+     * resolves to the env / libproxy proxy when nothing is configured. */
+    QSocProxy::apply(networkManager, QSocProxy::fromLegacyConfig(config));
 }
 
 LLMEndpoint QLLMService::selectEndpoint()
