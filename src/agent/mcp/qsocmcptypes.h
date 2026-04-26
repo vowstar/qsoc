@@ -50,6 +50,7 @@ struct McpServerConfig
     QMap<QString, QString> env;     /* stdio: extra environment variables */
     QString                url;     /* http: endpoint URL */
     QMap<QString, QString> headers; /* http: extra request headers */
+    QString                proxy;   /* http: "none" disables proxy; empty / "system" follows env */
     int                    connectTimeoutMs = 30000;
     int                    requestTimeoutMs = 60000;
     bool                   enabled          = true;

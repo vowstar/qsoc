@@ -37,6 +37,7 @@ public:
     void sendMessage(const nlohmann::json &message) override;
 
 private slots:
+    void onReplyMetaDataChanged();
     void onReplyReadyRead();
     void onReplyFinished();
     void onReplyError();
@@ -56,6 +57,7 @@ private:
     McpServerConfig                    config_;
     QNetworkAccessManager             *manager_ = nullptr;
     QHash<QNetworkReply *, ReplyState> replies_;
+    QByteArray                         sessionId_;
 };
 
 #endif // QSOCMCPHTTP_H
