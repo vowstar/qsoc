@@ -4230,8 +4230,9 @@ bool QSocCliWorker::runAgentLoop(
          * input so the LLM sees the skill prompt + any trailing arguments
          * as a single user message. This replaces `input` and falls through
          * to the normal agent query path below. */
+        bool skillDispatched = false;
         if (cmd.startsWith(QLatin1Char('/')) && !skillPaths.isEmpty()) {
-            /* Extract "/name args..." — cmd is already lowercased. */
+            /* Extract "/name args..." (cmd is already lowercased). */
             const int     spaceIdx = cmd.indexOf(QLatin1Char(' '));
             const QString skillCmd = (spaceIdx > 0) ? cmd.left(spaceIdx) : cmd;
             if (skillPaths.contains(skillCmd)) {
@@ -4246,8 +4247,21 @@ bool QSocCliWorker::runAgentLoop(
                     }
                     compositor.printContent(
                         QString("(Running skill %1)\n").arg(skillCmd), QTuiScrollView::Dim);
+                    skillDispatched = true;
                 }
             }
+        }
+
+        /* Reject unrecognised slash commands so they don't get shipped to the
+         * LLM as a typo'd query. Builtins were already handled above; skills
+         * set skillDispatched. Anything still starting with '/' is unknown. */
+        if (!skillDispatched && cmd.startsWith(QLatin1Char('/'))) {
+            const int     spaceIdx = cmd.indexOf(QLatin1Char(' '));
+            const QString unknown  = (spaceIdx > 0) ? cmd.left(spaceIdx) : cmd;
+            compositor.printContent(
+                QString("Unknown command: %1 (type /help for a list).\n").arg(unknown),
+                QTuiScrollView::Dim);
+            continue;
         }
 
         /* Run agent */
