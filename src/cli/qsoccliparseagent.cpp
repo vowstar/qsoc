@@ -3266,6 +3266,34 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent("  Shift+drag  - Native terminal selection (fallback)\n");
             compositor.printContent("  @<name>     - Fuzzy-complete a project file path\n");
             compositor.printContent("\n");
+
+            /* List user-invocable skills so the user can discover what
+             * /<name> commands the project and user dirs have registered. */
+            if (auto *reg = agent->getToolRegistry()) {
+                if (auto *skillTool = dynamic_cast<QSocToolSkillFind *>(
+                        reg->getTool(QStringLiteral("skill_find")))) {
+                    QList<QSocToolSkillFind::SkillInfo> userSkills;
+                    for (const auto &skill : skillTool->scanAllSkills()) {
+                        if (skill.userInvocable) {
+                            userSkills.append(skill);
+                        }
+                    }
+                    if (!userSkills.isEmpty()) {
+                        compositor.printContent("Installed skills:\n");
+                        for (const auto &skill : userSkills) {
+                            QString line = QStringLiteral("  /") + skill.name;
+                            if (!skill.argumentHint.isEmpty()) {
+                                line += QLatin1Char(' ') + skill.argumentHint;
+                            }
+                            line += QStringLiteral(" [") + skill.scope + QStringLiteral("] - ")
+                                    + skill.description + QLatin1Char('\n');
+                            compositor.printContent(line);
+                        }
+                        compositor.printContent("\n");
+                    }
+                }
+            }
+
             compositor.printContent("Or just type your question/request in natural language.\n");
             continue;
         }
