@@ -458,6 +458,11 @@ mcp:
       type: stdio
       command: /opt/legacy/mcp
       enabled: false
+
+    - name: lan_only
+      type: http
+      url: http://10.0.0.50/mcp
+      proxy: none           # bypass any qsoc-wide / system proxy
 ```
 
 #figure(
@@ -476,6 +481,11 @@ mcp:
     [`url`], [http: endpoint URL. Both immediate JSON and Server-Sent
        Events responses are accepted on the same endpoint.],
     [`headers`], [http: extra request headers, e.g. `Authorization`.],
+    [`proxy`], [http: per-server proxy override. Accepts the same flat
+       string form as the LLM endpoint `proxy:` field (`none` /
+       `system` / `http://host:port` / `socks5://host:port`). Empty or
+       `system` falls back to the qsoc-wide `proxy:` block; see
+       @proxy-config.],
     [`connect_timeout_ms`], [Connection timeout in milliseconds.
        Default 30000.],
     [`request_timeout_ms`], [Per-request timeout in milliseconds.

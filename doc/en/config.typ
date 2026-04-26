@@ -142,7 +142,18 @@ llm:
 
 == NETWORK PROXY CONFIGURATION
 <proxy-config>
-QSoC supports various proxy settings for network connections:
+QSoC resolves the proxy used for every HTTP-based subsystem (LLM
+endpoints, MCP HTTP transports, web tools) in three tiers, highest
+priority first:
+
++ *Per-target spec* attached to a single endpoint or server, e.g. an
+  MCP server's `proxy:` field.
++ *qsoc-wide* `proxy:` block at the top of the loaded config (the
+  block below).
++ *System / environment* fallback, picked up via `libproxy` and the
+  `http_proxy` / `https_proxy` env vars.
+
+The qsoc-wide block accepts the legacy nested form:
 
 #figure(
   align(center)[#table(
@@ -150,22 +161,64 @@ QSoC supports various proxy settings for network connections:
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [proxy.type], [Proxy type (system, none, http, socks5)],
+    [proxy.type], [Proxy type: `system`, `none`, `http`, `socks5`],
     [proxy.host], [Proxy server hostname or IP address],
     [proxy.port], [Proxy server port number],
     [proxy.user], [Username for proxy authentication (optional)],
     [proxy.password], [Password for proxy authentication (optional)],
   )],
-  caption: [PROXY CONFIGURATION OPTIONS],
+  caption: [QSOC-WIDE PROXY OPTIONS],
   kind: table,
 )
 
-Example:
 ```yaml
 proxy:
   type: http
   host: 127.0.0.1
   port: 7890
+```
+
+Per-target specs use a flat string instead, accepted at the LLM
+endpoint level and at every MCP server entry. The same vocabulary
+applies in both places:
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Value], [Effect]),
+    table.hline(),
+    [empty / `system` / `default`], [Inherit the qsoc-wide tier (then
+       system if that is also empty).],
+    [`none` / `off` / `direct`], [Bypass every proxy, connect directly.],
+    [`http://[user:pass@]host:port`], [Explicit HTTP proxy.],
+    [`socks5://[user:pass@]host:port`], [Explicit SOCKS5 proxy.],
+  )],
+  caption: [PER-TARGET PROXY VALUES],
+  kind: table,
+)
+
+Example combining the tiers:
+
+```yaml
+# qsoc-wide default: route everything through a corporate HTTP proxy.
+proxy:
+  type: http
+  host: proxy.internal
+  port: 8080
+
+mcp:
+  servers:
+    # Inherit the wide default.
+    - name: cloud_search
+      type: http
+      url: https://cloud.example/mcp
+
+    # Bypass the proxy for an internal service.
+    - name: lan_docs
+      type: http
+      url: http://10.0.0.50/mcp
+      proxy: none
 ```
 
 == AGENT CONFIGURATION
