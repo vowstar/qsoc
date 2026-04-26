@@ -77,6 +77,15 @@ public:
     int                  reconnectAttempts(const QString &name) const;
     bool                 hasGivenUp(const QString &name) const;
 
+    /**
+     * @brief Reset state and rebuild the named server immediately.
+     * @details Used by `/mcp reconnect`. Clears the reconnect counter
+     *          and the given-up flag, so a server that has exhausted
+     *          its automatic retries can still be revived on demand.
+     * @return true if the server name is known.
+     */
+    bool reconnectServer(const QString &name);
+
 signals:
     /** Tools have been registered (or refreshed) for one server. */
     void toolsRegistered(const QString &serverName, qsizetype count);

@@ -166,6 +166,21 @@ bool QSocMcpManager::hasGivenUp(const QString &name) const
     return servers_.value(name).givenUp;
 }
 
+bool QSocMcpManager::reconnectServer(const QString &name)
+{
+    if (!servers_.contains(name)) {
+        return false;
+    }
+    auto &state             = servers_[name];
+    state.reconnectAttempts = 0;
+    state.givenUp           = false;
+    if (!state.reconnectTimer.isNull()) {
+        state.reconnectTimer->stop();
+    }
+    rebuildServer(name);
+    return true;
+}
+
 void QSocMcpManager::onClientReady()
 {
     auto *client = senderClient();
