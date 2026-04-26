@@ -75,6 +75,7 @@ QSocToolSkillFind::SkillInfo QSocToolSkillFind::parseSkillFile(
 
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        info.parseError = QStringLiteral("cannot open file");
         return info;
     }
 
@@ -84,11 +85,13 @@ QSocToolSkillFind::SkillInfo QSocToolSkillFind::parseSkillFile(
 
     /* Parse YAML frontmatter between --- delimiters */
     if (!content.startsWith("---")) {
+        info.parseError = QStringLiteral("missing frontmatter ('---' on first line)");
         return info;
     }
 
     qsizetype endMarker = content.indexOf("\n---", 3);
     if (endMarker < 0) {
+        info.parseError = QStringLiteral("frontmatter has no closing '---' line");
         return info;
     }
 
@@ -135,9 +138,9 @@ QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanSkillsDir(
         QString skillFile = dir.filePath(entry + "/SKILL.md");
         if (QFile::exists(skillFile)) {
             SkillInfo info = parseSkillFile(skillFile, scope);
-            if (!info.name.isEmpty()) {
-                skills.append(info);
-            }
+            /* Broken SKILL.md files keep info.name empty but carry parseError;
+             * scanAllSkillFiles() needs them, scanAllSkills() filters them out. */
+            skills.append(info);
         }
     }
 
@@ -197,11 +200,54 @@ QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkills() const
     for (const QString &dir : dirs) {
         const QString scope = classify(dir);
         for (const SkillInfo &skill : scanSkillsDir(dir, scope)) {
+            if (skill.name.isEmpty()) {
+                continue;
+            }
             if (!seen.contains(skill.name)) {
                 seen.insert(skill.name);
                 result.append(skill);
             }
         }
+    }
+    return result;
+}
+
+QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkillFiles() const
+{
+    QString projectPath;
+    if (projectManager) {
+        projectPath = projectManager->getProjectPath();
+    }
+    if (projectPath.isEmpty()) {
+        projectPath = QDir::currentPath();
+    }
+
+    const QString envPrefix     = QSocPaths::envRoot();
+    const QString projectPrefix = QSocPaths::projectRoot(projectPath);
+    const QString userPrefix    = QSocPaths::userRoot();
+    const QString systemPrefix  = QSocPaths::systemRoot();
+
+    auto classify = [&](const QString &dir) -> QString {
+        if (!projectPrefix.isEmpty() && dir.startsWith(projectPrefix)) {
+            return QStringLiteral("project");
+        }
+        if (!envPrefix.isEmpty() && dir.startsWith(envPrefix)) {
+            return QStringLiteral("user");
+        }
+        if (dir.startsWith(userPrefix)) {
+            return QStringLiteral("user");
+        }
+        if (dir.startsWith(systemPrefix)) {
+            return QStringLiteral("system");
+        }
+        return QStringLiteral("user");
+    };
+
+    const QStringList dirs = allSkillsDirs();
+    QList<SkillInfo>  result;
+    for (const QString &dir : dirs) {
+        const QString scope = classify(dir);
+        result.append(scanSkillsDir(dir, scope));
     }
     return result;
 }
