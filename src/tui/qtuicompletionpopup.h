@@ -30,6 +30,10 @@ public:
     void               setItems(const QStringList &items);
     const QStringList &getItems() const { return items; }
 
+    /* Optional dim suffix shown after each item (e.g. argument hints).
+     * Length must match items; selection still returns the item text. */
+    void setHints(const QStringList &hints);
+
     void setHighlight(int index);
     int  getHighlight() const { return highlight; }
 
@@ -44,6 +48,7 @@ private:
     bool        visible      = false;
     bool        colorEnabled = true;
     QStringList items;
+    QStringList hints;
     int         highlight = 0;
     int         viewStart = 0;
     QString     title     = QStringLiteral("@file");

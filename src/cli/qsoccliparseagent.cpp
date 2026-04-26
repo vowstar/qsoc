@@ -1428,12 +1428,14 @@ bool QSocCliWorker::runAgentLoop(
            QStringLiteral("quit")};
     QStringList            slashCommands = slashCommandBuiltins;
     QMap<QString, QString> skillPaths;
+    QMap<QString, QString> skillHints;
 
     /* Rebuild the skill dispatch table and agent system-prompt listing from
      * the current projectManager state. Called at startup and on /project. */
     auto reloadSkills = [&]() {
         slashCommands = slashCommandBuiltins;
         skillPaths.clear();
+        skillHints.clear();
         QString listing;
         if (auto *reg = agent->getToolRegistry()) {
             if (auto *skillTool = dynamic_cast<QSocToolSkillFind *>(
@@ -1454,6 +1456,9 @@ bool QSocCliWorker::runAgentLoop(
                     if (skill.userInvocable && !slashCommands.contains(skill.name)) {
                         slashCommands.append(skill.name);
                         skillPaths.insert(QStringLiteral("/") + skill.name, skill.path);
+                        if (!skill.argumentHint.isEmpty()) {
+                            skillHints.insert(skill.name, skill.argumentHint);
+                        }
                     }
                 }
             }
@@ -1530,6 +1535,7 @@ bool QSocCliWorker::runAgentLoop(
          &popupAtPos,
          &dismissedFor,
          &slashCommands,
+         &skillHints,
          &remoteSession,
          &remotePath,
          detectSlashCommand,
@@ -1574,8 +1580,16 @@ bool QSocCliWorker::runAgentLoop(
                     closePopup();
                     return;
                 }
+                /* Pull argument-hints item-aligned so /commit-msg shows its
+                 * "[scope]" shorthand inline. Builtins have no hint slot. */
+                QStringList hints;
+                hints.reserve(matches.size());
+                for (const QString &cmd : matches) {
+                    hints.append(skillHints.value(cmd));
+                }
                 popupWidget.setTitle(QStringLiteral("/command"));
                 popupWidget.setItems(matches);
+                popupWidget.setHints(hints);
                 popupWidget.setHighlight(0);
                 popupWidget.setVisible(true);
                 popupKind  = PopupKind::SlashCommand;

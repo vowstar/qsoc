@@ -24,7 +24,7 @@ void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
 
     int visibleItems = qMin(static_cast<int>(items.size()), MAX_VISIBLE_ITEMS);
 
-    /* Compute box width from longest visible item */
+    /* Compute box width from longest visible item (plus its hint, if any) */
     int maxItemW = QTuiText::visualWidth(title) + 4;
     for (int idx = 0; idx < visibleItems; idx++) {
         int visIdx = viewStart + idx;
@@ -32,7 +32,10 @@ void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
             break;
         }
         int itemW = QTuiText::visualWidth(items[visIdx]) + 4;
-        maxItemW  = qMax(maxItemW, itemW);
+        if (visIdx < hints.size() && !hints[visIdx].isEmpty()) {
+            itemW += QTuiText::visualWidth(hints[visIdx]) + 1;
+        }
+        maxItemW = qMax(maxItemW, itemW);
     }
     int boxWidth = qMin(width, qMax(maxItemW, 20));
 
@@ -51,14 +54,35 @@ void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
             break;
         }
         QString line = QStringLiteral("  ") + items[visIdx];
-        while (QTuiText::visualWidth(line) < boxWidth) {
-            line += QLatin1Char(' ');
-        }
 
         bool        isHL  = (visIdx == highlight) && colorEnabled;
         QTuiFgColor fgCol = isHL ? QTuiFgColor::Yellow : QTuiFgColor::Default;
         QTuiBgColor bgCol = isHL ? MENU_BG_HIGHLIGHT : MENU_BG_NORMAL;
+
+        const bool hasHint = visIdx < hints.size() && !hints[visIdx].isEmpty();
+        if (hasHint) {
+            line += QLatin1Char(' ');
+        }
+        while (QTuiText::visualWidth(line) + (hasHint ? QTuiText::visualWidth(hints[visIdx]) : 0)
+               < boxWidth) {
+            line += QLatin1Char(' ');
+        }
         screen.putString(0, startY + 1 + row, line.left(width), isHL, false, false, fgCol, bgCol);
+
+        if (hasHint) {
+            const int hintX = QTuiText::visualWidth(line);
+            if (hintX < width) {
+                screen.putString(
+                    hintX,
+                    startY + 1 + row,
+                    hints[visIdx].left(width - hintX),
+                    false,
+                    false,
+                    false,
+                    QTuiFgColor::Gray,
+                    bgCol);
+            }
+        }
     }
 
     /* Footer */
@@ -89,10 +113,18 @@ void QTuiCompletionPopup::setVisible(bool vis)
 void QTuiCompletionPopup::setItems(const QStringList &newItems)
 {
     items = newItems;
+    /* Hints are item-aligned; reset whenever the item list changes so a
+     * stale hint cannot leak across two unrelated popup invocations. */
+    hints.clear();
     if (highlight >= items.size()) {
         highlight = items.isEmpty() ? 0 : static_cast<int>(items.size()) - 1;
     }
     adjustViewport();
+}
+
+void QTuiCompletionPopup::setHints(const QStringList &newHints)
+{
+    hints = newHints;
 }
 
 void QTuiCompletionPopup::setHighlight(int index)
