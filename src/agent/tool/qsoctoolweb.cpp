@@ -3,8 +3,8 @@
 
 #include "agent/tool/qsoctoolweb.h"
 
-#include <QNetworkProxy>
-#include <QNetworkProxyFactory>
+#include "common/qsocproxy.h"
+
 #include <QNetworkRequest>
 #include <QTimer>
 #include <QUrl>
@@ -53,50 +53,7 @@ json QSocToolWebSearch::getParametersSchema() const
 
 void QSocToolWebSearch::setupProxy()
 {
-    if (!networkManager) {
-        return;
-    }
-
-    if (!config) {
-        QNetworkProxyFactory::setUseSystemConfiguration(true);
-        networkManager->setProxy(QNetworkProxy::DefaultProxy);
-        return;
-    }
-
-    QString proxyType = config->getValue("proxy.type", "system").toLower();
-
-    QNetworkProxy proxy;
-
-    if (proxyType == "none") {
-        QNetworkProxyFactory::setUseSystemConfiguration(false);
-        proxy.setType(QNetworkProxy::NoProxy);
-    } else if (proxyType == "socks5") {
-        QNetworkProxyFactory::setUseSystemConfiguration(false);
-        proxy.setType(QNetworkProxy::Socks5Proxy);
-        proxy.setHostName(config->getValue("proxy.host", "127.0.0.1"));
-        proxy.setPort(config->getValue("proxy.port", "1080").toUInt());
-        QString user = config->getValue("proxy.user");
-        if (!user.isEmpty()) {
-            proxy.setUser(user);
-            proxy.setPassword(config->getValue("proxy.password"));
-        }
-    } else if (proxyType == "http") {
-        QNetworkProxyFactory::setUseSystemConfiguration(false);
-        proxy.setType(QNetworkProxy::HttpProxy);
-        proxy.setHostName(config->getValue("proxy.host", "127.0.0.1"));
-        proxy.setPort(config->getValue("proxy.port", "8080").toUInt());
-        QString user = config->getValue("proxy.user");
-        if (!user.isEmpty()) {
-            proxy.setUser(user);
-            proxy.setPassword(config->getValue("proxy.password"));
-        }
-    } else {
-        QNetworkProxyFactory::setUseSystemConfiguration(true);
-        networkManager->setProxy(QNetworkProxy::DefaultProxy);
-        return;
-    }
-
-    networkManager->setProxy(proxy);
+    QSocProxy::apply(networkManager, QSocProxy::fromLegacyConfig(config));
 }
 
 QString QSocToolWebSearch::execute(const json &arguments)
@@ -285,50 +242,7 @@ json QSocToolWebFetch::getParametersSchema() const
 
 void QSocToolWebFetch::setupProxy()
 {
-    if (!networkManager) {
-        return;
-    }
-
-    if (!config) {
-        QNetworkProxyFactory::setUseSystemConfiguration(true);
-        networkManager->setProxy(QNetworkProxy::DefaultProxy);
-        return;
-    }
-
-    QString proxyType = config->getValue("proxy.type", "system").toLower();
-
-    QNetworkProxy proxy;
-
-    if (proxyType == "none") {
-        QNetworkProxyFactory::setUseSystemConfiguration(false);
-        proxy.setType(QNetworkProxy::NoProxy);
-    } else if (proxyType == "socks5") {
-        QNetworkProxyFactory::setUseSystemConfiguration(false);
-        proxy.setType(QNetworkProxy::Socks5Proxy);
-        proxy.setHostName(config->getValue("proxy.host", "127.0.0.1"));
-        proxy.setPort(config->getValue("proxy.port", "1080").toUInt());
-        QString user = config->getValue("proxy.user");
-        if (!user.isEmpty()) {
-            proxy.setUser(user);
-            proxy.setPassword(config->getValue("proxy.password"));
-        }
-    } else if (proxyType == "http") {
-        QNetworkProxyFactory::setUseSystemConfiguration(false);
-        proxy.setType(QNetworkProxy::HttpProxy);
-        proxy.setHostName(config->getValue("proxy.host", "127.0.0.1"));
-        proxy.setPort(config->getValue("proxy.port", "8080").toUInt());
-        QString user = config->getValue("proxy.user");
-        if (!user.isEmpty()) {
-            proxy.setUser(user);
-            proxy.setPassword(config->getValue("proxy.password"));
-        }
-    } else {
-        QNetworkProxyFactory::setUseSystemConfiguration(true);
-        networkManager->setProxy(QNetworkProxy::DefaultProxy);
-        return;
-    }
-
-    networkManager->setProxy(proxy);
+    QSocProxy::apply(networkManager, QSocProxy::fromLegacyConfig(config));
 }
 
 namespace {
