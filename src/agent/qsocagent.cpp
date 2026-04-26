@@ -819,7 +819,9 @@ QString QSocAgent::buildSystemPromptWithMemory() const
             QStringList serverNames = mcpToolCounts.keys();
             std::sort(serverNames.begin(), serverNames.end());
             for (const QString &srv : serverNames) {
-                prompt += QStringLiteral("- %1 (%2 tools)\n").arg(srv).arg(mcpToolCounts.value(srv));
+                const int     count = mcpToolCounts.value(srv);
+                const QString unit  = count == 1 ? QStringLiteral("tool") : QStringLiteral("tools");
+                prompt += QStringLiteral("- %1 (%2 %3)\n").arg(srv).arg(count).arg(unit);
             }
         }
     }

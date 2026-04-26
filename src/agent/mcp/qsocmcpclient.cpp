@@ -159,6 +159,17 @@ void QSocMcpClient::onTransportClosed()
 void QSocMcpClient::onTransportError(const QString &message)
 {
     cancelAllPending(kClientErrorTransport, message);
+    /* During handshake the transport error is fatal: there is no
+     * recovery path for an unanswered initialize. Emit closed so the
+     * manager can trigger a reconnect with backoff, just like a
+     * process crash. After Ready the error is per-request; tool-call
+     * code paths surface it via requestFailed and the client stays
+     * usable for the next request. */
+    if (state_ == State::Connecting || state_ == State::Initializing) {
+        setState(State::Disconnected);
+        emit closed();
+        return;
+    }
     setState(State::Failed);
 }
 

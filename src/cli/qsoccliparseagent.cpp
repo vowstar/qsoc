@@ -3518,24 +3518,25 @@ bool QSocCliWorker::runAgentLoop(
                             break;
                         }
                     }
-                    const auto tools = mcpManager->toolsForClient(name);
-                    compositor.printContent(QString("  %1  [%2]  %3 tools\n")
+                    const auto    tools = mcpManager->toolsForClient(name);
+                    const QString unit  = tools.size() == 1 ? QStringLiteral("tool")
+                                                            : QStringLiteral("tools");
+                    compositor.printContent(QString("  %1  [%2]  %3 %4\n")
                                                 .arg(name, -16)
                                                 .arg(status)
-                                                .arg(tools.size()));
+                                                .arg(tools.size())
+                                                .arg(unit));
                 }
                 compositor.printContent("\n");
                 continue;
             }
             if (parts.first() == "reconnect" && parts.size() >= 2) {
                 const QString target = parts.mid(1).join(QChar(' '));
-                auto         *client = mcpManager->findClient(target);
-                if (client == nullptr) {
+                if (!mcpManager->reconnectServer(target)) {
                     compositor.printContent(
                         QString("Unknown MCP server: %1\n").arg(target), QTuiScrollView::Dim);
                     continue;
                 }
-                client->stop();
                 compositor
                     .printContent(QString("Reconnecting %1 ...\n").arg(target), QTuiScrollView::Dim);
                 continue;
