@@ -176,10 +176,72 @@ The agent provides the following tools through natural language:
   workflows
 - *Skills* -- `skill_find`, `skill_create` for user-defined prompt templates
   resolved across four layers (`$QSOC_HOME/skills`, `<project>/.qsoc/skills`,
-  `~/.config/qsoc/skills`, and a platform-native system skills dir);
-  see @config-files for the full layout
+  `~/.config/qsoc/skills`, and a platform-native system skills dir), plus
+  any directory listed in `QSOC_SKILLS_PATH`; see @agent-skills for the
+  SKILL.md format and @config-files for the full layout
 - *LSP* -- `lsp` for language server diagnostics and symbol lookup
 - *Web* -- `web_fetch` for URL content, `web_search` via SearXNG (when configured)
+
+== SKILLS
+<agent-skills>
+A skill is a `SKILL.md` markdown file with a YAML frontmatter block. Skills
+extend the agent without code changes. They are discovered across the four
+configuration layers (see @config-files) plus any directory listed in the
+`QSOC_SKILLS_PATH` environment variable. Same-name skills in higher layers
+shadow lower ones.
+
+=== File Layout
+<agent-skill-layout>
+Each skill lives in its own directory:
+
+```
+<root>/skills/<skill-name>/SKILL.md
+```
+
+Where `<root>` is one of: `$QSOC_HOME`, `<project>/.qsoc`,
+`~/.config/qsoc`, the platform system root, or any entry in
+`QSOC_SKILLS_PATH` (colon-separated on Unix, semicolon on Windows).
+
+=== Frontmatter Fields
+<agent-skill-frontmatter>
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Key], [Meaning]),
+    table.hline(),
+    [`name`], [Skill identifier (lowercase, digits, hyphens)],
+    [`description`], [One-line summary shown in listings],
+    [`when-to-use`], [Hint for the model on when to invoke],
+    [`argument-hint`], [Shorthand for arguments shown in autocomplete],
+    [`user-invocable`], [`true` (default) registers a `/name` slash command],
+    [`disable-model-invocation`], [`true` hides the skill from `skill_find` and from the system-prompt listing while keeping `/name` dispatch available],
+  )],
+  caption: [SKILL.md FRONTMATTER FIELDS],
+  kind: table,
+)
+
+=== Body and Placeholders
+<agent-skill-placeholders>
+The skill body is treated as a prompt prepended to the user message when
+the skill is dispatched. Three placeholders are substituted before the
+body is sent to the LLM:
+
+- `${ARGS}`: text typed after `/name` (empty when no args were passed)
+- `${CWD}`: the agent working directory
+- `${PROJECT}`: the project directory
+
+When `${ARGS}` is referenced anywhere in the body, the legacy
+"Arguments passed: ..." suffix is suppressed so the same value does not
+appear twice.
+
+=== Discovery and Diagnostics
+<agent-skill-diagnostics>
+At REPL startup and after `/project`, the agent rescans every skill root
+and prints a one-line warning for any `SKILL.md` whose frontmatter is
+missing or unclosed. `/help` lists the user-invocable skills along with
+their `argument-hint` so they are discoverable without grepping the
+filesystem.
 
 == REASONING EFFORT
 <agent-effort>
