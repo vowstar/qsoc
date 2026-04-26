@@ -359,6 +359,29 @@ private slots:
         QCOMPARE(QSocToolSkillFind::formatPromptListing({}), QString());
     }
 
+    void testSubstitutePlaceholders()
+    {
+        bool          consumed = false;
+        const QString result   = QSocToolSkillFind::substitutePlaceholders(
+            QStringLiteral("args=${ARGS} cwd=${CWD} project=${PROJECT}"),
+            QStringLiteral("foo bar"),
+            QStringLiteral("/tmp/here"),
+            QStringLiteral("/srv/proj"),
+            &consumed);
+        QCOMPARE(result, QStringLiteral("args=foo bar cwd=/tmp/here project=/srv/proj"));
+        QVERIFY(consumed);
+
+        bool          consumed2 = true;
+        const QString noArgs    = QSocToolSkillFind::substitutePlaceholders(
+            QStringLiteral("plain body, no placeholders"),
+            QStringLiteral("ignored"),
+            QStringLiteral("/x"),
+            QStringLiteral("/y"),
+            &consumed2);
+        QCOMPARE(noArgs, QStringLiteral("plain body, no placeholders"));
+        QVERIFY(!consumed2);
+    }
+
     /* scanAllSkillFiles surfaces parse errors so the REPL can warn the user. */
     void testScanReportsParseErrors()
     {

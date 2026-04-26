@@ -242,6 +242,23 @@ QString QSocToolSkillFind::formatPromptListing(const QList<SkillInfo> &skills)
     return listing;
 }
 
+QString QSocToolSkillFind::substitutePlaceholders(
+    const QString &body,
+    const QString &args,
+    const QString &cwd,
+    const QString &projectPath,
+    bool          *argsConsumed)
+{
+    if (argsConsumed != nullptr) {
+        *argsConsumed = body.contains(QStringLiteral("${ARGS}"));
+    }
+    QString out = body;
+    out.replace(QStringLiteral("${ARGS}"), args);
+    out.replace(QStringLiteral("${CWD}"), cwd);
+    out.replace(QStringLiteral("${PROJECT}"), projectPath);
+    return out;
+}
+
 QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkillFiles() const
 {
     QString projectPath;
