@@ -796,6 +796,34 @@ QString QSocAgent::buildSystemPromptWithMemory() const
         prompt += QStringLiteral("\n# Available skills\n\n") + agentConfig.skillListing;
     }
 
+    /* Section 11.5: External MCP servers contributing tools */
+    if (toolRegistry != nullptr) {
+        QHash<QString, int> mcpToolCounts;
+        const QStringList   allNames = toolRegistry->toolNames();
+        for (const QString &name : allNames) {
+            if (!name.startsWith(QStringLiteral("mcp__"))) {
+                continue;
+            }
+            const QString rest = name.mid(5);
+            const int     sep  = rest.indexOf(QStringLiteral("__"));
+            if (sep <= 0) {
+                continue;
+            }
+            mcpToolCounts[rest.left(sep)] += 1;
+        }
+        if (!mcpToolCounts.isEmpty()) {
+            prompt += QStringLiteral(
+                "\n# External MCP servers\n"
+                "These remote Model Context Protocol servers contribute tools, "
+                "namespaced as mcp__<server>__<tool>:\n");
+            QStringList serverNames = mcpToolCounts.keys();
+            std::sort(serverNames.begin(), serverNames.end());
+            for (const QString &srv : serverNames) {
+                prompt += QStringLiteral("- %1 (%2 tools)\n").arg(srv).arg(mcpToolCounts.value(srv));
+            }
+        }
+    }
+
     /* Section 11: Memory */
     if (agentConfig.autoLoadMemory && memoryManager) {
         QString memoryContent = memoryManager->loadMemoryForPrompt(agentConfig.memoryMaxChars);
