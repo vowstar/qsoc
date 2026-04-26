@@ -37,9 +37,10 @@ public:
         QString argumentHint; /* e.g. "-m 'message'" for /commit */
         QString whenToUse;    /* trigger hint for the LLM */
         QString path;
-        QString scope;                /* "project" or "user" */
-        bool    userInvocable = true; /* register as /name slash command */
-        QString parseError;           /* non-empty if the SKILL.md was malformed */
+        QString scope;                          /* "project" or "user" */
+        bool    userInvocable          = true;  /* register as /name slash command */
+        bool    disableModelInvocation = false; /* hide from model-facing listings */
+        QString parseError;                     /* non-empty if the SKILL.md was malformed */
     };
 
     /* Scan all skill directories like scanAllSkills(), but include entries
