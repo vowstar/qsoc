@@ -3275,13 +3275,18 @@ bool QSocCliWorker::runAgentLoop(
                     }
                     if (!userSkills.isEmpty()) {
                         compositor.printContent("Installed skills:\n");
+                        constexpr int kHelpDescCap = 120;
                         for (const auto &skill : userSkills) {
                             QString line = QStringLiteral("  /") + skill.name;
                             if (!skill.argumentHint.isEmpty()) {
                                 line += QLatin1Char(' ') + skill.argumentHint;
                             }
+                            QString desc = skill.description;
+                            if (desc.size() > kHelpDescCap) {
+                                desc = desc.left(kHelpDescCap - 3) + QStringLiteral("...");
+                            }
                             line += QStringLiteral(" [") + skill.scope + QStringLiteral("] - ")
-                                    + skill.description + QLatin1Char('\n');
+                                    + desc + QLatin1Char('\n');
                             compositor.printContent(line);
                         }
                         compositor.printContent("\n");
