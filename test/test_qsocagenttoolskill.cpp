@@ -400,6 +400,41 @@ private slots:
         QVERIFY(body.contains(QStringLiteral("secret-from-model")));
     }
 
+    /* QSOC_SKILLS_PATH adds extra discovery roots beyond the four layers. */
+    void testExtraSkillsPathFromEnv()
+    {
+        QTemporaryDir extraDir;
+        QVERIFY(extraDir.isValid());
+
+        const QString skillDir = QDir(extraDir.path()).filePath("teamlib-skill");
+        QVERIFY(QDir().mkpath(skillDir));
+        QFile file(QDir(skillDir).filePath("SKILL.md"));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream out(&file);
+        out << "---\nname: teamlib-skill\ndescription: from env path\n---\nbody\n";
+        file.close();
+
+        const QByteArray prev = qgetenv("QSOC_SKILLS_PATH");
+        qputenv("QSOC_SKILLS_PATH", extraDir.path().toUtf8());
+
+        QSocToolSkillFind tool(this, projectManager);
+        bool              found = false;
+        for (const auto &skill : tool.scanAllSkills()) {
+            if (skill.name == QStringLiteral("teamlib-skill")) {
+                found = true;
+                break;
+            }
+        }
+
+        if (prev.isNull()) {
+            qunsetenv("QSOC_SKILLS_PATH");
+        } else {
+            qputenv("QSOC_SKILLS_PATH", prev);
+        }
+
+        QVERIFY(found);
+    }
+
     void testSubstitutePlaceholders()
     {
         bool          consumed = false;
