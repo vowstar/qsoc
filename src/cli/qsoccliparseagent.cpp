@@ -4234,10 +4234,17 @@ bool QSocCliWorker::runAgentLoop(
                 const QString skillContent = QSocToolSkillFind(nullptr, projectManager)
                                                  .readSkillContent(skillPaths.value(skillCmd));
                 if (!skillContent.isEmpty()) {
-                    const QString args = (spaceIdx > 0) ? input.mid(spaceIdx + 1).trimmed()
-                                                        : QString();
-                    input              = skillContent;
-                    if (!args.isEmpty()) {
+                    const QString args         = (spaceIdx > 0) ? input.mid(spaceIdx + 1).trimmed()
+                                                                : QString();
+                    QString       projectPath  = projectManager ? projectManager->getProjectPath()
+                                                                : QString();
+                    bool          consumedArgs = false;
+                    input                      = QSocToolSkillFind::substitutePlaceholders(
+                        skillContent, args, QDir::currentPath(), projectPath, &consumedArgs);
+                    /* Only fall back to the legacy "Arguments passed:" suffix
+                     * when the skill author did not place ${ARGS} themselves;
+                     * otherwise the same args would appear twice. */
+                    if (!args.isEmpty() && !consumedArgs) {
                         input += QStringLiteral("\n\nArguments passed: ") + args;
                     }
                     compositor.printContent(

@@ -52,6 +52,16 @@ public:
      * when one skill's description grows by a few words. */
     static QString formatPromptListing(const QList<SkillInfo> &skills);
 
+    /* Replace ${ARGS}, ${CWD} and ${PROJECT} placeholders in a skill body.
+     * Returns the substituted text and sets argsConsumed to true if the
+     * body referenced ${ARGS} (so callers can avoid double-appending it). */
+    static QString substitutePlaceholders(
+        const QString &body,
+        const QString &args,
+        const QString &cwd,
+        const QString &projectPath,
+        bool          *argsConsumed = nullptr);
+
     /* Scan all skill directories and return a merged, deduplicated list.
      * Project-scoped skills take priority over user-scoped ones with the
      * same name. Public so the REPL can use it for prompt injection and
