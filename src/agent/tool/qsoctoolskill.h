@@ -39,7 +39,13 @@ public:
         QString path;
         QString scope;                /* "project" or "user" */
         bool    userInvocable = true; /* register as /name slash command */
+        QString parseError;           /* non-empty if the SKILL.md was malformed */
     };
+
+    /* Scan all skill directories like scanAllSkills(), but include entries
+     * whose SKILL.md failed to parse so the caller can surface diagnostics
+     * to the user. Each entry's path is set; name is empty when broken. */
+    QList<SkillInfo> scanAllSkillFiles() const;
 
     /* Scan all skill directories and return a merged, deduplicated list.
      * Project-scoped skills take priority over user-scoped ones with the

@@ -337,6 +337,51 @@ private slots:
         QCOMPARE(definition["type"].get<std::string>(), "function");
         QCOMPARE(definition["function"]["name"].get<std::string>(), "skill_create");
     }
+
+    /* scanAllSkillFiles surfaces parse errors so the REPL can warn the user. */
+    void testScanReportsParseErrors()
+    {
+        const QString skillsDir
+            = QDir(tempDir.path()).filePath(".qsoc/skills/broken-no-frontmatter");
+        QVERIFY(QDir().mkpath(skillsDir));
+        QFile noFrontmatter(QDir(skillsDir).filePath("SKILL.md"));
+        QVERIFY(noFrontmatter.open(QIODevice::WriteOnly | QIODevice::Text));
+        noFrontmatter.write("plain markdown body, no --- delimiter\n");
+        noFrontmatter.close();
+
+        const QString unclosedDir = QDir(tempDir.path()).filePath(".qsoc/skills/broken-unclosed");
+        QVERIFY(QDir().mkpath(unclosedDir));
+        QFile unclosed(QDir(unclosedDir).filePath("SKILL.md"));
+        QVERIFY(unclosed.open(QIODevice::WriteOnly | QIODevice::Text));
+        unclosed.write("---\nname: x\ndescription: missing closing\n");
+        unclosed.close();
+
+        QSocToolSkillFind tool(this, projectManager);
+        const auto        all = tool.scanAllSkillFiles();
+
+        bool sawNoFrontmatter = false;
+        bool sawUnclosed      = false;
+        for (const auto &info : all) {
+            if (info.path.endsWith("broken-no-frontmatter/SKILL.md")) {
+                QVERIFY(!info.parseError.isEmpty());
+                QVERIFY(info.name.isEmpty());
+                sawNoFrontmatter = true;
+            } else if (info.path.endsWith("broken-unclosed/SKILL.md")) {
+                QVERIFY(!info.parseError.isEmpty());
+                QVERIFY(info.name.isEmpty());
+                sawUnclosed = true;
+            }
+        }
+        QVERIFY(sawNoFrontmatter);
+        QVERIFY(sawUnclosed);
+
+        /* The non-broken scan must still drop both. */
+        const auto good = tool.scanAllSkills();
+        for (const auto &info : good) {
+            QVERIFY(!info.path.endsWith("broken-no-frontmatter/SKILL.md"));
+            QVERIFY(!info.path.endsWith("broken-unclosed/SKILL.md"));
+        }
+    }
 };
 
 QSOC_TEST_MAIN(Test)

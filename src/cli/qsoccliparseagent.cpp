@@ -1455,6 +1455,16 @@ bool QSocCliWorker::runAgentLoop(
         if (auto *reg = agent->getToolRegistry()) {
             if (auto *skillTool = dynamic_cast<QSocToolSkillFind *>(
                     reg->getTool(QStringLiteral("skill_find")))) {
+                /* Warn the user about SKILL.md files that failed to parse so
+                 * they don't silently disappear from the listing. */
+                for (const auto &broken : skillTool->scanAllSkillFiles()) {
+                    if (!broken.parseError.isEmpty()) {
+                        compositor.printContent(
+                            QString("Warning: skill at %1 ignored (%2).\n")
+                                .arg(broken.path, broken.parseError),
+                            QTuiScrollView::Dim);
+                    }
+                }
                 const auto skills = skillTool->scanAllSkills();
                 if (!skills.isEmpty()) {
                     listing += QStringLiteral(
