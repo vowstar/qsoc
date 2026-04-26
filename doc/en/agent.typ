@@ -95,29 +95,29 @@ The following commands are available during an interactive session:
 <agent-keyboard>
 Editing and navigation in the prompt:
 
-- *Left/Right*, *Ctrl+A/E* -- Move cursor / jump to start or end of line
-- *Up/Down* -- Browse prompt history
-- *Ctrl+K*, *Ctrl+U*, *Ctrl+W* -- Delete to end of line / start of line / previous word
-- *Backspace* -- Delete character before cursor (CJK/emoji aware)
-- *Ctrl+\_* -- Undo the last edit
-- *`\` + Enter* -- Continue on next line; multi-line paste is preserved as one input
+- *Left/Right*, *Ctrl+A/E*: Move cursor / jump to start or end of line
+- *Up/Down*: Browse prompt history
+- *Ctrl+K*, *Ctrl+U*, *Ctrl+W*: Delete to end of line / start of line / previous word
+- *Backspace*: Delete character before cursor (CJK/emoji aware)
+- *Ctrl+\_*: Undo the last edit
+- *`\` + Enter*: Continue on next line; multi-line paste is preserved as one input
 
 External editor and search:
 
-- *Ctrl+X Ctrl+E* or *Ctrl+G* -- Edit current input in `$EDITOR`
-- *Ctrl+R* -- Reverse-i-search through prompt history
+- *Ctrl+X Ctrl+E* or *Ctrl+G*: Edit current input in `$EDITOR`
+- *Ctrl+R*: Reverse-i-search through prompt history
 
 View and selection:
 
-- *Ctrl+T* -- Toggle TODO list visibility
-- *Ctrl+L* -- Force a full screen repaint
-- *Mouse drag* -- Select and auto-copy to clipboard (OSC 52)
-- *Shift + drag* -- Native terminal selection (fallback)
+- *Ctrl+T*: Toggle TODO list visibility
+- *Ctrl+L*: Force a full screen repaint
+- *Mouse drag*: Select and auto-copy to clipboard (OSC 52)
+- *Shift + drag*: Native terminal selection (fallback)
 
 Completion and interrupt:
 
-- *`@<name>`* -- Fuzzy-complete a project file path
-- *ESC* -- Abort the current operation
+- *`@<name>`*: Fuzzy-complete a project file path
+- *ESC*: Abort the current operation
 
 While the agent is executing, you can keep typing. Press *Enter* to submit; the
 agent consumes queued requests at the start of the next iteration. Pressing
@@ -128,30 +128,30 @@ calls; conversation history is preserved.
 <agent-decision-flow>
 The agent follows a four-tier decision flow for every request:
 
-+ *Tier 1 -- Skills*: Search for matching user-defined skills via `skill_find`.
++ *Tier 1: Skills*: Search for matching user-defined skills via `skill_find`.
   If a skill matches, read and follow its instructions.
-+ *Tier 2 -- SoC Infrastructure*: If the request involves clock tree, reset
++ *Tier 2: SoC Infrastructure*: If the request involves clock tree, reset
   network, power sequencing, or FSM generation, the agent queries built-in
   documentation (`query_docs`) for the YAML format, writes a `.soc_net` file,
   and calls `generate_verilog` to produce production-grade RTL. The agent never
   writes clock/reset/power/FSM Verilog by hand.
-+ *Tier 3 -- Plan*: For tasks requiring 3+ steps, decompose into a TODO
++ *Tier 3: Plan*: For tasks requiring 3+ steps, decompose into a TODO
   checklist before execution.
-+ *Tier 4 -- Execute*: Use file, shell, generation, or other tools directly.
++ *Tier 4: Execute*: Use file, shell, generation, or other tools directly.
 
 == SoC INFRASTRUCTURE
 <agent-soc-infrastructure>
 The `generate_verilog` tool produces production RTL from `.soc_net` YAML files
 with four primitive generators:
 
-- *Clock* -- ICG gating, static/dynamic/auto dividers, glitch-free MUX, STA
+- *Clock*: ICG gating, static/dynamic/auto dividers, glitch-free MUX, STA
   guide buffers, test enable bypass
-- *Reset* -- ARSR synchronizers (async assert / sync release), multi-source
+- *Reset*: ARSR synchronizers (async assert / sync release), multi-source
   matrices, reset reason recording
-- *Power* -- 8-state FSM per domain
+- *Power*: 8-state FSM per domain
   (OFF→WAIT\_DEP→TURN\_ON→CLK\_ON→ON→RST\_ASSERT→TURN\_OFF), hard/soft
   dependencies, fault recovery
-- *FSM* -- Table-mode (Moore/Mealy) and microcode-mode, binary/onehot/gray
+- *FSM*: Table-mode (Moore/Mealy) and microcode-mode, binary/onehot/gray
   encoding
 
 The agent detects SoC infrastructure requests by keyword (clock, reset, power,
@@ -161,26 +161,26 @@ FSM, etc.) and routes them through Tier 2 automatically.
 <agent-capabilities>
 The agent provides the following tools through natural language:
 
-- *Project* -- `project_list`, `project_show`, `project_create`
-- *Module* -- `module_list`, `module_show`, `module_import`, `module_bus_add`
-- *Bus* -- `bus_list`, `bus_show`, `bus_import` (AXI, APB, Wishbone, etc.)
-- *Generation* -- `generate_verilog` (RTL from `.soc_net`), `generate_template`
+- *Project*: `project_list`, `project_show`, `project_create`
+- *Module*: `module_list`, `module_show`, `module_import`, `module_bus_add`
+- *Bus*: `bus_list`, `bus_show`, `bus_import` (AXI, APB, Wishbone, etc.)
+- *Generation*: `generate_verilog` (RTL from `.soc_net`), `generate_template`
   (Jinja2 rendering)
-- *Files* -- `read_file`, `list_files`, `write_file`, `edit_file`; `path_context`
+- *Files*: `read_file`, `list_files`, `write_file`, `edit_file`; `path_context`
   reports and adjusts allowed write directories
-- *Shell* -- `bash` with timeout, `bash_manage` for background processes
-- *Documentation* -- `query_docs` by topic (about, commands, config, bus, clock,
+- *Shell*: `bash` with timeout, `bash_manage` for background processes
+- *Documentation*: `query_docs` by topic (about, commands, config, bus, clock,
   fsm, logic, netlist, power, reset, template, validation, overview, ...)
-- *Memory* -- `memory_read`, `memory_write` for persistent notes across sessions
-- *Todo* -- `todo_list`, `todo_add`, `todo_update`, `todo_delete` for multi-step
+- *Memory*: `memory_read`, `memory_write` for persistent notes across sessions
+- *Todo*: `todo_list`, `todo_add`, `todo_update`, `todo_delete` for multi-step
   workflows
-- *Skills* -- `skill_find`, `skill_create` for user-defined prompt templates
+- *Skills*: `skill_find`, `skill_create` for user-defined prompt templates
   resolved across four layers (`$QSOC_HOME/skills`, `<project>/.qsoc/skills`,
   `~/.config/qsoc/skills`, and a platform-native system skills dir), plus
   any directory listed in `QSOC_SKILLS_PATH`; see @agent-skills for the
   SKILL.md format and @config-files for the full layout
-- *LSP* -- `lsp` for language server diagnostics and symbol lookup
-- *Web* -- `web_fetch` for URL content, `web_search` via SearXNG (when configured)
+- *LSP*: `lsp` for language server diagnostics and symbol lookup
+- *Web*: `web_fetch` for URL content, `web_search` via SearXNG (when configured)
 
 == SKILLS
 <agent-skills>
@@ -277,11 +277,11 @@ output is displayed in dim text.
 <agent-context-compaction>
 Long conversations are managed by a three-layer compaction system:
 
-+ *Tool Output Pruning* (60% threshold) -- Old tool outputs are replaced with
++ *Tool Output Pruning* (60% threshold): Old tool outputs are replaced with
   `[output pruned]`. Zero LLM calls.
-+ *LLM Compaction* (80% threshold) -- Older messages are summarized by the LLM,
++ *LLM Compaction* (80% threshold): Older messages are summarized by the LLM,
   preserving technical details (file paths, decisions, errors).
-+ *Auto-Continue* -- After compaction during streaming, the agent automatically
++ *Auto-Continue*: After compaction during streaming, the agent automatically
   resumes the current task.
 
 Use `/compact` to trigger compaction manually, and `/context` to inspect the
@@ -291,12 +291,12 @@ per-category token breakdown.
 <agent-system-prompt>
 On every turn, the system prompt is composed from:
 
-- *Modular sections* -- built-in role, decision flow, and tool usage guidance
-- *Project instructions* -- `AGENTS.md` and `AGENTS.local.md` in the project
+- *Modular sections*: built-in role, decision flow, and tool usage guidance
+- *Project instructions*: `AGENTS.md` and `AGENTS.local.md` in the project
   directory, injected verbatim
-- *Memory* -- entries from the auto-memory store (see `memory_read` /
+- *Memory*: entries from the auto-memory store (see `memory_read` /
   `memory_write`), capped by `agent.memory_max_chars`
-- *Skill listing* -- names and descriptions of installed skills so the agent
+- *Skill listing*: names and descriptions of installed skills so the agent
   can route to them via `skill_find`
 
 Set `agent.system_prompt` in the config to replace the modular base with a
@@ -407,12 +407,12 @@ The agent uses a read-unrestricted, write-restricted permission model:
 Each session is persisted as `.qsoc/sessions/<id>.jsonl` under the project
 directory, one JSON event per line (messages plus metadata). This enables:
 
-- `qsoc agent --continue` -- resume the most recent session
-- `qsoc agent --resume [id]` -- pick a session from a list, or load one by id /
+- `qsoc agent --continue`: resume the most recent session
+- `qsoc agent --resume [id]`: pick a session from a list, or load one by id /
   unique prefix
-- `/branch [name]` -- fork the current session into a new id, preserving the
+- `/branch [name]`: fork the current session into a new id, preserving the
   original
-- `/rename <title>` -- set a human-readable title shown by the resume picker
+- `/rename <title>`: set a human-readable title shown by the resume picker
 
 == USAGE EXAMPLES
 <agent-examples>
