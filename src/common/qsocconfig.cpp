@@ -227,6 +227,11 @@ QMap<QString, QString> QSocConfig::getAllValues() const
     return configValues;
 }
 
+QList<McpServerConfig> QSocConfig::mcpServers() const
+{
+    return McpServerConfig::parseList(getYamlNode("mcp.servers"));
+}
+
 YAML::Node QSocConfig::getYamlNode(const QString &dotPath) const
 {
     QStringList parts = dotPath.split('.');

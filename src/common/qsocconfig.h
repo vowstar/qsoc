@@ -4,10 +4,12 @@
 #ifndef QSOCCONFIG_H
 #define QSOCCONFIG_H
 
+#include "agent/mcp/qsocmcptypes.h"
 #include "common/qsocprojectmanager.h"
 
 #include <yaml-cpp/yaml.h>
 
+#include <QList>
 #include <QMap>
 #include <QObject>
 #include <QString>
@@ -113,6 +115,14 @@ public slots:
      * @return YAML::Node at the path, or undefined node if not found
      */
     YAML::Node getYamlNode(const QString &dotPath) const;
+
+    /**
+     * @brief Get the list of MCP server entries from the loaded config.
+     * @details Reads the `mcp.servers` YAML sequence (project file first,
+     *          then the user/system layers). Invalid entries are skipped.
+     * @return List of validated server configs (may be empty).
+     */
+    QList<McpServerConfig> mcpServers() const;
 
 private:
     /* Project manager pointer, can be nullptr */
