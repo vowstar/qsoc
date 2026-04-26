@@ -3,6 +3,9 @@
 
 #include "cli/qsoccliworker.h"
 
+#include "agent/mcp/qsocmcpclient.h"
+#include "agent/mcp/qsocmcpmanager.h"
+#include "agent/mcp/qsocmcptypes.h"
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocfilehistory.h"
@@ -891,6 +894,41 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
     auto *lspTool = new QSocToolLsp(this);
     toolRegistry->registerTool(lspTool);
+
+    /* Spin up MCP servers (if any). Configured via the `mcp:` section in
+     * .qsoc.yml. Tools registered by these servers join the same registry
+     * as the built-in tools, so the LLM treats them uniformly. We give
+     * each server a brief window to handshake before continuing; tools
+     * that arrive later via tools/list_changed will still be picked up. */
+    if (mcpManager == nullptr && socConfig != nullptr) {
+        const QList<McpServerConfig> mcpConfigs = socConfig->mcpServers();
+        if (!mcpConfigs.isEmpty()) {
+            mcpManager = new QSocMcpManager(mcpConfigs, toolRegistry, this);
+            mcpManager->startAll();
+            QElapsedTimer mcpTimer;
+            mcpTimer.start();
+            const int handshakeBudgetMs = 1500;
+            while (mcpTimer.elapsed() < handshakeBudgetMs) {
+                bool allSettled = true;
+                for (const QString &name : mcpManager->serverNames()) {
+                    auto *client = mcpManager->findClient(name);
+                    if (client == nullptr) {
+                        continue;
+                    }
+                    if (client->state() != QSocMcpClient::State::Ready
+                        && client->state() != QSocMcpClient::State::Failed
+                        && !mcpManager->hasGivenUp(name)) {
+                        allSettled = false;
+                        break;
+                    }
+                }
+                if (allSettled) {
+                    break;
+                }
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            }
+        }
+    }
 
     /* Sync context budget and effort from model registry. The CLI flag
      * takes precedence: when --max-tokens is explicitly set we keep it,
@@ -3440,6 +3478,69 @@ bool QSocCliWorker::runAgentLoop(
                     QTuiScrollView::Dim);
             }
             compositor.printContent("\n");
+            continue;
+        }
+        if (cmd == "/mcp" || cmd.startsWith("/mcp ")) {
+            const QString rest = (cmd.size() > 4) ? input.mid(4).trimmed() : QString();
+            if (mcpManager == nullptr || mcpManager->serverNames().isEmpty()) {
+                compositor.printContent("(no MCP servers configured)\n", QTuiScrollView::Dim);
+                continue;
+            }
+            const QStringList parts = rest.isEmpty() ? QStringList()
+                                                     : rest.split(QRegularExpression("\\s+"));
+
+            if (parts.isEmpty() || parts.first() == "list") {
+                compositor.printContent("\n");
+                compositor.printContent("MCP servers\n", QTuiScrollView::Bold);
+                for (const QString &name : mcpManager->serverNames()) {
+                    auto   *client = mcpManager->findClient(name);
+                    QString status;
+                    if (mcpManager->hasGivenUp(name)) {
+                        status = QStringLiteral("failed");
+                    } else if (client == nullptr) {
+                        status = QStringLiteral("unavailable");
+                    } else {
+                        switch (client->state()) {
+                        case QSocMcpClient::State::Disconnected:
+                            status = QStringLiteral("disconnected");
+                            break;
+                        case QSocMcpClient::State::Connecting:
+                            status = QStringLiteral("connecting");
+                            break;
+                        case QSocMcpClient::State::Initializing:
+                            status = QStringLiteral("initializing");
+                            break;
+                        case QSocMcpClient::State::Ready:
+                            status = QStringLiteral("ready");
+                            break;
+                        case QSocMcpClient::State::Failed:
+                            status = QStringLiteral("failed");
+                            break;
+                        }
+                    }
+                    const auto tools = mcpManager->toolsForClient(name);
+                    compositor.printContent(QString("  %1  [%2]  %3 tools\n")
+                                                .arg(name, -16)
+                                                .arg(status)
+                                                .arg(tools.size()));
+                }
+                compositor.printContent("\n");
+                continue;
+            }
+            if (parts.first() == "reconnect" && parts.size() >= 2) {
+                const QString target = parts.mid(1).join(QChar(' '));
+                auto         *client = mcpManager->findClient(target);
+                if (client == nullptr) {
+                    compositor.printContent(
+                        QString("Unknown MCP server: %1\n").arg(target), QTuiScrollView::Dim);
+                    continue;
+                }
+                client->stop();
+                compositor
+                    .printContent(QString("Reconnecting %1 ...\n").arg(target), QTuiScrollView::Dim);
+                continue;
+            }
+            compositor.printContent("Usage: /mcp [list|reconnect <name>]\n", QTuiScrollView::Dim);
             continue;
         }
         if (cmd.startsWith("/branch")) {

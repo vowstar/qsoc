@@ -19,6 +19,7 @@
 
 class QSocAgent;
 class QAgentReadline;
+class QSocMcpManager;
 class QSocPathContext;
 
 /**
@@ -84,6 +85,7 @@ private:
     QSocBusManager      *busManager      = nullptr;
     QSocModuleManager   *moduleManager   = nullptr;
     QSocGenerateManager *generateManager = nullptr;
+    QSocMcpManager      *mcpManager      = nullptr;
 
     /**
      * @brief Parse the application command line arguments.
