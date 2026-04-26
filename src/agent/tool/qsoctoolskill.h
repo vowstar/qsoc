@@ -47,6 +47,11 @@ public:
      * to the user. Each entry's path is set; name is empty when broken. */
     QList<SkillInfo> scanAllSkillFiles() const;
 
+    /* Build the system-prompt listing block. Each description is truncated
+     * to keep the prefix small and stable so the prompt cache can hit even
+     * when one skill's description grows by a few words. */
+    static QString formatPromptListing(const QList<SkillInfo> &skills);
+
     /* Scan all skill directories and return a merged, deduplicated list.
      * Project-scoped skills take priority over user-scoped ones with the
      * same name. Public so the REPL can use it for prompt injection and

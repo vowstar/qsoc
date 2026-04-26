@@ -338,6 +338,27 @@ private slots:
         QCOMPARE(definition["function"]["name"].get<std::string>(), "skill_create");
     }
 
+    /* formatPromptListing caps long descriptions to keep the prompt cache hot. */
+    void testFormatPromptListingTruncatesLongDescription()
+    {
+        QSocToolSkillFind::SkillInfo info;
+        info.name          = QStringLiteral("verbose");
+        info.scope         = QStringLiteral("project");
+        info.userInvocable = true;
+        info.description   = QString(500, QLatin1Char('x'));
+
+        const QString listing = QSocToolSkillFind::formatPromptListing({info});
+        QVERIFY(listing.contains(QStringLiteral("verbose")));
+        QVERIFY(listing.contains(QStringLiteral("...")));
+        /* Cap is 200 chars; allow generous slack for surrounding scaffolding. */
+        QVERIFY(listing.size() < 500);
+    }
+
+    void testFormatPromptListingEmpty()
+    {
+        QCOMPARE(QSocToolSkillFind::formatPromptListing({}), QString());
+    }
+
     /* scanAllSkillFiles surfaces parse errors so the REPL can warn the user. */
     void testScanReportsParseErrors()
     {

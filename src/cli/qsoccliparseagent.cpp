@@ -766,24 +766,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * tool registry. */
     {
         QSocToolSkillFind scanner(nullptr, projectManager);
-        const auto        skills = scanner.scanAllSkills();
-        if (!skills.isEmpty()) {
-            QString listing;
-            listing += QStringLiteral(
-                "The following skills are installed. Use skill_find(action:\"read\", "
-                "query:\"<name>\") to load the full prompt, or the user can invoke "
-                "user-invocable ones directly as /<name> slash commands.\n\n");
-            for (const auto &skill : skills) {
-                listing += QStringLiteral("- **") + skill.name + QStringLiteral("** [")
-                           + skill.scope + QStringLiteral("]: ") + skill.description;
-                if (skill.userInvocable) {
-                    listing += QStringLiteral(" (user-invocable: /") + skill.name
-                               + QStringLiteral(")");
-                }
-                listing += QStringLiteral("\n");
-            }
-            config.skillListing = listing;
-        }
+        config.skillListing = QSocToolSkillFind::formatPromptListing(scanner.scanAllSkills());
     }
 
     /* Expose the model ID for system prompt injection. */
@@ -1466,23 +1449,11 @@ bool QSocCliWorker::runAgentLoop(
                     }
                 }
                 const auto skills = skillTool->scanAllSkills();
-                if (!skills.isEmpty()) {
-                    listing += QStringLiteral(
-                        "The following skills are installed. Use skill_find(action:\"read\", "
-                        "query:\"<name>\") to load the full prompt, or the user can invoke "
-                        "user-invocable ones directly as /<name> slash commands.\n\n");
-                    for (const auto &skill : skills) {
-                        listing += QStringLiteral("- **") + skill.name + QStringLiteral("** [")
-                                   + skill.scope + QStringLiteral("]: ") + skill.description;
-                        if (skill.userInvocable) {
-                            listing += QStringLiteral(" (user-invocable: /") + skill.name
-                                       + QStringLiteral(")");
-                            if (!slashCommands.contains(skill.name)) {
-                                slashCommands.append(skill.name);
-                                skillPaths.insert(QStringLiteral("/") + skill.name, skill.path);
-                            }
-                        }
-                        listing += QStringLiteral("\n");
+                listing           = QSocToolSkillFind::formatPromptListing(skills);
+                for (const auto &skill : skills) {
+                    if (skill.userInvocable && !slashCommands.contains(skill.name)) {
+                        slashCommands.append(skill.name);
+                        skillPaths.insert(QStringLiteral("/") + skill.name, skill.path);
                     }
                 }
             }
