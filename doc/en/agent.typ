@@ -423,3 +423,122 @@ qsoc> Import all Verilog files from ./rtl directory
 qsoc> Add AXI4 slave interface to the cpu module
 qsoc> Generate Verilog from netlist.yaml with output name "top"
 ```
+
+== MCP SERVERS
+<agent-mcp>
+The agent can connect to external Model Context Protocol (MCP) servers and
+expose their tools to the LLM alongside the built-in tool set. MCP is an
+open JSON-RPC 2.0 protocol; any compliant server works.
+
+=== Configuration
+<agent-mcp-config>
+
+Add an `mcp:` section to `.qsoc.yml` (project-level) or to the user-level
+config. Two transports are supported in this release:
+
+```yaml
+mcp:
+  servers:
+    - name: fs
+      type: stdio
+      command: /usr/local/bin/mcp-fs-server
+      args: ["--root", "/tmp"]
+      env:
+        LOG_LEVEL: info
+
+    - name: search
+      type: http
+      url: http://127.0.0.1:8080/mcp
+      headers:
+        Authorization: "Bearer placeholder"
+      request_timeout_ms: 60000
+      connect_timeout_ms: 30000
+
+    - name: archived
+      type: stdio
+      command: /opt/legacy/mcp
+      enabled: false
+```
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Field], [Description]),
+    table.hline(),
+    [`name`], [Logical server name; appears in `mcp__<name>__<tool>` and
+       `/mcp list`. Must be unique.],
+    [`type`], [`stdio` (child process) or `http` (Streamable HTTP).
+       Defaults to `stdio` if omitted.],
+    [`command`], [stdio: executable to launch.],
+    [`args`], [stdio: list of arguments passed to the executable.],
+    [`env`], [stdio: extra environment variables for the child process.],
+    [`url`], [http: endpoint URL. Both immediate JSON and Server-Sent
+       Events responses are accepted on the same endpoint.],
+    [`headers`], [http: extra request headers, e.g. `Authorization`.],
+    [`connect_timeout_ms`], [Connection timeout in milliseconds.
+       Default 30000.],
+    [`request_timeout_ms`], [Per-request timeout in milliseconds.
+       Default 60000.],
+    [`enabled`], [Set to `false` to keep the entry in the config but skip
+       it at startup.],
+  )],
+  caption: [MCP SERVER FIELDS],
+  kind: table,
+)
+
+=== Tool naming
+<agent-mcp-naming>
+Each tool exposed by an MCP server is registered as
+`mcp__<server>__<tool>`, with non-alphanumeric characters in either segment
+replaced by underscore (collapsed and trimmed). Two servers can therefore
+expose tools with the same short name without colliding. Examples:
+
+- server `fs`, tool `read_file` becomes `mcp__fs__read_file`
+- server `my server`, tool `Create Issue` becomes
+  `mcp__my_server__Create_Issue`
+
+=== Slash commands
+<agent-mcp-commands>
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Command], [Description]),
+    table.hline(),
+    [`/mcp` or `/mcp list`], [List configured MCP servers with state and
+       tool count.],
+    [`/mcp reconnect <name>`], [Force a disconnect of the named server;
+       the manager rebuilds it on the standard backoff.],
+  )],
+  caption: [MCP SLASH COMMANDS],
+  kind: table,
+)
+
+=== Lifecycle
+<agent-mcp-lifecycle>
+At startup the agent gives every configured server a short window
+(roughly 1.5 seconds total across servers) to complete the
+initialize / capabilities handshake. Servers that respond on time
+contribute their tools immediately; tools registered later via
+`notifications/tools/list_changed` are picked up at runtime.
+
+If a server closes unexpectedly the manager schedules a rebuild on
+exponential backoff (1 s, 2 s, 4 s, capped at 30 s). After three
+failed attempts the server is marked failed and dropped until the
+next agent restart.
+
+=== Security notes
+<agent-mcp-security>
+- MCP tools call out to processes (stdio) or remote endpoints (http) you
+  configured yourself. Treat them with the same care as any other piece of
+  third-party code.
+- Tools inherit the agent's permission rails (read unrestricted, write
+  restricted to allowlisted directories). The MCP server can still touch
+  resources outside the agent (a stdio server may write anywhere it has
+  permission to). Configure stdio servers with the narrowest filesystem
+  scope your task needs.
+- `headers` may contain bearer tokens or other secrets. Keep `.qsoc.yml`
+  out of version control if it carries credentials, or substitute
+  environment variables and reference them from your shell.
