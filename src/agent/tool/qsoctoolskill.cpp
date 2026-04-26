@@ -117,6 +117,8 @@ QSocToolSkillFind::SkillInfo QSocToolSkillFind::parseSkillFile(
             info.whenToUse = value;
         } else if (key == QLatin1String("user-invocable")) {
             info.userInvocable = (value.toLower() != QLatin1String("false"));
+        } else if (key == QLatin1String("disable-model-invocation")) {
+            info.disableModelInvocation = (value.toLower() == QLatin1String("true"));
         }
     }
 
@@ -222,24 +224,30 @@ QString QSocToolSkillFind::formatPromptListing(const QList<SkillInfo> &skills)
      * prompt cache prefix budget. 200 chars is enough for one full line. */
     constexpr int kDescriptionCap = 200;
 
-    QString listing = QStringLiteral(
-        "The following skills are installed. Use skill_find(action:\"read\", "
-        "query:\"<name>\") to load the full prompt, or the user can invoke "
-        "user-invocable ones directly as /<name> slash commands.\n\n");
-
+    QString body;
     for (const auto &skill : skills) {
+        if (skill.disableModelInvocation) {
+            continue;
+        }
         QString desc = skill.description;
         if (desc.size() > kDescriptionCap) {
             desc = desc.left(kDescriptionCap - 3) + QStringLiteral("...");
         }
-        listing += QStringLiteral("- **") + skill.name + QStringLiteral("** [") + skill.scope
-                   + QStringLiteral("]: ") + desc;
+        body += QStringLiteral("- **") + skill.name + QStringLiteral("** [") + skill.scope
+                + QStringLiteral("]: ") + desc;
         if (skill.userInvocable) {
-            listing += QStringLiteral(" (user-invocable: /") + skill.name + QStringLiteral(")");
+            body += QStringLiteral(" (user-invocable: /") + skill.name + QStringLiteral(")");
         }
-        listing += QStringLiteral("\n");
+        body += QStringLiteral("\n");
     }
-    return listing;
+    if (body.isEmpty()) {
+        return {};
+    }
+    return QStringLiteral(
+               "The following skills are installed. Use skill_find(action:\"read\", "
+               "query:\"<name>\") to load the full prompt, or the user can invoke "
+               "user-invocable ones directly as /<name> slash commands.\n\n")
+           + body;
 }
 
 QString QSocToolSkillFind::substitutePlaceholders(
@@ -322,6 +330,19 @@ QString QSocToolSkillFind::execute(const json &arguments)
             }
         }
         allSkills = filtered;
+    }
+
+    /* The model invokes skill_find. Skills marked disable-model-invocation
+     * are intentionally hidden from list/search so the model cannot pull
+     * them in autonomously; the user's /name slash dispatch still works. */
+    if (action != "read") {
+        QList<SkillInfo> visible;
+        for (const SkillInfo &skill : allSkills) {
+            if (!skill.disableModelInvocation) {
+                visible.append(skill);
+            }
+        }
+        allSkills = visible;
     }
 
     if (action == "list") {

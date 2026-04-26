@@ -359,6 +359,47 @@ private slots:
         QCOMPARE(QSocToolSkillFind::formatPromptListing({}), QString());
     }
 
+    void testDisableModelInvocationHidesFromListing()
+    {
+        const QString skillsDir = QDir(tempDir.path()).filePath(".qsoc/skills/secret-from-model");
+        QVERIFY(QDir().mkpath(skillsDir));
+        QFile file(QDir(skillsDir).filePath("SKILL.md"));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream out(&file);
+        out << "---\n"
+            << "name: secret-from-model\n"
+            << "description: Should not appear in skill_find\n"
+            << "user-invocable: true\n"
+            << "disable-model-invocation: true\n"
+            << "---\n"
+            << "body\n";
+        file.close();
+
+        QSocToolSkillFind tool(this, projectManager);
+        const auto        all   = tool.scanAllSkills();
+        bool              found = false;
+        for (const auto &skill : all) {
+            if (skill.name == QStringLiteral("secret-from-model")) {
+                QVERIFY(skill.disableModelInvocation);
+                QVERIFY(skill.userInvocable);
+                found = true;
+            }
+        }
+        QVERIFY(found);
+
+        const QString listing = QSocToolSkillFind::formatPromptListing(all);
+        QVERIFY(!listing.contains(QStringLiteral("secret-from-model")));
+
+        json    args = {{"action", "list"}};
+        QString res  = tool.execute(args);
+        QVERIFY(!res.contains(QStringLiteral("secret-from-model")));
+
+        /* Read still works so /name dispatch can pull the body. */
+        json    readArgs = {{"action", "read"}, {"query", "secret-from-model"}};
+        QString body     = tool.execute(readArgs);
+        QVERIFY(body.contains(QStringLiteral("secret-from-model")));
+    }
+
     void testSubstitutePlaceholders()
     {
         bool          consumed = false;
