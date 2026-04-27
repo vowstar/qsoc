@@ -374,6 +374,13 @@ private:
     bool firePromptSubmitHook(QString *userQuery, QString *blockReason);
 
     /**
+     * @brief Build the common envelope (cwd, remote section) that every
+     *        hook payload starts from. Per-event fields are added by the
+     *        caller.
+     */
+    nlohmann::json buildHookEnvelope() const;
+
+    /**
      * @brief Fire session_start once per agent lifetime. Fire-and-forget.
      */
     void fireSessionStartHookOnce();
