@@ -2,54 +2,53 @@
 
 ![QSoC Logo](./doc/en/image/logo.svg)
 
-QSoC is a Quick, Quality, Quintessential development environment for modern
-SoC (System on Chip) development based on the Qt framework.
+QSoC is a Qt-based studio for SoC design. It bundles a conversational
+agent, schematic editor, RTL generation, and bus interface management
+behind one binary; the agent calls into the same tools you would invoke
+by hand, so a prompt is always equivalent to a sequence of explicit
+operations.
 
-QSoC empowers hardware engineers with streamlined features for designing complex
-SoC systems, including advanced netlist validation with bit-level overlap detection
-and comprehensive port direction checking.
+## Quick start
+
+```bash
+qsoc agent -q "list the modules in this project"        # one-shot query
+qsoc agent                                              # interactive REPL
+qsoc agent --workspace /tmp/scratch                     # tools run in a different cwd
+qsoc agent --ssh user@host --workspace /home/u/proj     # remote workspace via SSH
+```
+
+## Features
+
+- Conversational agent with tool calling for file, shell, path, project,
+  module, bus, generate, schematic, LSP, skills, memory, docs, and web
+- Lifecycle hooks at five events (pre/post tool use, user prompt submit,
+  session start, stop) for policy, audit, and context injection
+- Remote workspace over SSH and SFTP; nothing is installed on the host
+- MCP servers as additional tool sources, namespaced under `mcp__`
+- Session persistence with resume, branch, clear, and rename
+- Schematic editor GUI alongside the CLI agent
+- Verilog generation, bus interface management, slang-based linting
+
+## Documentation
+
+The full manual lives under `doc/en/`. Build the PDF with Nix:
+
+```bash
+cd doc && nix build
+# result/qsoc_manual_<version>.pdf
+```
+
+See [doc/README.md](doc/README.md) for the multi-language build targets.
 
 ## Development
 
-### Environment Setup
-
-QSoC uses Nix to provide a consistent and reproducible development environment
-with all dependencies automatically managed:
+QSoC uses Nix to provide a reproducible development environment with
+all dependencies pinned:
 
 ```bash
-# Enter the development environment
 nix develop
-
-# Once inside the Nix environment, you can run development commands
 cmake -B build -G Ninja
-```
-
-### Code Formatting
-
-```bash
+cmake --build build -j
+cmake --build build --target test
 cmake --build build --target clang-format
 ```
-
-### Building
-
-```bash
-cmake --build build -j
-```
-
-### Testing
-
-```bash
-cmake --build build --target test
-# or using ctest directly
-cd build && ctest
-```
-
-### Building Documentation
-
-To build the documentation:
-
-```bash
-cd doc && nix build .#qsoc-manual
-```
-
-For detailed information on documentation building, please see [doc/README.md](doc/README.md).
