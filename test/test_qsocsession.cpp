@@ -184,6 +184,63 @@ private slots:
         QCOMPARE(static_cast<int>(restored.size()), 1);
         QCOMPARE(restored[0]["content"].get<std::string>(), std::string("only"));
     }
+
+    void testMetaOnlySessionLeavesNoFile()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        {
+            QSocSession session(id, path);
+            session.appendMeta(QStringLiteral("created"), QStringLiteral("2026-04-27T00:00:00Z"));
+            session.appendMeta(QStringLiteral("cwd"), tempDir.path());
+        } /* destructor: nothing should land on disk */
+
+        QVERIFY2(!QFile::exists(path), "meta-only session must not create the JSONL file");
+        QCOMPARE(QSocSession::listAll(tempDir.path()).size(), qsizetype(0));
+    }
+
+    void testFirstMessageFlushesBufferedMeta()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        QSocSession   session(id, path);
+        session.appendMeta(QStringLiteral("created"), QStringLiteral("2026-04-27T00:00:00Z"));
+        session.appendMeta(QStringLiteral("cwd"), tempDir.path());
+        QVERIFY(!QFile::exists(path));
+
+        session.appendMessage({{"role", "user"}, {"content", "kicked off"}});
+        QVERIFY(QFile::exists(path));
+
+        const auto info = QSocSession::readInfo(path);
+        QCOMPARE(info.firstPrompt, QStringLiteral("kicked off"));
+        QCOMPARE(
+            info.createdAt.toUTC().toString(Qt::ISODateWithMs),
+            QStringLiteral("2026-04-27T00:00:00.000Z"));
+        QCOMPARE(info.messageCount, 1);
+    }
+
+    void testClearOnEmptySessionStaysOffDisk()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        QSocSession   session(id, path);
+        session.appendMeta(QStringLiteral("created"), QStringLiteral("2026-04-27T00:00:00Z"));
+
+        session.rewriteMessages(json::array());
+
+        QVERIFY2(
+            !QFile::exists(path),
+            "/clear on a never-persisted session must not create the JSONL file");
+    }
 };
 
 QSOC_TEST_MAIN(Test)
