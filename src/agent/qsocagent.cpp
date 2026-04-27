@@ -123,6 +123,8 @@ void QSocAgent::runStream(const QString &userQuery)
         return;
     }
 
+    fireSessionStartHookOnce();
+
     QString prompt = userQuery;
     QString blockReason;
     if (!firePromptSubmitHook(&prompt, &blockReason)) {
@@ -446,6 +448,7 @@ void QSocAgent::handleStreamComplete(const json &response)
 
         isStreaming = false;
         heartbeatTimer->stop();
+        fireStopHook(content);
         emit runComplete(content);
     } else {
         /* Push full message to preserve reasoning_content for DeepSeek R1 */
@@ -459,6 +462,7 @@ void QSocAgent::handleStreamComplete(const json &response)
 
         isStreaming = false;
         heartbeatTimer->stop();
+        fireStopHook(QString());
         emit runComplete("");
     }
 }
@@ -661,6 +665,53 @@ void QSocAgent::setMemoryManager(QSocMemoryManager *manager)
 void QSocAgent::setHookManager(QSocHookManager *manager)
 {
     hookManager = manager;
+}
+
+namespace {
+
+nlohmann::json buildRemoteSection(const QSocAgentConfig &cfg)
+{
+    return nlohmann::json{
+        {"display", cfg.remoteDisplay.toStdString()},
+        {"workspace", cfg.remoteWorkspace.toStdString()},
+        {"cwd", cfg.remoteWorkingDir.toStdString()},
+    };
+}
+
+} // namespace
+
+void QSocAgent::fireSessionStartHookOnce()
+{
+    if (sessionStartFired) {
+        return;
+    }
+    sessionStartFired = true;
+    if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::SessionStart)) {
+        return;
+    }
+    json payload     = json::object();
+    payload["event"] = "session_start";
+    payload["cwd"]   = QDir::currentPath().toStdString();
+    if (agentConfig.remoteMode) {
+        payload["remote"] = buildRemoteSection(agentConfig);
+    }
+    hookManager
+        ->fire(QSocHookEvent::SessionStart, hookEventToYamlKey(QSocHookEvent::SessionStart), payload);
+}
+
+void QSocAgent::fireStopHook(const QString &finalContent)
+{
+    if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::Stop)) {
+        return;
+    }
+    json payload             = json::object();
+    payload["event"]         = "stop";
+    payload["final_content"] = finalContent.toStdString();
+    payload["cwd"]           = QDir::currentPath().toStdString();
+    if (agentConfig.remoteMode) {
+        payload["remote"] = buildRemoteSection(agentConfig);
+    }
+    hookManager->fire(QSocHookEvent::Stop, hookEventToYamlKey(QSocHookEvent::Stop), payload);
 }
 
 bool QSocAgent::firePromptSubmitHook(QString *userQuery, QString *blockReason)

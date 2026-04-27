@@ -374,6 +374,19 @@ private:
     bool firePromptSubmitHook(QString *userQuery, QString *blockReason);
 
     /**
+     * @brief Fire session_start once per agent lifetime. Fire-and-forget.
+     */
+    void fireSessionStartHookOnce();
+
+    /**
+     * @brief Fire stop just before runComplete is emitted. Fire-and-forget.
+     */
+    void fireStopHook(const QString &finalContent);
+
+    /* Whether session_start has fired for this agent instance. */
+    bool sessionStartFired = false;
+
+    /**
      * @brief Layer 1: Prune old tool outputs to reduce token usage
      * @param force Skip threshold check (for manual compact)
      * @return true if pruning saved enough tokens
