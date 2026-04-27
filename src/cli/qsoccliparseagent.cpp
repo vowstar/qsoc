@@ -12,6 +12,7 @@
 #include "agent/qsochookmanager.h"
 #include "agent/qsocsession.h"
 #include "agent/qsoctool.h"
+#include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocremotebinding.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
@@ -3747,237 +3748,56 @@ bool QSocCliWorker::runAgentLoop(
                 arg = picked;
             }
 
-            /* Parse `[user@]host[:port]`. The workspace used to ride on
-             * this argument separated by ':/', but that overloaded the
-             * colon with port numbers; the picker after connect now
-             * handles workspace selection for both first connect and
-             * subsequent changes, so the UX is uniform. */
-            QString user;
-            QString hostname;
-            int     port = 22;
-            {
-                QString   rest    = arg;
-                const int atIndex = rest.indexOf(QLatin1Char('@'));
-                if (atIndex >= 0) {
-                    user = rest.left(atIndex);
-                    rest = rest.mid(atIndex + 1);
-                }
-                QString hostPortPart = rest;
-                if (hostPortPart.contains(QLatin1Char('/'))) {
-                    compositor.printContent(
-                        "Ignoring workspace path in /ssh argument. Pick the workspace "
-                        "from the directory browser that opens after connecting, or use "
-                        "/cwd later to change it.\n");
-                    hostPortPart = hostPortPart.section(QLatin1Char('/'), 0, 0);
-                    if (hostPortPart.endsWith(QLatin1Char(':'))) {
-                        hostPortPart.chop(1);
-                    }
-                }
-                const int colonIndex = hostPortPart.lastIndexOf(QLatin1Char(':'));
-                if (colonIndex >= 0) {
-                    hostname     = hostPortPart.left(colonIndex);
-                    bool      ok = false;
-                    const int p  = hostPortPart.mid(colonIndex + 1).toInt(&ok);
-                    if (ok && p > 0 && p < 65536) {
-                        port = p;
-                    } else {
-                        hostname = hostPortPart;
-                    }
-                } else {
-                    hostname = hostPortPart;
-                }
-            }
-            if (hostname.isEmpty()) {
-                compositor.printContent("Invalid /ssh target.\n");
-                continue;
-            }
-
-            /* Remember the alias as typed so the binding key and status line
-             * stay human-readable. Actual TCP connect uses resolved values. */
-            const QString rawAlias     = hostname;
-            const bool    explicitUser = !user.isEmpty();
-            const bool    explicitPort = port != 22 || arg.contains(QLatin1Char(':'));
-
-            /* Pull ~/.ssh/config (with Include chains) so aliases like
-             * r9pro resolve to the real HostName/Port/User/IdentityFile. */
-            QSocSshConfigParser parser;
-            {
-                const QString cfg = QDir::homePath() + QStringLiteral("/.ssh/config");
-                if (QFileInfo::exists(cfg)) {
-                    parser.parse(cfg);
-                }
-            }
-            const QSocSshHostConfig resolvedCfg = parser.resolve(rawAlias);
-            if (resolvedCfg.fromConfig) {
-                if (!resolvedCfg.hostname.isEmpty()) {
-                    hostname = resolvedCfg.hostname;
-                }
-                if (!explicitPort && resolvedCfg.port > 0) {
-                    port = resolvedCfg.port;
-                }
-                if (!explicitUser && !resolvedCfg.user.isEmpty()) {
-                    user = resolvedCfg.user;
-                }
-            }
-            if (user.isEmpty()) {
-#ifdef Q_OS_WIN
-                user = qEnvironmentVariable("USERNAME");
-#else
-                user = qEnvironmentVariable("USER");
-                if (user.isEmpty()) {
-                    user = qEnvironmentVariable("LOGNAME");
-                }
-#endif
-            }
-            if (user.isEmpty()) {
+            /* Old `/ssh user@host:/path` syntax overloaded the colon with
+             * port numbers, so the workspace path no longer rides on the
+             * argument; the picker / sticky binding handles workspace. */
+            if (arg.contains(QLatin1Char('/'))) {
                 compositor.printContent(
-                    "Could not determine a default username; please write "
-                    "/ssh <user>@<host>.\n");
-                continue;
+                    "Ignoring workspace path in /ssh argument. Pick the workspace "
+                    "from the directory browser that opens after connecting, or use "
+                    "/cwd later to change it.\n");
             }
 
-            /* Binding key tracks the alias the user typed so lookups stay
-             * stable even if the config file later switches HostName. */
-            const QString targetKey = QStringLiteral("%1@%2:%3").arg(user, rawAlias).arg(port);
+            AgentRemoteState newState;
+            QString          err;
+
+            compositor.printContent(QString("Connecting to %1 ...\n").arg(arg));
+            compositor.render();
+            if (!connectAgentSshSession(arg, this, &newState, &err)) {
+                compositor.printContent(QString("%1\n").arg(err));
+                continue;
+            }
 
             const QString projectRoot = pathContext ? pathContext->getProjectDir() : QString();
             QString       workspace;
             if (!projectRoot.isEmpty()) {
                 const auto bound = QSocRemoteBinding::read(projectRoot);
-                if (bound.target == targetKey) {
+                if (bound.target == newState.targetKey) {
                     workspace = bound.workspace;
                 }
             }
 
-            QSocSshHostConfig host;
-            host.alias         = targetKey;
-            host.hostname      = hostname;
-            host.port          = port;
-            host.user          = user;
-            host.identityFiles = resolvedCfg.identityFiles;
-            /* IdentitiesOnly=yes without any configured IdentityFile would
-             * starve auth of keys because our parser does not synthesize the
-             * default id_* list. Flip to no so the session's default key
-             * enumeration kicks in, matching first-connect UX. */
-            host.identitiesOnly = resolvedCfg.identitiesOnly && !host.identityFiles.isEmpty();
-            host.proxyJump      = resolvedCfg.proxyJump;
-            /* Default to accept-new so first-time connects and ProxyJump
-             * hops work without a pre-populated known_hosts. Mismatches
-             * still abort the connect. */
-            host.strictHostKey = QSocSshHostConfig::StrictHostKey::AcceptNew;
-
-            compositor.printContent(QString("Connecting to %1 ...\n").arg(targetKey));
-            compositor.render();
-
-            /* OS default user reused for any ProxyJump hop that lacks a
-             * matching User directive in ~/.ssh/config. */
-            QString osDefaultUser;
-#ifdef Q_OS_WIN
-            osDefaultUser = qEnvironmentVariable("USERNAME");
-#else
-            osDefaultUser = qEnvironmentVariable("USER");
-            if (osDefaultUser.isEmpty()) {
-                osDefaultUser = qEnvironmentVariable("LOGNAME");
-            }
-#endif
-
-            /* Resolve a hop alias into a QSocSshHostConfig, filling in
-             * sensible defaults when the alias is not in the config file. */
-            auto hopConfig = [&](const QString &hopAlias) -> QSocSshHostConfig {
-                QSocSshHostConfig cfg = parser.resolve(hopAlias);
-                if (!cfg.fromConfig) {
-                    cfg.hostname = hopAlias;
-                    cfg.port     = 22;
-                }
-                if (cfg.user.isEmpty()) {
-                    cfg.user = osDefaultUser;
-                }
-                cfg.alias = hopAlias;
-                /* Same first-time policy as the final target, an unknown
-                 * jump host with strict Yes would abort a connect that is
-                 * otherwise valid. */
-                cfg.strictHostKey = QSocSshHostConfig::StrictHostKey::AcceptNew;
-                /* Avoid starving auth when config sets IdentitiesOnly=yes
-                 * but lists no IdentityFile entries. */
-                cfg.identitiesOnly = cfg.identitiesOnly && !cfg.identityFiles.isEmpty();
-                return cfg;
-            };
-
-            /* Build the ProxyJump chain. connectChain returns the final
-             * session on success and collects every intermediate hop in
-             * outJumps so the caller can tear them down later. */
-            QList<QSocSshSession *> localJumps;
-            std::function<QSocSshSession *(const QSocSshHostConfig &, QSocSshSession *, QString *)>
-                connectChain;
-            connectChain = [&](const QSocSshHostConfig &cfg,
-                               QSocSshSession          *parentSession,
-                               QString                 *errOut) -> QSocSshSession                 *{
-                QSocSshSession *currentParent = parentSession;
-                for (const QString &hopAlias : cfg.proxyJump) {
-                    const QSocSshHostConfig hopCfg = hopConfig(hopAlias);
-                    QString                 hopErr;
-                    QSocSshSession *hopSession = connectChain(hopCfg, currentParent, &hopErr);
-                    if (hopSession == nullptr) {
-                        if (errOut != nullptr) {
-                            *errOut = QStringLiteral("ProxyJump via %1 failed: %2")
-                                          .arg(hopAlias, hopErr);
-                        }
-                        return nullptr;
-                    }
-                    localJumps.append(hopSession);
-                    currentParent = hopSession;
-                }
-                auto                         *session = new QSocSshSession(this);
-                QSocSshSession::ConnectStatus status
-                    = (currentParent != nullptr) ? session->connectToVia(cfg, currentParent, errOut)
-                                                 : session->connectTo(cfg, errOut);
-                if (status != QSocSshSession::ConnectStatus::Ok) {
-                    delete session;
-                    return nullptr;
-                }
-                return session;
-            };
-
-            QString err;
-            auto   *newSession = connectChain(host, nullptr, &err);
-            if (newSession == nullptr) {
-                compositor.printContent(QString("SSH connect failed: %1\n").arg(err));
-                for (auto it = localJumps.rbegin(); it != localJumps.rend(); ++it) {
-                    (*it)->disconnectFromHost();
-                    delete *it;
-                }
-                continue;
-            }
-
-            auto *newSftp = new QSocSftpClient(*newSession);
-            if (!newSftp->open(&err)) {
-                compositor.printContent(QString("SFTP open failed: %1\n").arg(err));
-                delete newSftp;
-                newSession->disconnectFromHost();
-                delete newSession;
-                continue;
-            }
-
-            /* First connect or binding unavailable. Launch the remote path
+            /* First connect or binding unavailable: launch the remote path
              * picker so the user browses the live server and selects the
              * workspace, keeping the experience identical to a later
              * /cwd change. */
             if (workspace.isEmpty()) {
                 QString homeHint = QStringLiteral("/");
                 {
-                    QSocSshExec   homeExec(*newSession);
+                    QSocSshExec   homeExec(*newState.session);
                     const auto    homeResult = homeExec.run(QStringLiteral("echo $HOME"), 5000);
                     const QString raw        = QString::fromUtf8(homeResult.stdoutBytes).trimmed();
                     if (!raw.isEmpty() && raw.startsWith(QLatin1Char('/'))) {
                         homeHint = raw;
                     }
                 }
-                QTuiPathPicker picker;
+                QTuiPathPicker  picker;
+                QSocSftpClient *sftp = newState.sftp;
                 picker.setTitle(QStringLiteral("Remote workspace"));
                 picker.setStartPath(homeHint);
-                picker.setListDirs([newSftp](const QString &path) -> QStringList {
+                picker.setListDirs([sftp](const QString &path) -> QStringList {
                     QString     ignored;
-                    const auto  entries = newSftp->listDir(path, 500, &ignored);
+                    const auto  entries = sftp->listDir(path, 500, &ignored);
                     QStringList names;
                     names.reserve(entries.size());
                     for (const auto &entry : entries) {
@@ -3994,11 +3814,11 @@ bool QSocCliWorker::runAgentLoop(
                 inputMonitor.resetEscState();
                 if (workspace.isEmpty()) {
                     compositor.printContent("No workspace selected. Disconnecting.\n");
-                    newSftp->close();
-                    delete newSftp;
-                    newSession->disconnectFromHost();
-                    delete newSession;
-                    for (auto it = localJumps.rbegin(); it != localJumps.rend(); ++it) {
+                    newState.sftp->close();
+                    delete newState.sftp;
+                    newState.session->disconnectFromHost();
+                    delete newState.session;
+                    for (auto it = newState.jumps.rbegin(); it != newState.jumps.rend(); ++it) {
                         (*it)->disconnectFromHost();
                         delete *it;
                     }
@@ -4006,24 +3826,22 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
 
-            if (!newSftp->mkdirP(workspace, &err)) {
-                compositor.printContent(QString("Workspace mkdir failed: %1\n").arg(err));
-                newSftp->close();
-                delete newSftp;
-                newSession->disconnectFromHost();
-                delete newSession;
-                for (auto it = localJumps.rbegin(); it != localJumps.rend(); ++it) {
+            if (!prepareAgentRemoteWorkspace(workspace, &newState, &err)) {
+                compositor.printContent(QString("%1\n").arg(err));
+                newState.sftp->close();
+                delete newState.sftp;
+                newState.session->disconnectFromHost();
+                delete newState.session;
+                for (auto it = newState.jumps.rbegin(); it != newState.jumps.rend(); ++it) {
                     (*it)->disconnectFromHost();
                     delete *it;
                 }
                 continue;
             }
 
-            remotePath.setRoot(workspace);
-            remotePath.setCwd(workspace);
-            remotePath.setWritableDirs({workspace});
+            buildAgentRemoteRegistry(this, &newState, socConfig);
 
-            /* Tear down any previous remote session. */
+            /* Tear down any previous remote session before adopting the new one. */
             if (remoteRegistry != nullptr) {
                 remoteRegistry->deleteLater();
                 remoteRegistry = nullptr;
@@ -4045,38 +3863,22 @@ bool QSocCliWorker::runAgentLoop(
                 delete *it;
             }
             remoteJumps.clear();
-            remoteSession = newSession;
-            remoteSftp    = newSftp;
-            remoteJumps   = localJumps;
 
-            /* Build the remote tool registry with same-named tools. */
-            remoteRegistry = new QSocToolRegistry(this);
-            remoteRegistry->registerTool(new QSocToolRemoteFileRead(this, remoteSftp, &remotePath));
-            remoteRegistry->registerTool(new QSocToolRemoteFileList(this, remoteSftp, &remotePath));
-            remoteRegistry->registerTool(new QSocToolRemoteFileWrite(this, remoteSftp, &remotePath));
-            remoteRegistry->registerTool(new QSocToolRemoteFileEdit(this, remoteSftp, &remotePath));
-            remoteRegistry->registerTool(
-                new QSocToolRemoteShellBash(this, remoteSession, &remotePath));
-            remoteRegistry->registerTool(
-                new QSocToolRemoteBashManage(this, remoteSession, &remotePath));
-            remoteRegistry->registerTool(new QSocToolRemotePath(this, &remotePath));
-            /* Control-plane tools stay on the local side (docs/web). */
-            remoteRegistry->registerTool(new QSocToolDocQuery(this));
-            remoteRegistry->registerTool(new QSocToolWebFetch(this, socConfig));
-            if (socConfig != nullptr && !socConfig->getValue("web.search_api_url").isEmpty()) {
-                remoteRegistry->registerTool(new QSocToolWebSearch(this, socConfig));
-            }
+            remoteSession  = newState.session;
+            remoteSftp     = newState.sftp;
+            remoteJumps    = newState.jumps;
+            remoteRegistry = newState.registry;
+            remotePath     = newState.path;
 
             agent->setToolRegistry(remoteRegistry);
 
-            /* Update agent config so the system prompt reflects remote mode. */
             {
                 auto newCfg               = agent->getConfig();
                 newCfg.remoteMode         = true;
-                newCfg.remoteName         = targetKey;
-                newCfg.remoteDisplay      = targetKey + QStringLiteral(":") + workspace;
-                newCfg.remoteWorkspace    = workspace;
-                newCfg.remoteWorkingDir   = workspace;
+                newCfg.remoteName         = newState.targetKey;
+                newCfg.remoteDisplay      = newState.display;
+                newCfg.remoteWorkspace    = newState.workspace;
+                newCfg.remoteWorkingDir   = newState.workspace;
                 newCfg.remoteWritableDirs = remotePath.writableDirs();
                 agent->setConfig(newCfg);
             }
@@ -4084,8 +3886,8 @@ bool QSocCliWorker::runAgentLoop(
             /* Sticky binding. */
             if (!projectRoot.isEmpty()) {
                 QSocRemoteBinding::Entry toStore;
-                toStore.target    = targetKey;
-                toStore.workspace = workspace;
+                toStore.target    = newState.targetKey;
+                toStore.workspace = newState.workspace;
                 QString bindErr;
                 QSocRemoteBinding::write(projectRoot, toStore, &bindErr);
                 if (!bindErr.isEmpty()) {
@@ -4093,8 +3895,9 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
 
-            statusBarWidget.setStatus(QString("Remote: %1").arg(targetKey));
-            compositor.printContent(QString("Connected. Remote workspace: %1\n").arg(workspace));
+            statusBarWidget.setStatus(QString("Remote: %1").arg(newState.targetKey));
+            compositor.printContent(
+                QString("Connected. Remote workspace: %1\n").arg(newState.workspace));
             continue;
         }
         if (cmd == QStringLiteral("/local")) {
