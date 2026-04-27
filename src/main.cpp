@@ -9,6 +9,7 @@
 #include "gui/mainwindow/mainwindow.h"
 
 #include <QApplication>
+#include <QIcon>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -40,6 +41,7 @@ int main(int argc, char *argv[])
         FreeConsole();
 #endif
         const QApplication app(argc, argv);
+        QApplication::setWindowIcon(QIcon(QStringLiteral(":/qsoc.svg")));
         QStaticTranslator::setup();
         QSocCliWorker socCliWorker;
         socCliWorker.setup(app.arguments(), true);

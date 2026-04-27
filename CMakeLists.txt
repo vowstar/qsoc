@@ -491,6 +491,93 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     MACOSX_BUNDLE TRUE
 )
 
+# App icon: doc/en/image/icon.svg is the single source of truth.
+# Linux installs the SVG into the hicolor scalable theme. macOS and
+# Windows derive .icns / .ico at build time so the repository keeps no
+# generated binaries. CI provisions rsvg-convert + png2icns / icotool
+# on the platforms that actually need them.
+set(QSOC_ICON_SVG "${CMAKE_CURRENT_SOURCE_DIR}/doc/en/image/icon.svg")
+set(QSOC_ICON_BUILD_DIR "${CMAKE_BINARY_DIR}/icons")
+file(MAKE_DIRECTORY "${QSOC_ICON_BUILD_DIR}")
+
+function(qsoc_render_icon_png size out_var)
+    set(out "${QSOC_ICON_BUILD_DIR}/qsoc-${size}.png")
+    add_custom_command(
+        OUTPUT "${out}"
+        COMMAND "${RSVG_CONVERT}" -w ${size} -h ${size} -o "${out}" "${QSOC_ICON_SVG}"
+        DEPENDS "${QSOC_ICON_SVG}"
+        COMMENT "Rendering qsoc icon ${size}x${size}"
+        VERBATIM
+    )
+    set(${out_var} "${out}" PARENT_SCOPE)
+endfunction()
+
+if(APPLE)
+    find_program(RSVG_CONVERT rsvg-convert)
+    find_program(PNG2ICNS png2icns)
+    if(NOT RSVG_CONVERT OR NOT PNG2ICNS)
+        message(WARNING
+            "macOS app icon skipped: install librsvg and libicns to bundle qsoc.icns")
+    else()
+        set(QSOC_MAC_ICON_SIZES 16 32 128 256 512 1024)
+        set(QSOC_MAC_ICON_PNGS "")
+        foreach(size IN LISTS QSOC_MAC_ICON_SIZES)
+            qsoc_render_icon_png(${size} png_path)
+            list(APPEND QSOC_MAC_ICON_PNGS "${png_path}")
+        endforeach()
+        set(QSOC_ICNS "${QSOC_ICON_BUILD_DIR}/qsoc.icns")
+        add_custom_command(
+            OUTPUT "${QSOC_ICNS}"
+            COMMAND "${PNG2ICNS}" "${QSOC_ICNS}" ${QSOC_MAC_ICON_PNGS}
+            DEPENDS ${QSOC_MAC_ICON_PNGS}
+            COMMENT "Bundling qsoc.icns"
+            VERBATIM
+        )
+        set_source_files_properties("${QSOC_ICNS}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources"
+            GENERATED TRUE
+        )
+        target_sources(${PROJECT_NAME} PRIVATE "${QSOC_ICNS}")
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            MACOSX_BUNDLE_ICON_FILE qsoc.icns
+        )
+    endif()
+endif()
+
+if(WIN32)
+    find_program(RSVG_CONVERT rsvg-convert)
+    find_program(ICOTOOL icotool)
+    if(NOT RSVG_CONVERT OR NOT ICOTOOL)
+        message(WARNING
+            "Windows app icon skipped: install librsvg and icoutils to bundle qsoc.ico")
+    else()
+        set(QSOC_WIN_ICON_SIZES 16 32 48 64 128 256)
+        set(QSOC_WIN_ICON_PNGS "")
+        foreach(size IN LISTS QSOC_WIN_ICON_SIZES)
+            qsoc_render_icon_png(${size} png_path)
+            list(APPEND QSOC_WIN_ICON_PNGS "${png_path}")
+        endforeach()
+        set(QSOC_ICO "${QSOC_ICON_BUILD_DIR}/qsoc.ico")
+        add_custom_command(
+            OUTPUT "${QSOC_ICO}"
+            COMMAND "${ICOTOOL}" -c -o "${QSOC_ICO}" ${QSOC_WIN_ICON_PNGS}
+            DEPENDS ${QSOC_WIN_ICON_PNGS}
+            COMMENT "Bundling qsoc.ico"
+            VERBATIM
+        )
+        add_custom_target(qsoc_win_icon DEPENDS "${QSOC_ICO}")
+        target_sources(${PROJECT_NAME} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/resource/icons/qsoc.rc")
+        add_dependencies(${PROJECT_NAME} qsoc_win_icon)
+        # The .rc references qsoc.ico without a path; tell windres to look
+        # inside the build-dir output directory where the .ico is generated.
+        set_source_files_properties(
+            "${CMAKE_CURRENT_SOURCE_DIR}/resource/icons/qsoc.rc"
+            PROPERTIES COMPILE_FLAGS "-I\"${QSOC_ICON_BUILD_DIR}\""
+        )
+    endif()
+endif()
+
 install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
@@ -499,7 +586,8 @@ install(TARGETS ${PROJECT_NAME}
 if(UNIX AND NOT APPLE)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resource/qsoc.desktop"
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resource/qsoc.svg"
+    install(FILES "${QSOC_ICON_SVG}"
+        RENAME qsoc.svg
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps")
 endif()
 

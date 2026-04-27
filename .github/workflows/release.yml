@@ -69,7 +69,7 @@ jobs:
           -m qt5compat -O /opt/qt
 
     - name: Generate PNG icon
-      run: rsvg-convert -w 256 -h 256 resource/qsoc.svg -o resource/qsoc.png
+      run: rsvg-convert -w 256 -h 256 doc/en/image/icon.svg -o resource/qsoc.png
 
     - name: Configure CMake
       run: |
@@ -221,7 +221,7 @@ jobs:
         cache-key-prefix: 'install-qt-action-macos'
 
     - name: Install tools
-      run: brew install ninja pkg-config
+      run: brew install ninja pkg-config librsvg libicns
 
     - name: Configure CMake
       run: >-

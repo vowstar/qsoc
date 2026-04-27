@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
+        <file alias="qsoc.svg">../doc/en/image/icon.svg</file>
         <file>icon/dark/index.theme</file>
         <file>icon/dark/scalable/applications-bus.svg</file>
         <file>icon/dark/scalable/applications-module.svg</file>
