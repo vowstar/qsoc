@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="108"
+   height="108"
+   viewBox="0 0 108 108"
+   fill="none"
+   version="1.1"
+   id="svg17"
+   sodipodi:docname="qsoc_logo_only.svg"
+   inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <defs
+     id="defs17" />
+  <sodipodi:namedview
+     id="namedview17"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="2.0058333"
+     inkscape:cx="75.778978"
+     inkscape:cy="-39.135854"
+     inkscape:window-width="2560"
+     inkscape:window-height="1355"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg17" />
+  <title
+     id="title1">QSoC Quick System on Chip Studio logo</title>
+  <desc
+     id="desc1">Square monochrome pixel chip icon with detached dash pins and Roboto Bold wordmark.</desc>
+  <style
+     id="style1">
+    .brand-text { font-family: 'Roboto', Arial, sans-serif; font-weight: 700; fill: #22292C; }
+    .chip { fill: #0B8F8E; }
+    .eye { fill: #FFFFFF; }
+  </style>
+  <!-- Left pixel chip icon: 3 detached dash pins per side -->
+  <g
+     id="pixel-chip"
+     class="chip"
+     transform="translate(-8,-8)">
+    <!-- chip body -->
+    <path
+       id="rect1"
+       d="M 28,28 H 96 V 96 H 28 Z" />
+    <!-- top pins -->
+    <path
+       id="rect2"
+       d="m 34,12 h 10 v 8 H 34 Z" />
+    <path
+       id="rect3"
+       d="m 57,12 h 10 v 8 H 57 Z" />
+    <path
+       id="rect4"
+       d="m 80,12 h 10 v 8 H 80 Z" />
+    <!-- bottom pins -->
+    <path
+       id="rect5"
+       d="m 34,104 h 10 v 8 H 34 Z" />
+    <path
+       id="rect6"
+       d="m 57,104 h 10 v 8 H 57 Z" />
+    <path
+       id="rect7"
+       d="m 80,104 h 10 v 8 H 80 Z" />
+    <!-- left pins -->
+    <path
+       id="rect8"
+       d="m 8,34 h 10 v 8 H 8 Z" />
+    <path
+       id="rect9"
+       d="m 8,58 h 10 v 8 H 8 Z" />
+    <path
+       id="rect10"
+       d="m 8,82 h 10 v 8 H 8 Z" />
+    <!-- right pins -->
+    <path
+       id="rect11"
+       d="m 106,34 h 10 v 8 h -10 z" />
+    <path
+       id="rect12"
+       d="m 106,58 h 10 v 8 h -10 z" />
+    <path
+       id="rect13"
+       d="m 106,82 h 10 v 8 h -10 z" />
+  </g>
+  <!-- eyes: pure white, no highlights -->
+  <g
+     id="eyes"
+     class="eye"
+     transform="translate(-8,-8)">
+    <path
+       id="rect14"
+       d="m 43,52 h 9 v 11 h -9 z" />
+    <path
+       id="rect15"
+       d="m 72,52 h 9 v 11 h -9 z" />
+  </g>
+  <!-- Right wordmark, Roboto Bold -->
+  <g
+     id="wordmark"
+     class="brand-text"
+     transform="translate(-8,-12)" />
+  <metadata
+     id="metadata1">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:title>QSoC Quick System on Chip Studio logo</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+</svg>
