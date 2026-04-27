@@ -644,6 +644,19 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
              "argument to load it directly, or omit it to pick from a list.")},
         {"continue",
          QCoreApplication::translate("main", "Continue the most recent session for this project.")},
+        {"workspace",
+         QCoreApplication::translate(
+             "main",
+             "Working directory for tool execution. Local absolute path by "
+             "default; remote absolute path when paired with --ssh."),
+         "path"},
+        {"ssh",
+         QCoreApplication::translate(
+             "main",
+             "Connect to a remote workspace before the agent starts. Pass "
+             "[user@]host[:port] or a ~/.ssh/config alias; --workspace is "
+             "required and must be an absolute remote path."),
+         "target"},
     });
 
     /* Optional positional argument: a session id (or unique prefix). Mirrors
@@ -802,6 +815,29 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     /* Command line overrides config file */
     if (parser.isSet("no-stream")) {
         streaming = false;
+    }
+
+    /* Apply --workspace before any tool is constructed so the new cwd
+     * propagates to QProcess defaults, hook payloads, and relative path
+     * resolution uniformly. Project metadata (`-d`) is already resolved
+     * above, so chdir here does not affect config lookup. The remote
+     * variant of --workspace (paired with --ssh) is consumed below in
+     * the remote-connect block and bypasses local chdir. */
+    if (parser.isSet("workspace") && !parser.isSet("ssh")) {
+        const QString workspacePath = parser.value("workspace");
+        if (workspacePath.isEmpty() || !workspacePath.startsWith(QLatin1Char('/'))) {
+            QSocConsole::warn() << "--workspace must be an absolute local path; ignoring:"
+                                << workspacePath;
+        } else {
+            const QFileInfo info(workspacePath);
+            if (!info.exists() || !info.isDir()) {
+                QSocConsole::warn()
+                    << "--workspace path does not exist or is not a directory; ignoring:"
+                    << workspacePath;
+            } else if (!QDir::setCurrent(workspacePath)) {
+                QSocConsole::warn() << "failed to chdir to --workspace:" << workspacePath;
+            }
+        }
     }
 
     /* Create tool registry and register tools */
