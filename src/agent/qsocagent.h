@@ -9,6 +9,8 @@
 #include "agent/qsoctool.h"
 #include "common/qllmservice.h"
 
+class QSocHookManager;
+
 #include <atomic>
 #include <nlohmann/json.hpp>
 #include <QElapsedTimer>
@@ -171,6 +173,15 @@ public:
     QSocMemoryManager *getMemoryManager() const { return memoryManager; }
 
     /**
+     * @brief Set the hook manager for lifecycle event dispatch.
+     * @details The agent fires user-defined hook commands at well-known
+     *          lifecycle points (tool dispatch, prompt admission, session
+     *          start/end). When unset, no hooks fire and the agent
+     *          behaves identically to earlier releases.
+     */
+    void setHookManager(QSocHookManager *manager);
+
+    /**
      * @brief Set the agent configuration
      * @param config Agent configuration
      */
@@ -323,6 +334,7 @@ private:
     QLLMService       *llmService    = nullptr;
     QSocToolRegistry  *toolRegistry  = nullptr;
     QSocMemoryManager *memoryManager = nullptr;
+    QSocHookManager   *hookManager   = nullptr;
     QSocAgentConfig    agentConfig;
     json               messages;
 
