@@ -9,6 +9,7 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocfilehistory.h"
+#include "agent/qsochookmanager.h"
 #include "agent/qsocsession.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocremotebinding.h"
@@ -960,6 +961,13 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     /* Create agent */
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);
     agent->setMemoryManager(memoryManager);
+
+    /* Hook manager: parses agent.hooks from the merged config layers,
+     * dispatches lifecycle events to user-defined commands. Always
+     * created; with no hooks configured it's a cheap no-op. */
+    auto *hookManager = new QSocHookManager(this);
+    hookManager->setConfig(config.hooks);
+    agent->setHookManager(hookManager);
 
     /* Connect verbose output signal */
     connect(agent, &QSocAgent::verboseOutput, [](const QString &message) {

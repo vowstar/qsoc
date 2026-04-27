@@ -2,6 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
+
+#include "agent/qsochookmanager.h"
+#include "agent/qsochooktypes.h"
 #include "common/qsocconsole.h"
 
 #include <QDateTime>
@@ -560,6 +563,39 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
             continue;
         }
 
+        /* Pre-tool hook: matched hooks may inspect or block the call.
+         * On block we short-circuit executeTool and surface the reason
+         * back to the model as the tool result. */
+        if (hookManager != nullptr && hookManager->hasHooksFor(QSocHookEvent::PreToolUse)) {
+            json payload          = json::object();
+            payload["event"]      = "pre_tool_use";
+            payload["tool_name"]  = functionName.toStdString();
+            payload["tool_input"] = arguments;
+            payload["cwd"]        = QDir::currentPath().toStdString();
+            if (agentConfig.remoteMode) {
+                payload["remote"] = {
+                    {"display", agentConfig.remoteDisplay.toStdString()},
+                    {"workspace", agentConfig.remoteWorkspace.toStdString()},
+                    {"cwd", agentConfig.remoteWorkingDir.toStdString()},
+                };
+            }
+            const auto outcome = hookManager->fire(QSocHookEvent::PreToolUse, functionName, payload);
+            if (outcome.blocked) {
+                const QString reason = outcome.blockReason.isEmpty()
+                                           ? QStringLiteral("hook blocked execution")
+                                           : outcome.blockReason;
+                const QString blocked
+                    = QStringLiteral("Tool blocked by pre_tool_use hook: %1").arg(reason);
+                addToolMessage(toolCallId, blocked);
+                emit toolResult(functionName, blocked);
+                continue;
+            }
+            if (outcome.hasMergedResponse && outcome.mergedResponse.contains("updatedInput")
+                && outcome.mergedResponse["updatedInput"].is_object()) {
+                arguments = outcome.mergedResponse["updatedInput"];
+            }
+        }
+
         /* Execute tool */
         QString result = toolRegistry->executeTool(functionName, arguments);
 
@@ -579,6 +615,11 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
 void QSocAgent::setMemoryManager(QSocMemoryManager *manager)
 {
     memoryManager = manager;
+}
+
+void QSocAgent::setHookManager(QSocHookManager *manager)
+{
+    hookManager = manager;
 }
 
 QString QSocAgent::buildSystemPromptWithMemory() const
