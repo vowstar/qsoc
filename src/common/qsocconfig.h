@@ -5,6 +5,7 @@
 #define QSOCCONFIG_H
 
 #include "agent/mcp/qsocmcptypes.h"
+#include "agent/qsochooktypes.h"
 #include "common/qsocprojectmanager.h"
 
 #include <yaml-cpp/yaml.h>
@@ -123,6 +124,14 @@ public slots:
      * @return List of validated server configs (may be empty).
      */
     QList<McpServerConfig> mcpServers() const;
+
+    /**
+     * @brief Get user-defined agent lifecycle hooks.
+     * @details Reads `agent.hooks` from the merged config layers.
+     *          Invalid entries are dropped with a warning.
+     * @return Parsed hook config (may be empty).
+     */
+    QSocHookConfig agentHooks() const;
 
 private:
     /* Project manager pointer, can be nullptr */

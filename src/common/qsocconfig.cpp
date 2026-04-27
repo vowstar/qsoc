@@ -232,6 +232,11 @@ QList<McpServerConfig> QSocConfig::mcpServers() const
     return McpServerConfig::parseList(getYamlNode("mcp.servers"));
 }
 
+QSocHookConfig QSocConfig::agentHooks() const
+{
+    return QSocHookConfig::parseFromYaml(getYamlNode("agent.hooks"));
+}
+
 YAML::Node QSocConfig::getYamlNode(const QString &dotPath) const
 {
     QStringList parts = dotPath.split('.');
