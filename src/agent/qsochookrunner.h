@@ -11,15 +11,20 @@
 #include <QObject>
 #include <QString>
 
+class QProcess;
+class QTimer;
+
 /**
- * @brief Synchronous runner for a single hook command.
+ * @brief Runner for a single hook command.
  * @details Spawns the configured shell command, writes the event JSON
  *          payload on stdin, captures stdout / stderr, and translates
  *          the exit code into a coarse status the manager can act on.
  *          Stdin is closed after the payload is written; the child is
- *          killed if it exceeds the configured timeout. The runner
- *          owns no persistent state and is safe to re-use for the
- *          next event.
+ *          killed if it exceeds the configured timeout.
+ *
+ *          Exposes both a synchronous `run()` (used by single-shot
+ *          callers and unit tests) and an asynchronous start/finished
+ *          API the manager uses to fan-out parallel matchers.
  */
 class QSocHookRunner : public QObject
 {
@@ -46,14 +51,55 @@ public:
     };
 
     explicit QSocHookRunner(QObject *parent = nullptr);
+    ~QSocHookRunner() override;
 
     /**
      * @brief Run the hook synchronously.
-     * @param cfg Command spec (type, command line, timeout).
-     * @param payload Event payload, serialized to JSON and written to stdin.
-     * @return Outcome with captured streams and parsed response.
+     * @details Internally drives a local event loop until the child
+     *          finishes or times out.
      */
     Result run(const HookCommandConfig &cfg, const nlohmann::json &payload);
+
+    /**
+     * @brief Start the hook asynchronously.
+     * @details Caller must connect `finished()` before this returns
+     *          relevant state. After `finished()` fires, `result()`
+     *          carries the outcome. Calling start while an earlier run
+     *          is in flight is a programming error.
+     */
+    void start(const HookCommandConfig &cfg, const nlohmann::json &payload);
+
+    /**
+     * @brief Latest async outcome. Only meaningful after `finished()`.
+     */
+    const Result &result() const { return m_result; }
+
+    /**
+     * @brief True between `start()` and `finished()`.
+     */
+    bool isRunning() const { return m_running; }
+
+signals:
+    /**
+     * @brief Emitted exactly once per `start()` call.
+     */
+    void finished();
+
+private slots:
+    void handleProcessFinished();
+    void handleTimeout();
+
+private:
+    void   reset();
+    void   captureStreams();
+    Result interpretExit() const;
+
+    QProcess *m_process = nullptr;
+    QTimer   *m_timer   = nullptr;
+    Result    m_result;
+    int       m_timeoutMs = 0;
+    bool      m_running   = false;
+    bool      m_finalized = false;
 };
 
 #endif // QSOCHOOKRUNNER_H
