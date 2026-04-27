@@ -23,6 +23,12 @@ LLM tool calling to execute multi-step workflows through natural language.
     [`--resume [id]`],
     [Resume a previous session; pick from list if id omitted],
     [`--continue`], [Continue the most recent session for this project],
+    [`--workspace <path>`],
+    [Working directory for tool execution. Local absolute path by default;
+     paired with `--ssh` it names the remote workspace],
+    [`--ssh <target>`],
+    [Connect to a remote workspace before the first prompt. Accepts
+     `[user@]host[:port]` or a `~/.ssh/config` alias. Requires `--workspace`],
   )],
   caption: [AGENT COMMAND OPTIONS],
   kind: table,
@@ -46,6 +52,42 @@ qsoc agent --resume abc123
 qsoc agent -q "List all modules in the project"
 qsoc agent -q "Import cpu.v and add AXI bus interface"
 ```
+
+=== Workspace Override
+<agent-workspace-flag>
+
+`--workspace` switches the directory tools operate in without changing
+the project metadata directory selected by `-d`. Useful when the project
+is checked out in one place but tool runs (shell, file read/write, path
+context) should target a build directory or scratch space:
+
+```bash
+qsoc agent -d ~/work/proj --workspace ~/work/proj/build -q "list build outputs"
+qsoc agent --workspace /tmp/scratch -q "summarize files here"
+```
+
+The hook payload's `cwd` field reflects the new working directory so
+hook scripts see the same paths the tools do.
+
+=== Remote Workspace via SSH
+<agent-ssh-flag>
+
+`--ssh` opens an SSH session and mounts a remote directory as the
+workspace before the first prompt, so single-query mode and scripted
+runs can target a remote host without entering the REPL. `--workspace`
+must accompany it and name an absolute remote path:
+
+```bash
+qsoc agent --ssh user@host --workspace /home/user/proj -q "show host disk usage"
+qsoc agent --ssh myalias --workspace /home/me/proj          # picker skipped, REPL starts remote
+```
+
+The workspace is created on demand via SFTP `mkdir -p`. Tool calls (shell,
+file, path) execute remotely; hooks still run on the local host but
+their JSON payload includes a `remote` section so scripts can branch on
+it. `/local` inside the REPL returns to the local workspace; the sticky
+binding (`<project>/.qsoc/remote.yml`) is *not* written for one-shot
+`--ssh` runs.
 
 == INTERACTIVE COMMANDS
 <agent-commands>
