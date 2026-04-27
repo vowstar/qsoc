@@ -58,7 +58,7 @@ private slots:
 
         QVERIFY(prompt.contains(QStringLiteral("# External MCP servers")));
         QVERIFY(prompt.contains(QStringLiteral("alpha (2 tools)")));
-        QVERIFY(prompt.contains(QStringLiteral("beta (1 tools)")));
+        QVERIFY(prompt.contains(QStringLiteral("beta (1 tool)")));
         /* Built-in tools must not be listed under the MCP section. */
         const int sectionStart = prompt.indexOf(QStringLiteral("# External MCP servers"));
         QVERIFY(sectionStart >= 0);
