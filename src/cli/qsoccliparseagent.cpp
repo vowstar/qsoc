@@ -1026,6 +1026,64 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     /* Install SIGINT handler for Ctrl+C support in non-raw-mode states */
     installSigintHandler();
 
+    /* CLI --ssh: connect once before the agent runs the first prompt.
+     * --workspace is required to skip the interactive picker, since -q
+     * mode has no TUI. Both -q and the REPL adopt the resulting state:
+     * single-query just runs against the remote tools and exits; the
+     * REPL receives the live session via runAgentLoop arguments and the
+     * sticky binding's auto-/ssh is suppressed for this run. */
+    AgentRemoteState  cliRemoteState;
+    AgentRemoteState *preconnectedRemote = nullptr;
+    QSocToolRegistry *preLocalRegistry   = nullptr;
+    if (parser.isSet("ssh")) {
+        const QString sshTarget = parser.value("ssh");
+        const QString workspace = parser.value("workspace");
+        if (sshTarget.isEmpty()) {
+            return showError(2, QStringLiteral("--ssh requires a target [user@]host[:port]"));
+        }
+        if (workspace.isEmpty() || !workspace.startsWith(QLatin1Char('/'))) {
+            return showError(
+                2,
+                QStringLiteral("--ssh requires --workspace with an absolute remote path; got '%1'")
+                    .arg(workspace));
+        }
+        QSocConsole::out() << "Connecting to " << sshTarget << " ...\n" << Qt::flush;
+        QString sshErr;
+        if (!connectAgentSshSession(sshTarget, this, &cliRemoteState, &sshErr)) {
+            return showError(1, sshErr);
+        }
+        if (!prepareAgentRemoteWorkspace(workspace, &cliRemoteState, &sshErr)) {
+            cliRemoteState.sftp->close();
+            delete cliRemoteState.sftp;
+            cliRemoteState.session->disconnectFromHost();
+            delete cliRemoteState.session;
+            for (auto it = cliRemoteState.jumps.rbegin(); it != cliRemoteState.jumps.rend(); ++it) {
+                (*it)->disconnectFromHost();
+                delete *it;
+            }
+            return showError(1, sshErr);
+        }
+        buildAgentRemoteRegistry(this, &cliRemoteState, socConfig);
+
+        preLocalRegistry = agent->getToolRegistry();
+        agent->setToolRegistry(cliRemoteState.registry);
+        {
+            auto newCfg               = agent->getConfig();
+            newCfg.remoteMode         = true;
+            newCfg.remoteName         = cliRemoteState.targetKey;
+            newCfg.remoteDisplay      = cliRemoteState.display;
+            newCfg.remoteWorkspace    = cliRemoteState.workspace;
+            newCfg.remoteWorkingDir   = cliRemoteState.workspace;
+            newCfg.remoteWritableDirs = cliRemoteState.path.writableDirs();
+            agent->setConfig(newCfg);
+        }
+        preconnectedRemote = &cliRemoteState;
+        QSocConsole::out() << "Connected. Remote workspace: " << cliRemoteState.workspace << "\n"
+                           << Qt::flush;
+    } else if (parser.isSet("workspace")) {
+        /* Local --workspace already chdir'd above; nothing more to do. */
+    }
+
     /* Check if single query mode */
     if (parser.isSet("query")) {
         QString      query = parser.value("query");
@@ -1155,11 +1213,17 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             resumeSessionId = sessions.first().id;
         }
     }
-    return runAgentLoop(agent, streaming, resumeSessionId, pathContext);
+    return runAgentLoop(
+        agent, streaming, resumeSessionId, pathContext, preconnectedRemote, preLocalRegistry);
 }
 
 bool QSocCliWorker::runAgentLoop(
-    QSocAgent *agent, bool streaming, const QString &resumeSessionId, QSocPathContext *pathContext)
+    QSocAgent        *agent,
+    bool              streaming,
+    const QString    &resumeSessionId,
+    QSocPathContext  *pathContext,
+    AgentRemoteState *preconnected,
+    QSocToolRegistry *preLocalRegistry)
 {
     /* Require interactive terminal for TUI */
     QTerminalCapability termCap;
@@ -1203,13 +1267,24 @@ bool QSocCliWorker::runAgentLoop(
 
     /* Remote workspace state. A single session at a time; created by
      * `/ssh <target>` and torn down by `/local`. Local tool registry is
-     * cached here so `/local` can restore it in O(1). */
-    QSocToolRegistry       *localRegistry  = agent->getToolRegistry();
-    QSocSshSession         *remoteSession  = nullptr;
-    QSocSftpClient         *remoteSftp     = nullptr;
-    QSocToolRegistry       *remoteRegistry = nullptr;
+     * cached here so `/local` can restore it in O(1). When the CLI was
+     * launched with `--ssh`, parseAgent has already opened the session;
+     * we adopt that pre-connected state via preconnected/preLocalRegistry
+     * so the REPL starts directly in remote mode. */
+    QSocToolRegistry *localRegistry  = (preLocalRegistry != nullptr) ? preLocalRegistry
+                                                                     : agent->getToolRegistry();
+    QSocSshSession   *remoteSession  = nullptr;
+    QSocSftpClient   *remoteSftp     = nullptr;
+    QSocToolRegistry *remoteRegistry = nullptr;
     QList<QSocSshSession *> remoteJumps; /* ProxyJump chain, outlives target */
     QSocRemotePathContext   remotePath;
+    if (preconnected != nullptr && preconnected->session != nullptr) {
+        remoteSession  = preconnected->session;
+        remoteSftp     = preconnected->sftp;
+        remoteRegistry = preconnected->registry;
+        remoteJumps    = preconnected->jumps;
+        remotePath     = preconnected->path;
+    }
 
     /* Create TUI compositor — enters alt screen immediately */
     QTuiCompositor compositor(this);
@@ -1231,7 +1306,10 @@ bool QSocCliWorker::runAgentLoop(
         QString mid = llmService->getCurrentModelId();
         compositor.setTitle("QSoC Agent · " + (mid.isEmpty() ? "default" : mid));
     }
-    statusBarWidget.setStatus("Ready");
+    statusBarWidget.setStatus(
+        (preconnected != nullptr && !preconnected->targetKey.isEmpty())
+            ? QString("Remote: %1").arg(preconnected->targetKey)
+            : QStringLiteral("Ready"));
     statusBarWidget.setModel(llmService->getCurrentModelId());
     statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
     compositor.start();
@@ -1242,12 +1320,18 @@ bool QSocCliWorker::runAgentLoop(
     if (streaming) {
         compositor.printContent("(Enhanced mode, streaming enabled)\n");
     }
+    if (preconnected != nullptr && !preconnected->workspace.isEmpty()) {
+        compositor.printContent(QString("Connected to %1 (workspace %2)\n")
+                                    .arg(preconnected->targetKey, preconnected->workspace));
+    }
 
     /* If a sticky remote binding exists for this project, inject the matching
      * /ssh line so the next REPL iteration auto-connects. Cleared on first
      * consumption; users can still /local out or override manually. */
     QString pendingAutoInput;
-    if (pathContext != nullptr) {
+    /* When --ssh on the command line already brought the agent online, the
+     * sticky binding's auto-/ssh would override the live session; skip it. */
+    if (preconnected == nullptr && pathContext != nullptr) {
         const QString projectRootOnStart = pathContext->getProjectDir();
         if (!projectRootOnStart.isEmpty()) {
             const auto binding = QSocRemoteBinding::read(projectRootOnStart);
