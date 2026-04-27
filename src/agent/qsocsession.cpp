@@ -48,10 +48,28 @@ void appendJsonLine(const QString &filePath, const nlohmann::json &line)
 QSocSession::QSocSession(QString sessionId, QString filePath)
     : sessionIdValue(std::move(sessionId))
     , filePathValue(std::move(filePath))
+    , persisted(QFile::exists(filePathValue))
 {}
 
 void QSocSession::appendMessage(const nlohmann::json &message)
 {
+    /* First message flushes any meta the caller buffered while the
+     * session was still empty. The file is created here, not at
+     * construction or on appendMeta, so a REPL that opens and exits
+     * without any user activity leaves no JSONL behind. */
+    if (!persisted) {
+        for (const auto &kv : pendingMeta) {
+            nlohmann::json metaLine;
+            metaLine["type"]  = "meta";
+            metaLine["ts"]    = isoNow().toStdString();
+            metaLine["key"]   = kv.first.toStdString();
+            metaLine["value"] = kv.second.toStdString();
+            appendJsonLine(filePathValue, metaLine);
+        }
+        pendingMeta.clear();
+        persisted = true;
+    }
+
     nlohmann::json line;
     line["type"] = "message";
     line["ts"]   = isoNow().toStdString();
@@ -66,6 +84,10 @@ void QSocSession::appendMessage(const nlohmann::json &message)
 
 void QSocSession::appendMeta(const QString &key, const QString &value)
 {
+    if (!persisted) {
+        pendingMeta.append(qMakePair(key, value));
+        return;
+    }
     nlohmann::json line;
     line["type"]  = "meta";
     line["ts"]    = isoNow().toStdString();
@@ -76,6 +98,16 @@ void QSocSession::appendMeta(const QString &key, const QString &value)
 
 void QSocSession::rewriteMessages(const nlohmann::json &messages)
 {
+    const bool emptyRewrite = !messages.is_array() || messages.empty();
+
+    /* /clear on a still-empty session is a no-op: nothing on disk to
+     * truncate, and creating a zero-message file would leave the same
+     * orphan the lazy-persist path is trying to avoid. */
+    if (!persisted && emptyRewrite) {
+        pendingMeta.clear();
+        return;
+    }
+
     QFileInfo fileInfo(filePathValue);
     QDir      parentDir = fileInfo.absoluteDir();
     if (!parentDir.exists()) {
@@ -102,6 +134,8 @@ void QSocSession::rewriteMessages(const nlohmann::json &messages)
         }
     }
     file.close();
+    persisted = !emptyRewrite;
+    pendingMeta.clear();
 }
 
 nlohmann::json QSocSession::loadMessages(const QString &filePath)

@@ -6,6 +6,7 @@
 
 #include <QDateTime>
 #include <QList>
+#include <QPair>
 #include <QString>
 
 #include <nlohmann/json.hpp>
@@ -47,7 +48,10 @@ public:
 
     /**
      * @brief Construct a session bound to a JSONL file path. The file is not
-     *        created until the first append() call.
+     *        created until the first message is appended; meta entries
+     *        recorded before that point are buffered in memory and flushed
+     *        together with the first message, so a REPL that opens and
+     *        exits without any user activity leaves no JSONL on disk.
      */
     QSocSession(QString sessionId, QString filePath);
 
@@ -56,14 +60,19 @@ public:
 
     /**
      * @brief Append a single OpenAI-style message to the session JSONL.
-     * @details The message JSON is wrapped as
-     *          `{"type":"message", ...message fields}` so loaders can quickly
-     *          discriminate from meta entries on the same file.
+     * @details On the first call, any buffered meta entries are flushed
+     *          ahead of the message so the on-disk order matches the call
+     *          order. The message JSON is wrapped as
+     *          `{"type":"message", ...message fields}` so loaders can
+     *          quickly discriminate from meta entries on the same file.
      */
     void appendMessage(const nlohmann::json &message);
 
     /**
      * @brief Append a metadata key/value pair. Latest wins on load.
+     * @details Buffered until the first message is appended; the buffer
+     *          is then flushed in insertion order. Calling appendMeta
+     *          alone never creates the on-disk file.
      */
     void appendMeta(const QString &key, const QString &value);
 
@@ -111,8 +120,10 @@ public:
     static QString generateId();
 
 private:
-    QString sessionIdValue;
-    QString filePathValue;
+    QString                        sessionIdValue;
+    QString                        filePathValue;
+    QList<QPair<QString, QString>> pendingMeta; /* Flushed on first message */
+    bool                           persisted = false;
 };
 
 #endif // QSOCSESSION_H
