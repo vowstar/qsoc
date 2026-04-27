@@ -4,6 +4,8 @@
 #ifndef QSOCAGENTCONFIG_H
 #define QSOCAGENTCONFIG_H
 
+#include "agent/qsochooktypes.h"
+
 #include <QString>
 #include <QStringList>
 
@@ -90,6 +92,12 @@ struct QSocAgentConfig
     QString     remoteWorkspace;  /* Absolute remote workspace root. */
     QString     remoteWorkingDir; /* Absolute remote cwd (initially = workspace). */
     QStringList remoteWritableDirs;
+
+    /* User-defined lifecycle hooks parsed from `agent.hooks` in
+     * .qsoc.yml / qsoc.yml. Hooks always run on the local host, even
+     * in remoteMode; the JSON payload includes a `remote` section so
+     * scripts can branch on it. */
+    QSocHookConfig hooks;
 };
 
 #endif // QSOCAGENTCONFIG_H

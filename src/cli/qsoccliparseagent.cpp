@@ -750,6 +750,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         if (!memoryMaxCharsStr.isEmpty()) {
             config.memoryMaxChars = memoryMaxCharsStr.toInt();
         }
+
+        config.hooks = socConfig->agentHooks();
     }
 
     /* Command line overrides config file */
