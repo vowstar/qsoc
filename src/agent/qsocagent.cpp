@@ -67,8 +67,14 @@ QSocAgent::~QSocAgent()
 
 QString QSocAgent::run(const QString &userQuery)
 {
+    QString prompt = userQuery;
+    QString blockReason;
+    if (!firePromptSubmitHook(&prompt, &blockReason)) {
+        return QStringLiteral("[user_prompt_submit hook blocked: %1]").arg(blockReason);
+    }
+
     /* Add user message to history */
-    addMessage("user", userQuery);
+    addMessage("user", prompt);
 
     /* Agent loop */
     int iteration = 0;
@@ -117,8 +123,15 @@ void QSocAgent::runStream(const QString &userQuery)
         return;
     }
 
+    QString prompt = userQuery;
+    QString blockReason;
+    if (!firePromptSubmitHook(&prompt, &blockReason)) {
+        emit runError(QStringLiteral("user_prompt_submit hook blocked: %1").arg(blockReason));
+        return;
+    }
+
     /* Add user message to history */
-    addMessage("user", userQuery);
+    addMessage("user", prompt);
 
     /* Setup streaming */
     isStreaming               = true;
@@ -283,6 +296,15 @@ void QSocAgent::processStreamIteration()
             QString newRequest = requestQueue.takeFirst();
             int     remaining  = requestQueue.size();
             locker.unlock();
+
+            QString blockReason;
+            if (!firePromptSubmitHook(&newRequest, &blockReason)) {
+                emit processingQueuedRequest(
+                    QStringLiteral("[blocked by user_prompt_submit: %1]").arg(blockReason),
+                    remaining);
+                locker.relock();
+                continue;
+            }
 
             emit processingQueuedRequest(newRequest, remaining);
 
@@ -639,6 +661,48 @@ void QSocAgent::setMemoryManager(QSocMemoryManager *manager)
 void QSocAgent::setHookManager(QSocHookManager *manager)
 {
     hookManager = manager;
+}
+
+bool QSocAgent::firePromptSubmitHook(QString *userQuery, QString *blockReason)
+{
+    if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::UserPromptSubmit)) {
+        return true;
+    }
+    if (userQuery == nullptr) {
+        return true;
+    }
+    json payload      = json::object();
+    payload["event"]  = "user_prompt_submit";
+    payload["prompt"] = userQuery->toStdString();
+    payload["cwd"]    = QDir::currentPath().toStdString();
+    if (agentConfig.remoteMode) {
+        payload["remote"] = {
+            {"display", agentConfig.remoteDisplay.toStdString()},
+            {"workspace", agentConfig.remoteWorkspace.toStdString()},
+            {"cwd", agentConfig.remoteWorkingDir.toStdString()},
+        };
+    }
+    const auto outcome = hookManager->fire(
+        QSocHookEvent::UserPromptSubmit,
+        hookEventToYamlKey(QSocHookEvent::UserPromptSubmit),
+        payload);
+    if (outcome.blocked) {
+        if (blockReason != nullptr) {
+            *blockReason = outcome.blockReason.isEmpty()
+                               ? QStringLiteral("user_prompt_submit hook blocked the prompt")
+                               : outcome.blockReason;
+        }
+        return false;
+    }
+    if (outcome.hasMergedResponse && outcome.mergedResponse.contains("context")
+        && outcome.mergedResponse["context"].is_string()) {
+        const QString extra = QString::fromStdString(
+            outcome.mergedResponse["context"].get<std::string>());
+        if (!extra.isEmpty()) {
+            *userQuery = extra + QStringLiteral("\n\n") + *userQuery;
+        }
+    }
+    return true;
 }
 
 QString QSocAgent::buildSystemPromptWithMemory() const
