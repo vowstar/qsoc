@@ -364,6 +364,16 @@ private:
     int contextOverflowRetryCount = 0;
 
     /**
+     * @brief Fire user_prompt_submit and react to its outcome.
+     * @param[in,out] userQuery prompt about to be added to the
+     *                          conversation; the hook may prepend
+     *                          injected context.
+     * @param[out] blockReason populated on block.
+     * @return true to allow, false to drop the prompt.
+     */
+    bool firePromptSubmitHook(QString *userQuery, QString *blockReason);
+
+    /**
      * @brief Layer 1: Prune old tool outputs to reduce token usage
      * @param force Skip threshold check (for manual compact)
      * @return true if pruning saved enough tokens
