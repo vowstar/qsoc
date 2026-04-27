@@ -552,3 +552,178 @@ next agent restart.
 - `headers` may contain bearer tokens or other secrets. Keep `.qsoc.yml`
   out of version control if it carries credentials, or substitute
   environment variables and reference them from your shell.
+
+== HOOKS
+<agent-hooks>
+QSoC agent fires user-defined commands at well-known lifecycle points so
+projects can layer their own policy, audit trail, or context injection
+on top of the built-in agent loop. Hooks are configured in YAML, run
+locally via `/bin/bash`, and communicate with the agent over stdin
+JSON, stdout JSON (optional), and process exit codes.
+
+=== Events
+<agent-hooks-events>
+
+#figure(
+  table(
+    columns: (auto, 1fr, auto),
+    align: (left, left, left),
+    table.header([Event], [When it fires], [Can block]),
+    table.hline(),
+    [`pre_tool_use`],
+    [Before the agent dispatches a tool call. The matcher is tested
+     against the tool name.],
+    [yes (exit 2)],
+
+    [`post_tool_use`],
+    [Right after the tool returns and the result is emitted. Matcher tested
+     against the tool name. Fire-and-forget; the result is not mutated.],
+    [no],
+
+    [`user_prompt_submit`],
+    [Before a user prompt enters the conversation. Fires for the initial
+     query, queued requests, and synchronous `run()` calls.],
+    [yes (exit 2)],
+
+    [`session_start`],
+    [Once per agent lifetime, the first time `runStream` is invoked.],
+    [no],
+
+    [`stop`],
+    [Just before the agent emits `runComplete` with the final assistant
+     content. Fire-and-forget.],
+    [no],
+  ),
+  caption: [Hook events],
+  kind: table,
+)
+
+=== Configuration
+<agent-hooks-config>
+
+Add an `agent.hooks` section to `.qsoc.yml` (project-level) or to the
+user-level config. Each event maps to a list of *matcher groups*; each
+group has a matcher pattern plus the commands to run when it matches:
+
+```yaml
+agent:
+  hooks:
+    pre_tool_use:
+      - matcher: "bash|file_write"   # exact name, or pipe-separated alternates
+        hooks:
+          - type: command
+            command: /usr/local/bin/qsoc-audit
+            timeout: 10               # seconds; default 10
+    post_tool_use:
+      - hooks:                        # matcher omitted = always matches
+          - type: command
+            command: logger -t qsoc-tool
+    user_prompt_submit:
+      - hooks:
+          - type: command
+            command: /usr/local/bin/qsoc-inject-context
+    session_start:
+      - hooks:
+          - type: command
+            command: /usr/local/bin/qsoc-init
+    stop:
+      - hooks:
+          - type: command
+            command: notify-send "QSoC agent done"
+```
+
+Matcher rules:
+- Empty string or `*`: always matches.
+- All-alphanumeric/underscore plus `|`: exact match against the subject,
+  with `|` separating alternates.
+- Anything else: regular expression (anchored full match). Invalid regex
+  fails closed (the matcher is treated as no-match).
+
+Multiple matchers can be configured for the same event. Every group
+whose matcher matches contributes its commands; matched commands run in
+parallel and the outcome is aggregated (any command returning Block
+makes the whole event blocked).
+
+=== JSON protocol
+<agent-hooks-protocol>
+
+The agent serializes the event payload to JSON and writes it on the
+hook's stdin (one line, terminated by `\n`). The hook may write a
+single-line JSON object on stdout to influence the outcome; anything
+else on stdout is captured but ignored for control purposes.
+
+Common payload fields:
+
+#figure(
+  table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    table.header([Field], [Meaning]),
+    table.hline(),
+    [`event`],            [Event key (`pre_tool_use`, `post_tool_use`, ...).],
+    [`tool_name`],        [Tool name, for tool-related events.],
+    [`tool_input`],       [Parsed tool arguments (JSON object).],
+    [`response`],         [Tool result (text), for `post_tool_use` only.],
+    [`prompt`],           [User prompt text, for `user_prompt_submit` only.],
+    [`final_content`],    [Final assistant content, for `stop` only.],
+    [`cwd`],              [Local working directory at fire time.],
+    [`remote`],           [Present only when the agent is in remote mode;
+                           carries `display`, `workspace`, `cwd`.],
+  ),
+  caption: [Hook payload fields],
+  kind: table,
+)
+
+Hooks always run on the local host. In remote-workspace mode the agent
+includes a `remote` section so scripts can branch on it; if you want to
+inspect remote state, your hook script can `ssh` back into the host
+itself.
+
+Optional stdout fields (parsed only when the first stdout line is a
+JSON object):
+
+#figure(
+  table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    table.header([Field], [Meaning]),
+    table.hline(),
+    [`reason`],           [Human-readable block reason. Used by
+                           `pre_tool_use` and `user_prompt_submit` when the
+                           hook also exits with code 2.],
+    [`updatedInput`],     [Replacement for `tool_input` (JSON object).
+                           Honored by `pre_tool_use` on success.],
+    [`context`],          [String prepended to the user prompt. Honored by
+                           `user_prompt_submit` on success.],
+  ),
+  caption: [Hook stdout JSON fields],
+  kind: table,
+)
+
+Exit codes:
+- `0`: success; the agent applies any optional fields above and
+       continues normally.
+- `2`: block. Only meaningful for `pre_tool_use` and
+       `user_prompt_submit`; for other events it degrades to a
+       non-blocking error.
+- any other non-zero: non-blocking error; stderr is surfaced to the
+       console, the agent continues.
+
+If a hook does not finish within its `timeout` seconds the agent kills
+the child process and treats the result as a timeout (non-blocking
+except for `pre_tool_use`/`user_prompt_submit` where the hook's
+contribution is dropped). The default timeout is 10 seconds; set
+`timeout` per command to override.
+
+=== Security
+<agent-hooks-security>
+- Hook commands run with the privileges of the qsoc user. Treat any
+  hook source path as you would any locally executed script.
+- Hooks always run locally, even when the agent operates a remote
+  workspace; nothing is uploaded to the remote host.
+- Hooks have full access to the local filesystem, environment, and
+  network. Keep them small, single-purpose, and review their source
+  whenever you change `.qsoc.yml`.
+- Invalid YAML entries (unknown event, missing `command`, unsupported
+  `type`) are dropped at load time with a console warning rather than
+  crashing the agent.
