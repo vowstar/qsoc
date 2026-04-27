@@ -607,6 +607,25 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
 
         emit toolResult(functionName, result);
 
+        /* Post-tool hook: audit, log, or notify. Fire-and-forget; the
+         * outcome is not allowed to mutate the result the model sees. */
+        if (hookManager != nullptr && hookManager->hasHooksFor(QSocHookEvent::PostToolUse)) {
+            json payload          = json::object();
+            payload["event"]      = "post_tool_use";
+            payload["tool_name"]  = functionName.toStdString();
+            payload["tool_input"] = arguments;
+            payload["response"]   = result.toStdString();
+            payload["cwd"]        = QDir::currentPath().toStdString();
+            if (agentConfig.remoteMode) {
+                payload["remote"] = {
+                    {"display", agentConfig.remoteDisplay.toStdString()},
+                    {"workspace", agentConfig.remoteWorkspace.toStdString()},
+                    {"cwd", agentConfig.remoteWorkingDir.toStdString()},
+                };
+            }
+            hookManager->fire(QSocHookEvent::PostToolUse, functionName, payload);
+        }
+
         /* Add tool response to messages */
         addToolMessage(toolCallId, result);
     }
