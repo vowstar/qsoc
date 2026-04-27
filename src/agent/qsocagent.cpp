@@ -593,18 +593,10 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
          * On block we short-circuit executeTool and surface the reason
          * back to the model as the tool result. */
         if (hookManager != nullptr && hookManager->hasHooksFor(QSocHookEvent::PreToolUse)) {
-            json payload          = json::object();
+            json payload          = buildHookEnvelope();
             payload["event"]      = "pre_tool_use";
             payload["tool_name"]  = functionName.toStdString();
             payload["tool_input"] = arguments;
-            payload["cwd"]        = QDir::currentPath().toStdString();
-            if (agentConfig.remoteMode) {
-                payload["remote"] = {
-                    {"display", agentConfig.remoteDisplay.toStdString()},
-                    {"workspace", agentConfig.remoteWorkspace.toStdString()},
-                    {"cwd", agentConfig.remoteWorkingDir.toStdString()},
-                };
-            }
             const auto outcome = hookManager->fire(QSocHookEvent::PreToolUse, functionName, payload);
             if (outcome.blocked) {
                 const QString reason = outcome.blockReason.isEmpty()
@@ -636,19 +628,11 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
         /* Post-tool hook: audit, log, or notify. Fire-and-forget; the
          * outcome is not allowed to mutate the result the model sees. */
         if (hookManager != nullptr && hookManager->hasHooksFor(QSocHookEvent::PostToolUse)) {
-            json payload          = json::object();
+            json payload          = buildHookEnvelope();
             payload["event"]      = "post_tool_use";
             payload["tool_name"]  = functionName.toStdString();
             payload["tool_input"] = arguments;
             payload["response"]   = result.toStdString();
-            payload["cwd"]        = QDir::currentPath().toStdString();
-            if (agentConfig.remoteMode) {
-                payload["remote"] = {
-                    {"display", agentConfig.remoteDisplay.toStdString()},
-                    {"workspace", agentConfig.remoteWorkspace.toStdString()},
-                    {"cwd", agentConfig.remoteWorkingDir.toStdString()},
-                };
-            }
             hookManager->fire(QSocHookEvent::PostToolUse, functionName, payload);
         }
 
@@ -680,6 +664,16 @@ nlohmann::json buildRemoteSection(const QSocAgentConfig &cfg)
 
 } // namespace
 
+nlohmann::json QSocAgent::buildHookEnvelope() const
+{
+    nlohmann::json env = nlohmann::json::object();
+    env["cwd"]         = QDir::currentPath().toStdString();
+    if (agentConfig.remoteMode) {
+        env["remote"] = buildRemoteSection(agentConfig);
+    }
+    return env;
+}
+
 void QSocAgent::fireSessionStartHookOnce()
 {
     if (sessionStartFired) {
@@ -689,12 +683,8 @@ void QSocAgent::fireSessionStartHookOnce()
     if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::SessionStart)) {
         return;
     }
-    json payload     = json::object();
+    json payload     = buildHookEnvelope();
     payload["event"] = "session_start";
-    payload["cwd"]   = QDir::currentPath().toStdString();
-    if (agentConfig.remoteMode) {
-        payload["remote"] = buildRemoteSection(agentConfig);
-    }
     hookManager
         ->fire(QSocHookEvent::SessionStart, hookEventToYamlKey(QSocHookEvent::SessionStart), payload);
 }
@@ -704,13 +694,9 @@ void QSocAgent::fireStopHook(const QString &finalContent)
     if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::Stop)) {
         return;
     }
-    json payload             = json::object();
+    json payload             = buildHookEnvelope();
     payload["event"]         = "stop";
     payload["final_content"] = finalContent.toStdString();
-    payload["cwd"]           = QDir::currentPath().toStdString();
-    if (agentConfig.remoteMode) {
-        payload["remote"] = buildRemoteSection(agentConfig);
-    }
     hookManager->fire(QSocHookEvent::Stop, hookEventToYamlKey(QSocHookEvent::Stop), payload);
 }
 
@@ -722,17 +708,9 @@ bool QSocAgent::firePromptSubmitHook(QString *userQuery, QString *blockReason)
     if (userQuery == nullptr) {
         return true;
     }
-    json payload      = json::object();
-    payload["event"]  = "user_prompt_submit";
-    payload["prompt"] = userQuery->toStdString();
-    payload["cwd"]    = QDir::currentPath().toStdString();
-    if (agentConfig.remoteMode) {
-        payload["remote"] = {
-            {"display", agentConfig.remoteDisplay.toStdString()},
-            {"workspace", agentConfig.remoteWorkspace.toStdString()},
-            {"cwd", agentConfig.remoteWorkingDir.toStdString()},
-        };
-    }
+    json payload       = buildHookEnvelope();
+    payload["event"]   = "user_prompt_submit";
+    payload["prompt"]  = userQuery->toStdString();
     const auto outcome = hookManager->fire(
         QSocHookEvent::UserPromptSubmit,
         hookEventToYamlKey(QSocHookEvent::UserPromptSubmit),
