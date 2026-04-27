@@ -105,6 +105,15 @@ void QTuiCompositor::printContent(const QString &content, QTuiScrollView::LineSt
     scrollView.appendPartial(content, style);
 }
 
+void QTuiCompositor::dismissTopBanner()
+{
+    if (topBannerWidget.isHidden()) {
+        return;
+    }
+    topBannerWidget.setHidden(true);
+    screen.invalidate();
+}
+
 void QTuiCompositor::flushContent()
 {
     /* Force partial line to become complete line */
@@ -125,6 +134,7 @@ void QTuiCompositor::onTimer()
     /* Tick animations */
     todoWidget.tick();
     statusBarWidget.tick();
+    topBannerWidget.tick();
     emit tick();
 
     render();
@@ -164,6 +174,7 @@ void QTuiCompositor::render()
     recalculateLayout();
 
     renderTitle();
+    renderTopBanner();
     renderContent();
     renderTodo();
     renderQueued();
@@ -280,14 +291,17 @@ void QTuiCompositor::recalculateLayout()
     int todoLines    = todoWidget.lineCount();
     layout.todoStart = layout.queueStart - todoLines;
 
-    /* Content area fills between title and TODO */
-    layout.titleRow      = 0;
-    layout.contentStart  = 1;
+    /* Top banner sits between title and content; its height depends
+     * on terminal width (responsive layout) and visibility. */
+    layout.titleRow     = 0;
+    layout.topBannerRow = 1;
+    topBannerWidget.setTerminalWidth(totalW);
+    layout.topBannerH = topBannerWidget.lineCount();
+
+    layout.contentStart  = layout.topBannerRow + layout.topBannerH;
     layout.contentHeight = layout.todoStart - layout.contentStart;
 
     layout.contentHeight = qMax(1, layout.contentHeight);
-
-    (void) totalW;
 }
 
 void QTuiCompositor::renderTitle()
@@ -302,6 +316,14 @@ void QTuiCompositor::renderTitle()
     /* Title text */
     QString titleText = " " + title;
     screen.putString(0, 0, QTuiText::truncate(titleText, width), true, false, true);
+}
+
+void QTuiCompositor::renderTopBanner()
+{
+    if (layout.topBannerH <= 0) {
+        return;
+    }
+    topBannerWidget.render(screen, layout.topBannerRow, screen.width());
 }
 
 void QTuiCompositor::renderContent()

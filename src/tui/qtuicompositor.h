@@ -4,6 +4,7 @@
 #ifndef QTUICOMPOSITOR_H
 #define QTUICOMPOSITOR_H
 
+#include "tui/qtuichipbanner.h"
 #include "tui/qtuicompletionpopup.h"
 #include "tui/qtuiinputline.h"
 #include "tui/qtuiqueuedlist.h"
@@ -55,6 +56,9 @@ public:
     /* Flush remaining partial line to scrollback as complete line */
     void flushContent();
 
+    /* Retire the top banner; freed rows fold into scroll viewport. */
+    void dismissTopBanner();
+
     /* Force full redraw */
     void render();
 
@@ -68,6 +72,7 @@ public:
     QTuiInputLine       &inputLine() { return inputWidget; }
     QTuiQueuedList      &queuedList() { return queueWidget; }
     QTuiCompletionPopup &completionPopup() { return popupWidget; }
+    QTuiChipBanner      &topBanner() { return topBannerWidget; }
 
 signals:
     void tick();
@@ -77,6 +82,7 @@ private slots:
 
 private:
     QTuiScreen          screen;
+    QTuiChipBanner      topBannerWidget;
     QTuiScrollView      scrollView;
     QTuiTodoList        todoWidget;
     QTuiQueuedList      queueWidget;
@@ -112,6 +118,8 @@ private:
     struct Layout
     {
         int titleRow      = 0;
+        int topBannerRow  = 1;
+        int topBannerH    = 0;
         int contentStart  = 1;
         int contentHeight = 0;
         int todoStart     = 0;
@@ -139,6 +147,7 @@ private:
 
     /* Render each region to screen buffer */
     void renderTitle();
+    void renderTopBanner();
     void renderContent();
     void renderTodo();
     void renderQueued();

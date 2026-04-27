@@ -1312,18 +1312,24 @@ bool QSocCliWorker::runAgentLoop(
             : QStringLiteral("Ready"));
     statusBarWidget.setModel(llmService->getCurrentModelId());
     statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
-    compositor.start();
 
-    /* Show welcome banner in scroll view */
-    compositor.printContent("QSoC Agent - Interactive AI Assistant for SoC Design\n");
-    compositor.printContent("Type 'exit' to exit, '/help' for commands\n");
+    /* Top banner widget: chip mascot beside the intro lines. The
+     * widget is responsive (re-layouts on resize) and blinks its eyes
+     * occasionally; the compositor hides it as soon as scroll content
+     * arrives so the freed rows fold into the working viewport. */
+    QStringList introLines;
+    introLines << QStringLiteral("QSoC Agent - Interactive AI Assistant for SoC Design");
+    introLines << QStringLiteral("Type 'exit' to exit, '/help' for commands");
     if (streaming) {
-        compositor.printContent("(Enhanced mode, streaming enabled)\n");
+        introLines << QStringLiteral("(Enhanced mode, streaming enabled)");
     }
     if (preconnected != nullptr && !preconnected->workspace.isEmpty()) {
-        compositor.printContent(QString("Connected to %1 (workspace %2)\n")
-                                    .arg(preconnected->targetKey, preconnected->workspace));
+        introLines << QStringLiteral("Connected to %1 (workspace %2)")
+                          .arg(preconnected->targetKey, preconnected->workspace);
     }
+    compositor.topBanner().setIntro(introLines);
+
+    compositor.start();
 
     /* If a sticky remote binding exists for this project, inject the matching
      * /ssh line so the next REPL iteration auto-connects. Cleared on first
@@ -2731,6 +2737,11 @@ bool QSocCliWorker::runAgentLoop(
         if (input.isEmpty()) {
             continue;
         }
+
+        /* User submitting a prompt is the cue for "work has begun":
+         * retire the top banner widget so the freed rows fold into
+         * the scroll viewport. */
+        compositor.dismissTopBanner();
 
         /* Echo user input in scroll view */
         compositor.printContent("\nqsoc> " + input + "\n");
