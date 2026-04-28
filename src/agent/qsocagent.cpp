@@ -1670,6 +1670,16 @@ bool QSocAgent::compactWithLLM(bool force)
                                .arg(afterTokens)
                                .arg(llmSuccess ? "" : " (fallback)")
                                .arg(tag));
+        /* Surface the head of the produced summary so users can verify
+         * the template was followed (anchored vs fresh, section names
+         * present, no leaked tool calls). Capped so the verbose stream
+         * stays readable on big sessions. */
+        const int     dumpChars = 600;
+        const QString head      = summary.left(dumpChars);
+        emit verboseOutput(QString("[Layer 2 Summary head%1]\n%2%3")
+                               .arg(previousSummary.isEmpty() ? " (fresh)" : " (anchored)")
+                               .arg(head)
+                               .arg(summary.size() > dumpChars ? "\n... (truncated)" : ""));
     }
 
     return true;
