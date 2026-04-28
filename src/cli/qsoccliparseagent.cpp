@@ -2409,7 +2409,33 @@ bool QSocCliWorker::runAgentLoop(
         }
     }
     QEventLoop *idlePromptLoop = nullptr;
-    auto        connLoopFire   = connect(
+
+    /* Background bash completion notification. The shell tool keeps the
+     * process and its output around for bash_manage; this hook only paints
+     * a dim line so the user knows it ended without scraping bash_manage. */
+    if (auto *reg = agent->getToolRegistry()) {
+        if (auto *bashTool = dynamic_cast<QSocToolShellBash *>(
+                reg->getTool(QStringLiteral("bash")))) {
+            connect(
+                bashTool,
+                &QSocToolShellBash::backgroundProcessFinished,
+                &compositor,
+                [&compositor](int processId, int exitCode, const QString &command) {
+                    QString summary = command;
+                    summary.replace(QLatin1Char('\n'), QLatin1Char(' '));
+                    if (summary.size() > 60) {
+                        summary = summary.left(57) + QStringLiteral("...");
+                    }
+                    compositor.printContent(
+                        QStringLiteral("(bg #%1 exited code %2: %3)\n")
+                            .arg(processId)
+                            .arg(exitCode)
+                            .arg(summary),
+                        QTuiScrollView::Dim);
+                });
+        }
+    }
+    auto connLoopFire = connect(
         &loopScheduler,
         &QSocLoopScheduler::promptDue,
         [&compositor,
