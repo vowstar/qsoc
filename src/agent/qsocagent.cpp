@@ -1396,9 +1396,13 @@ QString QSocAgent::formatMessagesForSummary(int start, int end) const
             QString content = msg.contains("content") && msg["content"].is_string()
                                   ? QString::fromStdString(msg["content"].get<std::string>())
                                   : "";
-            /* Truncate large tool outputs for the summary prompt */
-            if (content.length() > 500) {
-                content = content.left(500) + "... (truncated)";
+            /* Cap tool outputs in the summary input. Big enough to keep
+             * file paths, error tails, and command output context; small
+             * enough that a handful of multi-MB outputs cannot blow the
+             * summarizer's own input budget. */
+            if (content.length() > 2000) {
+                content = content.left(1600) + "\n... (truncated, kept tail) ...\n"
+                          + content.right(400);
             }
             result += QString("[Tool result: %1]\n").arg(content);
         } else if (msg.contains("content") && msg["content"].is_string()) {
@@ -1423,29 +1427,76 @@ bool QSocAgent::compactWithLLM(bool force)
 
     int msgCount = static_cast<int>(messages.size());
 
+    /* Anchored / rolling summary: if messages[0] is a prior compaction
+     * summary we generated, lift it out and feed it back as a
+     * <previous-summary> anchor instead of re-summarizing it. Without
+     * this, every successive /compact re-feeds an already-lossy
+     * summary into the summarizer and information drifts away. */
+    QString       previousSummary;
+    int           summarizeStart = 0;
+    const QString summaryMarker  = QStringLiteral("[Conversation Summary]\n");
+    if (msgCount > 0) {
+        const auto &first = messages[0];
+        if (first.contains("role") && first["role"] == "user" && first.contains("content")
+            && first["content"].is_string()) {
+            const QString firstContent = QString::fromStdString(first["content"].get<std::string>());
+            if (firstContent.startsWith(summaryMarker)) {
+                previousSummary = firstContent.mid(summaryMarker.size());
+                summarizeStart  = 1;
+            }
+        }
+    }
+
     /* A handful of huge tool results can push tokens past the threshold
      * with fewer than keepRecentMessages messages total. Shrink the keep
      * window dynamically so something is always available to summarize,
      * and only bail when there genuinely is not enough to split. */
     const int minToSummarize = 3;
-    if (msgCount < minToSummarize + 1) {
+    if (msgCount - summarizeStart < minToSummarize + 1) {
         if (agentConfig.verbose) {
-            emit verboseOutput(QString("[Layer 2: Cannot compact, only %1 messages]").arg(msgCount));
+            emit verboseOutput(QString("[Layer 2: Cannot compact, only %1 new messages]")
+                                   .arg(msgCount - summarizeStart));
         }
         return false;
     }
-    const int effectiveKeep = qMin(agentConfig.keepRecentMessages, msgCount - minToSummarize);
+
+    /* Token-budget tail walk: count back from the end until we hit
+     * either keepRecentMessages or the recent-zone token budget. A
+     * single 50KB tool output should not be allowed to dominate the
+     * post-compact context just because it lives in the last N
+     * positions. */
+    const int tailBudget = qBound(2000, agentConfig.maxContextTokens / 4, 8000);
+    const int hardCap
+        = qMin(agentConfig.keepRecentMessages, msgCount - summarizeStart - minToSummarize);
+    int effectiveKeep = 0;
+    int tailTokens    = 0;
+    for (int i = msgCount - 1; i >= summarizeStart && effectiveKeep < hardCap; --i) {
+        const auto &msg = messages[static_cast<size_t>(i)];
+        QString     approx;
+        if (msg.contains("content") && msg["content"].is_string()) {
+            approx = QString::fromStdString(msg["content"].get<std::string>());
+        }
+        const int approxTokens = estimateTokens(approx);
+        if (effectiveKeep >= 1 && tailTokens + approxTokens > tailBudget) {
+            break;
+        }
+        tailTokens += approxTokens;
+        effectiveKeep++;
+    }
+    if (effectiveKeep < 1) {
+        effectiveKeep = qMin(1, hardCap);
+    }
 
     /* Determine boundary: keep recent messages */
     int proposedBoundary = msgCount - effectiveKeep;
     int boundary         = findSafeBoundary(proposedBoundary);
 
-    if (boundary <= 0) {
+    if (boundary <= summarizeStart) {
         return false;
     }
 
-    /* Format old messages for summarization */
-    QString oldContent = formatMessagesForSummary(0, boundary);
+    /* Format old messages for summarization (skip the anchor itself) */
+    QString oldContent = formatMessagesForSummary(summarizeStart, boundary);
 
     /* Try LLM summarization if service is available and not circuit-broken */
     QString              summary;
@@ -1465,38 +1516,65 @@ bool QSocAgent::compactWithLLM(bool force)
                              && llmService->hasEndpoint() && summaryInputTokens < compactBudget;
 
     if (llmCallable) {
-        QString summaryPrompt
-            = QString(
-                  "You are a conversation summarizer. Produce a structured summary of the "
-                  "following "
-                  "conversation.\n\n"
-                  "## Instructions\n"
-                  "- Preserve ALL technical details: file paths, command outputs, error messages\n"
-                  "- Preserve ALL decisions and their reasoning\n"
-                  "- Preserve current task state and next steps\n"
-                  "- Be concise but never lose actionable information\n\n"
-                  "## Required Sections\n"
-                  "### Task Overview\n"
-                  "### Current State\n"
-                  "### Key Files and Paths\n"
-                  "### Errors and Fixes\n"
-                  "### Decisions Made\n"
-                  "### Important Context\n"
-                  "### Actions Already Completed\n"
-                  "Enumerate every tool call already executed and its outcome "
-                  "(file read, command run, file written) so the agent does not "
-                  "redo work after compaction. One bullet per action.\n"
-                  "### All User Messages\n"
-                  "Reproduce every user message verbatim - they are short and critical.\n"
-                  "### Next Steps\n\n"
-                  "## Conversation to summarize:\n%1")
-                  .arg(oldContent);
+        const QString noToolsPreamble = QStringLiteral(
+            "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n"
+            "You already have all context above. Tool calls will be rejected\n"
+            "and waste this turn. Reply must be plain markdown.\n\n");
+
+        QString anchorBlock;
+        if (!previousSummary.isEmpty()) {
+            anchorBlock
+                = QString(
+                      "Update the anchored summary below using the conversation history above.\n"
+                      "Preserve still-true details, remove stale details, merge in new facts.\n"
+                      "<previous-summary>\n%1\n</previous-summary>\n\n")
+                      .arg(previousSummary);
+        } else {
+            anchorBlock = QStringLiteral(
+                "Create a new anchored summary from the conversation history above.\n\n");
+        }
+
+        const QString templateBlock = QStringLiteral(
+            "Output exactly the Markdown structure shown inside <template>.\n"
+            "Do not include the <template> tags in your response.\n\n"
+            "<template>\n"
+            "## Task Overview\n"
+            "- [single-sentence summary]\n"
+            "## Current State\n"
+            "- [(none)]\n"
+            "## Key Files and Paths\n"
+            "- [path: why it matters, or (none)]\n"
+            "## Errors and Fixes\n"
+            "- [error: fix, or (none)]\n"
+            "## Decisions Made\n"
+            "- [decision and why, or (none)]\n"
+            "## Important Context\n"
+            "- [(none)]\n"
+            "## Actions Already Completed\n"
+            "- [tool call: outcome, or (none)]\n"
+            "## All User Messages\n"
+            "- [verbatim, oldest first]\n"
+            "## Next Steps\n"
+            "- [(none)]\n"
+            "</template>\n\n"
+            "Rules:\n"
+            "- Keep every section, even when empty - write \"(none)\".\n"
+            "- Terse bullets, not prose paragraphs.\n"
+            "- Preserve exact file paths, commands, error strings, identifiers.\n"
+            "- Reproduce every user message verbatim - they are short and critical.\n"
+            "- Do not mention the summary process or that context was compacted.\n\n"
+            "## Conversation to summarize:\n%1\n\n");
+
+        const QString summaryPrompt = noToolsPreamble + anchorBlock + templateBlock.arg(oldContent)
+                                      + noToolsPreamble;
 
         /* Build messages for the summarization request */
         json summaryMessages = json::array();
         summaryMessages.push_back(
             {{"role", "system"},
-             {"content", "You are a precise conversation summarizer. Output only the summary."}});
+             {"content",
+              "You are a precise conversation summarizer. Output only plain markdown - "
+              "never call tools."}});
         summaryMessages.push_back({{"role", "user"}, {"content", summaryPrompt.toStdString()}});
 
         /* Use synchronous call - safe because we're at the start of processStreamIteration */
@@ -1529,8 +1607,15 @@ bool QSocAgent::compactWithLLM(bool force)
         const int summaryBudgetTokens
             = qMax(2048, static_cast<int>(agentConfig.maxContextTokens / 4));
         const int summaryBudgetChars = summaryBudgetTokens * 4; /* coarse token->char */
-        summary                      = "[Previous conversation summary: ";
-        for (int i = 0; i < boundary; i++) {
+        QString   carryAnchor;
+        if (!previousSummary.isEmpty()) {
+            /* Carry the prior anchor so rolling state survives even
+             * when the LLM call fails. */
+            carryAnchor = QStringLiteral("[carried anchor]\n") + previousSummary
+                          + QStringLiteral("\n[/carried anchor]\n");
+        }
+        summary = "[Previous conversation summary: " + carryAnchor;
+        for (int i = summarizeStart; i < boundary; i++) {
             if (summary.size() >= summaryBudgetChars) {
                 summary += "...(truncated)";
                 break;
@@ -1539,8 +1624,11 @@ bool QSocAgent::compactWithLLM(bool force)
             if (msg.contains("role") && msg.contains("content") && msg["content"].is_string()) {
                 QString role    = QString::fromStdString(msg["role"].get<std::string>());
                 QString content = QString::fromStdString(msg["content"].get<std::string>());
-                if (content.length() > 100) {
-                    content = content.left(100) + "...";
+                /* Keep head + tail so file paths and error tails
+                 * survive the truncation; left(100) alone routinely
+                 * decapitated commands and stack traces. */
+                if (content.length() > 400) {
+                    content = content.left(280) + " ... " + content.right(80);
                 }
                 summary += role + ": " + content + "; ";
             }
