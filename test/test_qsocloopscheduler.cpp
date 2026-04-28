@@ -4,7 +4,12 @@
 #include "cli/qsocloopscheduler.h"
 #include "qsoc_test.h"
 
+#include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
 
@@ -127,6 +132,68 @@ private slots:
         QVERIFY(!sched.removeJob("nope"));
         sched.clearJobs();
         QCOMPARE(sched.listJobs().size(), 0);
+    }
+
+    void persist_roundTrip_acrossInstances()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        {
+            QSocLoopScheduler a;
+            a.setProjectDir(tmp.path());
+            QVERIFY(a.isOwner());
+            a.addJob("ping", 60000);
+            a.addJob("pong", 120000);
+        }
+        /* New instance same dir: takes over the lock and re-loads. */
+        QSocLoopScheduler b;
+        b.setProjectDir(tmp.path());
+        QVERIFY(b.isOwner());
+        const auto jobs = b.listJobs();
+        QCOMPARE(jobs.size(), 2);
+        QCOMPARE(jobs[0].prompt, QString("ping"));
+        QCOMPARE(jobs[1].prompt, QString("pong"));
+        /* Seq counter must skip past loaded ids so a new add cannot
+         * collide with persisted L1/L2. */
+        const QString fresh = b.addJob("ping3", 60000);
+        QVERIFY(fresh != jobs[0].name);
+        QVERIFY(fresh != jobs[1].name);
+    }
+
+    void lock_secondInstance_isNotOwner()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocLoopScheduler first;
+        first.setProjectDir(tmp.path());
+        QVERIFY(first.isOwner());
+
+        QSocLoopScheduler second;
+        second.setProjectDir(tmp.path());
+        QVERIFY(!second.isOwner());
+    }
+
+    void lock_takeover_whenOwnerLockIsStale()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString lockPath = QDir(tmp.path()).filePath(".qsoc/loops.lock");
+        QDir(tmp.path()).mkpath(".qsoc");
+
+        /* Forge a stale lock file: pid 1 (init, always alive) but
+         * updatedAt is well past the staleness window. */
+        QJsonObject obj;
+        obj["pid"]       = QString::number(1);
+        obj["sessionId"] = QString("dead-session");
+        obj["updatedAt"] = QString::number(0);
+        QFile lf(lockPath);
+        QVERIFY(lf.open(QIODevice::WriteOnly));
+        lf.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+        lf.close();
+
+        QSocLoopScheduler sched;
+        sched.setProjectDir(tmp.path());
+        QVERIFY(sched.isOwner());
     }
 
     void promptDue_emitsAfterIntervalElapses()

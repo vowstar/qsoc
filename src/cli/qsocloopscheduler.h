@@ -32,7 +32,22 @@ public:
     };
 
     explicit QSocLoopScheduler(QObject *parent = nullptr);
-    ~QSocLoopScheduler() override = default;
+    ~QSocLoopScheduler() override;
+
+    /**
+     * @brief Bind to a project dir for durable storage + cross-session lock.
+     * @details Creates `<dir>/.qsoc/loops.json` and `<dir>/.qsoc/loops.lock`.
+     *          Loads any persisted jobs into memory. Only the lock owner
+     *          fires; non-owner sessions stay quiet to avoid double-fire.
+     *          Pass an empty string to operate purely in-memory (default).
+     */
+    void setProjectDir(const QString &dir);
+
+    /**
+     * @brief Whether this instance currently owns the on-disk fire lock.
+     * @details Always true in pure in-memory mode (no project dir bound).
+     */
+    bool isOwner() const;
 
     /**
      * @brief Add a recurring job. Returns its generated name.
@@ -83,10 +98,21 @@ private slots:
 
 private:
     QString allocateName();
+    void    persist();
+    void    loadFromDisk();
+    bool    tryAcquireLock();
+    void    releaseLock();
+    QString lockPath() const;
+    QString tasksPath() const;
 
     QTimer     timer_;
     QList<Job> jobs_;
     int        nameCounter_ = 0;
+
+    QString projectDir_;
+    QString sessionId_;
+    bool    isOwner_         = true;
+    qint64  lastLockRefresh_ = 0;
 };
 
 #endif /* QSOCLOOPSCHEDULER_H */

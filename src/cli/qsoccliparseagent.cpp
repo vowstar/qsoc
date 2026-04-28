@@ -2393,15 +2393,23 @@ bool QSocCliWorker::runAgentLoop(
         compositor.render();
     });
 
-    /* Session-only /loop scheduler. Lives the whole REPL; jobs are
-     * registered by the /loop slash dispatch and fired through promptDue
-     * back into pendingAutoInput / agent->queueRequest. The non-null
-     * idlePromptLoop signals "we are blocked on user input right now"; the
-     * fire path uses it to wake the prompt loop without racing against
-     * a turn that is in mid-flight. */
+    /* /loop scheduler. Lives the whole REPL; jobs are registered by the
+     * /loop slash dispatch and fired through promptDue back into
+     * pendingAutoInput / agent->queueRequest. The non-null idlePromptLoop
+     * signals "we are blocked on user input right now"; the fire path
+     * uses it to wake the prompt loop without racing against a turn that
+     * is in mid-flight. With a project dir bound, jobs persist to
+     * .qsoc/loops.json and a file lock keeps two qsoc sessions in the
+     * same project from double-firing. */
     QSocLoopScheduler loopScheduler;
-    QEventLoop       *idlePromptLoop = nullptr;
-    auto              connLoopFire   = connect(
+    {
+        const QString loopProjectPath = projectManager->getProjectPath();
+        if (!loopProjectPath.isEmpty()) {
+            loopScheduler.setProjectDir(loopProjectPath);
+        }
+    }
+    QEventLoop *idlePromptLoop = nullptr;
+    auto        connLoopFire   = connect(
         &loopScheduler,
         &QSocLoopScheduler::promptDue,
         [&compositor,
