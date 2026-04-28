@@ -37,6 +37,7 @@
 #include "cli/qagenthistorysearch.h"
 #include "cli/qagentinputmonitor.h"
 #include "cli/qsocexternaleditor.h"
+#include "cli/qsocloopscheduler.h"
 #include "cli/qterminalcapability.h"
 #include "common/qlspconfigloader.h"
 #include "common/qlspservice.h"
@@ -1602,6 +1603,7 @@ bool QSocCliWorker::runAgentLoop(
            QStringLiteral("cwd"),
            QStringLiteral("diff"),
            QStringLiteral("effort"),
+           QStringLiteral("loop"),
            QStringLiteral("model"),
            QStringLiteral("project"),
            QStringLiteral("rename"),
@@ -2391,6 +2393,38 @@ bool QSocCliWorker::runAgentLoop(
         compositor.render();
     });
 
+    /* Session-only /loop scheduler. Lives the whole REPL; jobs are
+     * registered by the /loop slash dispatch and fired through promptDue
+     * back into pendingAutoInput / agent->queueRequest. The non-null
+     * idlePromptLoop signals "we are blocked on user input right now"; the
+     * fire path uses it to wake the prompt loop without racing against
+     * a turn that is in mid-flight. */
+    QSocLoopScheduler loopScheduler;
+    QEventLoop       *idlePromptLoop = nullptr;
+    auto              connLoopFire   = connect(
+        &loopScheduler,
+        &QSocLoopScheduler::promptDue,
+        [&compositor,
+         &pendingAutoInput,
+         &idlePromptLoop,
+         agent](const QString &prompt, const QString &jobName) {
+            QString summary = prompt;
+            summary.replace(QLatin1Char('\n'), QLatin1Char(' '));
+            if (summary.size() > 60) {
+                summary = summary.left(57) + QStringLiteral("...");
+            }
+            compositor.printContent(
+                QStringLiteral("(loop %1 fired: %2)\n").arg(jobName, summary), QTuiScrollView::Dim);
+            if (agent->isRunning()) {
+                agent->queueRequest(prompt);
+            } else {
+                pendingAutoInput = prompt;
+                if (idlePromptLoop != nullptr) {
+                    idlePromptLoop->quit();
+                }
+            }
+        });
+
     /* Main loop */
     bool exitRequested = false;
 
@@ -2720,7 +2754,15 @@ bool QSocCliWorker::runAgentLoop(
             input = pendingAutoInput;
             pendingAutoInput.clear();
         } else {
+            idlePromptLoop = &promptLoop;
             promptLoop.exec();
+            idlePromptLoop = nullptr;
+            /* A scheduler fire while idle wakes promptLoop without setting
+             * `input`; instead it stashes the prompt in pendingAutoInput. */
+            if (input.isEmpty() && !pendingAutoInput.isEmpty()) {
+                input = pendingAutoInput;
+                pendingAutoInput.clear();
+            }
         }
 
         QObject::disconnect(connInput);
@@ -3380,6 +3422,91 @@ bool QSocCliWorker::runAgentLoop(
             renderDiffToScrollView(chosenFile.path, beforeText, afterText);
             continue;
         }
+        if (cmd.startsWith("/loop") && (cmd.size() == 5 || cmd[5].isSpace())) {
+            const QString rawArgs = input.mid(5).trimmed();
+            const QString sub     = rawArgs.section(QRegularExpression("\\s+"), 0, 0).toLower();
+
+            auto printUsage = [&compositor]() {
+                compositor.printContent(QStringLiteral(
+                    "Usage: /loop [interval] <prompt>\n"
+                    "       /loop list\n"
+                    "       /loop stop <id>\n"
+                    "       /loop clear\n"
+                    "Intervals: Ns, Nm, Nh, Nd (e.g. 5m, 30m, 2h, 1d). Min 1 minute.\n"
+                    "If no interval is given, defaults to 10m. The parsed prompt also runs\n"
+                    "immediately once on creation.\n"));
+            };
+
+            if (rawArgs.isEmpty()) {
+                printUsage();
+                continue;
+            }
+            if (sub == "list") {
+                const auto jobs = loopScheduler.listJobs();
+                if (jobs.isEmpty()) {
+                    compositor.printContent(QStringLiteral("(no /loop jobs)\n"));
+                } else {
+                    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                    for (const auto &job : jobs) {
+                        const qint64 due = job.nextFireAt - now;
+                        QString      eta;
+                        if (due <= 0) {
+                            eta = QStringLiteral("now");
+                        } else if (due < 60000) {
+                            eta = QStringLiteral("%1s").arg(due / 1000);
+                        } else {
+                            eta = QStringLiteral("%1m").arg(due / 60000);
+                        }
+                        QString promptSummary = job.prompt;
+                        promptSummary.replace(QLatin1Char('\n'), QLatin1Char(' '));
+                        if (promptSummary.size() > 50) {
+                            promptSummary = promptSummary.left(47) + QStringLiteral("...");
+                        }
+                        compositor.printContent(
+                            QStringLiteral("  %1  every %2  next %3  %4\n")
+                                .arg(job.name, -4)
+                                .arg(QSocLoopScheduler::formatInterval(job.intervalMs), -5)
+                                .arg(eta, -5)
+                                .arg(promptSummary));
+                    }
+                }
+                continue;
+            }
+            if (sub == "stop") {
+                const QString id = rawArgs.section(QRegularExpression("\\s+"), 1, 1);
+                if (id.isEmpty()) {
+                    compositor.printContent(QStringLiteral("Usage: /loop stop <id>\n"));
+                } else if (loopScheduler.removeJob(id)) {
+                    compositor.printContent(QStringLiteral("Removed loop %1.\n").arg(id));
+                } else {
+                    compositor.printContent(QStringLiteral("No loop named %1.\n").arg(id));
+                }
+                continue;
+            }
+            if (sub == "clear") {
+                const int count = loopScheduler.listJobs().size();
+                loopScheduler.clearJobs();
+                compositor.printContent(QStringLiteral("Cleared %1 loop(s).\n").arg(count));
+                continue;
+            }
+
+            qint64  intervalMs = 0;
+            QString parsedPrompt;
+            QSocLoopScheduler::parseLoopArgs(rawArgs, 10 * 60 * 1000, intervalMs, parsedPrompt);
+            if (intervalMs <= 0 || parsedPrompt.isEmpty()) {
+                printUsage();
+                continue;
+            }
+            const QString name = loopScheduler.addJob(parsedPrompt, intervalMs);
+            compositor.printContent(QStringLiteral("Scheduled loop %1 every %2: %3\n")
+                                        .arg(name)
+                                        .arg(QSocLoopScheduler::formatInterval(intervalMs))
+                                        .arg(parsedPrompt));
+            /* Fire once immediately by re-injecting through the same idle
+             * input path the scheduler uses on subsequent ticks. */
+            pendingAutoInput = parsedPrompt;
+            continue;
+        }
         if (cmd == "/clear") {
             agent->clearHistory();
             if (currentSession) {
@@ -3416,6 +3543,9 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent("  /diff        - Review file edits turn-by-turn\n");
             compositor.printContent(
                 "  /effort    - Show/set reasoning effort (off/low/medium/high)\n");
+            compositor.printContent(
+                "  /loop [interval] <prompt> - Re-run a prompt periodically\n"
+                "                              (also: /loop list, /loop stop <id>, /loop clear)\n");
             compositor.printContent("  /model       - Show/switch model\n");
             compositor.printContent(
                 "  /project <p> - Switch to another project (reloads config, clears caches,\n"
