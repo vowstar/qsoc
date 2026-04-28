@@ -69,7 +69,12 @@ json QSocToolShellBash::getParametersSchema() const
              "On timeout, process keeps running and can be managed via bash_manage tool."}}},
           {"working_directory",
            {{"type", "string"},
-            {"description", "Working directory for the command (default: project directory)"}}}}},
+            {"description", "Working directory for the command (default: project directory)"}}},
+          {"background",
+           {{"type", "boolean"},
+            {"description",
+             "Run in background (default: false). When true, returns process_id "
+             "immediately without waiting; manage via bash_manage tool."}}}}},
         {"required", json::array({"command"})}};
 }
 
@@ -113,6 +118,12 @@ QString QSocToolShellBash::execute(const json &arguments)
         workingDir = QString::fromStdString(arguments["working_directory"].get<std::string>());
     }
 
+    /* Explicit background mode: return process_id immediately, never block. */
+    bool background = false;
+    if (arguments.contains("background") && arguments["background"].is_boolean()) {
+        background = arguments["background"].get<bool>();
+    }
+
     if (workingDir.isEmpty() && projectManager) {
         workingDir = projectManager->getProjectPath();
     }
@@ -131,23 +142,23 @@ QString QSocToolShellBash::execute(const json &arguments)
     QString outputPath = tempDir->path() + "/output.log";
     delete tempDir;
 
-    QFile outputFile(outputPath);
-    if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
-        return "Error: Failed to create output file";
+    /* Touch the file so bash_manage can tail it before any output lands. */
+    {
+        QFile sentinel(outputPath);
+        if (!sentinel.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
+            return "Error: Failed to create output file";
+        }
+        sentinel.close();
     }
 
-    /* Create process on heap (survives timeout) */
+    /* Create process on heap (survives timeout). Redirect merged stdout/stderr
+     * straight to the capture file so we don't need a readyRead lambda
+     * keeping a stack QFile alive past execute(). */
     auto *process = new QProcess();
     process->setWorkingDirectory(workingDir);
     process->setProcessChannelMode(QProcess::MergedChannels);
-
-    /* Connect readyRead to write output incrementally */
-    QObject::connect(process, &QProcess::readyRead, process, [process, &outputFile]() {
-        QByteArray data = process->readAll();
-        outputFile.write(data);
-        outputFile.flush();
-    });
+    process->setStandardOutputFile(outputPath, QIODevice::Append);
 
     process->start("/bin/bash", QStringList() << "-c" << command);
 
@@ -155,9 +166,34 @@ QString QSocToolShellBash::execute(const json &arguments)
         QString error
             = QString("Error: Failed to start bash process: %1").arg(process->errorString());
         delete process;
-        outputFile.close();
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
         return error;
+    }
+
+    /* Background mode: register and return immediately, no event loop. */
+    if (background) {
+        const int           processId = nextProcessId++;
+        QSocBashProcessInfo info;
+        info.process    = process;
+        info.outputPath = outputPath;
+        info.command    = command;
+        info.startTime  = QDateTime::currentMSecsSinceEpoch();
+        activeProcesses.insert(processId, info);
+        QObject::connect(
+            process,
+            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this,
+            [this, processId, command](int exitCode, QProcess::ExitStatus) {
+                emit backgroundProcessFinished(processId, exitCode, command);
+            });
+        return QString(
+                   "Started in background.\n"
+                   "Process ID: %1\n"
+                   "Output file: %2\n\n"
+                   "Use bash_manage tool with process_id=%1 to: "
+                   "check status, wait, read output, kill, or terminate.")
+            .arg(processId)
+            .arg(outputPath);
     }
 
     /* Use local event loop + timer instead of waitForFinished */
@@ -183,15 +219,9 @@ QString QSocToolShellBash::execute(const json &arguments)
     currentLoop    = nullptr;
 
     if (finished) {
-        /* Process completed within timeout */
-        QByteArray remaining = process->readAll();
-        if (!remaining.isEmpty()) {
-            outputFile.write(remaining);
-            outputFile.flush();
-        }
-        outputFile.close();
-
-        /* Read output from file */
+        /* Process completed within timeout. Output is already on disk
+         * because setStandardOutputFile redirected stdout+stderr there
+         * before start; just read the capture file. */
         QFile   readFile(outputPath);
         QString output;
         if (readFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -217,8 +247,6 @@ QString QSocToolShellBash::execute(const json &arguments)
     }
 
     /* Timeout: process still running, store it */
-    outputFile.close();
-
     int processId = nextProcessId++;
 
     QSocBashProcessInfo info;
@@ -227,6 +255,13 @@ QString QSocToolShellBash::execute(const json &arguments)
     info.command    = command;
     info.startTime  = QDateTime::currentMSecsSinceEpoch();
     activeProcesses.insert(processId, info);
+    QObject::connect(
+        process,
+        QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+        this,
+        [this, processId, command](int exitCode, QProcess::ExitStatus) {
+            emit backgroundProcessFinished(processId, exitCode, command);
+        });
 
     /* Read last lines for immediate feedback */
     QString lastOutput = readLastLines(outputPath, 50);
@@ -418,18 +453,10 @@ QString QSocToolBashManage::execute(const json &arguments)
             }
         }
 
-        /* Reconnect readyRead to keep writing output */
-        QFile outputFile(info.outputPath);
-        if (!outputFile.open(QIODevice::Append | QIODevice::Text)) {
-            return "Error: Failed to open output file for writing";
-        }
-
-        auto connRead = QObject::connect(info.process, &QProcess::readyRead, info.process, [&]() {
-            QByteArray data = info.process->readAll();
-            outputFile.write(data);
-            outputFile.flush();
-        });
-
+        /* Process stdout is already redirected to info.outputPath at the
+         * OS level by setStandardOutputFile, so the file grows on its own
+         * while we wait. We just spin an event loop until either the
+         * process finishes or the wait timeout fires. */
         QEventLoop loop;
         bool       finished = false;
 
@@ -446,9 +473,7 @@ QString QSocToolBashManage::execute(const json &arguments)
 
         loop.exec();
 
-        QObject::disconnect(connRead);
         QObject::disconnect(connFinish);
-        outputFile.close();
 
         if (finished) {
             int     exitCode = info.process->exitCode();

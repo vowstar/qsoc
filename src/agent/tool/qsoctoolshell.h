@@ -53,6 +53,16 @@ public:
      */
     static void killAllActive();
 
+signals:
+    /**
+     * @brief Fired when a backgrounded bash process exits.
+     * @details Either explicit `background: true` or timeout-handoff. The
+     *          REPL uses this to surface a dim notification line; the
+     *          process and its output stay in activeProcesses for the
+     *          agent to inspect via bash_manage.
+     */
+    void backgroundProcessFinished(int processId, int exitCode, const QString &command);
+
 private:
     QSocProjectManager *projectManager = nullptr;
 
