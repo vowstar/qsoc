@@ -9,9 +9,22 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QTimer>
+
+namespace {
+
+constexpr qint64 kDefaultMaxOutputBytes = qint64{5} * 1024 * 1024; /* 5 MB */
+constexpr qint64 kStuckThresholdMs      = qint64{45} * 1000;
+constexpr int    kWatchdogTickMs        = 2000;
+/* How many bytes from the tail to test against the interactive-prompt
+ * regex. 4 KB is enough to catch a multi-line confirmation block while
+ * staying tiny relative to the overall capture file. */
+constexpr qint64 kStuckTailBytes = 4096;
+
+} /* namespace */
 
 /* Static members */
 QMap<int, QSocBashProcessInfo> QSocToolShellBash::activeProcesses;
@@ -22,7 +35,15 @@ QEventLoop                    *QSocToolShellBash::currentLoop    = nullptr;
 QSocToolShellBash::QSocToolShellBash(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
     , projectManager(projectManager)
-{}
+{
+    /* One shared timer drives every active process: cheaper than a
+     * QTimer per process, and the work each tick is just a stat() plus
+     * a small tail read. */
+    watchdogTimer_ = new QTimer(this);
+    watchdogTimer_->setInterval(kWatchdogTickMs);
+    connect(watchdogTimer_, &QTimer::timeout, this, &QSocToolShellBash::tickWatchdog);
+    watchdogTimer_->start();
+}
 
 QSocToolShellBash::~QSocToolShellBash()
 {
@@ -74,8 +95,91 @@ json QSocToolShellBash::getParametersSchema() const
            {{"type", "boolean"},
             {"description",
              "Run in background (default: false). When true, returns process_id "
-             "immediately without waiting; manage via bash_manage tool."}}}}},
+             "immediately without waiting; manage via bash_manage tool."}}},
+          {"max_output",
+           {{"type", "integer"},
+            {"description",
+             "Cap on captured stdout+stderr bytes (default: 5242880 = 5 MB). "
+             "When the watchdog sees the file grow past this, the process is "
+             "killed and bash_manage reports the kill reason."}}}}},
         {"required", json::array({"command"})}};
+}
+
+QString QSocToolShellBash::detectInteractivePrompt(const QString &tail)
+{
+    /* Heuristic: a stuck command's tail often ends with a question, a
+     * (y/n) cluster, or a "Press <key>" / password prompt. We keep only
+     * the trailing ~120 chars so a "(y/n)" that appeared mid-output ages
+     * out as fresh log lines stream in below. We also iterate globally
+     * and pick the LAST match: a prompt at the end of the slice is more
+     * reliable signal than a "are you sure" earlier in the same line. */
+    static const QRegularExpression reAll(QStringLiteral(
+        "(?i)("
+        "\\([yY]/[nN]\\)|\\([nN]/[yY]\\)|[yY]/[nN]\\?|"
+        "press\\s+(?:any\\s+key|enter|return)|"
+        "continue\\?|proceed\\?|are you sure|"
+        "passw(?:or)?d:|passphrase:"
+        ")"));
+    const QString                   slice = tail.right(120);
+    auto                            it    = reAll.globalMatch(slice);
+    QString                         last;
+    while (it.hasNext()) {
+        last = it.next().captured(1);
+    }
+    return last;
+}
+
+void QSocToolShellBash::tickWatchdog()
+{
+    if (activeProcesses.isEmpty())
+        return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QList<int>   stuckHits; /* emit signals after the loop to keep
+                               activeProcesses iteration re-entrancy-safe. */
+
+    for (auto it = activeProcesses.begin(); it != activeProcesses.end(); ++it) {
+        auto &info = it.value();
+        if (info.process == nullptr || info.process->state() == QProcess::NotRunning)
+            continue;
+
+        const qint64 cap  = info.maxOutputBytes > 0 ? info.maxOutputBytes : kDefaultMaxOutputBytes;
+        const qint64 size = QFileInfo(info.outputPath).size();
+
+        if (size != info.lastKnownSize) {
+            info.lastKnownSize    = size;
+            info.lastSizeChangeAt = now;
+        } else if (info.lastSizeChangeAt == 0) {
+            /* First tick after start: anchor the no-progress timer to
+             * the process start so a command that emits nothing for the
+             * full window still gets flagged. */
+            info.lastSizeChangeAt = info.startTime > 0 ? info.startTime : now;
+        }
+
+        if (size > cap && info.killReason.isEmpty()) {
+            info.killReason = QStringLiteral("output exceeded %1 bytes").arg(cap);
+            info.process->kill();
+            continue;
+        }
+
+        if (!info.stuckNotified && now - info.lastSizeChangeAt >= kStuckThresholdMs) {
+            const QString tail   = readLastLines(info.outputPath, 20);
+            const QString prompt = detectInteractivePrompt(tail);
+            if (!prompt.isEmpty()) {
+                info.stuckReason = QStringLiteral("no output for %1s; tail looks interactive (%2)")
+                                       .arg(kStuckThresholdMs / 1000)
+                                       .arg(prompt);
+                info.stuckNotified = true;
+                stuckHits.append(it.key());
+            }
+        }
+    }
+
+    for (int id : stuckHits) {
+        const auto it = activeProcesses.find(id);
+        if (it == activeProcesses.end())
+            continue;
+        emit processStuckDetected(id, it->stuckReason, readLastLines(it->outputPath, 5));
+    }
 }
 
 QString QSocToolShellBash::readLastLines(const QString &path, int count)
@@ -122,6 +226,14 @@ QString QSocToolShellBash::execute(const json &arguments)
     bool background = false;
     if (arguments.contains("background") && arguments["background"].is_boolean()) {
         background = arguments["background"].get<bool>();
+    }
+
+    /* Per-call output cap. 0 means "use built-in default". */
+    qint64 maxOutputBytes = 0;
+    if (arguments.contains("max_output") && arguments["max_output"].is_number_integer()) {
+        const auto raw = arguments["max_output"].get<long long>();
+        if (raw > 0)
+            maxOutputBytes = raw;
     }
 
     if (workingDir.isEmpty() && projectManager) {
@@ -174,10 +286,11 @@ QString QSocToolShellBash::execute(const json &arguments)
     if (background) {
         const int           processId = nextProcessId++;
         QSocBashProcessInfo info;
-        info.process    = process;
-        info.outputPath = outputPath;
-        info.command    = command;
-        info.startTime  = QDateTime::currentMSecsSinceEpoch();
+        info.process        = process;
+        info.outputPath     = outputPath;
+        info.command        = command;
+        info.startTime      = QDateTime::currentMSecsSinceEpoch();
+        info.maxOutputBytes = maxOutputBytes;
         activeProcesses.insert(processId, info);
         QObject::connect(
             process,
@@ -250,10 +363,11 @@ QString QSocToolShellBash::execute(const json &arguments)
     int processId = nextProcessId++;
 
     QSocBashProcessInfo info;
-    info.process    = process;
-    info.outputPath = outputPath;
-    info.command    = command;
-    info.startTime  = QDateTime::currentMSecsSinceEpoch();
+    info.process        = process;
+    info.outputPath     = outputPath;
+    info.command        = command;
+    info.startTime      = QDateTime::currentMSecsSinceEpoch();
+    info.maxOutputBytes = maxOutputBytes;
     activeProcesses.insert(processId, info);
     QObject::connect(
         process,
@@ -352,15 +466,9 @@ QString QSocToolBashManage::collectOutput(int processId, int exitCode)
 
     auto &info = QSocToolShellBash::activeProcesses[processId];
 
-    /* Flush remaining output */
-    QByteArray remaining = info.process->readAll();
-    if (!remaining.isEmpty()) {
-        QFile outputFile(info.outputPath);
-        if (outputFile.open(QIODevice::Append | QIODevice::Text)) {
-            outputFile.write(remaining);
-            outputFile.close();
-        }
-    }
+    /* No buffered remainder to flush: the process redirects stdout+stderr
+     * straight to info.outputPath via setStandardOutputFile, so the file
+     * already contains everything that was emitted up to exit. */
 
     /* Read full output */
     QFile   readFile(info.outputPath);
@@ -425,6 +533,13 @@ QString QSocToolBashManage::execute(const json &arguments)
                              .arg(elapsed)
                              .arg(fileSize)
                              .arg(lastLines);
+
+        if (!info.killReason.isEmpty()) {
+            result += QStringLiteral("\n\nKilled by watchdog: %1").arg(info.killReason);
+        }
+        if (!info.stuckReason.isEmpty()) {
+            result += QStringLiteral("\n\nLikely stuck: %1").arg(info.stuckReason);
+        }
 
         if (!running) {
             int     exitCode = info.process->exitCode();

@@ -10,6 +10,7 @@
 #include <QEventLoop>
 #include <QMap>
 #include <QProcess>
+#include <QTimer>
 
 /**
  * @brief Info for a background bash process that timed out but is still running
@@ -19,7 +20,15 @@ struct QSocBashProcessInfo
     QProcess *process = nullptr;
     QString   outputPath;
     QString   command;
-    qint64    startTime = 0;
+    qint64    startTime      = 0;
+    qint64    maxOutputBytes = 0; /* 0 means "use default cap" */
+    /* Watchdog state. lastKnownSize/lastSizeChangeAt feed both the
+     * output-size kill rule and the no-progress stuck detector. */
+    qint64  lastKnownSize    = 0;
+    qint64  lastSizeChangeAt = 0;
+    QString killReason;            /* set by watchdog when it kills the process */
+    QString stuckReason;           /* set when stuck detector first matches */
+    bool    stuckNotified = false; /* one-shot signal latch */
 };
 
 class QSocToolBashManage;
@@ -53,6 +62,14 @@ public:
      */
     static void killAllActive();
 
+    /**
+     * @brief Match a tail of bash output against common interactive prompts.
+     * @details Public so a unit test can pin the regex without driving a
+     *          real QProcess through a 45s no-progress window. Returns the
+     *          matched prompt fragment (e.g. "(y/n)") or an empty string.
+     */
+    static QString detectInteractivePrompt(const QString &tail);
+
 signals:
     /**
      * @brief Fired when a backgrounded bash process exits.
@@ -62,6 +79,15 @@ signals:
      *          agent to inspect via bash_manage.
      */
     void backgroundProcessFinished(int processId, int exitCode, const QString &command);
+
+    /**
+     * @brief Fired once when a background process appears stuck.
+     * @details "Stuck" means the capture file size has not grown for the
+     *          stuck-window AND the tail of the file looks like an
+     *          interactive prompt (y/n, password, "press enter"). Latched
+     *          per process so the REPL gets one notification, not a flood.
+     */
+    void processStuckDetected(int processId, const QString &reason, const QString &tailHint);
 
 private:
     QSocProjectManager *projectManager = nullptr;
@@ -73,7 +99,12 @@ private:
     static int                            nextProcessId;
     static QString                        readLastLines(const QString &path, int count);
 
+    QTimer *watchdogTimer_ = nullptr;
+
     friend class QSocToolBashManage;
+
+private slots:
+    void tickWatchdog();
 };
 
 /**
