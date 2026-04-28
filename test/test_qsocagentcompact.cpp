@@ -418,6 +418,41 @@ private slots:
         delete agent;
     }
 
+    void testRollingAnchorPreservesPriorSummary()
+    {
+        /* When the first message is an existing "[Conversation Summary]"
+         * marker, the next compact must treat it as an anchor instead
+         * of re-summarizing it. The mechanical fallback (LLM unavailable)
+         * carries it forward as a [carried anchor] block. */
+        QSocAgentConfig config;
+        config.maxContextTokens   = 10000;
+        config.pruneThreshold     = 0.99;
+        config.compactThreshold   = 0.01;
+        config.keepRecentMessages = 2;
+
+        auto *agent = createAgent(config);
+
+        json msgs = json::array();
+        msgs.push_back(
+            {{"role", "user"},
+             {"content", "[Conversation Summary]\n## Task Overview\n- prior anchored task XYZ"}});
+        for (int i = 0; i < 10; i++) {
+            msgs.push_back({{"role", "user"}, {"content", QString("Q%1").arg(i).toStdString()}});
+            msgs.push_back(
+                {{"role", "assistant"}, {"content", QString("A%1").arg(i).toStdString()}});
+        }
+        agent->setMessages(msgs);
+        agent->compact();
+
+        json    result = agent->getMessages();
+        QString first  = QString::fromStdString(result[0]["content"].get<std::string>());
+        QVERIFY(first.startsWith("[Conversation Summary]"));
+        QVERIFY(first.contains("carried anchor"));
+        QVERIFY(first.contains("prior anchored task XYZ"));
+
+        delete agent;
+    }
+
     void testAutoContinue()
     {
         QSocAgentConfig config;
