@@ -2433,6 +2433,22 @@ bool QSocCliWorker::runAgentLoop(
                             .arg(summary),
                         QTuiScrollView::Dim);
                 });
+            connect(
+                bashTool,
+                &QSocToolShellBash::processStuckDetected,
+                &compositor,
+                [&compositor](int processId, const QString &reason, const QString &tailHint) {
+                    QString tail = tailHint;
+                    tail.replace(QLatin1Char('\n'), QLatin1Char(' '));
+                    if (tail.size() > 60) {
+                        tail = tail.left(57) + QStringLiteral("...");
+                    }
+                    compositor.printContent(
+                        QStringLiteral("(bg #%1 looks stuck: %2 [tail: %3])\n")
+                            .arg(processId)
+                            .arg(reason, tail),
+                        QTuiScrollView::Dim);
+                });
         }
     }
     auto connLoopFire = connect(
