@@ -1335,7 +1335,14 @@ bool QSocCliWorker::runAgentLoop(
     /* If a sticky remote binding exists for this project, inject the matching
      * /ssh line so the next REPL iteration auto-connects. Cleared on first
      * consumption; users can still /local out or override manually. */
-    QString pendingAutoInput;
+    /* Queue of prompts to inject as if the user had typed them. Producers:
+     * the sticky /ssh binding at startup, the /loop create immediate-fire,
+     * and the scheduler fire signal. Consumer: the top of the REPL loop,
+     * which takeFirst()s before falling through to promptLoop.exec(). A
+     * list (rather than the original single-string slot) so that two
+     * scheduler ticks landing in the same idle window or two due jobs at
+     * the same tick don't clobber each other. */
+    QStringList pendingAutoInputs;
     /* When --ssh on the command line already brought the agent online, the
      * sticky binding's auto-/ssh would override the live session; skip it. */
     if (preconnected == nullptr && pathContext != nullptr) {
@@ -1349,7 +1356,7 @@ bool QSocCliWorker::runAgentLoop(
                  * pair: the parser printed "Ignoring workspace path"
                  * even though the binding's workspace was correctly
                  * applied moments later. */
-                pendingAutoInput = QStringLiteral("/ssh ") + binding.target;
+                pendingAutoInputs.append(QStringLiteral("/ssh ") + binding.target);
                 compositor.printContent(QString("Auto-connecting remote target %1 (workspace %2)\n")
                                             .arg(binding.target, binding.workspace));
             }
@@ -2451,11 +2458,23 @@ bool QSocCliWorker::runAgentLoop(
                 });
         }
     }
+    auto connLoopPersistFailed = connect(
+        &loopScheduler,
+        &QSocLoopScheduler::persistFailed,
+        &compositor,
+        [&compositor](const QString &path) {
+            compositor.printContent(
+                QStringLiteral(
+                    "(loop persist degraded: %1 not updated; "
+                    "check disk space/permissions)\n")
+                    .arg(path),
+                QTuiScrollView::Dim);
+        });
     auto connLoopFire = connect(
         &loopScheduler,
         &QSocLoopScheduler::promptDue,
         [&compositor,
-         &pendingAutoInput,
+         &pendingAutoInputs,
          &idlePromptLoop,
          agent](const QString &prompt, const QString &jobName) {
             QString summary = prompt;
@@ -2465,10 +2484,20 @@ bool QSocCliWorker::runAgentLoop(
             }
             compositor.printContent(
                 QStringLiteral("(loop %1 fired: %2)\n").arg(jobName, summary), QTuiScrollView::Dim);
-            if (agent->isRunning()) {
+            /* Slash commands and `!`-shell escapes MUST go through the
+             * CLI dispatch path so /compact, /status, !make, etc keep
+             * their built-in semantics regardless of whether the agent
+             * is running. queueRequest() would just hand the literal
+             * "/compact" or "!make" to the LLM as a user message.
+             * Free-form prompts can ride the agent's in-turn queue when
+             * running because they have no CLI-side special handling.
+             * The decision lives behind a static helper so unit tests
+             * can pin it without spinning up the whole REPL. */
+            if (agent->isRunning()
+                && !QSocLoopScheduler::scheduledInputRequiresCliDispatch(prompt)) {
                 agent->queueRequest(prompt);
             } else {
-                pendingAutoInput = prompt;
+                pendingAutoInputs.append(prompt);
                 if (idlePromptLoop != nullptr) {
                     idlePromptLoop->quit();
                 }
@@ -2800,18 +2829,18 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.render();
             });
 
-        if (!pendingAutoInput.isEmpty()) {
-            input = pendingAutoInput;
-            pendingAutoInput.clear();
+        if (!pendingAutoInputs.isEmpty()) {
+            input = pendingAutoInputs.takeFirst();
         } else {
             idlePromptLoop = &promptLoop;
             promptLoop.exec();
             idlePromptLoop = nullptr;
             /* A scheduler fire while idle wakes promptLoop without setting
-             * `input`; instead it stashes the prompt in pendingAutoInput. */
-            if (input.isEmpty() && !pendingAutoInput.isEmpty()) {
-                input = pendingAutoInput;
-                pendingAutoInput.clear();
+             * `input`; the prompt is in the queue waiting for us. If the
+             * user typed at the same time, their `input` wins and the
+             * queued prompts get drained on subsequent iterations. */
+            if (input.isEmpty() && !pendingAutoInputs.isEmpty()) {
+                input = pendingAutoInputs.takeFirst();
             }
         }
 
@@ -3522,21 +3551,64 @@ bool QSocCliWorker::runAgentLoop(
                 }
                 continue;
             }
+            /* Refusal message reused by every mutate path so the user
+             * sees the same explanation whether they tried add, stop,
+             * or clear from a non-owning session. */
+            const auto printNotOwner = [&compositor]() {
+                compositor.printContent(QStringLiteral(
+                    "Another qsoc session owns this project's /loop jobs. "
+                    "Run /loop add/stop/clear from that session.\n"));
+            };
+            const auto printPersistFailed = [&compositor]() {
+                compositor.printContent(QStringLiteral(
+                    "Failed to write .qsoc/loops.json. Check disk space and "
+                    "permissions; nothing was changed.\n"));
+            };
             if (sub == "stop") {
                 const QString id = rawArgs.section(QRegularExpression("\\s+"), 1, 1);
                 if (id.isEmpty()) {
                     compositor.printContent(QStringLiteral("Usage: /loop stop <id>\n"));
+                    continue;
+                }
+                if (!loopScheduler.isOwner()) {
+                    printNotOwner();
+                    continue;
+                }
+                /* Distinguish "no such id" from "persist failed" by
+                 * peeking at the list before calling. removeJob returns
+                 * false in both cases; only one of them is an error. */
+                bool present = false;
+                for (const auto &job : loopScheduler.listJobs()) {
+                    if (job.name == id) {
+                        present = true;
+                        break;
+                    }
+                }
+                if (!present) {
+                    compositor.printContent(QStringLiteral("No loop named %1.\n").arg(id));
                 } else if (loopScheduler.removeJob(id)) {
                     compositor.printContent(QStringLiteral("Removed loop %1.\n").arg(id));
                 } else {
-                    compositor.printContent(QStringLiteral("No loop named %1.\n").arg(id));
+                    printPersistFailed();
                 }
                 continue;
             }
             if (sub == "clear") {
+                if (!loopScheduler.isOwner()) {
+                    printNotOwner();
+                    continue;
+                }
                 const int count = loopScheduler.listJobs().size();
-                loopScheduler.clearJobs();
-                compositor.printContent(QStringLiteral("Cleared %1 loop(s).\n").arg(count));
+                if (loopScheduler.clearJobs()) {
+                    compositor.printContent(QStringLiteral("Cleared %1 loop(s).\n").arg(count));
+                } else {
+                    printPersistFailed();
+                }
+                continue;
+            }
+
+            if (!loopScheduler.isOwner()) {
+                printNotOwner();
                 continue;
             }
 
@@ -3548,13 +3620,24 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
             const QString name = loopScheduler.addJob(parsedPrompt, intervalMs);
+            if (name.isEmpty()) {
+                /* addJob refuses if either we lost ownership between
+                 * the isOwner check above (lock probe race) or the
+                 * persist write failed. Show the more likely cause. */
+                if (!loopScheduler.isOwner()) {
+                    printNotOwner();
+                } else {
+                    printPersistFailed();
+                }
+                continue;
+            }
             compositor.printContent(QStringLiteral("Scheduled loop %1 every %2: %3\n")
                                         .arg(name)
                                         .arg(QSocLoopScheduler::formatInterval(intervalMs))
                                         .arg(parsedPrompt));
-            /* Fire once immediately by re-injecting through the same idle
-             * input path the scheduler uses on subsequent ticks. */
-            pendingAutoInput = parsedPrompt;
+            /* Fire once immediately by appending through the same idle
+             * input queue the scheduler uses on subsequent ticks. */
+            pendingAutoInputs.append(parsedPrompt);
             continue;
         }
         if (cmd == "/clear") {
@@ -4448,6 +4531,13 @@ bool QSocCliWorker::runAgentLoop(
             /* Reload per-project UI state: TODO widget and input history. */
             loadTodoWidget(projectManager->getProjectPath());
             loadInputHistory(projectManager->getProjectPath());
+
+            /* Rebind /loop scheduler so the old project's lock is released
+             * and the new project's loops.json takes over. Drain any
+             * pending auto-input the old project queued so a stale
+             * scheduled prompt doesn't fire against the wrong project. */
+            loopScheduler.setProjectDir(projectManager->getProjectPath());
+            pendingAutoInputs.clear();
 
             compositor.printContent(
                 QString("Project: %1 (new session %2)%3\n")
