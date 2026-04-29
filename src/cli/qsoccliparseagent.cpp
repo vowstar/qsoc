@@ -4108,6 +4108,86 @@ bool QSocCliWorker::runAgentLoop(
                 = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
             continue;
         }
+        if (cmd == "/agents") {
+            QSocAgentDefinitionRegistry *defs = nullptr;
+            if (auto *registry = agent->getToolRegistry()) {
+                if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(
+                        registry->getTool(QStringLiteral("agent")))) {
+                    defs = spawnTool->definitionRegistry();
+                }
+            }
+            if (defs == nullptr) {
+                compositor.printContent(
+                    "Sub-agent registry not available in this session.\n", QTuiScrollView::Dim);
+                continue;
+            }
+
+            const QStringList scopes
+                = {QStringLiteral("builtin"), QStringLiteral("user"), QStringLiteral("project")};
+            const QStringList scopeLabels
+                = {QStringLiteral("Built-in"),
+                   QStringLiteral("User (~/.config/qsoc/agents/)"),
+                   QStringLiteral("Project (./.qsoc/agents/)")};
+
+            int sectionsPrinted = 0;
+            for (qsizetype si = 0; si < scopes.size(); ++si) {
+                const QString &scope = scopes[si];
+                QStringList    matching;
+                for (const QString &name : defs->availableNames()) {
+                    const QSocAgentDefinition *def = defs->find(name);
+                    if (def != nullptr && def->scope == scope) {
+                        matching.append(name);
+                    }
+                }
+                if (matching.isEmpty()) {
+                    continue;
+                }
+                if (sectionsPrinted > 0) {
+                    compositor.printContent("\n");
+                }
+                compositor.printContent(scopeLabels[si] + QStringLiteral(":\n"));
+                constexpr int kAgentDescCap = 120;
+                for (const QString &name : matching) {
+                    const QSocAgentDefinition *def = defs->find(name);
+                    if (def == nullptr) {
+                        continue;
+                    }
+                    QString desc = def->description;
+                    if (desc.size() > kAgentDescCap) {
+                        desc = desc.left(kAgentDescCap - 3) + QStringLiteral("...");
+                    }
+                    QString line = QStringLiteral("  ") + def->name + QStringLiteral(" - ") + desc
+                                   + QLatin1Char('\n');
+                    compositor.printContent(line);
+                    if (!def->toolsAllow.isEmpty()) {
+                        compositor.printContent(
+                            QStringLiteral("    tools: ")
+                                + def->toolsAllow.join(QStringLiteral(", ")) + QLatin1Char('\n'),
+                            QTuiScrollView::Dim);
+                    } else {
+                        compositor.printContent(
+                            QStringLiteral("    tools: (inherit parent set)\n"),
+                            QTuiScrollView::Dim);
+                    }
+                }
+                ++sectionsPrinted;
+            }
+            if (sectionsPrinted == 0) {
+                compositor
+                    .printContent("No sub-agent definitions registered.\n", QTuiScrollView::Dim);
+            }
+
+            const QList<QSocAgentDefinition> broken = defs->brokenDefinitions();
+            if (!broken.isEmpty()) {
+                compositor.printContent("\nErrors:\n");
+                for (const QSocAgentDefinition &bad : broken) {
+                    compositor.printContent(
+                        QString("  %1: %2\n").arg(bad.sourcePath, bad.parseError),
+                        QTuiScrollView::Dim);
+                }
+            }
+            continue;
+        }
         if (cmd == "/cost") {
             auto fmtTok = [](qint64 tokens) -> QString {
                 if (tokens >= 1000) {
