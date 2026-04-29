@@ -70,6 +70,12 @@ public:
      */
     int runCount() const;
 
+    /**
+     * @brief Forward abort() to every Running child. Used by the
+     *        spawn-agent tool's abort() so a parent ESC cascades.
+     */
+    void abortAll();
+
 private:
     struct RunState
     {

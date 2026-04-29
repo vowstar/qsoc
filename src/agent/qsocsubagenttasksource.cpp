@@ -156,6 +156,15 @@ int QSocSubAgentTaskSource::runCount() const
     return static_cast<int>(runs_.size());
 }
 
+void QSocSubAgentTaskSource::abortAll()
+{
+    for (RunState &run : runs_) {
+        if (run.status == QSocTask::Status::Running && run.agent != nullptr) {
+            run.agent->abort();
+        }
+    }
+}
+
 void QSocSubAgentTaskSource::evictStaleCompleted()
 {
     const qint64 nowMs   = QDateTime::currentMSecsSinceEpoch();
