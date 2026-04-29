@@ -11,6 +11,8 @@
 #include <QRegularExpression>
 #include <QSocketNotifier>
 #include <QString>
+
+#include <functional>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <QTimer>
@@ -57,6 +59,20 @@ public:
      * @param len Number of bytes
      */
     void processBytes(const char *data, int len);
+
+    /**
+     * @brief Install a printable-byte consumer that takes precedence over
+     *        the buffer state machine.
+     * @details When set, every printable byte (and Return) is offered to the
+     *          consumer before normal processing. If it returns true the byte
+     *          is treated as consumed and not appended to the input buffer.
+     *          Used by modal overlays (task overlay, etc.) so single-key
+     *          actions like x / j / k / Enter act on the overlay rather than
+     *          accumulating into the input line. ESC, Ctrl-keys, and arrow
+     *          escapes still go through normal signal paths.
+     */
+    using ExternalKeyConsumer = std::function<bool(unsigned char)>;
+    void setExternalKeyConsumer(ExternalKeyConsumer consumer);
 
 signals:
     void escPressed();
@@ -135,7 +151,16 @@ signals:
      */
     void redrawRequested();
 
+    /**
+     * @brief Emitted on Ctrl+B — open the task overlay listing every active
+     *        background task (loop schedule, background bash, future
+     *        sub-agent). Distinct from Ctrl+T (todo visibility toggle).
+     */
+    void taskOverlayRequested();
+
 private:
+    ExternalKeyConsumer externalKeyConsumer_;
+
     static int  utf8SeqLen(unsigned char lead);
     static bool isUtf8Continuation(unsigned char byte);
     void        insertAtCursor(const QString &decoded);

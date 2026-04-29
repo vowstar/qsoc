@@ -593,6 +593,22 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
+        /* Ctrl+B: open the background-task overlay. Distinct from Ctrl+T
+         * (todo visibility) so users can keep both bindings. */
+        if (byte == 0x02) {
+            emit taskOverlayRequested();
+            continue;
+        }
+
+        /* External key consumer (modal overlays) sees printable bytes and
+         * Return before they touch the buffer. ESC, Ctrl-keys, and arrow
+         * escapes are still routed through their own signal paths above
+         * so the overlay can react via its own handlers. */
+        if (externalKeyConsumer_ && (byte == 0x0D || byte == 0x0A || byte >= 0x20)) {
+            if (externalKeyConsumer_(byte))
+                continue;
+        }
+
         /* Ctrl+_: undo the last edit (readline-compatible undo key, 0x1F).
          * The stack holds PRE-mutation snapshots so we just pop and restore. */
         if (byte == 0x1F) {
@@ -939,4 +955,9 @@ void QAgentInputMonitor::stop()
 bool QAgentInputMonitor::isActive() const
 {
     return active;
+}
+
+void QAgentInputMonitor::setExternalKeyConsumer(ExternalKeyConsumer consumer)
+{
+    externalKeyConsumer_ = std::move(consumer);
 }
