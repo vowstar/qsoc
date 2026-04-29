@@ -8,9 +8,13 @@
 #include "agent/mcp/qsocmcptypes.h"
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocbashtasksource.h"
 #include "agent/qsocfilehistory.h"
 #include "agent/qsochookmanager.h"
+#include "agent/qsoclooptasksource.h"
 #include "agent/qsocsession.h"
+#include "agent/qsocsubagenttasksource.h"
+#include "agent/qsoctaskregistry.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocremotebinding.h"
@@ -993,6 +997,18 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(new QSocToolScheduleList(this, loopScheduler));
     toolRegistry->registerTool(new QSocToolScheduleDelete(this, loopScheduler));
 
+    /* Task registry: aggregator the TUI overlay reads. Sources adapt
+     * concrete subsystems (loop scheduler, background bash) to
+     * QSocTaskSource. Adding a fourth task kind (sub-agent, etc.) is a
+     * one-file change here plus the source impl. */
+    auto *taskRegistry = new QSocTaskRegistry(this);
+    taskRegistry->registerSource(new QSocLoopTaskSource(loopScheduler, this));
+    taskRegistry->registerSource(new QSocBashTaskSource(shellBashTool, this));
+    /* Sub-agent source is a placeholder today (returns empty list); it
+     * exists so a future sub-agent module slots in without touching the
+     * overlay, the compositor, or this site beyond the constructor body. */
+    taskRegistry->registerSource(new QSocSubAgentTaskSource(this));
+
     /* LSP service setup. Built-in slang backend goes first as fallback;
        external servers from qsoc.yml override it for matching extensions. */
     auto *lspService = QLspService::instance();
@@ -1276,7 +1292,13 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         }
     }
     return runAgentLoop(
-        agent, streaming, resumeSessionId, pathContext, preconnectedRemote, preLocalRegistry);
+        agent,
+        streaming,
+        resumeSessionId,
+        pathContext,
+        preconnectedRemote,
+        preLocalRegistry,
+        taskRegistry);
 }
 
 bool QSocCliWorker::runAgentLoop(
@@ -1285,7 +1307,8 @@ bool QSocCliWorker::runAgentLoop(
     const QString    &resumeSessionId,
     QSocPathContext  *pathContext,
     AgentRemoteState *preconnected,
-    QSocToolRegistry *preLocalRegistry)
+    QSocToolRegistry *preLocalRegistry,
+    QSocTaskRegistry *taskRegistry)
 {
     /* Require interactive terminal for TUI */
     QTerminalCapability termCap;
@@ -2164,6 +2187,16 @@ bool QSocCliWorker::runAgentLoop(
      * keys while in reverse-i-search mode accept the current match and
      * exit so the user can edit it further. */
     connect(&inputMonitor, &QAgentInputMonitor::arrowKey, [&](int key) {
+        /* Task overlay consumes arrow keys before history / popup
+         * navigation. 'A'=up, 'B'=down, 'C'=right, 'D'=left. */
+        if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskOverlay) {
+            const int qtKey = (key == 'A')   ? Qt::Key_Up
+                              : (key == 'B') ? Qt::Key_Down
+                              : (key == 'C') ? Qt::Key_Right
+                                             : Qt::Key_Left;
+            compositor.taskOverlay().handleKey(qtKey, /*ctrl*/ false);
+            return;
+        }
         if (searching) {
             /* Accept whatever is currently matched and leave search mode so
              * the monitor resumes normal editing with the selection loaded. */
@@ -2393,6 +2426,90 @@ bool QSocCliWorker::runAgentLoop(
         compositor.render();
     });
 
+    /* Ctrl+B: open the background-task overlay. */
+    auto &taskOverlay = compositor.taskOverlay();
+    if (taskRegistry != nullptr) {
+        taskOverlay.setRegistry(taskRegistry);
+        /* Status bar pill mirrors the registry count. Update once now and
+         * connect for live changes (loop add/remove, bash spawn/exit). */
+        const auto refreshTaskPill = [&compositor, taskRegistry]() {
+            const auto rows  = taskRegistry->listAll();
+            bool       alert = false;
+            for (const auto &tagged : rows) {
+                if (tagged.row.status == QSocTask::Status::Stuck
+                    || tagged.row.status == QSocTask::Status::Failed) {
+                    alert = true;
+                    break;
+                }
+            }
+            compositor.statusBar().setTaskCount(rows.size());
+            compositor.statusBar().setTaskAlert(alert);
+        };
+        refreshTaskPill();
+        connect(
+            taskRegistry,
+            &QSocTaskRegistry::anySourceChanged,
+            &compositor,
+            [refreshTaskPill, &compositor]() {
+                refreshTaskPill();
+                compositor.invalidate();
+                compositor.render();
+            });
+    }
+    connect(&taskOverlay, &QTuiTaskOverlay::invalidated, &compositor, [&compositor]() {
+        compositor.invalidate();
+        compositor.render();
+    });
+    connect(&taskOverlay, &QTuiTaskOverlay::closed, &compositor, [&compositor]() {
+        compositor.setFocusOwner(QTuiCompositor::FocusOwner::Input);
+        compositor.invalidate();
+        compositor.render();
+    });
+    connect(&inputMonitor, &QAgentInputMonitor::taskOverlayRequested, [&]() {
+        if (taskRegistry == nullptr)
+            return;
+        if (compositor.taskOverlay().mode() == QTuiTaskOverlay::Mode::Hidden) {
+            compositor.setFocusOwner(QTuiCompositor::FocusOwner::TaskOverlay);
+            compositor.taskOverlay().open();
+            /* While the overlay is up, intercept printable keys (j/k/x/
+             * Enter) before they touch the input buffer. ESC + arrows go
+             * through their own signal paths and check focus explicitly. */
+            inputMonitor.setExternalKeyConsumer([&compositor](unsigned char byte) {
+                int qtKey = 0;
+                switch (byte) {
+                case 0x0D: /* CR */
+                case 0x0A: /* LF */
+                    qtKey = Qt::Key_Return;
+                    break;
+                case 'x':
+                case 'X':
+                    qtKey = Qt::Key_X;
+                    break;
+                case 'j':
+                case 'J':
+                    qtKey = Qt::Key_J;
+                    break;
+                case 'k':
+                case 'K':
+                    qtKey = Qt::Key_K;
+                    break;
+                default:
+                    /* Swallow all other printable bytes while overlay is up. */
+                    return true;
+                }
+                compositor.taskOverlay().handleKey(qtKey, false);
+                return true;
+            });
+        } else {
+            compositor.taskOverlay().close();
+        }
+    });
+    connect(&taskOverlay, &QTuiTaskOverlay::closed, &inputMonitor, [&inputMonitor]() {
+        /* Drop the consumer when the overlay closes so normal typing
+         * resumes immediately. */
+        inputMonitor.setExternalKeyConsumer({});
+    });
+
     /* Ctrl+L: force a full compositor repaint — readline-style clear-and-redraw. */
     connect(&inputMonitor, &QAgentInputMonitor::redrawRequested, [&]() {
         compositor.invalidate();
@@ -2614,6 +2731,11 @@ bool QSocCliWorker::runAgentLoop(
              &searchOriginal,
              &searchCurrentMatch,
              &searchFailed]() {
+                /* Task overlay grabs ESC first: list -> close, detail -> list. */
+                if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskOverlay) {
+                    compositor.taskOverlay().handleKey(Qt::Key_Escape, false);
+                    return;
+                }
                 /* Reverse-i-search takes priority: Esc restores the original
                  * input the user had before pressing Ctrl+R and leaves the
                  * prompt intact so the loop keeps running. */

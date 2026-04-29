@@ -15,6 +15,26 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
 {
     QString line;
 
+    /* Right-aligned task pill (▶ N tasks). Drawn first so the main line
+     * truncation can leave room. Empty when count == 0. */
+    QString taskPill;
+    if (taskCount_ > 0) {
+        /* Plain ASCII to avoid wide-character ambiguity at the right
+         * margin (the BLACK RIGHT-POINTING TRIANGLE is Narrow per
+         * Unicode but East Asian Ambiguous in some terminals, which
+         * clips the trailing 's'). */
+        taskPill = QStringLiteral("> %1 task%2")
+                       .arg(taskCount_)
+                       .arg(taskCount_ == 1 ? QString() : QStringLiteral("s"));
+    }
+    const int pillWidth = QTuiText::visualWidth(taskPill);
+    /* Leave a 2-column right margin: terminal emulators commonly treat
+     * the very last column as an auto-scroll sentinel and the
+     * second-to-last as a pre-wrap reservation. Without the margin the
+     * trailing glyph gets eaten on both VT and tmux passthrough. */
+    const int pillStart = pillWidth > 0 ? qMax(0, width - pillWidth - 2) : width;
+    const int mainWidth = pillWidth > 0 ? qMax(0, pillStart - 1) : width;
+
     if (!running) {
         /* Idle state: static, no spinner/timer */
         line = currentStatus;
@@ -24,7 +44,16 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
         if (!modelId.isEmpty()) {
             line += " [" + modelId + "]";
         }
-        screen.putString(0, startY, QTuiText::truncate(line, width), false, true); /* dim */
+        screen.putString(0, startY, QTuiText::truncate(line, mainWidth), false, true); /* dim */
+        if (!taskPill.isEmpty()) {
+            screen.putString(
+                pillStart,
+                startY,
+                taskPill,
+                /*bold*/ false,
+                /*dim*/ !taskAlert_,
+                /*inverted*/ taskAlert_);
+        }
         return;
     }
 
@@ -84,7 +113,16 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     }
     line += warning;
 
-    screen.putString(0, startY, QTuiText::truncate(line, width));
+    screen.putString(0, startY, QTuiText::truncate(line, mainWidth));
+    if (!taskPill.isEmpty()) {
+        screen.putString(
+            width - pillWidth,
+            startY,
+            taskPill,
+            /*bold*/ false,
+            /*dim*/ !taskAlert_,
+            /*inverted*/ taskAlert_);
+    }
 }
 
 void QTuiStatusBar::setStatus(const QString &status)
@@ -96,6 +134,16 @@ void QTuiStatusBar::setStatus(const QString &status)
      * confusing — the user just saw the command they ran linger
      * across the next phase of the loop. */
     lastToolDetail.clear();
+}
+
+void QTuiStatusBar::setTaskCount(int count)
+{
+    taskCount_ = count;
+}
+
+void QTuiStatusBar::setTaskAlert(bool alert)
+{
+    taskAlert_ = alert;
 }
 
 void QTuiStatusBar::toolCalled(const QString &toolName, const QString &detail)

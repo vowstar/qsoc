@@ -391,7 +391,8 @@ private:
         const QString           &resumeSessionId  = QString(),
         QSocPathContext         *pathContext      = nullptr,
         struct AgentRemoteState *preconnected     = nullptr,
-        class QSocToolRegistry  *preLocalRegistry = nullptr);
+        class QSocToolRegistry  *preLocalRegistry = nullptr,
+        class QSocTaskRegistry  *taskRegistry     = nullptr);
 
     /**
      * @brief Show application name and version and emit exit with exitCode.

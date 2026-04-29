@@ -24,6 +24,14 @@ public:
     void updateTokens(qint64 input, qint64 output);
     void setEffortLevel(const QString &level);
     void setModel(const QString &modelId);
+    /**
+     * @brief Number of active background tasks (loops + bash + future
+     *        sub-agents) for the right-aligned `▶ N tasks` pill.
+     *        Hidden when count == 0.
+     */
+    void setTaskCount(int count);
+    /** @brief Whether to draw the pill in attention (blink) mode. */
+    void setTaskAlert(bool alert);
     void resetProgress();
     void startTimers();
     void stopTimers(); /* Stop animation + timer (idle state) */
@@ -45,6 +53,9 @@ private:
     QElapsedTimer stepTimer;
     QElapsedTimer totalTimer;
     bool          running = false; /* true = agent executing, false = idle */
+
+    int  taskCount_ = 0;
+    bool taskAlert_ = false;
 
     static const QStringList spinnerFrames;
     static const QStringList dotFrames;
