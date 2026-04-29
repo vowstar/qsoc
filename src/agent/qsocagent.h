@@ -251,6 +251,21 @@ public:
      */
     QString buildSystemPromptWithMemory() const;
 
+    /**
+     * @brief Test whether a tool name is permitted under the current
+     *        agent config. Honors `agentConfig.toolsAllow` allowlist,
+     *        and unconditionally rejects the spawn-agent tool when
+     *        `agentConfig.isSubAgent` is true.
+     */
+    bool isToolAllowed(const QString &name) const;
+
+    /**
+     * @brief Tool definitions the LLM will actually see this turn:
+     *        the registry's full list filtered by the sub-agent
+     *        allowlist + recursion guard.
+     */
+    nlohmann::json getEffectiveToolDefinitions() const;
+
 signals:
     /**
      * @brief Signal emitted when a tool is called
@@ -409,6 +424,20 @@ private:
 
     /* Whether session_start has fired for this agent instance. */
     bool sessionStartFired = false;
+
+    /**
+     * @brief Drop tool definitions that are not allowed for the current
+     *        agent (subagent allowlist, recursion guard).
+     */
+    nlohmann::json filterAllowedTools(const nlohmann::json &defs) const;
+
+    /**
+     * @brief Append the dynamic prompt sections (environment, remote
+     *        workspace, project instructions, skills, MCP servers,
+     *        memory) onto the given buffer. Shared by the regular
+     *        and sub-agent prompt assembly paths.
+     */
+    void appendDynamicSystemSections(QString &prompt) const;
 
     /**
      * @brief Layer 1: Prune old tool outputs to reduce token usage

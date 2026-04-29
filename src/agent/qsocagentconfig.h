@@ -98,6 +98,21 @@ struct QSocAgentConfig
      * in remoteMode; the JSON payload includes a `remote` section so
      * scripts can branch on it. */
     QSocHookConfig hooks;
+
+    /* Sub-agent flag. When true the agent runs as a child of another
+     * agent: session_start / stop / user_prompt_submit hooks are
+     * skipped (parent already fired them), the spawn-agent tool is
+     * never exposed (no recursion), and buildSystemPromptWithMemory
+     * treats systemPromptOverride as the identity section to which
+     * environment / project / skills / memory are still appended. */
+    bool isSubAgent = false;
+
+    /* Tool name allowlist. When non-empty only these tools are exposed
+     * to the LLM and accepted at dispatch; out-of-list calls return a
+     * structured error string. Empty list = inherit the parent
+     * registry's full tool set. The `agent` spawn tool is always
+     * filtered out when isSubAgent is true, regardless of this list. */
+    QStringList toolsAllow;
 };
 
 #endif // QSOCAGENTCONFIG_H

@@ -65,6 +65,46 @@ QSocAgent::~QSocAgent()
     /* No manual disconnect needed - doing so can cause crashes if llmService is already destroyed */
 }
 
+bool QSocAgent::isToolAllowed(const QString &name) const
+{
+    /* Sub-agents must never spawn further sub-agents: closes the
+     * recursion door regardless of allowlist. */
+    if (agentConfig.isSubAgent && name == QStringLiteral("agent")) {
+        return false;
+    }
+    if (agentConfig.toolsAllow.isEmpty()) {
+        return true;
+    }
+    return agentConfig.toolsAllow.contains(name);
+}
+
+nlohmann::json QSocAgent::getEffectiveToolDefinitions() const
+{
+    if (toolRegistry == nullptr) {
+        return json::array();
+    }
+    return filterAllowedTools(toolRegistry->getToolDefinitions());
+}
+
+nlohmann::json QSocAgent::filterAllowedTools(const nlohmann::json &defs) const
+{
+    if (agentConfig.toolsAllow.isEmpty() && !agentConfig.isSubAgent) {
+        return defs;
+    }
+    json filtered = json::array();
+    for (const auto &def : defs) {
+        if (!def.contains("function") || !def["function"].contains("name")) {
+            filtered.push_back(def);
+            continue;
+        }
+        const QString name = QString::fromStdString(def["function"]["name"].get<std::string>());
+        if (isToolAllowed(name)) {
+            filtered.push_back(def);
+        }
+    }
+    return filtered;
+}
+
 QString QSocAgent::run(const QString &userQuery)
 {
     QString prompt = userQuery;
@@ -359,8 +399,8 @@ void QSocAgent::processStreamIteration()
         messagesWithSystem.push_back(sanitized);
     }
 
-    /* Get tool definitions */
-    json tools = toolRegistry->getToolDefinitions();
+    /* Get tool definitions, filtered by sub-agent allowlist when set. */
+    json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
 
     /* Estimate input tokens for this request (includes system prompt + tool defs) */
     int inputTokens = estimateTotalTokens();
@@ -491,8 +531,8 @@ bool QSocAgent::processIteration()
         messagesWithSystem.push_back(sanitized);
     }
 
-    /* Get tool definitions */
-    json tools = toolRegistry->getToolDefinitions();
+    /* Get tool definitions, filtered by sub-agent allowlist when set. */
+    json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
 
     /* Call LLM */
     json response
@@ -577,6 +617,17 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
         }
 
         emit toolCalled(functionName, argumentsStr);
+
+        /* Allowlist guard. Defends against an LLM that ignores the
+         * filtered tool list or recalls a name from earlier history. */
+        if (!isToolAllowed(functionName)) {
+            const QString denied = QStringLiteral(
+                                       "Error: tool \"%1\" is not allowed in this sub-agent")
+                                       .arg(functionName);
+            addToolMessage(toolCallId, denied);
+            emit toolResult(functionName, denied);
+            continue;
+        }
 
         /* Parse arguments */
         json arguments;
@@ -685,6 +736,10 @@ void QSocAgent::fireSessionStartHookOnce()
         return;
     }
     sessionStartFired = true;
+    /* Sub-agents do not own a session: parent already fired session_start. */
+    if (agentConfig.isSubAgent) {
+        return;
+    }
     if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::SessionStart)) {
         return;
     }
@@ -696,6 +751,10 @@ void QSocAgent::fireSessionStartHookOnce()
 
 void QSocAgent::fireStopHook(const QString &finalContent)
 {
+    /* Sub-agents finish into a tool result, not a session stop. */
+    if (agentConfig.isSubAgent) {
+        return;
+    }
     if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::Stop)) {
         return;
     }
@@ -707,6 +766,10 @@ void QSocAgent::fireStopHook(const QString &finalContent)
 
 bool QSocAgent::firePromptSubmitHook(QString *userQuery, QString *blockReason)
 {
+    /* Sub-agent prompts come from the parent agent, not the user. */
+    if (agentConfig.isSubAgent) {
+        return true;
+    }
     if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::UserPromptSubmit)) {
         return true;
     }
@@ -741,14 +804,28 @@ bool QSocAgent::firePromptSubmitHook(QString *userQuery, QString *blockReason)
 
 QString QSocAgent::buildSystemPromptWithMemory() const
 {
-    /* If a full override is configured, use it verbatim + dynamic sections. */
-    if (!agentConfig.systemPromptOverride.isEmpty()) {
+    /* Legacy override path (non-sub-agent): replace the entire prompt. */
+    if (!agentConfig.systemPromptOverride.isEmpty() && !agentConfig.isSubAgent) {
         return agentConfig.systemPromptOverride;
     }
 
-    /* ── Static sections ─────────────────────────────────────────────── */
+    /* Sub-agent path: override replaces only the static identity /
+     * usage sections; environment, project instructions, optional
+     * skill listing and optional memory are still appended below so
+     * the child sees the same workspace, project rules, and (when
+     * enabled) the same skill / memory context as the parent. */
+    if (agentConfig.isSubAgent && !agentConfig.systemPromptOverride.isEmpty()) {
+        QString subPrompt = agentConfig.systemPromptOverride;
+        if (!subPrompt.endsWith(QLatin1Char('\n'))) {
+            subPrompt += QLatin1Char('\n');
+        }
+        appendDynamicSystemSections(subPrompt);
+        return subPrompt;
+    }
 
     QString prompt;
+
+    /* ── Static sections ─────────────────────────────────────────────── */
 
     /* Section 1: Identity */
     prompt += QStringLiteral(
@@ -857,8 +934,12 @@ QString QSocAgent::buildSystemPromptWithMemory() const
         "After scheduling, tell the user the id, schedule, durability, and how to cancel "
         "(schedule_delete id=<id>).\n");
 
-    /* ── Dynamic sections ────────────────────────────────────────────── */
+    appendDynamicSystemSections(prompt);
+    return prompt;
+}
 
+void QSocAgent::appendDynamicSystemSections(QString &prompt) const
+{
     /* Section 8: Environment */
     {
         QString envSection = QStringLiteral("\n# Environment\n");
@@ -872,7 +953,6 @@ QString QSocAgent::buildSystemPromptWithMemory() const
         if (!agentConfig.projectPath.isEmpty()) {
             envSection += QStringLiteral("- Working directory: ") + agentConfig.projectPath
                           + QStringLiteral("\n");
-            /* Detect git repo */
             QDir gitDir(agentConfig.projectPath);
             if (gitDir.exists(QStringLiteral(".git"))) {
                 envSection += QStringLiteral("- Git repository: yes\n");
@@ -1010,8 +1090,6 @@ QString QSocAgent::buildSystemPromptWithMemory() const
                       + memoryContent;
         }
     }
-
-    return prompt;
 }
 
 void QSocAgent::addMessage(const QString &role, const QString &content)
@@ -1231,7 +1309,7 @@ int QSocAgent::estimateTotalTokens() const
     if (!anchored) {
         tokens += estimateTokens(buildSystemPromptWithMemory());
         if (toolRegistry) {
-            json tools = toolRegistry->getToolDefinitions();
+            json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
             if (!tools.empty()) {
                 tokens += estimateTokens(QString::fromStdString(tools.dump()));
             }
