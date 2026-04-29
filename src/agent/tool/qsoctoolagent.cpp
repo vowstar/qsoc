@@ -134,14 +134,29 @@ QString QSocToolAgent::execute(const json &arguments)
             R"(wait for it to finish or kill it from the task overlay"})");
     }
 
-    if (llmService_ == nullptr || parentRegistry_ == nullptr) {
+    /* Resolve parent registry + config dynamically from the live parent
+     * agent when bound. This makes the spawn tool remote-mode correct:
+     * after `/remote` swaps the parent's registry and sets remoteMode,
+     * the child built here picks up the SSH-backed tool registry and
+     * the remote config in the same step, instead of a stale local
+     * snapshot captured at construction time. */
+    QSocToolRegistry *effectiveRegistry = parentRegistry_;
+    QSocAgentConfig   effectiveConfig   = parentConfig_;
+    if (parentAgent_ != nullptr) {
+        if (auto *liveReg = parentAgent_->getToolRegistry()) {
+            effectiveRegistry = liveReg;
+        }
+        effectiveConfig = parentAgent_->getConfig();
+    }
+
+    if (llmService_ == nullptr || effectiveRegistry == nullptr) {
         return QStringLiteral(
             R"({"status":"error","error":"LLM service or tool registry not configured"})");
     }
 
     /* Build child config: clone parent (carries remote-mode fields,
      * project path, hooks) then apply definition overrides. */
-    QSocAgentConfig childCfg      = parentConfig_;
+    QSocAgentConfig childCfg      = effectiveConfig;
     childCfg.systemPromptOverride = def->promptBody;
     childCfg.toolsAllow           = def->toolsAllow;
     childCfg.isSubAgent           = true;
@@ -153,7 +168,7 @@ QString QSocToolAgent::execute(const json &arguments)
         childCfg.modelId = def->model;
     }
 
-    auto *child = new QSocAgent(nullptr, llmService_, parentRegistry_, childCfg);
+    auto *child = new QSocAgent(nullptr, llmService_, effectiveRegistry, childCfg);
     if (memoryManager_ != nullptr && def->injectMemory) {
         child->setMemoryManager(memoryManager_);
     }

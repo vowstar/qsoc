@@ -1098,6 +1098,13 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     agentTool->setMemoryManager(memoryManager);
     agentTool->setHookManager(hookManager);
     agentTool->setLoopScheduler(loopScheduler);
+    /* Bind to the live parent agent so the spawn tool re-resolves the
+     * registry + config from it on every execute(). This is what keeps
+     * sub-agents correct across `/remote` -> `/local` toggles: the
+     * parent's tool registry is swapped to a SSH-backed one in remote
+     * mode, and we want children to inherit that swap, not the local
+     * snapshot we captured at construction. */
+    agentTool->setParentAgent(agent);
     toolRegistry->registerTool(agentTool);
 
     /* Connect verbose output signal */
@@ -1158,6 +1165,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             return showError(1, sshErr);
         }
         buildAgentRemoteRegistry(this, &cliRemoteState, socConfig);
+        /* Re-register the spawn tool into the remote registry so the
+         * parent LLM still sees `agent` after the remote swap. The
+         * spawn tool itself is registry-agnostic; its child resolves
+         * tools through whichever registry the parent currently uses
+         * (see QSocToolAgent::setParentAgent). */
+        cliRemoteState.registry->registerTool(agentTool);
 
         preLocalRegistry = agent->getToolRegistry();
         agent->setToolRegistry(cliRemoteState.registry);
@@ -4551,6 +4564,12 @@ bool QSocCliWorker::runAgentLoop(
             remoteRegistry = newState.registry;
             remotePath     = newState.path;
 
+            /* Carry the spawn tool across the swap so the parent LLM
+             * keeps seeing `agent`; the child resolves its registry
+             * dynamically via the parent agent. */
+            if (auto *spawnTool = localRegistry->getTool(QStringLiteral("agent"))) {
+                remoteRegistry->registerTool(spawnTool);
+            }
             agent->setToolRegistry(remoteRegistry);
 
             {
