@@ -651,6 +651,11 @@ void QSocAgent::setHookManager(QSocHookManager *manager)
     hookManager = manager;
 }
 
+void QSocAgent::setLoopScheduler(QSocLoopScheduler *scheduler)
+{
+    loopScheduler = scheduler;
+}
+
 namespace {
 
 nlohmann::json buildRemoteSection(const QSocAgentConfig &cfg)
@@ -836,6 +841,21 @@ QString QSocAgent::buildSystemPromptWithMemory() const
         "- High-level status updates at natural milestones\n"
         "- Errors or blockers that change the plan\n"
         "Skip filler words, preamble, and unnecessary transitions.\n");
+
+    /* Section 7.5: Scheduled prompts */
+    prompt += QStringLiteral(
+        "\n# Scheduled prompts\n"
+        "Use schedule_create proactively when the user asks to monitor, poll, retry, "
+        "remind, \"check back later\", or \"every N minutes/hours/days\".\n"
+        "Do NOT use it for ordinary one-off immediate work.\n"
+        "Time format is a 5-field cron string in local time.\n"
+        "- Recurring: cron like \"*/5 * * * *\" with recurring=true.\n"
+        "- One-shot: pin minute+hour+dom+month, e.g. \"30 14 27 2 *\" with recurring=false.\n"
+        "Default durable=false (session-only). Set durable=true only when the user says "
+        "\"permanently\", \"every day from now on\", or similar.\n"
+        "Preserve /commands and !commands verbatim in prompt.\n"
+        "After scheduling, tell the user the id, schedule, durability, and how to cancel "
+        "(schedule_delete id=<id>).\n");
 
     /* ── Dynamic sections ────────────────────────────────────────────── */
 

@@ -10,6 +10,7 @@
 #include "common/qllmservice.h"
 
 class QSocHookManager;
+class QSocLoopScheduler;
 
 #include <atomic>
 #include <nlohmann/json.hpp>
@@ -182,6 +183,21 @@ public:
     void setHookManager(QSocHookManager *manager);
 
     /**
+     * @brief Set the loop scheduler shared by `/loop` and `schedule_*` tools.
+     * @details The CLI agent owns the QSocLoopScheduler instance for the
+     *          life of the REPL; passing it here lets schedule tools
+     *          registered on this agent reach the same in-memory job list
+     *          as the REPL's `/loop` slash dispatch.
+     */
+    void setLoopScheduler(QSocLoopScheduler *scheduler);
+
+    /**
+     * @brief Get the current loop scheduler.
+     * @return Pointer (may be nullptr in non-CLI agents).
+     */
+    QSocLoopScheduler *getLoopScheduler() const { return loopScheduler; }
+
+    /**
      * @brief Set the agent configuration
      * @param config Agent configuration
      */
@@ -335,6 +351,7 @@ private:
     QSocToolRegistry  *toolRegistry  = nullptr;
     QSocMemoryManager *memoryManager = nullptr;
     QSocHookManager   *hookManager   = nullptr;
+    QSocLoopScheduler *loopScheduler = nullptr;
     QSocAgentConfig    agentConfig;
     json               messages;
 
