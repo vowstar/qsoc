@@ -4,6 +4,9 @@
 #include "agent/qsocagentdefinition.h"
 #include "agent/qsocagentdefinitionregistry.h"
 
+#include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
 
@@ -159,6 +162,188 @@ private slots:
         const QString text = reg.describeAvailable();
         QVERIFY(text.contains(QStringLiteral("- general-purpose: ")));
         QVERIFY(!text.endsWith(QLatin1Char('\n')));
+    }
+
+    /* === scanFromDisk: markdown loading =================================== */
+
+    static QString writeFile(QTemporaryDir &dir, const QString &name, const QByteArray &content)
+    {
+        const QString path = dir.filePath(name);
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        QFile out(path);
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            return {};
+        }
+        out.write(content);
+        out.close();
+        return path;
+    }
+
+    void testScanFromDiskParsesUserMarkdown()
+    {
+        QTemporaryDir userDir;
+        QVERIFY(userDir.isValid());
+        writeFile(
+            userDir,
+            "rtl-explorer.md",
+            "---\n"
+            "name: rtl-explorer\n"
+            "description: Investigate RTL modules and report a structured map.\n"
+            "tools: read_file, list_files, path_context\n"
+            "model: \n"
+            "inject_memory: false\n"
+            "inject_skills: true\n"
+            "---\n"
+            "You are an RTL explorer.\n"
+            "\n"
+            "Stay read-only.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("rtl-explorer"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->scope, QStringLiteral("user"));
+        QCOMPARE(
+            def->description,
+            QStringLiteral("Investigate RTL modules and report a structured map."));
+        QCOMPARE(def->toolsAllow.size(), 3);
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("read_file")));
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("path_context")));
+        QVERIFY(!def->injectMemory);
+        QVERIFY(def->injectSkills);
+        QVERIFY(def->injectProjectMd); /* default true */
+        QVERIFY(def->promptBody.contains(QStringLiteral("RTL explorer")));
+        QVERIFY(def->parseError.isEmpty());
+    }
+
+    void testScanFromDiskAcceptsYamlListTools()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "blocky.md",
+            "---\n"
+            "name: blocky\n"
+            "description: Test list-form tools field.\n"
+            "tools:\n"
+            "  - read_file\n"
+            "  - list_files\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("blocky"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->toolsAllow.size(), 2);
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("read_file")));
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("list_files")));
+    }
+
+    void testScanFromDiskProjectShadowsUserShadowsBuiltin()
+    {
+        QTemporaryDir userDir;
+        QTemporaryDir projDir;
+        writeFile(
+            userDir,
+            "general-purpose.md",
+            "---\n"
+            "name: general-purpose\n"
+            "description: USER override.\n"
+            "---\n"
+            "user body\n");
+        writeFile(
+            projDir,
+            "general-purpose.md",
+            "---\n"
+            "name: general-purpose\n"
+            "description: PROJECT override.\n"
+            "---\n"
+            "project body\n");
+
+        QSocAgentDefinitionRegistry reg;
+        reg.registerBuiltins();
+        reg.scanFromDisk(userDir.path(), projDir.path());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("general-purpose"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->scope, QStringLiteral("project"));
+        QCOMPARE(def->description, QStringLiteral("PROJECT override."));
+    }
+
+    void testScanFromDiskCapturesParseErrors()
+    {
+        QTemporaryDir userDir;
+        writeFile(userDir, "no-frontmatter.md", "Just plain content, no leading dashes.\n");
+        writeFile(
+            userDir,
+            "no-name.md",
+            "---\n"
+            "description: missing name field.\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+
+        const auto broken = reg.brokenDefinitions();
+        QVERIFY(broken.size() >= 1);
+        bool sawNoFrontmatter = false;
+        for (const QSocAgentDefinition &def : broken) {
+            if (def.sourcePath.endsWith(QStringLiteral("no-frontmatter.md"))) {
+                QVERIFY(def.parseError.contains(QStringLiteral("frontmatter")));
+                sawNoFrontmatter = true;
+            }
+        }
+        QVERIFY(sawNoFrontmatter);
+    }
+
+    void testScanFromDiskNameDefaultsToFileStem()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "stem-default.md",
+            "---\n"
+            "description: Has no name field; default to file stem.\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        QVERIFY(reg.find(QStringLiteral("stem-default")) != nullptr);
+    }
+
+    void testScanFromDiskMissingDirsAreSilent()
+    {
+        QSocAgentDefinitionRegistry reg;
+        reg.registerBuiltins();
+        const int before = reg.count();
+        /* Both paths point at non-existent locations. */
+        reg.scanFromDisk(
+            QStringLiteral("/nonexistent/qsoc/agents"),
+            QStringLiteral("/also/nonexistent/.qsoc/agents"));
+        QCOMPARE(reg.count(), before);
+        QVERIFY(reg.brokenDefinitions().isEmpty());
+    }
+
+    void testScanFromDiskInjectFlagsDefaultsAndOverrides()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "all-flags.md",
+            "---\n"
+            "name: all-flags\n"
+            "description: flags test.\n"
+            "inject_memory: yes\n"
+            "inject_skills: TRUE\n"
+            "inject_project_md: false\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("all-flags"));
+        QVERIFY(def != nullptr);
+        QVERIFY(def->injectMemory);
+        QVERIFY(def->injectSkills);
+        QVERIFY(!def->injectProjectMd);
     }
 };
 
