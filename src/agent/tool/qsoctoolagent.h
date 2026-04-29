@@ -66,6 +66,13 @@ public:
      */
     void setParentAgent(QSocAgent *agent) { parentAgent_ = agent; }
 
+    /**
+     * @brief Accessor for the underlying definition registry. Used by
+     *        the /agents slash command to enumerate definitions
+     *        without plumbing a separate pointer through the REPL.
+     */
+    QSocAgentDefinitionRegistry *definitionRegistry() const { return defRegistry_; }
+
 private:
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;
