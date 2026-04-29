@@ -3,8 +3,11 @@
 
 #include "qsocloopscheduler.h"
 
+#include "common/qsoccron.h"
+
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -14,21 +17,13 @@
 #include <QLockFile>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QUuid>
 
 namespace {
 
-constexpr qint64 kTickMs   = 1000;
-constexpr qint64 kSecondMs = 1000;
-constexpr qint64 kMinMs    = qint64{60} * kSecondMs;
-constexpr qint64 kHourMs   = qint64{60} * kMinMs;
-constexpr qint64 kDayMs    = qint64{24} * kHourMs;
-/* QLockFile staleness: 0 means "dead owner pid is the only staleness
- * signal". A live REPL owner is never reclaimed regardless of how many
- * hours it holds the lock; a crashed owner is reclaimed on the very
- * next probe with no grace period. Qt explicitly recommends 0 for
- * locks meant to live as long as the application itself. */
-constexpr int kLockStaleMs   = 0;
-constexpr int kSchemaVersion = 1;
+constexpr qint64 kTickMs        = 1000;
+constexpr int    kLockStaleMs   = 0;
+constexpr int    kSchemaVersion = 2;
 
 QString unitWordToSuffix(const QString &word)
 {
@@ -44,6 +39,14 @@ QString unitWordToSuffix(const QString &word)
     return QString();
 }
 
+QString intervalErrorMessage(const QString &token)
+{
+    return QStringLiteral(
+               "interval '%1' does not cleanly divide its unit; "
+               "use a clean step like 5m, 10m, 15m, 30m, 1h, 2h, 1d")
+        .arg(token);
+}
+
 } /* namespace */
 
 QSocLoopScheduler::QSocLoopScheduler(QObject *parent)
@@ -56,10 +59,6 @@ QSocLoopScheduler::QSocLoopScheduler(QObject *parent)
 
 QSocLoopScheduler::~QSocLoopScheduler()
 {
-    /* releaseLock() is a no-op when there is no lockFile_, so the gate
-     * doesn't need to know about owner/project state. Mirroring this
-     * pattern in setProjectDir() and the dtor avoids the V2 bug where
-     * a non-owner skipped releaseLock() and leaked the QLockFile. */
     releaseLock();
 }
 
@@ -82,16 +81,13 @@ void QSocLoopScheduler::setProjectDir(const QString &dir)
 {
     if (dir == projectDir_)
         return;
-    /* Always drop any lockFile_ left over from the previous project.
-     * Earlier this only ran when we were the owner, which left non-owner
-     * sessions holding a QLockFile pointed at the old path; subsequent
-     * tryAcquireLock() would be a no-op (lockFile_ already non-null) and
-     * the new project would silently share the stale lock object. */
     releaseLock();
     projectDir_ = dir;
+    /* Drop both durable and session-only tasks on rebind. Session-only
+     * tasks were created against the previous project's REPL context;
+     * carrying them over silently would surprise the user. */
     jobs_.clear();
-    nameCounter_ = 0;
-    isOwner_     = projectDir_.isEmpty();
+    isOwner_ = projectDir_.isEmpty();
     if (projectDir_.isEmpty())
         return;
     QDir(projectDir_).mkpath(QStringLiteral(".qsoc"));
@@ -110,46 +106,33 @@ void QSocLoopScheduler::loadFromDisk()
     const auto      doc = QJsonDocument::fromJson(bytes, &parse);
     if (parse.error != QJsonParseError::NoError || !doc.isObject())
         return;
+    const QJsonObject root   = doc.object();
+    const int         schema = root.value(QStringLiteral("schema")).toInt(0);
+    if (schema != kSchemaVersion) {
+        qDebug().noquote() << QStringLiteral(
+                                  "[loop] dropping legacy schema-%1 loops.json (no released "
+                                  "users; new schema is %2)")
+                                  .arg(schema)
+                                  .arg(kSchemaVersion);
+        return;
+    }
 
-    const QJsonArray arr = doc.object().value(QStringLiteral("tasks")).toArray();
+    const QJsonArray arr = root.value(QStringLiteral("tasks")).toArray();
     for (const auto &val : arr) {
         const auto obj = val.toObject();
         Job        job;
-        job.name        = obj.value(QStringLiteral("id")).toString();
+        job.id          = obj.value(QStringLiteral("id")).toString();
         job.prompt      = obj.value(QStringLiteral("prompt")).toString();
-        job.intervalMs  = obj.value(QStringLiteral("intervalMs")).toVariant().toLongLong();
+        job.cron        = obj.value(QStringLiteral("cron")).toString();
+        job.recurring   = obj.value(QStringLiteral("recurring")).toBool(false);
+        job.durable     = true; /* Anything on disk is durable by definition. */
         job.createdAt   = obj.value(QStringLiteral("createdAt")).toVariant().toLongLong();
         job.lastFiredAt = obj.value(QStringLiteral("lastFiredAt")).toVariant().toLongLong();
-        /* recurring/enabled default to true so old loops.json files
-         * (written before these fields existed) still load as before. */
-        job.recurring = obj.value(QStringLiteral("recurring")).toBool(true);
-        job.enabled   = obj.value(QStringLiteral("enabled")).toBool(true);
-        if (job.name.isEmpty() || job.intervalMs <= 0 || job.prompt.isEmpty())
+        if (job.id.isEmpty() || job.prompt.isEmpty() || !QSocCron::isValid(job.cron)) {
+            qDebug().noquote() << QStringLiteral("[loop] skipping malformed task entry");
             continue;
-        /* Anchor next fire from lastFiredAt when present so a recurring
-         * task that fired 30s before shutdown still waits the remaining
-         * 30s after restart, not the full interval. If qsoc was down for
-         * longer than the interval, advance nextFireAt past `now` in
-         * whole intervals so the loop resumes on cadence without
-         * back-firing every missed slot at startup (the plan calls for
-         * no catch-up on restart). */
-        const qint64 anchor = job.lastFiredAt > 0 ? job.lastFiredAt : job.createdAt;
-        const qint64 now    = QDateTime::currentMSecsSinceEpoch();
-        qint64       next   = anchor + job.intervalMs;
-        if (next <= now && job.intervalMs > 0) {
-            const qint64 missed = ((now - anchor) / job.intervalMs) + 1;
-            next                = anchor + (missed * job.intervalMs);
         }
-        job.nextFireAt = next;
         jobs_.append(job);
-        /* Bump the seq counter past any persisted L<n> id so new ids
-         * never collide. */
-        if (job.name.startsWith(QLatin1Char('L'))) {
-            bool       ok  = false;
-            const auto num = job.name.mid(1).toInt(&ok);
-            if (ok && num > nameCounter_)
-                nameCounter_ = num;
-        }
     }
 }
 
@@ -159,14 +142,15 @@ bool QSocLoopScheduler::persist()
         return true;
     QJsonArray arr;
     for (const auto &job : jobs_) {
+        if (!job.durable)
+            continue; /* session-only tasks never touch disk */
         QJsonObject obj;
-        obj[QStringLiteral("id")]          = job.name;
+        obj[QStringLiteral("id")]          = job.id;
         obj[QStringLiteral("prompt")]      = job.prompt;
-        obj[QStringLiteral("intervalMs")]  = QString::number(job.intervalMs);
+        obj[QStringLiteral("cron")]        = job.cron;
+        obj[QStringLiteral("recurring")]   = job.recurring;
         obj[QStringLiteral("createdAt")]   = QString::number(job.createdAt);
         obj[QStringLiteral("lastFiredAt")] = QString::number(job.lastFiredAt);
-        obj[QStringLiteral("recurring")]   = job.recurring;
-        obj[QStringLiteral("enabled")]     = job.enabled;
         arr.append(obj);
     }
     QJsonObject root;
@@ -182,9 +166,6 @@ bool QSocLoopScheduler::persist()
     }
     if (!file.commit())
         return false;
-    /* Any successful write clears the tick-path failure latch, so a
-     * user-triggered /loop add succeeding after the disk recovered also
-     * silences the periodic-fire warning at next tick. */
     persistDegraded_ = false;
     return true;
 }
@@ -193,21 +174,12 @@ bool QSocLoopScheduler::tryAcquireLock()
 {
     if (projectDir_.isEmpty())
         return true;
-    /* Lazy-construct so a single instance reuses the same QLockFile
-     * across reacquire-after-loss cycles. QLockFile owns the OS-level
-     * atomicity (O_EXCL on Unix, similar on Windows); we don't need to
-     * read-decide-write the lock file ourselves. */
     if (!lockFile_) {
         lockFile_ = std::make_unique<QLockFile>(lockPath());
         lockFile_->setStaleLockTime(kLockStaleMs);
     }
     if (lockFile_->isLocked())
         return true;
-    /* tryLock(0) is non-blocking. With staleLockTime(0) a live owner is
-     * never reclaimed solely because the lock file is old; a losing
-     * instance gets false here and the tick() loop probes again on the
-     * next iteration. Takeover only happens when QLockFile sees the
-     * previous owner's pid is gone, or when the owner unlocks normally. */
     return lockFile_->tryLock(0);
 }
 
@@ -219,34 +191,6 @@ void QSocLoopScheduler::releaseLock()
     lockFile_.reset();
 }
 
-qint64 QSocLoopScheduler::parseInterval(const QString &token)
-{
-    static const QRegularExpression re(QStringLiteral("^(\\d+)([smhd])$"));
-    const auto                      m = re.match(token.trimmed().toLower());
-    if (!m.hasMatch())
-        return 0;
-    bool       ok = false;
-    const auto n  = m.captured(1).toLongLong(&ok);
-    if (!ok || n <= 0)
-        return 0;
-    const QString unit = m.captured(2);
-    if (unit == "s") {
-        /* Plan rule: round up to whole minutes, minimum 1 minute. The
-         * scheduler tick is 1s but the cadence we expose to users is
-         * minute-aligned because anything finer is rarely meaningful and
-         * easy to abuse. */
-        const qint64 minutes = (n + 59) / 60;
-        return (minutes < 1 ? 1 : minutes) * kMinMs;
-    }
-    if (unit == "m")
-        return n * kMinMs;
-    if (unit == "h")
-        return n * kHourMs;
-    if (unit == "d")
-        return n * kDayMs;
-    return 0;
-}
-
 bool QSocLoopScheduler::scheduledInputRequiresCliDispatch(const QString &input)
 {
     const QString trimmed = input.trimmed();
@@ -256,131 +200,146 @@ bool QSocLoopScheduler::scheduledInputRequiresCliDispatch(const QString &input)
     return first == QLatin1Char('/') || first == QLatin1Char('!');
 }
 
-QString QSocLoopScheduler::formatInterval(qint64 intervalMs)
-{
-    if (intervalMs <= 0)
-        return QStringLiteral("?");
-    if (intervalMs % kDayMs == 0)
-        return QStringLiteral("%1d").arg(intervalMs / kDayMs);
-    if (intervalMs % kHourMs == 0)
-        return QStringLiteral("%1h").arg(intervalMs / kHourMs);
-    if (intervalMs % kMinMs == 0)
-        return QStringLiteral("%1m").arg(intervalMs / kMinMs);
-    return QStringLiteral("%1s").arg(intervalMs / kSecondMs);
-}
-
 void QSocLoopScheduler::parseLoopArgs(
-    const QString &args, qint64 defaultMs, qint64 &outIntervalMs, QString &outPrompt)
+    const QString &args,
+    const QString &defaultCron,
+    QString       &outCron,
+    QString       &outPrompt,
+    QString       &outErrorIfAny)
 {
     const QString trimmed = args.trimmed();
-    outIntervalMs         = 0;
+    outCron.clear();
     outPrompt.clear();
+    outErrorIfAny.clear();
 
     if (trimmed.isEmpty()) {
-        outIntervalMs = defaultMs;
+        outCron = defaultCron;
         return;
     }
 
     /* Rule 1: leading token is an interval (e.g. "5m foo"). */
-    const auto firstSpace = trimmed.indexOf(QRegularExpression("\\s"));
+    static const QRegularExpression reIntervalLead(QStringLiteral("^(\\d+[smhd])(?:\\s+(.*))?$"));
     {
-        const QString head = firstSpace < 0 ? trimmed : trimmed.left(firstSpace);
-        const qint64  ms   = parseInterval(head);
-        if (ms > 0) {
-            outIntervalMs = ms;
-            outPrompt     = firstSpace < 0 ? QString() : trimmed.mid(firstSpace + 1).trimmed();
+        const auto m = reIntervalLead.match(trimmed);
+        if (m.hasMatch()) {
+            const QString token = m.captured(1);
+            const QString cron  = QSocCron::intervalToCron(token);
+            if (cron.isEmpty()) {
+                outErrorIfAny = intervalErrorMessage(token);
+                return;
+            }
+            outCron   = cron;
+            outPrompt = m.captured(2).trimmed();
             return;
         }
     }
 
-    /* Rule 2: trailing "every Nx" or "every N <unit-word>". The
-     * unit-word form lets users write "every 5 minutes". */
+    /* Rule 2: trailing "every Nx" or "every N <unit-word>". */
     static const QRegularExpression reEvery1(QStringLiteral("(?i)\\s+every\\s+(\\d+)([smhd])\\s*$"));
     static const QRegularExpression reEvery2(QStringLiteral(
-        "(?i)\\s+every\\s+(\\d+)\\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?"
-        "|s|m|h|d)\\s*$"));
-    auto                            m1 = reEvery1.match(trimmed);
-    if (m1.hasMatch()) {
-        const qint64 ms = parseInterval(m1.captured(1) + m1.captured(2));
-        if (ms > 0) {
-            outIntervalMs = ms;
-            outPrompt     = trimmed.left(m1.capturedStart()).trimmed();
+        "(?i)\\s+every\\s+(\\d+)\\s+(seconds?|secs?|minutes?|mins?|"
+        "hours?|hrs?|days?|s|m|h|d)\\s*$"));
+    {
+        const auto m1 = reEvery1.match(trimmed);
+        if (m1.hasMatch()) {
+            const QString token = m1.captured(1) + m1.captured(2);
+            const QString cron  = QSocCron::intervalToCron(token);
+            if (cron.isEmpty()) {
+                outErrorIfAny = intervalErrorMessage(token);
+                return;
+            }
+            outCron   = cron;
+            outPrompt = trimmed.left(m1.capturedStart(0)).trimmed();
             return;
         }
-    }
-    auto m2 = reEvery2.match(trimmed);
-    if (m2.hasMatch()) {
-        const QString suffix = unitWordToSuffix(m2.captured(2));
-        if (!suffix.isEmpty()) {
-            const qint64 ms = parseInterval(m2.captured(1) + suffix);
-            if (ms > 0) {
-                outIntervalMs = ms;
-                outPrompt     = trimmed.left(m2.capturedStart()).trimmed();
+        const auto m2 = reEvery2.match(trimmed);
+        if (m2.hasMatch()) {
+            const QString suffix = unitWordToSuffix(m2.captured(2));
+            if (!suffix.isEmpty()) {
+                const QString token = m2.captured(1) + suffix;
+                const QString cron  = QSocCron::intervalToCron(token);
+                if (cron.isEmpty()) {
+                    outErrorIfAny = intervalErrorMessage(token);
+                    return;
+                }
+                outCron   = cron;
+                outPrompt = trimmed.left(m2.capturedStart(0)).trimmed();
                 return;
             }
         }
     }
 
     /* Rule 3: default. */
-    outIntervalMs = defaultMs;
-    outPrompt     = trimmed;
+    outCron   = defaultCron;
+    outPrompt = trimmed;
 }
 
-QString QSocLoopScheduler::allocateName()
+QString QSocLoopScheduler::allocateId()
 {
-    /* Short numeric ids are easier to type into /loop stop than UUIDs. */
-    return QStringLiteral("L%1").arg(++nameCounter_);
+    /* 8 hex chars from a v4 UUID: stable across restarts, uniformly
+     * distributed, and short enough to type into /loop stop. */
+    return QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
 }
 
-QString QSocLoopScheduler::addJob(const QString &prompt, qint64 intervalMs)
+QString QSocLoopScheduler::addJob(
+    const QString &cron, const QString &prompt, bool recurring, bool durable)
 {
-    /* In durable mode, the on-disk loops.json is the source of truth.
-     * A non-owner that mutates would either lose the write (the owner
-     * never reloads) or stomp the owner's view at next refresh; both
-     * leave the user with a UI that disagrees with reality. Refuse here
-     * and let the slash dispatch surface the reason. */
-    if (!projectDir_.isEmpty() && !isOwner_)
+    if (prompt.trimmed().isEmpty())
         return QString();
+    if (!QSocCron::isValid(cron))
+        return QString();
+    if (jobs_.size() >= kMaxJobs)
+        return QString();
+    /* Non-owner cannot mutate durable on-disk state; session-only is fine
+     * because non-owners run their own in-memory list and never persist. */
+    if (durable && !projectDir_.isEmpty() && !isOwner_)
+        return QString();
+
     Job job;
-    job.name        = allocateName();
+    job.id          = allocateId();
     job.prompt      = prompt;
-    job.intervalMs  = intervalMs;
+    job.cron        = cron;
+    job.recurring   = recurring;
+    job.durable     = durable;
     job.createdAt   = QDateTime::currentMSecsSinceEpoch();
     job.lastFiredAt = 0;
-    job.nextFireAt  = job.createdAt + intervalMs;
     jobs_.append(job);
-    /* Roll the in-memory append back if the disk write failed; otherwise
-     * the user would see the job in /loop list this session but lose it
-     * after restart, and a non-owner would never see it. */
-    if (!persist()) {
+    if (durable && !persist()) {
         jobs_.removeLast();
-        --nameCounter_;
         return QString();
     }
-    return job.name;
+    return job.id;
 }
 
-bool QSocLoopScheduler::removeJob(const QString &name)
+bool QSocLoopScheduler::removeJob(const QString &id)
 {
-    if (!projectDir_.isEmpty() && !isOwner_)
-        return false;
     for (int i = 0; i < jobs_.size(); ++i) {
-        if (jobs_[i].name == name) {
-            const Job stash = jobs_[i];
-            jobs_.removeAt(i);
-            if (!persist()) {
-                jobs_.insert(i, stash);
-                return false;
-            }
-            return true;
+        if (jobs_[i].id != id)
+            continue;
+        const Job stash = jobs_[i];
+        if (stash.durable && !projectDir_.isEmpty() && !isOwner_)
+            return false;
+        jobs_.removeAt(i);
+        if (stash.durable && !persist()) {
+            jobs_.insert(i, stash);
+            return false;
         }
+        return true;
     }
     return false;
 }
 
 bool QSocLoopScheduler::clearJobs()
 {
-    if (!projectDir_.isEmpty() && !isOwner_)
+    /* If any durable task exists in durable mode, only the owner can clear. */
+    bool anyDurable = false;
+    for (const auto &job : jobs_) {
+        if (job.durable) {
+            anyDurable = true;
+            break;
+        }
+    }
+    if (anyDurable && !projectDir_.isEmpty() && !isOwner_)
         return false;
     QList<Job> stash = jobs_;
     jobs_.clear();
@@ -393,16 +352,19 @@ bool QSocLoopScheduler::clearJobs()
 
 QList<QSocLoopScheduler::Job> QSocLoopScheduler::listJobs()
 {
-    /* In durable mode the owner's in-memory copy is authoritative; its
-     * tick() rewrote nextFireAt mid-tick and the file may be a few ms
-     * behind. A non-owner is a passive observer: reread loops.json on
-     * every call. An mtime gate would skip same-second updates because
-     * mtime resolution is 1s on most filesystems, and /loop list is a
-     * user-driven command on a small file, not a hot path. */
     if (!projectDir_.isEmpty() && !isOwner_) {
+        /* Re-read durable tasks from disk; preserve session-only ones
+         * (which only exist in our memory) by stashing them across the
+         * reload. */
+        QList<Job> sessionOnly;
+        for (const auto &job : jobs_) {
+            if (!job.durable)
+                sessionOnly.append(job);
+        }
         jobs_.clear();
-        nameCounter_ = 0;
         loadFromDisk();
+        for (const auto &job : sessionOnly)
+            jobs_.append(job);
     }
     return jobs_;
 }
@@ -411,50 +373,62 @@ void QSocLoopScheduler::tick()
 {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
 
-    /* When bound to a project dir: only the QLockFile owner fires.
-     * Non-owners silently re-probe each tick so a crashed owner is
-     * taken over without a restart. QLockFile holds the lock for the
-     * process lifetime, so no periodic refresh is needed. */
-    if (!projectDir_.isEmpty()) {
-        if (!isOwner_) {
-            if (tryAcquireLock()) {
-                isOwner_ = true;
-                /* Re-load tasks: while we were a non-owner the previous
-                 * owner may have added or removed jobs in the file. */
-                jobs_.clear();
-                nameCounter_ = 0;
-                loadFromDisk();
-            } else {
-                return;
+    /* When bound to a project dir: only the QLockFile owner fires durable
+     * tasks. Non-owners silently re-probe each tick so a crashed owner is
+     * taken over without a restart. Session-only tasks always fire (they
+     * are private to this process). */
+    if (!projectDir_.isEmpty() && !isOwner_) {
+        if (tryAcquireLock()) {
+            isOwner_ = true;
+            QList<Job> sessionOnly;
+            for (const auto &job : jobs_) {
+                if (!job.durable)
+                    sessionOnly.append(job);
             }
+            jobs_.clear();
+            loadFromDisk();
+            for (const auto &job : sessionOnly)
+                jobs_.append(job);
         }
+        /* Even if we just took over, fall through to evaluate this tick. */
     }
 
     if (jobs_.isEmpty())
         return;
 
-    /* Snapshot ids up front: emit() may re-enter (e.g. fire path calls back
-     * into addJob/removeJob via /loop dispatch). Always reschedule before
-     * emit so a re-entrant tick cannot double-fire. */
+    /* Snapshot due payloads up front: emit may re-enter (e.g. via
+     * /loop dispatch). One-shot tasks must be erased from jobs_ BEFORE
+     * emit so a re-entrant tick cannot fire them again with lastFiredAt
+     * advanced; recurring tasks update lastFiredAt to anchor next match. */
     QList<QPair<QString, QString>> due;
-    bool                           anyFired = false;
+    QList<QString>                 oneShotsToErase;
+    bool                           anyMutation = false;
     for (auto &job : jobs_) {
-        if (!job.enabled || now < job.nextFireAt)
+        const qint64 anchor = job.lastFiredAt > 0 ? job.lastFiredAt : job.createdAt;
+        const qint64 next   = QSocCron::nextRunMs(job.cron, anchor);
+        if (next == 0 || now < next)
             continue;
-        job.lastFiredAt = now;
-        job.nextFireAt  = now + job.intervalMs;
-        anyFired        = true;
-        due.append(qMakePair(job.prompt, job.name));
+        due.append(qMakePair(job.prompt, job.id));
+        if (job.recurring) {
+            job.lastFiredAt = now;
+            anyMutation     = true;
+        } else {
+            oneShotsToErase.append(job.id);
+        }
     }
-    if (anyFired && !persist() && !persistDegraded_) {
-        /* Latch on first failure so REPL gets one warning per outage,
-         * not one per tick. persist() clears the latch on next success. */
+    for (const QString &eraseId : oneShotsToErase) {
+        for (int i = 0; i < jobs_.size(); ++i) {
+            if (jobs_[i].id == eraseId) {
+                jobs_.removeAt(i);
+                anyMutation = true;
+                break;
+            }
+        }
+    }
+    if (anyMutation && !persist() && !persistDegraded_) {
         persistDegraded_ = true;
         emit persistFailed(tasksPath());
     }
-    /* Emit promptDue regardless of persist outcome: silently halting a
-     * recurring loop because the disk hiccupped is worse than the disk
-     * drift, which load-time missed-task logic absorbs at restart. */
     for (const auto &pair : due)
         emit promptDue(pair.first, pair.second);
 }

@@ -29,6 +29,7 @@
 #include "agent/tool/qsoctoolmodule.h"
 #include "agent/tool/qsoctoolpath.h"
 #include "agent/tool/qsoctoolproject.h"
+#include "agent/tool/qsoctoolschedule.h"
 #include "agent/tool/qsoctoolshell.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctooltodo.h"
@@ -43,6 +44,7 @@
 #include "common/qlspservice.h"
 #include "common/qlspslangbackend.h"
 #include "common/qsocconsole.h"
+#include "common/qsoccron.h"
 #include "common/qsoclinediff.h"
 #include "common/qsocpaths.h"
 #include "common/qsocproxy.h"
@@ -245,6 +247,50 @@ bool handleModelCommand(
         }
     }
     return true;
+}
+
+/**
+ * @brief Source of a scheduled prompt for {@link dispatchScheduledPrompt}.
+ * @details Both sources route through the same logic today; the enum is
+ *          present so a future fire-time policy (e.g. drop tick fires
+ *          while agent is mid-tool, but always honor /loop create) has a
+ *          single switch site.
+ */
+enum class ScheduledDispatchSource {
+    TickFire,        /* Scheduler tick reached fire time. */
+    ImmediateRunNow, /* /loop create or schedule_create with run-now. */
+};
+
+/**
+ * @brief Route a scheduled prompt to either CLI dispatch or the agent queue.
+ * @details Slash commands and `!`-shell escapes MUST go through the CLI
+ *          dispatch path so /compact, /status, !make, etc keep their
+ *          built-in semantics. Free-form prompts can ride the agent's
+ *          in-turn queue when running. When idle, both paths land in
+ *          pendingAutoInputs and wake the prompt loop.
+ *
+ *          Centralized so the slash dispatch site, the scheduler fire
+ *          callback, and any future reentry path agree on routing.
+ */
+void dispatchScheduledPrompt(
+    const QString          &prompt,
+    const QString          &jobId,
+    ScheduledDispatchSource source,
+    QStringList            &pendingAutoInputs,
+    QEventLoop             *idlePromptLoop,
+    QSocAgent              *agent)
+{
+    Q_UNUSED(jobId);
+    Q_UNUSED(source);
+    if (agent != nullptr && agent->isRunning()
+        && !QSocLoopScheduler::scheduledInputRequiresCliDispatch(prompt)) {
+        agent->queueRequest(prompt);
+        return;
+    }
+    pendingAutoInputs.append(prompt);
+    if (idlePromptLoop != nullptr) {
+        idlePromptLoop->quit();
+    }
 }
 
 /**
@@ -841,6 +887,13 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         }
     }
 
+    /* Loop scheduler shared by `/loop` REPL dispatch and the schedule_*
+     * tools. Owned by QSocCliWorker so its lifetime spans the whole agent
+     * session (parseAgent + runAgentLoop). The QSocLoopScheduler ctor
+     * starts a 1s tick timer; any tools built below can borrow the
+     * pointer, and the agent sees it via setLoopScheduler() further down. */
+    auto *loopScheduler = new QSocLoopScheduler(this);
+
     /* Create tool registry and register tools */
     auto *toolRegistry = new QSocToolRegistry(this);
 
@@ -933,6 +986,13 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         toolRegistry->registerTool(webSearchTool);
     }
 
+    /* Schedule tools — share the same QSocLoopScheduler instance the REPL
+     * uses for `/loop`, so model-created tasks and slash-created loops
+     * land in the same in-memory list and the same loops.json. */
+    toolRegistry->registerTool(new QSocToolScheduleCreate(this, loopScheduler));
+    toolRegistry->registerTool(new QSocToolScheduleList(this, loopScheduler));
+    toolRegistry->registerTool(new QSocToolScheduleDelete(this, loopScheduler));
+
     /* LSP service setup. Built-in slang backend goes first as fallback;
        external servers from qsoc.yml override it for matching extensions. */
     auto *lspService = QLspService::instance();
@@ -999,6 +1059,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     /* Create agent */
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);
     agent->setMemoryManager(memoryManager);
+    agent->setLoopScheduler(loopScheduler);
 
     /* Hook manager: parses agent.hooks from the merged config layers,
      * dispatches lifecycle events to user-defined commands. Always
@@ -2400,15 +2461,12 @@ bool QSocCliWorker::runAgentLoop(
         compositor.render();
     });
 
-    /* /loop scheduler. Lives the whole REPL; jobs are registered by the
-     * /loop slash dispatch and fired through promptDue back into
-     * pendingAutoInput / agent->queueRequest. The non-null idlePromptLoop
-     * signals "we are blocked on user input right now"; the fire path
-     * uses it to wake the prompt loop without racing against a turn that
-     * is in mid-flight. With a project dir bound, jobs persist to
-     * .qsoc/loops.json and a file lock keeps two qsoc sessions in the
-     * same project from double-firing. */
-    QSocLoopScheduler loopScheduler;
+    /* /loop scheduler is now constructed in parseAgent() and reached via
+     * agent->getLoopScheduler() so schedule_* tools and the REPL share a
+     * single instance. Bind it to the active project's loops.json here
+     * (lifecycle: a `/project` switch later in this loop rebinds via
+     * setProjectDir()). */
+    QSocLoopScheduler &loopScheduler = *agent->getLoopScheduler();
     {
         const QString loopProjectPath = projectManager->getProjectPath();
         if (!loopProjectPath.isEmpty()) {
@@ -2476,32 +2534,21 @@ bool QSocCliWorker::runAgentLoop(
         [&compositor,
          &pendingAutoInputs,
          &idlePromptLoop,
-         agent](const QString &prompt, const QString &jobName) {
+         agent](const QString &prompt, const QString &jobId) {
             QString summary = prompt;
             summary.replace(QLatin1Char('\n'), QLatin1Char(' '));
             if (summary.size() > 60) {
                 summary = summary.left(57) + QStringLiteral("...");
             }
             compositor.printContent(
-                QStringLiteral("(loop %1 fired: %2)\n").arg(jobName, summary), QTuiScrollView::Dim);
-            /* Slash commands and `!`-shell escapes MUST go through the
-             * CLI dispatch path so /compact, /status, !make, etc keep
-             * their built-in semantics regardless of whether the agent
-             * is running. queueRequest() would just hand the literal
-             * "/compact" or "!make" to the LLM as a user message.
-             * Free-form prompts can ride the agent's in-turn queue when
-             * running because they have no CLI-side special handling.
-             * The decision lives behind a static helper so unit tests
-             * can pin it without spinning up the whole REPL. */
-            if (agent->isRunning()
-                && !QSocLoopScheduler::scheduledInputRequiresCliDispatch(prompt)) {
-                agent->queueRequest(prompt);
-            } else {
-                pendingAutoInputs.append(prompt);
-                if (idlePromptLoop != nullptr) {
-                    idlePromptLoop->quit();
-                }
-            }
+                QStringLiteral("(loop %1 fired: %2)\n").arg(jobId, summary), QTuiScrollView::Dim);
+            dispatchScheduledPrompt(
+                prompt,
+                jobId,
+                ScheduledDispatchSource::TickFire,
+                pendingAutoInputs,
+                idlePromptLoop,
+                agent);
         });
 
     /* Main loop */
@@ -3527,26 +3574,37 @@ bool QSocCliWorker::runAgentLoop(
                 } else {
                     const qint64 now = QDateTime::currentMSecsSinceEpoch();
                     for (const auto &job : jobs) {
-                        const qint64 due = job.nextFireAt - now;
+                        const qint64 anchor = job.lastFiredAt > 0 ? job.lastFiredAt : job.createdAt;
+                        const qint64 next   = QSocCron::nextRunMs(job.cron, anchor);
+                        const qint64 due    = (next == 0) ? -1 : next - now;
                         QString      eta;
-                        if (due <= 0) {
+                        if (next == 0) {
+                            eta = QStringLiteral("never");
+                        } else if (due <= 0) {
                             eta = QStringLiteral("now");
                         } else if (due < 60000) {
                             eta = QStringLiteral("%1s").arg(due / 1000);
-                        } else {
+                        } else if (due < 3600000) {
                             eta = QStringLiteral("%1m").arg(due / 60000);
+                        } else {
+                            eta = QStringLiteral("%1h").arg(due / 3600000);
                         }
                         QString promptSummary = job.prompt;
                         promptSummary.replace(QLatin1Char('\n'), QLatin1Char(' '));
                         if (promptSummary.size() > 50) {
                             promptSummary = promptSummary.left(47) + QStringLiteral("...");
                         }
-                        compositor.printContent(
-                            QStringLiteral("  %1  every %2  next %3  %4\n")
-                                .arg(job.name, -4)
-                                .arg(QSocLoopScheduler::formatInterval(job.intervalMs), -5)
-                                .arg(eta, -5)
-                                .arg(promptSummary));
+                        const QString kind  = job.recurring ? QStringLiteral("rec")
+                                                            : QStringLiteral("once");
+                        const QString where = job.durable ? QStringLiteral("disk")
+                                                          : QStringLiteral("sess");
+                        compositor.printContent(QStringLiteral("  %1  %2  %3 %4  next %5  %6\n")
+                                                    .arg(job.id, -8)
+                                                    .arg(QSocCron::cronToHuman(job.cron), -16)
+                                                    .arg(kind, -4)
+                                                    .arg(where, -4)
+                                                    .arg(eta, -5)
+                                                    .arg(promptSummary));
                     }
                 }
                 continue;
@@ -3579,7 +3637,7 @@ bool QSocCliWorker::runAgentLoop(
                  * false in both cases; only one of them is an error. */
                 bool present = false;
                 for (const auto &job : loopScheduler.listJobs()) {
-                    if (job.name == id) {
+                    if (job.id == id) {
                         present = true;
                         break;
                     }
@@ -3612,18 +3670,21 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
 
-            qint64  intervalMs = 0;
+            QString cron;
             QString parsedPrompt;
-            QSocLoopScheduler::parseLoopArgs(rawArgs, 10 * 60 * 1000, intervalMs, parsedPrompt);
-            if (intervalMs <= 0 || parsedPrompt.isEmpty()) {
+            QString parseError;
+            QSocLoopScheduler::parseLoopArgs(
+                rawArgs, QStringLiteral("*/10 * * * *"), cron, parsedPrompt, parseError);
+            if (!parseError.isEmpty()) {
+                compositor.printContent(parseError + QStringLiteral("\n"));
+                continue;
+            }
+            if (cron.isEmpty() || parsedPrompt.isEmpty()) {
                 printUsage();
                 continue;
             }
-            const QString name = loopScheduler.addJob(parsedPrompt, intervalMs);
-            if (name.isEmpty()) {
-                /* addJob refuses if either we lost ownership between
-                 * the isOwner check above (lock probe race) or the
-                 * persist write failed. Show the more likely cause. */
+            const QString id = loopScheduler.addJob(cron, parsedPrompt, true, true);
+            if (id.isEmpty()) {
                 if (!loopScheduler.isOwner()) {
                     printNotOwner();
                 } else {
@@ -3631,9 +3692,9 @@ bool QSocCliWorker::runAgentLoop(
                 }
                 continue;
             }
-            compositor.printContent(QStringLiteral("Scheduled loop %1 every %2: %3\n")
-                                        .arg(name)
-                                        .arg(QSocLoopScheduler::formatInterval(intervalMs))
+            compositor.printContent(QStringLiteral("Scheduled loop %1 (%2): %3\n")
+                                        .arg(id)
+                                        .arg(QSocCron::cronToHuman(cron))
                                         .arg(parsedPrompt));
             /* Fire once immediately by appending through the same idle
              * input queue the scheduler uses on subsequent ticks. */

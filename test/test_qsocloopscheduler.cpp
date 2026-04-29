@@ -4,14 +4,56 @@
 #include "cli/qsocloopscheduler.h"
 #include "qsoc_test.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
+
+namespace {
+
+QString writePastRecurringLoopFile(const QString &projectDir, const QString &prompt)
+{
+    /* Forge a schema-2 loops.json with createdAt 5 minutes in the past so
+     * the very first tick computes a nextRunMs that is in the past too,
+     * causing an immediate fire. Returns the assigned id. */
+    const QString id = QStringLiteral("abcd1234");
+    QDir(projectDir).mkpath(QStringLiteral(".qsoc"));
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+    QJsonObject job;
+    job["id"]          = id;
+    job["prompt"]      = prompt;
+    job["cron"]        = QStringLiteral("*/1 * * * *");
+    job["recurring"]   = true;
+    job["createdAt"]   = QString::number(now - (5 * 60 * 1000));
+    job["lastFiredAt"] = QString::number(0);
+
+    QJsonObject root;
+    root["schema"] = 2;
+    root["tasks"]  = QJsonArray{job};
+
+    QFile out(QDir(projectDir).filePath(QStringLiteral(".qsoc/loops.json")));
+    if (!out.open(QIODevice::WriteOnly))
+        return QString();
+    out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    out.close();
+    return id;
+}
+
+bool isShortHexId(const QString &str)
+{
+    static const QRegularExpression re(QStringLiteral("^[0-9a-f]{8}$"));
+    return re.match(str).hasMatch();
+}
+
+} /* namespace */
 
 struct TestApp
 {
@@ -25,144 +67,199 @@ struct TestApp
     }
 };
 
-class Test : public QObject
+class TestQSocLoopScheduler : public QObject
 {
     Q_OBJECT
 
 private slots:
     void initTestCase() { TestApp::instance(); }
 
-    void parseInterval_basic()
-    {
-        QCOMPARE(QSocLoopScheduler::parseInterval("5m"), qint64(5 * 60 * 1000));
-        QCOMPARE(QSocLoopScheduler::parseInterval("1h"), qint64(60 * 60 * 1000));
-        QCOMPARE(QSocLoopScheduler::parseInterval("2d"), qint64(2 * 24 * 60 * 60 * 1000));
-    }
-
-    void parseInterval_secondsRoundUpToMinute()
-    {
-        /* Sub-minute granularity is meaningless for prompt scheduling
-         * and the plan calls for ceil-to-minute. Anything from 1s to
-         * 60s collapses to 1m; 61s..120s to 2m; etc. */
-        QCOMPARE(QSocLoopScheduler::parseInterval("30s"), qint64(60 * 1000));
-        QCOMPARE(QSocLoopScheduler::parseInterval("1s"), qint64(60 * 1000));
-        QCOMPARE(QSocLoopScheduler::parseInterval("60s"), qint64(60 * 1000));
-        QCOMPARE(QSocLoopScheduler::parseInterval("61s"), qint64(120 * 1000));
-        QCOMPARE(QSocLoopScheduler::parseInterval("90s"), qint64(120 * 1000));
-        QCOMPARE(QSocLoopScheduler::parseInterval("120s"), qint64(120 * 1000));
-    }
-
-    void parseInterval_invalid()
-    {
-        QCOMPARE(QSocLoopScheduler::parseInterval("foo"), qint64(0));
-        QCOMPARE(QSocLoopScheduler::parseInterval("0m"), qint64(0));
-        QCOMPARE(QSocLoopScheduler::parseInterval("5min"), qint64(0));
-        QCOMPARE(QSocLoopScheduler::parseInterval(""), qint64(0));
-    }
+    /* ---- parseLoopArgs (cron-based) ---- */
 
     void parseLoopArgs_leadingInterval()
     {
-        qint64  ms = 0;
-        QString p;
-        QSocLoopScheduler::parseLoopArgs("5m /status", 600000, ms, p);
-        QCOMPARE(ms, qint64(5 * 60 * 1000));
-        QCOMPARE(p, QString("/status"));
+        QString cron, prompt, err;
+        QSocLoopScheduler::parseLoopArgs(
+            "5m /status", QStringLiteral("*/10 * * * *"), cron, prompt, err);
+        QCOMPARE(cron, QString("*/5 * * * *"));
+        QCOMPARE(prompt, QString("/status"));
+        QVERIFY(err.isEmpty());
     }
 
     void parseLoopArgs_trailingEverySuffix()
     {
-        qint64  ms = 0;
-        QString p;
-        QSocLoopScheduler::parseLoopArgs("check the deploy every 20m", 600000, ms, p);
-        QCOMPARE(ms, qint64(20 * 60 * 1000));
-        QCOMPARE(p, QString("check the deploy"));
+        QString cron, prompt, err;
+        QSocLoopScheduler::parseLoopArgs(
+            "check the deploy every 20m", QStringLiteral("*/10 * * * *"), cron, prompt, err);
+        QCOMPARE(cron, QString("*/20 * * * *"));
+        QCOMPARE(prompt, QString("check the deploy"));
+        QVERIFY(err.isEmpty());
     }
 
     void parseLoopArgs_trailingEveryUnitWord()
     {
-        qint64  ms = 0;
-        QString p;
-        QSocLoopScheduler::parseLoopArgs("run tests every 5 minutes", 600000, ms, p);
-        QCOMPARE(ms, qint64(5 * 60 * 1000));
-        QCOMPARE(p, QString("run tests"));
+        QString cron, prompt, err;
+        QSocLoopScheduler::parseLoopArgs(
+            "run tests every 5 minutes", QStringLiteral("*/10 * * * *"), cron, prompt, err);
+        QCOMPARE(cron, QString("*/5 * * * *"));
+        QCOMPARE(prompt, QString("run tests"));
+        QVERIFY(err.isEmpty());
     }
 
     void parseLoopArgs_everyNotFollowedByTime()
     {
-        /* "every PR" must NOT be parsed as an interval: falls through to
-         * default. The whole text stays as the prompt verbatim. */
-        qint64  ms = 0;
-        QString p;
-        QSocLoopScheduler::parseLoopArgs("check every PR", 600000, ms, p);
-        QCOMPARE(ms, qint64(600000));
-        QCOMPARE(p, QString("check every PR"));
+        QString cron, prompt, err;
+        QSocLoopScheduler::parseLoopArgs(
+            "check every PR", QStringLiteral("*/10 * * * *"), cron, prompt, err);
+        QCOMPARE(cron, QString("*/10 * * * *"));
+        QCOMPARE(prompt, QString("check every PR"));
+        QVERIFY(err.isEmpty());
     }
 
     void parseLoopArgs_default()
     {
-        qint64  ms = 0;
-        QString p;
-        QSocLoopScheduler::parseLoopArgs("ping the server", 600000, ms, p);
-        QCOMPARE(ms, qint64(600000));
-        QCOMPARE(p, QString("ping the server"));
+        QString cron, prompt, err;
+        QSocLoopScheduler::parseLoopArgs(
+            "ping the server", QStringLiteral("*/10 * * * *"), cron, prompt, err);
+        QCOMPARE(cron, QString("*/10 * * * *"));
+        QCOMPARE(prompt, QString("ping the server"));
+        QVERIFY(err.isEmpty());
     }
 
     void parseLoopArgs_intervalOnly_emptyPrompt()
     {
-        qint64  ms = 0;
-        QString p;
-        QSocLoopScheduler::parseLoopArgs("5m", 600000, ms, p);
-        QCOMPARE(ms, qint64(5 * 60 * 1000));
-        QVERIFY(p.isEmpty());
+        QString cron, prompt, err;
+        QSocLoopScheduler::parseLoopArgs("5m", QStringLiteral("*/10 * * * *"), cron, prompt, err);
+        QCOMPARE(cron, QString("*/5 * * * *"));
+        QVERIFY(prompt.isEmpty());
+        QVERIFY(err.isEmpty());
     }
 
-    void formatInterval_canonicalUnits()
+    void parseLoopArgs_uncleanInterval_setsError()
     {
-        QCOMPARE(QSocLoopScheduler::formatInterval(60 * 1000), QString("1m"));
-        QCOMPARE(QSocLoopScheduler::formatInterval(10 * 60 * 1000), QString("10m"));
-        QCOMPARE(QSocLoopScheduler::formatInterval(qint64(2) * 60 * 60 * 1000), QString("2h"));
-        QCOMPARE(QSocLoopScheduler::formatInterval(qint64(3) * 24 * 60 * 60 * 1000), QString("3d"));
+        QString cron, prompt, err;
+        QSocLoopScheduler::parseLoopArgs(
+            "7m do stuff", QStringLiteral("*/10 * * * *"), cron, prompt, err);
+        QVERIFY(cron.isEmpty());
+        QVERIFY(!err.isEmpty());
     }
+
+    /* ---- addJob / removeJob / clearJobs (in-memory mode) ---- */
 
     void addRemoveList_roundTrip()
     {
         QSocLoopScheduler sched;
-        const QString     a = sched.addJob("foo", 60000);
-        const QString     b = sched.addJob("bar", 120000);
+        const QString     a = sched.addJob("*/5 * * * *", "foo", true, false);
+        const QString     b = sched.addJob("*/2 * * * *", "bar", true, false);
+        QVERIFY(isShortHexId(a));
+        QVERIFY(isShortHexId(b));
+        QVERIFY(a != b);
         QCOMPARE(sched.listJobs().size(), 2);
         QVERIFY(sched.removeJob(a));
         QCOMPARE(sched.listJobs().size(), 1);
-        QCOMPARE(sched.listJobs().first().name, b);
-        QVERIFY(!sched.removeJob("nope"));
+        QCOMPARE(sched.listJobs().first().id, b);
+        QVERIFY(!sched.removeJob("nopeNope"));
         sched.clearJobs();
         QCOMPARE(sched.listJobs().size(), 0);
     }
+
+    void addJob_invalidCron_returnsEmpty()
+    {
+        QSocLoopScheduler sched;
+        QVERIFY(sched.addJob("totally bogus", "x", true, false).isEmpty());
+        QVERIFY(sched.addJob("", "x", true, false).isEmpty());
+        QVERIFY(sched.addJob("60 * * * *", "x", true, false).isEmpty());
+    }
+
+    void addJob_emptyPrompt_returnsEmpty()
+    {
+        QSocLoopScheduler sched;
+        QVERIFY(sched.addJob("*/5 * * * *", "", true, false).isEmpty());
+        QVERIFY(sched.addJob("*/5 * * * *", "   ", true, false).isEmpty());
+    }
+
+    void addJob_maxJobsCap()
+    {
+        QSocLoopScheduler sched;
+        for (int i = 0; i < QSocLoopScheduler::kMaxJobs; ++i) {
+            const QString id = sched.addJob("*/5 * * * *", QString("p%1").arg(i), true, false);
+            QVERIFY(!id.isEmpty());
+        }
+        const QString rejected = sched.addJob("*/5 * * * *", "overflow", true, false);
+        QVERIFY(rejected.isEmpty());
+        QCOMPARE(sched.listJobs().size(), QSocLoopScheduler::kMaxJobs);
+    }
+
+    /* ---- durable persistence ---- */
 
     void persist_roundTrip_acrossInstances()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
+        QString idA, idB;
         {
             QSocLoopScheduler a;
             a.setProjectDir(tmp.path());
             QVERIFY(a.isOwner());
-            a.addJob("ping", 60000);
-            a.addJob("pong", 120000);
+            idA = a.addJob("*/5 * * * *", "ping", true, true);
+            idB = a.addJob("0 9 * * *", "morning report", true, true);
+            QVERIFY(!idA.isEmpty());
+            QVERIFY(!idB.isEmpty());
         }
-        /* New instance same dir: takes over the lock and re-loads. */
         QSocLoopScheduler b;
         b.setProjectDir(tmp.path());
         QVERIFY(b.isOwner());
         const auto jobs = b.listJobs();
         QCOMPARE(jobs.size(), 2);
         QCOMPARE(jobs[0].prompt, QString("ping"));
-        QCOMPARE(jobs[1].prompt, QString("pong"));
-        /* Seq counter must skip past loaded ids so a new add cannot
-         * collide with persisted L1/L2. */
-        const QString fresh = b.addJob("ping3", 60000);
-        QVERIFY(fresh != jobs[0].name);
-        QVERIFY(fresh != jobs[1].name);
+        QCOMPARE(jobs[1].prompt, QString("morning report"));
+        QVERIFY(b.removeJob(idA));
+        QCOMPARE(b.listJobs().size(), 1);
     }
+
+    void sessionOnlyJob_notPersisted()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        {
+            QSocLoopScheduler a;
+            a.setProjectDir(tmp.path());
+            QVERIFY(!a.addJob("*/5 * * * *", "ephemeral", true, false).isEmpty());
+            QCOMPARE(a.listJobs().size(), 1);
+        }
+        QSocLoopScheduler b;
+        b.setProjectDir(tmp.path());
+        /* Session-only task disappeared with previous instance. */
+        QCOMPARE(b.listJobs().size(), 0);
+    }
+
+    void legacySchema1_dropped()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QDir(tmp.path()).mkpath(".qsoc");
+        QJsonObject job;
+        job["id"]          = QString("L1");
+        job["prompt"]      = QString("legacy");
+        job["intervalMs"]  = QString::number(60000);
+        job["createdAt"]   = QString::number(0);
+        job["lastFiredAt"] = QString::number(0);
+        job["recurring"]   = true;
+        job["enabled"]     = true;
+        QJsonObject root;
+        root["schema"] = 1;
+        root["tasks"]  = QJsonArray{job};
+        QFile out(QDir(tmp.path()).filePath(".qsoc/loops.json"));
+        QVERIFY(out.open(QIODevice::WriteOnly));
+        out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+        out.close();
+
+        QSocLoopScheduler sched;
+        sched.setProjectDir(tmp.path());
+        QCOMPARE(sched.listJobs().size(), 0);
+    }
+
+    /* ---- locking ---- */
 
     void lock_secondInstance_isNotOwner()
     {
@@ -179,11 +276,6 @@ private slots:
 
     void projectSwitch_releasesPriorLock()
     {
-        /* Two projects A and B. Session "rover" is non-owner in A (held
-         * by "rooted"), then setProjectDir(B). It must release the A
-         * QLockFile and re-acquire fresh in B; otherwise a non-owner
-         * would carry the old lock object into the new dir, isOwner_
-         * would always be false, and B's loops would never fire. */
         QTemporaryDir projA;
         QTemporaryDir projB;
         QVERIFY(projA.isValid());
@@ -201,105 +293,74 @@ private slots:
         QVERIFY(rover.isOwner());
     }
 
-    void nonOwnerList_seesOwnerAdds_immediately()
-    {
-        /* Two adds within the same mtime tick must both be visible to a
-         * non-owner; an mtime-cache gate would have masked the second. */
-        QTemporaryDir tmp;
-        QVERIFY(tmp.isValid());
-        QSocLoopScheduler owner;
-        owner.setProjectDir(tmp.path());
-        QVERIFY(owner.isOwner());
-        QSocLoopScheduler reader;
-        reader.setProjectDir(tmp.path());
-        QVERIFY(!reader.isOwner());
-
-        owner.addJob("ping", 60000);
-        owner.addJob("pong", 60000);
-        QCOMPARE(reader.listJobs().size(), 2);
-    }
-
-    void nonOwnerList_seesOwnerRemove_immediately()
+    void mutate_durableRefusedForNonOwner()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
         QSocLoopScheduler owner;
         owner.setProjectDir(tmp.path());
-        const QString name = owner.addJob("ephemeral", 60000);
-
-        QSocLoopScheduler reader;
-        reader.setProjectDir(tmp.path());
-        QCOMPARE(reader.listJobs().size(), 1);
-
-        QVERIFY(owner.removeJob(name));
-        QCOMPARE(reader.listJobs().size(), 0);
-    }
-
-    void nonOwnerList_seesOwnerClear_immediately()
-    {
-        QTemporaryDir tmp;
-        QVERIFY(tmp.isValid());
-        QSocLoopScheduler owner;
-        owner.setProjectDir(tmp.path());
-        owner.addJob("a", 60000);
-        owner.addJob("b", 60000);
-
-        QSocLoopScheduler reader;
-        reader.setProjectDir(tmp.path());
-        QCOMPARE(reader.listJobs().size(), 2);
-
-        QVERIFY(owner.clearJobs());
-        QCOMPARE(reader.listJobs().size(), 0);
-    }
-
-    void mutate_refusedForNonOwner()
-    {
-        QTemporaryDir tmp;
-        QVERIFY(tmp.isValid());
-        QSocLoopScheduler owner;
-        owner.setProjectDir(tmp.path());
-        QVERIFY(owner.isOwner());
-        const QString a = owner.addJob("alpha", 60000);
+        const QString a = owner.addJob("*/5 * * * *", "alpha", true, true);
         QVERIFY(!a.isEmpty());
 
         QSocLoopScheduler nonOwner;
         nonOwner.setProjectDir(tmp.path());
         QVERIFY(!nonOwner.isOwner());
 
-        /* Non-owner sees the loaded job but cannot mutate. The on-disk
-         * file is left untouched so the owner's view stays authoritative. */
         QCOMPARE(nonOwner.listJobs().size(), 1);
-        QVERIFY(nonOwner.addJob("beta", 60000).isEmpty());
+        QVERIFY(nonOwner.addJob("*/2 * * * *", "beta", true, true).isEmpty());
         QVERIFY(!nonOwner.removeJob(a));
         QVERIFY(!nonOwner.clearJobs());
         QCOMPARE(owner.listJobs().size(), 1);
     }
 
-    void durableRestart_doesNotBackFireMissedRecurring()
+    /* ---- fire path ---- */
+
+    void recurringFire_emitsOnceWithinTick()
     {
-        /* Plan rule: recurring task missed during downtime does not run
-         * a catch-up volley at startup. We forge a loops.json where
-         * lastFiredAt + interval is well in the past, then construct a
-         * scheduler and verify no promptDue fires within ~3 ticks. */
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
-        const QString qsocDir = QDir(tmp.path()).filePath(".qsoc");
-        QDir(tmp.path()).mkpath(".qsoc");
+        const QString id = writePastRecurringLoopFile(tmp.path(), "ping");
+        QVERIFY(!id.isEmpty());
 
-        const qint64 now    = QDateTime::currentMSecsSinceEpoch();
-        const qint64 oneMin = 60 * 1000;
-        QJsonObject  job;
-        job["id"]          = QString("L1");
-        job["prompt"]      = QString("dont-fire-me");
-        job["intervalMs"]  = QString::number(oneMin);
-        job["createdAt"]   = QString::number(now - (10 * oneMin));
-        job["lastFiredAt"] = QString::number(now - (5 * oneMin));
-        job["recurring"]   = true;
-        job["enabled"]     = true;
+        QSocLoopScheduler sched;
+        QSignalSpy        spy(&sched, &QSocLoopScheduler::promptDue);
+        sched.setProjectDir(tmp.path());
+        QVERIFY(sched.isOwner());
+
+        QVERIFY(spy.wait(2500));
+        QVERIFY(spy.count() >= 1);
+        QCOMPARE(spy.first().at(0).toString(), QString("ping"));
+        QCOMPARE(spy.first().at(1).toString(), id);
+        /* Recurring task stays in jobs_ with lastFiredAt advanced. */
+        const auto jobs = sched.listJobs();
+        QCOMPARE(jobs.size(), 1);
+        QVERIFY(jobs.first().lastFiredAt > 0);
+    }
+
+    void oneShotFire_eraseFromJobsAfterFire()
+    {
+        /* One-shot pinned to the very-recent past: fires once on the next
+         * tick, then must be erased from jobs_ entirely. */
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QDir(tmp.path()).mkpath(".qsoc");
+        const qint64    nowMs = QDateTime::currentMSecsSinceEpoch();
+        const QDateTime past  = QDateTime::fromMSecsSinceEpoch(nowMs).addSecs(-180);
+        QJsonObject     job;
+        job["id"]          = QString("oneoneone");
+        job["prompt"]      = QString("once");
+        job["cron"]        = QStringLiteral("%1 %2 %3 %4 *")
+                                 .arg(past.time().minute())
+                                 .arg(past.time().hour())
+                                 .arg(past.date().day())
+                                 .arg(past.date().month());
+        job["recurring"]   = false;
+        job["createdAt"]   = QString::number(past.toMSecsSinceEpoch() - 60000);
+        job["lastFiredAt"] = QString::number(0);
         QJsonObject root;
-        root["schema"] = 1;
+        root["schema"] = 2;
         root["tasks"]  = QJsonArray{job};
-        QFile out(QDir(qsocDir).filePath("loops.json"));
+        QFile out(QDir(tmp.path()).filePath(".qsoc/loops.json"));
         QVERIFY(out.open(QIODevice::WriteOnly));
         out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
         out.close();
@@ -308,55 +369,15 @@ private slots:
         QSignalSpy        spy(&sched, &QSocLoopScheduler::promptDue);
         sched.setProjectDir(tmp.path());
 
-        const auto jobs = sched.listJobs();
-        QCOMPARE(jobs.size(), 1);
-        /* nextFireAt must have been advanced past now during load. */
-        QVERIFY(jobs.first().nextFireAt > now);
-        /* Wait through ~3 ticks; the job is firmly scheduled in the
-         * future so no fire should land. */
-        QVERIFY(!spy.wait(3500));
-        QCOMPARE(spy.count(), 0);
-    }
-
-    void promptDue_doesNotEmitBeforeInterval()
-    {
-        /* Negative test: a brand-new 1m job must not fire within the
-         * first second-or-two of ticks. Pairs with the positive
-         * promptDue_firesOnceWhenIntervalElapses test below. */
-        QSocLoopScheduler sched;
-        QSignalSpy        spy(&sched, &QSocLoopScheduler::promptDue);
-        const QString     name = sched.addJob("ping", 60000);
-        QVERIFY(!name.isEmpty());
-        QVERIFY(!spy.wait(1500));
-        QCOMPARE(spy.count(), 0);
-        QCOMPARE(sched.listJobs().size(), 1);
-    }
-
-    void promptDue_firesOnceWhenIntervalElapses()
-    {
-        /* Positive fire path. Use a sub-second interval (only the user
-         * facing parser enforces the 1m floor; the API accepts any
-         * positive ms) so the test finishes in seconds. The first tick
-         * after createdAt+intervalMs should emit promptDue with the
-         * job's prompt and id. */
-        QSocLoopScheduler sched;
-        QSignalSpy        spy(&sched, &QSocLoopScheduler::promptDue);
-        const QString     name = sched.addJob("ping", 100);
-        QVERIFY(!name.isEmpty());
         QVERIFY(spy.wait(2500));
-        QVERIFY(spy.count() >= 1);
-        const auto args = spy.first();
-        QCOMPARE(args.at(0).toString(), QString("ping"));
-        QCOMPARE(args.at(1).toString(), name);
-        /* nextFireAt rolled forward; the same job stays scheduled. */
-        QCOMPARE(sched.listJobs().size(), 1);
-        QVERIFY(sched.listJobs().first().lastFiredAt > 0);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(sched.listJobs().size(), 0);
     }
+
+    /* ---- dispatch helper (CLI vs queueRequest) ---- */
 
     void scheduledDispatch_helperClassifiesInputs()
     {
-        /* Pin the dispatch policy: slash and shell prompts must take
-         * the CLI path; everything else can ride the agent queue. */
         using L = QSocLoopScheduler;
         QVERIFY(L::scheduledInputRequiresCliDispatch("/status"));
         QVERIFY(L::scheduledInputRequiresCliDispatch("  /compact"));
@@ -368,60 +389,23 @@ private slots:
         QVERIFY(!L::scheduledInputRequiresCliDispatch("  "));
     }
 
-    void tickPersistFailure_emitsOnceUntilRecovery()
-    {
-        /* When fire-time persist() fails, the scheduler should keep
-         * firing (silent halt is worse than disk drift) but emit
-         * persistFailed exactly once until the next successful write. */
-        QTemporaryDir tmp;
-        QVERIFY(tmp.isValid());
-        QSocLoopScheduler sched;
-        sched.setProjectDir(tmp.path());
-        QVERIFY(sched.isOwner());
-        const QString name = sched.addJob("ping", 100);
-        QVERIFY(!name.isEmpty());
-
-        QSignalSpy fireSpy(&sched, &QSocLoopScheduler::promptDue);
-        QSignalSpy failSpy(&sched, &QSocLoopScheduler::persistFailed);
-
-        const QString qsocDir = QDir(tmp.path()).filePath(".qsoc");
-        QFile         dir(qsocDir);
-        QVERIFY(dir.setPermissions(QFile::ReadOwner | QFile::ExeOwner));
-
-        /* Wait through several ticks so multiple fires can stack up. */
-        QVERIFY(fireSpy.wait(2500));
-        QVERIFY(fireSpy.count() >= 1);
-        /* Latched: only one persistFailed regardless of how many ticks
-         * fired during the outage. */
-        QCOMPARE(failSpy.count(), 1);
-
-        /* Restore permissions and trigger another mutation; the next
-         * persist succeeds and clears the latch. A future failure
-         * window must be allowed to re-emit. */
-        QVERIFY(dir.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
-        QVERIFY(!sched.addJob("delta", 60000).isEmpty());
-    }
+    /* ---- persist failure rollback ---- */
 
     void persist_failure_rollsBackInMemory()
     {
-        /* Make the .qsoc directory unwritable mid-flight: the first
-         * addJob writes loops.json successfully, then we strip write
-         * permissions and the second addJob must be refused without
-         * leaving a phantom job in jobs_. */
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
         QSocLoopScheduler sched;
         sched.setProjectDir(tmp.path());
         QVERIFY(sched.isOwner());
-        QVERIFY(!sched.addJob("alpha", 60000).isEmpty());
+        QVERIFY(!sched.addJob("*/5 * * * *", "alpha", true, true).isEmpty());
 
         const QString qsocDir = QDir(tmp.path()).filePath(".qsoc");
         QFile         dir(qsocDir);
         QVERIFY(dir.setPermissions(QFile::ReadOwner | QFile::ExeOwner));
 
-        const QString rejected = sched.addJob("beta", 60000);
+        const QString rejected = sched.addJob("*/2 * * * *", "beta", true, true);
         const auto    jobs     = sched.listJobs();
-        /* Restore so QTemporaryDir can clean up. */
         QVERIFY(dir.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
         QVERIFY(rejected.isEmpty());
         QCOMPARE(jobs.size(), 1);
@@ -429,5 +413,5 @@ private slots:
     }
 };
 
-QSOC_TEST_MAIN(Test)
+QSOC_TEST_MAIN(TestQSocLoopScheduler)
 #include "test_qsocloopscheduler.moc"
