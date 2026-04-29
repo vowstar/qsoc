@@ -8,6 +8,7 @@
 #include "agent/mcp/qsocmcptypes.h"
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsocbashtasksource.h"
 #include "agent/qsocfilehistory.h"
 #include "agent/qsochookmanager.h"
@@ -24,6 +25,7 @@
 #include "agent/remote/qsocsshexec.h"
 #include "agent/remote/qsocsshsession.h"
 #include "agent/remote/qsoctoolremote.h"
+#include "agent/tool/qsoctoolagent.h"
 #include "agent/tool/qsoctoolbus.h"
 #include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolfile.h"
@@ -1006,10 +1008,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     auto *taskRegistry = new QSocTaskRegistry(this);
     taskRegistry->registerSource(new QSocLoopTaskSource(loopScheduler, this));
     taskRegistry->registerSource(new QSocBashTaskSource(shellBashTool, this));
-    /* Sub-agent source is a placeholder today (returns empty list); it
-     * exists so a future sub-agent module slots in without touching the
-     * overlay, the compositor, or this site beyond the constructor body. */
-    taskRegistry->registerSource(new QSocSubAgentTaskSource(this));
+    auto *subAgentTaskSource = new QSocSubAgentTaskSource(this);
+    taskRegistry->registerSource(subAgentTaskSource);
 
     /* LSP service setup. Built-in slang backend goes first as fallback;
        external servers from qsoc.yml override it for matching extensions. */
@@ -1085,6 +1085,20 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     auto *hookManager = new QSocHookManager(this);
     hookManager->setConfig(config.hooks);
     agent->setHookManager(hookManager);
+
+    /* Sub-agent spawn tool: catalog of compiled-in definitions plus
+     * the live task source so child runs surface in the Ctrl+B
+     * overlay. The tool shares the parent's LLM service, registry,
+     * memory / hook / loop managers, and clones the parent config
+     * (carrying remote-mode fields) into each child. */
+    auto *agentDefinitions = new QSocAgentDefinitionRegistry(this);
+    agentDefinitions->registerBuiltins();
+    auto *agentTool = new QSocToolAgent(
+        this, llmService, toolRegistry, config, agentDefinitions, subAgentTaskSource);
+    agentTool->setMemoryManager(memoryManager);
+    agentTool->setHookManager(hookManager);
+    agentTool->setLoopScheduler(loopScheduler);
+    toolRegistry->registerTool(agentTool);
 
     /* Connect verbose output signal */
     connect(agent, &QSocAgent::verboseOutput, [](const QString &message) {
