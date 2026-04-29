@@ -74,6 +74,7 @@
 #include <QMap>
 #include <QPair>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QTextStream>
 
 #include <atomic>
@@ -1093,6 +1094,22 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * (carrying remote-mode fields) into each child. */
     auto *agentDefinitions = new QSocAgentDefinitionRegistry(this);
     agentDefinitions->registerBuiltins();
+    /* User scope is always local (it is the user's machine config).
+     * Project scope follows the project manager's current path; in
+     * remote mode that path may be empty or not have a .qsoc/agents/
+     * subtree, in which case the scan is a silent no-op. Future
+     * remote-aware loading via SFTP is a separate concern. */
+    {
+        const QString userAgentsDir = QStandardPaths::writableLocation(
+                                          QStandardPaths::AppConfigLocation)
+                                      + QStringLiteral("/agents");
+        const QString projectRoot   = projectManager->getProjectPath();
+        QString       projectAgentsDir;
+        if (!projectRoot.isEmpty()) {
+            projectAgentsDir = QDir(projectRoot).filePath(QStringLiteral(".qsoc/agents"));
+        }
+        agentDefinitions->scanFromDisk(userAgentsDir, projectAgentsDir);
+    }
     auto *agentTool = new QSocToolAgent(
         this, llmService, toolRegistry, config, agentDefinitions, subAgentTaskSource);
     agentTool->setMemoryManager(memoryManager);

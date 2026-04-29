@@ -3,6 +3,14 @@
 
 #include "agent/qsocagentdefinitionregistry.h"
 
+#include "common/qsocconsole.h"
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QStringList>
+#include <QTextStream>
+
 QSocAgentDefinitionRegistry::QSocAgentDefinitionRegistry(QObject *parent)
     : QObject(parent)
 {}
@@ -188,4 +196,179 @@ QString QSocAgentDefinitionRegistry::describeAvailable() const
 int QSocAgentDefinitionRegistry::count() const
 {
     return static_cast<int>(defs_.size());
+}
+
+QList<QSocAgentDefinition> QSocAgentDefinitionRegistry::brokenDefinitions() const
+{
+    return broken_;
+}
+
+void QSocAgentDefinitionRegistry::scanFromDisk(const QString &userDir, const QString &projectDir)
+{
+    /* User scope first so project scope can shadow it. */
+    if (!userDir.isEmpty()) {
+        scanDirectory(userDir, QStringLiteral("user"));
+    }
+    if (!projectDir.isEmpty()) {
+        scanDirectory(projectDir, QStringLiteral("project"));
+    }
+}
+
+void QSocAgentDefinitionRegistry::scanDirectory(const QString &dirPath, const QString &scope)
+{
+    QDir dir(dirPath);
+    if (!dir.exists()) {
+        QSocConsole::debug() << "agent definitions: " << scope << " dir not present: " << dirPath;
+        return;
+    }
+    const QStringList entries
+        = dir.entryList({QStringLiteral("*.md")}, QDir::Files | QDir::Readable, QDir::Name);
+    for (const QString &name : entries) {
+        const QString       path = dir.filePath(name);
+        QSocAgentDefinition def  = parseAgentMarkdown(path, scope);
+        if (!def.parseError.isEmpty()) {
+            broken_.append(def);
+            continue;
+        }
+        registerDefinition(def);
+    }
+}
+
+namespace {
+
+/* Parse the `tools:` value, supporting two shapes:
+ *  1) inline list: `tools: read_file, list_files, bash`
+ *  2) YAML list block:
+ *       tools:
+ *         - read_file
+ *         - list_files
+ * `inlineValue` is whatever follows the colon on the `tools:` line
+ * (already trimmed); `followingLines` is the rest of the frontmatter
+ * after that line. The function consumes leading list lines.
+ */
+QStringList parseToolsField(const QString &inlineValue, const QStringList &followingLines)
+{
+    QStringList out;
+    if (!inlineValue.isEmpty()) {
+        const QStringList parts = inlineValue.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        for (const QString &part : parts) {
+            const QString trimmed = part.trimmed();
+            if (!trimmed.isEmpty()) {
+                out.append(trimmed);
+            }
+        }
+        return out;
+    }
+    /* Block form: consume leading "- foo" lines. */
+    for (const QString &line : followingLines) {
+        const QString trimmed = line.trimmed();
+        if (!trimmed.startsWith(QLatin1Char('-'))) {
+            break;
+        }
+        QString item = trimmed.mid(1).trimmed();
+        if (!item.isEmpty()) {
+            out.append(item);
+        }
+    }
+    return out;
+}
+
+bool parseBoolField(const QString &value, bool fallback)
+{
+    const QString lower = value.toLower();
+    if (lower == QLatin1String("true") || lower == QLatin1String("yes")
+        || lower == QLatin1String("1")) {
+        return true;
+    }
+    if (lower == QLatin1String("false") || lower == QLatin1String("no")
+        || lower == QLatin1String("0")) {
+        return false;
+    }
+    return fallback;
+}
+
+} // namespace
+
+QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdown(
+    const QString &path, const QString &scope) const
+{
+    QSocAgentDefinition def;
+    def.scope      = scope;
+    def.sourcePath = path;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        def.parseError = QStringLiteral("cannot open file");
+        return def;
+    }
+    QTextStream   stream(&file);
+    const QString content = stream.readAll();
+    file.close();
+
+    if (!content.startsWith(QStringLiteral("---"))) {
+        def.parseError = QStringLiteral("missing frontmatter ('---' on first line)");
+        return def;
+    }
+    const qsizetype endMarker = content.indexOf(QStringLiteral("\n---"), 3);
+    if (endMarker < 0) {
+        def.parseError = QStringLiteral("frontmatter has no closing '---' line");
+        return def;
+    }
+
+    const QString     frontmatter = content.mid(4, endMarker - 4);
+    const QStringList fmLines     = frontmatter.split(QLatin1Char('\n'));
+
+    /* Body = everything after the closing '---' line. */
+    const qsizetype bodyStart = endMarker + 4; /* skip "\n---" */
+    QString         body      = content.mid(bodyStart);
+    /* Trim a single optional newline immediately after the closing marker. */
+    while (body.startsWith(QLatin1Char('\n'))) {
+        body.remove(0, 1);
+    }
+    def.promptBody = body;
+
+    for (qsizetype i = 0; i < fmLines.size(); ++i) {
+        const QString  &line     = fmLines[i];
+        const qsizetype colonPos = line.indexOf(QLatin1Char(':'));
+        if (colonPos < 0) {
+            continue;
+        }
+        const QString key   = line.left(colonPos).trimmed();
+        const QString value = line.mid(colonPos + 1).trimmed();
+
+        if (key == QLatin1String("name")) {
+            def.name = value;
+        } else if (key == QLatin1String("description")) {
+            def.description = value;
+        } else if (key == QLatin1String("tools")) {
+            QStringList rest;
+            for (qsizetype j = i + 1; j < fmLines.size(); ++j) {
+                rest.append(fmLines[j]);
+            }
+            def.toolsAllow = parseToolsField(value, rest);
+        } else if (key == QLatin1String("model")) {
+            def.model = value;
+        } else if (key == QLatin1String("inject_memory")) {
+            def.injectMemory = parseBoolField(value, def.injectMemory);
+        } else if (key == QLatin1String("inject_skills")) {
+            def.injectSkills = parseBoolField(value, def.injectSkills);
+        } else if (key == QLatin1String("inject_project_md")) {
+            def.injectProjectMd = parseBoolField(value, def.injectProjectMd);
+        }
+    }
+
+    /* Default name from the file stem when the frontmatter omits it. */
+    if (def.name.isEmpty()) {
+        def.name = QFileInfo(path).completeBaseName();
+    }
+    if (def.name.isEmpty()) {
+        def.parseError = QStringLiteral("missing required field 'name'");
+        return def;
+    }
+    if (def.promptBody.trimmed().isEmpty()) {
+        def.parseError = QStringLiteral("body (prompt text after frontmatter) is empty");
+        return def;
+    }
+
+    return def;
 }
