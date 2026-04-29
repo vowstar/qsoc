@@ -249,6 +249,9 @@ public:
     /* Set input buffer content (for history navigation) */
     void setInputBuffer(const QString &text);
 
+    /* Read-only snapshot of the input buffer (for focus-routing decisions). */
+    const QString &getInputBuffer() const { return inputBuffer; }
+
     /* Current cursor position within inputBuffer (QChar index) */
     int getCursorPos() const { return cursorPos; }
 

@@ -46,13 +46,17 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
         }
         screen.putString(0, startY, QTuiText::truncate(line, mainWidth), false, true); /* dim */
         if (!taskPill.isEmpty()) {
+            /* Focus state takes precedence: pill is bold + inverted so the
+             * user sees the focus jump unambiguously. Alert (stuck task)
+             * also inverts; focus implies alert-style invert. */
+            const bool focused = taskPillFocused_;
             screen.putString(
                 pillStart,
                 startY,
                 taskPill,
-                /*bold*/ false,
-                /*dim*/ !taskAlert_,
-                /*inverted*/ taskAlert_);
+                /*bold*/ focused,
+                /*dim*/ !taskAlert_ && !focused,
+                /*inverted*/ taskAlert_ || focused);
         }
         return;
     }
@@ -144,6 +148,11 @@ void QTuiStatusBar::setTaskCount(int count)
 void QTuiStatusBar::setTaskAlert(bool alert)
 {
     taskAlert_ = alert;
+}
+
+void QTuiStatusBar::setTaskPillFocused(bool focused)
+{
+    taskPillFocused_ = focused;
 }
 
 void QTuiStatusBar::toolCalled(const QString &toolName, const QString &detail)
