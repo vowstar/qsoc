@@ -26,6 +26,7 @@
 #include "agent/remote/qsocsshsession.h"
 #include "agent/remote/qsoctoolremote.h"
 #include "agent/tool/qsoctoolagent.h"
+#include "agent/tool/qsoctoolagentstatus.h"
 #include "agent/tool/qsoctoolbus.h"
 #include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolfile.h"
@@ -1124,6 +1125,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     agentTool->setParentAgent(agent);
     toolRegistry->registerTool(agentTool);
 
+    /* Companion tool: lets the LLM poll a backgrounded sub-agent
+     * without waiting for completion. Same parent registry as the
+     * spawn tool so it carries across the remote swap below. */
+    auto *agentStatusTool = new QSocToolAgentStatus(this, subAgentTaskSource);
+    toolRegistry->registerTool(agentStatusTool);
+
     /* Connect verbose output signal */
     connect(agent, &QSocAgent::verboseOutput, [](const QString &message) {
         QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":" << message;
@@ -1182,12 +1189,14 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             return showError(1, sshErr);
         }
         buildAgentRemoteRegistry(this, &cliRemoteState, socConfig);
-        /* Re-register the spawn tool into the remote registry so the
-         * parent LLM still sees `agent` after the remote swap. The
-         * spawn tool itself is registry-agnostic; its child resolves
-         * tools through whichever registry the parent currently uses
+        /* Re-register the spawn tool + its companion into the remote
+         * registry so the parent LLM still sees `agent` /
+         * `agent_status` after the remote swap. Both tools are
+         * registry-agnostic; the spawn tool's child resolves tools
+         * through whichever registry the parent currently uses
          * (see QSocToolAgent::setParentAgent). */
         cliRemoteState.registry->registerTool(agentTool);
+        cliRemoteState.registry->registerTool(agentStatusTool);
 
         preLocalRegistry = agent->getToolRegistry();
         agent->setToolRegistry(cliRemoteState.registry);
@@ -4661,11 +4670,15 @@ bool QSocCliWorker::runAgentLoop(
             remoteRegistry = newState.registry;
             remotePath     = newState.path;
 
-            /* Carry the spawn tool across the swap so the parent LLM
-             * keeps seeing `agent`; the child resolves its registry
-             * dynamically via the parent agent. */
+            /* Carry the spawn tool and its status companion across
+             * the swap so the parent LLM keeps seeing them; the
+             * child resolves its registry dynamically via the parent
+             * agent. */
             if (auto *spawnTool = localRegistry->getTool(QStringLiteral("agent"))) {
                 remoteRegistry->registerTool(spawnTool);
+            }
+            if (auto *statusTool = localRegistry->getTool(QStringLiteral("agent_status"))) {
+                remoteRegistry->registerTool(statusTool);
             }
             agent->setToolRegistry(remoteRegistry);
 

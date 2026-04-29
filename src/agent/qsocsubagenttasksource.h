@@ -76,6 +76,24 @@ public:
      */
     void abortAll();
 
+    /**
+     * @brief Find a row by id; returns false if no run with that id
+     *        is currently tracked (either never registered, or
+     *        already evicted).
+     */
+    bool findRow(const QString &id, QSocTask::Row *out) const;
+
+    /**
+     * @brief Elapsed seconds since a run started. Returns 0 when the
+     *        id is unknown or has no startedAtMs.
+     */
+    qint64 elapsedSecondsFor(const QString &id) const;
+
+    /**
+     * @brief Sub-agent type label for an id; empty when unknown.
+     */
+    QString subagentTypeFor(const QString &id) const;
+
 private:
     struct RunState
     {

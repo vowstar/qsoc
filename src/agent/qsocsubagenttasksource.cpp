@@ -165,6 +165,52 @@ void QSocSubAgentTaskSource::abortAll()
     }
 }
 
+bool QSocSubAgentTaskSource::findRow(const QString &id, QSocTask::Row *out) const
+{
+    for (const RunState &run : runs_) {
+        if (run.id != id) {
+            continue;
+        }
+        if (out != nullptr) {
+            out->id          = run.id;
+            out->label       = run.label;
+            out->summary     = run.subagentType;
+            out->kind        = QSocTask::Kind::SubAgent;
+            out->status      = run.status;
+            out->startedAtMs = run.startedAtMs;
+            out->canKill     = (run.status == QSocTask::Status::Running);
+        }
+        return true;
+    }
+    return false;
+}
+
+qint64 QSocSubAgentTaskSource::elapsedSecondsFor(const QString &id) const
+{
+    for (const RunState &run : runs_) {
+        if (run.id != id) {
+            continue;
+        }
+        if (run.startedAtMs <= 0) {
+            return 0;
+        }
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        const qint64 delta = nowMs - run.startedAtMs;
+        return delta > 0 ? delta / 1000 : 0;
+    }
+    return 0;
+}
+
+QString QSocSubAgentTaskSource::subagentTypeFor(const QString &id) const
+{
+    for (const RunState &run : runs_) {
+        if (run.id == id) {
+            return run.subagentType;
+        }
+    }
+    return {};
+}
+
 void QSocSubAgentTaskSource::evictStaleCompleted()
 {
     const qint64 nowMs   = QDateTime::currentMSecsSinceEpoch();
