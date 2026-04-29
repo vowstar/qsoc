@@ -11,6 +11,7 @@
 #include "tui/qtuiscreen.h"
 #include "tui/qtuiscrollview.h"
 #include "tui/qtuistatusbar.h"
+#include "tui/qtuitaskoverlay.h"
 #include "tui/qtuitodolist.h"
 
 #include <QObject>
@@ -36,6 +37,24 @@ class QTuiCompositor : public QObject
 public:
     explicit QTuiCompositor(QObject *parent = nullptr);
     ~QTuiCompositor() override;
+
+    /**
+     * @brief Which UI element currently consumes keyboard input.
+     * @details Existing popup logic remains gated by isVisible() inline
+     *          at the REPL — those paths are functionally equivalent to
+     *          a CompletionPopup focus check. The enum exists so the
+     *          task overlay (and future modal widgets) can declare a
+     *          focus state the REPL can branch on without ad-hoc flags.
+     *          Defaults to Input; flipped by setFocusOwner.
+     */
+    enum class FocusOwner {
+        Input,
+        CompletionPopup,
+        TaskOverlay,
+    };
+
+    void       setFocusOwner(FocusOwner owner);
+    FocusOwner currentFocus() const { return focusOwner_; }
 
     /* Lifecycle */
     void start(int intervalMs = 100);
@@ -73,6 +92,7 @@ public:
     QTuiQueuedList      &queuedList() { return queueWidget; }
     QTuiCompletionPopup &completionPopup() { return popupWidget; }
     QTuiChipBanner      &topBanner() { return topBannerWidget; }
+    QTuiTaskOverlay     &taskOverlay() { return taskOverlayWidget; }
 
 signals:
     void tick();
@@ -89,10 +109,12 @@ private:
     QTuiStatusBar       statusBarWidget;
     QTuiInputLine       inputWidget;
     QTuiCompletionPopup popupWidget;
+    QTuiTaskOverlay     taskOverlayWidget;
 
-    QTimer *timer  = nullptr;
-    bool    active = false;
-    QString title;
+    QTimer    *timer  = nullptr;
+    bool       active = false;
+    QString    title;
+    FocusOwner focusOwner_ = FocusOwner::Input;
 
     /* Terminal management */
     void enterAltScreen();
@@ -152,6 +174,7 @@ private:
     void renderTodo();
     void renderQueued();
     void renderCompletionPopup();
+    void renderTaskOverlay();
     void renderStatusBar();
     void renderSeparator();
     void renderInput();

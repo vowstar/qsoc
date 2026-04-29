@@ -27,6 +27,11 @@ QTuiCompositor::~QTuiCompositor()
     }
 }
 
+void QTuiCompositor::setFocusOwner(FocusOwner owner)
+{
+    focusOwner_ = owner;
+}
+
 void QTuiCompositor::start(int intervalMs)
 {
     if (active) {
@@ -135,6 +140,7 @@ void QTuiCompositor::onTimer()
     todoWidget.tick();
     statusBarWidget.tick();
     topBannerWidget.tick();
+    taskOverlayWidget.tick();
     emit tick();
 
     render();
@@ -179,6 +185,7 @@ void QTuiCompositor::render()
     renderTodo();
     renderQueued();
     renderCompletionPopup();
+    renderTaskOverlay();
     renderStatusBar();
     renderSeparator();
     renderInput();
@@ -353,6 +360,23 @@ void QTuiCompositor::renderCompletionPopup()
         return;
     }
     popupWidget.render(screen, layout.popupStart, screen.width());
+}
+
+void QTuiCompositor::renderTaskOverlay()
+{
+    if (taskOverlayWidget.lineCount() == 0) {
+        return;
+    }
+    /* Task overlay shares the content area with scrollView. Pass the
+     * full available height as the upper bound so lineCount() can grow
+     * up to it; otherwise a ratcheting setMaxHeight() (bumped up to
+     * kMinHeight on a previous frame) would lock the overlay at 6 rows
+     * even when there are more tasks than that. */
+    const int contentH = layout.contentHeight > 0 ? layout.contentHeight : 0;
+    if (contentH > 0) {
+        taskOverlayWidget.setMaxHeight(contentH);
+    }
+    taskOverlayWidget.render(screen, layout.contentStart, screen.width());
 }
 
 void QTuiCompositor::renderStatusBar()
