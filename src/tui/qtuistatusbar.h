@@ -32,6 +32,8 @@ public:
     void setTaskCount(int count);
     /** @brief Whether to draw the pill in attention (blink) mode. */
     void setTaskAlert(bool alert);
+    /** @brief Whether the pill currently has keyboard focus (Down-arrow parked). */
+    void setTaskPillFocused(bool focused);
     void resetProgress();
     void startTimers();
     void stopTimers(); /* Stop animation + timer (idle state) */
@@ -54,8 +56,9 @@ private:
     QElapsedTimer totalTimer;
     bool          running = false; /* true = agent executing, false = idle */
 
-    int  taskCount_ = 0;
-    bool taskAlert_ = false;
+    int  taskCount_       = 0;
+    bool taskAlert_       = false;
+    bool taskPillFocused_ = false;
 
     static const QStringList spinnerFrames;
     static const QStringList dotFrames;

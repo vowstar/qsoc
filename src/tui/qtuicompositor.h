@@ -50,7 +50,8 @@ public:
     enum class FocusOwner {
         Input,
         CompletionPopup,
-        TaskOverlay,
+        TaskPill,    /* Down-arrow from empty input parks here; Enter opens overlay. */
+        TaskOverlay, /* Modal task list / detail. */
     };
 
     void       setFocusOwner(FocusOwner owner);

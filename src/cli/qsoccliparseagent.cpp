@@ -60,6 +60,8 @@
 #include "tui/qtuistatusbar.h"
 #include "tui/qtuitodolist.h"
 
+#include <functional>
+
 #include <QDateTime>
 #include <QDir>
 #include <QEventLoop>
@@ -2180,6 +2182,11 @@ bool QSocCliWorker::runAgentLoop(
     int     historyPos = -1; /* -1 = not browsing, 0 = most recent */
     QString savedInput;      /* Input buffer before browsing */
 
+    /* Forward-declare the task-overlay opener so handlers below can call
+     * it before its body is bound. The body is assigned further down where
+     * the overlay/registry/inputMonitor captures are all in scope. */
+    std::function<void()> openTaskOverlay;
+
     loadInputHistory(projectManager->getProjectPath());
 
     /* Connect arrow keys: when completion popup is visible, Up/Down navigate
@@ -2195,6 +2202,53 @@ bool QSocCliWorker::runAgentLoop(
                               : (key == 'C') ? Qt::Key_Right
                                              : Qt::Key_Left;
             compositor.taskOverlay().handleKey(qtKey, /*ctrl*/ false);
+            return;
+        }
+        /* Task pill is a modal focus stop between Input and TaskOverlay.
+         * Up returns to Input; left/right are no-ops; Down reasserts the
+         * focus (no-op since we're already there). Enter (handled
+         * elsewhere) opens the overlay. */
+        if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskPill) {
+            if (key == 'A') {
+                compositor.setFocusOwner(QTuiCompositor::FocusOwner::Input);
+                compositor.statusBar().setTaskPillFocused(false);
+                inputMonitor.setExternalKeyConsumer({});
+                compositor.invalidate();
+                compositor.render();
+            }
+            return;
+        }
+        /* Down from empty input + at least one task in registry → park
+         * focus on the task pill. Skip when history navigation is active
+         * (historyPos>=0) so the existing Down=history-step path keeps
+         * working. Mirrors claude-code's arrow-down-to-footer pattern. */
+        if (key == 'B' && taskRegistry != nullptr && taskRegistry->activeCount() > 0
+            && historyPos < 0 && inputMonitor.getInputBuffer().isEmpty()) {
+            compositor.setFocusOwner(QTuiCompositor::FocusOwner::TaskPill);
+            compositor.statusBar().setTaskPillFocused(true);
+            /* Enter on an empty buffer never fires inputReady (submitNow
+             * early-bails), so a thin consumer catches CR/LF here and
+             * routes the keystroke to the overlay-open path. Other keys
+             * (Up, ESC) flow through their dedicated signals. */
+            inputMonitor.setExternalKeyConsumer([&compositor, &openTaskOverlay](unsigned char byte) {
+                if (byte == 0x0D || byte == 0x0A) {
+                    openTaskOverlay();
+                    return true;
+                }
+                if (compositor.currentFocus() != QTuiCompositor::FocusOwner::TaskPill) {
+                    /* Focus already moved on (e.g. ESC ran); fall
+                         * through and let normal input handling resume. */
+                    return false;
+                }
+                /* Any printable while parked on the pill goes back to
+                     * the input buffer with focus reset, so users who
+                     * just want to type aren't stuck. */
+                compositor.setFocusOwner(QTuiCompositor::FocusOwner::Input);
+                compositor.statusBar().setTaskPillFocused(false);
+                return false;
+            });
+            compositor.invalidate();
+            compositor.render();
             return;
         }
         if (searching) {
@@ -2444,6 +2498,14 @@ bool QSocCliWorker::runAgentLoop(
             }
             compositor.statusBar().setTaskCount(rows.size());
             compositor.statusBar().setTaskAlert(alert);
+            /* If the user is parked on the pill but the last task just
+             * vanished, fall focus back to the input so they are not
+             * stranded on an invisible pill. */
+            if (rows.isEmpty()
+                && compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskPill) {
+                compositor.setFocusOwner(QTuiCompositor::FocusOwner::Input);
+                compositor.statusBar().setTaskPillFocused(false);
+            }
         };
         refreshTaskPill();
         connect(
@@ -2465,41 +2527,54 @@ bool QSocCliWorker::runAgentLoop(
         compositor.invalidate();
         compositor.render();
     });
+    /* Shared "open the task overlay" path. Used by Ctrl+B (toggle), by
+     * Down-from-empty-input → Enter (claude-code-style focus walk), and
+     * eventually by any future entry point. Idempotent: if the overlay
+     * is already open this just refreshes focus state. */
+    openTaskOverlay = [&]() {
+        if (taskRegistry == nullptr)
+            return;
+        compositor.setFocusOwner(QTuiCompositor::FocusOwner::TaskOverlay);
+        compositor.statusBar().setTaskPillFocused(false);
+        if (compositor.taskOverlay().mode() == QTuiTaskOverlay::Mode::Hidden) {
+            compositor.taskOverlay().open();
+        }
+        /* While the overlay is up, intercept printable keys (j/k/x/Enter)
+         * before they touch the input buffer. ESC + arrows go through
+         * their own signal paths and check focus explicitly. */
+        inputMonitor.setExternalKeyConsumer([&compositor](unsigned char byte) {
+            int qtKey = 0;
+            switch (byte) {
+            case 0x0D:
+            case 0x0A:
+                qtKey = Qt::Key_Return;
+                break;
+            case 'x':
+            case 'X':
+                qtKey = Qt::Key_X;
+                break;
+            case 'j':
+            case 'J':
+                qtKey = Qt::Key_J;
+                break;
+            case 'k':
+            case 'K':
+                qtKey = Qt::Key_K;
+                break;
+            default:
+                return true;
+            }
+            compositor.taskOverlay().handleKey(qtKey, false);
+            return true;
+        });
+        compositor.invalidate();
+        compositor.render();
+    };
     connect(&inputMonitor, &QAgentInputMonitor::taskOverlayRequested, [&]() {
         if (taskRegistry == nullptr)
             return;
         if (compositor.taskOverlay().mode() == QTuiTaskOverlay::Mode::Hidden) {
-            compositor.setFocusOwner(QTuiCompositor::FocusOwner::TaskOverlay);
-            compositor.taskOverlay().open();
-            /* While the overlay is up, intercept printable keys (j/k/x/
-             * Enter) before they touch the input buffer. ESC + arrows go
-             * through their own signal paths and check focus explicitly. */
-            inputMonitor.setExternalKeyConsumer([&compositor](unsigned char byte) {
-                int qtKey = 0;
-                switch (byte) {
-                case 0x0D: /* CR */
-                case 0x0A: /* LF */
-                    qtKey = Qt::Key_Return;
-                    break;
-                case 'x':
-                case 'X':
-                    qtKey = Qt::Key_X;
-                    break;
-                case 'j':
-                case 'J':
-                    qtKey = Qt::Key_J;
-                    break;
-                case 'k':
-                case 'K':
-                    qtKey = Qt::Key_K;
-                    break;
-                default:
-                    /* Swallow all other printable bytes while overlay is up. */
-                    return true;
-                }
-                compositor.taskOverlay().handleKey(qtKey, false);
-                return true;
-            });
+            openTaskOverlay();
         } else {
             compositor.taskOverlay().close();
         }
@@ -2684,7 +2759,13 @@ bool QSocCliWorker::runAgentLoop(
         auto connInput = connect(
             &inputMonitor,
             &QAgentInputMonitor::inputReady,
-            [&input, &promptLoop](const QString &text) {
+            [&input, &promptLoop, &compositor, &openTaskOverlay](const QString &text) {
+                /* Enter on the parked task pill opens the overlay; the
+                 * empty-buffer Enter would otherwise be a silent no-op. */
+                if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskPill) {
+                    openTaskOverlay();
+                    return;
+                }
                 input = text;
                 promptLoop.quit();
             });
@@ -2734,6 +2815,15 @@ bool QSocCliWorker::runAgentLoop(
                 /* Task overlay grabs ESC first: list -> close, detail -> list. */
                 if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskOverlay) {
                     compositor.taskOverlay().handleKey(Qt::Key_Escape, false);
+                    return;
+                }
+                /* Task pill focused: ESC returns focus to input. */
+                if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskPill) {
+                    compositor.setFocusOwner(QTuiCompositor::FocusOwner::Input);
+                    compositor.statusBar().setTaskPillFocused(false);
+                    inputMonitor.setExternalKeyConsumer({});
+                    compositor.invalidate();
+                    compositor.render();
                     return;
                 }
                 /* Reverse-i-search takes priority: Esc restores the original
