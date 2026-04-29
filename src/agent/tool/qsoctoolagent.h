@@ -8,6 +8,7 @@
 #include "agent/qsoctool.h"
 
 class QLLMService;
+class QSocAgent;
 class QSocAgentDefinitionRegistry;
 class QSocHookManager;
 class QSocLoopScheduler;
@@ -54,6 +55,17 @@ public:
     void setHookManager(QSocHookManager *manager) { hookManager_ = manager; }
     void setLoopScheduler(QSocLoopScheduler *scheduler) { loopScheduler_ = scheduler; }
 
+    /**
+     * @brief Bind a live parent QSocAgent. When set, the spawn tool
+     *        pulls the parent's CURRENT toolRegistry and config at
+     *        execute() time instead of using the constructor-captured
+     *        snapshot. Critical for remote-mode correctness: the
+     *        parent's registry is swapped to a SSH-backed registry on
+     *        `/remote`, and the child must inherit that swap rather
+     *        than a stale local pointer.
+     */
+    void setParentAgent(QSocAgent *agent) { parentAgent_ = agent; }
+
 private:
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;
@@ -63,6 +75,7 @@ private:
     QSocMemoryManager           *memoryManager_ = nullptr;
     QSocHookManager             *hookManager_   = nullptr;
     QSocLoopScheduler           *loopScheduler_ = nullptr;
+    QSocAgent                   *parentAgent_   = nullptr;
 };
 
 #endif /* QSOCTOOLAGENT_H */

@@ -53,6 +53,54 @@ private slots:
         QVERIFY(def->parseError.isEmpty());
     }
 
+    void testRegisterBuiltinsAddsExploreReadOnly()
+    {
+        QSocAgentDefinitionRegistry reg;
+        reg.registerBuiltins();
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("explore"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->scope, QStringLiteral("builtin"));
+        QVERIFY(!def->toolsAllow.isEmpty());
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("read_file")));
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("lsp")));
+        /* Must NOT include any write or shell tool. */
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("write_file")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("edit_file")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("bash")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("memory_write")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("module_import")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("generate_verilog")));
+        /* Recursion guard belt-and-braces: definition itself should not
+         * list the spawn tool either. */
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("agent")));
+    }
+
+    void testRegisterBuiltinsAddsVerificationNoWriteSrc()
+    {
+        QSocAgentDefinitionRegistry reg;
+        reg.registerBuiltins();
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("verification"));
+        QVERIFY(def != nullptr);
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("bash")));
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("read_file")));
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("lsp")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("write_file")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("edit_file")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("memory_write")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("agent")));
+    }
+
+    void testBuiltinSetCount()
+    {
+        QSocAgentDefinitionRegistry reg;
+        reg.registerBuiltins();
+        QCOMPARE(reg.count(), 3);
+        QStringList names = reg.availableNames();
+        QVERIFY(names.contains(QStringLiteral("general-purpose")));
+        QVERIFY(names.contains(QStringLiteral("explore")));
+        QVERIFY(names.contains(QStringLiteral("verification")));
+    }
+
     void testRegisterBuiltinsIsIdempotent()
     {
         QSocAgentDefinitionRegistry reg;
