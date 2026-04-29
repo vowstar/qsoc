@@ -70,6 +70,29 @@ public:
      */
     static QString detectInteractivePrompt(const QString &tail);
 
+    /**
+     * @brief Snapshot of active background process info, sorted by id.
+     * @details The task overlay reads this to render rows; consumers
+     *          should not retain QProcess pointers because they belong
+     *          to bashTool's static map and may be deleted on exit.
+     *          Returns a list of {id, command, startedAtMs, outputPath,
+     *          isStuck} tuples — minimal projection so callers do not
+     *          accidentally pin internal state.
+     */
+    struct BackgroundSnapshot
+    {
+        int     id;
+        QString command;
+        qint64  startedAtMs;
+        QString outputPath;
+        bool    isStuck;
+        bool    isRunning;
+    };
+    static QList<BackgroundSnapshot> snapshotActive();
+    static int                       activeProcessCount();
+    static bool                      killActive(int processId);
+    static QString                   tailActive(int processId, int maxBytes);
+
 signals:
     /**
      * @brief Fired when a backgrounded bash process exits.

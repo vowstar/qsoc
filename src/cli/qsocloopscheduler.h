@@ -119,6 +119,15 @@ public:
     QList<Job> listJobs();
 
     /**
+     * @brief Count of currently scheduled tasks (durable + session-only).
+     * @details O(1) snapshot; safe to call from UI hot paths (status bar
+     *          pill / task overlay header). Unlike listJobs() this does
+     *          not re-read disk in non-owner mode, so it can drift by up
+     *          to 1 tick behind a peer session's mutation.
+     */
+    int activeJobCount() const;
+
+    /**
      * @brief Whether a scheduled prompt must go through CLI dispatch.
      * @details Returns true when the (trimmed) input begins with `/`
      *          (slash command) or `!` (shell escape). Free-form text can
@@ -151,6 +160,16 @@ public:
 signals:
     /** @brief A task is due. The receiver must dispatch prompt verbatim. */
     void promptDue(const QString &prompt, const QString &jobId);
+
+    /**
+     * @brief Emitted whenever the job list changes shape (add / remove /
+     *        clear / fire-and-erase one-shot).
+     * @details Drives task overlays / status bar pills that need to
+     *          re-render when the count or composition changes. Distinct
+     *          from promptDue: a recurring fire updates lastFiredAt but
+     *          does not change shape, so this signal is not emitted there.
+     */
+    void jobsChanged();
 
     /**
      * @brief Durable persist write failed during tick().

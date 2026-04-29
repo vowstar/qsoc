@@ -308,6 +308,7 @@ QString QSocLoopScheduler::addJob(
         jobs_.removeLast();
         return QString();
     }
+    emit jobsChanged();
     return job.id;
 }
 
@@ -324,6 +325,7 @@ bool QSocLoopScheduler::removeJob(const QString &id)
             jobs_.insert(i, stash);
             return false;
         }
+        emit jobsChanged();
         return true;
     }
     return false;
@@ -347,7 +349,13 @@ bool QSocLoopScheduler::clearJobs()
         jobs_ = stash;
         return false;
     }
+    emit jobsChanged();
     return true;
+}
+
+int QSocLoopScheduler::activeJobCount() const
+{
+    return jobs_.size();
 }
 
 QList<QSocLoopScheduler::Job> QSocLoopScheduler::listJobs()
@@ -429,6 +437,10 @@ void QSocLoopScheduler::tick()
         persistDegraded_ = true;
         emit persistFailed(tasksPath());
     }
+    /* Emit jobsChanged when shape changed (one-shot erased), not on
+     * lastFiredAt updates alone. */
+    if (!oneShotsToErase.isEmpty())
+        emit jobsChanged();
     for (const auto &pair : due)
         emit promptDue(pair.first, pair.second);
 }

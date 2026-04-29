@@ -63,6 +63,68 @@ void QSocToolShellBash::killAllActive()
     activeProcesses.clear();
 }
 
+QList<QSocToolShellBash::BackgroundSnapshot> QSocToolShellBash::snapshotActive()
+{
+    QList<BackgroundSnapshot> out;
+    for (auto it = activeProcesses.constBegin(); it != activeProcesses.constEnd(); ++it) {
+        const auto        &info = it.value();
+        BackgroundSnapshot snap;
+        snap.id          = it.key();
+        snap.command     = info.command;
+        snap.startedAtMs = info.startTime;
+        snap.outputPath  = info.outputPath;
+        snap.isStuck     = !info.stuckReason.isEmpty();
+        snap.isRunning = (info.process != nullptr && info.process->state() != QProcess::NotRunning);
+        out.append(snap);
+    }
+    std::sort(out.begin(), out.end(), [](const BackgroundSnapshot &a, const BackgroundSnapshot &b) {
+        return a.id < b.id;
+    });
+    return out;
+}
+
+int QSocToolShellBash::activeProcessCount()
+{
+    return static_cast<int>(activeProcesses.size());
+}
+
+bool QSocToolShellBash::killActive(int processId)
+{
+    auto it = activeProcesses.find(processId);
+    if (it == activeProcesses.end())
+        return false;
+    QSocBashProcessInfo &info = it.value();
+    if (info.process != nullptr) {
+        info.process->terminate();
+        if (!info.process->waitForFinished(2000)) {
+            info.process->kill();
+            info.process->waitForFinished(1000);
+        }
+        delete info.process;
+        info.process = nullptr;
+    }
+    QDir(QFileInfo(info.outputPath).absolutePath()).removeRecursively();
+    activeProcesses.erase(it);
+    return true;
+}
+
+QString QSocToolShellBash::tailActive(int processId, int maxBytes)
+{
+    auto it = activeProcesses.constFind(processId);
+    if (it == activeProcesses.constEnd())
+        return QString();
+    const QString &path = it.value().outputPath;
+    QFile          file(path);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly))
+        return QString();
+    const qint64 size = file.size();
+    if (size > maxBytes)
+        file.seek(size - maxBytes);
+    const QByteArray bytes = file.readAll();
+    file.close();
+    return QString::fromUtf8(bytes);
+}
+
 QString QSocToolShellBash::getName() const
 {
     return "bash";
