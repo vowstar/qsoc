@@ -59,6 +59,7 @@ QString QSocToolAgent::getDescription() const
 json QSocToolAgent::getParametersSchema() const
 {
     json enumValues = json::array();
+    enumValues.push_back("fork");
     if (defRegistry_ != nullptr) {
         for (const QString &name : defRegistry_->availableNames()) {
             enumValues.push_back(name.toStdString());
@@ -70,7 +71,10 @@ json QSocToolAgent::getParametersSchema() const
          {{"subagent_type",
            {{"type", "string"},
             {"enum", enumValues},
-            {"description", "Identifier of the sub-agent type to spawn."}}},
+            {"description",
+             "Sub-agent type. Use 'fork' to inherit the parent's full message "
+             "history (cache-cheap delegation that continues the existing thread). "
+             "When omitted, fork mode is also assumed."}}},
           {"description",
            {{"type", "string"},
             {"description", "Short 3-7 word label shown in the task overlay row."}}},
@@ -91,10 +95,35 @@ json QSocToolAgent::getParametersSchema() const
              "When 'worktree', the child runs inside a fresh git worktree of the "
              "current project, so its file changes are isolated from the parent. "
              "Silently falls back to 'none' if the project is not a git repo."}}}}},
-        {"required", json::array({"subagent_type", "description", "prompt"})}};
+        {"required", json::array({"description", "prompt"})}};
 }
 
 namespace {
+
+/* Marker injected into a forked child's messages so a nested fork
+ * can detect "this context is already forked" and refuse. Mirrors
+ * claude-code's boilerplate-tag recursion guard. */
+constexpr auto kForkMarkerTag = "<!-- qsoc-fork-tag -->";
+
+bool messagesContainForkMarker(const json &messages)
+{
+    if (!messages.is_array()) {
+        return false;
+    }
+    for (const auto &msg : messages) {
+        if (!msg.contains("content")) {
+            continue;
+        }
+        if (!msg["content"].is_string()) {
+            continue;
+        }
+        const std::string content = msg["content"].get<std::string>();
+        if (content.find(kForkMarkerTag) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
 
 QString jsonStringField(const json &args, const char *key)
 {
@@ -236,21 +265,33 @@ QString QSocToolAgent::execute(const json &arguments)
                                      ? QStringLiteral("none")
                                      : jsonStringField(arguments, "isolation");
 
-    if (subagentType.isEmpty() || prompt.isEmpty()) {
-        return QStringLiteral(
-            R"({"status":"error","error":"subagent_type and prompt are required"})");
+    if (prompt.isEmpty()) {
+        return QStringLiteral(R"({"status":"error","error":"prompt is required"})");
     }
 
-    const QSocAgentDefinition *def = defRegistry_->find(subagentType);
-    if (def == nullptr) {
-        return QString::fromUtf8(
-            json{
-                {"status", "error"},
-                {"error", std::string("unknown subagent_type: ") + subagentType.toStdString()},
-                {"available",
-                 QString(defRegistry_->availableNames().join(QStringLiteral(", "))).toStdString()}}
-                .dump()
-                .c_str());
+    /* Fork mode: subagent_type empty or "fork" → spawn a child that
+     * inherits the parent's message history + system prompt for
+     * cache-identical prefix continuation. The parent's full
+     * conversation is forwarded; the child gets `prompt` as the
+     * next user turn. Recursion guard via the kForkMarkerTag
+     * sentinel: if the parent's history already carries one, this
+     * is a forked context, refuse a second fork. */
+    const bool isFork = subagentType.isEmpty() || subagentType == QStringLiteral("fork");
+
+    const QSocAgentDefinition *def = nullptr;
+    if (!isFork) {
+        def = defRegistry_->find(subagentType);
+        if (def == nullptr) {
+            return QString::fromUtf8(
+                json{
+                    {"status", "error"},
+                    {"error", std::string("unknown subagent_type: ") + subagentType.toStdString()},
+                    {"available",
+                     QString(defRegistry_->availableNames().join(QStringLiteral(", ")))
+                         .toStdString()}}
+                    .dump()
+                    .c_str());
+        }
     }
 
     /* Resolve parent registry + config dynamically from the live parent
@@ -295,6 +336,22 @@ QString QSocToolAgent::execute(const json &arguments)
                 .c_str());
     }
 
+    /* Fork-mode preconditions: needs a live parent agent to copy
+     * the message history from, and rejects nested forks via the
+     * marker check. Checked BEFORE the llm-null guard so a fork
+     * spawn attempt fails for the right reason regardless of llm
+     * wiring. */
+    if (isFork) {
+        if (parentAgent_ == nullptr) {
+            return QStringLiteral(
+                R"({"status":"error","error":"fork mode requires a bound parent agent"})");
+        }
+        if (messagesContainForkMarker(parentAgent_->getMessages())) {
+            return QStringLiteral(
+                R"({"status":"error","error":"forks cannot be nested; this context is already forked"})");
+        }
+    }
+
     if (effectiveLlm == nullptr || effectiveRegistry == nullptr) {
         return QStringLiteral(
             R"({"status":"error","error":"LLM service or tool registry not configured"})");
@@ -310,22 +367,35 @@ QString QSocToolAgent::execute(const json &arguments)
         worktreePath = createWorktreeFor(parentRepoRoot, QStringLiteral("pending"));
     }
 
-    /* Build child config: clone parent (carries remote-mode fields,
-     * project path, hooks) then apply definition overrides. */
-    QSocAgentConfig childCfg      = effectiveConfig;
-    childCfg.systemPromptOverride = def->promptBody;
-    childCfg.toolsAllow           = def->toolsAllow;
-    childCfg.toolsDeny            = def->toolsDeny;
-    childCfg.maxTurnsOverride     = def->maxTurns;
-    childCfg.criticalReminder     = def->criticalReminder;
-    childCfg.isSubAgent           = true;
-    childCfg.autoLoadMemory       = def->injectMemory;
-    childCfg.injectProjectMd      = def->injectProjectMd;
-    if (!def->injectSkills) {
-        childCfg.skillListing.clear();
-    }
-    if (!def->model.isEmpty()) {
-        childCfg.modelId = def->model;
+    /* Build child config. Two paths:
+     *   - Named def: apply that def's restrictions / prompt body.
+     *   - Fork:      reuse parent's rendered system prompt verbatim
+     *                so the LLM cache stays warm; no allowlist /
+     *                denylist / max_turns override; isSubAgent is
+     *                still on so the recursion guard blocks the
+     *                spawn-agent tool. */
+    QSocAgentConfig childCfg = effectiveConfig;
+    childCfg.isSubAgent      = true;
+    if (isFork) {
+        childCfg.systemPromptOverride = parentAgent_->buildSystemPromptWithMemory();
+        childCfg.toolsAllow.clear();
+        childCfg.toolsDeny.clear();
+        childCfg.maxTurnsOverride = 0;
+        childCfg.criticalReminder.clear();
+    } else {
+        childCfg.systemPromptOverride = def->promptBody;
+        childCfg.toolsAllow           = def->toolsAllow;
+        childCfg.toolsDeny            = def->toolsDeny;
+        childCfg.maxTurnsOverride     = def->maxTurns;
+        childCfg.criticalReminder     = def->criticalReminder;
+        childCfg.autoLoadMemory       = def->injectMemory;
+        childCfg.injectProjectMd      = def->injectProjectMd;
+        if (!def->injectSkills) {
+            childCfg.skillListing.clear();
+        }
+        if (!def->model.isEmpty()) {
+            childCfg.modelId = def->model;
+        }
     }
     if (!worktreePath.isEmpty()) {
         childCfg.projectPath = worktreePath;
@@ -347,7 +417,7 @@ QString QSocToolAgent::execute(const json &arguments)
      * hooks, build a child-scoped hook manager. Otherwise inherit
      * the parent's. The child-owned manager is parented to the
      * child so it goes when the child does. */
-    if (!def->hooks.isEmpty()) {
+    if (def != nullptr && !def->hooks.isEmpty()) {
         auto *childHooks = new QSocHookManager(child);
         childHooks->setConfig(def->hooks);
         child->setHookManager(childHooks);
@@ -363,8 +433,24 @@ QString QSocToolAgent::execute(const json &arguments)
         child->setLoopScheduler(loopScheduler_);
     }
 
-    const QString label  = description.isEmpty() ? subagentType : description;
-    const QString taskId = taskSource_->registerRun(label, subagentType, child);
+    /* Fork mode: copy parent's message history into the child + a
+     * marker system message so subsequent forks detect the chain. */
+    if (isFork) {
+        json forkedMessages = parentAgent_->getMessages();
+        if (!forkedMessages.is_array()) {
+            forkedMessages = json::array();
+        }
+        forkedMessages.push_back({
+            {"role", "system"},
+            {"content",
+             std::string(kForkMarkerTag) + "\nFork point: continuing as a forked sub-agent."},
+        });
+        child->setMessages(forkedMessages);
+    }
+
+    const QString effectiveType = isFork ? QStringLiteral("fork") : subagentType;
+    const QString label         = description.isEmpty() ? effectiveType : description;
+    const QString taskId        = taskSource_->registerRun(label, effectiveType, child);
     /* Stash isolation + worktree on the run so the meta sidecar
      * captures them; mirrors what the response JSON reports. */
     taskSource_->setIsolationMetadata(taskId, isolation, worktreePath);
@@ -433,7 +519,7 @@ QString QSocToolAgent::execute(const json &arguments)
      * the prompt as a context block. Capped at 4 KB per skill so a
      * fat SKILL.md doesn't dominate the child's context window. */
     QString effectivePrompt = prompt;
-    if (!def->skills.isEmpty()) {
+    if (def != nullptr && !def->skills.isEmpty()) {
         if (auto *skillTool = dynamic_cast<QSocToolSkillFind *>(
                 effectiveRegistry->getTool(QStringLiteral("skill_find")))) {
             const QList<QSocToolSkillFind::SkillInfo> all = skillTool->scanAllSkills();
@@ -496,7 +582,7 @@ QString QSocToolAgent::execute(const json &arguments)
             json{
                 {"status", "async_launched"},
                 {"task_id", taskId.toStdString()},
-                {"subagent_type", subagentType.toStdString()},
+                {"subagent_type", effectiveType.toStdString()},
                 {"description", label.toStdString()},
                 {"isolation", isolation.toStdString()},
                 {"worktree", worktreePath.toStdString()}}
