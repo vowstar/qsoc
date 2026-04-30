@@ -323,6 +323,52 @@ private slots:
         QVERIFY(reg.brokenDefinitions().isEmpty());
     }
 
+    void testScanFromDiskParsesDisallowedTools()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "deny.md",
+            "---\n"
+            "name: deny\n"
+            "description: tools + disallowed_tools combined.\n"
+            "tools: read_file, list_files, bash\n"
+            "disallowed_tools: bash, write_file\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("deny"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->toolsAllow.size(), 3);
+        QCOMPARE(def->toolsDeny.size(), 2);
+        QVERIFY(def->toolsDeny.contains(QStringLiteral("bash")));
+        QVERIFY(def->toolsDeny.contains(QStringLiteral("write_file")));
+    }
+
+    /* The camelCase claude-code spelling is also accepted as a
+     * convenience. */
+    void testScanFromDiskAcceptsCamelDisallowedTools()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "camel.md",
+            "---\n"
+            "name: camel\n"
+            "disallowedTools:\n"
+            "  - lsp\n"
+            "  - memory_write\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("camel"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->toolsDeny.size(), 2);
+        QVERIFY(def->toolsDeny.contains(QStringLiteral("lsp")));
+    }
+
     void testScanFromDiskInjectFlagsDefaultsAndOverrides()
     {
         QTemporaryDir userDir;

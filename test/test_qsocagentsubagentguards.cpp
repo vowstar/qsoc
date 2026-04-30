@@ -107,6 +107,44 @@ private slots:
         QCOMPARE(agent->getEffectiveToolDefinitions().size(), size_t{1});
     }
 
+    /* Denylist subtracts from inherit-everything: empty allow + deny
+     * one tool means everything else stays allowed. */
+    void testDenylistSubtractsFromInheritEverything()
+    {
+        QSocAgentConfig cfg;
+        cfg.toolsAllow.clear();
+        cfg.toolsDeny = {QStringLiteral("bash_run")};
+        auto *agent   = new QSocAgent(this, nullptr, makeRegistry(), cfg);
+        QVERIFY(agent->isToolAllowed(QStringLiteral("file_read")));
+        QVERIFY(!agent->isToolAllowed(QStringLiteral("bash_run")));
+        QVERIFY(agent->isToolAllowed(QStringLiteral("agent")));
+    }
+
+    /* Denylist takes precedence over allowlist when they intersect:
+     * "allow X and Y, but deny Y" leaves only X. */
+    void testDenylistWinsAgainstAllowlist()
+    {
+        QSocAgentConfig cfg;
+        cfg.toolsAllow = {QStringLiteral("file_read"), QStringLiteral("bash_run")};
+        cfg.toolsDeny  = {QStringLiteral("bash_run")};
+        auto *agent    = new QSocAgent(this, nullptr, makeRegistry(), cfg);
+        QVERIFY(agent->isToolAllowed(QStringLiteral("file_read")));
+        QVERIFY(!agent->isToolAllowed(QStringLiteral("bash_run")));
+    }
+
+    /* Denylist works in sub-agent mode too; recursion guard still
+     * blocks the agent tool independently. */
+    void testDenylistInSubAgentRespectsRecursionGuard()
+    {
+        QSocAgentConfig cfg;
+        cfg.isSubAgent = true;
+        cfg.toolsDeny  = {QStringLiteral("file_read")};
+        auto *agent    = new QSocAgent(this, nullptr, makeRegistry(), cfg);
+        QVERIFY(!agent->isToolAllowed(QStringLiteral("file_read")));
+        QVERIFY(agent->isToolAllowed(QStringLiteral("bash_run")));
+        QVERIFY(!agent->isToolAllowed(QStringLiteral("agent")));
+    }
+
     /* Non-sub parent with allowlist behaves as plain whitelist (no
      * automatic "agent" rejection). */
     void testParentAllowlistAllowsAgentTool()

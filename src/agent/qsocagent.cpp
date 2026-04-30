@@ -72,10 +72,17 @@ bool QSocAgent::isToolAllowed(const QString &name) const
     if (agentConfig.isSubAgent && name == QStringLiteral("agent")) {
         return false;
     }
-    if (agentConfig.toolsAllow.isEmpty()) {
-        return true;
+    /* Allowlist gate: empty list inherits everything. */
+    if (!agentConfig.toolsAllow.isEmpty() && !agentConfig.toolsAllow.contains(name)) {
+        return false;
     }
-    return agentConfig.toolsAllow.contains(name);
+    /* Denylist gate: applied AFTER allowlist. Used to subtract a
+     * couple of tools from "inherit everything" or from a broad
+     * allowlist. Mirrors claude-code's `disallowedTools`. */
+    if (agentConfig.toolsDeny.contains(name)) {
+        return false;
+    }
+    return true;
 }
 
 nlohmann::json QSocAgent::getEffectiveToolDefinitions() const
