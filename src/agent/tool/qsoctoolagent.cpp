@@ -11,8 +11,12 @@
 
 #include <memory>
 #include <utility>
+#include <QDir>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QPointer>
+#include <QProcess>
+#include <QStandardPaths>
 
 QSocToolAgent::QSocToolAgent(
     QObject                     *parent,
@@ -75,7 +79,15 @@ json QSocToolAgent::getParametersSchema() const
            {{"type", "boolean"},
             {"default", false},
             {"description",
-             "When true, return task_id immediately and run the child asynchronously."}}}}},
+             "When true, return task_id immediately and run the child asynchronously."}}},
+          {"isolation",
+           {{"type", "string"},
+            {"enum", json::array({"none", "worktree"})},
+            {"default", "none"},
+            {"description",
+             "When 'worktree', the child runs inside a fresh git worktree of the "
+             "current project, so its file changes are isolated from the parent. "
+             "Silently falls back to 'none' if the project is not a git repo."}}}}},
         {"required", json::array({"subagent_type", "description", "prompt"})}};
 }
 
@@ -97,6 +109,73 @@ bool jsonBoolField(const json &args, const char *key, bool fallback)
     return args[key].get<bool>();
 }
 
+/* Worktree helpers. Synchronous git invocations; failure is reported
+ * via empty-string return and lets the caller fall back to no
+ * isolation. Used only when isolation == "worktree". */
+QString worktreeRootDir()
+{
+    return QDir::tempPath() + QStringLiteral("/qsoc-worktrees");
+}
+
+bool runGit(const QString &cwd, const QStringList &args, QString *errOut = nullptr)
+{
+    QProcess proc;
+    if (!cwd.isEmpty()) {
+        proc.setWorkingDirectory(cwd);
+    }
+    proc.start(QStringLiteral("git"), args);
+    if (!proc.waitForFinished(15000)) {
+        if (errOut != nullptr) {
+            *errOut = QStringLiteral("git timed out");
+        }
+        return false;
+    }
+    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
+        if (errOut != nullptr) {
+            *errOut = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+        }
+        return false;
+    }
+    return true;
+}
+
+QString createWorktreeFor(const QString &repoRoot, const QString &taskId)
+{
+    if (repoRoot.isEmpty()) {
+        return {};
+    }
+    /* Cheap precheck: is the parent a git working tree? */
+    if (!runGit(repoRoot, {QStringLiteral("rev-parse"), QStringLiteral("--is-inside-work-tree")})) {
+        return {};
+    }
+    QDir().mkpath(worktreeRootDir());
+    const QString wtPath = QDir(worktreeRootDir()).filePath(QStringLiteral("qsoc_wt_") + taskId);
+    QString       err;
+    if (!runGit(
+            repoRoot,
+            {QStringLiteral("worktree"),
+             QStringLiteral("add"),
+             QStringLiteral("--detach"),
+             wtPath,
+             QStringLiteral("HEAD")},
+            &err)) {
+        return {};
+    }
+    return wtPath;
+}
+
+void removeWorktreeAt(const QString &repoRoot, const QString &wtPath)
+{
+    if (wtPath.isEmpty()) {
+        return;
+    }
+    runGit(
+        repoRoot,
+        {QStringLiteral("worktree"), QStringLiteral("remove"), QStringLiteral("--force"), wtPath});
+    /* Belt and braces: remove any leftover directory tree. */
+    QDir(wtPath).removeRecursively();
+}
+
 } // namespace
 
 QString QSocToolAgent::execute(const json &arguments)
@@ -109,6 +188,9 @@ QString QSocToolAgent::execute(const json &arguments)
     const QString description  = jsonStringField(arguments, "description");
     const QString prompt       = jsonStringField(arguments, "prompt");
     const bool    background   = jsonBoolField(arguments, "run_in_background", false);
+    const QString isolation    = jsonStringField(arguments, "isolation").isEmpty()
+                                     ? QStringLiteral("none")
+                                     : jsonStringField(arguments, "isolation");
 
     if (subagentType.isEmpty() || prompt.isEmpty()) {
         return QStringLiteral(
@@ -174,6 +256,16 @@ QString QSocToolAgent::execute(const json &arguments)
             R"({"status":"error","error":"LLM service or tool registry not configured"})");
     }
 
+    /* When isolation == "worktree" and the parent is a git repo,
+     * create a fresh detached worktree off HEAD and route the
+     * child's projectPath there. Silent fallback to no isolation
+     * if git is unavailable or the parent isn't a working tree. */
+    QString       worktreePath;
+    const QString parentRepoRoot = effectiveConfig.projectPath;
+    if (isolation == QStringLiteral("worktree") && !parentRepoRoot.isEmpty()) {
+        worktreePath = createWorktreeFor(parentRepoRoot, QStringLiteral("pending"));
+    }
+
     /* Build child config: clone parent (carries remote-mode fields,
      * project path, hooks) then apply definition overrides. */
     QSocAgentConfig childCfg      = effectiveConfig;
@@ -189,6 +281,9 @@ QString QSocToolAgent::execute(const json &arguments)
     }
     if (!def->model.isEmpty()) {
         childCfg.modelId = def->model;
+    }
+    if (!worktreePath.isEmpty()) {
+        childCfg.projectPath = worktreePath;
     }
 
     /* Per-child LLMService: clone the live parent's service so the
@@ -267,27 +362,42 @@ QString QSocToolAgent::execute(const json &arguments)
             }
         });
 
+    /* Worktree cleanup hook captured by lambdas below. Empty path
+     * = no isolation, helpers are no-ops. */
+    auto wtCleanup = [parentRepoRoot, worktreePath]() {
+        removeWorktreeAt(parentRepoRoot, worktreePath);
+    };
+
     if (background) {
         QObject::connect(
             child,
             &QSocAgent::runComplete,
             taskSource_,
-            [srcGuard, taskId](const QString &finalText) {
+            [srcGuard, taskId, wtCleanup](const QString &finalText) {
                 if (!srcGuard.isNull()) {
                     srcGuard->markCompleted(taskId, finalText);
                 }
+                wtCleanup();
             });
         QObject::connect(
-            child, &QSocAgent::runError, taskSource_, [srcGuard, taskId](const QString &error) {
+            child,
+            &QSocAgent::runError,
+            taskSource_,
+            [srcGuard, taskId, wtCleanup](const QString &error) {
                 if (!srcGuard.isNull()) {
                     srcGuard->markFailed(taskId, error);
                 }
+                wtCleanup();
             });
         QObject::connect(
-            child, &QSocAgent::runAborted, taskSource_, [srcGuard, taskId](const QString &) {
+            child,
+            &QSocAgent::runAborted,
+            taskSource_,
+            [srcGuard, taskId, wtCleanup](const QString &) {
                 if (!srcGuard.isNull()) {
                     srcGuard->markFailed(taskId, QStringLiteral("aborted"));
                 }
+                wtCleanup();
             });
         child->runStream(prompt);
         return QString::fromUtf8(
@@ -295,7 +405,9 @@ QString QSocToolAgent::execute(const json &arguments)
                 {"status", "async_launched"},
                 {"task_id", taskId.toStdString()},
                 {"subagent_type", subagentType.toStdString()},
-                {"description", label.toStdString()}}
+                {"description", label.toStdString()},
+                {"isolation", isolation.toStdString()},
+                {"worktree", worktreePath.toStdString()}}
                 .dump()
                 .c_str());
     }
@@ -305,13 +417,16 @@ QString QSocToolAgent::execute(const json &arguments)
      * the child's stream; the single-in-flight invariant holds. */
     const QString result = child->run(prompt);
     taskSource_->markCompleted(taskId, result);
+    wtCleanup();
 
     return QString::fromUtf8(
         json{
             {"status", "ok"},
             {"task_id", taskId.toStdString()},
             {"subagent_type", subagentType.toStdString()},
-            {"result", result.toStdString()}}
+            {"result", result.toStdString()},
+            {"isolation", isolation.toStdString()},
+            {"worktree", worktreePath.toStdString()}}
             .dump()
             .c_str());
 }

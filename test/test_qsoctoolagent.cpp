@@ -9,7 +9,11 @@
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolagent.h"
 #include <nlohmann/json.hpp>
+#include <QDir>
+#include <QFile>
+#include <QProcess>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
 
@@ -223,6 +227,48 @@ private slots:
          * registry resolution, proving liveReg was reachable (not
          * cachedReg, which would also have been non-null but the
          * point is: with parentAgent bound, we follow the live path). */
+        QVERIFY(parsed["error"].get<std::string>().find("LLM service") != std::string::npos);
+    }
+
+    void testIsolationFieldInSchemaEnumNoneAndWorktree()
+    {
+        auto      *tool   = makeTool();
+        const json schema = tool->getParametersSchema();
+        QVERIFY(schema["properties"].contains("isolation"));
+        const auto &enumValues = schema["properties"]["isolation"]["enum"];
+        QVERIFY(enumValues.is_array());
+        std::vector<std::string> got;
+        for (const auto &val : enumValues) {
+            got.push_back(val.get<std::string>());
+        }
+        QVERIFY(std::find(got.begin(), got.end(), "none") != got.end());
+        QVERIFY(std::find(got.begin(), got.end(), "worktree") != got.end());
+    }
+
+    /* When isolation=worktree but the project path is not a git
+     * repo, the spawn tool silently falls back to no isolation
+     * (worktree path empty in the response). */
+    void testIsolationWorktreeFallsBackOutsideGitRepo()
+    {
+        auto *defs = new QSocAgentDefinitionRegistry(this);
+        defs->registerBuiltins();
+        auto           *src = new QSocSubAgentTaskSource(this);
+        auto           *reg = new QSocToolRegistry(this);
+        QTemporaryDir   nonGit; /* not a git repo */
+        QSocAgentConfig cfg;
+        cfg.projectPath = nonGit.path();
+        auto *tool      = new QSocToolAgent(this, nullptr, reg, cfg, defs, src);
+
+        const QString out = tool->execute(
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "x"},
+                {"prompt", "do thing"},
+                {"isolation", "worktree"}});
+        const json parsed = json::parse(out.toStdString());
+        /* Falls through to LLM-null guard, which proves we got past
+         * the isolation step without crashing on the missing repo. */
+        QCOMPARE(parsed["status"].get<std::string>(), std::string("error"));
         QVERIFY(parsed["error"].get<std::string>().find("LLM service") != std::string::npos);
     }
 
