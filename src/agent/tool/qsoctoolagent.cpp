@@ -180,6 +180,7 @@ QString QSocToolAgent::execute(const json &arguments)
     childCfg.systemPromptOverride = def->promptBody;
     childCfg.toolsAllow           = def->toolsAllow;
     childCfg.toolsDeny            = def->toolsDeny;
+    childCfg.maxTurnsOverride     = def->maxTurns;
     childCfg.isSubAgent           = true;
     childCfg.autoLoadMemory       = def->injectMemory;
     if (!def->injectSkills) {

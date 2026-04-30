@@ -46,6 +46,12 @@ struct QSocAgentDefinition
     /* Optional model override. Empty = inherit parent's model. */
     QString model;
 
+    /* Per-definition iteration cap. 0 = inherit parent's
+     * `maxIterations` (default 100). When > 0 the child stops with a
+     * "Reached max turns limit" assistant message after this many
+     * agentic iterations, regardless of the parent's higher cap. */
+    int maxTurns = 0;
+
     /* Provenance: "builtin" today; "user" / "project" reserved for
      * markdown discovery in a future iteration. */
     QString scope = QStringLiteral("builtin");

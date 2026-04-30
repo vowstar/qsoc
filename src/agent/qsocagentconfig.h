@@ -118,6 +118,13 @@ struct QSocAgentConfig
      * Empty = no extra denies on top of allowlist + recursion guard. */
     QStringList toolsDeny;
 
+    /* Per-agent iteration cap. 0 = inherit `maxIterations`. When > 0
+     * the agent stops with a "Reached max turns limit" message after
+     * this many iterations even if `maxIterations` would allow more.
+     * Sub-agent definitions set this via the `max_turns:` frontmatter
+     * field; mirrors claude-code's `maxTurns`. */
+    int maxTurnsOverride = 0;
+
     /* Maximum number of sub-agents that may be Running concurrently.
      * Read by the spawn tool when deciding whether to admit a new
      * spawn. The cap protects per-API-key RPM limits at remote

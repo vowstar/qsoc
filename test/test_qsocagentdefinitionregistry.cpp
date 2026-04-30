@@ -323,6 +323,42 @@ private slots:
         QVERIFY(reg.brokenDefinitions().isEmpty());
     }
 
+    void testScanFromDiskParsesMaxTurns()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "capped.md",
+            "---\n"
+            "name: capped\n"
+            "max_turns: 7\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("capped"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->maxTurns, 7);
+    }
+
+    void testScanFromDiskMaxTurnsRejectsBogus()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "bogus.md",
+            "---\n"
+            "name: bogus\n"
+            "max_turns: not-a-number\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("bogus"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->maxTurns, 0); /* default kept */
+    }
+
     void testScanFromDiskParsesDisallowedTools()
     {
         QTemporaryDir userDir;

@@ -124,9 +124,11 @@ QString QSocAgent::run(const QString &userQuery)
     addMessage("user", prompt);
 
     /* Agent loop */
-    int iteration = 0;
+    int       iteration = 0;
+    const int turnCap   = agentConfig.maxTurnsOverride > 0 ? agentConfig.maxTurnsOverride
+                                                           : agentConfig.maxIterations;
 
-    while (iteration < agentConfig.maxIterations) {
+    while (iteration < turnCap) {
         iteration++;
 
         /* Check and compress history if needed */
@@ -160,7 +162,13 @@ QString QSocAgent::run(const QString &userQuery)
         }
     }
 
-    return QString("[Agent safety limit reached (%1 iterations)]").arg(agentConfig.maxIterations);
+    /* Cap source decides the wording: per-agent override gets the
+     * "max turns limit" message; the default safety cap retains the
+     * legacy phrasing so existing logs still match. */
+    if (agentConfig.maxTurnsOverride > 0) {
+        return QString("Reached max turns limit (%1)").arg(turnCap);
+    }
+    return QString("[Agent safety limit reached (%1 iterations)]").arg(turnCap);
 }
 
 void QSocAgent::runStream(const QString &userQuery)
@@ -366,11 +374,16 @@ void QSocAgent::processStreamIteration()
 
     streamIteration++;
 
-    if (streamIteration > agentConfig.maxIterations) {
+    const int streamCap = agentConfig.maxTurnsOverride > 0 ? agentConfig.maxTurnsOverride
+                                                           : agentConfig.maxIterations;
+    if (streamIteration > streamCap) {
         isStreaming = false;
         heartbeatTimer->stop();
-        emit runError(
-            QString("[Agent safety limit reached (%1 iterations)]").arg(agentConfig.maxIterations));
+        const QString msg
+            = agentConfig.maxTurnsOverride > 0
+                  ? QString("Reached max turns limit (%1)").arg(streamCap)
+                  : QString("[Agent safety limit reached (%1 iterations)]").arg(streamCap);
+        emit runError(msg);
         return;
     }
 
