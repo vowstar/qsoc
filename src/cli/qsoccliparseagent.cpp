@@ -26,6 +26,7 @@
 #include "agent/remote/qsocsshsession.h"
 #include "agent/remote/qsoctoolremote.h"
 #include "agent/tool/qsoctoolagent.h"
+#include "agent/tool/qsoctoolagentresume.h"
 #include "agent/tool/qsoctoolagentstatus.h"
 #include "agent/tool/qsoctoolbus.h"
 #include "agent/tool/qsoctooldoc.h"
@@ -1145,6 +1146,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     auto *sendMessageTool = new QSocToolSendMessage(this, subAgentTaskSource);
     toolRegistry->registerTool(sendMessageTool);
 
+    /* Companion tool: prepares a resume payload from a prior run's
+     * meta sidecar + transcript so the LLM can re-spawn an evicted /
+     * crashed sub-agent with the original context restored. */
+    auto *resumeTool = new QSocToolAgentResume(this, subAgentTaskSource);
+    toolRegistry->registerTool(resumeTool);
+
     /* Connect verbose output signal */
     connect(agent, &QSocAgent::verboseOutput, [](const QString &message) {
         QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":" << message;
@@ -1212,6 +1219,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         cliRemoteState.registry->registerTool(agentTool);
         cliRemoteState.registry->registerTool(agentStatusTool);
         cliRemoteState.registry->registerTool(sendMessageTool);
+        cliRemoteState.registry->registerTool(resumeTool);
 
         preLocalRegistry = agent->getToolRegistry();
         agent->setToolRegistry(cliRemoteState.registry);
@@ -4745,6 +4753,9 @@ bool QSocCliWorker::runAgentLoop(
             }
             if (auto *sendTool = localRegistry->getTool(QStringLiteral("send_message"))) {
                 remoteRegistry->registerTool(sendTool);
+            }
+            if (auto *resumeT = localRegistry->getTool(QStringLiteral("agent_resume"))) {
+                remoteRegistry->registerTool(resumeT);
             }
             agent->setToolRegistry(remoteRegistry);
             /* Pull the remote project's .qsoc/agents/ defs across SFTP

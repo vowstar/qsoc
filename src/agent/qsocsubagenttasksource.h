@@ -162,6 +162,14 @@ public:
     QList<HistoricalRun> historicalRuns() const { return historical_; }
 
     /**
+     * @brief Look up one historical run by id from the cache (or
+     *        rescan disk if cache empty / id missing). Used by the
+     *        agent_resume tool to find a prior run's metadata.
+     *        Returns true on hit; populates `out`.
+     */
+    bool findHistoricalRun(const QString &id, HistoricalRun *out);
+
+    /**
      * @brief Find a row by id; returns false if no run with that id
      *        is currently tracked (either never registered, or
      *        already evicted).
