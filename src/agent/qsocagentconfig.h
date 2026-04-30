@@ -49,6 +49,13 @@ struct QSocAgentConfig
     /* Project instructions (AGENTS.md / AGENTS.local.md) */
     QString projectPath; /* Set by parseAgent; empty = no project instructions loaded */
 
+    /* Whether to inject the project AGENTS.md / AGENTS.local.md
+     * section into the system prompt. Default true. Sub-agent
+     * definitions can opt out with `inject_project_md: false` in
+     * frontmatter to save cache tokens on read-only agents
+     * (claude-code's `omitClaudeMd`). */
+    bool injectProjectMd = true;
+
     /* Pre-built skill listing for system prompt injection. Populated by
      * the REPL at startup from scanAllSkills(); empty = no skills found. */
     QString skillListing;

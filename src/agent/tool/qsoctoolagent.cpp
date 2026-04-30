@@ -320,6 +320,7 @@ QString QSocToolAgent::execute(const json &arguments)
     childCfg.criticalReminder     = def->criticalReminder;
     childCfg.isSubAgent           = true;
     childCfg.autoLoadMemory       = def->injectMemory;
+    childCfg.injectProjectMd      = def->injectProjectMd;
     if (!def->injectSkills) {
         childCfg.skillListing.clear();
     }
