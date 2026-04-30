@@ -181,6 +181,7 @@ QString QSocToolAgent::execute(const json &arguments)
     childCfg.toolsAllow           = def->toolsAllow;
     childCfg.toolsDeny            = def->toolsDeny;
     childCfg.maxTurnsOverride     = def->maxTurns;
+    childCfg.criticalReminder     = def->criticalReminder;
     childCfg.isSubAgent           = true;
     childCfg.autoLoadMemory       = def->injectMemory;
     if (!def->injectSkills) {

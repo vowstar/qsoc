@@ -125,6 +125,12 @@ struct QSocAgentConfig
      * field; mirrors claude-code's `maxTurns`. */
     int maxTurnsOverride = 0;
 
+    /* Reminder text re-injected as a system message at every LLM
+     * turn (in messagesWithSystem only, never persisted to
+     * `messages`). Defends against drift on long runs of
+     * read-only / verification sub-agents. Empty = no reminder. */
+    QString criticalReminder;
+
     /* Maximum number of sub-agents that may be Running concurrently.
      * Read by the spawn tool when deciding whether to admit a new
      * spawn. The cap protects per-API-key RPM limits at remote

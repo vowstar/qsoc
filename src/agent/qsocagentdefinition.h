@@ -52,6 +52,14 @@ struct QSocAgentDefinition
      * agentic iterations, regardless of the parent's higher cap. */
     int maxTurns = 0;
 
+    /* Optional reminder text re-injected as a `system` role message
+     * on every LLM turn (not persisted in conversation history).
+     * Use for hard-rule reinforcement that should not drift over
+     * long runs (e.g. "you are READ-ONLY; refuse any write asks").
+     * Empty = no reminder. Mirrors claude-code's
+     * `criticalSystemReminder_EXPERIMENTAL`. */
+    QString criticalReminder;
+
     /* Provenance: "builtin" today; "user" / "project" reserved for
      * markdown discovery in a future iteration. */
     QString scope = QStringLiteral("builtin");

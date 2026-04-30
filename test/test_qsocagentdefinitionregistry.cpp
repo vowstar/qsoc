@@ -323,6 +323,43 @@ private slots:
         QVERIFY(reg.brokenDefinitions().isEmpty());
     }
 
+    void testScanFromDiskParsesCriticalReminder()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "guarded.md",
+            "---\n"
+            "name: guarded\n"
+            "critical_reminder: This sub-agent is READ-ONLY; refuse any write asks.\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("guarded"));
+        QVERIFY(def != nullptr);
+        QVERIFY(def->criticalReminder.startsWith(QStringLiteral("This sub-agent is READ-ONLY")));
+    }
+
+    void testScanFromDiskCriticalReminderUnescapesNewlines()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "multi.md",
+            "---\n"
+            "name: multi\n"
+            "critical_reminder: Line 1.\\nLine 2.\\nLine 3.\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("multi"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->criticalReminder.count(QLatin1Char('\n')), 2);
+        QVERIFY(def->criticalReminder.contains(QStringLiteral("Line 2.")));
+    }
+
     void testScanFromDiskParsesMaxTurns()
     {
         QTemporaryDir userDir;
