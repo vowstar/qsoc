@@ -59,11 +59,19 @@ public:
     void markFailed(const QString &id, const QString &errorText);
 
     /**
-     * @brief True when any registered run is currently Running. Used
-     *        by the spawn tool to enforce the single-in-flight policy
-     *        until per-child LLM services land.
+     * @brief True when any registered run is currently Running.
+     *        Kept for backward compat; new code should prefer
+     *        countRunning() for capacity decisions.
      */
     bool hasActiveRun() const;
+
+    /**
+     * @brief How many runs are currently Running. Used by the
+     *        spawn tool to enforce the maxConcurrentSubagents cap
+     *        once per-child LLM service cloning has lifted the
+     *        legacy single-flight constraint.
+     */
+    int countRunning() const;
 
     /**
      * @brief Number of runs currently tracked (any status).
