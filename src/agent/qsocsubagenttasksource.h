@@ -95,6 +95,21 @@ public:
     bool queueRequestFor(const QString &id, const QString &message);
 
     /**
+     * @brief Override the directory used to persist transcripts.
+     *        Empty (default) routes to
+     *        `<XDG_RUNTIME_DIR>/qsoc/agents/` with a temp-path
+     *        fallback for non-Linux. Test-only.
+     */
+    void setTranscriptDir(const QString &dir) { transcriptDir_ = dir; }
+
+    /**
+     * @brief Resolve the transcript file path for a given run id
+     *        (independent of whether the run is still tracked
+     *        in-memory). Used by `tailFor` for evicted-run fallback.
+     */
+    QString transcriptPathFor(const QString &id) const;
+
+    /**
      * @brief Find a row by id; returns false if no run with that id
      *        is currently tracked (either never registered, or
      *        already evicted).
@@ -132,10 +147,17 @@ private:
      * registered, so the panel doesn't grow without bound. */
     void evictStaleCompleted();
 
+    /** Resolve the on-disk directory transcripts are written to. */
+    QString transcriptDir() const;
+
+    /** Append a line to the on-disk transcript file (best effort). */
+    void appendToDiskTranscript(const QString &id, const QString &text) const;
+
     QList<RunState> runs_; /* preserves registration order; small N */
     int             nextSerial_      = 1;
     qint64          completionTtlMs_ = qint64{60} * 1000; /* 60 s lingering window */
     int             transcriptCap_   = 64 * 1024;
+    QString         transcriptDir_; /* empty = compute from QStandardPaths */
 };
 
 #endif /* QSOCSUBAGENTTASKSOURCE_H */
