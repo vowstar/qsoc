@@ -60,6 +60,14 @@ struct QSocAgentDefinition
      * `criticalSystemReminder_EXPERIMENTAL`. */
     QString criticalReminder;
 
+    /* Specific skill names to preload into the child's conversation
+     * at spawn time. Each name is resolved via the parent's
+     * `skill_find` tool; the SKILL.md content is injected as a
+     * user-role message in the child's history (capped at 4 KB).
+     * Independent from `injectSkills` (which lists EVERY skill in
+     * the system prompt — broad context vs. targeted preload). */
+    QStringList skills;
+
     /* Provenance: "builtin" today; "user" / "project" reserved for
      * markdown discovery in a future iteration. */
     QString scope = QStringLiteral("builtin");

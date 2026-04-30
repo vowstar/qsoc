@@ -418,6 +418,13 @@ QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdownContent(
                 rest.append(fmLines[j]);
             }
             def.toolsDeny = parseToolsField(value, rest);
+        } else if (key == QLatin1String("skills")) {
+            /* Same list shape as `tools` / `disallowed_tools`. */
+            QStringList rest;
+            for (qsizetype j = i + 1; j < fmLines.size(); ++j) {
+                rest.append(fmLines[j]);
+            }
+            def.skills = parseToolsField(value, rest);
         } else if (key == QLatin1String("model")) {
             def.model = value;
         } else if (key == QLatin1String("critical_reminder") || key == QLatin1String("criticalReminder")) {

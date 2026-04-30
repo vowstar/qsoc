@@ -7,6 +7,7 @@
 #include "agent/qsocagentdefinition.h"
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsocsubagenttasksource.h"
+#include "agent/tool/qsoctoolskill.h"
 #include "common/qllmservice.h"
 
 #include <memory>
@@ -410,6 +411,37 @@ QString QSocToolAgent::execute(const json &arguments)
         removeWorktreeAt(parentRepoRoot, worktreePath);
     };
 
+    /* If def declares specific `skills`, prepend their content to
+     * the prompt as a context block. Capped at 4 KB per skill so a
+     * fat SKILL.md doesn't dominate the child's context window. */
+    QString effectivePrompt = prompt;
+    if (!def->skills.isEmpty()) {
+        if (auto *skillTool = dynamic_cast<QSocToolSkillFind *>(
+                effectiveRegistry->getTool(QStringLiteral("skill_find")))) {
+            const QList<QSocToolSkillFind::SkillInfo> all = skillTool->scanAllSkills();
+            QString                                   prefix;
+            constexpr int                             kSkillCapBytes = 4 * 1024;
+            for (const QString &wanted : def->skills) {
+                for (const auto &skill : all) {
+                    if (skill.name != wanted) {
+                        continue;
+                    }
+                    QString content = skillTool->readSkillContent(skill.path);
+                    if (content.size() > kSkillCapBytes) {
+                        content = content.left(kSkillCapBytes)
+                                  + QStringLiteral("\n[... skill content truncated ...]\n");
+                    }
+                    prefix += QStringLiteral("[Skill: ") + wanted + QStringLiteral("]\n") + content
+                              + QStringLiteral("\n\n");
+                    break;
+                }
+            }
+            if (!prefix.isEmpty()) {
+                effectivePrompt = prefix + QStringLiteral("=== Task ===\n") + prompt;
+            }
+        }
+    }
+
     if (background) {
         QObject::connect(
             child,
@@ -441,7 +473,7 @@ QString QSocToolAgent::execute(const json &arguments)
                 }
                 wtCleanup();
             });
-        child->runStream(prompt);
+        child->runStream(effectivePrompt);
         return QString::fromUtf8(
             json{
                 {"status", "async_launched"},
@@ -476,7 +508,7 @@ QString QSocToolAgent::execute(const json &arguments)
     /* Synchronous: child->run() nests a QEventLoop internally. The
      * parent is blocked here, so its own LLM service is idle; the
      * child uses its own cloned service. */
-    const QString result = child->run(prompt);
+    const QString result = child->run(effectivePrompt);
     autoBgTimer->stop();
     autoBgTimer->deleteLater();
     taskSource_->markCompleted(taskId, result);

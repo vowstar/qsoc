@@ -362,6 +362,46 @@ private slots:
         QVERIFY(reg.brokenDefinitions().isEmpty());
     }
 
+    void testScanFromDiskParsesSkillsList()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "withskills.md",
+            "---\n"
+            "name: withskills\n"
+            "skills:\n"
+            "  - lint-checker\n"
+            "  - vendor-rules\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("withskills"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->skills.size(), 2);
+        QVERIFY(def->skills.contains(QStringLiteral("lint-checker")));
+        QVERIFY(def->skills.contains(QStringLiteral("vendor-rules")));
+    }
+
+    void testScanFromDiskSkillsInlineForm()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "inlskills.md",
+            "---\n"
+            "name: inlskills\n"
+            "skills: alpha, beta\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("inlskills"));
+        QVERIFY(def != nullptr);
+        QCOMPARE(def->skills.size(), 2);
+    }
+
     void testScanFromDiskParsesCriticalReminder()
     {
         QTemporaryDir userDir;
