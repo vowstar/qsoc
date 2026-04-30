@@ -9,6 +9,7 @@
 #include "agent/qsocsubagenttasksource.h"
 #include "common/qllmservice.h"
 
+#include <memory>
 #include <utility>
 #include <QEventLoop>
 #include <QPointer>
@@ -181,6 +182,27 @@ QString QSocToolAgent::execute(const json &arguments)
 
     const QString label  = description.isEmpty() ? subagentType : description;
     const QString taskId = taskSource_->registerRun(label, subagentType, child);
+
+    /* Forward child token usage into the parent's running totals so
+     * the parent's status pill / cost view reflects total cost in
+     * real time. Routes only the DELTA on each emission to avoid
+     * double counting. */
+    if (parentAgent_ != nullptr) {
+        auto *parent  = parentAgent_;
+        auto  prevIn  = std::make_shared<qint64>(0);
+        auto  prevOut = std::make_shared<qint64>(0);
+        QObject::connect(
+            child,
+            &QSocAgent::tokenUsage,
+            parent,
+            [parent, prevIn, prevOut](qint64 inputTok, qint64 outputTok) {
+                const qint64 dIn  = inputTok - *prevIn;
+                const qint64 dOut = outputTok - *prevOut;
+                *prevIn           = inputTok;
+                *prevOut          = outputTok;
+                parent->addExternalTokenUsage(dIn, dOut);
+            });
+    }
 
     /* Stream child progress into the overlay's transcript buffer. */
     QPointer<QSocSubAgentTaskSource> srcGuard(taskSource_);

@@ -266,6 +266,16 @@ public:
      */
     nlohmann::json getEffectiveToolDefinitions() const;
 
+    /**
+     * @brief Fold token usage from a child or other external source
+     *        into this agent's running totals. Re-emits `tokenUsage`
+     *        with the new totals so the status pill / cost view see
+     *        the addition immediately.
+     * @param inputTokens  Tokens to add to totalInputTokens.
+     * @param outputTokens Tokens to add to totalOutputTokens.
+     */
+    void addExternalTokenUsage(qint64 inputTokens, qint64 outputTokens);
+
 signals:
     /**
      * @brief Signal emitted when a tool is called
