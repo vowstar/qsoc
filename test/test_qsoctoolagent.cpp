@@ -9,6 +9,7 @@
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolagent.h"
 #include <nlohmann/json.hpp>
+#include <QSignalSpy>
 #include <QtCore>
 #include <QtTest>
 
@@ -177,6 +178,31 @@ private slots:
          * cachedReg, which would also have been non-null but the
          * point is: with parentAgent bound, we follow the live path). */
         QVERIFY(parsed["error"].get<std::string>().find("LLM service") != std::string::npos);
+    }
+
+    /* Direct verification of QSocAgent::addExternalTokenUsage: it must
+     * accumulate into totalInputTokens / totalOutputTokens and emit a
+     * tokenUsage signal carrying the new totals. This is the contract
+     * the spawn tool relies on to fold child usage into the parent. */
+    void testAddExternalTokenUsageAccumulatesAndEmits()
+    {
+        auto      *parent = new QSocAgent(this, nullptr, nullptr, QSocAgentConfig());
+        QSignalSpy spy(parent, &QSocAgent::tokenUsage);
+
+        parent->addExternalTokenUsage(100, 50);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toLongLong(), qint64(100));
+        QCOMPARE(spy.at(0).at(1).toLongLong(), qint64(50));
+
+        parent->addExternalTokenUsage(40, 0);
+        QCOMPARE(spy.count(), 2);
+        QCOMPARE(spy.at(1).at(0).toLongLong(), qint64(140));
+        QCOMPARE(spy.at(1).at(1).toLongLong(), qint64(50));
+
+        /* Zero / negative deltas are ignored; signal not re-emitted. */
+        parent->addExternalTokenUsage(0, 0);
+        parent->addExternalTokenUsage(-5, -5);
+        QCOMPARE(spy.count(), 2);
     }
 };
 

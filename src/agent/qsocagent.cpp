@@ -1134,6 +1134,20 @@ void QSocAgent::clearPendingRequests()
     requestQueue.clear();
 }
 
+void QSocAgent::addExternalTokenUsage(qint64 inputTokens, qint64 outputTokens)
+{
+    if (inputTokens <= 0 && outputTokens <= 0) {
+        return;
+    }
+    if (inputTokens > 0) {
+        totalInputTokens.fetch_add(inputTokens);
+    }
+    if (outputTokens > 0) {
+        totalOutputTokens.fetch_add(outputTokens);
+    }
+    emit tokenUsage(totalInputTokens.load(), totalOutputTokens.load());
+}
+
 void QSocAgent::abort()
 {
     abortRequested = true;
