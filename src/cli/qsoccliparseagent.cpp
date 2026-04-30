@@ -37,6 +37,7 @@
 #include "agent/tool/qsoctoolpath.h"
 #include "agent/tool/qsoctoolproject.h"
 #include "agent/tool/qsoctoolschedule.h"
+#include "agent/tool/qsoctoolsendmessage.h"
 #include "agent/tool/qsoctoolshell.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctooltodo.h"
@@ -1131,6 +1132,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     auto *agentStatusTool = new QSocToolAgentStatus(this, subAgentTaskSource);
     toolRegistry->registerTool(agentStatusTool);
 
+    /* Companion tool: lets the LLM push more input into a Running
+     * async sub-agent without waiting for completion. */
+    auto *sendMessageTool = new QSocToolSendMessage(this, subAgentTaskSource);
+    toolRegistry->registerTool(sendMessageTool);
+
     /* Connect verbose output signal */
     connect(agent, &QSocAgent::verboseOutput, [](const QString &message) {
         QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":" << message;
@@ -1197,6 +1203,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
          * (see QSocToolAgent::setParentAgent). */
         cliRemoteState.registry->registerTool(agentTool);
         cliRemoteState.registry->registerTool(agentStatusTool);
+        cliRemoteState.registry->registerTool(sendMessageTool);
 
         preLocalRegistry = agent->getToolRegistry();
         agent->setToolRegistry(cliRemoteState.registry);
@@ -4679,6 +4686,9 @@ bool QSocCliWorker::runAgentLoop(
             }
             if (auto *statusTool = localRegistry->getTool(QStringLiteral("agent_status"))) {
                 remoteRegistry->registerTool(statusTool);
+            }
+            if (auto *sendTool = localRegistry->getTool(QStringLiteral("send_message"))) {
+                remoteRegistry->registerTool(sendTool);
             }
             agent->setToolRegistry(remoteRegistry);
 
