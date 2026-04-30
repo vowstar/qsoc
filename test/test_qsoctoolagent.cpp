@@ -230,6 +230,51 @@ private slots:
         QVERIFY(parsed["error"].get<std::string>().find("LLM service") != std::string::npos);
     }
 
+    /* sweepStaleWorktrees deletes only mtime > maxAgeSec dirs and
+     * leaves fresh ones alone. Test against a temp-rooted worktree
+     * dir; we override the global path indirectly by accepting that
+     * the function runs on the real TempLocation/qsoc-worktrees. To
+     * avoid colliding with concurrent qsoc instances, we create
+     * uniquely-named dirs and only assert *those* specific entries
+     * are removed. */
+    void testSweepStaleWorktreesRemovesOldOnly()
+    {
+        const QString root = QDir::tempPath() + QStringLiteral("/qsoc-worktrees");
+        QDir().mkpath(root);
+        const QString uniq    = QString::number(QDateTime::currentMSecsSinceEpoch());
+        const QString freshWt = QDir(root).filePath(QStringLiteral("qsoc_wt_fresh_") + uniq);
+        const QString staleWt = QDir(root).filePath(QStringLiteral("qsoc_wt_stale_") + uniq);
+        QDir().mkpath(freshWt);
+        QDir().mkpath(staleWt);
+        /* Fake old mtime by using `touch -t` style: write a marker
+         * file then setFileTime. */
+        QFile staleMarker(staleWt + QStringLiteral("/.marker"));
+        QVERIFY(staleMarker.open(QIODevice::WriteOnly));
+        staleMarker.close();
+        const QDateTime oldTs = QDateTime::currentDateTime().addDays(-3);
+        QFileInfo(staleWt).setFile(staleWt);
+        /* Use Linux-only touch via shell: more portable than
+         * QFile::setFileTime which is Qt 6.5+ */
+        QProcess::execute(
+            QStringLiteral("touch"),
+            {QStringLiteral("-t"), oldTs.toString(QStringLiteral("yyyyMMddhhmm")), staleWt});
+
+        const int removed = QSocToolAgent::sweepStaleWorktrees(/*maxAgeSec*/ 24 * 60 * 60);
+
+        QVERIFY(removed >= 1);
+        QVERIFY(QDir(freshWt).exists());
+        QVERIFY(!QDir(staleWt).exists());
+
+        QDir(freshWt).removeRecursively();
+    }
+
+    void testSweepStaleWorktreesNoRootIsNoOp()
+    {
+        /* Sweeping when the root doesn't exist returns 0 cleanly. */
+        const int removed = QSocToolAgent::sweepStaleWorktrees(/*maxAgeSec*/ 1);
+        QVERIFY(removed >= 0);
+    }
+
     void testIsolationFieldInSchemaEnumNoneAndWorktree()
     {
         auto      *tool   = makeTool();

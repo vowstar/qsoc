@@ -1112,6 +1112,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         }
         agentDefinitions->scanFromDisk(userAgentsDir, projectAgentsDir);
     }
+    /* One-shot hygiene: drop orphan sub-agent worktrees from prior
+     * crashed processes (mtime > 24h). Idempotent + best-effort. */
+    QSocToolAgent::sweepStaleWorktrees();
+
     auto *agentTool = new QSocToolAgent(
         this, llmService, toolRegistry, config, agentDefinitions, subAgentTaskSource);
     agentTool->setMemoryManager(memoryManager);
