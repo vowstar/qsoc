@@ -180,12 +180,55 @@ private slots:
 
         QFile file(src.transcriptPathFor(runId));
         QVERIFY(file.exists());
-        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString content = QString::fromUtf8(file.readAll());
-        QVERIFY(content.contains(QStringLiteral("disk-run")));
-        QVERIFY(content.contains(QStringLiteral("hello world")));
-        QVERIFY(content.contains(QStringLiteral("=== final ===")));
-        QVERIFY(content.contains(QStringLiteral("FINAL")));
+        /* Now JSONL format: each line is a JSON object {ts, kind, data}. */
+        QVERIFY(content.contains(QStringLiteral("\"kind\":\"chunk\"")));
+        QVERIFY(content.contains(QStringLiteral("\"kind\":\"final\"")));
+        QVERIFY(content.contains(QStringLiteral("\"data\":\"FINAL\"")));
+    }
+
+    void testMetaSidecarRecordsRunStatus()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        const QString runId = src.registerRun(
+            QStringLiteral("with-meta"), QStringLiteral("verification"), makeAgent());
+        src.setIsolationMetadata(runId, QStringLiteral("worktree"), QStringLiteral("/tmp/wt/abc"));
+        src.markCompleted(runId, QStringLiteral("PASS"));
+
+        QFile meta(src.metaPathFor(runId));
+        QVERIFY(meta.exists());
+        QVERIFY(meta.open(QIODevice::ReadOnly));
+        const QByteArray bytes = meta.readAll();
+        const QString    text  = QString::fromUtf8(bytes);
+        QVERIFY(text.contains(QStringLiteral("\"task_id\"")));
+        QVERIFY(text.contains(QStringLiteral("\"status\": \"completed\"")));
+        QVERIFY(text.contains(QStringLiteral("\"isolation\": \"worktree\"")));
+        QVERIFY(text.contains(QStringLiteral("/tmp/wt/abc")));
+        QVERIFY(text.contains(QStringLiteral("\"subagent_type\": \"verification\"")));
+    }
+
+    void testTailForReadsJsonlAfterEviction()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        const QString runId
+            = src.registerRun(QStringLiteral("done"), QStringLiteral("explore"), makeAgent());
+        src.appendTranscript(runId, QStringLiteral("first chunk "));
+        src.appendTranscript(runId, QStringLiteral("second chunk"));
+        src.markCompleted(runId, QStringLiteral("THE FINAL ANSWER"));
+
+        /* Manually clear in-memory state to simulate eviction:
+         * agent_status's "evicted run" path falls back to disk. */
+        QSocSubAgentTaskSource src2; /* fresh source pointed at same dir */
+        src2.setTranscriptDir(tmp.path());
+        const QString tail = src2.tailFor(runId, /*maxBytes*/ 0);
+        QVERIFY(tail.contains(QStringLiteral("first chunk second chunk")));
+        QVERIFY(tail.contains(QStringLiteral("=== final ===")));
+        QVERIFY(tail.contains(QStringLiteral("THE FINAL ANSWER")));
     }
 
     void testFailedRunWritesFailedMarkerToDisk()
@@ -199,7 +242,7 @@ private slots:
         QFile file(src.transcriptPathFor(runId));
         QVERIFY(file.open(QIODevice::ReadOnly));
         const QString content = QString::fromUtf8(file.readAll());
-        QVERIFY(content.contains(QStringLiteral("=== failed ===")));
+        QVERIFY(content.contains(QStringLiteral("\"kind\":\"error\"")));
         QVERIFY(content.contains(QStringLiteral("LLM timeout")));
     }
 
@@ -216,7 +259,8 @@ private slots:
         const QString path   = src.transcriptPathFor(fakeId);
         QFile         outFile(path);
         QVERIFY(outFile.open(QIODevice::WriteOnly));
-        outFile.write("evicted-run-tail-content");
+        /* Write a JSONL chunk event so tailFor's fallback parses it. */
+        outFile.write("{\"ts\":1,\"kind\":\"chunk\",\"data\":\"evicted-run-tail-content\"}\n");
         outFile.close();
 
         const QString tail = src.tailFor(fakeId, 1024);
@@ -232,7 +276,10 @@ private slots:
         const QString path   = src.transcriptPathFor(fakeId);
         QFile         outFile(path);
         QVERIFY(outFile.open(QIODevice::WriteOnly));
-        outFile.write(QByteArray("y").repeated(2048));
+        /* Many JSONL chunk events combine into a long rendered tail. */
+        for (int n = 0; n < 200; ++n) {
+            outFile.write("{\"ts\":1,\"kind\":\"chunk\",\"data\":\"yyyyyyyyyyyy\"}\n");
+        }
         outFile.close();
         const QString tail = src.tailFor(fakeId, 64);
         QVERIFY(tail.startsWith(QStringLiteral("[... truncated ...]")));

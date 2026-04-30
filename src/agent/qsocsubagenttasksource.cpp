@@ -8,6 +8,8 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStandardPaths>
 
 QSocSubAgentTaskSource::QSocSubAgentTaskSource(QObject *parent)
@@ -56,19 +58,41 @@ QString QSocSubAgentTaskSource::tailFor(const QString &id, int maxBytes) const
         }
         return out;
     }
-    /* Not in memory (evicted). Fall back to the on-disk transcript so
-     * agent_status / overlay tail can still serve historical runs. */
+    /* Not in memory (evicted). Fall back to the on-disk JSONL
+     * transcript so agent_status / overlay tail can still serve
+     * historical runs. We render each event back to text by
+     * concatenating data fields (with `=== <kind> ===` separators
+     * for non-chunk events). */
     const QString path = transcriptPathFor(id);
     QFile         file(path);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return {};
     }
-    if (maxBytes > 0 && file.size() > maxBytes) {
-        file.seek(file.size() - maxBytes);
-        const QByteArray bytes = file.readAll();
-        return QStringLiteral("[... truncated ...]\n") + QString::fromUtf8(bytes);
+    QString rendered;
+    while (!file.atEnd()) {
+        const QByteArray line = file.readLine().trimmed();
+        if (line.isEmpty()) {
+            continue;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(line);
+        if (!doc.isObject()) {
+            continue;
+        }
+        const QJsonObject obj  = doc.object();
+        const QString     kind = obj.value(QStringLiteral("kind")).toString();
+        const QString     data = obj.value(QStringLiteral("data")).toString();
+        if (kind == QStringLiteral("chunk") || kind == QStringLiteral("start")) {
+            rendered += data;
+        } else {
+            rendered += QStringLiteral("\n=== ") + kind + QStringLiteral(" ===\n") + data
+                        + QLatin1Char('\n');
+        }
     }
-    return QString::fromUtf8(file.readAll());
+    file.close();
+    if (maxBytes > 0 && rendered.size() > maxBytes) {
+        return QStringLiteral("[... truncated ...]\n") + rendered.right(maxBytes);
+    }
+    return rendered;
 }
 
 bool QSocSubAgentTaskSource::killTask(const QString &id)
@@ -109,11 +133,11 @@ QString QSocSubAgentTaskSource::registerRun(
         agent->setParent(this);
     }
     runs_.append(run);
-    /* Stamp a header at the top of the disk file so off-line readers
-     * know where the run started without parsing surrounding context. */
-    appendToDiskTranscript(
+    appendDiskEvent(
         run.id,
-        QStringLiteral("=== run %1 (%2): %3 ===\n").arg(run.id, run.subagentType, run.label));
+        QStringLiteral("start"),
+        QStringLiteral("run %1 (%2): %3").arg(run.id, run.subagentType, run.label));
+    writeMeta(run);
     emit tasksChanged();
     return run.id;
 }
@@ -129,9 +153,7 @@ void QSocSubAgentTaskSource::appendTranscript(const QString &id, const QString &
             run.transcript = run.transcript.right(transcriptCap_);
         }
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-        /* Mirror to disk so the transcript survives eviction and
-         * process restart; agent_status falls back to this file. */
-        appendToDiskTranscript(id, chunk);
+        appendDiskEvent(id, QStringLiteral("chunk"), chunk);
         return;
     }
 }
@@ -145,8 +167,8 @@ void QSocSubAgentTaskSource::markCompleted(const QString &id, const QString &fin
         run.status         = QSocTask::Status::Completed;
         run.finalResult    = finalResult;
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-        appendToDiskTranscript(
-            id, QStringLiteral("\n=== final ===\n") + finalResult + QLatin1Char('\n'));
+        appendDiskEvent(id, QStringLiteral("final"), finalResult);
+        writeMeta(run);
         emit tasksChanged();
         return;
     }
@@ -161,9 +183,23 @@ void QSocSubAgentTaskSource::markFailed(const QString &id, const QString &errorT
         run.status         = QSocTask::Status::Failed;
         run.errorText      = errorText;
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-        appendToDiskTranscript(
-            id, QStringLiteral("\n=== failed ===\n") + errorText + QLatin1Char('\n'));
+        appendDiskEvent(id, QStringLiteral("error"), errorText);
+        writeMeta(run);
         emit tasksChanged();
+        return;
+    }
+}
+
+void QSocSubAgentTaskSource::setIsolationMetadata(
+    const QString &id, const QString &isolation, const QString &worktreePath)
+{
+    for (RunState &run : runs_) {
+        if (run.id != id) {
+            continue;
+        }
+        run.isolation    = isolation;
+        run.worktreePath = worktreePath;
+        writeMeta(run);
         return;
     }
 }
@@ -276,24 +312,87 @@ QString QSocSubAgentTaskSource::transcriptDir() const
 
 QString QSocSubAgentTaskSource::transcriptPathFor(const QString &id) const
 {
-    return QDir(transcriptDir()).filePath(id + QStringLiteral(".log"));
+    return QDir(transcriptDir()).filePath(id + QStringLiteral(".jsonl"));
 }
 
-void QSocSubAgentTaskSource::appendToDiskTranscript(const QString &id, const QString &text) const
+QString QSocSubAgentTaskSource::metaPathFor(const QString &id) const
 {
-    if (text.isEmpty()) {
+    return QDir(transcriptDir()).filePath(id + QStringLiteral(".meta.json"));
+}
+
+void QSocSubAgentTaskSource::appendDiskEvent(
+    const QString &id, const QString &kind, const QString &data) const
+{
+    if (data.isEmpty() && kind != QStringLiteral("start")) {
         return;
     }
     const QString dir = transcriptDir();
-    /* Best effort: failures are silent so the in-memory transcript
-     * path is never blocked by disk issues. */
     QDir().mkpath(dir);
-    const QString path = QDir(dir).filePath(id + QStringLiteral(".log"));
+    const QString path = QDir(dir).filePath(id + QStringLiteral(".jsonl"));
     QFile         file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) {
         return;
     }
-    file.write(text.toUtf8());
+    QJsonObject obj;
+    obj["ts"]                   = QDateTime::currentMSecsSinceEpoch();
+    obj["kind"]                 = kind;
+    obj["data"]                 = data;
+    const QByteArray serialized = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+    file.write(serialized);
+    file.write("\n");
+    file.close();
+}
+
+void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
+{
+    const QString dir = transcriptDir();
+    QDir().mkpath(dir);
+    const QString path = QDir(dir).filePath(run.id + QStringLiteral(".meta.json"));
+    QJsonObject   meta;
+    meta["task_id"]       = run.id;
+    meta["label"]         = run.label;
+    meta["subagent_type"] = run.subagentType;
+    meta["started_at_ms"] = run.startedAtMs;
+    const char *statusStr = "running";
+    switch (run.status) {
+    case QSocTask::Status::Running:
+        statusStr = "running";
+        break;
+    case QSocTask::Status::Completed:
+        statusStr = "completed";
+        break;
+    case QSocTask::Status::Failed:
+        statusStr = "failed";
+        break;
+    case QSocTask::Status::Pending:
+        statusStr = "pending";
+        break;
+    case QSocTask::Status::Idle:
+        statusStr = "idle";
+        break;
+    case QSocTask::Status::Stuck:
+        statusStr = "stuck";
+        break;
+    }
+    meta["status"]    = QString::fromLatin1(statusStr);
+    meta["isolation"] = run.isolation.isEmpty() ? QStringLiteral("none") : run.isolation;
+    if (!run.worktreePath.isEmpty()) {
+        meta["worktree"] = run.worktreePath;
+    }
+    if (run.status == QSocTask::Status::Completed || run.status == QSocTask::Status::Failed) {
+        meta["finished_at_ms"] = run.lastActivityMs;
+        if (!run.finalResult.isEmpty()) {
+            meta["final_preview"] = run.finalResult.left(256);
+        }
+        if (!run.errorText.isEmpty()) {
+            meta["error"] = run.errorText;
+        }
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return;
+    }
+    file.write(QJsonDocument(meta).toJson(QJsonDocument::Indented));
     file.close();
 }
 
