@@ -396,6 +396,74 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
     file.close();
 }
 
+QList<QSocSubAgentTaskSource::HistoricalRun> QSocSubAgentTaskSource::loadHistoricalRuns(
+    int staleAgeSec)
+{
+    historical_.clear();
+    const QString dirPath = transcriptDir();
+    QDir          dir(dirPath);
+    if (!dir.exists()) {
+        return {};
+    }
+    const QStringList entries
+        = dir.entryList({QStringLiteral("*.meta.json")}, QDir::Files | QDir::Readable);
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    for (const QString &name : entries) {
+        const QString path = dir.filePath(name);
+        QFile         file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+        file.close();
+        if (!doc.isObject()) {
+            continue;
+        }
+        const QJsonObject obj = doc.object();
+        HistoricalRun     run;
+        run.id           = obj.value(QStringLiteral("task_id")).toString();
+        run.label        = obj.value(QStringLiteral("label")).toString();
+        run.subagentType = obj.value(QStringLiteral("subagent_type")).toString();
+        run.status       = obj.value(QStringLiteral("status")).toString();
+        run.startedAtMs  = obj.value(QStringLiteral("started_at_ms")).toVariant().toLongLong();
+        run.finishedAtMs = obj.value(QStringLiteral("finished_at_ms")).toVariant().toLongLong();
+        run.isolation    = obj.value(QStringLiteral("isolation")).toString();
+        run.worktreePath = obj.value(QStringLiteral("worktree")).toString();
+        run.error        = obj.value(QStringLiteral("error")).toString();
+        run.finalPreview = obj.value(QStringLiteral("final_preview")).toString();
+        if (run.id.isEmpty()) {
+            continue;
+        }
+        /* Resurrect-prevention: a running meta older than staleAgeSec
+         * is necessarily from a dead process. Rewrite it as failed
+         * so it never appears as live again. */
+        if (run.status == QStringLiteral("running") && run.startedAtMs > 0
+            && (nowMs - run.startedAtMs) / 1000 > staleAgeSec) {
+            run.status          = QStringLiteral("failed");
+            run.error           = QStringLiteral("process restart (sub-agent did not finish)");
+            run.finishedAtMs    = nowMs;
+            QJsonObject patched = obj;
+            patched["status"]   = run.status;
+            patched["error"]    = run.error;
+            patched["finished_at_ms"] = run.finishedAtMs;
+            QFile out(path);
+            if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                out.write(QJsonDocument(patched).toJson(QJsonDocument::Indented));
+                out.close();
+            }
+        }
+        historical_.append(run);
+    }
+    /* Newest first. */
+    std::sort(
+        historical_.begin(),
+        historical_.end(),
+        [](const HistoricalRun &lhs, const HistoricalRun &rhs) {
+            return lhs.startedAtMs > rhs.startedAtMs;
+        });
+    return historical_;
+}
+
 void QSocSubAgentTaskSource::evictStaleCompleted()
 {
     const qint64 nowMs   = QDateTime::currentMSecsSinceEpoch();

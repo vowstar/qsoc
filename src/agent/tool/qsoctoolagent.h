@@ -74,6 +74,13 @@ public:
     QSocAgentDefinitionRegistry *definitionRegistry() const { return defRegistry_; }
 
     /**
+     * @brief Accessor for the sub-agent task source. The
+     *        /agents-history slash uses this to read disk-backed
+     *        meta sidecars without a separate handle.
+     */
+    QSocSubAgentTaskSource *taskSource() const { return taskSource_; }
+
+    /**
      * @brief Sweep orphan sub-agent worktrees left behind by crashed
      *        runs. Walks `<TempLocation>/qsoc-worktrees/qsoc_wt_*`,
      *        removes any dir whose mtime is older than maxAgeSec.

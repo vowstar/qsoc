@@ -125,6 +125,43 @@ public:
         const QString &id, const QString &isolation, const QString &worktreePath);
 
     /**
+     * @brief One historical run reconstructed from disk meta sidecar.
+     *        Distinct from in-memory RunState: no live agent pointer,
+     *        meant for read-only listing and tail fallback.
+     */
+    struct HistoricalRun
+    {
+        QString id;
+        QString label;
+        QString subagentType;
+        QString status; /* running / completed / failed / ... */
+        qint64  startedAtMs  = 0;
+        qint64  finishedAtMs = 0;
+        QString isolation;
+        QString worktreePath;
+        QString error;
+        QString finalPreview;
+    };
+
+    /**
+     * @brief Scan the transcript directory for .meta.json sidecars
+     *        and rebuild a list of past runs. Any meta with
+     *        status="running" older than @p staleAgeSec is rewritten
+     *        as failed (with reason "process restart") so a
+     *        process-killed run never reappears as live.
+     *        Returns the loaded list (also cached for
+     *        historicalRuns()).
+     */
+    QList<HistoricalRun> loadHistoricalRuns(int staleAgeSec = 60 * 60);
+
+    /**
+     * @brief Cached historical runs from the most recent
+     *        loadHistoricalRuns() call. Returns an empty list if
+     *        loadHistoricalRuns has never been invoked.
+     */
+    QList<HistoricalRun> historicalRuns() const { return historical_; }
+
+    /**
      * @brief Find a row by id; returns false if no run with that id
      *        is currently tracked (either never registered, or
      *        already evicted).
@@ -174,11 +211,12 @@ private:
     /** Write the meta sidecar JSON file for a given run. */
     void writeMeta(const RunState &run) const;
 
-    QList<RunState> runs_; /* preserves registration order; small N */
-    int             nextSerial_      = 1;
-    qint64          completionTtlMs_ = qint64{60} * 1000; /* 60 s lingering window */
-    int             transcriptCap_   = 64 * 1024;
-    QString         transcriptDir_; /* empty = compute from QStandardPaths */
+    QList<RunState>      runs_; /* preserves registration order; small N */
+    QList<HistoricalRun> historical_;
+    int                  nextSerial_      = 1;
+    qint64               completionTtlMs_ = qint64{60} * 1000; /* 60 s lingering window */
+    int                  transcriptCap_   = 64 * 1024;
+    QString              transcriptDir_; /* empty = compute from QStandardPaths */
 };
 
 #endif /* QSOCSUBAGENTTASKSOURCE_H */
