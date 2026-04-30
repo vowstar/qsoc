@@ -464,6 +464,27 @@ QList<QSocSubAgentTaskSource::HistoricalRun> QSocSubAgentTaskSource::loadHistori
     return historical_;
 }
 
+bool QSocSubAgentTaskSource::findHistoricalRun(const QString &id, HistoricalRun *out)
+{
+    auto search = [&]() -> bool {
+        for (const HistoricalRun &run : historical_) {
+            if (run.id == id) {
+                if (out != nullptr) {
+                    *out = run;
+                }
+                return true;
+            }
+        }
+        return false;
+    };
+    if (search()) {
+        return true;
+    }
+    /* Cache miss: rescan disk in case the run was just produced. */
+    loadHistoricalRuns();
+    return search();
+}
+
 void QSocSubAgentTaskSource::evictStaleCompleted()
 {
     const qint64 nowMs   = QDateTime::currentMSecsSinceEpoch();
