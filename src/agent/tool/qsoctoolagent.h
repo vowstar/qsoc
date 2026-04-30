@@ -73,6 +73,16 @@ public:
      */
     QSocAgentDefinitionRegistry *definitionRegistry() const { return defRegistry_; }
 
+    /**
+     * @brief Sweep orphan sub-agent worktrees left behind by crashed
+     *        runs. Walks `<TempLocation>/qsoc-worktrees/qsoc_wt_*`,
+     *        removes any dir whose mtime is older than maxAgeSec.
+     *        Returns the number of dirs removed. Safe to call from
+     *        multiple processes (best-effort; git worktree remove
+     *        is idempotent).
+     */
+    static int sweepStaleWorktrees(int maxAgeSec = 24 * 60 * 60);
+
 private:
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;

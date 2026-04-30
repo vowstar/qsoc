@@ -177,7 +177,48 @@ void removeWorktreeAt(const QString &repoRoot, const QString &wtPath)
     QDir(wtPath).removeRecursively();
 }
 
+bool runGitFromInsideWorktree(const QStringList &args, const QString &cwd)
+{
+    /* Without --git-dir, running from inside the worktree is enough
+     * for `git worktree remove` to find its source repo via the
+     * parent worktree's .git pointer. */
+    return runGit(cwd, args);
+}
+
 } // namespace
+
+int QSocToolAgent::sweepStaleWorktrees(int maxAgeSec)
+{
+    const QString root = worktreeRootDir();
+    QDir          dir(root);
+    if (!dir.exists()) {
+        return 0;
+    }
+    const QDateTime   cutoff  = QDateTime::currentDateTime().addSecs(-maxAgeSec);
+    int               removed = 0;
+    const QStringList entries
+        = dir.entryList({QStringLiteral("qsoc_wt_*")}, QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QString &name : entries) {
+        const QString   fullPath = dir.filePath(name);
+        const QFileInfo info(fullPath);
+        if (info.lastModified() >= cutoff) {
+            continue;
+        }
+        /* Best-effort: ask git to drop its administrative records,
+         * THEN remove the directory tree. We don't know the source
+         * repo, so call `git worktree remove` from inside the
+         * worktree (git resolves the source via the .git file). */
+        runGitFromInsideWorktree(
+            {QStringLiteral("worktree"),
+             QStringLiteral("remove"),
+             QStringLiteral("--force"),
+             fullPath},
+            fullPath);
+        QDir(fullPath).removeRecursively();
+        ++removed;
+    }
+    return removed;
+}
 
 QString QSocToolAgent::execute(const json &arguments)
 {
