@@ -1055,8 +1055,8 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
         prompt += remoteSection;
     }
 
-    /* Section 9: Project instructions (AGENTS.md / AGENTS.local.md) */
-    if (!agentConfig.projectPath.isEmpty()) {
+    /* Section 9: Project instructions (AGENTS.md / AGENTS.local.md). */
+    if (agentConfig.injectProjectMd && !agentConfig.projectPath.isEmpty()) {
         QDir    projectDir(agentConfig.projectPath);
         QString instructions;
         for (const QString &name :

@@ -7,6 +7,8 @@
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
+#include <QFile>
+#include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
 
@@ -228,6 +230,37 @@ private slots:
         QVERIFY(prompt.contains(QStringLiteral("# Remote Workspace")));
         QVERIFY(prompt.contains(QStringLiteral("user@host:22")));
         QVERIFY(prompt.contains(QStringLiteral("/remote/ws")));
+    }
+
+    /* When config.injectProjectMd is false the prompt assembler
+     * skips the AGENTS.md / AGENTS.local.md section entirely.
+     * Setting up a real project dir is sufficient: with injection on
+     * the section appears, with injection off it does not. */
+    void testInjectProjectMdToggle()
+    {
+        QTemporaryDir tmpProj;
+        QVERIFY(tmpProj.isValid());
+        const QString agentsMd = tmpProj.path() + QStringLiteral("/AGENTS.md");
+        QFile         out(agentsMd);
+        QVERIFY(out.open(QIODevice::WriteOnly));
+        out.write("Sample project rules here.\n");
+        out.close();
+
+        QSocAgentConfig cfg;
+        cfg.projectPath          = tmpProj.path();
+        cfg.injectProjectMd      = true;
+        cfg.systemPromptOverride = QStringLiteral("HEAD");
+        cfg.isSubAgent           = true;
+        QSocAgent     agentOn(this, nullptr, makeRegistry(), cfg);
+        const QString promptOn = agentOn.buildSystemPromptWithMemory();
+        QVERIFY(promptOn.contains(QStringLiteral("# Project instructions")));
+        QVERIFY(promptOn.contains(QStringLiteral("Sample project rules here.")));
+
+        cfg.injectProjectMd = false;
+        QSocAgent     agentOff(this, nullptr, makeRegistry(), cfg);
+        const QString promptOff = agentOff.buildSystemPromptWithMemory();
+        QVERIFY(!promptOff.contains(QStringLiteral("# Project instructions")));
+        QVERIFY(!promptOff.contains(QStringLiteral("Sample project rules here.")));
     }
 
     /* Legacy non-sub default path still emits the full identity prefix. */
