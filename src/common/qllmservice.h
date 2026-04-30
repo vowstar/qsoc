@@ -86,8 +86,26 @@ public:
 
     /**
      * @brief Destructor for QLLMService
+     * @details Aborts any in-flight stream and best-effort wipes
+     *          API-key buffers (detach + zero + clear) before they
+     *          leave process memory. Buffers are only ours: the
+     *          source QSocConfig still holds its own copies.
      */
     ~QLLMService() override;
+
+    /**
+     * @brief Build an independent copy of this service.
+     * @details Returns a fresh QLLMService rooted at @p parent that
+     *          shares the same `QSocConfig` (re-parses endpoints +
+     *          model registry from it) and is positioned on the
+     *          same `currentModelId` as `this`. Streaming state is
+     *          NOT carried over: each clone has its own QNAM,
+     *          its own `currentStreamReply`, and its own
+     *          `streamCompleted` flag, so two clones can stream
+     *          concurrently without trampling each other's
+     *          single-flight invariant.
+     */
+    QLLMService *clone(QObject *parent = nullptr) const;
 
 public slots:
     /* Configuration */

@@ -5,6 +5,7 @@
 #include "common/qsocconsole.h"
 #include "common/qsocproxy.h"
 
+#include <algorithm>
 #include <QDebug>
 #include <QEventLoop>
 #include <QNetworkRequest>
@@ -23,7 +24,52 @@ QLLMService::QLLMService(QObject *parent, QSocConfig *config)
     setupNetworkProxy();
 }
 
-QLLMService::~QLLMService() = default;
+QLLMService::~QLLMService()
+{
+    /* Tear down any in-flight stream so its slots can't fire on a
+     * partially-destroyed `this`. */
+    if (currentStreamReply != nullptr) {
+        disconnect(currentStreamReply, nullptr, this, nullptr);
+        currentStreamReply->abort();
+        currentStreamReply->deleteLater();
+        currentStreamReply = nullptr;
+    }
+    /* Best-effort wipe of API-key buffers. detach() forces COW
+     * uniqueness so we zero our own copy, not a shared one. */
+    auto wipe = [](QString &str) {
+        if (str.isEmpty()) {
+            return;
+        }
+        str.detach();
+        std::fill(str.begin(), str.end(), QChar(u'\0'));
+        str.clear();
+    };
+    for (auto &endpoint : endpoints) {
+        wipe(endpoint.key);
+    }
+    for (auto &model : modelConfigs) {
+        wipe(model.key);
+    }
+}
+
+QLLMService *QLLMService::clone(QObject *parent) const
+{
+    /* The constructor calls loadConfigSettings(), which re-parses
+     * endpoints + modelConfigs from the same QSocConfig. That gives
+     * the clone its OWN copies of those structures (and own QNAM,
+     * own streaming state). Then we align the clone with the
+     * parent's currently selected model and fallback strategy. */
+    auto *child             = new QLLMService(parent, config);
+    child->fallbackStrategy = fallbackStrategy;
+    if (!currentModelId.isEmpty()) {
+        /* setCurrentModel keeps endpoint index + currentModelId in
+         * sync against modelConfigs, so prefer it over manual copies. */
+        child->setCurrentModel(currentModelId);
+    } else {
+        child->currentEndpoint = currentEndpoint;
+    }
+    return child;
+}
 
 /* Configuration */
 
