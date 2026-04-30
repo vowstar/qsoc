@@ -317,6 +317,73 @@ private slots:
         QVERIFY(parsed["error"].get<std::string>().find("LLM service") != std::string::npos);
     }
 
+    /* Fork mode: subagent_type empty triggers fork; required parent
+     * agent missing → error. */
+    void testForkRequiresParentAgent()
+    {
+        auto *defs = new QSocAgentDefinitionRegistry(this);
+        defs->registerBuiltins();
+        auto         *src  = new QSocSubAgentTaskSource(this);
+        auto         *reg  = new QSocToolRegistry(this);
+        auto         *tool = new QSocToolAgent(this, nullptr, reg, QSocAgentConfig(), defs, src);
+        const QString out  = tool->execute(
+            json{{"description", "fork-it"}, {"prompt", "do delegated work"}});
+        const json parsed = json::parse(out.toStdString());
+        QCOMPARE(parsed["status"].get<std::string>(), std::string("error"));
+        QVERIFY(parsed["error"].get<std::string>().find("fork mode requires") != std::string::npos);
+    }
+
+    /* "fork" enum value is in the schema. */
+    void testSchemaIncludesForkEnumValue()
+    {
+        auto       *tool       = makeTool();
+        const json  schema     = tool->getParametersSchema();
+        const auto &enumValues = schema["properties"]["subagent_type"]["enum"];
+        bool        found      = false;
+        for (const auto &val : enumValues) {
+            if (val.is_string() && val.get<std::string>() == "fork") {
+                found = true;
+                break;
+            }
+        }
+        QVERIFY(found);
+        /* subagent_type must NOT be in required anymore (fork omits it). */
+        bool required = false;
+        for (const auto &val : schema["required"]) {
+            if (val.is_string() && val.get<std::string>() == "subagent_type") {
+                required = true;
+            }
+        }
+        QVERIFY(!required);
+    }
+
+    /* Nested forks are blocked by the marker check. We seed the
+     * parent agent's messages with the marker, then attempt a fork:
+     * spawn must refuse before reaching child construction. */
+    void testForkRejectsRecursionViaMarker()
+    {
+        auto *defs = new QSocAgentDefinitionRegistry(this);
+        defs->registerBuiltins();
+        auto *src         = new QSocSubAgentTaskSource(this);
+        auto *liveReg     = new QSocToolRegistry(this);
+        auto *parentAgent = new QSocAgent(this, nullptr, liveReg, QSocAgentConfig());
+        /* Inject the fork marker into parent's history. */
+        json forced = json::array();
+        forced.push_back(
+            {{"role", "system"}, {"content", "<!-- qsoc-fork-tag -->\nfake earlier fork"}});
+        parentAgent->setMessages(forced);
+
+        auto *tool = new QSocToolAgent(this, nullptr, liveReg, QSocAgentConfig(), defs, src);
+        tool->setParentAgent(parentAgent);
+
+        const QString out = tool->execute(
+            json{{"description", "deeper fork"}, {"prompt", "another delegation"}});
+        const json parsed = json::parse(out.toStdString());
+        QCOMPARE(parsed["status"].get<std::string>(), std::string("error"));
+        QVERIFY(
+            parsed["error"].get<std::string>().find("forks cannot be nested") != std::string::npos);
+    }
+
     /* Direct verification of QSocAgent::addExternalTokenUsage: it must
      * accumulate into totalInputTokens / totalOutputTokens and emit a
      * tokenUsage signal carrying the new totals. This is the contract
