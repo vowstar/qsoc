@@ -6,6 +6,7 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocagentdefinition.h"
 #include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsochookmanager.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "common/qllmservice.h"
@@ -341,7 +342,20 @@ QString QSocToolAgent::execute(const json &arguments)
     if (memoryManager_ != nullptr && def->injectMemory) {
         child->setMemoryManager(memoryManager_);
     }
-    if (hookManager_ != nullptr) {
+    /* Per-definition hooks override: when def declares its own
+     * hooks, build a child-scoped hook manager. Otherwise inherit
+     * the parent's. The child-owned manager is parented to the
+     * child so it goes when the child does. */
+    if (!def->hooks.isEmpty()) {
+        auto *childHooks = new QSocHookManager(child);
+        childHooks->setConfig(def->hooks);
+        child->setHookManager(childHooks);
+        /* Mirror config onto the child's QSocAgentConfig so the
+         * sub-agent suppression check (in fire* methods) sees a
+         * non-empty hooks structure and lets lifecycle events fire. */
+        childCfg.hooks = def->hooks;
+        child->setConfig(childCfg);
+    } else if (hookManager_ != nullptr) {
         child->setHookManager(hookManager_);
     }
     if (loopScheduler_ != nullptr) {

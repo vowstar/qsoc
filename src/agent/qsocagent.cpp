@@ -772,8 +772,10 @@ void QSocAgent::fireSessionStartHookOnce()
         return;
     }
     sessionStartFired = true;
-    /* Sub-agents do not own a session: parent already fired session_start. */
-    if (agentConfig.isSubAgent) {
+    /* Sub-agents inherit the parent's session_start by default; suppress
+     * the duplicate. Definitions that declare their own hooks
+     * (agentConfig.hooks non-empty in a sub-agent) get to fire. */
+    if (agentConfig.isSubAgent && agentConfig.hooks.isEmpty()) {
         return;
     }
     if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::SessionStart)) {
@@ -787,8 +789,9 @@ void QSocAgent::fireSessionStartHookOnce()
 
 void QSocAgent::fireStopHook(const QString &finalContent)
 {
-    /* Sub-agents finish into a tool result, not a session stop. */
-    if (agentConfig.isSubAgent) {
+    /* Sub-agents finish into a tool result, not a session stop —
+     * suppress unless the def explicitly declared its own hooks. */
+    if (agentConfig.isSubAgent && agentConfig.hooks.isEmpty()) {
         return;
     }
     if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::Stop)) {
@@ -802,8 +805,9 @@ void QSocAgent::fireStopHook(const QString &finalContent)
 
 bool QSocAgent::firePromptSubmitHook(QString *userQuery, QString *blockReason)
 {
-    /* Sub-agent prompts come from the parent agent, not the user. */
-    if (agentConfig.isSubAgent) {
+    /* Sub-agent prompts come from the parent agent, not the user —
+     * unless the def opts into its own user_prompt_submit hook. */
+    if (agentConfig.isSubAgent && agentConfig.hooks.isEmpty()) {
         return true;
     }
     if (hookManager == nullptr || !hookManager->hasHooksFor(QSocHookEvent::UserPromptSubmit)) {
