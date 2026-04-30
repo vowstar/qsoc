@@ -127,6 +127,14 @@ The following commands are available during an interactive session:
      later connects.],
     [`/status`], [Show model, session, and endpoint info],
     [`/help`], [Show help message],
+    [`/agents`],
+    [List sub-agent definitions by scope (builtin, user, project) and any
+     parse errors. See @agent-subagents.],
+    [`/agents-history`],
+    [Show prior backgrounded sub-agent runs with status and transcript tail.],
+    [`/loop [cron] <prompt>`],
+    [Schedule a recurring prompt. Subforms: `/loop list`, `/loop stop <id>`,
+     `/loop clear`. See @agent-loop.],
     [`!<command>`], [Execute a shell command directly],
   )],
   caption: [INTERACTIVE COMMANDS],
@@ -152,6 +160,9 @@ External editor and search:
 View and selection:
 
 - *Ctrl+T*: Toggle TODO list visibility
+- *Ctrl+B*: Open the background-task overlay (see @agent-tasks)
+- *Down* on the prompt's first row: park focus on the task pill;
+  *Enter* opens the overlay, *Up* returns to the prompt
 - *Ctrl+L*: Force a full screen repaint
 - *Mouse drag*: Select and auto-copy to clipboard (OSC 52)
 - *Shift + drag*: Native terminal selection (fallback)
@@ -210,7 +221,12 @@ The agent provides the following tools through natural language:
   (Jinja2 rendering)
 - *Files*: `read_file`, `list_files`, `write_file`, `edit_file`; `path_context`
   reports and adjusts allowed write directories
-- *Shell*: `bash` with timeout, `bash_manage` for background processes
+- *Shell*: `bash` (synchronous, or `background=true` for detached jobs),
+  `bash_manage` to inspect, tail, or kill backgrounded jobs
+- *Sub-agents*: `agent` to spawn a child run, `agent_status` to poll a
+  backgrounded run, `agent_resume` to pick up a prior run from disk,
+  `send_message` to post live input to a streaming child; see
+  @agent-subagents
 - *Documentation*: `query_docs` by topic (about, commands, config, bus, clock,
   fsm, logic, netlist, power, reset, template, validation, overview, ...)
 - *Memory*: `memory_read`, `memory_write` for persistent notes across sessions
@@ -328,6 +344,226 @@ Long conversations are managed by a three-layer compaction system:
 
 Use `/compact` to trigger compaction manually, and `/context` to inspect the
 per-category token breakdown.
+
+Each compaction also produces a rolling anchored summary that is preserved
+across subsequent compactions. The earliest decisions, file paths, and
+constraints survive even after multiple rounds, so long sessions retain
+their starting context instead of drifting.
+
+== SUB-AGENTS
+<agent-subagents>
+A sub-agent is a child run with its own message history, its own tool
+allowlist, and its own system prompt. The parent dispatches through the
+`agent` tool; the child's final output is returned as the tool result.
+
+=== Spawning
+<agent-subagents-spawn>
+
+The `agent` tool accepts:
+
+#figure(
+  align(center)[#table(
+    columns: (0.32fr, 1fr),
+    align: (auto, left),
+    table.header([Field], [Meaning]),
+    table.hline(),
+    [`subagent_type`],
+    [Definition slug. Empty or `fork` selects fork mode.],
+    [`description`],
+    [3-7 word label shown in the task overlay.],
+    [`prompt`],
+    [Full instructions for the child.],
+    [`run_in_background`],
+    [`false` blocks until the child finishes; `true` returns a `task_id`
+     immediately and the child runs detached.],
+    [`isolation`],
+    [`worktree` runs the child in its own `git worktree --detach` under
+     `<runtime>/qsoc-worktrees/<task_id>`. Default is none.],
+  )],
+  caption: [`agent` TOOL FIELDS],
+  kind: table,
+)
+
+`description` and `prompt` are required. The concurrency cap defaults to
+four in-flight children; the limit is enforced before the LLM is touched
+so a capped spawn fails fast.
+
+=== Fork Mode
+<agent-subagents-fork>
+
+When `subagent_type` is empty or set to `fork`, the child inherits the
+parent's full message history up to the spawn point. The fork point is
+marked with the `<!-- qsoc-fork-tag -->` HTML comment so further `agent`
+calls inside the child cannot recurse into another fork from the same
+anchor.
+
+The child's prefix is byte-identical to the parent's, so the prompt
+cache hit on the first child turn is preserved.
+
+=== Definitions
+<agent-subagents-defs>
+
+Three scopes exist, in shadowing order from highest to lowest:
+
+- *Project*: `<project>/.qsoc/agents/*.md`. In remote-workspace mode the
+  files are scanned over SFTP from the same path under the remote
+  workspace, so a remote project's definitions are seen without
+  uploading anything from the local host.
+- *User*: `~/.config/qsoc/agents/*.md`
+- *Builtin*: compiled in. The shipped names are `general-purpose`
+  (full tool set), `explore` (read-only), and `verification` (adds
+  `bash` and `lsp_*`).
+
+Same-name definitions in higher scopes shadow lower ones. Files whose
+frontmatter fails to parse appear in `/agents` under an "Errors"
+group with the offending path.
+
+=== Frontmatter Fields
+<agent-subagents-frontmatter>
+
+#figure(
+  align(center)[#table(
+    columns: (0.32fr, 1fr),
+    align: (auto, left),
+    table.header([Key], [Meaning]),
+    table.hline(),
+    [`name`],
+    [Definition slug. Becomes the `subagent_type` value the parent passes.],
+    [`description`],
+    [One-line summary shown in the parent's system prompt and `/agents`.],
+    [`tools`],
+    [Allowlist of tool names the child may call. Empty inherits the parent
+     set.],
+    [`disallowed_tools`],
+    [Denylist applied after the allowlist. Pipe-separated alternates.],
+    [`max_turns`],
+    [Hard ceiling on the child's iteration count. Unset inherits the
+     parent's limit.],
+    [`critical_reminder`],
+    [Text re-injected as a system message at the head of every child turn.],
+    [`skills`],
+    [Skill names preloaded into the child's system prompt as if
+     `skill_find` returned them.],
+    [`hooks`],
+    [Inline hook overrides. Same shape as the global `agent.hooks` block,
+     single level deep.],
+    [`inject_memory`],
+    [`true` adds the auto-memory store. Default `false` for sub-agents.],
+    [`inject_skills`],
+    [`true` adds the skill listing. Default `false`.],
+    [`inject_project_md`],
+    [`true` (default) injects `AGENTS.md`. `false` skips it.],
+    [`model`],
+    [Override model id for this child. Empty inherits the parent.],
+  )],
+  caption: [SUB-AGENT DEFINITION FRONTMATTER],
+  kind: table,
+)
+
+The body of the file is the child's base system prompt.
+
+=== Runtime State
+<agent-subagents-state>
+
+Each run produces:
+
+- `<runtime>/qsoc/agents/<task_id>.jsonl`: structured event stream
+  (one JSON event per line: prompt, tool calls, tool results,
+  content chunks, final output).
+- `<task_id>.meta.json`: sidecar with label, `subagent_type`, status,
+  isolation mode, and worktree path.
+
+At startup, runs whose meta says `running` but whose owning process is
+gone are rewritten to `failed`, and worktrees older than one hour
+without a live owner are swept.
+
+=== Polling and Resuming
+<agent-subagents-poll>
+
+While a backgrounded run is alive:
+
+- `agent_status` returns the current status, transcript tail, and the
+  final output once the run completes.
+- `send_message` queues a line of user input into the child's stream.
+- `/agents-history` lists prior runs with their final results.
+- `agent_resume` reads the meta sidecar plus the transcript tail and
+  synthesizes a `resume_prompt` that can be passed to a fresh `agent`
+  call to continue where a prior run left off, e.g. across a process
+  restart.
+
+== BACKGROUND TASKS
+<agent-tasks>
+A unified task panel lists every long-running activity attached to the
+current agent: backgrounded `bash` jobs, scheduled `/loop` prompts, and
+detached sub-agent runs.
+
+=== Status Pill
+<agent-tasks-pill>
+
+While any task is in flight, a status pill is rendered just above the
+prompt with the count and the most recent activity. *Down* on the
+prompt's first row parks focus on the pill; *Enter* opens the overlay;
+*Up* returns to the prompt. *Ctrl+B* opens the overlay from anywhere.
+
+=== Overlay
+<agent-tasks-overlay>
+
+The overlay is two columns: a list on the left, the highlighted task's
+tail on the right.
+
+#figure(
+  align(center)[#table(
+    columns: (0.25fr, 1fr),
+    align: (auto, left),
+    table.header([Key], [Action]),
+    table.hline(),
+    [`Up`/`Down`, `j`/`k`], [Move selection],
+    [`Enter`], [Open the task's detail tail],
+    [`x`],
+    [Abort or kill the highlighted task with no confirm prompt],
+    [`q`, `ESC`], [Close the overlay],
+  )],
+  caption: [TASK OVERLAY KEYS],
+  kind: table,
+)
+
+`x` sends `SIGTERM` to bash jobs, calls `abort()` on streaming
+sub-agents, and removes a `/loop` job from the schedule. Completed rows
+linger for a short window so their tail can still be inspected before
+being evicted.
+
+== SCHEDULED PROMPTS
+<agent-loop>
+`/loop` runs a prompt on a cron schedule. Jobs are persisted to
+`<project>/.qsoc/loop.yml` and gated by a per-project file lock so only
+one qsoc session fires them at a time.
+
+=== Subcommands
+<agent-loop-cmds>
+
+#figure(
+  align(center)[#table(
+    columns: (0.45fr, 1fr),
+    align: (auto, left),
+    table.header([Form], [Effect]),
+    table.hline(),
+    [`/loop <cron> <prompt>`],
+    [Add a job. Cron is a 5-field expression (`m h dom mon dow`).],
+    [`/loop <prompt>`],
+    [Add a job at the default cadence (`*/10 * * * *`).],
+    [`/loop list`],
+    [Show all jobs with id, cron, next-run time, and prompt head.],
+    [`/loop stop <id>`], [Remove a job.],
+    [`/loop clear`], [Remove every job for this project.],
+  )],
+  caption: [/LOOP SUBCOMMANDS],
+  kind: table,
+)
+
+Each fire is queued as a normal user prompt; the agent processes it
+between turns of any in-flight conversation. If another qsoc session
+already holds the loop lock, `/loop add/stop/clear` reports the conflict
+and exits without modifying state.
 
 == SYSTEM PROMPT SOURCES
 <agent-system-prompt>
