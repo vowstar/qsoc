@@ -111,14 +111,20 @@ private slots:
         QCOMPARE(parsed["status"].get<std::string>(), std::string("error"));
     }
 
-    void testRejectsConcurrentSpawnWhenSourceBusy()
+    void testRejectsSpawnAtMaxConcurrencyCap()
     {
-        QSocSubAgentTaskSource *src  = nullptr;
-        auto                   *tool = makeTool(nullptr, &src, nullptr);
-        /* Manually register a fake busy run. */
-        auto *dummyAgent = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
-        src->registerRun(QStringLiteral("busy"), QStringLiteral("general-purpose"), dummyAgent);
-        QVERIFY(src->hasActiveRun());
+        auto *defs = new QSocAgentDefinitionRegistry(this);
+        defs->registerBuiltins();
+        auto           *src = new QSocSubAgentTaskSource(this);
+        auto           *reg = new QSocToolRegistry(this);
+        QSocAgentConfig parentCfg;
+        parentCfg.maxConcurrentSubagents = 1; /* strict serial */
+        auto *tool = new QSocToolAgent(this, nullptr, reg, parentCfg, defs, src);
+
+        /* Fake one busy run; with cap=1 a second spawn must be denied. */
+        auto *dummy = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
+        src->registerRun(QStringLiteral("busy"), QStringLiteral("general-purpose"), dummy);
+        QCOMPARE(src->countRunning(), 1);
 
         const QString out = tool->execute(
             json{
@@ -127,7 +133,47 @@ private slots:
                 {"prompt", "do something"}});
         const json parsed = json::parse(out.toStdString());
         QCOMPARE(parsed["status"].get<std::string>(), std::string("error"));
-        QVERIFY(parsed["error"].get<std::string>().find("another sub-agent") != std::string::npos);
+        QVERIFY(
+            parsed["error"].get<std::string>().find("max concurrent sub-agents")
+            != std::string::npos);
+        QCOMPARE(parsed["running"].get<int>(), 1);
+        QCOMPARE(parsed["cap"].get<int>(), 1);
+    }
+
+    /* Default cap is 4: a single busy run does NOT block a new spawn
+     * by itself. The new spawn proceeds past the cap guard and is
+     * stopped at the next required gate (no LLMService configured),
+     * which proves we got past the cap-rejection path. */
+    void testDefaultCapAllowsSecondSpawnPastBusyRun()
+    {
+        auto *defs = new QSocAgentDefinitionRegistry(this);
+        defs->registerBuiltins();
+        auto *src  = new QSocSubAgentTaskSource(this);
+        auto *reg  = new QSocToolRegistry(this);
+        auto *tool = new QSocToolAgent(this, nullptr, reg, QSocAgentConfig(), defs, src);
+
+        auto *dummy = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
+        src->registerRun(QStringLiteral("busy"), QStringLiteral("general-purpose"), dummy);
+        QCOMPARE(src->countRunning(), 1);
+
+        const QString out = tool->execute(
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "another"},
+                {"prompt", "do something"}});
+        const json parsed = json::parse(out.toStdString());
+        QCOMPARE(parsed["status"].get<std::string>(), std::string("error"));
+        /* We got PAST the cap check (cap=4 > running=1). The next gate
+         * fails because llmService is nullptr in this test harness. */
+        QVERIFY(parsed["error"].get<std::string>().find("LLM service") != std::string::npos);
+    }
+
+    /* QSocAgent::getLLMService() is the spawn tool's source of truth
+     * for cloning a per-child service. */
+    void testQSocAgentExposesLLMServiceAccessor()
+    {
+        auto *agent = new QSocAgent(this, nullptr, nullptr, QSocAgentConfig());
+        QCOMPARE(agent->getLLMService(), nullptr);
     }
 
     void testAbortPropagatesToTaskSource()

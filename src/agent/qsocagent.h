@@ -138,6 +138,14 @@ public:
     void setLLMService(QLLMService *llmService);
 
     /**
+     * @brief Get the LLM service this agent is wired against.
+     *        Used by the spawn-agent tool to clone() the parent's
+     *        service for each child so concurrent sub-agents don't
+     *        share the single-flight stream invariant.
+     */
+    QLLMService *getLLMService() const { return llmService; }
+
+    /**
      * @brief Set the tool registry
      * @param toolRegistry Pointer to the tool registry
      */

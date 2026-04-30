@@ -113,6 +113,12 @@ struct QSocAgentConfig
      * registry's full tool set. The `agent` spawn tool is always
      * filtered out when isSubAgent is true, regardless of this list. */
     QStringList toolsAllow;
+
+    /* Maximum number of sub-agents that may be Running concurrently.
+     * Read by the spawn tool when deciding whether to admit a new
+     * spawn. The cap protects per-API-key RPM limits at remote
+     * providers. 1 = strict serial (legacy behavior). */
+    int maxConcurrentSubagents = 4;
 };
 
 #endif // QSOCAGENTCONFIG_H

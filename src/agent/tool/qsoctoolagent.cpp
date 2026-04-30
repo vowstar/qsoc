@@ -127,14 +127,6 @@ QString QSocToolAgent::execute(const json &arguments)
                 .c_str());
     }
 
-    /* Single-in-flight policy: shared QLLMService cannot stream two
-     * conversations at once. Block a second concurrent spawn. */
-    if (taskSource_->hasActiveRun()) {
-        return QStringLiteral(
-            R"({"status":"error","error":"another sub-agent is currently running; )"
-            R"(wait for it to finish or kill it from the task overlay"})");
-    }
-
     /* Resolve parent registry + config dynamically from the live parent
      * agent when bound. This makes the spawn tool remote-mode correct:
      * after `/remote` swaps the parent's registry and sets remoteMode,
@@ -143,14 +135,41 @@ QString QSocToolAgent::execute(const json &arguments)
      * snapshot captured at construction time. */
     QSocToolRegistry *effectiveRegistry = parentRegistry_;
     QSocAgentConfig   effectiveConfig   = parentConfig_;
+    QLLMService      *effectiveLlm      = llmService_;
     if (parentAgent_ != nullptr) {
         if (auto *liveReg = parentAgent_->getToolRegistry()) {
             effectiveRegistry = liveReg;
         }
         effectiveConfig = parentAgent_->getConfig();
+        if (auto *liveLlm = parentAgent_->getLLMService()) {
+            effectiveLlm = liveLlm;
+        }
     }
 
-    if (llmService_ == nullptr || effectiveRegistry == nullptr) {
+    /* Concurrency cap: protect remote-LLM RPM limits and bound memory.
+     * Default 4 (qsocagentconfig.h); user can lower to 1 for strict
+     * serial behavior or raise once they trust their provider quota.
+     * Checked before the llm-null guard so a capped spawn fails for
+     * the right reason regardless of llm wiring. */
+    const int cap     = effectiveConfig.maxConcurrentSubagents > 0
+                            ? effectiveConfig.maxConcurrentSubagents
+                            : 1;
+    const int running = taskSource_->countRunning();
+    if (running >= cap) {
+        return QString::fromUtf8(
+            json{
+                {"status", "error"},
+                {"error",
+                 std::string("max concurrent sub-agents reached (") + std::to_string(running) + "/"
+                     + std::to_string(cap)
+                     + "); wait for one to finish or kill it from the task overlay"},
+                {"running", running},
+                {"cap", cap}}
+                .dump()
+                .c_str());
+    }
+
+    if (effectiveLlm == nullptr || effectiveRegistry == nullptr) {
         return QStringLiteral(
             R"({"status":"error","error":"LLM service or tool registry not configured"})");
     }
@@ -169,7 +188,15 @@ QString QSocToolAgent::execute(const json &arguments)
         childCfg.modelId = def->model;
     }
 
-    auto *child = new QSocAgent(nullptr, llmService_, effectiveRegistry, childCfg);
+    /* Per-child LLMService: clone the live parent's service so the
+     * child has its OWN streaming state (currentStreamReply,
+     * streamCompleted, …). Without this, two concurrent sub-agents
+     * trample each other's single-flight invariant. The clone
+     * shares the same QSocConfig, so model + endpoint selection
+     * stays in sync. */
+    auto *childLlm = effectiveLlm->clone(nullptr);
+    auto *child    = new QSocAgent(nullptr, childLlm, effectiveRegistry, childCfg);
+    childLlm->setParent(child); /* tie LLM lifetime to child */
     if (memoryManager_ != nullptr && def->injectMemory) {
         child->setMemoryManager(memoryManager_);
     }

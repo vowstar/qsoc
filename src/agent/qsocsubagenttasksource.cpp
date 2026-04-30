@@ -143,12 +143,18 @@ void QSocSubAgentTaskSource::markFailed(const QString &id, const QString &errorT
 
 bool QSocSubAgentTaskSource::hasActiveRun() const
 {
+    return countRunning() > 0;
+}
+
+int QSocSubAgentTaskSource::countRunning() const
+{
+    int count = 0;
     for (const RunState &run : runs_) {
         if (run.status == QSocTask::Status::Running) {
-            return true;
+            ++count;
         }
     }
-    return false;
+    return count;
 }
 
 int QSocSubAgentTaskSource::runCount() const
