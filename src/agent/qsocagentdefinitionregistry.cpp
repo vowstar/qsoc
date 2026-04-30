@@ -354,6 +354,12 @@ QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdown(
             def.toolsDeny = parseToolsField(value, rest);
         } else if (key == QLatin1String("model")) {
             def.model = value;
+        } else if (key == QLatin1String("max_turns") || key == QLatin1String("maxTurns")) {
+            bool      parsedOk = false;
+            const int parsed   = value.toInt(&parsedOk);
+            if (parsedOk && parsed > 0) {
+                def.maxTurns = parsed;
+            }
         } else if (key == QLatin1String("inject_memory")) {
             def.injectMemory = parseBoolField(value, def.injectMemory);
         } else if (key == QLatin1String("inject_skills")) {
