@@ -4,6 +4,8 @@
 #ifndef QSOCAGENTDEFINITION_H
 #define QSOCAGENTDEFINITION_H
 
+#include "agent/qsochooktypes.h"
+
 #include <QString>
 #include <QStringList>
 
@@ -67,6 +69,15 @@ struct QSocAgentDefinition
      * Independent from `injectSkills` (which lists EVERY skill in
      * the system prompt — broad context vs. targeted preload). */
     QStringList skills;
+
+    /* Per-definition hook overrides. Empty = inherit the parent
+     * agent's hookManager (today's behavior). When non-empty, the
+     * spawn tool builds a child-scoped QSocHookManager with these
+     * settings and binds it to the child. Declaring a hook for
+     * session_start / stop / user_prompt_submit also lifts the
+     * sub-agent suppression for those events: the child's hook
+     * fires while the parent's still doesn't. */
+    QSocHookConfig hooks;
 
     /* Provenance: "builtin" today; "user" / "project" reserved for
      * markdown discovery in a future iteration. */

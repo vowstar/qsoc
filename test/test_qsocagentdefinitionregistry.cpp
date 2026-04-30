@@ -362,6 +362,56 @@ private slots:
         QVERIFY(reg.brokenDefinitions().isEmpty());
     }
 
+    void testScanFromDiskParsesInlineHooks()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "withhooks.md",
+            "---\n"
+            "name: withhooks\n"
+            "hooks:\n"
+            "  pre_tool_use: /usr/local/bin/audit-pre.sh\n"
+            "  post_tool_use: /usr/local/bin/audit-post.sh\n"
+            "  session_start: /usr/local/bin/init.sh\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("withhooks"));
+        QVERIFY(def != nullptr);
+        QVERIFY(!def->hooks.isEmpty());
+        const auto preMatchers = def->hooks.matchersFor(QSocHookEvent::PreToolUse);
+        QCOMPARE(preMatchers.size(), 1);
+        QCOMPARE(preMatchers.first().commands.size(), 1);
+        QCOMPARE(
+            preMatchers.first().commands.first().command,
+            QStringLiteral("/usr/local/bin/audit-pre.sh"));
+        QVERIFY(!def->hooks.matchersFor(QSocHookEvent::SessionStart).isEmpty());
+    }
+
+    void testScanFromDiskHooksUnknownEventIgnored()
+    {
+        QTemporaryDir userDir;
+        writeFile(
+            userDir,
+            "weirdhook.md",
+            "---\n"
+            "name: weirdhook\n"
+            "hooks:\n"
+            "  not_a_real_event: /tmp/cmd\n"
+            "  pre_tool_use: /tmp/real.sh\n"
+            "---\n"
+            "Body.\n");
+        QSocAgentDefinitionRegistry reg;
+        reg.scanFromDisk(userDir.path(), QString());
+        const QSocAgentDefinition *def = reg.find(QStringLiteral("weirdhook"));
+        QVERIFY(def != nullptr);
+        QVERIFY(!def->hooks.matchersFor(QSocHookEvent::PreToolUse).isEmpty());
+        /* Total commands count only the recognized event. */
+        QCOMPARE(def->hooks.totalCommands(), 1);
+    }
+
     void testScanFromDiskParsesSkillsList()
     {
         QTemporaryDir userDir;

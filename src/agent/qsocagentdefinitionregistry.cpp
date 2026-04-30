@@ -425,6 +425,36 @@ QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdownContent(
                 rest.append(fmLines[j]);
             }
             def.skills = parseToolsField(value, rest);
+        } else if (key == QLatin1String("hooks")) {
+            /* Inline single-level mapping:
+             *     hooks:
+             *       pre_tool_use: /path/to/cmd.sh
+             *       session_start: /path/init.sh
+             * Each entry becomes one HookCommandConfig with empty
+             * matcher. Block-scalar / nested matcher arrays are not
+             * supported by this hand-rolled parser. */
+            for (qsizetype j = i + 1; j < fmLines.size(); ++j) {
+                const QString &raw = fmLines[j];
+                if (raw.isEmpty() || !raw.startsWith(QLatin1Char(' '))) {
+                    break;
+                }
+                const QString   trimmed    = raw.trimmed();
+                const qsizetype eventColon = trimmed.indexOf(QLatin1Char(':'));
+                if (eventColon < 0) {
+                    break;
+                }
+                const QString eventKey = trimmed.left(eventColon).trimmed();
+                const QString eventCmd = trimmed.mid(eventColon + 1).trimmed();
+                const auto    parsed   = hookEventFromYamlKey(eventKey);
+                if (!parsed.has_value() || eventCmd.isEmpty()) {
+                    continue;
+                }
+                HookCommandConfig command;
+                command.command = eventCmd;
+                HookMatcherConfig matcher;
+                matcher.commands.append(command);
+                def.hooks.byEvent[parsed.value()].append(matcher);
+            }
         } else if (key == QLatin1String("model")) {
             def.model = value;
         } else if (key == QLatin1String("critical_reminder") || key == QLatin1String("criticalReminder")) {
