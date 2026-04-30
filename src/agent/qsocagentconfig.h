@@ -114,6 +114,10 @@ struct QSocAgentConfig
      * filtered out when isSubAgent is true, regardless of this list. */
     QStringList toolsAllow;
 
+    /* Tool name denylist. Applied AFTER `toolsAllow` (deny wins).
+     * Empty = no extra denies on top of allowlist + recursion guard. */
+    QStringList toolsDeny;
+
     /* Maximum number of sub-agents that may be Running concurrently.
      * Read by the spawn tool when deciding whether to admit a new
      * spawn. The cap protects per-API-key RPM limits at remote

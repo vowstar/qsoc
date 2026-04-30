@@ -37,6 +37,11 @@ struct QSocAgentDefinition
      * out for recursion safety). */
     QStringList toolsAllow;
 
+    /* Tool name denylist. Applied AFTER `toolsAllow`: deny wins. Use
+     * for "inherit everything except these" definitions, or to
+     * subtract a few risky tools from a broad allowlist. */
+    QStringList toolsDeny;
+
     /* Optional model override. Empty = inherit parent's model. */
     QString model;
 

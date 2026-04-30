@@ -346,6 +346,12 @@ QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdown(
                 rest.append(fmLines[j]);
             }
             def.toolsAllow = parseToolsField(value, rest);
+        } else if (key == QLatin1String("disallowed_tools") || key == QLatin1String("disallowedTools")) {
+            QStringList rest;
+            for (qsizetype j = i + 1; j < fmLines.size(); ++j) {
+                rest.append(fmLines[j]);
+            }
+            def.toolsDeny = parseToolsField(value, rest);
         } else if (key == QLatin1String("model")) {
             def.model = value;
         } else if (key == QLatin1String("inject_memory")) {
