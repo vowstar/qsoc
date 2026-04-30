@@ -11,6 +11,8 @@
 #include <QString>
 #include <QStringList>
 
+class QSocSftpClient;
+
 /**
  * @brief Catalog of sub-agent definitions discoverable by the
  *        `agent` spawn tool.
@@ -84,6 +86,29 @@ public:
      */
     QList<QSocAgentDefinition> brokenDefinitions() const;
 
+    /**
+     * @brief Scan an SFTP-served directory of markdown agent
+     *        definitions and register them under the given scope
+     *        (defaults to "project"). Used by `/remote` after a
+     *        successful connection so a remote project's
+     *        `.qsoc/agents/` is reachable without local sync.
+     *        Failures are logged and skipped: a flaky SFTP read
+     *        does not abort the scan.
+     */
+    void scanFromRemoteSftp(
+        QSocSftpClient *sftp,
+        const QString  &remoteDir,
+        const QString  &scope = QStringLiteral("project"));
+
+    /**
+     * @brief Drop every definition (and broken entry) carrying the
+     *        given scope. Used on `/local` to undo a prior remote
+     *        project scan before re-scanning the local project.
+     *        Pass "user" or "project". Pass "builtin" to clear
+     *        compiled-ins (rare).
+     */
+    void removeByScope(const QString &scope);
+
 private:
     /**
      * @brief Parse a single markdown agent definition file.
@@ -93,6 +118,17 @@ private:
      *         and the rest of the fields may be partially populated.
      */
     QSocAgentDefinition parseAgentMarkdown(const QString &path, const QString &scope) const;
+
+    /**
+     * @brief Parse markdown content directly (no disk I/O). Shared
+     *        by file-based and SFTP-based loaders.
+     * @param content Raw markdown text including frontmatter.
+     * @param sourcePath Used only for diagnostics + the def's
+     *                   `sourcePath` field; can be a remote path.
+     * @param scope "user" / "project" / "builtin".
+     */
+    QSocAgentDefinition parseAgentMarkdownContent(
+        const QString &content, const QString &sourcePath, const QString &scope) const;
 
     /**
      * @brief Scan a single directory for *.md files and register them.
