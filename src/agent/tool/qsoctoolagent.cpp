@@ -17,6 +17,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QTimer>
 
 QSocToolAgent::QSocToolAgent(
     QObject                     *parent,
@@ -412,10 +413,31 @@ QString QSocToolAgent::execute(const json &arguments)
                 .c_str());
     }
 
+    /* Auto-background hint: a single-shot timer notes long-running
+     * sync work in the transcript so the human + the LLM (via
+     * agent_status) can decide whether to ESC and re-spawn with
+     * run_in_background=true. This does NOT change blocking
+     * semantics; the parent stays in child->run() until the child
+     * returns, matching the existing nested-event-loop invariant. */
+    auto *autoBgTimer = new QTimer(this);
+    autoBgTimer->setSingleShot(true);
+    QObject::connect(autoBgTimer, &QTimer::timeout, taskSource_, [srcGuard, taskId]() {
+        if (!srcGuard.isNull()) {
+            srcGuard->appendTranscript(
+                taskId,
+                QStringLiteral(
+                    "\n[long-running: 120s elapsed; consider "
+                    "spawning with run_in_background=true]\n"));
+        }
+    });
+    autoBgTimer->start(120 * 1000);
+
     /* Synchronous: child->run() nests a QEventLoop internally. The
-     * parent is blocked here, so the shared QLLMService sees only
-     * the child's stream; the single-in-flight invariant holds. */
+     * parent is blocked here, so its own LLM service is idle; the
+     * child uses its own cloned service. */
     const QString result = child->run(prompt);
+    autoBgTimer->stop();
+    autoBgTimer->deleteLater();
     taskSource_->markCompleted(taskId, result);
     wtCleanup();
 
