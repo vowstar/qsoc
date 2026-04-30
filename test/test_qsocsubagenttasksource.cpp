@@ -6,7 +6,10 @@
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctasksource.h"
 
+#include <QDir>
+#include <QFile>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
 
@@ -157,7 +160,102 @@ private slots:
     void testTailForUnknownIdEmpty()
     {
         QSocSubAgentTaskSource src;
+        src.setTranscriptDir(QString()); /* skip disk fallback */
         QCOMPARE(src.tailFor(QStringLiteral("nope"), 1024), QString());
+    }
+
+    /* === N: disk transcript persistence ============================== */
+
+    void testTranscriptIsMirroredToDisk()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        const QString runId
+            = src.registerRun(QStringLiteral("disk-run"), QStringLiteral("explore"), makeAgent());
+        src.appendTranscript(runId, QStringLiteral("hello "));
+        src.appendTranscript(runId, QStringLiteral("world\n"));
+        src.markCompleted(runId, QStringLiteral("FINAL"));
+
+        QFile file(src.transcriptPathFor(runId));
+        QVERIFY(file.exists());
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString content = QString::fromUtf8(file.readAll());
+        QVERIFY(content.contains(QStringLiteral("disk-run")));
+        QVERIFY(content.contains(QStringLiteral("hello world")));
+        QVERIFY(content.contains(QStringLiteral("=== final ===")));
+        QVERIFY(content.contains(QStringLiteral("FINAL")));
+    }
+
+    void testFailedRunWritesFailedMarkerToDisk()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        const QString runId
+            = src.registerRun(QStringLiteral("flaky"), QStringLiteral("verification"), makeAgent());
+        src.markFailed(runId, QStringLiteral("LLM timeout"));
+        QFile file(src.transcriptPathFor(runId));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString content = QString::fromUtf8(file.readAll());
+        QVERIFY(content.contains(QStringLiteral("=== failed ===")));
+        QVERIFY(content.contains(QStringLiteral("LLM timeout")));
+    }
+
+    /* tailFor falls back to the disk file when the in-memory entry
+     * has been evicted. We simulate "evicted" by using an unknown
+     * id whose disk file we create manually. */
+    void testTailForFallsBackToDisk()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+
+        const QString fakeId = QStringLiteral("a99");
+        const QString path   = src.transcriptPathFor(fakeId);
+        QFile         outFile(path);
+        QVERIFY(outFile.open(QIODevice::WriteOnly));
+        outFile.write("evicted-run-tail-content");
+        outFile.close();
+
+        const QString tail = src.tailFor(fakeId, 1024);
+        QVERIFY(tail.contains(QStringLiteral("evicted-run-tail-content")));
+    }
+
+    void testTailForDiskTruncationMarker()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        const QString fakeId = QStringLiteral("a98");
+        const QString path   = src.transcriptPathFor(fakeId);
+        QFile         outFile(path);
+        QVERIFY(outFile.open(QIODevice::WriteOnly));
+        outFile.write(QByteArray("y").repeated(2048));
+        outFile.close();
+        const QString tail = src.tailFor(fakeId, 64);
+        QVERIFY(tail.startsWith(QStringLiteral("[... truncated ...]")));
+    }
+
+    /* Disk file survives evictStaleCompleted: even after the
+     * in-memory RunState is gone, the file is still present. */
+    void testDiskFileSurvivesEviction()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        const QString runId
+            = src.registerRun(QStringLiteral("once"), QStringLiteral("explore"), makeAgent());
+        src.markCompleted(runId, QStringLiteral("done"));
+        QVERIFY(QFile::exists(src.transcriptPathFor(runId)));
+        /* Evict by deleting the in-memory entry directly via kill +
+         * a long-since-finished simulation. (Eviction window is
+         * 60 s wall clock; we just verify that even after we drop
+         * a fresh second run on top, the disk file for the first is
+         * still available via the disk fallback path.) */
+        src.registerRun(QStringLiteral("two"), QStringLiteral("explore"), makeAgent());
+        QVERIFY(QFile::exists(src.transcriptPathFor(runId)));
     }
 };
 

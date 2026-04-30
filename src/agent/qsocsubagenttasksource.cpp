@@ -6,6 +6,9 @@
 #include "agent/qsocagent.h"
 
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QStandardPaths>
 
 QSocSubAgentTaskSource::QSocSubAgentTaskSource(QObject *parent)
     : QSocTaskSource(parent)
@@ -53,7 +56,19 @@ QString QSocSubAgentTaskSource::tailFor(const QString &id, int maxBytes) const
         }
         return out;
     }
-    return {};
+    /* Not in memory (evicted). Fall back to the on-disk transcript so
+     * agent_status / overlay tail can still serve historical runs. */
+    const QString path = transcriptPathFor(id);
+    QFile         file(path);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    if (maxBytes > 0 && file.size() > maxBytes) {
+        file.seek(file.size() - maxBytes);
+        const QByteArray bytes = file.readAll();
+        return QStringLiteral("[... truncated ...]\n") + QString::fromUtf8(bytes);
+    }
+    return QString::fromUtf8(file.readAll());
 }
 
 bool QSocSubAgentTaskSource::killTask(const QString &id)
@@ -94,6 +109,11 @@ QString QSocSubAgentTaskSource::registerRun(
         agent->setParent(this);
     }
     runs_.append(run);
+    /* Stamp a header at the top of the disk file so off-line readers
+     * know where the run started without parsing surrounding context. */
+    appendToDiskTranscript(
+        run.id,
+        QStringLiteral("=== run %1 (%2): %3 ===\n").arg(run.id, run.subagentType, run.label));
     emit tasksChanged();
     return run.id;
 }
@@ -109,6 +129,9 @@ void QSocSubAgentTaskSource::appendTranscript(const QString &id, const QString &
             run.transcript = run.transcript.right(transcriptCap_);
         }
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+        /* Mirror to disk so the transcript survives eviction and
+         * process restart; agent_status falls back to this file. */
+        appendToDiskTranscript(id, chunk);
         return;
     }
 }
@@ -122,6 +145,8 @@ void QSocSubAgentTaskSource::markCompleted(const QString &id, const QString &fin
         run.status         = QSocTask::Status::Completed;
         run.finalResult    = finalResult;
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+        appendToDiskTranscript(
+            id, QStringLiteral("\n=== final ===\n") + finalResult + QLatin1Char('\n'));
         emit tasksChanged();
         return;
     }
@@ -136,6 +161,8 @@ void QSocSubAgentTaskSource::markFailed(const QString &id, const QString &errorT
         run.status         = QSocTask::Status::Failed;
         run.errorText      = errorText;
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+        appendToDiskTranscript(
+            id, QStringLiteral("\n=== failed ===\n") + errorText + QLatin1Char('\n'));
         emit tasksChanged();
         return;
     }
@@ -231,6 +258,43 @@ QString QSocSubAgentTaskSource::subagentTypeFor(const QString &id) const
         }
     }
     return {};
+}
+
+QString QSocSubAgentTaskSource::transcriptDir() const
+{
+    if (!transcriptDir_.isEmpty()) {
+        return transcriptDir_;
+    }
+    QString base = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (base.isEmpty()) {
+        base = QDir::tempPath() + QStringLiteral("/qsoc-agents");
+    } else {
+        base += QStringLiteral("/qsoc/agents");
+    }
+    return base;
+}
+
+QString QSocSubAgentTaskSource::transcriptPathFor(const QString &id) const
+{
+    return QDir(transcriptDir()).filePath(id + QStringLiteral(".log"));
+}
+
+void QSocSubAgentTaskSource::appendToDiskTranscript(const QString &id, const QString &text) const
+{
+    if (text.isEmpty()) {
+        return;
+    }
+    const QString dir = transcriptDir();
+    /* Best effort: failures are silent so the in-memory transcript
+     * path is never blocked by disk issues. */
+    QDir().mkpath(dir);
+    const QString path = QDir(dir).filePath(id + QStringLiteral(".log"));
+    QFile         file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) {
+        return;
+    }
+    file.write(text.toUtf8());
+    file.close();
 }
 
 void QSocSubAgentTaskSource::evictStaleCompleted()
