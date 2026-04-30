@@ -1012,6 +1012,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     taskRegistry->registerSource(new QSocLoopTaskSource(loopScheduler, this));
     taskRegistry->registerSource(new QSocBashTaskSource(shellBashTool, this));
     auto *subAgentTaskSource = new QSocSubAgentTaskSource(this);
+    /* Reconstruct historical (backgrounded) runs from disk meta
+     * sidecars and rewrite stale "running" entries to "failed" so
+     * `/agents-history` can serve them. */
+    subAgentTaskSource->loadHistoricalRuns();
     taskRegistry->registerSource(subAgentTaskSource);
 
     /* LSP service setup. Built-in slang backend goes first as fallback;
@@ -4132,6 +4136,45 @@ bool QSocCliWorker::runAgentLoop(
             statusBarWidget.setStatus("Ready");
             lastPersistedIndex
                 = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
+            continue;
+        }
+        if (cmd == "/agents-history") {
+            QSocSubAgentTaskSource *src = nullptr;
+            if (auto *registry = agent->getToolRegistry()) {
+                if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(
+                        registry->getTool(QStringLiteral("agent")))) {
+                    src = spawnTool->taskSource();
+                }
+            }
+            if (src == nullptr) {
+                compositor
+                    .printContent("Sub-agent task source not available.\n", QTuiScrollView::Dim);
+                continue;
+            }
+            const auto runs = src->loadHistoricalRuns();
+            if (runs.isEmpty()) {
+                compositor
+                    .printContent("No historical sub-agent runs on disk.\n", QTuiScrollView::Dim);
+                continue;
+            }
+            compositor.printContent("Recent sub-agent runs:\n");
+            int shown = 0;
+            for (const auto &run : runs) {
+                if (shown >= 20) {
+                    break;
+                }
+                ++shown;
+                compositor.printContent(QString("  %1 [%2] %3 (%4)\n")
+                                            .arg(run.id, run.subagentType, run.label, run.status));
+                if (!run.error.isEmpty()) {
+                    compositor
+                        .printContent(QString("    error: %1\n").arg(run.error), QTuiScrollView::Dim);
+                }
+                if (!run.finalPreview.isEmpty()) {
+                    compositor.printContent(
+                        QString("    final: %1\n").arg(run.finalPreview), QTuiScrollView::Dim);
+                }
+            }
             continue;
         }
         if (cmd == "/agents") {

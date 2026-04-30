@@ -8,6 +8,8 @@
 
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtCore>
@@ -283,6 +285,77 @@ private slots:
         outFile.close();
         const QString tail = src.tailFor(fakeId, 64);
         QVERIFY(tail.startsWith(QStringLiteral("[... truncated ...]")));
+    }
+
+    void testLoadHistoricalRunsParsesMetaSidecars()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+
+        const QString done
+            = src.registerRun(QStringLiteral("done-x"), QStringLiteral("explore"), makeAgent());
+        src.markCompleted(done, QStringLiteral("PASSED"));
+        const QString fail
+            = src.registerRun(QStringLiteral("flaky-y"), QStringLiteral("verification"), makeAgent());
+        src.markFailed(fail, QStringLiteral("network"));
+
+        QSocSubAgentTaskSource freshSrc;
+        freshSrc.setTranscriptDir(tmp.path());
+        const auto runs = freshSrc.loadHistoricalRuns();
+        QVERIFY(runs.size() >= 2);
+        bool sawDone = false;
+        bool sawFail = false;
+        for (const auto &run : runs) {
+            if (run.id == done && run.status == QStringLiteral("completed")) {
+                sawDone = true;
+            }
+            if (run.id == fail && run.status == QStringLiteral("failed")) {
+                sawFail = true;
+            }
+        }
+        QVERIFY(sawDone);
+        QVERIFY(sawFail);
+    }
+
+    void testLoadHistoricalRunsRewritesStaleRunning()
+    {
+        /* Hand-craft a "running" meta whose timestamp is 2 hours
+         * old; loadHistoricalRuns must rewrite it as failed. */
+        QTemporaryDir tmp;
+        QDir().mkpath(tmp.path());
+        const QString metaPath = QDir(tmp.path()).filePath(QStringLiteral("a55.meta.json"));
+        const qint64  twoHrAgo = QDateTime::currentMSecsSinceEpoch() - qint64{2} * 3600 * 1000;
+        QJsonObject   meta;
+        meta["task_id"]       = QStringLiteral("a55");
+        meta["label"]         = QStringLiteral("ghost");
+        meta["subagent_type"] = QStringLiteral("explore");
+        meta["status"]        = QStringLiteral("running");
+        meta["started_at_ms"] = twoHrAgo;
+        meta["isolation"]     = QStringLiteral("none");
+        QFile file(metaPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QJsonDocument(meta).toJson(QJsonDocument::Indented));
+        file.close();
+
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        const auto runs         = src.loadHistoricalRuns(/*staleAgeSec*/ 60 * 60);
+        bool       sawRewritten = false;
+        for (const auto &run : runs) {
+            if (run.id == QStringLiteral("a55")) {
+                QCOMPARE(run.status, QStringLiteral("failed"));
+                QVERIFY(run.error.contains(QStringLiteral("process restart")));
+                sawRewritten = true;
+            }
+        }
+        QVERIFY(sawRewritten);
+
+        /* The meta file on disk has been rewritten too. */
+        QFile reread(metaPath);
+        QVERIFY(reread.open(QIODevice::ReadOnly));
+        const QJsonObject newObj = QJsonDocument::fromJson(reread.readAll()).object();
+        QCOMPARE(newObj.value(QStringLiteral("status")).toString(), QStringLiteral("failed"));
     }
 
     /* Disk file survives evictStaleCompleted: even after the
