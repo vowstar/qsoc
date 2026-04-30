@@ -419,6 +419,15 @@ void QSocAgent::processStreamIteration()
         messagesWithSystem.push_back(sanitized);
     }
 
+    /* Critical reminder: re-injected as a system message at the tail
+     * of every turn's wire payload so long-running children (e.g.
+     * read-only `explore`) don't drift away from their hard rules.
+     * Not persisted into `messages`. */
+    if (!agentConfig.criticalReminder.isEmpty()) {
+        messagesWithSystem.push_back(
+            {{"role", "system"}, {"content", agentConfig.criticalReminder.toStdString()}});
+    }
+
     /* Get tool definitions, filtered by sub-agent allowlist when set. */
     json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
 
@@ -549,6 +558,13 @@ bool QSocAgent::processIteration()
         json sanitized = msg;
         sanitized.erase("_usage");
         messagesWithSystem.push_back(sanitized);
+    }
+
+    /* Critical reminder: same per-turn re-injection as the streaming
+     * path; defends against drift on long sync runs. */
+    if (!agentConfig.criticalReminder.isEmpty()) {
+        messagesWithSystem.push_back(
+            {{"role", "system"}, {"content", agentConfig.criticalReminder.toStdString()}});
     }
 
     /* Get tool definitions, filtered by sub-agent allowlist when set. */

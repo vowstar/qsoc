@@ -354,6 +354,14 @@ QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdown(
             def.toolsDeny = parseToolsField(value, rest);
         } else if (key == QLatin1String("model")) {
             def.model = value;
+        } else if (key == QLatin1String("critical_reminder") || key == QLatin1String("criticalReminder")) {
+            /* Inline only; users get multi-line via "\n" escapes
+             * (parsed back to real newlines). YAML block-scalar
+             * `|` form is not supported by this hand-rolled
+             * frontmatter parser. */
+            QString unescaped = value;
+            unescaped.replace(QStringLiteral("\\n"), QStringLiteral("\n"));
+            def.criticalReminder = unescaped;
         } else if (key == QLatin1String("max_turns") || key == QLatin1String("maxTurns")) {
             bool      parsedOk = false;
             const int parsed   = value.toInt(&parsedOk);
