@@ -3,6 +3,7 @@
 
 #include "agent/qsocagentdefinitionregistry.h"
 
+#include "agent/remote/qsocsftpclient.h"
 #include "common/qsocconsole.h"
 
 #include <QDir>
@@ -214,6 +215,63 @@ void QSocAgentDefinitionRegistry::scanFromDisk(const QString &userDir, const QSt
     }
 }
 
+void QSocAgentDefinitionRegistry::scanFromRemoteSftp(
+    QSocSftpClient *sftp, const QString &remoteDir, const QString &scope)
+{
+    if (sftp == nullptr || remoteDir.isEmpty()) {
+        return;
+    }
+    QString                            listErr;
+    const QList<QSocSftpClient::Entry> entries = sftp->listDir(remoteDir, /*limit*/ 0, &listErr);
+    if (!listErr.isEmpty()) {
+        QSocConsole::debug() << "agent definitions: remote SFTP list failed for " << remoteDir
+                             << ": " << listErr;
+        return;
+    }
+    for (const QSocSftpClient::Entry &entry : entries) {
+        if (entry.isDirectory) {
+            continue;
+        }
+        if (!entry.name.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive)) {
+            continue;
+        }
+        const QString    fullPath = remoteDir + QLatin1Char('/') + entry.name;
+        QString          readErr;
+        const QByteArray bytes = sftp->readFile(fullPath, /*maxBytes*/ qint64{64} * 1024, &readErr);
+        if (!readErr.isEmpty()) {
+            QSocConsole::debug() << "agent definitions: remote read failed for " << fullPath << ": "
+                                 << readErr;
+            continue;
+        }
+        const QString       content = QString::fromUtf8(bytes);
+        QSocAgentDefinition def     = parseAgentMarkdownContent(content, fullPath, scope);
+        if (!def.parseError.isEmpty()) {
+            broken_.append(def);
+            continue;
+        }
+        registerDefinition(def);
+    }
+}
+
+void QSocAgentDefinitionRegistry::removeByScope(const QString &scope)
+{
+    QStringList toErase;
+    for (auto it = defs_.cbegin(); it != defs_.cend(); ++it) {
+        if (it.value().scope == scope) {
+            toErase.append(it.key());
+        }
+    }
+    for (const QString &name : toErase) {
+        defs_.remove(name);
+    }
+    /* Same for broken (parseError) entries. */
+    for (int i = broken_.size() - 1; i >= 0; --i) {
+        if (broken_[i].scope == scope) {
+            broken_.removeAt(i);
+        }
+    }
+}
+
 void QSocAgentDefinitionRegistry::scanDirectory(const QString &dirPath, const QString &scope)
 {
     QDir dir(dirPath);
@@ -292,18 +350,26 @@ bool parseBoolField(const QString &value, bool fallback)
 QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdown(
     const QString &path, const QString &scope) const
 {
-    QSocAgentDefinition def;
-    def.scope      = scope;
-    def.sourcePath = path;
-
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QSocAgentDefinition def;
+        def.scope      = scope;
+        def.sourcePath = path;
         def.parseError = QStringLiteral("cannot open file");
         return def;
     }
     QTextStream   stream(&file);
     const QString content = stream.readAll();
     file.close();
+    return parseAgentMarkdownContent(content, path, scope);
+}
+
+QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdownContent(
+    const QString &content, const QString &sourcePath, const QString &scope) const
+{
+    QSocAgentDefinition def;
+    def.scope      = scope;
+    def.sourcePath = sourcePath;
 
     if (!content.startsWith(QStringLiteral("---"))) {
         def.parseError = QStringLiteral("missing frontmatter ('---' on first line)");
@@ -379,7 +445,7 @@ QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdown(
 
     /* Default name from the file stem when the frontmatter omits it. */
     if (def.name.isEmpty()) {
-        def.name = QFileInfo(path).completeBaseName();
+        def.name = QFileInfo(sourcePath).completeBaseName();
     }
     if (def.name.isEmpty()) {
         def.parseError = QStringLiteral("missing required field 'name'");

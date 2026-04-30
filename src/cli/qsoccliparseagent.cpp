@@ -1218,6 +1218,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             agent->setConfig(newCfg);
         }
         preconnectedRemote = &cliRemoteState;
+        /* Pull the remote project's .qsoc/agents/ markdown defs into
+         * the registry so the LLM sees them under scope=project. */
+        if (cliRemoteState.sftp != nullptr && !cliRemoteState.workspace.isEmpty()) {
+            agentDefinitions->scanFromRemoteSftp(
+                cliRemoteState.sftp, cliRemoteState.workspace + QStringLiteral("/.qsoc/agents"));
+        }
         QSocConsole::out() << "Connected. Remote workspace: " << cliRemoteState.workspace << "\n"
                            << Qt::flush;
     } else if (parser.isSet("workspace")) {
@@ -4681,8 +4687,11 @@ bool QSocCliWorker::runAgentLoop(
              * the swap so the parent LLM keeps seeing them; the
              * child resolves its registry dynamically via the parent
              * agent. */
-            if (auto *spawnTool = localRegistry->getTool(QStringLiteral("agent"))) {
+            QSocAgentDefinitionRegistry *defs = nullptr;
+            if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(
+                    localRegistry->getTool(QStringLiteral("agent")))) {
                 remoteRegistry->registerTool(spawnTool);
+                defs = spawnTool->definitionRegistry();
             }
             if (auto *statusTool = localRegistry->getTool(QStringLiteral("agent_status"))) {
                 remoteRegistry->registerTool(statusTool);
@@ -4691,6 +4700,12 @@ bool QSocCliWorker::runAgentLoop(
                 remoteRegistry->registerTool(sendTool);
             }
             agent->setToolRegistry(remoteRegistry);
+            /* Pull the remote project's .qsoc/agents/ defs across SFTP
+             * so the parent agent sees them after `/remote`. */
+            if (defs != nullptr && remoteSftp != nullptr && !newState.workspace.isEmpty()) {
+                defs->scanFromRemoteSftp(
+                    remoteSftp, newState.workspace + QStringLiteral("/.qsoc/agents"));
+            }
 
             {
                 auto newCfg               = agent->getConfig();
@@ -4727,6 +4742,14 @@ bool QSocCliWorker::runAgentLoop(
             }
             /* Restore local tool registry and drop remote state. */
             agent->setToolRegistry(localRegistry);
+            /* Drop project-scope defs that were sourced from the
+             * remote workspace; user / builtin entries stay. */
+            if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(
+                    localRegistry->getTool(QStringLiteral("agent")))) {
+                if (auto *defs = spawnTool->definitionRegistry()) {
+                    defs->removeByScope(QStringLiteral("project"));
+                }
+            }
             if (remoteRegistry != nullptr) {
                 remoteRegistry->deleteLater();
                 remoteRegistry = nullptr;

@@ -310,6 +310,45 @@ private slots:
         QVERIFY(reg.find(QStringLiteral("stem-default")) != nullptr);
     }
 
+    void testRemoveByScopeDropsMatchingEntries()
+    {
+        QSocAgentDefinitionRegistry reg;
+        QSocAgentDefinition         a;
+        a.name       = QStringLiteral("a");
+        a.scope      = QStringLiteral("user");
+        a.promptBody = QStringLiteral("body");
+        reg.registerDefinition(a);
+
+        QSocAgentDefinition b;
+        b.name       = QStringLiteral("b");
+        b.scope      = QStringLiteral("project");
+        b.promptBody = QStringLiteral("body");
+        reg.registerDefinition(b);
+
+        QSocAgentDefinition c;
+        c.name       = QStringLiteral("c");
+        c.scope      = QStringLiteral("project");
+        c.promptBody = QStringLiteral("body");
+        reg.registerDefinition(c);
+
+        QCOMPARE(reg.count(), 3);
+        reg.removeByScope(QStringLiteral("project"));
+        QCOMPARE(reg.count(), 1);
+        QVERIFY(reg.find(QStringLiteral("a")) != nullptr);
+        QVERIFY(reg.find(QStringLiteral("b")) == nullptr);
+        QVERIFY(reg.find(QStringLiteral("c")) == nullptr);
+    }
+
+    void testScanFromRemoteSftpHandlesNullClient()
+    {
+        QSocAgentDefinitionRegistry reg;
+        reg.registerBuiltins();
+        const int before = reg.count();
+        /* Null client is a no-op (no crash, no entries added). */
+        reg.scanFromRemoteSftp(nullptr, QStringLiteral("/remote/agents"));
+        QCOMPARE(reg.count(), before);
+    }
+
     void testScanFromDiskMissingDirsAreSilent()
     {
         QSocAgentDefinitionRegistry reg;
