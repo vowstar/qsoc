@@ -85,6 +85,16 @@ public:
     void abortAll();
 
     /**
+     * @brief Queue a follow-up user message into a Running child's
+     *        request queue. Returns true on success; false when the
+     *        id is unknown or the run is already finished.
+     * @details Used by the `send_message` tool. The child consumes
+     *          the queued message at its next iteration boundary
+     *          via `QSocAgent::queueRequest`.
+     */
+    bool queueRequestFor(const QString &id, const QString &message);
+
+    /**
      * @brief Find a row by id; returns false if no run with that id
      *        is currently tracked (either never registered, or
      *        already evicted).

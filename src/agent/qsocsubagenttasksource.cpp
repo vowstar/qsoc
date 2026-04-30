@@ -171,6 +171,22 @@ void QSocSubAgentTaskSource::abortAll()
     }
 }
 
+bool QSocSubAgentTaskSource::queueRequestFor(const QString &id, const QString &message)
+{
+    for (RunState &run : runs_) {
+        if (run.id != id) {
+            continue;
+        }
+        if (run.status != QSocTask::Status::Running || run.agent == nullptr) {
+            return false;
+        }
+        run.agent->queueRequest(message);
+        run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+        return true;
+    }
+    return false;
+}
+
 bool QSocSubAgentTaskSource::findRow(const QString &id, QSocTask::Row *out) const
 {
     for (const RunState &run : runs_) {
