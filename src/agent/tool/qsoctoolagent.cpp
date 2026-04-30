@@ -364,6 +364,9 @@ QString QSocToolAgent::execute(const json &arguments)
 
     const QString label  = description.isEmpty() ? subagentType : description;
     const QString taskId = taskSource_->registerRun(label, subagentType, child);
+    /* Stash isolation + worktree on the run so the meta sidecar
+     * captures them; mirrors what the response JSON reports. */
+    taskSource_->setIsolationMetadata(taskId, isolation, worktreePath);
 
     /* Forward child token usage into the parent's running totals so
      * the parent's status pill / cost view reflects total cost in

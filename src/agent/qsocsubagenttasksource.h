@@ -103,11 +103,26 @@ public:
     void setTranscriptDir(const QString &dir) { transcriptDir_ = dir; }
 
     /**
-     * @brief Resolve the transcript file path for a given run id
-     *        (independent of whether the run is still tracked
+     * @brief Resolve the JSONL transcript file path for a given run
+     *        id (independent of whether the run is still tracked
      *        in-memory). Used by `tailFor` for evicted-run fallback.
      */
     QString transcriptPathFor(const QString &id) const;
+
+    /**
+     * @brief Resolve the metadata sidecar file path for a given run
+     *        id. Stores `{task_id, label, subagent_type,
+     *        started_at_ms, status, isolation, worktree, ...}`.
+     */
+    QString metaPathFor(const QString &id) const;
+
+    /**
+     * @brief Stash isolation + worktree path on a registered run so
+     *        the meta sidecar reflects them. Spawn tool calls this
+     *        right after registerRun(). No-op for unknown ids.
+     */
+    void setIsolationMetadata(
+        const QString &id, const QString &isolation, const QString &worktreePath);
 
     /**
      * @brief Find a row by id; returns false if no run with that id
@@ -140,6 +155,8 @@ private:
         QString          transcript;  /* rolling, capped */
         QString          finalResult; /* on Completed */
         QString          errorText;   /* on Failed */
+        QString          isolation;   /* "none" | "worktree" */
+        QString          worktreePath;
     };
 
     /* Drop Completed / Failed runs older than completionTtlMs_,
@@ -150,8 +167,12 @@ private:
     /** Resolve the on-disk directory transcripts are written to. */
     QString transcriptDir() const;
 
-    /** Append a line to the on-disk transcript file (best effort). */
-    void appendToDiskTranscript(const QString &id, const QString &text) const;
+    /** Append a JSONL event {ts, kind, data} to the transcript
+     *  file (best effort; failures are silent). */
+    void appendDiskEvent(const QString &id, const QString &kind, const QString &data) const;
+
+    /** Write the meta sidecar JSON file for a given run. */
+    void writeMeta(const RunState &run) const;
 
     QList<RunState> runs_; /* preserves registration order; small N */
     int             nextSerial_      = 1;
