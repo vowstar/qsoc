@@ -23,6 +23,7 @@ enum class Kind {
     Loop,           /* QSocLoopScheduler job */
     BackgroundBash, /* QSocToolShellBash::activeProcesses entry */
     SubAgent,       /* future: in-process or remote sub-agent */
+    Monitor,        /* stdout-line monitor task */
 };
 
 enum class Status {

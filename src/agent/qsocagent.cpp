@@ -350,9 +350,17 @@ void QSocAgent::processStreamIteration()
     {
         QMutexLocker locker(&queueMutex);
         while (!requestQueue.isEmpty()) {
-            QString newRequest = requestQueue.takeFirst();
-            int     remaining  = requestQueue.size();
+            QueuedRequest item       = requestQueue.takeFirst();
+            QString       newRequest = item.text;
+            int           remaining  = requestQueue.size();
             locker.unlock();
+
+            if (item.taskNotification) {
+                emit processingQueuedRequest(QStringLiteral("[task notification]"), remaining);
+                addMessage("user", newRequest);
+                locker.relock();
+                continue;
+            }
 
             QString blockReason;
             if (!firePromptSubmitHook(&newRequest, &blockReason)) {
@@ -936,6 +944,12 @@ QString QSocAgent::buildSystemPromptWithMemory() const
         "- Break down complex work with todo_add / todo_update to track progress.\n"
         "- For SoC infrastructure: query_docs → file_write .soc_net → generate_verilog.\n"
         "- For web research: web_search for discovery, web_fetch for content retrieval.\n"
+        "- Use monitor proactively when the user asks to watch, monitor, tail, poll, "
+        "wait for a status change, react to log lines, or keep an eye on a long-running "
+        "process while continuing the conversation. Write the watcher command yourself; "
+        "do not ask the user to configure it.\n"
+        "- Use background bash for long-running commands whose output only needs later "
+        "manual inspection. Use monitor when output should wake you as events arrive.\n"
         "- Tool definitions are provided separately — you do not need to memorize their "
         "schemas.\n");
 
@@ -959,17 +973,23 @@ QString QSocAgent::buildSystemPromptWithMemory() const
         "- Errors or blockers that change the plan\n"
         "Skip filler words, preamble, and unnecessary transitions.\n");
 
-    /* Section 7.5: Scheduled prompts */
+    /* Section 7.5: Background monitoring and scheduled prompts */
     prompt += QStringLiteral(
-        "\n# Scheduled prompts\n"
-        "Use schedule_create proactively when the user asks to monitor, poll, retry, "
-        "remind, \"check back later\", or \"every N minutes/hours/days\".\n"
-        "Do NOT use it for ordinary one-off immediate work.\n"
+        "\n# Background monitoring and scheduled prompts\n"
+        "Use monitor for live event streams inside this session: log tails, file watches, "
+        "CI/status polling loops, test runners in watch mode, dev servers, and any script "
+        "that should notify you line-by-line as something changes. Keep monitor output "
+        "concise: print one useful event per line and avoid noisy heartbeats.\n"
+        "Use schedule_create for time-based future prompts: reminders, periodic check-ins, "
+        "or work that should run at a wall-clock cadence even when there is no live output.\n"
+        "Do NOT use schedule_create for ordinary one-off immediate work.\n"
         "Time format is a 5-field cron string in local time.\n"
         "- Recurring: cron like \"*/5 * * * *\" with recurring=true.\n"
         "- One-shot: pin minute+hour+dom+month, e.g. \"30 14 27 2 *\" with recurring=false.\n"
         "Default durable=false (session-only). Set durable=true only when the user says "
         "\"permanently\", \"every day from now on\", or similar.\n"
+        "Stop monitors with monitor_stop when the watched condition is resolved or the "
+        "watch is no longer useful.\n"
         "Preserve /commands and !commands verbatim in prompt.\n"
         "After scheduling, tell the user the id, schedule, durability, and how to cancel "
         "(schedule_delete id=<id>).\n");
@@ -1153,7 +1173,13 @@ void QSocAgent::clearHistory()
 void QSocAgent::queueRequest(const QString &request)
 {
     QMutexLocker locker(&queueMutex);
-    requestQueue.append(request);
+    requestQueue.append({request, false});
+}
+
+void QSocAgent::queueTaskNotification(const QString &notification)
+{
+    QMutexLocker locker(&queueMutex);
+    requestQueue.append({notification, true});
 }
 
 bool QSocAgent::hasPendingRequests() const

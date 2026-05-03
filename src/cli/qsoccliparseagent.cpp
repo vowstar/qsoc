@@ -15,6 +15,7 @@
 #include "agent/qsoclooptasksource.h"
 #include "agent/qsocsession.h"
 #include "agent/qsocsubagenttasksource.h"
+#include "agent/qsoctaskeventqueue.h"
 #include "agent/qsoctaskregistry.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
@@ -35,6 +36,7 @@
 #include "agent/tool/qsoctoollsp.h"
 #include "agent/tool/qsoctoolmemory.h"
 #include "agent/tool/qsoctoolmodule.h"
+#include "agent/tool/qsoctoolmonitor.h"
 #include "agent/tool/qsoctoolpath.h"
 #include "agent/tool/qsoctoolproject.h"
 #include "agent/tool/qsoctoolschedule.h"
@@ -80,6 +82,7 @@
 #include <QStandardPaths>
 #include <QTextStream>
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
@@ -962,6 +965,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(shellBashTool);
     toolRegistry->registerTool(bashManageTool);
 
+    auto *taskEventQueue    = new QSocTaskEventQueue(this);
+    auto *monitorTaskSource = new QSocMonitorTaskSource(this, taskEventQueue, projectManager);
+    toolRegistry->registerTool(new QSocToolMonitor(this, monitorTaskSource));
+    toolRegistry->registerTool(new QSocToolMonitorStop(this, monitorTaskSource));
+
     /* Documentation tools */
     auto *docQueryTool = new QSocToolDocQuery(this);
     toolRegistry->registerTool(docQueryTool);
@@ -1012,6 +1020,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     auto *taskRegistry = new QSocTaskRegistry(this);
     taskRegistry->registerSource(new QSocLoopTaskSource(loopScheduler, this));
     taskRegistry->registerSource(new QSocBashTaskSource(shellBashTool, this));
+    taskRegistry->registerSource(monitorTaskSource);
     auto *subAgentTaskSource = new QSocSubAgentTaskSource(this);
     /* Reconstruct historical (backgrounded) runs from disk meta
      * sidecars and rewrite stale "running" entries to "failed" so
@@ -1209,7 +1218,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             }
             return showError(1, sshErr);
         }
-        buildAgentRemoteRegistry(this, &cliRemoteState, socConfig);
+        buildAgentRemoteRegistry(this, &cliRemoteState, socConfig, monitorTaskSource);
         /* Re-register the spawn tool + its companion into the remote
          * registry so the parent LLM still sees `agent` /
          * `agent_status` after the remote swap. Both tools are
@@ -1250,6 +1259,16 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     if (parser.isSet("query")) {
         QString      query = parser.value("query");
         QTextStream &qout  = QSocConsole::out();
+
+        connect(
+            taskEventQueue,
+            &QSocTaskEventQueue::taskNotificationReady,
+            agent,
+            [agent](const QString &message, const QString &agentId) {
+                if (agentId.isEmpty()) {
+                    agent->queueTaskNotification(message);
+                }
+            });
 
         if (streaming) {
             /* Streaming single query mode */
@@ -1382,17 +1401,21 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         pathContext,
         preconnectedRemote,
         preLocalRegistry,
-        taskRegistry);
+        taskRegistry,
+        taskEventQueue,
+        monitorTaskSource);
 }
 
 bool QSocCliWorker::runAgentLoop(
-    QSocAgent        *agent,
-    bool              streaming,
-    const QString    &resumeSessionId,
-    QSocPathContext  *pathContext,
-    AgentRemoteState *preconnected,
-    QSocToolRegistry *preLocalRegistry,
-    QSocTaskRegistry *taskRegistry)
+    QSocAgent             *agent,
+    bool                   streaming,
+    const QString         &resumeSessionId,
+    QSocPathContext       *pathContext,
+    AgentRemoteState      *preconnected,
+    QSocToolRegistry      *preLocalRegistry,
+    QSocTaskRegistry      *taskRegistry,
+    QSocTaskEventQueue    *taskEventQueue,
+    QSocMonitorTaskSource *monitorTaskSource)
 {
     /* Require interactive terminal for TUI */
     QTerminalCapability termCap;
@@ -1447,12 +1470,14 @@ bool QSocCliWorker::runAgentLoop(
     QSocToolRegistry *remoteRegistry = nullptr;
     QList<QSocSshSession *> remoteJumps; /* ProxyJump chain, outlives target */
     QSocRemotePathContext   remotePath;
+    QString                 remoteTargetKey;
     if (preconnected != nullptr && preconnected->session != nullptr) {
-        remoteSession  = preconnected->session;
-        remoteSftp     = preconnected->sftp;
-        remoteRegistry = preconnected->registry;
-        remoteJumps    = preconnected->jumps;
-        remotePath     = preconnected->path;
+        remoteSession   = preconnected->session;
+        remoteSftp      = preconnected->sftp;
+        remoteRegistry  = preconnected->registry;
+        remoteJumps     = preconnected->jumps;
+        remotePath      = preconnected->path;
+        remoteTargetKey = preconnected->targetKey;
     }
 
     /* Create TUI compositor — enters alt screen immediately */
@@ -2748,6 +2773,28 @@ bool QSocCliWorker::runAgentLoop(
         }
     }
     QEventLoop *idlePromptLoop = nullptr;
+
+    if (taskEventQueue != nullptr) {
+        connect(
+            taskEventQueue,
+            &QSocTaskEventQueue::taskNotificationReady,
+            agent,
+            [agent,
+             &pendingAutoInputs,
+             &idlePromptLoop](const QString &message, const QString &agentId) {
+                if (!agentId.isEmpty()) {
+                    return;
+                }
+                if (agent->isRunning()) {
+                    agent->queueTaskNotification(message);
+                    return;
+                }
+                pendingAutoInputs.append(message);
+                if (idlePromptLoop != nullptr) {
+                    idlePromptLoop->quit();
+                }
+            });
+    }
 
     /* Background bash completion notification. The shell tool keeps the
      * process and its output around for bash_manage; this hook only paints
@@ -4707,7 +4754,7 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
 
-            buildAgentRemoteRegistry(this, &newState, socConfig);
+            buildAgentRemoteRegistry(this, &newState, socConfig, monitorTaskSource);
 
             /* Tear down any previous remote session before adopting the new one. */
             if (remoteRegistry != nullptr) {
@@ -4732,11 +4779,12 @@ bool QSocCliWorker::runAgentLoop(
             }
             remoteJumps.clear();
 
-            remoteSession  = newState.session;
-            remoteSftp     = newState.sftp;
-            remoteJumps    = newState.jumps;
-            remoteRegistry = newState.registry;
-            remotePath     = newState.path;
+            remoteSession   = newState.session;
+            remoteSftp      = newState.sftp;
+            remoteJumps     = newState.jumps;
+            remoteRegistry  = newState.registry;
+            remotePath      = newState.path;
+            remoteTargetKey = newState.targetKey;
 
             /* Carry the spawn tool and its status companion across
              * the swap so the parent LLM keeps seeing them; the
@@ -4812,6 +4860,7 @@ bool QSocCliWorker::runAgentLoop(
                 remoteRegistry->deleteLater();
                 remoteRegistry = nullptr;
             }
+            remoteTargetKey.clear();
             if (remoteSftp != nullptr) {
                 remoteSftp->close();
                 delete remoteSftp;

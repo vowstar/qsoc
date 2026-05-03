@@ -386,13 +386,15 @@ private:
      * @retval false Run failed.
      */
     bool runAgentLoop(
-        QSocAgent               *agent,
-        bool                     streaming        = false,
-        const QString           &resumeSessionId  = QString(),
-        QSocPathContext         *pathContext      = nullptr,
-        struct AgentRemoteState *preconnected     = nullptr,
-        class QSocToolRegistry  *preLocalRegistry = nullptr,
-        class QSocTaskRegistry  *taskRegistry     = nullptr);
+        QSocAgent                   *agent,
+        bool                         streaming         = false,
+        const QString               &resumeSessionId   = QString(),
+        QSocPathContext             *pathContext       = nullptr,
+        struct AgentRemoteState     *preconnected      = nullptr,
+        class QSocToolRegistry      *preLocalRegistry  = nullptr,
+        class QSocTaskRegistry      *taskRegistry      = nullptr,
+        class QSocTaskEventQueue    *taskEventQueue    = nullptr,
+        class QSocMonitorTaskSource *monitorTaskSource = nullptr);
 
     /**
      * @brief Show application name and version and emit exit with exitCode.
