@@ -14,6 +14,7 @@ class QSocSshSession;
 class QSocSftpClient;
 class QSocToolRegistry;
 class QSocConfig;
+class QSocMonitorTaskSource;
 
 /**
  * @brief Bundle of remote-session state shared by the agent and its tools.
@@ -76,6 +77,9 @@ bool prepareAgentRemoteWorkspace(
  * @return New registry. Never null.
  */
 QSocToolRegistry *buildAgentRemoteRegistry(
-    QObject *parent, AgentRemoteState *state, QSocConfig *socConfig);
+    QObject               *parent,
+    AgentRemoteState      *state,
+    QSocConfig            *socConfig,
+    QSocMonitorTaskSource *monitorSource = nullptr);
 
 #endif // QSOCAGENTREMOTE_H

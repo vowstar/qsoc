@@ -223,6 +223,8 @@ The agent provides the following tools through natural language:
   reports and adjusts allowed write directories
 - *Shell*: `bash` (synchronous, or `background=true` for detached jobs),
   `bash_manage` to inspect, tail, or kill backgrounded jobs
+- *Monitors*: `monitor` starts a line-oriented watcher whose output wakes
+  the agent; `monitor_stop` terminates a watcher
 - *Sub-agents*: `agent` to spawn a child run, `agent_status` to poll a
   backgrounded run, `agent_resume` to pick up a prior run from disk,
   `send_message` to post live input to a streaming child; see
@@ -495,7 +497,8 @@ While a backgrounded run is alive:
 <agent-tasks>
 A unified task panel lists every long-running activity attached to the
 current agent: backgrounded `bash` jobs, scheduled `/loop` prompts, and
-detached sub-agent runs.
+detached sub-agent runs. Monitors created by `monitor` also appear here
+while they are alive.
 
 === Status Pill
 <agent-tasks-pill>
@@ -528,9 +531,25 @@ tail on the right.
 )
 
 `x` sends `SIGTERM` to bash jobs, calls `abort()` on streaming
-sub-agents, and removes a `/loop` job from the schedule. Completed rows
-linger for a short window so their tail can still be inspected before
-being evicted.
+sub-agents, stops monitors, and removes a `/loop` job from the schedule.
+Completed rows linger for a short window so their tail can still be
+inspected before being evicted.
+
+=== Output Monitors
+<agent-task-monitors>
+
+`monitor` runs a shell command in the background and watches stdout/stderr
+as a line stream. Each output line becomes a `<task-notification>` user
+message queued for the current agent turn; partial trailing lines are
+flushed on exit, and high-volume bursts are coalesced before injection.
+The full stream is also written to an `output.log` path returned by the
+tool and shown in the task overlay.
+
+Users normally do not need to configure monitors manually. Ask the agent
+to watch a log, poll a status endpoint, wait for CI, or react to a file
+change; the agent should write the watcher command itself and call
+`monitor` when event output needs to wake the session. Use `monitor_stop`
+with the returned `task_id` to stop it.
 
 == SCHEDULED PROMPTS
 <agent-loop>
@@ -619,6 +638,7 @@ Workspace tools operate on the remote host (SFTP + SSH exec):
 - `read_file`, `write_file`, `list_files`, `edit_file`
 - `bash` (with optional `background=true` for detached jobs)
 - `bash_manage` (status/output/terminate/kill for backgrounded jobs)
+- `monitor`, `monitor_stop` (remote command, local notification stream)
 - `path_context` (remote root, cwd, writable dirs)
 
 Control-plane tools stay on the local machine regardless of mode:

@@ -10,6 +10,7 @@
 #include "agent/remote/qsocsshsession.h"
 #include "agent/remote/qsoctoolremote.h"
 #include "agent/tool/qsoctooldoc.h"
+#include "agent/tool/qsoctoolmonitor.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qsocconfig.h"
 
@@ -287,7 +288,10 @@ bool prepareAgentRemoteWorkspace(
 }
 
 QSocToolRegistry *buildAgentRemoteRegistry(
-    QObject *parent, AgentRemoteState *state, QSocConfig *socConfig)
+    QObject               *parent,
+    AgentRemoteState      *state,
+    QSocConfig            *socConfig,
+    QSocMonitorTaskSource *monitorSource)
 {
     auto *registry = new QSocToolRegistry(parent);
     registry->registerTool(new QSocToolRemoteFileRead(parent, state->sftp, &state->path));
@@ -297,6 +301,13 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     registry->registerTool(new QSocToolRemoteShellBash(parent, state->session, &state->path));
     registry->registerTool(new QSocToolRemoteBashManage(parent, state->session, &state->path));
     registry->registerTool(new QSocToolRemotePath(parent, &state->path));
+    if (monitorSource != nullptr) {
+        QSocMonitorTaskSource::RemoteSpec remote;
+        remote.targetKey = state->targetKey;
+        remote.workspace = state->workspace;
+        registry->registerTool(new QSocToolMonitor(parent, monitorSource, remote));
+        registry->registerTool(new QSocToolMonitorStop(parent, monitorSource));
+    }
     /* Control-plane tools stay local even in remote mode. */
     registry->registerTool(new QSocToolDocQuery(parent));
     registry->registerTool(new QSocToolWebFetch(parent, socConfig));

@@ -271,6 +271,8 @@ private slots:
         QString         prompt = agent->buildSystemPromptWithMemory();
         QVERIFY(prompt.contains(QStringLiteral("You are QSoC Agent")));
         QVERIFY(prompt.contains(QStringLiteral("# Environment")));
+        QVERIFY(prompt.contains(QStringLiteral("Use monitor proactively")));
+        QVERIFY(prompt.contains(QStringLiteral("do not ask the user to configure it")));
     }
 };
 

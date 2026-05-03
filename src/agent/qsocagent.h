@@ -15,6 +15,7 @@ class QSocLoopScheduler;
 #include <atomic>
 #include <nlohmann/json.hpp>
 #include <QElapsedTimer>
+#include <QList>
 #include <QMutex>
 #include <QObject>
 #include <QString>
@@ -80,6 +81,14 @@ public:
      * @param request The user request to queue
      */
     void queueRequest(const QString &request);
+
+    /**
+     * @brief Queue a model-visible background task notification.
+     * @details Unlike queueRequest(), this bypasses user_prompt_submit hooks
+     *          when drained during a running turn because it is system
+     *          generated, not human-authored input.
+     */
+    void queueTaskNotification(const QString &notification);
 
     /**
      * @brief Check if there are pending requests in the queue
@@ -397,10 +406,16 @@ private:
     QTimer       *heartbeatTimer = nullptr;
     QElapsedTimer runElapsedTimer;
 
+    struct QueuedRequest
+    {
+        QString text;
+        bool    taskNotification = false;
+    };
+
     /* Request queue for dynamic input during execution */
-    QStringList       requestQueue;
-    mutable QMutex    queueMutex;
-    std::atomic<bool> abortRequested{false};
+    QList<QueuedRequest> requestQueue;
+    mutable QMutex       queueMutex;
+    std::atomic<bool>    abortRequested{false};
 
     /* Progress tracking for stuck detection */
     std::atomic<qint64> lastProgressTime{0};
