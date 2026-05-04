@@ -278,7 +278,10 @@ void QTuiCompositor::recalculateLayout()
     int totalH = screen.height();
     int totalW = screen.width();
 
-    /* Dynamic input height: grows with multi-line content, capped at 1/3 of screen */
+    /* Dynamic input height: grows with multi-line content, capped at 1/3 of
+     * screen. Tell the input widget the current width first so soft-wrap
+     * can be reflected in the visual row count. */
+    inputWidget.setTerminalWidth(totalW);
     int inputH    = inputWidget.lineCount();
     int maxInputH = qMax(1, totalH / 3);
     inputH        = qBound(1, inputH, maxInputH);
