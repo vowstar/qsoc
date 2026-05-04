@@ -310,7 +310,10 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     }
     /* Control-plane tools stay local even in remote mode. */
     registry->registerTool(new QSocToolDocQuery(parent));
-    registry->registerTool(new QSocToolWebFetch(parent, socConfig));
+    /* Remote-mode web_fetch has no QLLMService handle (the model lives on the
+     * client). Image inlining therefore falls back to alt-text; users who want
+     * vision should fetch locally. */
+    registry->registerTool(new QSocToolWebFetch(parent, socConfig, /*llm=*/nullptr));
     if (socConfig != nullptr && !socConfig->getValue("web.search_api_url").isEmpty()) {
         registry->registerTool(new QSocToolWebSearch(parent, socConfig));
     }

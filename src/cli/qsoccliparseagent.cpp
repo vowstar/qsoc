@@ -998,7 +998,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(skillCreateTool);
 
     /* Web tools */
-    auto *webFetchTool = new QSocToolWebFetch(this, socConfig);
+    auto *webFetchTool = new QSocToolWebFetch(this, socConfig, llmService);
     toolRegistry->registerTool(webFetchTool);
 
     if (socConfig && !socConfig->getValue("web.search_api_url").isEmpty()) {
