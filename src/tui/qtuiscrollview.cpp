@@ -7,27 +7,42 @@
 namespace {
 
 /* Visual-width-aware soft wrap. Breaks preferentially on spaces, falls
- * back to hard breaks for tokens wider than the available width. Leaves
- * the first-segment indentation alone so paragraphs keep their shape. */
-QList<QString> softWrap(const QString &text, int maxWidth)
+ * back to hard breaks for tokens wider than the available width.
+ *
+ * continuationPrefix: prepended to every emitted chunk except the first,
+ * and counted against that chunk's width budget. Used by diff rendering
+ * to keep continuation rows aligned under the +/- marker column so a
+ * wrapped add/del line still reads as a single visual block. */
+QList<QString> softWrap(const QString &text, int maxWidth, const QString &continuationPrefix)
 {
     QList<QString> out;
     if (maxWidth <= 0) {
         out.append(text);
         return out;
     }
+    const int prefixWidth = QTuiText::visualWidth(continuationPrefix);
+    auto      finalize    = [&](const QString &chunk) {
+        out.append(out.isEmpty() ? chunk : continuationPrefix + chunk);
+    };
+    auto budget = [&]() {
+        if (out.isEmpty()) {
+            return maxWidth;
+        }
+        return qMax(1, maxWidth - prefixWidth);
+    };
+
     QString current;
     int     currentWidth = 0;
     int     lastBreak    = -1; /* last space index in current buffer */
     for (int idx = 0; idx < text.size(); ++idx) {
         const QChar ch    = text.at(idx);
         const int   chWid = QTuiText::isWideChar(ch.unicode()) ? 2 : 1;
-        if (currentWidth + chWid > maxWidth && !current.isEmpty()) {
+        if (currentWidth + chWid > budget() && !current.isEmpty()) {
             if (lastBreak > 0) {
                 /* Break at the last space, carry the tail forward. */
                 QString head = current.left(lastBreak);
                 QString tail = current.mid(lastBreak + 1);
-                out.append(head);
+                finalize(head);
                 current      = tail;
                 currentWidth = 0;
                 for (const QChar tc : tail) {
@@ -36,7 +51,7 @@ QList<QString> softWrap(const QString &text, int maxWidth)
                 lastBreak = -1;
             } else {
                 /* Token wider than the row: hard-break. */
-                out.append(current);
+                finalize(current);
                 current.clear();
                 currentWidth = 0;
                 lastBreak    = -1;
@@ -49,7 +64,7 @@ QList<QString> softWrap(const QString &text, int maxWidth)
         currentWidth += chWid;
     }
     if (!current.isEmpty() || out.isEmpty()) {
-        out.append(current);
+        finalize(current);
     }
     return out;
 }
@@ -114,12 +129,29 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
     QList<DisplayRow> displayRows;
     displayRows.reserve(lines.size() + 8);
 
+    /* Diff lines carry a single +/-/space marker as their first column,
+     * so wrapped continuation rows get a 1-char space gutter to align
+     * the wrapped content under the original content's first character.
+     * Without this the second visual row sticks one column to the left
+     * and breaks the "single block of red/green" reading. */
+    auto continuationPrefixFor = [](LineStyle style) -> QString {
+        switch (style) {
+        case DiffAdd:
+        case DiffDel:
+        case DiffContext:
+            return QStringLiteral(" ");
+        default:
+            return {};
+        }
+    };
+
     auto pushWrapped = [&](const QString &text, LineStyle style) {
         if (text.isEmpty()) {
             displayRows.append({QString(), style});
             return;
         }
-        for (const QString &chunk : softWrap(text, contentWidth)) {
+        const QString contPrefix = continuationPrefixFor(style);
+        for (const QString &chunk : softWrap(text, contentWidth, contPrefix)) {
             displayRows.append({chunk, style});
         }
     };
