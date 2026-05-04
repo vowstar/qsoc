@@ -950,7 +950,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(pathContextTool);
 
     /* File tools - use pathContext for permission checks */
-    auto *fileReadTool  = new QSocToolFileRead(this, pathContext);
+    auto *fileReadTool  = new QSocToolFileRead(this, pathContext, llmService);
     auto *fileListTool  = new QSocToolFileList(this, pathContext);
     auto *fileWriteTool = new QSocToolFileWrite(this, pathContext);
     auto *fileEditTool  = new QSocToolFileEdit(this, pathContext);

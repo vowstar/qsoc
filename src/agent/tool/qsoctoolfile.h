@@ -6,6 +6,9 @@
 
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolpath.h"
+#include "common/qllmservice.h"
+
+#include <QPointer>
 
 class QSocFileHistory;
 
@@ -17,7 +20,10 @@ class QSocToolFileRead : public QSocTool
     Q_OBJECT
 
 public:
-    explicit QSocToolFileRead(QObject *parent = nullptr, QSocPathContext *pathContext = nullptr);
+    explicit QSocToolFileRead(
+        QObject         *parent      = nullptr,
+        QSocPathContext *pathContext = nullptr,
+        QLLMService     *llm         = nullptr);
     ~QSocToolFileRead() override;
 
     QString getName() const override;
@@ -27,8 +33,21 @@ public:
 
     void setPathContext(QSocPathContext *pathContext);
 
+    /**
+     * @brief Attach an LLM service for image-attachment capability gating.
+     * @details When the file's leading bytes match a known raster image
+     *          signature, read_file dispatches into the shared
+     *          QSocImageAttach pipeline. The pipeline consults the
+     *          active model's modalities.image flag to decide whether
+     *          to inline the bytes or degrade to alt-text. Without an
+     *          LLM pointer the read still works; image files get the
+     *          alt-text fallback as if the model were text-only.
+     */
+    void setLLMService(QLLMService *llm);
+
 private:
-    QSocPathContext *pathContext = nullptr;
+    QSocPathContext      *pathContext = nullptr;
+    QPointer<QLLMService> llmService;
 };
 
 /**
