@@ -7,12 +7,13 @@
 #include "tui/qtuiwidget.h"
 
 #include <QString>
+#include <QVector>
 
 /**
  * @brief User input line widget at bottom of screen
- * @details Supports multi-line text (split on \n), up to MAX_VISIBLE_LINES
- *          visible rows. Tracks a cursor position for IME placement and
- *          line editing feedback.
+ * @details Supports multi-line text (split on \n) with soft-wrap on the
+ *          terminal width, up to MAX_VISIBLE_LINES visual rows. Tracks a
+ *          cursor position for IME placement and line editing feedback.
  */
 class QTuiInputLine : public QTuiWidget
 {
@@ -22,9 +23,19 @@ public:
     int  lineCount() const override;
     void render(QTuiScreen &screen, int startY, int width) override;
 
-    void    setText(const QString &text);
+    void    setText(const QString &newText);
     void    clear();
     QString getText() const { return text; }
+
+    /**
+     * @brief Tell the widget the current terminal width so lineCount() and
+     *        cursor metrics can account for soft-wrap of long logical lines.
+     * @details The compositor must call this before lineCount() during
+     *          layout, since the input row height depends on how many
+     *          visual rows the wrapped text occupies. A non-positive value
+     *          is ignored.
+     */
+    void setTerminalWidth(int cols);
 
     /**
      * @brief Set the dim placeholder shown on an empty, non-search input line.
@@ -38,8 +49,8 @@ public:
      * @brief Set the dim trailing hint shown after the buffer text.
      * @details Used for inline slash-command argument hints like
      *          "/effort " → "<dim>off|low|medium|high</dim>". Rendered only
-     *          when the buffer is non-empty, single-line, and not in search
-     *          mode. Empty hint disables the feature.
+     *          when the buffer is non-empty, occupies a single visual row,
+     *          and not in search mode. Empty hint disables the feature.
      */
     void setTrailingHint(const QString &hint) { trailingHint = hint; }
 
@@ -64,8 +75,29 @@ public:
     bool isSearchMode() const { return searchMode; }
 
 private:
+    /**
+     * @brief One visual (post-wrap) row of the input area.
+     * @details Each logical line (separated by \n in the raw buffer) yields
+     *          one or more VisualRow entries depending on how it wraps at
+     *          the current terminal width. promptWidth is non-zero only on
+     *          the first visual row of a logical line; continuation rows
+     *          render with no prefix so the wrapped content uses the full
+     *          width and stays close to its visual neighbors.
+     */
+    struct VisualRow
+    {
+        QString prompt;       /* Prefix to render at column 0 (may be empty) */
+        int     promptWidth;  /* Visual width cells consumed by prompt */
+        int     contentStart; /* QChar offset into text where this row's content begins */
+        int     contentLen;   /* Length in QChars of the content slice (no prompt) */
+    };
+
+    QVector<VisualRow> buildVisualRows() const;
+    int                takeFitChars(int startIdx, int capacity) const;
+
     QString text;
-    int     cursorPos = 0;
+    int     cursorPos     = 0;
+    int     terminalWidth = 80;
     QString placeholder;
     QString trailingHint;
 

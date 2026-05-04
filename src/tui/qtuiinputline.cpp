@@ -18,15 +18,6 @@ QStringList splitLines(const QString &text)
     return text.split(QLatin1Char('\n'));
 }
 
-/* Compute first visible line index (scroll when content exceeds MAX_VISIBLE_LINES) */
-int firstVisibleLine(int totalLines)
-{
-    if (totalLines <= QTuiInputLine::MAX_VISIBLE_LINES) {
-        return 0;
-    }
-    return totalLines - QTuiInputLine::MAX_VISIBLE_LINES;
-}
-
 QString promptForLine(int lineIdx, bool startsWithBang)
 {
     if (lineIdx == 0) {
@@ -45,13 +36,136 @@ QString contentForDisplay(const QString &line, int lineIdx, bool startsWithBang)
 }
 } // namespace
 
+int QTuiInputLine::takeFitChars(int startIdx, int capacity) const
+{
+    if (capacity <= 0) {
+        return 0;
+    }
+    int idx   = startIdx;
+    int width = 0;
+    int len   = static_cast<int>(text.size());
+    while (idx < len) {
+        QChar qch = text[idx];
+        if (qch == QLatin1Char('\n')) {
+            break;
+        }
+        uint code;
+        int  charLen;
+        if (qch.isHighSurrogate() && idx + 1 < len && text[idx + 1].isLowSurrogate()) {
+            code    = QChar::surrogateToUcs4(qch, text[idx + 1]);
+            charLen = 2;
+        } else {
+            code    = qch.unicode();
+            charLen = 1;
+        }
+        if (code < 0x20 || (code >= 0x7F && code < 0xA0)) {
+            /* Skip zero-width control chars but still advance */
+            idx += charLen;
+            continue;
+        }
+        int cellW = QTuiText::isWideChar(code) ? 2 : 1;
+        if (width + cellW > capacity) {
+            /* Force-take at least one codepoint when capacity is too narrow
+             * for a wide glyph but nothing has fit yet, otherwise we'd
+             * spin forever producing empty rows. */
+            if (width == 0) {
+                idx += charLen;
+            }
+            break;
+        }
+        width += cellW;
+        idx += charLen;
+    }
+    return idx - startIdx;
+}
+
+QVector<QTuiInputLine::VisualRow> QTuiInputLine::buildVisualRows() const
+{
+    QVector<VisualRow> rows;
+    if (terminalWidth <= 0) {
+        return rows;
+    }
+
+    bool startsWithBang = text.startsWith(QLatin1Char('!'));
+
+    /* Walk the buffer one logical line at a time, tracking absolute QChar
+     * offsets so cursor lookup can map cursorPos onto its visual row. */
+    int  logicalIdx   = 0;
+    int  logicalStart = 0;
+    int  len          = static_cast<int>(text.size());
+    int  idx          = 0;
+    auto flushLogical = [&](int lineStart, int lineEnd) {
+        QString prompt       = promptForLine(logicalIdx, startsWithBang);
+        int     promptW      = QTuiText::visualWidth(prompt);
+        int     contentStart = lineStart;
+        if (logicalIdx == 0 && startsWithBang && contentStart < lineEnd
+            && text[contentStart] == QLatin1Char('!')) {
+            contentStart++;
+        }
+
+        bool firstSegment = true;
+        int  segStart     = contentStart;
+        while (segStart < lineEnd) {
+            int capacity = (firstSegment ? terminalWidth - promptW : terminalWidth);
+            if (capacity <= 0) {
+                capacity = 1;
+            }
+            int taken = takeFitChars(segStart, capacity);
+            /* Cap the slice at lineEnd in case takeFitChars happened to be
+             * called past the logical line boundary (shouldn't happen since
+             * '\n' breaks the inner loop, but be defensive). */
+            if (segStart + taken > lineEnd) {
+                taken = lineEnd - segStart;
+            }
+            VisualRow row;
+            row.prompt       = firstSegment ? prompt : QString();
+            row.promptWidth  = firstSegment ? promptW : 0;
+            row.contentStart = segStart;
+            row.contentLen   = taken;
+            rows.append(row);
+            if (taken <= 0) {
+                /* Defensive: avoid an infinite loop on a degenerate width */
+                break;
+            }
+            segStart += taken;
+            firstSegment = false;
+        }
+        if (firstSegment) {
+            /* Empty logical line still occupies one visual row showing the
+             * prompt only (e.g. the cursor sits on a blank continuation). */
+            VisualRow row;
+            row.prompt       = prompt;
+            row.promptWidth  = promptW;
+            row.contentStart = contentStart;
+            row.contentLen   = 0;
+            rows.append(row);
+        }
+    };
+
+    while (idx <= len) {
+        if (idx == len || text[idx] == QLatin1Char('\n')) {
+            flushLogical(logicalStart, idx);
+            if (idx == len) {
+                break;
+            }
+            logicalIdx++;
+            idx++;
+            logicalStart = idx;
+            continue;
+        }
+        idx++;
+    }
+
+    return rows;
+}
+
 int QTuiInputLine::lineCount() const
 {
     if (searchMode) {
         return 1;
     }
-    int total = 1 + static_cast<int>(text.count(QLatin1Char('\n')));
-    total     = qMax(total, 1);
+    QVector<VisualRow> rows  = buildVisualRows();
+    int                total = rows.isEmpty() ? 1 : static_cast<int>(rows.size());
     return qMin(total, MAX_VISIBLE_LINES);
 }
 
@@ -82,29 +196,31 @@ void QTuiInputLine::render(QTuiScreen &screen, int startY, int width)
         return;
     }
 
-    QStringList lines          = splitLines(text);
-    int         total          = static_cast<int>(lines.size());
-    bool        startsWithBang = text.startsWith(QLatin1Char('!'));
-    int         firstVis       = firstVisibleLine(total);
-    int         visCount       = qMin(total - firstVis, MAX_VISIBLE_LINES);
+    /* Recompute visual rows against the actual render width: the
+     * compositor's cached terminalWidth is normally identical, but using
+     * the parameter keeps render correct if a caller forgot to update. */
+    int saved               = terminalWidth;
+    terminalWidth           = width;
+    QVector<VisualRow> rows = buildVisualRows();
+    terminalWidth           = saved;
+
+    int total    = static_cast<int>(rows.size());
+    int firstVis = (total > MAX_VISIBLE_LINES) ? total - MAX_VISIBLE_LINES : 0;
+    int visCount = qMin(total - firstVis, MAX_VISIBLE_LINES);
 
     for (int row = 0; row < visCount; row++) {
-        int     lineIdx = firstVis + row;
-        QString prompt  = promptForLine(lineIdx, startsWithBang);
-        QString content = contentForDisplay(lines[lineIdx], lineIdx, startsWithBang);
-        QString display = prompt + content;
+        const VisualRow &vrow    = rows[firstVis + row];
+        QString          content = text.mid(vrow.contentStart, vrow.contentLen);
+        QString          display = vrow.prompt + content;
         screen.putString(0, startY + row, display.left(width));
     }
 
-    /* Trailing hint (slash command argument preview): rendered only for a
-     * single-line buffer so it can't collide with continuation prompts, and
-     * positioned immediately after the buffer text in dim style. The cursor
-     * stays at the end of the real buffer — the hint is purely decorative. */
+    /* Trailing hint: only when the buffer occupies a single visual row. */
     if (!trailingHint.isEmpty() && total == 1 && visCount == 1) {
-        QString prompt    = promptForLine(0, startsWithBang);
-        QString content   = contentForDisplay(lines[0], 0, startsWithBang);
-        int     column    = QTuiText::visualWidth(prompt) + QTuiText::visualWidth(content) + 1;
-        int     available = width - column;
+        const VisualRow &vrow      = rows[0];
+        QString          content   = text.mid(vrow.contentStart, vrow.contentLen);
+        int              column    = vrow.promptWidth + QTuiText::visualWidth(content) + 1;
+        int              available = width - column;
         if (available > 0) {
             screen.putString(
                 column,
@@ -128,6 +244,13 @@ void QTuiInputLine::clear()
     cursorPos = 0;
 }
 
+void QTuiInputLine::setTerminalWidth(int cols)
+{
+    if (cols > 0) {
+        terminalWidth = cols;
+    }
+}
+
 void QTuiInputLine::setCursorPos(int pos)
 {
     int maxPos = static_cast<int>(text.size());
@@ -139,18 +262,29 @@ int QTuiInputLine::cursorLine() const
     if (searchMode) {
         return 0;
     }
-    /* Count newlines before cursorPos to find which logical line the cursor is on */
-    int logicalLine = 0;
-    int limit       = qMin(cursorPos, static_cast<int>(text.size()));
-    for (int idx = 0; idx < limit; idx++) {
-        if (text[idx] == QLatin1Char('\n')) {
-            logicalLine++;
+    QVector<VisualRow> rows = buildVisualRows();
+    if (rows.isEmpty()) {
+        return 0;
+    }
+    int total    = static_cast<int>(rows.size());
+    int firstVis = (total > MAX_VISIBLE_LINES) ? total - MAX_VISIBLE_LINES : 0;
+
+    /* Find the visual row whose [contentStart, contentStart+contentLen]
+     * range contains cursorPos. The cursor at a row's right edge belongs
+     * to that row when it is the final visual row of its logical line
+     * (otherwise it logically belongs to the start of the next row). */
+    int found = total - 1;
+    for (int i = 0; i < total; i++) {
+        const VisualRow &vrow                  = rows[i];
+        int              rowEnd                = vrow.contentStart + vrow.contentLen;
+        bool             isLastVisualOfLogical = (i == total - 1) || (rows[i + 1].promptWidth > 0);
+        if (cursorPos < rowEnd || (cursorPos == rowEnd && isLastVisualOfLogical)) {
+            found = i;
+            break;
         }
     }
 
-    int total    = 1 + static_cast<int>(text.count(QLatin1Char('\n')));
-    int firstVis = firstVisibleLine(total);
-    int visRow   = logicalLine - firstVis;
+    int visRow = found - firstVis;
     return qBound(0, visRow, MAX_VISIBLE_LINES - 1);
 }
 
@@ -162,31 +296,25 @@ int QTuiInputLine::cursorColumn() const
                                            : QStringLiteral("(bck-i-search)`");
         return QTuiText::visualWidth(label) + QTuiText::visualWidth(searchQuery);
     }
-
-    /* Find start of current logical line */
-    int lineStart = cursorPos;
-    while (lineStart > 0 && text[lineStart - 1] != QLatin1Char('\n')) {
-        lineStart--;
+    QVector<VisualRow> rows = buildVisualRows();
+    if (rows.isEmpty()) {
+        return 0;
     }
-
-    /* Count logical line index to choose prompt prefix */
-    int logicalLine = 0;
-    for (int idx = 0; idx < lineStart; idx++) {
-        if (text[idx] == QLatin1Char('\n')) {
-            logicalLine++;
+    int total = static_cast<int>(rows.size());
+    int found = total - 1;
+    for (int i = 0; i < total; i++) {
+        const VisualRow &vrow                  = rows[i];
+        int              rowEnd                = vrow.contentStart + vrow.contentLen;
+        bool             isLastVisualOfLogical = (i == total - 1) || (rows[i + 1].promptWidth > 0);
+        if (cursorPos < rowEnd || (cursorPos == rowEnd && isLastVisualOfLogical)) {
+            found = i;
+            break;
         }
     }
-
-    bool    startsWithBang = text.startsWith(QLatin1Char('!'));
-    QString prompt         = promptForLine(logicalLine, startsWithBang);
-
-    /* Content up to cursor on current line */
-    QString segment = text.mid(lineStart, cursorPos - lineStart);
-    if (logicalLine == 0 && startsWithBang && !segment.isEmpty() && segment[0] == QLatin1Char('!')) {
-        segment = segment.mid(1);
-    }
-
-    return QTuiText::visualWidth(prompt) + QTuiText::visualWidth(segment);
+    const VisualRow &vrow = rows[found];
+    int     clamp  = qBound(vrow.contentStart, cursorPos, vrow.contentStart + vrow.contentLen);
+    QString before = text.mid(vrow.contentStart, clamp - vrow.contentStart);
+    return vrow.promptWidth + QTuiText::visualWidth(before);
 }
 
 void QTuiInputLine::setSearchMode(
