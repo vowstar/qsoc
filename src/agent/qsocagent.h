@@ -505,12 +505,47 @@ private:
      */
     void addMessage(const QString &role, const QString &content);
 
+public:
+    /**
+     * @brief A single image attachment lifted from a tool result.
+     * @details Tools that fetch images (web_fetch on an image URL) emit a
+     *          structured marker the agent loop strips out and forwards
+     *          here so the next LLM request can include the image as an
+     *          OpenAI-compatible image_url content part.
+     */
+    struct AttachmentSpec
+    {
+        QString mime;      /* image/jpeg, image/png, image/webp */
+        QString dataB64;   /* base64-encoded payload, no data: prefix */
+        QString sourceUrl; /* original URL the bytes were fetched from */
+        int     width     = 0;
+        int     height    = 0;
+        int     byteSize  = 0;
+        int     estTokens = 0;
+        bool    resized   = false;
+    };
+
+    /**
+     * @brief Extract image attachments from a raw tool result.
+     * @param raw  Tool result possibly containing attachment markers.
+     * @param out  Populated with each parsed attachment in source order.
+     * @return The text-only view of @p raw (markers removed), suitable
+     *         for showing to the user and for storing as the textual
+     *         portion of the tool message content.
+     */
+    static QString extractImageAttachments(const QString &raw, QList<AttachmentSpec> *out);
+
+private:
     /**
      * @brief Add a tool result message to the conversation history
-     * @param toolCallId The ID of the tool call
-     * @param content The tool result content
+     * @param toolCallId  The ID of the tool call
+     * @param content     Stripped tool result content (no markers)
+     * @param attachments Image attachments to lift into a content array
      */
-    void addToolMessage(const QString &toolCallId, const QString &content);
+    void addToolMessage(
+        const QString               &toolCallId,
+        const QString               &content,
+        const QList<AttachmentSpec> &attachments = {});
 
     /**
      * @brief Compress history if needed based on token count
