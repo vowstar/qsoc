@@ -5,6 +5,7 @@
 
 #include "agent/qsocfilehistory.h"
 #include "common/qlspservice.h"
+#include "common/qsocimageattach.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -15,9 +16,10 @@
 
 /* QSocToolFileRead Implementation */
 
-QSocToolFileRead::QSocToolFileRead(QObject *parent, QSocPathContext *pathContext)
+QSocToolFileRead::QSocToolFileRead(QObject *parent, QSocPathContext *pathContext, QLLMService *llm)
     : QSocTool(parent)
     , pathContext(pathContext)
+    , llmService(llm)
 {}
 
 QSocToolFileRead::~QSocToolFileRead() = default;
@@ -97,6 +99,24 @@ QString QSocToolFileRead::execute(const json &arguments)
         }
     }
 
+    /* Image branch: peek the first bytes raw and let QSocImageAttach
+     * validate via magic signature, not extension. A misnamed `.txt`
+     * with a JPEG header still attaches; a `.png` that is actually
+     * Markdown still falls through to the text reader. */
+    {
+        QFile probe(filePath);
+        if (probe.open(QIODevice::ReadOnly)) {
+            const QByteArray head     = probe.peek(16);
+            const QString    detected = QSocImageAttach::detectMimeByMagic(head);
+            if (!detected.isEmpty()) {
+                const QByteArray body = probe.readAll();
+                probe.close();
+                return QSocImageAttach::buildAttachmentResult(filePath, detected, body, llmService);
+            }
+            probe.close();
+        }
+    }
+
     /* Read file */
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -144,6 +164,11 @@ QString QSocToolFileRead::execute(const json &arguments)
 void QSocToolFileRead::setPathContext(QSocPathContext *pathContext)
 {
     this->pathContext = pathContext;
+}
+
+void QSocToolFileRead::setLLMService(QLLMService *llm)
+{
+    llmService = llm;
 }
 
 /* QSocToolFileList Implementation */
