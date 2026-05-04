@@ -123,6 +123,16 @@ QString QLLMService::getCurrentModelId() const
     return currentModelId;
 }
 
+LLMModelConfig QLLMService::getCurrentModelConfig() const
+{
+    return modelConfigs.value(currentModelId, LLMModelConfig());
+}
+
+bool QLLMService::currentSupportsImage() const
+{
+    return getCurrentModelConfig().acceptsImage;
+}
+
 bool QLLMService::setCurrentModel(const QString &modelId)
 {
     if (!modelConfigs.contains(modelId)) {
@@ -338,6 +348,27 @@ void QLLMService::loadConfigSettings()
                 }
                 if (node["effort"]) {
                     modelCfg.effort = QString::fromStdString(node["effort"].as<std::string>());
+                }
+
+                /* Modality block: opt-in only. Absent or non-map -> all
+                 * defaults (text-only). The block's keys are flat
+                 * because the only modality we currently route is image;
+                 * audio / video / pdf would extend this map. */
+                if (node["modalities"] && node["modalities"].IsMap()) {
+                    YAML::Node mod = node["modalities"];
+                    if (mod["image"]) {
+                        modelCfg.acceptsImage = mod["image"].as<bool>();
+                    }
+                    if (mod["image_max_tokens"]) {
+                        modelCfg.imageMaxTokens = mod["image_max_tokens"].as<int>();
+                    }
+                    if (mod["image_max_dimension"]) {
+                        modelCfg.imageMaxDimension = mod["image_max_dimension"].as<int>();
+                    }
+                    if (mod["image_provider_hint"]) {
+                        modelCfg.imageProviderHint = QString::fromStdString(
+                            mod["image_provider_hint"].as<std::string>());
+                    }
                 }
 
                 modelConfigs[modelCfg.id] = modelCfg;
