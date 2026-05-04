@@ -45,6 +45,19 @@ struct LLMModelConfig
     int     maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
     bool    reasoning       = false;  /* Supports thinking/reasoning mode */
     QString effort;                   /* Default effort: empty/off, "low", "medium", "high" */
+
+    /* Multimodal capability flags. Default text-only so a misconfigured
+     * model never receives an image content block it cannot parse: the
+     * silent-drop failure mode (DeepSeek-chat, Qwen text-only) is
+     * indistinguishable from a model that simply ignored the image, and
+     * masking it as success would burn the user's token budget for no
+     * answer. Opt-in only. */
+    bool acceptsImage      = false;
+    int  imageMaxTokens    = 5000; /* Hard reject when client estimate exceeds this */
+    int  imageMaxDimension = 1568; /* Resize short edge to this before encoding */
+    /* Provider hint for the token-cost formula; the request payload
+     * still uses the OpenAI-compatible image_url shape regardless. */
+    QString imageProviderHint;
 };
 
 /**
@@ -173,6 +186,24 @@ public slots:
      * @return Current model ID
      */
     QString getCurrentModelId() const;
+
+    /**
+     * @brief Get the full config of the currently active model.
+     * @details Convenience wrapper around getModelConfig(getCurrentModelId())
+     *          for callers that need modality / context / effort info on
+     *          the live endpoint without two round-trips through the map.
+     */
+    LLMModelConfig getCurrentModelConfig() const;
+
+    /**
+     * @brief Whether the currently active model accepts image inputs.
+     * @details Reads the modalities.image flag from the model registry.
+     *          False for any model whose config did not opt in. Tools
+     *          (web_fetch, file_attach, ...) consult this before
+     *          inlining base64 image data so a text-only model never
+     *          receives a content block it would silently drop.
+     */
+    bool currentSupportsImage() const;
 
     /**
      * @brief Switch to a different model, updating the active endpoint
