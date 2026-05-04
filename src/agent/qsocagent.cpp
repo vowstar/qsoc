@@ -5,6 +5,7 @@
 
 #include "agent/qsochookmanager.h"
 #include "agent/qsochooktypes.h"
+#include "agent/tool/qsoctoolweb.h"
 #include "common/qsocconsole.h"
 
 #include <QDateTime>
@@ -710,7 +711,15 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
         }
 
         /* Execute tool */
-        QString result = toolRegistry->executeTool(functionName, arguments);
+        const QString rawResult = toolRegistry->executeTool(functionName, arguments);
+
+        /* Strip image-attachment markers up front so every consumer
+         * (verbose log, scrollview, hooks, message history) sees the
+         * same clean text. Attachments are passed separately to
+         * addToolMessage which lifts them into the OpenAI-compatible
+         * content array on the conversation history. */
+        QList<AttachmentSpec> attachments;
+        const QString         result = extractImageAttachments(rawResult, &attachments);
 
         if (agentConfig.verbose) {
             QString truncatedResult = result.length() > 200 ? result.left(200) + "... (truncated)"
@@ -732,7 +741,7 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
         }
 
         /* Add tool response to messages */
-        addToolMessage(toolCallId, result);
+        addToolMessage(toolCallId, result, attachments);
     }
 }
 
@@ -1157,12 +1166,93 @@ void QSocAgent::addMessage(const QString &role, const QString &content)
     messages.push_back({{"role", role.toStdString()}, {"content", content.toStdString()}});
 }
 
-void QSocAgent::addToolMessage(const QString &toolCallId, const QString &content)
+QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentSpec> *out)
 {
-    messages.push_back(
-        {{"role", "tool"},
-         {"tool_call_id", toolCallId.toStdString()},
-         {"content", content.toStdString()}});
+    if (out != nullptr) {
+        out->clear();
+    }
+    const QString openMarker  = QString::fromLatin1(QSocToolWebFetch::attachmentMarkerOpen());
+    const QString closeMarker = QString::fromLatin1(QSocToolWebFetch::attachmentMarkerClose());
+    if (openMarker.isEmpty() || closeMarker.isEmpty() || !raw.contains(openMarker)) {
+        return raw;
+    }
+
+    QString stripped;
+    stripped.reserve(raw.size());
+    int pos = 0;
+    while (pos < raw.size()) {
+        const int oi = raw.indexOf(openMarker, pos);
+        if (oi < 0) {
+            stripped.append(QStringView{raw}.mid(pos));
+            break;
+        }
+        const int ci = raw.indexOf(closeMarker, oi + openMarker.size());
+        if (ci < 0) {
+            /* Unterminated marker: treat the rest as text so we never lose
+             * data, and stop scanning. */
+            stripped.append(QStringView{raw}.mid(pos));
+            break;
+        }
+        stripped.append(QStringView{raw}.mid(pos, oi - pos));
+
+        const QString jsonText
+            = raw.mid(oi + openMarker.size(), ci - oi - static_cast<int>(openMarker.size()));
+        if (out != nullptr) {
+            try {
+                const auto     payload = json::parse(jsonText.toStdString());
+                AttachmentSpec spec;
+                spec.mime      = QString::fromStdString(payload.value("mime", std::string()));
+                spec.dataB64   = QString::fromStdString(payload.value("data", std::string()));
+                spec.sourceUrl = QString::fromStdString(payload.value("source_url", std::string()));
+                spec.width     = payload.value("width", 0);
+                spec.height    = payload.value("height", 0);
+                spec.byteSize  = payload.value("byte_size", 0);
+                spec.estTokens = payload.value("est_tokens", 0);
+                spec.resized   = payload.value("resized", false);
+                if (!spec.mime.isEmpty() && !spec.dataB64.isEmpty()) {
+                    out->append(spec);
+                }
+            } catch (const json::exception &) {
+                /* Drop malformed marker silently: the textual summary
+                 * line above the marker still tells the model what was
+                 * supposed to be there. */
+            }
+        }
+        pos = ci + closeMarker.size();
+        /* Eat the trailing newline left over from the tool's separator
+         * so the visible text reads naturally. */
+        if (pos < raw.size() && raw[pos] == QLatin1Char('\n')) {
+            pos++;
+        }
+    }
+    return stripped;
+}
+
+void QSocAgent::addToolMessage(
+    const QString &toolCallId, const QString &content, const QList<AttachmentSpec> &attachments)
+{
+    json msg = {{"role", "tool"}, {"tool_call_id", toolCallId.toStdString()}};
+    if (attachments.isEmpty()) {
+        msg["content"] = content.toStdString();
+        messages.push_back(msg);
+        return;
+    }
+
+    /* OpenAI-compatible content array: one text part for the model's
+     * narrative summary, then one image_url part per attachment using
+     * a data URL so providers that cannot egress to the original host
+     * (self-hosted vLLM/SGLang/Ollama) still see the bytes. */
+    json contentArr = json::array();
+    if (!content.isEmpty()) {
+        contentArr.push_back({{"type", "text"}, {"text", content.toStdString()}});
+    }
+    for (const auto &att : attachments) {
+        const QString dataUrl = QStringLiteral("data:%1;base64,%2").arg(att.mime, att.dataB64);
+        contentArr.push_back(
+            {{"type", "image_url"}, {"image_url", {{"url", dataUrl.toStdString()}}}});
+    }
+    msg["content"] = contentArr;
+    messages.push_back(msg);
 }
 
 void QSocAgent::clearHistory()
