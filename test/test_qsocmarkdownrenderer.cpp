@@ -174,6 +174,31 @@ private slots:
         QCOMPARE(itemTexts[2], QStringLiteral("3. third"));
     }
 
+    /* Nested ordered lists must restart numbering at the inner level
+     * rather than continuing the outer list's count, and the outer
+     * list must keep going correctly after the nested block ends. */
+    void nestedOrderedListNumbersIncrementIndependently()
+    {
+        const auto  out = QSocMarkdownRenderer::render(QStringLiteral(
+            "1. outer-one\n"
+            "2. outer-two\n"
+            "   1. inner-a\n"
+            "   2. inner-b\n"
+            "3. outer-three\n"));
+        QStringList itemTexts;
+        for (const auto &line : out) {
+            if (line.kind == Kind::ListItem) {
+                itemTexts.append(concat(line));
+            }
+        }
+        QCOMPARE(itemTexts.size(), 5);
+        QCOMPARE(itemTexts[0], QStringLiteral("1. outer-one"));
+        QCOMPARE(itemTexts[1], QStringLiteral("2. outer-two"));
+        QCOMPARE(itemTexts[2], QStringLiteral("  1. inner-a"));
+        QCOMPARE(itemTexts[3], QStringLiteral("  2. inner-b"));
+        QCOMPARE(itemTexts[4], QStringLiteral("3. outer-three"));
+    }
+
     /* Fenced code block: language flows through to codeLanguage,
      * each interior line is a CodeBlock kind. The renderer prefixes
      * a one-line ┄ banner with the language label and a `▎ ` gutter
