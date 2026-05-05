@@ -138,6 +138,22 @@ const QSet<QString> &jsonKeywords()
     return kw;
 }
 
+const QSet<QString> &tclKeywords()
+{
+    static const QSet<QString> kw = {
+        "proc",    "set",     "if",     "else",    "elseif",   "then",    "foreach",   "for",
+        "while",   "do",      "return", "break",   "continue", "switch",  "expr",      "lindex",
+        "llength", "lappend", "lset",   "list",    "dict",     "array",   "namespace", "package",
+        "source",  "after",   "error",  "catch",   "try",      "throw",   "eval",      "exec",
+        "format",  "regexp",  "regsub", "string",  "info",     "global",  "upvar",     "variable",
+        "incr",    "append",  "puts",   "gets",    "open",     "close",   "read",      "write",
+        "file",    "glob",    "scan",   "trace",   "subst",    "uplevel", "rename",    "unset",
+        "concat",  "split",   "join",   "lsort",   "lreverse", "lrepeat", "lrange",    "lreplace",
+        "linsert", "lassign", "lmap",   "lsearch",
+    };
+    return kw;
+}
+
 struct LexerSpec
 {
     const QSet<QString> *keywords        = nullptr;
@@ -227,6 +243,18 @@ const LexerSpec &lexerFor(const QString &language)
         .yamlKeyColoring = false,
         .isDiff          = false,
     };
+    static const LexerSpec tcl{
+        .keywords        = &tclKeywords(),
+        .hashComment     = true,
+        .slashComment    = false,
+        .blockComment    = false,
+        .doubleQuoteStr  = true,
+        .singleQuoteStr  = false,
+        .cPreproc        = false,
+        .verilogLiteral  = false,
+        .yamlKeyColoring = false,
+        .isDiff          = false,
+    };
     static const LexerSpec yaml{
         .keywords        = nullptr,
         .hashComment     = true,
@@ -273,6 +301,9 @@ const LexerSpec &lexerFor(const QString &language)
     }
     if (language == "yaml" || language == "yml") {
         return yaml;
+    }
+    if (language == "tcl" || language == "tk") {
+        return tcl;
     }
     if (language == "diff" || language == "patch") {
         return diff;
