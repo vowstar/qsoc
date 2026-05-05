@@ -80,14 +80,42 @@ public:
      * visual order. */
     QTuiBlock *lastBlock() const { return blocks.empty() ? nullptr : blocks.back().get(); }
 
+    /* Block-aware focus and copy.
+     *
+     * focusedBlockIdx == -1 means no block is focused; render() applies
+     * a bg tint to every cell of the focused block so users can see at
+     * a glance which one will be copied. blockAtScreenRow maps a hit
+     * test back to a block index using the row->block table cached on
+     * the previous render() call, so inputs from outside (mouse click
+     * coordinates from the input monitor) line up with what the user
+     * actually saw. */
+    int  focusedBlockIdx() const { return focusedBlockIdx_; }
+    void setFocusedBlockIdx(int idx);
+    int  blockAtScreenRow(int screenRow) const;
+
+    /* Copy: returns toMarkdown() of the focused block, or empty if no
+     * block is focused. The caller is responsible for delivering the
+     * result to the system clipboard (OSC 52, xclip, etc.). */
+    QString copyFocusedAsMarkdown() const;
+    QString copyFocusedAsPlainText() const;
+
     /* Get all content as plain text (for dumping after alt screen exit) */
     QString toPlainText() const;
 
 private:
     std::vector<std::unique_ptr<QTuiBlock>> blocks;
     QString                                 partialLine; /* Current incomplete line */
-    LineStyle                               partialStyle = Normal;
-    int                                     scrollOffset = 0; /* 0 = at bottom */
+    LineStyle                               partialStyle     = Normal;
+    int                                     scrollOffset     = 0;  /* 0 = at bottom */
+    int                                     focusedBlockIdx_ = -1; /* -1 = none */
+
+    /* Cached during the previous render() call: per-screen-row block
+     * index, indexed by `screenRow - lastRenderStartRow_`. Lets a hit
+     * test convert a mouse click back to a block without re-doing the
+     * scroll math. */
+    std::vector<int> rowToBlock_;
+    int              lastRenderStartRow_ = 0;
+    int              lastRenderHeight_   = 0;
 };
 
 #endif // QTUISCROLLVIEW_H

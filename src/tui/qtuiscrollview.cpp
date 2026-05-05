@@ -408,26 +408,52 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
     const int viewBottom = totalVisible - scrollOffset;
     const int viewTop    = viewBottom - height;
 
-    /* Walk blocks once, mapping viewport rows to (block, rowInBlock). */
+    lastRenderStartRow_ = startRow;
+    lastRenderHeight_   = height;
+    rowToBlock_.assign(static_cast<std::size_t>(qMax(0, height)), -1);
+
+    /* Walk blocks once, mapping viewport rows to (block, rowInBlock).
+     * Records each painted screen row's owning block index so a later
+     * mouse hit test can resolve a click back to a block. */
     int globalRow = 0;
+    int blockIdx  = 0;
     for (const auto &block : blocks) {
         const int rows = block->rowCount();
         if (globalRow + rows <= viewTop) {
             globalRow += rows;
+            ++blockIdx;
             continue;
         }
         if (globalRow >= viewBottom) {
+            ++blockIdx;
             break;
         }
+        const bool focused = (blockIdx == focusedBlockIdx_);
         for (int rowInBlock = 0; rowInBlock < rows; ++rowInBlock) {
             const int gRow = globalRow + rowInBlock;
             if (gRow < viewTop || gRow >= viewBottom) {
                 continue;
             }
-            const int screenY = startRow + (gRow - viewTop);
-            block->paintRow(screen, screenY, rowInBlock, 0, contentWidth, false, false);
+            const int screenY  = startRow + (gRow - viewTop);
+            const int rowLocal = screenY - lastRenderStartRow_;
+            if (rowLocal >= 0 && rowLocal < static_cast<int>(rowToBlock_.size())) {
+                rowToBlock_[rowLocal] = blockIdx;
+            }
+            block->paintRow(screen, screenY, rowInBlock, 0, contentWidth, focused, false);
+            if (focused) {
+                /* Subtle bg tint across the painted row so the focused
+                 * block stands out without overdrawing block content.
+                 * Cells with an explicit non-default bg keep theirs. */
+                for (int col = 0; col < contentWidth; ++col) {
+                    QTuiCell &cell = screen.at(col, screenY);
+                    if (cell.bgColor == BG_DEFAULT) {
+                        cell.bgColor = 235; /* dark gray */
+                    }
+                }
+            }
         }
         globalRow += rows;
+        ++blockIdx;
     }
 
     /* Paint any partial-line rows after the blocks. */
@@ -481,6 +507,40 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
             }
         }
     }
+}
+
+void QTuiScrollView::setFocusedBlockIdx(int idx)
+{
+    if (idx < -1 || idx >= static_cast<int>(blocks.size())) {
+        focusedBlockIdx_ = -1;
+        return;
+    }
+    focusedBlockIdx_ = idx;
+}
+
+int QTuiScrollView::blockAtScreenRow(int screenRow) const
+{
+    const int local = screenRow - lastRenderStartRow_;
+    if (local < 0 || local >= static_cast<int>(rowToBlock_.size())) {
+        return -1;
+    }
+    return rowToBlock_[local];
+}
+
+QString QTuiScrollView::copyFocusedAsMarkdown() const
+{
+    if (focusedBlockIdx_ < 0 || focusedBlockIdx_ >= static_cast<int>(blocks.size())) {
+        return {};
+    }
+    return blocks[focusedBlockIdx_]->toMarkdown();
+}
+
+QString QTuiScrollView::copyFocusedAsPlainText() const
+{
+    if (focusedBlockIdx_ < 0 || focusedBlockIdx_ >= static_cast<int>(blocks.size())) {
+        return {};
+    }
+    return blocks[focusedBlockIdx_]->toPlainText();
 }
 
 void QTuiScrollView::scrollUp(int count)

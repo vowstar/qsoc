@@ -161,6 +161,44 @@ void QTuiCompositor::finishStream()
     activeReasoning = nullptr;
 }
 
+void QTuiCompositor::focusBlockAtScreenRow(int screenRow)
+{
+    const int idx = scrollView.blockAtScreenRow(screenRow);
+    if (idx < 0) {
+        scrollView.setFocusedBlockIdx(-1);
+    } else {
+        scrollView.setFocusedBlockIdx(idx);
+    }
+    screen.invalidate();
+    render();
+}
+
+void QTuiCompositor::clearBlockFocus()
+{
+    scrollView.setFocusedBlockIdx(-1);
+    screen.invalidate();
+    render();
+}
+
+bool QTuiCompositor::copyFocusedBlock()
+{
+    /* Markdown form is the right copy default: it round-trips through
+     * the next agent turn intact, so users can paste a block back as
+     * input without losing structure. */
+    const QString payload = scrollView.copyFocusedAsMarkdown();
+    if (payload.isEmpty()) {
+        return false;
+    }
+    /* OSC 52 clipboard write. tmux gates this behind
+     * `set-clipboard on`; modern terminals (iTerm2, Alacritty, Kitty,
+     * WezTerm, foot) accept it without configuration. */
+    const QByteArray base64 = payload.toUtf8().toBase64();
+    const QByteArray osc    = QByteArray("\x1b]52;c;") + base64 + QByteArray("\x1b\\");
+    fwrite(osc.constData(), 1, osc.size(), stdout);
+    fflush(stdout);
+    return true;
+}
+
 void QTuiCompositor::dismissTopBanner()
 {
     if (topBannerWidget.isHidden()) {
@@ -478,7 +516,15 @@ void QTuiCompositor::selectionFinish(int col, int row)
     }
     selection.focusCol = col;
     selection.focusRow = row;
-    copySelectionToClipboard();
+    /* No drag happened (release at the same cell as press): treat as
+     * a block-focus tap. Otherwise carry on with the text-range copy. */
+    const bool noDrag
+        = (selection.anchorCol == selection.focusCol && selection.anchorRow == selection.focusRow);
+    if (noDrag) {
+        focusBlockAtScreenRow(row);
+    } else {
+        copySelectionToClipboard();
+    }
     selection.active = false;
     invalidate();
 }
