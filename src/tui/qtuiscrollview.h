@@ -6,13 +6,15 @@
 
 #include "tui/qtuiscreen.h"
 
+#include <QList>
 #include <QStringList>
 
 /**
  * @brief Scrollable text content area with line history
  * @details Stores all output lines. Renders a viewport window.
  *          Auto-scrolls to bottom when new content arrives (unless user scrolled up).
- *          Each line can be normal, dim (thinking), or bold (tool).
+ *          Each line can be normal, dim (thinking), or bold (tool), or
+ *          carry a list of styled runs for mixed-style markdown output.
  */
 class QTuiScrollView
 {
@@ -25,10 +27,22 @@ public:
         DiffDel     = 4, /* '-' lines, rendered red */
         DiffHunk    = 5, /* '@@' headers, rendered yellow + bold */
         DiffContext = 6, /* unchanged context lines, dim */
+        Styled      = 7, /* runs[] holds mixed-style segments; text unused */
     };
 
     /* Append a complete line */
     void appendLine(const QString &text, LineStyle style = Normal);
+
+    /* Append a styled-runs line. Each run carries its own bold/italic/
+     * dim/underline/fg/bg attributes; render() paints them cell-by-cell
+     * with soft-wrap that preserves run boundaries. */
+    void appendStyledLine(const QList<QTuiStyledRun> &runs);
+
+    /* Replace the most-recently-appended line with a new styled-runs
+     * payload. Used by the streaming markdown pipeline so the
+     * in-progress final line gets repainted on every chunk without
+     * trailing duplicates. No-op if the buffer is empty. */
+    void replaceLastStyledLine(const QList<QTuiStyledRun> &runs);
 
     /* Append partial text (streaming). Completes on \n. */
     void appendPartial(const QString &text, LineStyle style = Normal);
@@ -56,8 +70,9 @@ public:
 private:
     struct Line
     {
-        QString   text;
-        LineStyle style = Normal;
+        QString              text;
+        LineStyle            style = Normal;
+        QList<QTuiStyledRun> runs; /* Populated when style == Styled */
     };
 
     QList<Line> lines;

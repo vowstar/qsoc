@@ -39,18 +39,39 @@ struct QTuiCell
 {
     QChar       character = ' ';
     bool        bold      = false;
+    bool        italic    = false;
     bool        dim       = false;
+    bool        underline = false;
     bool        inverted  = false;
     QTuiFgColor fgColor   = QTuiFgColor::Default;
     QTuiBgColor bgColor   = BG_DEFAULT;
 
     bool operator==(const QTuiCell &other) const
     {
-        return character == other.character && bold == other.bold && dim == other.dim
-               && inverted == other.inverted && fgColor == other.fgColor
-               && bgColor == other.bgColor;
+        return character == other.character && bold == other.bold && italic == other.italic
+               && dim == other.dim && underline == other.underline && inverted == other.inverted
+               && fgColor == other.fgColor && bgColor == other.bgColor;
     }
     bool operator!=(const QTuiCell &other) const { return !(*this == other); }
+};
+
+/**
+ * @brief A contiguous run of text sharing the same style attributes.
+ * @details Bridge type between higher-level renderers (markdown,
+ *          syntax highlight) and the cell-grid backing the screen.
+ *          Keep field names short so renderer-side construction stays
+ *          dense; QTuiCell mirrors the same flags using its own naming
+ *          convention.
+ */
+struct QTuiStyledRun
+{
+    QString     text;
+    bool        bold      = false;
+    bool        italic    = false;
+    bool        dim       = false;
+    bool        underline = false;
+    QTuiFgColor fg        = QTuiFgColor::Default;
+    QTuiBgColor bg        = BG_DEFAULT;
 };
 
 /**
