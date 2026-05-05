@@ -112,6 +112,12 @@ public:
     /* Get all content as plain text (for dumping after alt screen exit) */
     QString toPlainText() const;
 
+    /* Block-by-block ANSI dump for cooked-mode (--print) and the
+     * scrollback flush after exiting the alt screen. Each block is
+     * laid out at `width`, painted to a temporary screen, and emitted
+     * as styled text without cursor-positioning escapes. */
+    QString toAnsi(int width);
+
 private:
     std::vector<std::unique_ptr<QTuiBlock>> blocks;
     QString                                 partialLine; /* Current incomplete line */

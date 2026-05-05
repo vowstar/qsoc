@@ -62,8 +62,12 @@ void QTuiCompositor::stop()
     active = false;
     exitAltScreen();
 
-    /* Print scrollview content to normal stdout so it's visible after alt screen */
-    QString content = scrollView.toPlainText();
+    /* Block-aware ANSI dump preserves headings, code blocks, tool
+     * boxes, diff colors, and OSC 8 hyperlinks in the user's normal
+     * scrollback after the alt screen unwinds. Falling back to plain
+     * text would erase every styling cue the agent produced. */
+    const int     dumpWidth = qMax(20, getTerminalWidth());
+    const QString content   = scrollView.toAnsi(dumpWidth);
     if (!content.isEmpty()) {
         fputs(content.toUtf8().constData(), stdout);
         if (!content.endsWith('\n')) {

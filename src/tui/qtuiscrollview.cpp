@@ -615,6 +615,24 @@ QString QTuiScrollView::toPlainText() const
     return result;
 }
 
+QString QTuiScrollView::toAnsi(int width)
+{
+    if (width <= 0) {
+        return QString();
+    }
+    QString out;
+    for (auto &block : blocks) {
+        out.append(block->toAnsi(width));
+    }
+    if (!partialLine.isEmpty()) {
+        out.append(partialLine);
+        if (!partialLine.endsWith(QLatin1Char('\n'))) {
+            out.append(QLatin1Char('\n'));
+        }
+    }
+    return out;
+}
+
 void QTuiScrollView::clear()
 {
     blocks.clear();
