@@ -143,6 +143,15 @@ signals:
     void copyFocusedBlockRequested();
 
     /**
+     * @brief Emitted on Shift+Left / Shift+Right — request horizontal
+     *        scroll of the currently-focused scrollback block by one
+     *        step. -1 scrolls left, +1 scrolls right. The REPL hands
+     *        this to the compositor which clamps to the focused
+     *        block's maxXOffset.
+     */
+    void blockHorizontalScroll(int direction);
+
+    /**
      * @brief Emitted when a bracketed paste completes, carrying the full
      *        decoded paste payload. The REPL decides whether to insert the
      *        text literally or replace it with a "[Pasted text #N +M lines]"

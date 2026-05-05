@@ -103,6 +103,12 @@ public:
      * when no block is focused or the block does not support folding. */
     void toggleFocusedFold();
 
+    /* Step the focused block's horizontal scroll by `delta` cells.
+     * Direction matches the key: +1 for right, -1 for left. Clamped
+     * to [0, maxXOffset(width)]. Width is the most recent layout
+     * width, so the caller doesn't need to know the viewport. */
+    void scrollFocusedHorizontal(int delta);
+
     /* Get all content as plain text (for dumping after alt screen exit) */
     QString toPlainText() const;
 
@@ -120,6 +126,7 @@ private:
     std::vector<int> rowToBlock_;
     int              lastRenderStartRow_ = 0;
     int              lastRenderHeight_   = 0;
+    int              lastRenderWidth_    = 0; /* contentWidth of last paint */
 };
 
 #endif // QTUISCROLLVIEW_H
