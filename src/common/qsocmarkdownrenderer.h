@@ -42,18 +42,13 @@ class QSocMarkdownRenderer
 public:
     /**
      * @brief Visual style flags for a contiguous run of text within a
-     *        rendered line. Maps directly onto QTuiCell attributes when
-     *        the consumer paints to a screen.
+     *        rendered line. Aliased to the screen-level run type so the
+     *        scrollview can ingest renderer output without an adapter
+     *        copy. Field semantics: bold/italic/dim/underline map to
+     *        SGR attributes; fg/bg are 256-palette indices via the
+     *        warm retro color enum.
      */
-    struct StyledRun
-    {
-        QString     text;
-        bool        bold      = false;
-        bool        italic    = false;
-        bool        dim       = false;
-        bool        underline = false; /* Reserved; current TUI ignores. */
-        QTuiFgColor fg        = QTuiFgColor::Default;
-    };
+    using StyledRun = QTuiStyledRun;
 
     /**
      * @brief One physical line of rendered output.

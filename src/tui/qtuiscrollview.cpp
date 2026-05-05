@@ -69,11 +69,105 @@ QList<QString> softWrap(const QString &text, int maxWidth, const QString &contin
     return out;
 }
 
+/* Soft-wrap a styled-runs line to maxWidth visual cells while keeping
+ * the per-character style attribution intact. The output is a sequence
+ * of rows, each itself a list of runs whose concatenated text has visual
+ * width <= maxWidth. Wrapping prefers space boundaries; tokens wider
+ * than maxWidth are hard-broken. */
+QList<QList<QTuiStyledRun>> wrapStyledRuns(const QList<QTuiStyledRun> &runs, int maxWidth)
+{
+    QList<QList<QTuiStyledRun>> out;
+    if (runs.isEmpty()) {
+        return out;
+    }
+    if (maxWidth <= 0) {
+        out.append(runs);
+        return out;
+    }
+
+    /* Flatten to a per-char stream tagged with the source-run index so
+     * we can later regroup consecutive same-style chars after wrap. */
+    struct CharCell
+    {
+        QChar ch;
+        int   runIdx;
+        int   width;
+    };
+    QList<CharCell> cells;
+    cells.reserve(256);
+    for (int idx = 0; idx < runs.size(); ++idx) {
+        const QString &text = runs[idx].text;
+        for (const QChar character : text) {
+            const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+            cells.append({.ch = character, .runIdx = idx, .width = chW});
+        }
+    }
+    if (cells.isEmpty()) {
+        out.append(runs);
+        return out;
+    }
+
+    auto regroup = [&](int begin, int end) -> QList<QTuiStyledRun> {
+        QList<QTuiStyledRun> rowRuns;
+        if (begin >= end) {
+            return rowRuns;
+        }
+        int           curRun = cells[begin].runIdx;
+        QTuiStyledRun proto  = runs[curRun];
+        proto.text.clear();
+        for (int idx = begin; idx < end; ++idx) {
+            if (cells[idx].runIdx != curRun) {
+                if (!proto.text.isEmpty()) {
+                    rowRuns.append(proto);
+                }
+                curRun     = cells[idx].runIdx;
+                proto      = runs[curRun];
+                proto.text = QString();
+            }
+            proto.text.append(cells[idx].ch);
+        }
+        if (!proto.text.isEmpty()) {
+            rowRuns.append(proto);
+        }
+        return rowRuns;
+    };
+
+    int rowStart  = 0;
+    int rowWidth  = 0;
+    int lastSpace = -1;
+    for (int idx = 0; idx < cells.size(); ++idx) {
+        const auto &cell = cells[idx];
+        if (rowWidth + cell.width > maxWidth && idx > rowStart) {
+            int breakAt = (lastSpace > rowStart) ? lastSpace : idx;
+            out.append(regroup(rowStart, breakAt));
+            /* Skip the breaking space itself when we wrapped on one. */
+            int next  = (lastSpace > rowStart) ? (breakAt + 1) : breakAt;
+            rowStart  = next;
+            rowWidth  = 0;
+            lastSpace = -1;
+            for (int back = rowStart; back < idx; ++back) {
+                rowWidth += cells[back].width;
+            }
+        }
+        if (cell.ch == QLatin1Char(' ')) {
+            lastSpace = idx;
+        }
+        rowWidth += cell.width;
+    }
+    if (rowStart < cells.size()) {
+        out.append(regroup(rowStart, cells.size()));
+    }
+    if (out.isEmpty()) {
+        out.append(QList<QTuiStyledRun>{});
+    }
+    return out;
+}
+
 } // namespace
 
 void QTuiScrollView::appendLine(const QString &text, LineStyle style)
 {
-    lines.append({.text = text, .style = style});
+    lines.append({.text = text, .style = style, .runs = {}});
 
     /* Enforce max buffer depth */
     while (lines.size() > MAX_LINES) {
@@ -82,6 +176,27 @@ void QTuiScrollView::appendLine(const QString &text, LineStyle style)
             scrollOffset--;
         }
     }
+}
+
+void QTuiScrollView::appendStyledLine(const QList<QTuiStyledRun> &runs)
+{
+    lines.append({.text = QString(), .style = Styled, .runs = runs});
+
+    while (lines.size() > MAX_LINES) {
+        lines.removeFirst();
+        if (scrollOffset > 0) {
+            scrollOffset--;
+        }
+    }
+}
+
+void QTuiScrollView::replaceLastStyledLine(const QList<QTuiStyledRun> &runs)
+{
+    if (lines.isEmpty()) {
+        appendStyledLine(runs);
+        return;
+    }
+    lines.last() = {.text = QString(), .style = Styled, .runs = runs};
 }
 
 void QTuiScrollView::appendPartial(const QString &text, LineStyle style)
@@ -120,11 +235,14 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
     /* Flatten every stored line (plus the active streaming partial) into
      * wrapped display rows so long paragraphs and CJK text spill onto
      * additional rows instead of being truncated at the edge. Each
-     * source line may contribute one or more display rows. */
+     * source line may contribute one or more display rows. Styled rows
+     * carry per-run attributes; plain rows fall back to the single
+     * LineStyle enum. */
     struct DisplayRow
     {
-        QString   text;
-        LineStyle style;
+        QString              text;
+        LineStyle            style;
+        QList<QTuiStyledRun> runs;
     };
     QList<DisplayRow> displayRows;
     displayRows.reserve(lines.size() + 8);
@@ -147,17 +265,31 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
 
     auto pushWrapped = [&](const QString &text, LineStyle style) {
         if (text.isEmpty()) {
-            displayRows.append({QString(), style});
+            displayRows.append({.text = QString(), .style = style, .runs = {}});
             return;
         }
         const QString contPrefix = continuationPrefixFor(style);
         for (const QString &chunk : softWrap(text, contentWidth, contPrefix)) {
-            displayRows.append({chunk, style});
+            displayRows.append({.text = chunk, .style = style, .runs = {}});
+        }
+    };
+
+    auto pushStyled = [&](const QList<QTuiStyledRun> &runs) {
+        if (runs.isEmpty()) {
+            displayRows.append({.text = QString(), .style = Styled, .runs = {}});
+            return;
+        }
+        for (const auto &row : wrapStyledRuns(runs, contentWidth)) {
+            displayRows.append({.text = QString(), .style = Styled, .runs = row});
         }
     };
 
     for (const Line &line : lines) {
-        pushWrapped(line.text, line.style);
+        if (line.style == Styled) {
+            pushStyled(line.runs);
+        } else {
+            pushWrapped(line.text, line.style);
+        }
     }
     if (!partialLine.isEmpty()) {
         pushWrapped(partialLine, partialStyle);
@@ -181,6 +313,31 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
         const QString  &text  = displayRows[rowIdx].text;
         const LineStyle style = displayRows[rowIdx].style;
 
+        if (style == Styled) {
+            int col = 0;
+            for (const QTuiStyledRun &run : displayRows[rowIdx].runs) {
+                for (const QChar character : run.text) {
+                    if (col >= contentWidth) {
+                        break;
+                    }
+                    QTuiCell &cell = screen.at(col, screenY);
+                    cell.character = character;
+                    cell.bold      = run.bold;
+                    cell.italic    = run.italic;
+                    cell.dim       = run.dim;
+                    cell.underline = run.underline;
+                    cell.inverted  = false;
+                    cell.fgColor   = run.fg;
+                    cell.bgColor   = run.bg;
+                    col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+                }
+                if (col >= contentWidth) {
+                    break;
+                }
+            }
+            continue;
+        }
+
         bool        isDim   = (style == Dim) || (style == DiffContext);
         bool        isBold  = (style == Bold) || (style == DiffHunk);
         QTuiFgColor fgColor = QTuiFgColor::Default;
@@ -198,6 +355,7 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
         case Dim:
         case Bold:
         case DiffContext:
+        case Styled:
         default:
             break;
         }
@@ -267,7 +425,14 @@ QString QTuiScrollView::toPlainText() const
 {
     QString result;
     for (const auto &line : lines) {
-        result += line.text + "\n";
+        if (line.style == Styled) {
+            for (const QTuiStyledRun &run : line.runs) {
+                result += run.text;
+            }
+            result += QLatin1Char('\n');
+        } else {
+            result += line.text + QLatin1Char('\n');
+        }
     }
     if (!partialLine.isEmpty()) {
         result += partialLine;

@@ -136,11 +136,13 @@ QString QTuiScreen::toAnsi()
     /* Cursor home */
     output += "\033[H";
 
-    bool        currentBold     = false;
-    bool        currentDim      = false;
-    bool        currentInverted = false;
-    QTuiFgColor currentColor    = QTuiFgColor::Default;
-    QTuiBgColor currentBg       = BG_DEFAULT;
+    bool        currentBold      = false;
+    bool        currentItalic    = false;
+    bool        currentDim       = false;
+    bool        currentUnderline = false;
+    bool        currentInverted  = false;
+    QTuiFgColor currentColor     = QTuiFgColor::Default;
+    QTuiBgColor currentBg        = BG_DEFAULT;
 
     for (int row = 0; row < rows; row++) {
         /* Check if this row changed (skip unchanged rows for performance) */
@@ -169,19 +171,21 @@ QString QTuiScreen::toAnsi()
 
             /* Emit style changes */
             bool needReset = false;
-            if (cell.bold != currentBold || cell.dim != currentDim
-                || cell.inverted != currentInverted || cell.fgColor != currentColor
-                || cell.bgColor != currentBg) {
+            if (cell.bold != currentBold || cell.italic != currentItalic || cell.dim != currentDim
+                || cell.underline != currentUnderline || cell.inverted != currentInverted
+                || cell.fgColor != currentColor || cell.bgColor != currentBg) {
                 needReset = true;
             }
 
             if (needReset) {
                 output += "\033[0m";
-                currentBold     = false;
-                currentDim      = false;
-                currentInverted = false;
-                currentColor    = QTuiFgColor::Default;
-                currentBg       = BG_DEFAULT;
+                currentBold      = false;
+                currentItalic    = false;
+                currentDim       = false;
+                currentUnderline = false;
+                currentInverted  = false;
+                currentColor     = QTuiFgColor::Default;
+                currentBg        = BG_DEFAULT;
 
                 QString attrs;
                 if (cell.bold) {
@@ -189,6 +193,12 @@ QString QTuiScreen::toAnsi()
                 }
                 if (cell.dim) {
                     attrs += "2;";
+                }
+                if (cell.italic) {
+                    attrs += "3;";
+                }
+                if (cell.underline) {
+                    attrs += "4;";
                 }
                 if (cell.inverted) {
                     attrs += "7;";
@@ -203,11 +213,13 @@ QString QTuiScreen::toAnsi()
                     attrs.chop(1);
                     output += "\033[" + attrs + "m";
                 }
-                currentBold     = cell.bold;
-                currentDim      = cell.dim;
-                currentInverted = cell.inverted;
-                currentColor    = cell.fgColor;
-                currentBg       = cell.bgColor;
+                currentBold      = cell.bold;
+                currentItalic    = cell.italic;
+                currentDim       = cell.dim;
+                currentUnderline = cell.underline;
+                currentInverted  = cell.inverted;
+                currentColor     = cell.fgColor;
+                currentBg        = cell.bgColor;
             }
 
             output += cell.character;
