@@ -4,6 +4,7 @@
 #include "tui/qtuicompositor.h"
 
 #include "tui/qtuiassistanttextblock.h"
+#include "tui/qtuitoolblock.h"
 #include "tui/qtuiwidget.h"
 
 #include <cstdio>
@@ -177,6 +178,41 @@ void QTuiCompositor::finishStream()
 {
     activeAssistant = nullptr;
     activeReasoning = nullptr;
+}
+
+void QTuiCompositor::beginToolUse(const QString &toolName, const QString &detail)
+{
+    /* A new tool call seals the streaming assistant block so the box
+     * lands AFTER the prose, not retroactively before it. */
+    activeAssistant = nullptr;
+    activeReasoning = nullptr;
+    auto block      = std::make_unique<QTuiToolBlock>(toolName, detail);
+    activeTool      = block.get();
+    scrollView.appendBlock(std::move(block));
+}
+
+void QTuiCompositor::appendToolUseBody(const QString &chunk)
+{
+    if (activeTool == nullptr) {
+        return;
+    }
+    if (scrollView.lastBlock() != activeTool) {
+        /* Something else landed on top of the active tool block; abort
+         * the cursor rather than silently inject mid-history. */
+        activeTool = nullptr;
+        return;
+    }
+    activeTool->appendBody(chunk);
+}
+
+void QTuiCompositor::finishToolUse(bool success, const QString &summary)
+{
+    if (activeTool == nullptr) {
+        return;
+    }
+    activeTool
+        ->finish(success ? QTuiToolBlock::Status::Success : QTuiToolBlock::Status::Failure, summary);
+    activeTool = nullptr;
 }
 
 void QTuiCompositor::focusBlockAtScreenRow(int screenRow)
