@@ -84,6 +84,16 @@ public:
     void appendReasoningChunk(const QString &chunk);
     void finishStream();
 
+    /* Tool-call lifecycle hooks. beginToolUse pushes a bordered
+     * QTuiToolBlock onto the scrollback and remembers it; appendBody
+     * streams output into the active block; finishToolUse stamps the
+     * footer status. Each turn may have multiple tool calls in flight
+     * conceptually but only one active block at a time, since tool
+     * output never interleaves. */
+    void beginToolUse(const QString &toolName, const QString &detail);
+    void appendToolUseBody(const QString &chunk);
+    void finishToolUse(bool success, const QString &summary = QString());
+
     /* Retire the top banner; freed rows fold into scroll viewport. */
     void dismissTopBanner();
 
@@ -139,6 +149,11 @@ private:
      * one-line summary while only the freshest reasoning stays
      * expanded. */
     std::vector<class QTuiAssistantTextBlock *> reasoningHistory;
+
+    /* Active tool-call cursor. Cleared by finishToolUse() and any
+     * intervening printContent / streaming chunk so the next tool
+     * call lands on a fresh block. */
+    class QTuiToolBlock *activeTool = nullptr;
 
     /* Terminal management */
     void enterAltScreen();

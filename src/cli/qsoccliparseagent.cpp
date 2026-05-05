@@ -5235,6 +5235,7 @@ bool QSocCliWorker::runAgentLoop(
                         statusBarWidget.setStatus(QString("Running %1...").arg(toolName));
                     } else {
                         statusBarWidget.toolCalled(toolName, detail);
+                        compositor.beginToolUse(toolName, detail);
                     }
                 });
 
@@ -5253,6 +5254,14 @@ bool QSocCliWorker::runAgentLoop(
                  &renderDiffToScrollView](const QString &toolName, const QString &result) {
                     statusBarWidget.resetProgress();
                     statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
+
+                    /* Stream the result body into the active tool block
+                     * and stamp the footer status. Todo tools never opened
+                     * a block so the call is a no-op there. */
+                    if (!toolName.startsWith("todo_")) {
+                        compositor.appendToolUseBody(result);
+                        compositor.finishToolUse(true);
+                    }
 
                     /* edit_file diff: render a colored unified diff to the
                      * scroll view when the previous toolCalled hook stashed
@@ -5722,6 +5731,7 @@ bool QSocCliWorker::runAgentLoop(
                         statusBarWidget.setStatus(QString("Running %1...").arg(toolName));
                     } else {
                         statusBarWidget.toolCalled(toolName, detail);
+                        compositor.beginToolUse(toolName, detail);
                     }
                 });
 
@@ -5740,6 +5750,14 @@ bool QSocCliWorker::runAgentLoop(
                  &renderDiffToScrollView](const QString &toolName, const QString &result) {
                     statusBarWidget.resetProgress();
                     statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
+
+                    /* Stream the result body into the active tool block
+                     * and stamp the footer status. Todo tools never opened
+                     * a block so the call is a no-op there. */
+                    if (!toolName.startsWith("todo_")) {
+                        compositor.appendToolUseBody(result);
+                        compositor.finishToolUse(true);
+                    }
 
                     /* edit_file diff: render a colored unified diff to the
                      * scroll view when the previous toolCalled hook stashed
