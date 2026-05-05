@@ -76,6 +76,14 @@ public:
     /* Flush remaining partial line to scrollback as complete line */
     void flushContent();
 
+    /* Streaming markdown ingestion. Each chunk is appended to the
+     * current assistant block; a fresh block is created on first
+     * call after a tool/system print broke the run. finishStream
+     * clears the cursor so the next chunk begins a new block. */
+    void appendAssistantChunk(const QString &chunk);
+    void appendReasoningChunk(const QString &chunk);
+    void finishStream();
+
     /* Retire the top banner; freed rows fold into scroll viewport. */
     void dismissTopBanner();
 
@@ -116,6 +124,13 @@ private:
     bool       active = false;
     QString    title;
     FocusOwner focusOwner_ = FocusOwner::Input;
+
+    /* Cursors into the scrollback for the active streaming blocks.
+     * Non-owning; the scrollview owns the blocks. Cleared by
+     * finishStream() and whenever the cursor stops pointing at
+     * scrollback's last block (an unrelated print landed). */
+    class QTuiAssistantTextBlock *activeAssistant = nullptr;
+    class QTuiAssistantTextBlock *activeReasoning = nullptr;
 
     /* Terminal management */
     void enterAltScreen();

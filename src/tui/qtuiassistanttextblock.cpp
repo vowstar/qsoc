@@ -183,12 +183,12 @@ void QTuiAssistantTextBlock::paintRow(
             }
             QTuiCell &cell = screen.at(col, screenRow);
             cell.character = character;
-            cell.bold      = run.bold;
-            cell.italic    = run.italic;
-            cell.dim       = run.dim;
+            cell.bold      = run.bold && !forceDim;
+            cell.italic    = run.italic || forceDim;
+            cell.dim       = run.dim || forceDim;
             cell.underline = run.underline;
             cell.inverted  = false;
-            cell.fgColor   = run.fg;
+            cell.fgColor   = forceDim ? QTuiFgColor::Default : run.fg;
             cell.bgColor   = run.bg;
             col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
         }

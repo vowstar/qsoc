@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "tui/qtuicompositor.h"
+
+#include "tui/qtuiassistanttextblock.h"
 #include "tui/qtuiwidget.h"
 
 #include <cstdio>
@@ -107,7 +109,56 @@ void QTuiCompositor::setTitle(const QString &newTitle)
 
 void QTuiCompositor::printContent(const QString &content, QTuiScrollView::LineStyle style)
 {
+    /* Anything routed through printContent counts as non-streaming
+     * output; seal any pending assistant/reasoning blocks first so
+     * the next streaming chunk starts after this content rather than
+     * back-filling onto the wrong block. */
+    activeAssistant = nullptr;
+    activeReasoning = nullptr;
     scrollView.appendPartial(content, style);
+}
+
+void QTuiCompositor::appendAssistantChunk(const QString &chunk)
+{
+    if (chunk.isEmpty()) {
+        return;
+    }
+    /* Reset the cursor whenever an unrelated block has landed in
+     * between two chunks; appending to a stale block would make the
+     * new chunk render above any printContent that arrived in the
+     * meantime. */
+    if (activeAssistant != nullptr && scrollView.lastBlock() != activeAssistant) {
+        activeAssistant = nullptr;
+    }
+    if (activeAssistant == nullptr) {
+        auto block      = std::make_unique<QTuiAssistantTextBlock>();
+        activeAssistant = block.get();
+        scrollView.appendBlock(std::move(block));
+    }
+    activeAssistant->appendMarkdown(chunk);
+}
+
+void QTuiCompositor::appendReasoningChunk(const QString &chunk)
+{
+    if (chunk.isEmpty()) {
+        return;
+    }
+    if (activeReasoning != nullptr && scrollView.lastBlock() != activeReasoning) {
+        activeReasoning = nullptr;
+    }
+    if (activeReasoning == nullptr) {
+        auto block = std::make_unique<QTuiAssistantTextBlock>();
+        block->setDimAll(true);
+        activeReasoning = block.get();
+        scrollView.appendBlock(std::move(block));
+    }
+    activeReasoning->appendMarkdown(chunk);
+}
+
+void QTuiCompositor::finishStream()
+{
+    activeAssistant = nullptr;
+    activeReasoning = nullptr;
 }
 
 void QTuiCompositor::dismissTopBanner()
