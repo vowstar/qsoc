@@ -167,8 +167,12 @@ public:
      *          The default implementation lays out the block at
      *          `width`, paints each row into a freshly-sized
      *          QTuiScreen, and emits one SGR-encoded line per row.
+     *          Concrete blocks can override to inject extra escape
+     *          payloads (for instance, the image preview block emits
+     *          a Kitty / iTerm2 graphics escape ahead of the cell
+     *          grid so the actual bitmap shows up inline).
      */
-    QString toAnsi(int width);
+    virtual QString toAnsi(int width);
 
 protected:
     /** Cached width that produced the current row layout. */
