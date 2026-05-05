@@ -37,3 +37,6 @@
 [submodule "external/mbedtls"]
 	path = external/mbedtls
 	url = https://github.com/Mbed-TLS/mbedtls.git
+[submodule "external/cmark-gfm"]
+	path = external/cmark-gfm
+	url = https://github.com/github/cmark-gfm.git
