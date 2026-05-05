@@ -69,6 +69,7 @@ public:
         BlockQuote, /* Already prefixed with "│ " gutter */
         CodeBlock,  /* Raw code; codeLanguage filled when known */
         BlankLine,  /* Visual separator emitted between block elements */
+        Table,      /* Border or cell row built with box-drawing chars */
     };
 
     struct RenderedLine
@@ -88,8 +89,12 @@ public:
      *          GFM extensions are registered exactly once per process
      *          (cmark_gfm_core_extensions_ensure_registered is
      *          idempotent).
+     * @param markdown      Source GFM markdown text.
+     * @param terminalWidth Visible width in cells used to plan table
+     *                      column widths. Pass 0 for "unconstrained";
+     *                      tables then render at their ideal width.
      */
-    static QList<RenderedLine> render(const QString &markdown);
+    static QList<RenderedLine> render(const QString &markdown, int terminalWidth = 0);
 };
 
 #endif // QSOCMARKDOWNRENDERER_H

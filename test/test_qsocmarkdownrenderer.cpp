@@ -3,6 +3,7 @@
 
 #include "common/qsocmarkdownrenderer.h"
 #include "qsoc_test.h"
+#include "tui/qtuiwidget.h"
 
 #include <QString>
 #include <QtTest>
@@ -239,6 +240,125 @@ private slots:
             }
         }
         QVERIFY(blankCount >= 1);
+    }
+
+    /* Basic GFM table: 2 columns, 1 header + 2 body rows; expect three
+     * border lines plus three content lines, all Kind::Table. */
+    void simpleTableEmitsBorderAndCells()
+    {
+        const QString md = QStringLiteral(
+            "| Name | Type |\n"
+            "|------|------|\n"
+            "| clk  | wire |\n"
+            "| rst  | reg  |\n");
+        const auto out = QSocMarkdownRenderer::render(md, /*width=*/80);
+
+        QStringList tableLines;
+        for (const auto &line : out) {
+            if (line.kind == Kind::Table) {
+                tableLines.append(concat(line));
+            }
+        }
+        QCOMPARE(tableLines.size(), 6);
+        QVERIFY2(
+            tableLines[0].startsWith(QChar(0x250C)) && tableLines[0].contains(QChar(0x252C))
+                && tableLines[0].endsWith(QChar(0x2510)),
+            qPrintable(tableLines[0]));
+        QVERIFY2(tableLines[1].contains(QStringLiteral("Name")), qPrintable(tableLines[1]));
+        QVERIFY2(
+            tableLines[2].startsWith(QChar(0x251C)) && tableLines[2].contains(QChar(0x253C))
+                && tableLines[2].endsWith(QChar(0x2524)),
+            qPrintable(tableLines[2]));
+        QVERIFY2(tableLines[3].contains(QStringLiteral("clk")), qPrintable(tableLines[3]));
+        QVERIFY2(tableLines[4].contains(QStringLiteral("rst")), qPrintable(tableLines[4]));
+        QVERIFY2(
+            tableLines[5].startsWith(QChar(0x2514)) && tableLines[5].contains(QChar(0x2534))
+                && tableLines[5].endsWith(QChar(0x2518)),
+            qPrintable(tableLines[5]));
+    }
+
+    /* Header cells inherit bold styling from `**...**`; bodies stay
+     * plain. The header-vs-body split surfaces in run flags so the
+     * scrollview can color rows differently. */
+    void tableHeaderRowKeepsBoldStyling()
+    {
+        const QString md = QStringLiteral(
+            "| **Sig** | Width |\n"
+            "|---------|-------|\n"
+            "| clk     | 1     |\n");
+        const auto out           = QSocMarkdownRenderer::render(md, 80);
+        bool       sawHeaderBold = false;
+        for (const auto &line : out) {
+            if (line.kind != Kind::Table) {
+                continue;
+            }
+            for (const auto &run : line.runs) {
+                if (run.text.contains(QStringLiteral("Sig")) && run.bold) {
+                    sawHeaderBold = true;
+                }
+            }
+        }
+        QVERIFY(sawHeaderBold);
+    }
+
+    /* When the table is wider than the terminal, columns shrink and
+     * cells word-wrap. The border + cell row count grows because each
+     * row may emit several lines. The test pins that:
+     *   1) every output line stays within terminalWidth visual cells
+     *   2) at least one body row produced multiple lines */
+    void tableShrinksAndWordWrapsCellsOnNarrowTerminal()
+    {
+        const QString md = QStringLiteral(
+            "| Description                                  | Note          |\n"
+            "|----------------------------------------------|---------------|\n"
+            "| short                                        | very long note text here that wraps "
+            "|\n");
+        const int  terminalWidth = 40;
+        const auto out           = QSocMarkdownRenderer::render(md, terminalWidth);
+
+        bool sawMultiLineBody = false;
+        int  bodyRowsRendered = 0;
+        for (const auto &line : out) {
+            if (line.kind == Kind::Table) {
+                const QString text = concat(line);
+                /* No table line may exceed the terminal width. */
+                QVERIFY2(
+                    QTuiText::visualWidth(text) <= terminalWidth,
+                    qPrintable(
+                        QStringLiteral("len=%1: %2").arg(QTuiText::visualWidth(text)).arg(text)));
+                if (text.contains(QStringLiteral("note")) || text.contains(QStringLiteral("text"))
+                    || text.contains(QStringLiteral("wraps"))) {
+                    bodyRowsRendered++;
+                }
+            }
+        }
+        sawMultiLineBody = (bodyRowsRendered >= 2);
+        QVERIFY(sawMultiLineBody);
+    }
+
+    /* CJK glyphs count as 2 cells; the column planner must size columns
+     * by visual width, not QChar count, or the alignment falls apart. */
+    void tableHandlesCjkCellWidth()
+    {
+        const QString md = QStringLiteral(
+            "| 名称 | 描述         |\n"
+            "|------|--------------|\n"
+            "| 时钟 | 主时钟信号   |\n"
+            "| 复位 | 异步复位     |\n");
+        const auto  out = QSocMarkdownRenderer::render(md, 80);
+        QStringList tableTexts;
+        for (const auto &line : out) {
+            if (line.kind == Kind::Table) {
+                tableTexts.append(concat(line));
+            }
+        }
+        QVERIFY(tableTexts.size() >= 5);
+        /* Every table line should have the same total visual width for
+         * borders + bars to stack correctly. */
+        const int firstWidth = QTuiText::visualWidth(tableTexts.first());
+        for (const QString &line : tableTexts) {
+            QCOMPARE(QTuiText::visualWidth(line), firstWidth);
+        }
     }
 
     /* Smoke test on a realistic mixed document: walker must survive
