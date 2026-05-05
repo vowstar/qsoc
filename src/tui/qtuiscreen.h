@@ -51,13 +51,19 @@ struct QTuiCell
      * payload and just render the cell text, which is the desired
      * graceful fallback. */
     QString hyperlink;
+    /* True when the cell paints structural decoration rather than
+     * payload — gutters, banners, frame borders, scrollbar track,
+     * fold markers. The mouse-drag selection highlighter skips these
+     * during invert and the OSC 52 copy path skips them during text
+     * extract, so a drag-to-copy never picks up `▎`, `╭`, `│`, etc. */
+    bool decorative = false;
 
     bool operator==(const QTuiCell &other) const
     {
         return character == other.character && bold == other.bold && italic == other.italic
                && dim == other.dim && underline == other.underline && inverted == other.inverted
                && fgColor == other.fgColor && bgColor == other.bgColor
-               && hyperlink == other.hyperlink;
+               && hyperlink == other.hyperlink && decorative == other.decorative;
     }
     bool operator!=(const QTuiCell &other) const { return !(*this == other); }
 };
@@ -83,6 +89,9 @@ struct QTuiStyledRun
      * higher-level renderers can attach a click target to a run
      * without poking at cells directly. */
     QString hyperlink;
+    /* Decoration marker carried through paint into QTuiCell so the
+     * selection / copy paths can exclude structural characters. */
+    bool decorative = false;
 };
 
 /**

@@ -15,18 +15,20 @@ namespace {
 QTuiStyledRun cyanDim(const QString &text)
 {
     QTuiStyledRun run;
-    run.text = text;
-    run.dim  = true;
-    run.fg   = QTuiFgColor::Cyan;
+    run.text       = text;
+    run.dim        = true;
+    run.fg         = QTuiFgColor::Cyan;
+    run.decorative = true;
     return run;
 }
 
 QTuiStyledRun summaryRun(const QString &text)
 {
     QTuiStyledRun run;
-    run.text   = text;
-    run.dim    = true;
-    run.italic = true;
+    run.text       = text;
+    run.dim        = true;
+    run.italic     = true;
+    run.decorative = true;
     return run;
 }
 
@@ -143,16 +145,17 @@ void QTuiCodeBlock::paintRow(
             if (painted + chW > width) {
                 return;
             }
-            QTuiCell &cell = screen.at(painted, screenRow);
-            cell.character = character;
-            cell.bold      = run.bold;
-            cell.italic    = run.italic;
-            cell.dim       = run.dim;
-            cell.underline = run.underline;
-            cell.inverted  = false;
-            cell.fgColor   = run.fg;
-            cell.bgColor   = run.bg;
-            cell.hyperlink = run.hyperlink;
+            QTuiCell &cell  = screen.at(painted, screenRow);
+            cell.character  = character;
+            cell.bold       = run.bold;
+            cell.italic     = run.italic;
+            cell.dim        = run.dim;
+            cell.underline  = run.underline;
+            cell.inverted   = false;
+            cell.fgColor    = run.fg;
+            cell.bgColor    = run.bg;
+            cell.hyperlink  = run.hyperlink;
+            cell.decorative = run.decorative;
             painted += chW;
         }
     }

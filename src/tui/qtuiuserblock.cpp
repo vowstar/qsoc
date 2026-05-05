@@ -31,9 +31,10 @@ void QTuiUserBlock::layout(int width)
     for (const QString &line : lines) {
         QList<QTuiStyledRun> row;
         QTuiStyledRun        gutter;
-        gutter.text = QStringLiteral("▍ ");
-        gutter.bold = true;
-        gutter.fg   = QTuiFgColor::Blue;
+        gutter.text       = QStringLiteral("▍ ");
+        gutter.bold       = true;
+        gutter.fg         = QTuiFgColor::Blue;
+        gutter.decorative = true;
         row.append(gutter);
         QTuiStyledRun body;
         body.text = line;
@@ -46,9 +47,10 @@ void QTuiUserBlock::layout(int width)
          * has visible presence in scrollback. */
         QList<QTuiStyledRun> row;
         QTuiStyledRun        gutter;
-        gutter.text = QStringLiteral("▍ ");
-        gutter.bold = true;
-        gutter.fg   = QTuiFgColor::Blue;
+        gutter.text       = QStringLiteral("▍ ");
+        gutter.bold       = true;
+        gutter.fg         = QTuiFgColor::Blue;
+        gutter.decorative = true;
         row.append(gutter);
         rendered.append(row);
     }
@@ -80,16 +82,17 @@ void QTuiUserBlock::paintRow(
             if (col >= width) {
                 return;
             }
-            QTuiCell &cell = screen.at(col, screenRow);
-            cell.character = character;
-            cell.bold      = run.bold;
-            cell.italic    = run.italic;
-            cell.dim       = run.dim;
-            cell.underline = run.underline;
-            cell.inverted  = false;
-            cell.fgColor   = run.fg;
-            cell.bgColor   = run.bg;
-            cell.hyperlink = run.hyperlink;
+            QTuiCell &cell  = screen.at(col, screenRow);
+            cell.character  = character;
+            cell.bold       = run.bold;
+            cell.italic     = run.italic;
+            cell.dim        = run.dim;
+            cell.underline  = run.underline;
+            cell.inverted   = false;
+            cell.fgColor    = run.fg;
+            cell.bgColor    = run.bg;
+            cell.hyperlink  = run.hyperlink;
+            cell.decorative = run.decorative;
             col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
         }
     }

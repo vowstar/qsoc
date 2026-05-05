@@ -221,16 +221,17 @@ void QTuiAssistantTextBlock::paintRow(
             if (painted + chW > width) {
                 return;
             }
-            QTuiCell &cell = screen.at(painted, screenRow);
-            cell.character = character;
-            cell.bold      = run.bold && !forceDim;
-            cell.italic    = run.italic || forceDim;
-            cell.dim       = run.dim || forceDim;
-            cell.underline = run.underline;
-            cell.inverted  = false;
-            cell.fgColor   = forceDim ? QTuiFgColor::Default : run.fg;
-            cell.bgColor   = run.bg;
-            cell.hyperlink = run.hyperlink;
+            QTuiCell &cell  = screen.at(painted, screenRow);
+            cell.character  = character;
+            cell.bold       = run.bold && !forceDim;
+            cell.italic     = run.italic || forceDim;
+            cell.dim        = run.dim || forceDim;
+            cell.underline  = run.underline;
+            cell.inverted   = false;
+            cell.fgColor    = forceDim ? QTuiFgColor::Default : run.fg;
+            cell.bgColor    = run.bg;
+            cell.hyperlink  = run.hyperlink;
+            cell.decorative = run.decorative;
             painted += chW;
         }
     }
