@@ -5,6 +5,7 @@
 
 #include "tui/qtuiassistanttextblock.h"
 #include "tui/qtuitoolblock.h"
+#include "tui/qtuiuserblock.h"
 #include "tui/qtuiwidget.h"
 
 #include <cstdio>
@@ -213,6 +214,16 @@ void QTuiCompositor::finishToolUse(bool success, const QString &summary)
     activeTool
         ->finish(success ? QTuiToolBlock::Status::Success : QTuiToolBlock::Status::Failure, summary);
     activeTool = nullptr;
+}
+
+void QTuiCompositor::appendUserMessage(const QString &text)
+{
+    /* New user input ends every active streaming context; the next
+     * agent chunk should land below the user's message. */
+    activeAssistant = nullptr;
+    activeReasoning = nullptr;
+    activeTool      = nullptr;
+    scrollView.appendBlock(std::make_unique<QTuiUserBlock>(text));
 }
 
 void QTuiCompositor::focusBlockAtScreenRow(int screenRow)

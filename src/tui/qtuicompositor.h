@@ -94,6 +94,12 @@ public:
     void appendToolUseBody(const QString &chunk);
     void finishToolUse(bool success, const QString &summary = QString());
 
+    /* Push the user's input as a distinct scrollback block. Replaces
+     * the prior `compositor.printContent("qsoc> " + input + "\n")`
+     * pattern so a focused user message can be copied back as a
+     * blockquote-formatted markdown string. */
+    void appendUserMessage(const QString &text);
+
     /* Retire the top banner; freed rows fold into scroll viewport. */
     void dismissTopBanner();
 

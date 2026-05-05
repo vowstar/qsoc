@@ -3268,7 +3268,7 @@ bool QSocCliWorker::runAgentLoop(
         compositor.dismissTopBanner();
 
         /* Echo user input in scroll view */
-        compositor.printContent("\nqsoc> " + input + "\n");
+        compositor.appendUserMessage(input);
 
         /* Add to history (skip duplicates of last entry). Saved in CHIP form
          * with any referenced paste payloads captured alongside so chips
