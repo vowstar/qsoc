@@ -56,11 +56,13 @@
 #include "common/qlspslangbackend.h"
 #include "common/qsocconsole.h"
 #include "common/qsoccron.h"
+#include "common/qsocimageattach.h"
 #include "common/qsoclinediff.h"
 #include "common/qsocpaths.h"
 #include "common/qsocproxy.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuidiffblock.h"
+#include "tui/qtuiimagepreviewblock.h"
 #include "tui/qtuiinputline.h"
 #include "tui/qtuimenu.h"
 #include "tui/qtuipathpicker.h"
@@ -68,6 +70,9 @@
 #include "tui/qtuistatusbar.h"
 #include "tui/qtuitodoblock.h"
 #include "tui/qtuitodolist.h"
+
+#include <QBuffer>
+#include <QImageReader>
 
 #include <functional>
 
@@ -1648,6 +1653,11 @@ bool QSocCliWorker::runAgentLoop(
     QString pendingDiffPath;
     QString pendingDiffOldString;
     QString pendingDiffNewString;
+    /* read_file path captured at toolCalled and consumed by the
+     * matching toolResult to push an image preview block when the
+     * file body is a recognised image. Distinct from pendingDiffPath
+     * which clears on non-edit/write tool calls. */
+    QString pendingReadPath;
 
     /* Helper: render a unified diff to the scroll view with the diff line
      * styles defined on QTuiScrollView (Hunk = yellow bold, Add = green,
@@ -5183,7 +5193,8 @@ bool QSocCliWorker::runAgentLoop(
                  &inputWidget,
                  &pendingDiffPath,
                  &pendingDiffOldString,
-                 &pendingDiffNewString](const QString &toolName, const QString &arguments) {
+                 &pendingDiffNewString,
+                 &pendingReadPath](const QString &toolName, const QString &arguments) {
                     Q_UNUSED(compositor)
                     /* Extract detail from arguments for better UX */
                     QString detail;
@@ -5240,6 +5251,18 @@ bool QSocCliWorker::runAgentLoop(
                             pendingDiffOldString.clear();
                             pendingDiffNewString.clear();
                         }
+
+                        /* Stash the read_file path so the matching
+                         * toolResult hook can probe the file body for
+                         * a recognised image and push a preview block
+                         * into scrollback. Cleared on every other
+                         * tool to avoid spurious image attempts. */
+                        if (toolName == "read_file" && args.contains("file_path")) {
+                            pendingReadPath = QString::fromStdString(
+                                args["file_path"].get<std::string>());
+                        } else {
+                            pendingReadPath.clear();
+                        }
                     } catch (...) {
                         /* Ignore parse errors */
                     }
@@ -5265,6 +5288,7 @@ bool QSocCliWorker::runAgentLoop(
                  &pendingDiffPath,
                  &pendingDiffOldString,
                  &pendingDiffNewString,
+                 &pendingReadPath,
                  &renderDiffToScrollView](const QString &toolName, const QString &result) {
                     statusBarWidget.resetProgress();
                     statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
@@ -5275,6 +5299,39 @@ bool QSocCliWorker::runAgentLoop(
                     if (!toolName.startsWith("todo_")) {
                         compositor.appendToolUseBody(result);
                         compositor.finishToolUse(true);
+                    }
+
+                    /* read_file image branch: when the tool returned an
+                     * image attachment, push a dedicated preview block
+                     * so the conversation history can render the actual
+                     * bitmap on supported terminals via Kitty / iTerm2
+                     * graphics protocol. */
+                    if (toolName == "read_file" && !pendingReadPath.isEmpty()) {
+                        QFile file(pendingReadPath);
+                        if (file.open(QIODevice::ReadOnly)) {
+                            const QByteArray head = file.read(32);
+                            const QString    mime = QSocImageAttach::detectMimeByMagic(head);
+                            if (!mime.isEmpty()) {
+                                file.seek(0);
+                                const QByteArray body = file.readAll();
+                                QBuffer          buf;
+                                buf.setData(body);
+                                int widthPx  = 0;
+                                int heightPx = 0;
+                                if (buf.open(QIODevice::ReadOnly)) {
+                                    QImageReader reader(&buf);
+                                    const QSize  dims = reader.size();
+                                    if (dims.isValid()) {
+                                        widthPx  = dims.width();
+                                        heightPx = dims.height();
+                                    }
+                                }
+                                compositor.contentView().appendBlock(
+                                    std::make_unique<QTuiImagePreviewBlock>(
+                                        pendingReadPath, mime, widthPx, heightPx, body));
+                            }
+                        }
+                        pendingReadPath.clear();
                     }
 
                     /* edit_file / write_file diff: render a colored
@@ -5699,7 +5756,8 @@ bool QSocCliWorker::runAgentLoop(
                  &inputWidget,
                  &pendingDiffPath,
                  &pendingDiffOldString,
-                 &pendingDiffNewString](const QString &toolName, const QString &arguments) {
+                 &pendingDiffNewString,
+                 &pendingReadPath](const QString &toolName, const QString &arguments) {
                     Q_UNUSED(compositor)
                     /* Extract detail from arguments for better UX */
                     QString detail;
@@ -5756,6 +5814,18 @@ bool QSocCliWorker::runAgentLoop(
                             pendingDiffOldString.clear();
                             pendingDiffNewString.clear();
                         }
+
+                        /* Stash the read_file path so the matching
+                         * toolResult hook can probe the file body for
+                         * a recognised image and push a preview block
+                         * into scrollback. Cleared on every other
+                         * tool to avoid spurious image attempts. */
+                        if (toolName == "read_file" && args.contains("file_path")) {
+                            pendingReadPath = QString::fromStdString(
+                                args["file_path"].get<std::string>());
+                        } else {
+                            pendingReadPath.clear();
+                        }
                     } catch (...) {
                         /* Ignore parse errors */
                     }
@@ -5781,6 +5851,7 @@ bool QSocCliWorker::runAgentLoop(
                  &pendingDiffPath,
                  &pendingDiffOldString,
                  &pendingDiffNewString,
+                 &pendingReadPath,
                  &renderDiffToScrollView](const QString &toolName, const QString &result) {
                     statusBarWidget.resetProgress();
                     statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
@@ -5791,6 +5862,39 @@ bool QSocCliWorker::runAgentLoop(
                     if (!toolName.startsWith("todo_")) {
                         compositor.appendToolUseBody(result);
                         compositor.finishToolUse(true);
+                    }
+
+                    /* read_file image branch: when the tool returned an
+                     * image attachment, push a dedicated preview block
+                     * so the conversation history can render the actual
+                     * bitmap on supported terminals via Kitty / iTerm2
+                     * graphics protocol. */
+                    if (toolName == "read_file" && !pendingReadPath.isEmpty()) {
+                        QFile file(pendingReadPath);
+                        if (file.open(QIODevice::ReadOnly)) {
+                            const QByteArray head = file.read(32);
+                            const QString    mime = QSocImageAttach::detectMimeByMagic(head);
+                            if (!mime.isEmpty()) {
+                                file.seek(0);
+                                const QByteArray body = file.readAll();
+                                QBuffer          buf;
+                                buf.setData(body);
+                                int widthPx  = 0;
+                                int heightPx = 0;
+                                if (buf.open(QIODevice::ReadOnly)) {
+                                    QImageReader reader(&buf);
+                                    const QSize  dims = reader.size();
+                                    if (dims.isValid()) {
+                                        widthPx  = dims.width();
+                                        heightPx = dims.height();
+                                    }
+                                }
+                                compositor.contentView().appendBlock(
+                                    std::make_unique<QTuiImagePreviewBlock>(
+                                        pendingReadPath, mime, widthPx, heightPx, body));
+                            }
+                        }
+                        pendingReadPath.clear();
                     }
 
                     /* edit_file / write_file diff: render a colored
