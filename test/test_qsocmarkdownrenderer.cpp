@@ -175,7 +175,10 @@ private slots:
     }
 
     /* Fenced code block: language flows through to codeLanguage,
-     * each interior line is a CodeBlock kind with raw text dim. */
+     * each interior line is a CodeBlock kind. The renderer prefixes
+     * a one-line ┄ banner with the language label and a `▎ ` gutter
+     * on each body line; the test verifies both shape and body
+     * content stripped of the gutter. */
     void codeBlockPreservesContentAndLanguage()
     {
         const auto out = QSocMarkdownRenderer::render(
@@ -188,10 +191,11 @@ private slots:
                 lang = line.codeLanguage;
             }
         }
-        QCOMPARE(codeLines.size(), 3);
-        QCOMPARE(codeLines[0], QStringLiteral("int main() {"));
-        QCOMPARE(codeLines[1], QStringLiteral("    return 0;"));
-        QCOMPARE(codeLines[2], QStringLiteral("}"));
+        QCOMPARE(codeLines.size(), 4);
+        QVERIFY(codeLines[0].contains(QStringLiteral("cpp")));
+        QCOMPARE(codeLines[1], QStringLiteral("▎ int main() {"));
+        QCOMPARE(codeLines[2], QStringLiteral("▎     return 0;"));
+        QCOMPARE(codeLines[3], QStringLiteral("▎ }"));
         QCOMPARE(lang, QStringLiteral("cpp"));
     }
 
