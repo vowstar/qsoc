@@ -117,6 +117,24 @@ public:
     }
 
     /**
+     * @brief Current horizontal scroll offset. The render loop hands
+     *        this to paintRow; concrete blocks decide whether to honour
+     *        it. The base accessor is shared so the scrollview can
+     *        drive scroll without each block reimplementing storage.
+     */
+    int  xOffset() const { return xOffset_; }
+    void setXOffset(int offset)
+    {
+        if (offset < 0) {
+            offset = 0;
+        }
+        if (xOffset_ != offset) {
+            xOffset_ = offset;
+            invalidate();
+        }
+    }
+
+    /**
      * @brief Plain-text content for clipboard yank. Excludes any
      *        decorative gutters, borders, fold markers, ANSI codes.
      */
@@ -148,6 +166,8 @@ protected:
     bool layoutDirty = true;
     /** Fold state. Concrete blocks decide whether to honour it. */
     bool folded = false;
+    /** Horizontal scroll offset honoured by blocks that opt in. */
+    int xOffset_ = 0;
 };
 
 #endif // QTUIBLOCK_H

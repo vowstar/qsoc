@@ -1607,6 +1607,13 @@ bool QSocCliWorker::runAgentLoop(
         compositor.copyFocusedBlock();
     });
 
+    /* Shift+Left / Shift+Right: step the focused block's horizontal
+     * scroll. The compositor and the focused block decide whether the
+     * gesture has any effect; plain Left/Right stays untouched. */
+    connect(&inputMonitor, &QAgentInputMonitor::blockHorizontalScroll, [&compositor](int direction) {
+        compositor.scrollFocusedBlockHorizontal(direction);
+    });
+
     /* Input history + reverse-i-search state — declared early so lambdas
      * below can capture them. The history file load happens after the
      * conversation restore (further down). inputHistoryPastes is aligned

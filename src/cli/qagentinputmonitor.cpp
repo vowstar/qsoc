@@ -422,6 +422,24 @@ void QAgentInputMonitor::processEscSequence()
                 resetEscBuffer();
                 return;
             }
+            /* Shift+Left / Shift+Right: ESC [ 1 ; 2 D / ESC [ 1 ; 2 C.
+             * Used by the REPL to horizontally scroll the focused
+             * scrollback block (code blocks, tables, diffs that don't
+             * fit the viewport). Plain Left/Right stays bound to
+             * input-line cursor movement. */
+            if (escBuffer == QByteArray("\033[1;2D")) {
+                emit blockHorizontalScroll(-1);
+                cancelDoubleEscArming();
+                resetEscBuffer();
+                return;
+            }
+            if (escBuffer == QByteArray("\033[1;2C")) {
+                emit blockHorizontalScroll(1);
+                cancelDoubleEscArming();
+                resetEscBuffer();
+                return;
+            }
+
             /* ESC [ 3 ~ = Delete (delete char at cursor, surrogate + atomic-aware) */
             if (escBuffer == QByteArray("\033[3~")) {
                 int atomicStart = -1;

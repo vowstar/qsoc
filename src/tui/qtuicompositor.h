@@ -166,6 +166,11 @@ public:
     void clearBlockFocus();
     bool copyFocusedBlock();
 
+    /* Step the focused block's horizontal scroll. delta=+1 scrolls
+     * right one cell, delta=-1 scrolls left. No-op when nothing is
+     * focused or the focused block does not opt into h-scroll. */
+    void scrollFocusedBlockHorizontal(int delta);
+
     /* Reset execution state without stopping the compositor (stay in alt screen) */
     void resetExecution();
 
