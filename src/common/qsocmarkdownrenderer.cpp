@@ -194,14 +194,36 @@ void emitCodeBlock(Walker &walker, cmark_node *codeNode)
     const QString language = (fenceRaw != nullptr) ? QString::fromUtf8(fenceRaw).trimmed().toLower()
                                                    : QString();
 
+    /* Header banner: a dim ┄ rule with the language label embedded.
+     * Renders even when the language is unspecified so users have a
+     * visual anchor between prose and code. */
+    {
+        QSocMarkdownRenderer::RenderedLine header;
+        header.kind         = QSocMarkdownRenderer::Kind::CodeBlock;
+        header.codeLanguage = language;
+        QSocMarkdownRenderer::StyledRun bar;
+        bar.text = QStringLiteral("┄┄┄ ");
+        bar.dim  = true;
+        bar.fg   = QTuiFgColor::Cyan;
+        header.runs.append(bar);
+        QSocMarkdownRenderer::StyledRun label;
+        label.text = language.isEmpty() ? QStringLiteral("code") : language;
+        label.dim  = true;
+        label.fg   = QTuiFgColor::Cyan;
+        header.runs.append(label);
+        QSocMarkdownRenderer::StyledRun bar2;
+        bar2.text = QStringLiteral(" ┄┄┄");
+        bar2.dim  = true;
+        bar2.fg   = QTuiFgColor::Cyan;
+        header.runs.append(bar2);
+        walker.lines.append(header);
+    }
+
     /* Code block content lives on its own lines; cmark stores a single
-     * literal string with embedded newlines. Split and emit each line
-     * with kind=CodeBlock so the consumer can paint a left gutter or
-     * differentiate styling. */
+     * literal string with embedded newlines. Each line gets a dim cyan
+     * `▎ ` gutter so blocks read as a column even when wrapped. */
     const QStringList rawLines = text.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
-    /* Split with KeepEmptyParts on a trailing newline yields a tail
-     * empty entry; drop it so we don't emit a phantom blank code line. */
-    int count = rawLines.size();
+    int               count    = rawLines.size();
     if (count > 0 && rawLines.last().isEmpty()) {
         --count;
     }
@@ -209,10 +231,15 @@ void emitCodeBlock(Walker &walker, cmark_node *codeNode)
         QSocMarkdownRenderer::RenderedLine line;
         line.kind         = QSocMarkdownRenderer::Kind::CodeBlock;
         line.codeLanguage = language;
-        QSocMarkdownRenderer::StyledRun run;
-        run.text = rawLines[idx];
-        run.dim  = true;
-        line.runs.append(run);
+        QSocMarkdownRenderer::StyledRun gutter;
+        gutter.text = QStringLiteral("▎ ");
+        gutter.dim  = true;
+        gutter.fg   = QTuiFgColor::Cyan;
+        line.runs.append(gutter);
+        QSocMarkdownRenderer::StyledRun body;
+        body.text = rawLines[idx];
+        body.dim  = true;
+        line.runs.append(body);
         walker.lines.append(line);
     }
 }
