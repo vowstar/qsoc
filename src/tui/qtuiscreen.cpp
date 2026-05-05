@@ -3,6 +3,8 @@
 
 #include "tui/qtuiscreen.h"
 
+#include "tui/qtuiwidget.h"
+
 QTuiCell QTuiScreen::defaultCell;
 
 QTuiScreen::QTuiScreen(int width, int height)
@@ -110,7 +112,13 @@ void QTuiScreen::putString(
         if (pos >= 0) {
             putChar(pos, row, chr, bold, dim, inverted, fgColor, bgColor);
         }
-        pos++;
+        /* Wide chars (CJK / emoji) occupy two terminal cells; advance
+         * the write cursor by the visual width so consecutive wide
+         * chars do not stomp on each other's trailing cells. The
+         * trailing cell is left as the default ' ' which toAnsi then
+         * skips, keeping the screen buffer in sync with what the
+         * terminal actually shows. */
+        pos += QTuiText::isWideChar(chr.unicode()) ? 2 : 1;
         idx++;
     }
 }
@@ -166,8 +174,14 @@ QString QTuiScreen::toAnsi()
         /* Position cursor at row start */
         output += QString("\033[%1;1H").arg(row + 1);
 
-        for (int col = 0; col < cols; col++) {
+        for (int col = 0; col < cols;) {
             const QTuiCell &cell = cells[row][col];
+            /* Wide chars (CJK, emoji) occupy two cells visually. The
+             * second cell is left as the default ' ' by paintRow but
+             * must not be emitted, otherwise the terminal renders an
+             * extra space and pushes following content one cell to the
+             * right. Detect, emit once, skip the trailing cell. */
+            const int charWidth = QTuiText::isWideChar(cell.character.unicode()) ? 2 : 1;
 
             /* Emit style changes */
             bool needReset = false;
@@ -223,6 +237,7 @@ QString QTuiScreen::toAnsi()
             }
 
             output += cell.character;
+            col += charWidth;
         }
 
         /* Clear to end of line (handles terminal width mismatch) */
