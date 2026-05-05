@@ -5213,8 +5213,11 @@ bool QSocCliWorker::runAgentLoop(
                             detail = "#" + QString::number(args["id"].get<int>());
                         }
 
-                        /* Capture edit_file args for the diff renderer in the
-                         * matching toolResult hook below. */
+                        /* Capture diff-producing tool args for the
+                         * renderer in the matching toolResult hook
+                         * below. write_file is treated as a creation
+                         * with empty old content so the user sees the
+                         * full file rendered as add lines. */
                         if (toolName == "edit_file" && args.contains("file_path")
                             && args.contains("old_string") && args.contains("new_string")) {
                             pendingDiffPath = QString::fromStdString(
@@ -5223,6 +5226,14 @@ bool QSocCliWorker::runAgentLoop(
                                 args["old_string"].get<std::string>());
                             pendingDiffNewString = QString::fromStdString(
                                 args["new_string"].get<std::string>());
+                        } else if (
+                            toolName == "write_file" && args.contains("file_path")
+                            && args.contains("content")) {
+                            pendingDiffPath = QString::fromStdString(
+                                args["file_path"].get<std::string>());
+                            pendingDiffOldString.clear();
+                            pendingDiffNewString = QString::fromStdString(
+                                args["content"].get<std::string>());
                         } else {
                             pendingDiffPath.clear();
                             pendingDiffOldString.clear();
@@ -5265,10 +5276,13 @@ bool QSocCliWorker::runAgentLoop(
                         compositor.finishToolUse(true);
                     }
 
-                    /* edit_file diff: render a colored unified diff to the
-                     * scroll view when the previous toolCalled hook stashed
-                     * old/new strings AND the result indicates success. */
-                    if (toolName == "edit_file" && !pendingDiffPath.isEmpty()
+                    /* edit_file / write_file diff: render a colored
+                     * unified diff to the scroll view when the matching
+                     * toolCalled hook stashed strings AND the result
+                     * indicates success. write_file goes from empty to
+                     * the new content so the diff reads as a creation. */
+                    if ((toolName == "edit_file" || toolName == "write_file")
+                        && !pendingDiffPath.isEmpty()
                         && result.startsWith(QStringLiteral("Successfully"))) {
                         renderDiffToScrollView(
                             pendingDiffPath, pendingDiffOldString, pendingDiffNewString);
@@ -5709,8 +5723,11 @@ bool QSocCliWorker::runAgentLoop(
                             detail = "#" + QString::number(args["id"].get<int>());
                         }
 
-                        /* Capture edit_file args for the diff renderer in the
-                         * matching toolResult hook below. */
+                        /* Capture diff-producing tool args for the
+                         * renderer in the matching toolResult hook
+                         * below. write_file is treated as a creation
+                         * with empty old content so the user sees the
+                         * full file rendered as add lines. */
                         if (toolName == "edit_file" && args.contains("file_path")
                             && args.contains("old_string") && args.contains("new_string")) {
                             pendingDiffPath = QString::fromStdString(
@@ -5719,6 +5736,14 @@ bool QSocCliWorker::runAgentLoop(
                                 args["old_string"].get<std::string>());
                             pendingDiffNewString = QString::fromStdString(
                                 args["new_string"].get<std::string>());
+                        } else if (
+                            toolName == "write_file" && args.contains("file_path")
+                            && args.contains("content")) {
+                            pendingDiffPath = QString::fromStdString(
+                                args["file_path"].get<std::string>());
+                            pendingDiffOldString.clear();
+                            pendingDiffNewString = QString::fromStdString(
+                                args["content"].get<std::string>());
                         } else {
                             pendingDiffPath.clear();
                             pendingDiffOldString.clear();
@@ -5761,10 +5786,13 @@ bool QSocCliWorker::runAgentLoop(
                         compositor.finishToolUse(true);
                     }
 
-                    /* edit_file diff: render a colored unified diff to the
-                     * scroll view when the previous toolCalled hook stashed
-                     * old/new strings AND the result indicates success. */
-                    if (toolName == "edit_file" && !pendingDiffPath.isEmpty()
+                    /* edit_file / write_file diff: render a colored
+                     * unified diff to the scroll view when the matching
+                     * toolCalled hook stashed strings AND the result
+                     * indicates success. write_file goes from empty to
+                     * the new content so the diff reads as a creation. */
+                    if ((toolName == "edit_file" || toolName == "write_file")
+                        && !pendingDiffPath.isEmpty()
                         && result.startsWith(QStringLiteral("Successfully"))) {
                         renderDiffToScrollView(
                             pendingDiffPath, pendingDiffOldString, pendingDiffNewString);
