@@ -60,6 +60,7 @@
 #include "common/qsocpaths.h"
 #include "common/qsocproxy.h"
 #include "tui/qtuicompositor.h"
+#include "tui/qtuidiffblock.h"
 #include "tui/qtuiinputline.h"
 #include "tui/qtuimenu.h"
 #include "tui/qtuipathpicker.h"
@@ -1685,28 +1686,29 @@ bool QSocCliWorker::runAgentLoop(
                 headerA = QStringLiteral("a/") + displayPath;
                 headerB = QStringLiteral("b/") + displayPath;
             }
-            compositor.printContent(
-                QStringLiteral("\n--- ") + headerA + QLatin1Char('\n'), QTuiScrollView::DiffDel);
-            compositor.printContent(
-                QStringLiteral("+++ ") + headerB + QLatin1Char('\n'), QTuiScrollView::DiffAdd);
+            /* Bundle the entire diff into a single QTuiDiffBlock so
+             * Ctrl+Y on the focused diff produces a clean unified
+             * patch rather than just the one row under the cursor. */
+            auto diffBlock = std::make_unique<QTuiDiffBlock>(headerA, headerB);
             for (const auto &line : diff) {
-                QTuiScrollView::LineStyle style = QTuiScrollView::DiffContext;
+                QTuiDiffBlock::Kind kind = QTuiDiffBlock::Kind::Context;
                 switch (line.kind) {
                 case QSocLineDiff::Kind::Hunk:
-                    style = QTuiScrollView::DiffHunk;
+                    kind = QTuiDiffBlock::Kind::Hunk;
                     break;
                 case QSocLineDiff::Kind::Add:
-                    style = QTuiScrollView::DiffAdd;
+                    kind = QTuiDiffBlock::Kind::Add;
                     break;
                 case QSocLineDiff::Kind::Del:
-                    style = QTuiScrollView::DiffDel;
+                    kind = QTuiDiffBlock::Kind::Del;
                     break;
                 case QSocLineDiff::Kind::Context:
-                    style = QTuiScrollView::DiffContext;
+                    kind = QTuiDiffBlock::Kind::Context;
                     break;
                 }
-                compositor.printContent(line.text + QLatin1Char('\n'), style);
+                diffBlock->addRow(kind, line.text);
             }
+            compositor.contentView().appendBlock(std::move(diffBlock));
         };
 
     /* Helper: expand "[Pasted text #N +M lines]" chips inline with the
