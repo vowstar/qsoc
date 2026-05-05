@@ -148,6 +148,16 @@ public:
     void selectionUpdate(int col, int row);
     void selectionFinish(int col, int row);
 
+    /* Block-level focus + clipboard. focusBlockAtScreenRow lets the
+     * input monitor route a single mouse click into block focus when
+     * the user is not dragging a text selection. copyFocusedBlock
+     * emits the focused block's markdown payload as an OSC 52
+     * clipboard write so any modern terminal (or tmux with
+     * set-clipboard on) places it on the system clipboard. */
+    void focusBlockAtScreenRow(int screenRow);
+    void clearBlockFocus();
+    bool copyFocusedBlock();
+
     /* Reset execution state without stopping the compositor (stay in alt screen) */
     void resetExecution();
 

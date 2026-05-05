@@ -1601,6 +1601,12 @@ bool QSocCliWorker::runAgentLoop(
         compositor.selectionUpdate(col - 1, row - 1);
     });
 
+    /* Ctrl+Y: copy the focused scrollback block to the system
+     * clipboard via OSC 52. No-op when nothing is focused. */
+    connect(&inputMonitor, &QAgentInputMonitor::copyFocusedBlockRequested, [&compositor]() {
+        compositor.copyFocusedBlock();
+    });
+
     /* Input history + reverse-i-search state — declared early so lambdas
      * below can capture them. The history file load happens after the
      * conversation restore (further down). inputHistoryPastes is aligned

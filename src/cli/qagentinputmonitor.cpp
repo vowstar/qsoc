@@ -600,6 +600,12 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
+        /* Ctrl+Y: copy the currently-focused scrollback block. */
+        if (byte == 0x19) {
+            emit copyFocusedBlockRequested();
+            continue;
+        }
+
         /* External key consumer (modal overlays) sees printable bytes and
          * Return before they touch the buffer. ESC, Ctrl-keys, and arrow
          * escapes are still routed through their own signal paths above

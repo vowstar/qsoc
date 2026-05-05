@@ -135,6 +135,14 @@ signals:
     void toggleTodosRequested();
 
     /**
+     * @brief Emitted on Ctrl+Y — request copy of the currently-focused
+     *        scrollback block to the system clipboard via OSC 52. The
+     *        REPL handler consults the compositor; if no block is
+     *        focused it can show a one-line hint instead.
+     */
+    void copyFocusedBlockRequested();
+
+    /**
      * @brief Emitted when a bracketed paste completes, carrying the full
      *        decoded paste payload. The REPL decides whether to insert the
      *        text literally or replace it with a "[Pasted text #N +M lines]"
