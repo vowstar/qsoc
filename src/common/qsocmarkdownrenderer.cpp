@@ -3,6 +3,7 @@
 
 #include "common/qsocmarkdownrenderer.h"
 
+#include "common/qsoccodehighlighter.h"
 #include "tui/qtuiwidget.h"
 
 extern "C" {
@@ -236,10 +237,13 @@ void emitCodeBlock(Walker &walker, cmark_node *codeNode)
         gutter.dim  = true;
         gutter.fg   = QTuiFgColor::Cyan;
         line.runs.append(gutter);
-        QSocMarkdownRenderer::StyledRun body;
-        body.text = rawLines[idx];
-        body.dim  = true;
-        line.runs.append(body);
+        /* Tokenise the line by language; the highlighter returns one
+         * or more colored dim runs that the renderer appends in order
+         * after the gutter. */
+        const auto tokens = QSocCodeHighlighter::highlight(rawLines[idx], language);
+        for (const auto &tokenRun : tokens) {
+            line.runs.append(tokenRun);
+        }
         walker.lines.append(line);
     }
 }
