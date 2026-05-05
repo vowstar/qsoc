@@ -485,12 +485,18 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
         screen.putString(0, screenY, partialRows[idx], isBold, isDim, false, fgColor);
     }
 
-    /* ASCII scrollbar on the rightmost column. */
+    /* Vertical scrollbar on the rightmost column. The track always
+     * shows as a dim │ so the right edge of the scroll area is a
+     * visible border, even when content fits the viewport. When the
+     * content overflows, an opaque █ thumb segment indicates scroll
+     * position over the track. */
     if (width > 1) {
-        const int scrollCol = width - 1;
+        const int   scrollCol = width - 1;
+        const QChar trackChar(0x2502); /* │ */
+        const QChar thumbChar(0x2588); /* █ */
         if (totalVisible <= height || height <= 0) {
             for (int row = 0; row < height; ++row) {
-                screen.putChar(scrollCol, startRow + row, ' ', false, true);
+                screen.putChar(scrollCol, startRow + row, trackChar, false, true);
             }
         } else {
             int       thumbSize   = qBound(1, height * height / totalVisible, height);
@@ -504,9 +510,15 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
             thumbTop              = qBound(0, thumbTop, height - thumbSize);
             const int thumbBottom = thumbTop + thumbSize;
             for (int row = 0; row < height; ++row) {
-                const QChar scrollChar = (row >= thumbTop && row < thumbBottom) ? QChar('#')
-                                                                                : QChar('|');
-                screen.putChar(scrollCol, startRow + row, scrollChar, false, true);
+                const bool  inThumb   = (row >= thumbTop && row < thumbBottom);
+                const QChar character = inThumb ? thumbChar : trackChar;
+                /* Track is dim, thumb is bold (not dim) to stand out. */
+                screen.putChar(
+                    scrollCol,
+                    startRow + row,
+                    character,
+                    /*bold=*/inThumb,
+                    /*dim=*/!inThumb);
             }
         }
     }

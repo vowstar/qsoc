@@ -172,8 +172,13 @@ QString QTuiScreen::toAnsi()
             }
         }
 
-        /* Position cursor at row start */
-        output += QString("\033[%1;1H").arg(row + 1);
+        /* Position cursor at row start, then clear any stale content
+         * for the row before painting. Doing the clear BEFORE the paint
+         * matters with auto-wrap disabled (DECAWM off): if the clear
+         * came after the paint, painting the rightmost cell would
+         * leave the cursor at column W with no auto-advance, and the
+         * subsequent EL would erase the cell we just drew. */
+        output += QString("\033[%1;1H\033[K").arg(row + 1);
 
         for (int col = 0; col < cols;) {
             const QTuiCell &cell = cells[row][col];
@@ -255,9 +260,6 @@ QString QTuiScreen::toAnsi()
             output += cell.character;
             col += charWidth;
         }
-
-        /* Clear to end of line (handles terminal width mismatch) */
-        output += "\033[K";
     }
 
     /* Close any in-flight OSC 8 hyperlink so the cursor leaves the

@@ -11,9 +11,13 @@
 namespace {
 QString rowOf(const QTuiScreen &screen, int row, int width)
 {
-    QString out;
-    out.reserve(width);
-    for (int col = 0; col < width; ++col) {
+    /* Skip the rightmost column: the scrollview now always paints a
+     * `│` (or `█`) scrollbar there, which would otherwise make every
+     * row look "non-empty" and hide the actual content boundary. */
+    QString   out;
+    const int contentEnd = qMax(0, width - 1);
+    out.reserve(contentEnd);
+    for (int col = 0; col < contentEnd; ++col) {
         out.append(screen.at(col, row).character);
     }
     while (out.endsWith(QLatin1Char(' '))) {
