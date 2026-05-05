@@ -99,6 +99,10 @@ public:
     QString copyFocusedAsMarkdown() const;
     QString copyFocusedAsPlainText() const;
 
+    /* Toggle the focused block's fold state if it is foldable. No-op
+     * when no block is focused or the block does not support folding. */
+    void toggleFocusedFold();
+
     /* Get all content as plain text (for dumping after alt screen exit) */
     QString toPlainText() const;
 

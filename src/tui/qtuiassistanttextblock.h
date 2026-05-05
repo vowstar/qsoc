@@ -47,6 +47,8 @@ public:
         bool        focused,
         bool        selected) const override;
 
+    bool isFoldable() const override { return true; }
+
     QString toPlainText() const override;
     QString toMarkdown() const override { return source; }
 

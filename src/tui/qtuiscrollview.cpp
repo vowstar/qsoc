@@ -543,6 +543,18 @@ QString QTuiScrollView::copyFocusedAsPlainText() const
     return blocks[focusedBlockIdx_]->toPlainText();
 }
 
+void QTuiScrollView::toggleFocusedFold()
+{
+    if (focusedBlockIdx_ < 0 || focusedBlockIdx_ >= static_cast<int>(blocks.size())) {
+        return;
+    }
+    auto &block = blocks[focusedBlockIdx_];
+    if (!block->isFoldable()) {
+        return;
+    }
+    block->setFolded(!block->isFolded());
+}
+
 void QTuiScrollView::scrollUp(int count)
 {
     /* Soft cap: blocks count is a lower bound on display-row count.

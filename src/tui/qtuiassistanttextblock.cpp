@@ -140,18 +140,31 @@ void QTuiAssistantTextBlock::layout(int width)
      * sees the same budget the scrollview will paint into. */
     const auto rendered = QSocMarkdownRenderer::render(source, width);
 
+    /* Total row count of the unfolded layout, retained for the fold
+     * summary even after we throw the row buffer away. */
+    QList<QList<QTuiStyledRun>> fullRows;
     for (const auto &line : rendered) {
         QList<QTuiStyledRun> runs;
         if (line.runs.isEmpty()) {
-            /* Blank-line separators carry no runs; emit an empty row
-             * so vertical spacing matches the source. */
             runs.append(QTuiStyledRun{});
         } else {
             runs = line.runs;
         }
         for (const auto &wrappedRow : wrapRunsToWidth(runs, width)) {
-            rows.append(wrappedRow);
+            fullRows.append(wrappedRow);
         }
+    }
+
+    if (folded) {
+        /* Summary row: ▸ N lines (folded). Plain styled run, dim italic
+         * to match the fold-control aesthetic shared with tool boxes. */
+        QTuiStyledRun summary;
+        summary.text   = QStringLiteral("▸ %1 lines (folded)").arg(fullRows.size());
+        summary.dim    = true;
+        summary.italic = true;
+        rows.append(QList<QTuiStyledRun>{summary});
+    } else {
+        rows = std::move(fullRows);
     }
 }
 
