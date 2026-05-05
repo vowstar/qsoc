@@ -48,17 +48,25 @@ public:
         bool        selected) const override;
 
     bool isFoldable() const override { return true; }
+    int  maxXOffset(int width) const override;
 
     QString toPlainText() const override;
     QString toMarkdown() const override { return source; }
 
 private:
-    /* Each cached row is a list of styled runs whose total visual
-     * width is <= layoutWidth. Built fresh on every layout() call
-     * after a mutation or width change. */
-    QString                     source;
-    QList<QList<QTuiStyledRun>> rows;
-    bool                        forceDim = false;
+    /* Each cached row is a list of styled runs. Rows tagged noWrap
+     * (tables, code blocks) carry visual widths greater than
+     * layoutWidth and rely on xOffset-based horizontal scrolling
+     * instead of soft-wrapping. */
+    struct Row
+    {
+        QList<QTuiStyledRun> runs;
+        bool                 noWrap = false;
+    };
+
+    QString    source;
+    QList<Row> rows;
+    bool       forceDim = false;
 };
 
 #endif // QTUIASSISTANTTEXTBLOCK_H

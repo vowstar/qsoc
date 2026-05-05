@@ -142,7 +142,7 @@ void QTuiAssistantTextBlock::layout(int width)
 
     /* Total row count of the unfolded layout, retained for the fold
      * summary even after we throw the row buffer away. */
-    QList<QList<QTuiStyledRun>> fullRows;
+    QList<Row> fullRows;
     for (const auto &line : rendered) {
         QList<QTuiStyledRun> runs;
         if (line.runs.isEmpty()) {
@@ -150,8 +150,18 @@ void QTuiAssistantTextBlock::layout(int width)
         } else {
             runs = line.runs;
         }
-        for (const auto &wrappedRow : wrapRunsToWidth(runs, width)) {
-            fullRows.append(wrappedRow);
+        /* Tables and fenced code keep box-drawing / gutter alignment
+         * intact across rows, so let them overflow horizontally and
+         * rely on the block's xOffset for scroll instead of breaking
+         * structure with soft-wrap. */
+        const bool noWrap = line.kind == QSocMarkdownRenderer::Kind::Table
+                            || line.kind == QSocMarkdownRenderer::Kind::CodeBlock;
+        if (noWrap) {
+            fullRows.append({.runs = runs, .noWrap = true});
+        } else {
+            for (const auto &wrappedRow : wrapRunsToWidth(runs, width)) {
+                fullRows.append({.runs = wrappedRow, .noWrap = false});
+            }
         }
     }
 
@@ -162,7 +172,7 @@ void QTuiAssistantTextBlock::layout(int width)
         summary.text   = QStringLiteral("▸ %1 lines (folded)").arg(fullRows.size());
         summary.dim    = true;
         summary.italic = true;
-        rows.append(QList<QTuiStyledRun>{summary});
+        rows.append({.runs = QList<QTuiStyledRun>{summary}, .noWrap = false});
     } else {
         rows = std::move(fullRows);
     }
@@ -182,19 +192,36 @@ void QTuiAssistantTextBlock::paintRow(
     bool        focused,
     bool        selected) const
 {
-    Q_UNUSED(xOffset);
     Q_UNUSED(focused);
     Q_UNUSED(selected);
     if (viewportRow < 0 || viewportRow >= rows.size()) {
         return;
     }
-    int col = 0;
-    for (const QTuiStyledRun &run : rows[viewportRow]) {
+    /* xOffset only matters for noWrap rows; soft-wrapped rows already
+     * fit within width by construction. Wrapped rows ignore the offset
+     * and paint from their natural start so prose never disappears
+     * sideways when the user h-scrolls a table. */
+    const Row &row     = rows[viewportRow];
+    const int  effX    = row.noWrap ? xOffset : 0;
+    int        skipped = 0;
+    int        painted = 0;
+    for (const QTuiStyledRun &run : row.runs) {
         for (const QChar character : run.text) {
-            if (col >= width) {
+            const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+            if (skipped + chW <= effX) {
+                skipped += chW;
+                continue;
+            }
+            if (skipped < effX) {
+                /* Wide char straddling the scroll boundary: skip the
+                 * whole glyph rather than render half. */
+                skipped += chW;
+                continue;
+            }
+            if (painted + chW > width) {
                 return;
             }
-            QTuiCell &cell = screen.at(col, screenRow);
+            QTuiCell &cell = screen.at(painted, screenRow);
             cell.character = character;
             cell.bold      = run.bold && !forceDim;
             cell.italic    = run.italic || forceDim;
@@ -203,9 +230,30 @@ void QTuiAssistantTextBlock::paintRow(
             cell.inverted  = false;
             cell.fgColor   = forceDim ? QTuiFgColor::Default : run.fg;
             cell.bgColor   = run.bg;
-            col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+            painted += chW;
         }
     }
+}
+
+int QTuiAssistantTextBlock::maxXOffset(int width) const
+{
+    if (width <= 0) {
+        return 0;
+    }
+    int longest = 0;
+    for (const Row &row : rows) {
+        if (!row.noWrap) {
+            continue;
+        }
+        int rowWidth = 0;
+        for (const QTuiStyledRun &run : row.runs) {
+            for (const QChar character : run.text) {
+                rowWidth += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+            }
+        }
+        longest = std::max(longest, rowWidth);
+    }
+    return std::max(0, longest - width);
 }
 
 QString QTuiAssistantTextBlock::toPlainText() const
