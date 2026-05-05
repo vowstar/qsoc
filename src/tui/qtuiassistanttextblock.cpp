@@ -230,6 +230,7 @@ void QTuiAssistantTextBlock::paintRow(
             cell.inverted  = false;
             cell.fgColor   = forceDim ? QTuiFgColor::Default : run.fg;
             cell.bgColor   = run.bg;
+            cell.hyperlink = run.hyperlink;
             painted += chW;
         }
     }
