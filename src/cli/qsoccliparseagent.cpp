@@ -5311,7 +5311,7 @@ bool QSocCliWorker::runAgentLoop(
                 &QSocAgent::contentChunk,
                 &loop,
                 [&compositor, &statusBarWidget, &todoWidget, &queueWidget, &inputWidget](
-                    const QString &chunk) { compositor.printContent(chunk); });
+                    const QString &chunk) { compositor.appendAssistantChunk(chunk); });
 
             auto connRunComplete = QObject::connect(
                 agent,
@@ -5325,6 +5325,7 @@ bool QSocCliWorker::runAgentLoop(
                  &queueWidget,
                  &inputWidget,
                  &loopRunning](const QString &) {
+                    compositor.finishStream();
                     compositor.resetExecution();
                     compositor.printContent("\n");
                     if (loopRunning) {
@@ -5344,6 +5345,7 @@ bool QSocCliWorker::runAgentLoop(
                  &queueWidget,
                  &inputWidget,
                  &loopRunning](const QString &error) {
+                    compositor.finishStream();
                     compositor.resetExecution();
                     compositor.printContent("\nError: " + error + "\n");
                     if (loopRunning) {
@@ -5464,7 +5466,7 @@ bool QSocCliWorker::runAgentLoop(
                 [&compositor, reasoningCollapser](const QString &chunk) {
                     const QString filtered = reasoningCollapser->feed(chunk);
                     if (!filtered.isEmpty()) {
-                        compositor.printContent(filtered, QTuiScrollView::Dim);
+                        compositor.appendReasoningChunk(filtered);
                     }
                 });
 

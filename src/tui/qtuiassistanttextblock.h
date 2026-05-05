@@ -30,6 +30,12 @@ public:
     void           appendMarkdown(const QString &chunk);
     const QString &markdown() const { return source; }
 
+    /* Force every painted cell to be dim. Used by reasoning blocks so
+     * the model's internal monologue reads as a quieter aside even
+     * when the markdown has bold/colored runs of its own. */
+    void setDimAll(bool dim) { forceDim = dim; }
+    bool isDimAll() const { return forceDim; }
+
     void layout(int width) override;
     int  rowCount() const override;
     void paintRow(
@@ -50,6 +56,7 @@ private:
      * after a mutation or width change. */
     QString                     source;
     QList<QList<QTuiStyledRun>> rows;
+    bool                        forceDim = false;
 };
 
 #endif // QTUIASSISTANTTEXTBLOCK_H

@@ -73,6 +73,13 @@ public:
 
     int totalLines() const { return static_cast<int>(blocks.size()); }
 
+    /* Non-owning pointer to the last block in the scrollback (or
+     * nullptr if empty). Lets a streaming consumer detect when an
+     * unrelated block has landed in between two chunks so it can
+     * start a fresh block instead of retroactively appending out of
+     * visual order. */
+    QTuiBlock *lastBlock() const { return blocks.empty() ? nullptr : blocks.back().get(); }
+
     /* Get all content as plain text (for dumping after alt screen exit) */
     QString toPlainText() const;
 
