@@ -2,7 +2,10 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "tui/qtuiscrollview.h"
+
 #include "tui/qtuiwidget.h"
+
+#include <utility>
 
 namespace {
 
@@ -33,34 +36,32 @@ QList<QString> softWrap(const QString &text, int maxWidth, const QString &contin
 
     QString current;
     int     currentWidth = 0;
-    int     lastBreak    = -1; /* last space index in current buffer */
+    int     lastBreak    = -1;
     for (int idx = 0; idx < text.size(); ++idx) {
-        const QChar ch    = text.at(idx);
-        const int   chWid = QTuiText::isWideChar(ch.unicode()) ? 2 : 1;
+        const QChar character = text.at(idx);
+        const int   chWid     = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
         if (currentWidth + chWid > budget() && !current.isEmpty()) {
             if (lastBreak > 0) {
-                /* Break at the last space, carry the tail forward. */
                 QString head = current.left(lastBreak);
                 QString tail = current.mid(lastBreak + 1);
                 finalize(head);
                 current      = tail;
                 currentWidth = 0;
-                for (const QChar tc : tail) {
-                    currentWidth += QTuiText::isWideChar(tc.unicode()) ? 2 : 1;
+                for (const QChar tail_ch : tail) {
+                    currentWidth += QTuiText::isWideChar(tail_ch.unicode()) ? 2 : 1;
                 }
                 lastBreak = -1;
             } else {
-                /* Token wider than the row: hard-break. */
                 finalize(current);
                 current.clear();
                 currentWidth = 0;
                 lastBreak    = -1;
             }
         }
-        if (ch == QLatin1Char(' ')) {
+        if (character == QLatin1Char(' ')) {
             lastBreak = current.size();
         }
-        current.append(ch);
+        current.append(character);
         currentWidth += chWid;
     }
     if (!current.isEmpty() || out.isEmpty()) {
@@ -69,11 +70,6 @@ QList<QString> softWrap(const QString &text, int maxWidth, const QString &contin
     return out;
 }
 
-/* Soft-wrap a styled-runs line to maxWidth visual cells while keeping
- * the per-character style attribution intact. The output is a sequence
- * of rows, each itself a list of runs whose concatenated text has visual
- * width <= maxWidth. Wrapping prefers space boundaries; tokens wider
- * than maxWidth are hard-broken. */
 QList<QList<QTuiStyledRun>> wrapStyledRuns(const QList<QTuiStyledRun> &runs, int maxWidth)
 {
     QList<QList<QTuiStyledRun>> out;
@@ -84,72 +80,65 @@ QList<QList<QTuiStyledRun>> wrapStyledRuns(const QList<QTuiStyledRun> &runs, int
         out.append(runs);
         return out;
     }
-
-    /* Flatten to a per-char stream tagged with the source-run index so
-     * we can later regroup consecutive same-style chars after wrap. */
     struct CharCell
     {
-        QChar ch;
+        QChar character;
         int   runIdx;
         int   width;
     };
     QList<CharCell> cells;
     cells.reserve(256);
     for (int idx = 0; idx < runs.size(); ++idx) {
-        const QString &text = runs[idx].text;
-        for (const QChar character : text) {
+        for (const QChar character : runs[idx].text) {
             const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
-            cells.append({.ch = character, .runIdx = idx, .width = chW});
+            cells.append({.character = character, .runIdx = idx, .width = chW});
         }
     }
     if (cells.isEmpty()) {
         out.append(runs);
         return out;
     }
-
     auto regroup = [&](int begin, int end) -> QList<QTuiStyledRun> {
         QList<QTuiStyledRun> rowRuns;
         if (begin >= end) {
             return rowRuns;
         }
-        int           curRun = cells[begin].runIdx;
-        QTuiStyledRun proto  = runs[curRun];
+        int           current = cells[begin].runIdx;
+        QTuiStyledRun proto   = runs[current];
         proto.text.clear();
         for (int idx = begin; idx < end; ++idx) {
-            if (cells[idx].runIdx != curRun) {
+            if (cells[idx].runIdx != current) {
                 if (!proto.text.isEmpty()) {
                     rowRuns.append(proto);
                 }
-                curRun     = cells[idx].runIdx;
-                proto      = runs[curRun];
+                current    = cells[idx].runIdx;
+                proto      = runs[current];
                 proto.text = QString();
             }
-            proto.text.append(cells[idx].ch);
+            proto.text.append(cells[idx].character);
         }
         if (!proto.text.isEmpty()) {
             rowRuns.append(proto);
         }
         return rowRuns;
     };
-
     int rowStart  = 0;
     int rowWidth  = 0;
     int lastSpace = -1;
     for (int idx = 0; idx < cells.size(); ++idx) {
         const auto &cell = cells[idx];
         if (rowWidth + cell.width > maxWidth && idx > rowStart) {
-            int breakAt = (lastSpace > rowStart) ? lastSpace : idx;
+            const int breakAt = (lastSpace > rowStart) ? lastSpace : idx;
             out.append(regroup(rowStart, breakAt));
-            /* Skip the breaking space itself when we wrapped on one. */
-            int next  = (lastSpace > rowStart) ? (breakAt + 1) : breakAt;
-            rowStart  = next;
-            rowWidth  = 0;
-            lastSpace = -1;
+            const int next = (lastSpace > rowStart) ? (breakAt + 1) : breakAt;
+            rowStart       = next;
+            rowWidth       = 0;
+            lastSpace      = -1;
             for (int back = rowStart; back < idx; ++back) {
                 rowWidth += cells[back].width;
             }
         }
-        if (cell.ch == QLatin1Char(' ')) {
+        if (cell.character == QLatin1Char(' ')) {
             lastSpace = idx;
         }
         rowWidth += cell.width;
@@ -163,15 +152,169 @@ QList<QList<QTuiStyledRun>> wrapStyledRuns(const QList<QTuiStyledRun> &runs, int
     return out;
 }
 
+/* Block adapter: a single source line of plain text with a LineStyle.
+ * Wraps via softWrap and paints with putString so existing diff/dim/
+ * bold semantics remain bit-identical to the pre-block scrollview. */
+class PlainLineBlock : public QTuiBlock
+{
+public:
+    PlainLineBlock(QString text, QTuiScrollView::LineStyle style)
+        : sourceText(std::move(text))
+        , style(style)
+    {}
+
+    void layout(int width) override
+    {
+        if (!layoutDirty && layoutWidth == width) {
+            return;
+        }
+        layoutWidth = width;
+        layoutDirty = false;
+        wrapped.clear();
+        if (sourceText.isEmpty()) {
+            wrapped.append(QString());
+            return;
+        }
+        wrapped = softWrap(sourceText, width, continuationPrefix());
+    }
+
+    int rowCount() const override { return static_cast<int>(wrapped.size()); }
+
+    void paintRow(
+        QTuiScreen &screen,
+        int         screenRow,
+        int         viewportRow,
+        int         xOffset,
+        int         width,
+        bool        focused,
+        bool        selected) const override
+    {
+        Q_UNUSED(xOffset);
+        Q_UNUSED(width);
+        Q_UNUSED(focused);
+        Q_UNUSED(selected);
+        if (viewportRow < 0 || viewportRow >= wrapped.size()) {
+            return;
+        }
+        bool isDim  = (style == QTuiScrollView::Dim) || (style == QTuiScrollView::DiffContext);
+        bool isBold = (style == QTuiScrollView::Bold) || (style == QTuiScrollView::DiffHunk);
+        QTuiFgColor fgColor = QTuiFgColor::Default;
+        switch (style) {
+        case QTuiScrollView::DiffAdd:
+            fgColor = QTuiFgColor::Green;
+            break;
+        case QTuiScrollView::DiffDel:
+            fgColor = QTuiFgColor::Red;
+            break;
+        case QTuiScrollView::DiffHunk:
+            fgColor = QTuiFgColor::Yellow;
+            break;
+        default:
+            break;
+        }
+        screen.putString(0, screenRow, wrapped[viewportRow], isBold, isDim, false, fgColor);
+    }
+
+    QString toPlainText() const override { return sourceText; }
+
+private:
+    QString continuationPrefix() const
+    {
+        switch (style) {
+        case QTuiScrollView::DiffAdd:
+        case QTuiScrollView::DiffDel:
+        case QTuiScrollView::DiffContext:
+            return QStringLiteral(" ");
+        default:
+            return {};
+        }
+    }
+
+    QString                   sourceText;
+    QTuiScrollView::LineStyle style;
+    QList<QString>            wrapped;
+};
+
+/* Block adapter: a single source line of styled runs (markdown
+ * inline output, status-line snippets, etc.). */
+class StyledLineBlock : public QTuiBlock
+{
+public:
+    explicit StyledLineBlock(QList<QTuiStyledRun> runs)
+        : sourceRuns(std::move(runs))
+    {}
+
+    void layout(int width) override
+    {
+        if (!layoutDirty && layoutWidth == width) {
+            return;
+        }
+        layoutWidth = width;
+        layoutDirty = false;
+        wrapped     = wrapStyledRuns(sourceRuns, width);
+        if (wrapped.isEmpty()) {
+            wrapped.append(QList<QTuiStyledRun>{});
+        }
+    }
+
+    int rowCount() const override { return static_cast<int>(wrapped.size()); }
+
+    void paintRow(
+        QTuiScreen &screen,
+        int         screenRow,
+        int         viewportRow,
+        int         xOffset,
+        int         width,
+        bool        focused,
+        bool        selected) const override
+    {
+        Q_UNUSED(xOffset);
+        Q_UNUSED(focused);
+        Q_UNUSED(selected);
+        if (viewportRow < 0 || viewportRow >= wrapped.size()) {
+            return;
+        }
+        int col = 0;
+        for (const QTuiStyledRun &run : wrapped[viewportRow]) {
+            for (const QChar character : run.text) {
+                if (col >= width) {
+                    return;
+                }
+                QTuiCell &cell = screen.at(col, screenRow);
+                cell.character = character;
+                cell.bold      = run.bold;
+                cell.italic    = run.italic;
+                cell.dim       = run.dim;
+                cell.underline = run.underline;
+                cell.inverted  = false;
+                cell.fgColor   = run.fg;
+                cell.bgColor   = run.bg;
+                col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+            }
+        }
+    }
+
+    QString toPlainText() const override
+    {
+        QString out;
+        for (const QTuiStyledRun &run : sourceRuns) {
+            out += run.text;
+        }
+        return out;
+    }
+
+private:
+    QList<QTuiStyledRun>        sourceRuns;
+    QList<QList<QTuiStyledRun>> wrapped;
+};
+
 } // namespace
 
 void QTuiScrollView::appendLine(const QString &text, LineStyle style)
 {
-    lines.append({.text = text, .style = style, .runs = {}});
-
-    /* Enforce max buffer depth */
-    while (lines.size() > MAX_LINES) {
-        lines.removeFirst();
+    blocks.push_back(std::make_unique<PlainLineBlock>(text, style));
+    while (static_cast<int>(blocks.size()) > MAX_BLOCKS) {
+        blocks.erase(blocks.begin());
         if (scrollOffset > 0) {
             scrollOffset--;
         }
@@ -180,10 +323,9 @@ void QTuiScrollView::appendLine(const QString &text, LineStyle style)
 
 void QTuiScrollView::appendStyledLine(const QList<QTuiStyledRun> &runs)
 {
-    lines.append({.text = QString(), .style = Styled, .runs = runs});
-
-    while (lines.size() > MAX_LINES) {
-        lines.removeFirst();
+    blocks.push_back(std::make_unique<StyledLineBlock>(runs));
+    while (static_cast<int>(blocks.size()) > MAX_BLOCKS) {
+        blocks.erase(blocks.begin());
         if (scrollOffset > 0) {
             scrollOffset--;
         }
@@ -192,20 +334,32 @@ void QTuiScrollView::appendStyledLine(const QList<QTuiStyledRun> &runs)
 
 void QTuiScrollView::replaceLastStyledLine(const QList<QTuiStyledRun> &runs)
 {
-    if (lines.isEmpty()) {
+    if (blocks.empty()) {
         appendStyledLine(runs);
         return;
     }
-    lines.last() = {.text = QString(), .style = Styled, .runs = runs};
+    blocks.back() = std::make_unique<StyledLineBlock>(runs);
+}
+
+void QTuiScrollView::appendBlock(std::unique_ptr<QTuiBlock> block)
+{
+    if (block == nullptr) {
+        return;
+    }
+    blocks.push_back(std::move(block));
+    while (static_cast<int>(blocks.size()) > MAX_BLOCKS) {
+        blocks.erase(blocks.begin());
+        if (scrollOffset > 0) {
+            scrollOffset--;
+        }
+    }
 }
 
 void QTuiScrollView::appendPartial(const QString &text, LineStyle style)
 {
-    /* When the caller switches style mid-stream while a partial line is
-     * still pending, finalize that partial under its ORIGINAL style first
-     * — otherwise the new style would retroactively recolor the prior
-     * content (e.g. a diff render landing right after a streaming
-     * reasoning chunk would paint the unfinished sentence red). */
+    /* Style transition mid-stream: lock down the prior fragment under
+     * its original style first so a follow-up render does not
+     * retroactively recolor unfinished prose. */
     if (style != partialStyle && !partialLine.isEmpty()) {
         appendLine(partialLine, partialStyle);
         partialLine.clear();
@@ -213,7 +367,6 @@ void QTuiScrollView::appendPartial(const QString &text, LineStyle style)
     partialStyle = style;
     partialLine += text;
 
-    /* Split on newlines */
     while (true) {
         int idx = partialLine.indexOf('\n');
         if (idx < 0) {
@@ -226,122 +379,68 @@ void QTuiScrollView::appendPartial(const QString &text, LineStyle style)
 
 void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int width)
 {
-    /* Reserve 1 column for scrollbar */
     int contentWidth = width - 1;
     if (contentWidth < 1) {
         contentWidth = width;
     }
 
-    /* Flatten every stored line (plus the active streaming partial) into
-     * wrapped display rows so long paragraphs and CJK text spill onto
-     * additional rows instead of being truncated at the edge. Each
-     * source line may contribute one or more display rows. Styled rows
-     * carry per-run attributes; plain rows fall back to the single
-     * LineStyle enum. */
-    struct DisplayRow
-    {
-        QString              text;
-        LineStyle            style;
-        QList<QTuiStyledRun> runs;
-    };
-    QList<DisplayRow> displayRows;
-    displayRows.reserve(lines.size() + 8);
-
-    /* Diff lines carry a single +/-/space marker as their first column,
-     * so wrapped continuation rows get a 1-char space gutter to align
-     * the wrapped content under the original content's first character.
-     * Without this the second visual row sticks one column to the left
-     * and breaks the "single block of red/green" reading. */
-    auto continuationPrefixFor = [](LineStyle style) -> QString {
-        switch (style) {
-        case DiffAdd:
-        case DiffDel:
-        case DiffContext:
-            return QStringLiteral(" ");
-        default:
-            return {};
-        }
-    };
-
-    auto pushWrapped = [&](const QString &text, LineStyle style) {
-        if (text.isEmpty()) {
-            displayRows.append({.text = QString(), .style = style, .runs = {}});
-            return;
-        }
-        const QString contPrefix = continuationPrefixFor(style);
-        for (const QString &chunk : softWrap(text, contentWidth, contPrefix)) {
-            displayRows.append({.text = chunk, .style = style, .runs = {}});
-        }
-    };
-
-    auto pushStyled = [&](const QList<QTuiStyledRun> &runs) {
-        if (runs.isEmpty()) {
-            displayRows.append({.text = QString(), .style = Styled, .runs = {}});
-            return;
-        }
-        for (const auto &row : wrapStyledRuns(runs, contentWidth)) {
-            displayRows.append({.text = QString(), .style = Styled, .runs = row});
-        }
-    };
-
-    for (const Line &line : lines) {
-        if (line.style == Styled) {
-            pushStyled(line.runs);
-        } else {
-            pushWrapped(line.text, line.style);
-        }
+    /* Layout every block at the current width so per-block row counts
+     * stack into a single virtual row coordinate space. */
+    int totalVisible = 0;
+    for (const auto &block : blocks) {
+        block->layout(contentWidth);
+        totalVisible += block->rowCount();
     }
+
+    /* Streaming partial line is treated as a virtual trailing block
+     * for paint purposes. Avoids reallocating a real PlainLineBlock
+     * on every keystroke when the line will get absorbed on \n. */
+    QList<QString> partialRows;
     if (!partialLine.isEmpty()) {
-        pushWrapped(partialLine, partialStyle);
+        const QString contPrefix = (partialStyle == DiffAdd || partialStyle == DiffDel
+                                    || partialStyle == DiffContext)
+                                       ? QStringLiteral(" ")
+                                       : QString();
+        partialRows              = softWrap(partialLine, contentWidth, contPrefix);
+        totalVisible += partialRows.size();
     }
 
-    const int totalVisible = displayRows.size();
+    const int viewBottom = totalVisible - scrollOffset;
+    const int viewTop    = viewBottom - height;
 
-    /* Calculate viewport in display-row space so scrolling is smooth
-     * even when a single source line spans many rows. */
-    int viewBottom = totalVisible - scrollOffset;
-    int viewTop    = viewBottom - height;
-
-    for (int viewRow = 0; viewRow < height; viewRow++) {
-        int rowIdx  = viewTop + viewRow;
-        int screenY = startRow + viewRow;
-
-        if (rowIdx < 0 || rowIdx >= totalVisible) {
+    /* Walk blocks once, mapping viewport rows to (block, rowInBlock). */
+    int globalRow = 0;
+    for (const auto &block : blocks) {
+        const int rows = block->rowCount();
+        if (globalRow + rows <= viewTop) {
+            globalRow += rows;
             continue;
         }
-
-        const QString  &text  = displayRows[rowIdx].text;
-        const LineStyle style = displayRows[rowIdx].style;
-
-        if (style == Styled) {
-            int col = 0;
-            for (const QTuiStyledRun &run : displayRows[rowIdx].runs) {
-                for (const QChar character : run.text) {
-                    if (col >= contentWidth) {
-                        break;
-                    }
-                    QTuiCell &cell = screen.at(col, screenY);
-                    cell.character = character;
-                    cell.bold      = run.bold;
-                    cell.italic    = run.italic;
-                    cell.dim       = run.dim;
-                    cell.underline = run.underline;
-                    cell.inverted  = false;
-                    cell.fgColor   = run.fg;
-                    cell.bgColor   = run.bg;
-                    col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
-                }
-                if (col >= contentWidth) {
-                    break;
-                }
+        if (globalRow >= viewBottom) {
+            break;
+        }
+        for (int rowInBlock = 0; rowInBlock < rows; ++rowInBlock) {
+            const int gRow = globalRow + rowInBlock;
+            if (gRow < viewTop || gRow >= viewBottom) {
+                continue;
             }
+            const int screenY = startRow + (gRow - viewTop);
+            block->paintRow(screen, screenY, rowInBlock, 0, contentWidth, false, false);
+        }
+        globalRow += rows;
+    }
+
+    /* Paint any partial-line rows after the blocks. */
+    for (int idx = 0; idx < partialRows.size(); ++idx) {
+        const int gRow = globalRow + idx;
+        if (gRow < viewTop || gRow >= viewBottom) {
             continue;
         }
-
-        bool        isDim   = (style == Dim) || (style == DiffContext);
-        bool        isBold  = (style == Bold) || (style == DiffHunk);
+        const int   screenY = startRow + (gRow - viewTop);
+        bool        isDim   = (partialStyle == Dim) || (partialStyle == DiffContext);
+        bool        isBold  = (partialStyle == Bold) || (partialStyle == DiffHunk);
         QTuiFgColor fgColor = QTuiFgColor::Default;
-        switch (style) {
+        switch (partialStyle) {
         case DiffAdd:
             fgColor = QTuiFgColor::Green;
             break;
@@ -351,46 +450,33 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
         case DiffHunk:
             fgColor = QTuiFgColor::Yellow;
             break;
-        case Normal:
-        case Dim:
-        case Bold:
-        case DiffContext:
-        case Styled:
         default:
             break;
         }
-        screen.putString(0, screenY, text, isBold, isDim, /*inverted=*/false, fgColor);
+        screen.putString(0, screenY, partialRows[idx], isBold, isDim, false, fgColor);
     }
 
-    /* Render ASCII scrollbar on the right column */
+    /* ASCII scrollbar on the rightmost column. */
     if (width > 1) {
-        int scrollCol = width - 1;
-
+        const int scrollCol = width - 1;
         if (totalVisible <= height || height <= 0) {
-            /* No scrollbar needed — all content fits */
-            for (int row = 0; row < height; row++) {
+            for (int row = 0; row < height; ++row) {
                 screen.putChar(scrollCol, startRow + row, ' ', false, true);
             }
         } else {
-            /* Calculate thumb position and size with clamping */
-            int thumbSize   = qBound(1, height * height / totalVisible, height);
-            int scrollRange = totalVisible - height;
-            int clampedOff  = qBound(0, scrollOffset, scrollRange);
-            int currentPos  = scrollRange - clampedOff;
-            int thumbTop    = 0;
+            int       thumbSize   = qBound(1, height * height / totalVisible, height);
+            const int scrollRange = totalVisible - height;
+            const int clampedOff  = qBound(0, scrollOffset, scrollRange);
+            const int currentPos  = scrollRange - clampedOff;
+            int       thumbTop    = 0;
             if (scrollRange > 0) {
                 thumbTop = currentPos * (height - thumbSize) / scrollRange;
             }
-            thumbTop        = qBound(0, thumbTop, height - thumbSize);
-            int thumbBottom = thumbTop + thumbSize;
-
-            for (int row = 0; row < height; row++) {
-                QChar scrollChar;
-                if (row >= thumbTop && row < thumbBottom) {
-                    scrollChar = '#'; /* Thumb */
-                } else {
-                    scrollChar = '|'; /* Track */
-                }
+            thumbTop              = qBound(0, thumbTop, height - thumbSize);
+            const int thumbBottom = thumbTop + thumbSize;
+            for (int row = 0; row < height; ++row) {
+                const QChar scrollChar = (row >= thumbTop && row < thumbBottom) ? QChar('#')
+                                                                                : QChar('|');
                 screen.putChar(scrollCol, startRow + row, scrollChar, false, true);
             }
         }
@@ -399,10 +485,10 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
 
 void QTuiScrollView::scrollUp(int count)
 {
-    /* Display-row count varies with terminal width, so clamp loosely here
-     * against a pessimistic upper bound and let render()'s viewport math
-     * ignore rows past the top of the wrapped content. */
-    const int softCap = (static_cast<int>(lines.size()) + 1) * 8;
+    /* Soft cap: blocks count is a lower bound on display-row count.
+     * The actual cap depends on width-driven wrapping; render() clamps
+     * once it knows totalVisible. */
+    const int softCap = (static_cast<int>(blocks.size()) + 1) * 8;
     scrollOffset      = qMin(scrollOffset + count, qMax(0, softCap));
 }
 
@@ -424,15 +510,9 @@ bool QTuiScrollView::isAtBottom() const
 QString QTuiScrollView::toPlainText() const
 {
     QString result;
-    for (const auto &line : lines) {
-        if (line.style == Styled) {
-            for (const QTuiStyledRun &run : line.runs) {
-                result += run.text;
-            }
-            result += QLatin1Char('\n');
-        } else {
-            result += line.text + QLatin1Char('\n');
-        }
+    for (const auto &block : blocks) {
+        result += block->toPlainText();
+        result += QLatin1Char('\n');
     }
     if (!partialLine.isEmpty()) {
         result += partialLine;
@@ -442,7 +522,7 @@ QString QTuiScrollView::toPlainText() const
 
 void QTuiScrollView::clear()
 {
-    lines.clear();
+    blocks.clear();
     partialLine.clear();
     scrollOffset = 0;
 }

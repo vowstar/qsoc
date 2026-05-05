@@ -4,10 +4,14 @@
 #ifndef QTUISCROLLVIEW_H
 #define QTUISCROLLVIEW_H
 
+#include "tui/qtuiblock.h"
 #include "tui/qtuiscreen.h"
 
 #include <QList>
 #include <QStringList>
+
+#include <memory>
+#include <vector>
 
 /**
  * @brief Scrollable text content area with line history
@@ -44,6 +48,10 @@ public:
      * trailing duplicates. No-op if the buffer is empty. */
     void replaceLastStyledLine(const QList<QTuiStyledRun> &runs);
 
+    /* Append a generic block. Takes ownership; the scrollview is the
+     * sole owner of every block in its history. */
+    void appendBlock(std::unique_ptr<QTuiBlock> block);
+
     /* Append partial text (streaming). Completes on \n. */
     void appendPartial(const QString &text, LineStyle style = Normal);
 
@@ -51,7 +59,8 @@ public:
      * Reserves 1 column on the right for ASCII scrollbar. */
     void render(QTuiScreen &screen, int startRow, int height, int width);
 
-    static constexpr int MAX_LINES = 65536;
+    static constexpr int MAX_BLOCKS = 65536;
+    static constexpr int MAX_LINES  = MAX_BLOCKS; /* Deprecated alias */
 
     /* Scroll control */
     void scrollUp(int lines = 1);
@@ -62,23 +71,16 @@ public:
     /* Clear all content */
     void clear();
 
-    int totalLines() const { return static_cast<int>(lines.size()); }
+    int totalLines() const { return static_cast<int>(blocks.size()); }
 
     /* Get all content as plain text (for dumping after alt screen exit) */
     QString toPlainText() const;
 
 private:
-    struct Line
-    {
-        QString              text;
-        LineStyle            style = Normal;
-        QList<QTuiStyledRun> runs; /* Populated when style == Styled */
-    };
-
-    QList<Line> lines;
-    QString     partialLine; /* Current incomplete line (streaming) */
-    LineStyle   partialStyle = Normal;
-    int         scrollOffset = 0; /* 0 = at bottom (auto-scroll) */
+    std::vector<std::unique_ptr<QTuiBlock>> blocks;
+    QString                                 partialLine; /* Current incomplete line */
+    LineStyle                               partialStyle = Normal;
+    int                                     scrollOffset = 0; /* 0 = at bottom */
 };
 
 #endif // QTUISCROLLVIEW_H
