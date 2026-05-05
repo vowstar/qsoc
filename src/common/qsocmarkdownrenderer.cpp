@@ -214,19 +214,22 @@ void emitCodeBlock(Walker &walker, cmark_node *codeNode)
         header.kind         = QSocMarkdownRenderer::Kind::CodeBlock;
         header.codeLanguage = language;
         QSocMarkdownRenderer::StyledRun bar;
-        bar.text = QStringLiteral("┄┄┄ ");
-        bar.dim  = true;
-        bar.fg   = QTuiFgColor::Cyan;
+        bar.text       = QStringLiteral("┄┄┄ ");
+        bar.dim        = true;
+        bar.fg         = QTuiFgColor::Cyan;
+        bar.decorative = true;
         header.runs.append(bar);
         QSocMarkdownRenderer::StyledRun label;
-        label.text = language.isEmpty() ? QStringLiteral("code") : language;
-        label.dim  = true;
-        label.fg   = QTuiFgColor::Cyan;
+        label.text       = language.isEmpty() ? QStringLiteral("code") : language;
+        label.dim        = true;
+        label.fg         = QTuiFgColor::Cyan;
+        label.decorative = true;
         header.runs.append(label);
         QSocMarkdownRenderer::StyledRun bar2;
-        bar2.text = QStringLiteral(" ┄┄┄");
-        bar2.dim  = true;
-        bar2.fg   = QTuiFgColor::Cyan;
+        bar2.text       = QStringLiteral(" ┄┄┄");
+        bar2.dim        = true;
+        bar2.fg         = QTuiFgColor::Cyan;
+        bar2.decorative = true;
         header.runs.append(bar2);
         walker.lines.append(header);
     }
@@ -244,9 +247,10 @@ void emitCodeBlock(Walker &walker, cmark_node *codeNode)
         line.kind         = QSocMarkdownRenderer::Kind::CodeBlock;
         line.codeLanguage = language;
         QSocMarkdownRenderer::StyledRun gutter;
-        gutter.text = QStringLiteral("▎ ");
-        gutter.dim  = true;
-        gutter.fg   = QTuiFgColor::Cyan;
+        gutter.text       = QStringLiteral("▎ ");
+        gutter.dim        = true;
+        gutter.fg         = QTuiFgColor::Cyan;
+        gutter.decorative = true;
         line.runs.append(gutter);
         /* Tokenise the line by language; the highlighter returns one
          * or more colored dim runs that the renderer appends in order
@@ -308,8 +312,9 @@ void flushPendingPrefix(Walker &walker)
     }
     if (!walker.pendingBlockquotePrefix.isEmpty()) {
         QSocMarkdownRenderer::StyledRun run;
-        run.text = walker.pendingBlockquotePrefix;
-        run.dim  = true;
+        run.text       = walker.pendingBlockquotePrefix;
+        run.dim        = true;
+        run.decorative = true;
         walker.currentLine.runs.prepend(run);
         walker.pendingBlockquotePrefix.clear();
     }
@@ -512,8 +517,9 @@ QString padToWidth(const QString &text, int width)
 QSocMarkdownRenderer::StyledRun dimRun(const QString &text)
 {
     QSocMarkdownRenderer::StyledRun run;
-    run.text = text;
-    run.dim  = true;
+    run.text       = text;
+    run.dim        = true;
+    run.decorative = true;
     return run;
 }
 

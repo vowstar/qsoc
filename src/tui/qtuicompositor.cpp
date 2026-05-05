@@ -767,7 +767,14 @@ void QTuiCompositor::applySelectionHighlight()
         int colEnd   = (row == endRow) ? endCol : screen.width() - 1;
         for (int col = colBegin; col <= colEnd && col < screen.width(); col++) {
             QTuiCell &cell = screen.at(col, row);
-            cell.inverted  = !cell.inverted;
+            /* Decorative cells (gutters, banners, frame borders, the
+             * scrollbar track / thumb) are excluded from the visible
+             * selection so the user sees exactly which payload cells
+             * will end up on the clipboard. */
+            if (cell.decorative) {
+                continue;
+            }
+            cell.inverted = !cell.inverted;
         }
     }
 }
@@ -784,14 +791,20 @@ void QTuiCompositor::copySelectionToClipboard()
         std::swap(startCol, endCol);
     }
 
-    /* Extract text from screen buffer, trimming trailing spaces per row. */
+    /* Extract text from screen buffer, skipping decorative cells (so
+     * the clipboard never receives gutter / banner / frame chars or
+     * the scrollbar track) and trimming trailing spaces per row. */
     QString text;
     for (int row = startRow; row <= endRow && row < screen.height(); row++) {
         int     colBegin = (row == startRow) ? startCol : 0;
         int     colEnd   = (row == endRow) ? endCol : screen.width() - 1;
         QString line;
         for (int col = colBegin; col <= colEnd && col < screen.width(); col++) {
-            line += screen.at(col, row).character;
+            const QTuiCell &cell = screen.at(col, row);
+            if (cell.decorative) {
+                continue;
+            }
+            line += cell.character;
         }
         /* Trim trailing spaces from each line. */
         while (line.endsWith(QLatin1Char(' '))) {

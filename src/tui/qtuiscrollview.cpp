@@ -280,16 +280,17 @@ public:
                 if (col >= width) {
                     return;
                 }
-                QTuiCell &cell = screen.at(col, screenRow);
-                cell.character = character;
-                cell.bold      = run.bold;
-                cell.italic    = run.italic;
-                cell.dim       = run.dim;
-                cell.underline = run.underline;
-                cell.inverted  = false;
-                cell.fgColor   = run.fg;
-                cell.bgColor   = run.bg;
-                cell.hyperlink = run.hyperlink;
+                QTuiCell &cell  = screen.at(col, screenRow);
+                cell.character  = character;
+                cell.bold       = run.bold;
+                cell.italic     = run.italic;
+                cell.dim        = run.dim;
+                cell.underline  = run.underline;
+                cell.inverted   = false;
+                cell.fgColor    = run.fg;
+                cell.bgColor    = run.bg;
+                cell.hyperlink  = run.hyperlink;
+                cell.decorative = run.decorative;
                 col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
             }
         }
@@ -494,9 +495,11 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
         const int   scrollCol = width - 1;
         const QChar trackChar(0x2502); /* │ */
         const QChar thumbChar(0x2588); /* █ */
+        auto markDecorative = [&](int rowY) { screen.at(scrollCol, rowY).decorative = true; };
         if (totalVisible <= height || height <= 0) {
             for (int row = 0; row < height; ++row) {
                 screen.putChar(scrollCol, startRow + row, trackChar, false, true);
+                markDecorative(startRow + row);
             }
         } else {
             int       thumbSize   = qBound(1, height * height / totalVisible, height);
@@ -519,6 +522,7 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
                     character,
                     /*bold=*/inThumb,
                     /*dim=*/!inThumb);
+                markDecorative(startRow + row);
             }
         }
     }
