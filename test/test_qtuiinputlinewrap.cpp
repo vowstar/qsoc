@@ -4,6 +4,7 @@
 #include "qsoc_test.h"
 #include "tui/qtuiinputline.h"
 #include "tui/qtuiscreen.h"
+#include "tui/qtuiwidget.h"
 
 #include <QString>
 #include <QtTest>
@@ -13,8 +14,13 @@ QString rowOf(const QTuiScreen &screen, int row, int width)
 {
     QString out;
     out.reserve(width);
-    for (int col = 0; col < width; ++col) {
-        out.append(screen.at(col, row).character);
+    for (int col = 0; col < width;) {
+        const QTuiCell &cell = screen.at(col, row);
+        out.append(cell.character);
+        /* Wide chars own two terminal cells; the second cell is a
+         * blank placeholder set by paintRow. Mirror the toAnsi skip
+         * here so the extracted text reflects what the user sees. */
+        col += QTuiText::isWideChar(cell.character.unicode()) ? 2 : 1;
     }
     return out;
 }
