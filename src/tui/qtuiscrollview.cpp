@@ -289,6 +289,7 @@ public:
                 cell.inverted  = false;
                 cell.fgColor   = run.fg;
                 cell.bgColor   = run.bg;
+                cell.hyperlink = run.hyperlink;
                 col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
             }
         }

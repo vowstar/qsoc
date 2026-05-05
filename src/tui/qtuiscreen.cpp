@@ -151,6 +151,7 @@ QString QTuiScreen::toAnsi()
     bool        currentInverted  = false;
     QTuiFgColor currentColor     = QTuiFgColor::Default;
     QTuiBgColor currentBg        = BG_DEFAULT;
+    QString     currentLink;
 
     for (int row = 0; row < rows; row++) {
         /* Check if this row changed (skip unchanged rows for performance) */
@@ -236,6 +237,21 @@ QString QTuiScreen::toAnsi()
                 currentBg        = cell.bgColor;
             }
 
+            /* OSC 8 hyperlink wrapping: open when entering a non-empty
+             * link target, close when leaving it. The cell-level state
+             * machine emits each transition exactly once so adjacent
+             * cells with the same hyperlink share one open/close pair. */
+            if (cell.hyperlink != currentLink) {
+                if (!currentLink.isEmpty()) {
+                    output += "\x1b]8;;\x1b\\";
+                }
+                if (!cell.hyperlink.isEmpty()) {
+                    output += "\x1b]8;;";
+                    output += cell.hyperlink;
+                    output += "\x1b\\";
+                }
+                currentLink = cell.hyperlink;
+            }
             output += cell.character;
             col += charWidth;
         }
@@ -244,6 +260,12 @@ QString QTuiScreen::toAnsi()
         output += "\033[K";
     }
 
+    /* Close any in-flight OSC 8 hyperlink so the cursor leaves the
+     * frame in a clean state — otherwise text typed in the input
+     * line would inherit the last cell's link target. */
+    if (!currentLink.isEmpty()) {
+        output += "\x1b]8;;\x1b\\";
+    }
     /* Reset attributes at end */
     if (currentBold || currentDim || currentInverted || currentColor != QTuiFgColor::Default
         || currentBg != BG_DEFAULT) {

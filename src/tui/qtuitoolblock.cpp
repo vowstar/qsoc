@@ -194,6 +194,7 @@ void QTuiToolBlock::paintRow(
             cell.inverted  = false;
             cell.fgColor   = run.fg;
             cell.bgColor   = run.bg;
+            cell.hyperlink = run.hyperlink;
             painted += chW;
         }
     }

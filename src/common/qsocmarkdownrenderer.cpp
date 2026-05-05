@@ -57,6 +57,10 @@ struct InlineStyle
      * heading runs inside acquire italic + dim styling and land on
      * BlockQuote-kind lines. */
     int blockQuote = 0;
+    /* Active hyperlink target while traversing a NODE_LINK subtree.
+     * Empty when no link is in flight. cmark-gfm guarantees no nested
+     * links so a single string is enough. */
+    QString hyperlink;
 
     bool isBold() const { return bold > 0; }
     bool isItalic() const { return italic > 0 || blockQuote > 0; }
@@ -130,13 +134,20 @@ struct Walker
             return;
         }
         QSocMarkdownRenderer::StyledRun run;
-        run.text   = text;
-        run.bold   = style.isBold();
-        run.italic = style.isItalic();
+        run.text      = text;
+        run.bold      = style.isBold();
+        run.italic    = style.isItalic();
+        run.hyperlink = style.hyperlink;
         if (style.isInlineCode()) {
             run.fg = QTuiFgColor::Yellow;
         } else if (style.isInBlockQuote()) {
             run.dim = true;
+        }
+        if (!run.hyperlink.isEmpty()) {
+            /* Distinct color + underline so links read as clickable
+             * even on terminals that ignore the OSC 8 wrapping. */
+            run.fg        = QTuiFgColor::Blue;
+            run.underline = true;
         }
         currentLine.runs.append(run);
     }
@@ -782,11 +793,17 @@ void walkDocument(cmark_node *root, Walker &walker)
             break;
 
         case CMARK_NODE_LINK:
-            /* OSC 8 hyperlinks are a future commit; for now flatten the
-             * link text and drop the URL to avoid decorating prose with
-             * markdown literal `[text](url)`. */
-            if (!isEnter) {
-                /* No special action on exit. */
+            /* Push / pop the link URL on enter / exit so any text node
+             * inside this subtree picks up the OSC 8 target. cmark
+             * does not support nested links so a single-slot stack is
+             * sufficient. */
+            if (isEnter) {
+                const char *url = cmark_node_get_url(node);
+                if (url != nullptr) {
+                    walker.style.hyperlink = QString::fromUtf8(url);
+                }
+            } else {
+                walker.style.hyperlink.clear();
             }
             break;
 

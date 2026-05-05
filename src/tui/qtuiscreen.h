@@ -45,12 +45,19 @@ struct QTuiCell
     bool        inverted  = false;
     QTuiFgColor fgColor   = QTuiFgColor::Default;
     QTuiBgColor bgColor   = BG_DEFAULT;
+    /* Optional OSC 8 hyperlink target. Empty disables hyperlink mode
+     * for the cell. Modern terminals (iTerm2, VTE 0.50+, Alacritty,
+     * Kitty, foot, WezTerm) honour this; older ones ignore the OSC
+     * payload and just render the cell text, which is the desired
+     * graceful fallback. */
+    QString hyperlink;
 
     bool operator==(const QTuiCell &other) const
     {
         return character == other.character && bold == other.bold && italic == other.italic
                && dim == other.dim && underline == other.underline && inverted == other.inverted
-               && fgColor == other.fgColor && bgColor == other.bgColor;
+               && fgColor == other.fgColor && bgColor == other.bgColor
+               && hyperlink == other.hyperlink;
     }
     bool operator!=(const QTuiCell &other) const { return !(*this == other); }
 };
@@ -72,6 +79,10 @@ struct QTuiStyledRun
     bool        underline = false;
     QTuiFgColor fg        = QTuiFgColor::Default;
     QTuiBgColor bg        = BG_DEFAULT;
+    /* Optional OSC 8 link target. Mirrors QTuiCell::hyperlink so
+     * higher-level renderers can attach a click target to a run
+     * without poking at cells directly. */
+    QString hyperlink;
 };
 
 /**
