@@ -356,6 +356,31 @@ set(LIBSSH2_INCLUDE_DIRS
 set(LIBSSH2_LIBRARIES libssh2::libssh2_static)
 message(STATUS "Use local libssh2 library: ${LIBSSH2_LIBRARIES} ${LIBSSH2_INCLUDE_DIRS}")
 
+# CMARK-GFM (bundled, always static, drives Markdown rendering)
+# Upstream pins cmake_minimum_required(VERSION 3.6); CMake 4.x rejects
+# anything below 3.10 unless we override the minimum policy version.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.10 CACHE STRING "cmark-gfm policy floor" FORCE)
+set(CMARK_TESTS          OFF CACHE BOOL "disable cmark-gfm tests"      FORCE)
+set(CMARK_SHARED         OFF CACHE BOOL "cmark-gfm no shared"          FORCE)
+set(CMARK_STATIC         ON  CACHE BOOL "cmark-gfm static"             FORCE)
+set(CMARK_LIB_FUZZER     OFF CACHE BOOL "no libFuzzer harness"         FORCE)
+set(CMARK_FUZZ_QUADRATIC OFF CACHE BOOL "no quadratic fuzz harness"    FORCE)
+add_subdirectory(external/cmark-gfm EXCLUDE_FROM_ALL)
+# Upstream unconditionally adds an executable + install() rules; keep
+# them out of qsoc's default build / install set.
+set_target_properties(cmark-gfm PROPERTIES EXCLUDE_FROM_ALL ON)
+set(CMARK_GFM_INCLUDE_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/external/cmark-gfm/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/external/cmark-gfm/extensions"
+    "${CMAKE_CURRENT_BINARY_DIR}/external/cmark-gfm/src"
+    "${CMAKE_CURRENT_BINARY_DIR}/external/cmark-gfm/extensions"
+)
+set(CMARK_GFM_LIBRARIES
+    libcmark-gfm-extensions_static
+    libcmark-gfm_static
+)
+message(STATUS "Use local cmark-gfm library: ${CMARK_GFM_LIBRARIES}")
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "resource/*.qrc")
@@ -444,6 +469,7 @@ target_include_directories(qsoc_core SYSTEM PUBLIC
     "${REPLXX_INCLUDE_DIRS}"
     "${MBEDTLS_INCLUDE_DIRS}"
     "${LIBSSH2_INCLUDE_DIRS}"
+    "${CMARK_GFM_INCLUDE_DIRS}"
 )
 
 target_link_libraries(qsoc_core PUBLIC
@@ -467,6 +493,12 @@ target_link_libraries(qsoc_core PUBLIC
     ${FMT_LIBRARIES}
     ${REPLXX_LIBRARIES}
     ${LIBSSH2_LIBRARIES}
+    ${CMARK_GFM_LIBRARIES}
+)
+
+target_compile_definitions(qsoc_core PUBLIC
+    CMARK_GFM_STATIC_DEFINE
+    CMARK_GFM_EXTENSIONS_STATIC_DEFINE
 )
 
 if(WIN32)
