@@ -66,6 +66,7 @@
 #include "tui/qtuipathpicker.h"
 #include "tui/qtuiqueuedlist.h"
 #include "tui/qtuistatusbar.h"
+#include "tui/qtuitodoblock.h"
 #include "tui/qtuitodolist.h"
 
 #include <functional>
@@ -5296,6 +5297,12 @@ bool QSocCliWorker::runAgentLoop(
                         auto items = parseTodoListResult(result);
                         todoWidget.setItems(items);
                         /* Done items expire via the 30s tick() timer. */
+                        /* Snapshot the list into scrollback so the
+                         * conversation history shows what was on the
+                         * plan when the agent inspected it. The widget
+                         * version disappears as items expire; the
+                         * scrollback block is permanent. */
+                        compositor.contentView().appendBlock(std::make_unique<QTuiTodoBlock>(items));
                     } else if (toolName == "todo_add") {
                         auto item = parseTodoAddResult(result);
                         if (item.id >= 0) {
@@ -5806,6 +5813,12 @@ bool QSocCliWorker::runAgentLoop(
                         auto items = parseTodoListResult(result);
                         todoWidget.setItems(items);
                         /* Done items expire via the 30s tick() timer. */
+                        /* Snapshot the list into scrollback so the
+                         * conversation history shows what was on the
+                         * plan when the agent inspected it. The widget
+                         * version disappears as items expire; the
+                         * scrollback block is permanent. */
+                        compositor.contentView().appendBlock(std::make_unique<QTuiTodoBlock>(items));
                     } else if (toolName == "todo_add") {
                         auto item = parseTodoAddResult(result);
                         if (item.id >= 0) {
