@@ -148,18 +148,65 @@ private:
     class QTuiAssistantTextBlock *activeAssistant = nullptr;
     class QTuiAssistantTextBlock *activeReasoning = nullptr;
 
-    /* History of reasoning block raw pointers (oldest first). Used by
-     * the auto-fold policy: when a new reasoning block starts or the
-     * user moves on (assistant chunk arrives, plain print arrives),
-     * fold every block in this list so older monologue collapses to a
-     * one-line summary while only the freshest reasoning stays
-     * expanded. */
-    std::vector<class QTuiAssistantTextBlock *> reasoningHistory;
+    /* Active fenced-code-block cursors. The streaming markdown
+     * splitter creates one whenever a triple-backtick fence opens in
+     * the matching stream, and clears the pointer when the closing
+     * fence arrives. */
+    class QTuiCodeBlock *activeAssistantCode = nullptr;
+    class QTuiCodeBlock *activeReasoningCode = nullptr;
+
+    /* Carry buffers for incomplete trailing lines: streaming chunks
+     * can split a triple-backtick fence across two messages, so the
+     * splitter only commits a line when it sees a newline. The
+     * `committed*Source` strings hold the prose lines already
+     * finalised into the active text block; the active block's
+     * markdown shows committed + pending so the user sees partial
+     * lines instantly even before the next \n arrives. */
+    QString pendingAssistantLine;
+    QString pendingReasoningLine;
+    QString committedAssistantSource;
+    QString committedReasoningSource;
+
+    /* Group identifiers tie all blocks created during one assistant
+     * (or reasoning) run together, so the auto-fold policy can collapse
+     * an entire prior reasoning monologue (text + code) as a unit. The
+     * "current" id is non-zero while a stream is in flight; reset to
+     * zero when the run ends so the next chunk knows to allocate a
+     * fresh group. */
+    int nextGroupId             = 0;
+    int currentAssistantGroupId = 0;
+    int currentReasoningGroupId = 0;
+
+    /* Reasoning-run tracking grouped by run id. Older groups are
+     * folded as a whole when a new reasoning group starts or
+     * non-reasoning content arrives. */
+    struct ReasoningGroup
+    {
+        int                            groupId;
+        std::vector<class QTuiBlock *> blocks;
+    };
+    std::vector<ReasoningGroup> reasoningHistory;
 
     /* Active tool-call cursor. Cleared by finishToolUse() and any
      * intervening printContent / streaming chunk so the next tool
      * call lands on a fresh block. */
     class QTuiToolBlock *activeTool = nullptr;
+
+    enum class StreamMode : std::uint8_t {
+        Assistant,
+        Reasoning,
+    };
+
+    /* Streaming markdown splitter shared by assistant and reasoning
+     * streams. Routes incoming chunks line-by-line into either the
+     * matching active text block or a freshly-created QTuiCodeBlock,
+     * depending on whether triple-backtick fences are open. */
+    void feedSplitChunk(const QString &chunk, StreamMode mode);
+
+    /* Flush remaining pending-line content into whichever active block
+     * is current, then clear the splitter cursors and group id for the
+     * given stream so the next chunk starts a fresh run. */
+    void sealStream(StreamMode mode);
 
     /* Terminal management */
     void enterAltScreen();

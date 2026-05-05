@@ -4,6 +4,7 @@
 #include "tui/qtuicompositor.h"
 
 #include "tui/qtuiassistanttextblock.h"
+#include "tui/qtuicodeblock.h"
 #include "tui/qtuitoolblock.h"
 #include "tui/qtuiuserblock.h"
 #include "tui/qtuiwidget.h"
@@ -116,83 +117,222 @@ void QTuiCompositor::setTitle(const QString &newTitle)
 void QTuiCompositor::printContent(const QString &content, QTuiScrollView::LineStyle style)
 {
     /* Anything routed through printContent counts as non-streaming
-     * output; seal any pending assistant/reasoning blocks first so
-     * the next streaming chunk starts after this content rather than
-     * back-filling onto the wrong block. Folding the reasoning
-     * history at the same time keeps older monologue collapsed when
-     * the user has clearly moved on. */
-    activeAssistant = nullptr;
-    activeReasoning = nullptr;
-    for (auto *block : reasoningHistory) {
-        block->setFolded(true);
+     * output; seal both assistant and reasoning streams first so the
+     * next streaming chunk starts after this content rather than
+     * back-filling onto the wrong block. Sealing also clears the
+     * code-block cursors and pending line buffers, and folds older
+     * reasoning groups by virtue of resetting the run-group id. */
+    sealStream(StreamMode::Assistant);
+    sealStream(StreamMode::Reasoning);
+    /* Old reasoning monologue (across all groups) collapses since the
+     * user is clearly past it. */
+    for (auto &group : reasoningHistory) {
+        for (auto *block : group.blocks) {
+            block->setFolded(true);
+        }
     }
     scrollView.appendPartial(content, style);
 }
 
 void QTuiCompositor::appendAssistantChunk(const QString &chunk)
 {
-    if (chunk.isEmpty()) {
-        return;
-    }
-    /* Reset the cursor whenever an unrelated block has landed in
-     * between two chunks; appending to a stale block would make the
-     * new chunk render above any printContent that arrived in the
-     * meantime. */
-    if (activeAssistant != nullptr && scrollView.lastBlock() != activeAssistant) {
-        activeAssistant = nullptr;
-    }
-    if (activeAssistant == nullptr) {
-        /* New assistant block means the current reasoning run is over.
-         * Fold every reasoning block we have tracked so the user sees
-         * a clean answer with collapsed thinking above. */
-        for (auto *block : reasoningHistory) {
-            block->setFolded(true);
-        }
-        auto block      = std::make_unique<QTuiAssistantTextBlock>();
-        activeAssistant = block.get();
-        scrollView.appendBlock(std::move(block));
-    }
-    activeAssistant->appendMarkdown(chunk);
+    feedSplitChunk(chunk, StreamMode::Assistant);
 }
 
 void QTuiCompositor::appendReasoningChunk(const QString &chunk)
 {
-    if (chunk.isEmpty()) {
-        return;
-    }
-    if (activeReasoning != nullptr && scrollView.lastBlock() != activeReasoning) {
-        activeReasoning = nullptr;
-    }
-    if (activeReasoning == nullptr) {
-        /* When starting a fresh reasoning block, fold any previous
-         * reasoning blocks so the scrollback shows only the active
-         * monologue expanded. */
-        for (auto *block : reasoningHistory) {
-            block->setFolded(true);
-        }
-        auto block = std::make_unique<QTuiAssistantTextBlock>();
-        block->setDimAll(true);
-        activeReasoning = block.get();
-        reasoningHistory.push_back(activeReasoning);
-        scrollView.appendBlock(std::move(block));
-    }
-    activeReasoning->appendMarkdown(chunk);
+    feedSplitChunk(chunk, StreamMode::Reasoning);
 }
 
 void QTuiCompositor::finishStream()
 {
-    activeAssistant = nullptr;
-    activeReasoning = nullptr;
+    sealStream(StreamMode::Assistant);
+    sealStream(StreamMode::Reasoning);
+}
+
+void QTuiCompositor::feedSplitChunk(const QString &chunk, StreamMode mode)
+{
+    if (chunk.isEmpty()) {
+        return;
+    }
+
+    QString                 &pending   = (mode == StreamMode::Assistant) ? pendingAssistantLine
+                                                                         : pendingReasoningLine;
+    QString                 &committed = (mode == StreamMode::Assistant) ? committedAssistantSource
+                                                                         : committedReasoningSource;
+    QTuiAssistantTextBlock *&activeText = (mode == StreamMode::Assistant) ? activeAssistant
+                                                                          : activeReasoning;
+    QTuiCodeBlock          *&activeCode = (mode == StreamMode::Assistant) ? activeAssistantCode
+                                                                          : activeReasoningCode;
+    int       &currentGroup             = (mode == StreamMode::Assistant) ? currentAssistantGroupId
+                                                                          : currentReasoningGroupId;
+    const bool forceDim                 = (mode == StreamMode::Reasoning);
+
+    /* Cursors stale because something else landed on top of our last
+     * block: drop them and reset committed prose so the next line
+     * creates a fresh block rather than back-filling. */
+    if (activeText != nullptr && scrollView.lastBlock() != activeText
+        && scrollView.lastBlock() != activeCode) {
+        activeText = nullptr;
+        committed.clear();
+    }
+    if (activeCode != nullptr && scrollView.lastBlock() != activeCode
+        && scrollView.lastBlock() != activeText) {
+        activeCode = nullptr;
+    }
+
+    auto ensureRunGroup = [&]() {
+        if (currentGroup != 0) {
+            return;
+        }
+        ++nextGroupId;
+        currentGroup = nextGroupId;
+        if (mode == StreamMode::Reasoning) {
+            /* Starting a new reasoning run collapses every prior
+             * reasoning group so only the freshest monologue stays
+             * expanded in the scrollback. */
+            for (auto &group : reasoningHistory) {
+                for (auto *block : group.blocks) {
+                    block->setFolded(true);
+                }
+            }
+            reasoningHistory.push_back({.groupId = currentGroup, .blocks = {}});
+        }
+    };
+
+    auto trackReasoningBlock = [&](QTuiBlock *block) {
+        if (mode != StreamMode::Reasoning) {
+            return;
+        }
+        if (reasoningHistory.empty() || reasoningHistory.back().groupId != currentGroup) {
+            return;
+        }
+        reasoningHistory.back().blocks.push_back(block);
+    };
+
+    pending.append(chunk);
+
+    while (true) {
+        const int idx = pending.indexOf(QLatin1Char('\n'));
+        if (idx < 0) {
+            break;
+        }
+        const QString line       = pending.left(idx);
+        pending                  = pending.mid(idx + 1);
+        const QString lineWithNl = line + QLatin1Char('\n');
+
+        const QString trimmed = line.trimmed();
+        const bool    isFence = trimmed.startsWith(QStringLiteral("```"));
+
+        if (isFence) {
+            if (activeCode == nullptr) {
+                /* Opening fence: language tag is the rest of the
+                 * fence line; lower-cased so the highlighter and the
+                 * markdown round-trip both see a normalised id.
+                 * Strip any provisional pending-display from the text
+                 * block by reverting its markdown to committed prose. */
+                const QString lang = trimmed.mid(3).trimmed().toLower();
+                if (activeText != nullptr) {
+                    activeText->setMarkdown(committed);
+                }
+                activeText = nullptr;
+                committed.clear();
+                ensureRunGroup();
+                auto block
+                    = std::make_unique<QTuiCodeBlock>(lang, QString(), forceDim, currentGroup);
+                activeCode = block.get();
+                trackReasoningBlock(activeCode);
+                scrollView.appendBlock(std::move(block));
+            } else {
+                /* Closing fence: code body is finalised; the next
+                 * prose line will create a fresh assistant text block
+                 * in the same run group. */
+                activeCode = nullptr;
+            }
+            continue;
+        }
+
+        if (activeCode != nullptr) {
+            activeCode->appendBody(lineWithNl);
+            continue;
+        }
+
+        ensureRunGroup();
+        if (activeText == nullptr) {
+            auto block = std::make_unique<QTuiAssistantTextBlock>();
+            if (forceDim) {
+                block->setDimAll(true);
+            }
+            activeText = block.get();
+            trackReasoningBlock(activeText);
+            scrollView.appendBlock(std::move(block));
+        }
+        committed.append(lineWithNl);
+        activeText->setMarkdown(committed);
+    }
+
+    /* Provisionally show the pending trailing line so streaming text
+     * appears live, even when chunks lack newlines. The next chunk
+     * either commits this line (newline arrives) or keeps extending
+     * it. The text block's setMarkdown is idempotent — subsequent
+     * chunks rewrite the source rather than accumulate. */
+    if (activeText != nullptr && !pending.isEmpty()) {
+        activeText->setMarkdown(committed + pending);
+    } else if (activeText == nullptr && activeCode == nullptr && !pending.isEmpty()) {
+        /* No active block yet but a partial line is being typed (e.g.,
+         * a pure prose chunk without trailing \n). Open a fresh text
+         * block so the user sees the partial line. */
+        ensureRunGroup();
+        auto block = std::make_unique<QTuiAssistantTextBlock>();
+        if (forceDim) {
+            block->setDimAll(true);
+        }
+        activeText = block.get();
+        trackReasoningBlock(activeText);
+        scrollView.appendBlock(std::move(block));
+        activeText->setMarkdown(pending);
+    }
+}
+
+void QTuiCompositor::sealStream(StreamMode mode)
+{
+    QString                 &pending   = (mode == StreamMode::Assistant) ? pendingAssistantLine
+                                                                         : pendingReasoningLine;
+    QString                 &committed = (mode == StreamMode::Assistant) ? committedAssistantSource
+                                                                         : committedReasoningSource;
+    QTuiAssistantTextBlock *&activeText = (mode == StreamMode::Assistant) ? activeAssistant
+                                                                          : activeReasoning;
+    QTuiCodeBlock          *&activeCode = (mode == StreamMode::Assistant) ? activeAssistantCode
+                                                                          : activeReasoningCode;
+    int &currentGroup                   = (mode == StreamMode::Assistant) ? currentAssistantGroupId
+                                                                          : currentReasoningGroupId;
+
+    /* Promote any incomplete trailing line into a final commit so the
+     * sealed block reflects everything the user saw. The receiving
+     * consumer is forgiving about a missing final \n. */
+    if (!pending.isEmpty()) {
+        if (activeCode != nullptr) {
+            activeCode->appendBody(pending);
+        } else if (activeText != nullptr) {
+            committed.append(pending);
+            activeText->setMarkdown(committed);
+        }
+        pending.clear();
+    }
+    committed.clear();
+    activeText   = nullptr;
+    activeCode   = nullptr;
+    currentGroup = 0;
 }
 
 void QTuiCompositor::beginToolUse(const QString &toolName, const QString &detail)
 {
-    /* A new tool call seals the streaming assistant block so the box
-     * lands AFTER the prose, not retroactively before it. */
-    activeAssistant = nullptr;
-    activeReasoning = nullptr;
-    auto block      = std::make_unique<QTuiToolBlock>(toolName, detail);
-    activeTool      = block.get();
+    /* A new tool call seals both streaming runs so the box lands after
+     * any in-flight prose / code, not retroactively before it. */
+    sealStream(StreamMode::Assistant);
+    sealStream(StreamMode::Reasoning);
+    auto block = std::make_unique<QTuiToolBlock>(toolName, detail);
+    activeTool = block.get();
     scrollView.appendBlock(std::move(block));
 }
 
@@ -223,10 +363,10 @@ void QTuiCompositor::finishToolUse(bool success, const QString &summary)
 void QTuiCompositor::appendUserMessage(const QString &text)
 {
     /* New user input ends every active streaming context; the next
-     * agent chunk should land below the user's message. */
-    activeAssistant = nullptr;
-    activeReasoning = nullptr;
-    activeTool      = nullptr;
+     * agent chunk lands below the user's message in a fresh run group. */
+    sealStream(StreamMode::Assistant);
+    sealStream(StreamMode::Reasoning);
+    activeTool = nullptr;
     scrollView.appendBlock(std::make_unique<QTuiUserBlock>(text));
 }
 
