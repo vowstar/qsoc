@@ -159,6 +159,17 @@ public:
         layoutWidth = -1;
     }
 
+    /**
+     * @brief Emit the block as a sequence of ANSI-encoded lines.
+     * @details Used by cooked-mode (--print) output and the alt-screen
+     *          exit path so the scrollback content survives as
+     *          colored text in the user's terminal scroll history.
+     *          The default implementation lays out the block at
+     *          `width`, paints each row into a freshly-sized
+     *          QTuiScreen, and emits one SGR-encoded line per row.
+     */
+    QString toAnsi(int width);
+
 protected:
     /** Cached width that produced the current row layout. */
     int layoutWidth = -1;
