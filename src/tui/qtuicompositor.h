@@ -132,6 +132,14 @@ private:
     class QTuiAssistantTextBlock *activeAssistant = nullptr;
     class QTuiAssistantTextBlock *activeReasoning = nullptr;
 
+    /* History of reasoning block raw pointers (oldest first). Used by
+     * the auto-fold policy: when a new reasoning block starts or the
+     * user moves on (assistant chunk arrives, plain print arrives),
+     * fold every block in this list so older monologue collapses to a
+     * one-line summary while only the freshest reasoning stays
+     * expanded. */
+    std::vector<class QTuiAssistantTextBlock *> reasoningHistory;
+
     /* Terminal management */
     void enterAltScreen();
     void exitAltScreen();

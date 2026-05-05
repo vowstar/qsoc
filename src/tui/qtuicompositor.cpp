@@ -112,9 +112,14 @@ void QTuiCompositor::printContent(const QString &content, QTuiScrollView::LineSt
     /* Anything routed through printContent counts as non-streaming
      * output; seal any pending assistant/reasoning blocks first so
      * the next streaming chunk starts after this content rather than
-     * back-filling onto the wrong block. */
+     * back-filling onto the wrong block. Folding the reasoning
+     * history at the same time keeps older monologue collapsed when
+     * the user has clearly moved on. */
     activeAssistant = nullptr;
     activeReasoning = nullptr;
+    for (auto *block : reasoningHistory) {
+        block->setFolded(true);
+    }
     scrollView.appendPartial(content, style);
 }
 
@@ -131,6 +136,12 @@ void QTuiCompositor::appendAssistantChunk(const QString &chunk)
         activeAssistant = nullptr;
     }
     if (activeAssistant == nullptr) {
+        /* New assistant block means the current reasoning run is over.
+         * Fold every reasoning block we have tracked so the user sees
+         * a clean answer with collapsed thinking above. */
+        for (auto *block : reasoningHistory) {
+            block->setFolded(true);
+        }
         auto block      = std::make_unique<QTuiAssistantTextBlock>();
         activeAssistant = block.get();
         scrollView.appendBlock(std::move(block));
@@ -147,9 +158,16 @@ void QTuiCompositor::appendReasoningChunk(const QString &chunk)
         activeReasoning = nullptr;
     }
     if (activeReasoning == nullptr) {
+        /* When starting a fresh reasoning block, fold any previous
+         * reasoning blocks so the scrollback shows only the active
+         * monologue expanded. */
+        for (auto *block : reasoningHistory) {
+            block->setFolded(true);
+        }
         auto block = std::make_unique<QTuiAssistantTextBlock>();
         block->setDimAll(true);
         activeReasoning = block.get();
+        reasoningHistory.push_back(activeReasoning);
         scrollView.appendBlock(std::move(block));
     }
     activeReasoning->appendMarkdown(chunk);
@@ -166,6 +184,11 @@ void QTuiCompositor::focusBlockAtScreenRow(int screenRow)
     const int idx = scrollView.blockAtScreenRow(screenRow);
     if (idx < 0) {
         scrollView.setFocusedBlockIdx(-1);
+    } else if (idx == scrollView.focusedBlockIdx()) {
+        /* Re-clicking the focused block toggles its fold. Lets users
+         * collapse and re-expand a thinking / tool / table block with
+         * the same gesture used to focus it. */
+        scrollView.toggleFocusedFold();
     } else {
         scrollView.setFocusedBlockIdx(idx);
     }
