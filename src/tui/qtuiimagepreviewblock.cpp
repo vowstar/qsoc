@@ -22,25 +22,33 @@ enum class GraphicsProtocol : std::uint8_t {
 
 GraphicsProtocol detectProtocol()
 {
-    static const GraphicsProtocol cached = []() {
-        const QProcessEnvironment env  = QProcessEnvironment::systemEnvironment();
-        const QString             term = env.value(QStringLiteral("TERM"), QString()).toLower();
-        const QString termProgram      = env.value(QStringLiteral("TERM_PROGRAM"), QString());
+    /* Re-evaluated on every call so tests can flip env vars between
+     * cases. The cost is one environment snapshot plus a handful of
+     * string compares, negligible next to the base64 image transfer. */
+    const QProcessEnvironment env  = QProcessEnvironment::systemEnvironment();
+    const QString             term = env.value(QStringLiteral("TERM"), QString()).toLower();
+    const QString termProgram      = env.value(QStringLiteral("TERM_PROGRAM"), QString()).toLower();
 
-        if (env.contains(QStringLiteral("KITTY_WINDOW_ID"))) {
-            return GraphicsProtocol::Kitty;
-        }
-        if (termProgram == QStringLiteral("iTerm.app") || termProgram == QStringLiteral("WezTerm")
-            || termProgram == QStringLiteral("vscode") || termProgram == QStringLiteral("mintty")) {
-            return GraphicsProtocol::ITerm2;
-        }
-        if (term.contains(QStringLiteral("foot")) || term.contains(QStringLiteral("mlterm"))
-            || term.contains(QStringLiteral("contour"))) {
-            return GraphicsProtocol::SixelPlaceholder;
-        }
-        return GraphicsProtocol::None;
-    }();
-    return cached;
+    /* Kitty graphics protocol. WezTerm and Rio also speak iTerm2
+     * inline, but Kitty's chunked transfer is the more capable
+     * dialect on every terminal that supports both. */
+    if (env.contains(QStringLiteral("KITTY_WINDOW_ID"))
+        || env.contains(QStringLiteral("GHOSTTY_RESOURCES_DIR"))
+        || env.contains(QStringLiteral("WEZTERM_EXECUTABLE"))
+        || env.contains(QStringLiteral("KONSOLE_VERSION")) || term == QStringLiteral("xterm-kitty")
+        || term == QStringLiteral("xterm-ghostty") || termProgram == QStringLiteral("ghostty")
+        || termProgram == QStringLiteral("wezterm") || termProgram == QStringLiteral("rio")) {
+        return GraphicsProtocol::Kitty;
+    }
+    if (termProgram == QStringLiteral("iterm.app") || termProgram == QStringLiteral("vscode")
+        || termProgram == QStringLiteral("mintty") || term == QStringLiteral("mintty")) {
+        return GraphicsProtocol::ITerm2;
+    }
+    if (term.contains(QStringLiteral("foot")) || term.contains(QStringLiteral("mlterm"))
+        || term.contains(QStringLiteral("contour"))) {
+        return GraphicsProtocol::SixelPlaceholder;
+    }
+    return GraphicsProtocol::None;
 }
 
 QTuiStyledRun coloredRun(const QString &text, QTuiFgColor color, bool bold = false, bool dim = false)

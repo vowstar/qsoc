@@ -20,12 +20,15 @@
  *          inline in their terminal scrollback after the agent exits.
  *
  *          Detection priority (env-only, no DA1 probe):
- *          - $KITTY_WINDOW_ID            → Kitty graphics
- *          - $TERM_PROGRAM in {iTerm.app, WezTerm, vscode, mintty}
- *                                        → iTerm2 inline image
- *          - $TERM matches foot|mlterm|contour → Sixel (placeholder
- *            for now since Sixel encoding requires libsixel)
- *          - otherwise                   → text placeholder only
+ *          - Kitty graphics: $KITTY_WINDOW_ID, $GHOSTTY_RESOURCES_DIR,
+ *            $WEZTERM_EXECUTABLE, $KONSOLE_VERSION, $TERM in
+ *            {xterm-kitty, xterm-ghostty}, or $TERM_PROGRAM in
+ *            {ghostty, wezterm, rio}
+ *          - iTerm2 inline: $TERM_PROGRAM in {iterm.app, vscode,
+ *            mintty} or $TERM=mintty
+ *          - Sixel placeholder: $TERM matches foot|mlterm|contour
+ *            (no encoder bundled yet)
+ *          - otherwise: text placeholder only
  */
 class QTuiImagePreviewBlock : public QTuiBlock
 {
