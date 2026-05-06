@@ -312,7 +312,14 @@ void QTuiCompositor::sealStream(StreamMode mode)
      * consumer is forgiving about a missing final \n. */
     if (!pending.isEmpty()) {
         if (activeCode != nullptr) {
-            activeCode->appendBody(pending);
+            /* Closing fence with no trailing newline (the LLM ended its
+             * message on the fence line) must close the block, not land
+             * inside the code body and double up at toMarkdown time. */
+            if (pending.trimmed().startsWith(QStringLiteral("```"))) {
+                activeCode = nullptr;
+            } else {
+                activeCode->appendBody(pending);
+            }
         } else if (activeText != nullptr) {
             committed.append(pending);
             activeText->setMarkdown(committed);

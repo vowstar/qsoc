@@ -18,6 +18,7 @@ private slots:
     void reasoningStreamSplitsLikewise();
     void interveningPrintContentSealsAndStartsFreshGroup();
     void newReasoningRunFoldsPriorReasoningGroup();
+    void closingFenceWithoutTrailingNewlineDoesNotLeakIntoBody();
 };
 
 namespace {
@@ -153,6 +154,29 @@ void Test::newReasoningRunFoldsPriorReasoningGroup()
     }
     QVERIFY(!firstRunMarkdowns.isEmpty());
     QVERIFY(!secondRunMarkdowns.isEmpty());
+}
+
+void Test::closingFenceWithoutTrailingNewlineDoesNotLeakIntoBody()
+{
+    QTuiCompositor compositor;
+    /* Stream ends with the closing fence but no final newline, the
+     * exact pattern an LLM produces when its message terminates on the
+     * fence. The closing ``` must be recognised as the close, not
+     * appended into the C source body. */
+    compositor.appendAssistantChunk(QStringLiteral("```c\nint x = 0;\n```"));
+    compositor.finishStream();
+
+    const QStringList md      = collectMarkdowns(compositor);
+    bool              sawCode = false;
+    for (const auto &one : md) {
+        if (one.startsWith(QStringLiteral("```c"))) {
+            sawCode = true;
+            QCOMPARE(one, QStringLiteral("```c\nint x = 0;\n```\n"));
+            const int innerCount = one.count(QStringLiteral("```"));
+            QCOMPARE(innerCount, 2);
+        }
+    }
+    QVERIFY(sawCode);
 }
 
 QSOC_TEST_MAIN(Test)
