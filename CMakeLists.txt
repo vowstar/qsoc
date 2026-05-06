@@ -381,6 +381,20 @@ set(CMARK_GFM_LIBRARIES
 )
 message(STATUS "Use local cmark-gfm library: ${CMARK_GFM_LIBRARIES}")
 
+# LEXBOR (bundled, always static, drives HTML5 parsing for the web tool)
+set(LEXBOR_BUILD_SHARED   OFF CACHE BOOL "lexbor no shared"            FORCE)
+set(LEXBOR_BUILD_STATIC   ON  CACHE BOOL "lexbor static"               FORCE)
+set(LEXBOR_BUILD_EXAMPLES OFF CACHE BOOL "lexbor no examples"          FORCE)
+set(LEXBOR_BUILD_TESTS    OFF CACHE BOOL "lexbor no tests"             FORCE)
+set(LEXBOR_BUILD_UTILS    OFF CACHE BOOL "lexbor no utils"             FORCE)
+set(LEXBOR_INSTALL_HEADERS OFF CACHE BOOL "lexbor no header install"   FORCE)
+add_subdirectory(external/lexbor EXCLUDE_FROM_ALL)
+set(LEXBOR_INCLUDE_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/external/lexbor/source"
+)
+set(LEXBOR_LIBRARIES lexbor_static)
+message(STATUS "Use local lexbor library: ${LEXBOR_LIBRARIES}")
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "resource/*.qrc")
@@ -470,6 +484,7 @@ target_include_directories(qsoc_core SYSTEM PUBLIC
     "${MBEDTLS_INCLUDE_DIRS}"
     "${LIBSSH2_INCLUDE_DIRS}"
     "${CMARK_GFM_INCLUDE_DIRS}"
+    "${LEXBOR_INCLUDE_DIRS}"
 )
 
 target_link_libraries(qsoc_core PUBLIC
@@ -494,11 +509,13 @@ target_link_libraries(qsoc_core PUBLIC
     ${REPLXX_LIBRARIES}
     ${LIBSSH2_LIBRARIES}
     ${CMARK_GFM_LIBRARIES}
+    ${LEXBOR_LIBRARIES}
 )
 
 target_compile_definitions(qsoc_core PUBLIC
     CMARK_GFM_STATIC_DEFINE
     CMARK_GFM_EXTENSIONS_STATIC_DEFINE
+    LEXBOR_STATIC
 )
 
 if(WIN32)

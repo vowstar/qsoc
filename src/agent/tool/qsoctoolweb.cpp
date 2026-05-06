@@ -6,10 +6,15 @@
 #include "common/qsocimageattach.h"
 #include "common/qsocproxy.h"
 
+#include <lexbor/dom/dom.h>
+#include <lexbor/html/html.h>
 #include <QNetworkRequest>
+#include <QSet>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
+
+#include <cstring>
 
 static const QString kUserAgent
     = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; QSoC/1.0; "
@@ -259,29 +264,39 @@ void QSocToolWebFetch::setupProxy()
 
 namespace {
 
-enum class CtxType : uint8_t {
-    Skip,
-    Pre,
-    Anchor,
-    Heading,
-    Bold,
-    Italic,
-    Code,
-    List,
-    ListItem,
-    Blockquote,
-    Table,
-    TableRow,
-    TableCell,
-};
-
-struct Context
+const QSet<QString> &skipTags()
 {
-    CtxType type;
-    QString data;
-    int     counter  = 0;
-    bool    isHeader = false;
-};
+    static const QSet<QString> set = {
+        QStringLiteral("script"),
+        QStringLiteral("style"),
+        QStringLiteral("svg"),
+        QStringLiteral("noscript"),
+        QStringLiteral("head"),
+        QStringLiteral("template"),
+        QStringLiteral("iframe"),
+    };
+    return set;
+}
+
+const QSet<QString> &blockTags()
+{
+    static const QSet<QString> set = {
+        QStringLiteral("p"),
+        QStringLiteral("div"),
+        QStringLiteral("section"),
+        QStringLiteral("article"),
+        QStringLiteral("header"),
+        QStringLiteral("footer"),
+        QStringLiteral("nav"),
+        QStringLiteral("main"),
+        QStringLiteral("aside"),
+        QStringLiteral("figure"),
+        QStringLiteral("figcaption"),
+        QStringLiteral("details"),
+        QStringLiteral("summary"),
+    };
+    return set;
+}
 
 struct TableBuffer
 {
@@ -292,756 +307,474 @@ struct TableBuffer
     QString                   cellBuf;
 };
 
-static const QHash<QString, QString> &entityMap()
+QString formatTable(const TableBuffer &table)
 {
-    static const QHash<QString, QString> map = {
-        {"amp", "&"},
-        {"lt", "<"},
-        {"gt", ">"},
-        {"quot", "\""},
-        {"apos", "'"},
-        {"nbsp", " "},
-        {"ndash", "\u2013"},
-        {"mdash", "\u2014"},
-        {"lsquo", "\u2018"},
-        {"rsquo", "\u2019"},
-        {"ldquo", "\u201C"},
-        {"rdquo", "\u201D"},
-        {"bull", "\u2022"},
-        {"hellip", "\u2026"},
-        {"copy", "\u00A9"},
-        {"reg", "\u00AE"},
-        {"trade", "\u2122"},
-        {"times", "\u00D7"},
-    };
-    return map;
-}
-
-static QString decodeEntity(const QString &entity)
-{
-    auto it = entityMap().constFind(entity);
-    if (it != entityMap().constEnd()) {
-        return it.value();
-    }
-    if (entity.startsWith('#')) {
-        bool ok  = false;
-        uint num = 0;
-        if (entity.size() > 1 && (entity[1] == 'x' || entity[1] == 'X')) {
-            num = entity.mid(2).toUInt(&ok, 16);
-        } else {
-            num = entity.mid(1).toUInt(&ok, 10);
-        }
-        if (ok && num > 0) {
-            if (num <= 0xFFFF) {
-                return QString(QChar(num));
-            }
-            /* Surrogate pair for supplementary plane */
-            char32_t cp = static_cast<char32_t>(num);
-            return QString::fromUcs4(&cp, 1);
-        }
-    }
-    return QString("&%1;").arg(entity);
-}
-
-static QString extractAttr(const QString &tagBody, const QString &attr)
-{
-    /* Find attr="value" or attr='value' in tag body */
-    int pos = 0;
-    while (pos < tagBody.size()) {
-        int idx = tagBody.indexOf(attr, pos, Qt::CaseInsensitive);
-        if (idx < 0) {
-            return {};
-        }
-        /* Ensure it's a word boundary: start of string or preceded by space */
-        if (idx > 0 && tagBody[idx - 1] != ' ' && tagBody[idx - 1] != '\t'
-            && tagBody[idx - 1] != '\n') {
-            pos = idx + 1;
-            continue;
-        }
-        int eqPos = idx + attr.size();
-        /* Skip whitespace before '=' */
-        while (eqPos < tagBody.size() && (tagBody[eqPos] == ' ' || tagBody[eqPos] == '\t')) {
-            eqPos++;
-        }
-        if (eqPos >= tagBody.size() || tagBody[eqPos] != '=') {
-            pos = eqPos;
-            continue;
-        }
-        eqPos++;
-        /* Skip whitespace after '=' */
-        while (eqPos < tagBody.size() && (tagBody[eqPos] == ' ' || tagBody[eqPos] == '\t')) {
-            eqPos++;
-        }
-        if (eqPos >= tagBody.size()) {
-            return {};
-        }
-        QChar quote = tagBody[eqPos];
-        if (quote == '"' || quote == '\'') {
-            int end = tagBody.indexOf(quote, eqPos + 1);
-            if (end < 0) {
-                return {};
-            }
-            return tagBody.mid(eqPos + 1, end - eqPos - 1);
-        }
-        /* Unquoted value */
-        int end = eqPos;
-        while (end < tagBody.size() && tagBody[end] != ' ' && tagBody[end] != '>'
-               && tagBody[end] != '\t') {
-            end++;
-        }
-        return tagBody.mid(eqPos, end - eqPos);
-    }
-    return {};
-}
-
-static QString formatTable(const TableBuffer &tb)
-{
-    if (tb.rows.isEmpty()) {
+    if (table.rows.isEmpty()) {
         return {};
     }
-
-    /* Determine column count */
     int cols = 0;
-    for (const auto &row : tb.rows) {
-        cols = qMax(cols, row.size());
+    for (const auto &row : table.rows) {
+        cols = qMax(cols, static_cast<int>(row.size()));
     }
     if (cols == 0) {
         return {};
     }
-
-    /* Compute column widths */
     QVector<int> widths(cols, 3);
-    for (const auto &row : tb.rows) {
-        for (int c = 0; c < row.size(); c++) {
-            widths[c] = qMax(widths[c], row[c].size());
+    for (const auto &row : table.rows) {
+        for (int idx = 0; idx < row.size(); ++idx) {
+            widths[idx] = qMax(widths[idx], static_cast<int>(row[idx].size()));
         }
     }
 
     QString out;
+    auto    formatRow = [&](const QVector<QString> &row) {
+        out += QLatin1Char('|');
+        for (int idx = 0; idx < cols; ++idx) {
+            QString cell = (idx < row.size()) ? row[idx] : QString();
+            cell.replace(QLatin1Char('|'), QStringLiteral("\\|"));
+            out += QLatin1Char(' ');
+            out += cell;
+            for (int pad = widths[idx] - static_cast<int>(cell.size()); pad > 0; --pad) {
+                out += QLatin1Char(' ');
+            }
+            out += QStringLiteral(" |");
+        }
+        out += QLatin1Char('\n');
+    };
+    auto formatSeparator = [&]() {
+        out += QLatin1Char('|');
+        for (int idx = 0; idx < cols; ++idx) {
+            out += QLatin1Char(' ');
+            for (int pad = 0; pad < widths[idx]; ++pad) {
+                out += QLatin1Char('-');
+            }
+            out += QStringLiteral(" |");
+        }
+        out += QLatin1Char('\n');
+    };
 
-    /* Find header row index (first row where isHeader is true) */
     int headerIdx = -1;
-    for (int r = 0; r < tb.rows.size(); r++) {
-        if (r < tb.headerFlags.size() && tb.headerFlags[r]) {
-            headerIdx = r;
+    for (int idx = 0; idx < table.rows.size(); ++idx) {
+        if (idx < table.headerFlags.size() && table.headerFlags[idx]) {
+            headerIdx = idx;
             break;
         }
     }
-
-    auto formatRow = [&](const QVector<QString> &row) {
-        out += '|';
-        for (int c = 0; c < cols; c++) {
-            QString cell = (c < row.size()) ? row[c] : QString();
-            /* Escape pipe in cell content */
-            cell.replace('|', "\\|");
-            out += ' ';
-            out += cell;
-            int pad = widths[c] - cell.size();
-            for (int p = 0; p < pad; p++) {
-                out += ' ';
-            }
-            out += " |";
-        }
-        out += '\n';
-    };
-
-    auto formatSeparator = [&]() {
-        out += '|';
-        for (int c = 0; c < cols; c++) {
-            out += ' ';
-            for (int p = 0; p < widths[c]; p++) {
-                out += '-';
-            }
-            out += " |";
-        }
-        out += '\n';
-    };
-
     if (headerIdx >= 0) {
-        /* Output header row */
-        formatRow(tb.rows[headerIdx]);
+        formatRow(table.rows[headerIdx]);
         formatSeparator();
-        /* Output remaining rows */
-        for (int r = 0; r < tb.rows.size(); r++) {
-            if (r != headerIdx) {
-                formatRow(tb.rows[r]);
+        for (int idx = 0; idx < table.rows.size(); ++idx) {
+            if (idx != headerIdx) {
+                formatRow(table.rows[idx]);
             }
         }
     } else {
-        /* No header: use separator after first row */
-        formatRow(tb.rows[0]);
+        formatRow(table.rows[0]);
         formatSeparator();
-        for (int r = 1; r < tb.rows.size(); r++) {
-            formatRow(tb.rows[r]);
+        for (int idx = 1; idx < table.rows.size(); ++idx) {
+            formatRow(table.rows[idx]);
         }
     }
-
     return out;
 }
 
-/* Count how many nesting levels of a type are on the stack */
-static int countCtx(const QVector<Context> &stack, CtxType type)
+QString collapseBlankLines(const QString &input)
 {
-    int n = 0;
-    for (const auto &ctx : stack) {
-        if (ctx.type == type) {
-            n++;
-        }
-    }
-    return n;
-}
-
-static bool inCtx(const QVector<Context> &stack, CtxType type)
-{
-    for (int i = stack.size() - 1; i >= 0; i--) {
-        if (stack[i].type == type) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static QString listIndent(const QVector<Context> &stack)
-{
-    int depth = countCtx(stack, CtxType::List);
-    if (depth <= 1) {
-        return {};
-    }
-    return QString((depth - 1) * 2, ' ');
-}
-
-} /* anonymous namespace */
-
-QString QSocToolWebFetch::htmlToMarkdown(const QString &html)
-{
-    /* Stream-based HTML-to-Markdown converter.
-     * Uses a context stack for nesting and a table buffer for GFM tables.
-     * QTextDocument::setHtml() segfaults on large/complex pages (e.g. GitHub)
-     * and regex approaches overflow the PCRE2 stack. A linear scan is safe. */
-    QString result;
-    result.reserve(html.size() / 2);
-
-    const QStringList skipTags = {"script", "style", "svg", "noscript", "head"};
-
-    QVector<Context>     stack;
-    QVector<TableBuffer> tableBufs;
-    int                  skipDepth  = 0;
-    int                  tableDepth = 0;
-    QString              skipTag;
-
-    auto output = [&](const QString &s) {
-        if (tableDepth > 0 && !tableBufs.isEmpty()) {
-            tableBufs.last().cellBuf += s;
-        } else {
-            result += s;
-        }
-    };
-
-    auto outputCh = [&](QChar c) {
-        if (tableDepth > 0 && !tableBufs.isEmpty()) {
-            tableBufs.last().cellBuf += c;
-        } else {
-            result += c;
-        }
-    };
-
-    auto ensureNewline = [&]() {
-        if (tableDepth > 0) {
-            return;
-        }
-        if (!result.isEmpty() && !result.endsWith('\n')) {
-            result += '\n';
-        }
-    };
-
-    auto ensureBlankLine = [&]() {
-        if (tableDepth > 0) {
-            return;
-        }
-        if (result.isEmpty()) {
-            return;
-        }
-        if (!result.endsWith('\n')) {
-            result += '\n';
-        }
-        if (!result.endsWith("\n\n")) {
-            result += '\n';
-        }
-    };
-
-    int i   = 0;
-    int len = html.size();
-
-    while (i < len) {
-        QChar ch = html[i];
-
-        /* HTML comment */
-        if (ch == '<' && i + 3 < len && html[i + 1] == '!' && html[i + 2] == '-'
-            && html[i + 3] == '-') {
-            int end = html.indexOf("-->", i + 4);
-            i       = (end >= 0) ? end + 3 : len;
-            continue;
-        }
-
-        /* CDATA */
-        if (ch == '<' && i + 8 < len && html.mid(i, 9) == "<![CDATA[") {
-            int end = html.indexOf("]]>", i + 9);
-            if (end >= 0) {
-                output(html.mid(i + 9, end - i - 9));
-                i = end + 3;
-            } else {
-                i = len;
-            }
-            continue;
-        }
-
-        /* Tag */
-        if (ch == '<') {
-            int tagStart = i + 1;
-
-            /* Self-closing or doctype check */
-            bool isClose = (tagStart < len && html[tagStart] == '/');
-            if (isClose) {
-                tagStart++;
-            }
-
-            /* Skip <! doctype etc */
-            if (!isClose && tagStart < len && html[tagStart] == '!') {
-                while (i < len && html[i] != '>') {
-                    i++;
-                }
-                if (i < len) {
-                    i++;
-                }
-                continue;
-            }
-
-            /* Extract tag name */
-            int tagEnd = tagStart;
-            while (tagEnd < len && html[tagEnd] != '>' && html[tagEnd] != ' '
-                   && html[tagEnd] != '\t' && html[tagEnd] != '\n' && html[tagEnd] != '/'
-                   && html[tagEnd] != '"' && html[tagEnd] != '\'') {
-                tagEnd++;
-            }
-            QString tagName = html.mid(tagStart, tagEnd - tagStart).toLower();
-
-            /* Extract full tag body (attributes) up to '>' */
-            int tagClosePos = tagEnd;
-            while (tagClosePos < len && html[tagClosePos] != '>') {
-                /* Skip quoted attribute values */
-                if (html[tagClosePos] == '"' || html[tagClosePos] == '\'') {
-                    QChar q     = html[tagClosePos];
-                    int   end   = html.indexOf(q, tagClosePos + 1);
-                    tagClosePos = (end >= 0) ? end + 1 : len;
-                    continue;
-                }
-                tagClosePos++;
-            }
-            QString tagBody   = html.mid(tagEnd, tagClosePos - tagEnd);
-            bool    selfClose = (!tagBody.isEmpty() && tagBody.endsWith('/')) || tagName == "br"
-                                || tagName == "hr" || tagName == "img" || tagName == "input"
-                                || tagName == "meta" || tagName == "link" || tagName == "wbr";
-            i                 = tagClosePos;
-            if (i < len) {
-                i++; /* skip '>' */
-            }
-
-            /* Skip-depth handling */
-            if (skipDepth > 0) {
-                if (isClose && tagName == skipTag) {
-                    skipDepth--;
-                } else if (!isClose && !selfClose && skipTags.contains(tagName)) {
-                    skipDepth++;
-                }
-                continue;
-            }
-
-            if (!isClose && !selfClose && skipTags.contains(tagName)) {
-                skipTag   = tagName;
-                skipDepth = 1;
-                continue;
-            }
-
-            /* --- Open tags --- */
-            if (!isClose && !selfClose) {
-                /* Headings */
-                if (tagName.size() == 2 && tagName[0] == 'h' && tagName[1] >= '1'
-                    && tagName[1] <= '6') {
-                    int level = tagName[1].digitValue();
-                    ensureBlankLine();
-                    output(QString(level, '#') + ' ');
-                    stack.push_back({CtxType::Heading, {}, level, false});
-                    continue;
-                }
-                /* Bold */
-                if (tagName == "strong" || tagName == "b") {
-                    output("**");
-                    stack.push_back({CtxType::Bold, {}, 0, false});
-                    continue;
-                }
-                /* Italic */
-                if (tagName == "em" || tagName == "i") {
-                    output("*");
-                    stack.push_back({CtxType::Italic, {}, 0, false});
-                    continue;
-                }
-                /* Inline code */
-                if (tagName == "code" && !inCtx(stack, CtxType::Pre)) {
-                    output("`");
-                    stack.push_back({CtxType::Code, {}, 0, false});
-                    continue;
-                }
-                /* Pre/code block */
-                if (tagName == "pre") {
-                    ensureBlankLine();
-                    QString lang;
-                    /* Check for class="language-xxx" on pre or nested code */
-                    QString cls = extractAttr(tagBody, "class");
-                    if (cls.startsWith("language-")) {
-                        lang = cls.mid(9);
-                    }
-                    output("```" + lang + "\n");
-                    stack.push_back({CtxType::Pre, lang, 0, false});
-                    continue;
-                }
-                /* Code inside pre — skip the extra backtick */
-                if (tagName == "code" && inCtx(stack, CtxType::Pre)) {
-                    /* Check for language hint on code tag */
-                    QString cls = extractAttr(tagBody, "class");
-                    if (cls.startsWith("language-")) {
-                        /* Update the pre's language if not set */
-                        for (int s = stack.size() - 1; s >= 0; s--) {
-                            if (stack[s].type == CtxType::Pre && stack[s].data.isEmpty()) {
-                                QString lang  = cls.mid(9);
-                                stack[s].data = lang;
-                                /* Patch the output: replace ``` with ```lang */
-                                if (tableDepth == 0 && result.endsWith("```\n")) {
-                                    result.chop(4);
-                                    result += "```" + lang + "\n";
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    /* Don't push context — we handle </code> inside pre specially */
-                    continue;
-                }
-                /* Anchor */
-                if (tagName == "a") {
-                    QString href = extractAttr(tagBody, "href");
-                    output("[");
-                    stack.push_back({CtxType::Anchor, href, 0, false});
-                    continue;
-                }
-                /* Lists */
-                if (tagName == "ul") {
-                    ensureNewline();
-                    stack.push_back({CtxType::List, "ul", 0, false});
-                    continue;
-                }
-                if (tagName == "ol") {
-                    ensureNewline();
-                    stack.push_back({CtxType::List, "ol", 0, false});
-                    continue;
-                }
-                if (tagName == "li") {
-                    ensureNewline();
-                    /* Find parent list */
-                    for (int s = stack.size() - 1; s >= 0; s--) {
-                        if (stack[s].type == CtxType::List) {
-                            QString indent = listIndent(stack);
-                            if (stack[s].data == "ol") {
-                                stack[s].counter++;
-                                output(indent + QString::number(stack[s].counter) + ". ");
-                            } else {
-                                output(indent + "- ");
-                            }
-                            break;
-                        }
-                    }
-                    stack.push_back({CtxType::ListItem, {}, 0, false});
-                    continue;
-                }
-                /* Blockquote */
-                if (tagName == "blockquote") {
-                    ensureBlankLine();
-                    output("> ");
-                    stack.push_back({CtxType::Blockquote, {}, 0, false});
-                    continue;
-                }
-                /* Table */
-                if (tagName == "table") {
-                    ensureBlankLine();
-                    tableDepth++;
-                    tableBufs.push_back(TableBuffer());
-                    stack.push_back({CtxType::Table, {}, 0, false});
-                    continue;
-                }
-                if (tagName == "tr") {
-                    if (!tableBufs.isEmpty()) {
-                        tableBufs.last().currentRow.clear();
-                        tableBufs.last().currentIsHeader = false;
-                    }
-                    stack.push_back({CtxType::TableRow, {}, 0, false});
-                    continue;
-                }
-                if (tagName == "th" || tagName == "td") {
-                    bool isH = (tagName == "th");
-                    if (!tableBufs.isEmpty()) {
-                        tableBufs.last().cellBuf.clear();
-                        if (isH) {
-                            tableBufs.last().currentIsHeader = true;
-                        }
-                    }
-                    stack.push_back({CtxType::TableCell, {}, 0, isH});
-                    continue;
-                }
-                /* thead/tbody/tfoot — transparent, no context needed */
-                if (tagName == "thead" || tagName == "tbody" || tagName == "tfoot") {
-                    continue;
-                }
-                /* Block elements: p, div, section, etc. */
-                if (tagName == "p" || tagName == "div" || tagName == "section"
-                    || tagName == "article" || tagName == "header" || tagName == "footer"
-                    || tagName == "nav" || tagName == "main" || tagName == "aside"
-                    || tagName == "figure" || tagName == "figcaption" || tagName == "details"
-                    || tagName == "summary") {
-                    ensureBlankLine();
-                    continue;
-                }
-                continue;
-            }
-
-            /* --- Self-closing tags --- */
-            if (selfClose && !isClose) {
-                if (tagName == "br") {
-                    if (inCtx(stack, CtxType::Pre)) {
-                        outputCh('\n');
-                    } else {
-                        output("  \n");
-                    }
-                    continue;
-                }
-                if (tagName == "hr") {
-                    ensureBlankLine();
-                    output("---\n");
-                    continue;
-                }
-                if (tagName == "img") {
-                    QString alt = extractAttr(tagBody, "alt");
-                    QString src = extractAttr(tagBody, "src");
-                    if (!src.isEmpty()) {
-                        output("![" + alt + "](" + src + ")");
-                    }
-                    continue;
-                }
-                continue;
-            }
-
-            /* --- Close tags --- */
-            if (isClose) {
-                /* Code inside pre — skip */
-                if (tagName == "code" && inCtx(stack, CtxType::Pre)) {
-                    continue;
-                }
-                /* thead/tbody/tfoot — transparent */
-                if (tagName == "thead" || tagName == "tbody" || tagName == "tfoot") {
-                    continue;
-                }
-
-                /* Find matching context on stack */
-                CtxType closeType = CtxType::Skip;
-                if (tagName == "strong" || tagName == "b") {
-                    closeType = CtxType::Bold;
-                } else if (tagName == "em" || tagName == "i") {
-                    closeType = CtxType::Italic;
-                } else if (tagName == "code") {
-                    closeType = CtxType::Code;
-                } else if (tagName == "pre") {
-                    closeType = CtxType::Pre;
-                } else if (tagName == "a") {
-                    closeType = CtxType::Anchor;
-                } else if (
-                    tagName.size() == 2 && tagName[0] == 'h' && tagName[1] >= '1'
-                    && tagName[1] <= '6') {
-                    closeType = CtxType::Heading;
-                } else if (tagName == "ul" || tagName == "ol") {
-                    closeType = CtxType::List;
-                } else if (tagName == "li") {
-                    closeType = CtxType::ListItem;
-                } else if (tagName == "blockquote") {
-                    closeType = CtxType::Blockquote;
-                } else if (tagName == "table") {
-                    closeType = CtxType::Table;
-                } else if (tagName == "tr") {
-                    closeType = CtxType::TableRow;
-                } else if (tagName == "th" || tagName == "td") {
-                    closeType = CtxType::TableCell;
-                }
-
-                if (closeType == CtxType::Skip) {
-                    /* Block-level close tags: ensure newline */
-                    if (tagName == "p" || tagName == "div" || tagName == "section"
-                        || tagName == "article" || tagName == "header" || tagName == "footer"
-                        || tagName == "nav" || tagName == "main" || tagName == "aside"
-                        || tagName == "figure" || tagName == "figcaption" || tagName == "details"
-                        || tagName == "summary") {
-                        ensureBlankLine();
-                    }
-                    continue;
-                }
-
-                /* Search stack (up to 8 levels) for matching context */
-                int found = -1;
-                for (int s = stack.size() - 1; s >= 0 && s >= stack.size() - 8; s--) {
-                    if (stack[s].type == closeType) {
-                        found = s;
-                        break;
-                    }
-                }
-                if (found < 0) {
-                    continue; /* No match, ignore */
-                }
-
-                Context ctx = stack[found];
-                stack.remove(found);
-
-                /* Emit closing markdown */
-                switch (ctx.type) {
-                case CtxType::Heading:
-                    ensureNewline();
-                    break;
-                case CtxType::Bold:
-                    output("**");
-                    break;
-                case CtxType::Italic:
-                    output("*");
-                    break;
-                case CtxType::Code:
-                    output("`");
-                    break;
-                case CtxType::Pre:
-                    /* Ensure newline before closing fence */
-                    if (tableDepth == 0 && !result.isEmpty() && !result.endsWith('\n')) {
-                        result += '\n';
-                    }
-                    output("```\n");
-                    break;
-                case CtxType::Anchor:
-                    output("](" + ctx.data + ")");
-                    break;
-                case CtxType::List:
-                    ensureNewline();
-                    break;
-                case CtxType::ListItem:
-                    ensureNewline();
-                    break;
-                case CtxType::Blockquote:
-                    ensureNewline();
-                    break;
-                case CtxType::TableCell:
-                    if (!tableBufs.isEmpty()) {
-                        tableBufs.last().currentRow.push_back(tableBufs.last().cellBuf.trimmed());
-                        tableBufs.last().cellBuf.clear();
-                    }
-                    break;
-                case CtxType::TableRow:
-                    if (!tableBufs.isEmpty()) {
-                        tableBufs.last().rows.push_back(tableBufs.last().currentRow);
-                        tableBufs.last().headerFlags.push_back(tableBufs.last().currentIsHeader);
-                        tableBufs.last().currentRow.clear();
-                    }
-                    break;
-                case CtxType::Table:
-                    if (!tableBufs.isEmpty()) {
-                        TableBuffer tb = tableBufs.last();
-                        tableBufs.pop_back();
-                        tableDepth--;
-                        output(formatTable(tb));
-                    }
-                    break;
-                default:
-                    break;
-                }
-                continue;
-            }
-            continue;
-        }
-
-        /* Skip-depth */
-        if (skipDepth > 0) {
-            i++;
-            continue;
-        }
-
-        /* HTML entity */
-        if (ch == '&') {
-            int semi = html.indexOf(';', i + 1);
-            if (semi > 0 && semi - i < 12) {
-                QString entity = html.mid(i + 1, semi - i - 1);
-                i              = semi + 1;
-                output(decodeEntity(entity));
-                continue;
-            }
-        }
-
-        /* Text content */
-        if (inCtx(stack, CtxType::Pre)) {
-            /* Preserve whitespace in <pre> */
-            outputCh(ch);
-            i++;
-            continue;
-        }
-
-        /* Blockquote prefix for new lines */
-        if (ch == '\n' && inCtx(stack, CtxType::Blockquote)) {
-            outputCh('\n');
-            output("> ");
-            i++;
-            /* Skip whitespace after newline */
-            while (i < len && (html[i] == ' ' || html[i] == '\t' || html[i] == '\n')) {
-                i++;
-            }
-            continue;
-        }
-
-        /* Collapse whitespace outside <pre> */
-        if (ch == '\n' || ch == '\r' || ch == '\t' || ch == ' ') {
-            /* Emit a single space if not already at whitespace */
-            if (tableDepth > 0 && !tableBufs.isEmpty()) {
-                if (!tableBufs.last().cellBuf.isEmpty() && !tableBufs.last().cellBuf.endsWith(' ')) {
-                    tableBufs.last().cellBuf += ' ';
-                }
-            } else {
-                if (!result.isEmpty() && !result.endsWith(' ') && !result.endsWith('\n')) {
-                    result += ' ';
-                }
-            }
-            i++;
-            continue;
-        }
-
-        outputCh(ch);
-        i++;
-    }
-
-    /* Collapse runs of blank lines (3+ newlines → 2) */
-    QString collapsed;
-    collapsed.reserve(result.size());
+    QString out;
+    out.reserve(input.size());
     int newlines = 0;
-    for (QChar c : result) {
-        if (c == '\n') {
-            newlines++;
+    for (QChar character : input) {
+        if (character == QLatin1Char('\n')) {
+            ++newlines;
             if (newlines <= 2) {
-                collapsed += c;
+                out += character;
             }
         } else {
             newlines = 0;
-            collapsed += c;
+            out += character;
+        }
+    }
+    return out;
+}
+
+class HtmlMarkdownEmitter
+{
+public:
+    QString convert(const QString &html)
+    {
+        const QByteArray utf8 = html.toUtf8();
+        if (utf8.isEmpty()) {
+            return {};
+        }
+        lxb_html_document_t *doc = lxb_html_document_create();
+        if (doc == nullptr) {
+            return {};
+        }
+        /* Lexbor's parser implements WHATWG's error-recovery algorithm;
+         * a non-OK status still leaves a usable tree, so we don't bail. */
+        (void) lxb_html_document_parse(
+            doc,
+            reinterpret_cast<const lxb_char_t *>(utf8.constData()),
+            static_cast<size_t>(utf8.size()));
+
+        lxb_html_body_element_t *body = lxb_html_document_body_element(doc);
+        if (body != nullptr) {
+            walkChildren(lxb_dom_interface_node(body));
+        }
+        lxb_html_document_destroy(doc);
+        return collapseBlankLines(result).trimmed();
+    }
+
+private:
+    QString              result;
+    QVector<TableBuffer> tableBufs;
+    QStringList          listKinds;
+    QVector<int>         olCounters;
+    int                  tableDepth      = 0;
+    int                  preDepth        = 0;
+    int                  boldDepth       = 0;
+    int                  italicDepth     = 0;
+    int                  blockquoteDepth = 0;
+
+    QString *outBuf()
+    {
+        if (tableDepth > 0 && !tableBufs.isEmpty()) {
+            return &tableBufs.last().cellBuf;
+        }
+        return &result;
+    }
+
+    void put(const QString &str) { *outBuf() += str; }
+    void put(QChar character) { *outBuf() += character; }
+
+    void ensureNewline()
+    {
+        if (tableDepth > 0) {
+            return;
+        }
+        if (!result.isEmpty() && !result.endsWith(QLatin1Char('\n'))) {
+            result += QLatin1Char('\n');
+        }
+    }
+    void ensureBlankLine()
+    {
+        if (tableDepth > 0 || result.isEmpty()) {
+            return;
+        }
+        if (!result.endsWith(QLatin1Char('\n'))) {
+            result += QLatin1Char('\n');
+        }
+        if (!result.endsWith(QStringLiteral("\n\n"))) {
+            result += QLatin1Char('\n');
         }
     }
 
-    return collapsed.trimmed();
+    static QString tagName(lxb_dom_node_t *node)
+    {
+        size_t            len  = 0;
+        const lxb_char_t *name = lxb_dom_element_local_name(lxb_dom_interface_element(node), &len);
+        if (name == nullptr) {
+            return {};
+        }
+        return QString::fromUtf8(reinterpret_cast<const char *>(name), static_cast<int>(len));
+    }
+    static QString getAttr(lxb_dom_node_t *node, const char *attr)
+    {
+        size_t            len   = 0;
+        const lxb_char_t *value = lxb_dom_element_get_attribute(
+            lxb_dom_interface_element(node),
+            reinterpret_cast<const lxb_char_t *>(attr),
+            std::strlen(attr),
+            &len);
+        if (value == nullptr) {
+            return {};
+        }
+        return QString::fromUtf8(reinterpret_cast<const char *>(value), static_cast<int>(len));
+    }
+
+    void walkChildren(lxb_dom_node_t *parent)
+    {
+        for (lxb_dom_node_t *child = lxb_dom_node_first_child(parent); child != nullptr;
+             child                 = lxb_dom_node_next(child)) {
+            walk(child);
+        }
+    }
+
+    void walk(lxb_dom_node_t *node)
+    {
+        if (node->type == LXB_DOM_NODE_TYPE_TEXT) {
+            handleText(node);
+            return;
+        }
+        if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) {
+            return;
+        }
+        const QString tag = tagName(node);
+        if (tag.isEmpty() || skipTags().contains(tag)) {
+            return;
+        }
+
+        if (tag.size() == 2 && tag[0] == QLatin1Char('h') && tag[1] >= QLatin1Char('1')
+            && tag[1] <= QLatin1Char('6')) {
+            ensureBlankLine();
+            put(QString(tag[1].digitValue(), QLatin1Char('#')));
+            put(QLatin1Char(' '));
+            walkChildren(node);
+            ensureNewline();
+            return;
+        }
+
+        if (tag == QStringLiteral("strong") || tag == QStringLiteral("b")) {
+            const bool wasOuter = (boldDepth == 0);
+            if (wasOuter) {
+                put(QStringLiteral("**"));
+            }
+            ++boldDepth;
+            walkChildren(node);
+            --boldDepth;
+            if (wasOuter) {
+                put(QStringLiteral("**"));
+            }
+            return;
+        }
+        if (tag == QStringLiteral("em") || tag == QStringLiteral("i")) {
+            const bool wasOuter = (italicDepth == 0);
+            if (wasOuter) {
+                put(QLatin1Char('*'));
+            }
+            ++italicDepth;
+            walkChildren(node);
+            --italicDepth;
+            if (wasOuter) {
+                put(QLatin1Char('*'));
+            }
+            return;
+        }
+        if (tag == QStringLiteral("code") && preDepth == 0) {
+            put(QLatin1Char('`'));
+            walkChildren(node);
+            put(QLatin1Char('`'));
+            return;
+        }
+        if (tag == QStringLiteral("pre")) {
+            ensureBlankLine();
+            QString lang = getAttr(node, "class");
+            if (lang.startsWith(QStringLiteral("language-"))) {
+                lang = lang.mid(9);
+            } else {
+                lang.clear();
+            }
+            if (lang.isEmpty()) {
+                /* GFM convention: <pre><code class="language-x">…</code></pre>.
+                 * Fish the language out of the inner code if present. */
+                for (lxb_dom_node_t *kid = lxb_dom_node_first_child(node); kid != nullptr;
+                     kid                 = lxb_dom_node_next(kid)) {
+                    if (kid->type != LXB_DOM_NODE_TYPE_ELEMENT) {
+                        continue;
+                    }
+                    if (tagName(kid) != QStringLiteral("code")) {
+                        continue;
+                    }
+                    const QString cls = getAttr(kid, "class");
+                    if (cls.startsWith(QStringLiteral("language-"))) {
+                        lang = cls.mid(9);
+                    }
+                    break;
+                }
+            }
+            put(QStringLiteral("```") + lang + QLatin1Char('\n'));
+            ++preDepth;
+            walkChildren(node);
+            --preDepth;
+            ensureNewline();
+            put(QStringLiteral("```\n"));
+            return;
+        }
+        if (tag == QStringLiteral("a")) {
+            const QString href = getAttr(node, "href");
+            put(QLatin1Char('['));
+            walkChildren(node);
+            put(QStringLiteral("](") + href + QLatin1Char(')'));
+            return;
+        }
+        if (tag == QStringLiteral("ul") || tag == QStringLiteral("ol")) {
+            ensureNewline();
+            listKinds.push_back(tag);
+            if (tag == QStringLiteral("ol")) {
+                olCounters.push_back(0);
+            }
+            walkChildren(node);
+            listKinds.pop_back();
+            if (tag == QStringLiteral("ol")) {
+                olCounters.pop_back();
+            }
+            ensureNewline();
+            return;
+        }
+        if (tag == QStringLiteral("li")) {
+            ensureNewline();
+            const int     depth = listKinds.size();
+            const QString indent((depth > 0 ? depth - 1 : 0) * 2, QLatin1Char(' '));
+            if (!listKinds.isEmpty() && listKinds.last() == QStringLiteral("ol")) {
+                if (!olCounters.isEmpty()) {
+                    ++olCounters.last();
+                    put(indent + QString::number(olCounters.last()) + QStringLiteral(". "));
+                }
+            } else {
+                put(indent + QStringLiteral("- "));
+            }
+            walkChildren(node);
+            ensureNewline();
+            return;
+        }
+        if (tag == QStringLiteral("blockquote")) {
+            ensureBlankLine();
+            put(QStringLiteral("> "));
+            ++blockquoteDepth;
+            walkChildren(node);
+            --blockquoteDepth;
+            ensureNewline();
+            return;
+        }
+        if (tag == QStringLiteral("br")) {
+            if (preDepth > 0) {
+                put(QLatin1Char('\n'));
+            } else {
+                put(QStringLiteral("  \n"));
+            }
+            return;
+        }
+        if (tag == QStringLiteral("hr")) {
+            ensureBlankLine();
+            put(QStringLiteral("---\n"));
+            return;
+        }
+        if (tag == QStringLiteral("img")) {
+            const QString alt = getAttr(node, "alt");
+            const QString src = getAttr(node, "src");
+            if (!src.isEmpty()) {
+                put(QStringLiteral("![") + alt + QStringLiteral("](") + src + QLatin1Char(')'));
+            }
+            return;
+        }
+        if (tag == QStringLiteral("table")) {
+            ensureBlankLine();
+            ++tableDepth;
+            tableBufs.push_back(TableBuffer{});
+            walkChildren(node);
+            const TableBuffer table = tableBufs.last();
+            tableBufs.pop_back();
+            --tableDepth;
+            put(formatTable(table));
+            return;
+        }
+        if (tag == QStringLiteral("tr")) {
+            if (!tableBufs.isEmpty()) {
+                tableBufs.last().currentRow.clear();
+                tableBufs.last().currentIsHeader = false;
+            }
+            walkChildren(node);
+            if (!tableBufs.isEmpty()) {
+                tableBufs.last().rows.push_back(tableBufs.last().currentRow);
+                tableBufs.last().headerFlags.push_back(tableBufs.last().currentIsHeader);
+                tableBufs.last().currentRow.clear();
+            }
+            return;
+        }
+        if (tag == QStringLiteral("th") || tag == QStringLiteral("td")) {
+            const bool isHeader = (tag == QStringLiteral("th"));
+            if (!tableBufs.isEmpty()) {
+                tableBufs.last().cellBuf.clear();
+                if (isHeader) {
+                    tableBufs.last().currentIsHeader = true;
+                }
+            }
+            walkChildren(node);
+            if (!tableBufs.isEmpty()) {
+                tableBufs.last().currentRow.push_back(tableBufs.last().cellBuf.trimmed());
+                tableBufs.last().cellBuf.clear();
+            }
+            return;
+        }
+
+        if (blockTags().contains(tag)) {
+            ensureBlankLine();
+            walkChildren(node);
+            ensureBlankLine();
+            return;
+        }
+
+        /* Unknown / inline-but-unhandled (span, mark, font, ...): walk
+         * through transparently so descendants still render. */
+        walkChildren(node);
+    }
+
+    void handleText(lxb_dom_node_t *node)
+    {
+        size_t            len = 0;
+        const lxb_char_t *raw = lxb_dom_node_text_content(node, &len);
+        if (raw == nullptr || len == 0) {
+            return;
+        }
+        const QString text
+            = QString::fromUtf8(reinterpret_cast<const char *>(raw), static_cast<int>(len));
+        if (text.isEmpty()) {
+            return;
+        }
+
+        if (preDepth > 0) {
+            put(text);
+            return;
+        }
+
+        QString out;
+        out.reserve(text.size());
+        bool whitespace = false;
+        for (QChar character : text) {
+            if (character == QLatin1Char(' ') || character == QLatin1Char('\t')
+                || character == QLatin1Char('\n') || character == QLatin1Char('\r')) {
+                whitespace = true;
+                continue;
+            }
+            if (whitespace && !out.isEmpty()) {
+                out += QLatin1Char(' ');
+            }
+            whitespace = false;
+            out += character;
+        }
+        if (whitespace && !out.isEmpty()) {
+            out += QLatin1Char(' ');
+        }
+        if (out.isEmpty()) {
+            return;
+        }
+
+        QString *buf = outBuf();
+        if (out.startsWith(QLatin1Char(' '))
+            && (buf->isEmpty() || buf->endsWith(QLatin1Char('\n'))
+                || buf->endsWith(QLatin1Char(' ')))) {
+            out.remove(0, 1);
+        }
+        if (out.isEmpty()) {
+            return;
+        }
+
+        if (blockquoteDepth > 0 && tableDepth == 0) {
+            out.replace(QLatin1Char('\n'), QStringLiteral("\n> "));
+        }
+        put(out);
+    }
+};
+
+} // namespace
+
+QString QSocToolWebFetch::htmlToMarkdown(const QString &html)
+{
+    /* Lexbor parses HTML5 per the WHATWG spec (full error-recovery)
+     * and exposes a DOM we walk to emit Markdown. The previous hand-
+     * rolled stream parser missed many real-world malformations. */
+    HtmlMarkdownEmitter emitter;
+    return emitter.convert(html);
 }
 
 QString QSocToolWebFetch::execute(const json &arguments)
