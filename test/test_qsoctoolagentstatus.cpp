@@ -5,6 +5,7 @@
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/tool/qsoctoolagentstatus.h"
+#include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
 #include <QtCore>
@@ -14,18 +15,6 @@ using json = nlohmann::json;
 
 namespace {
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -34,8 +23,6 @@ private:
     QSocAgent *makeAgent() { return new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig()); }
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     void testNameAndSchema()
     {
         QSocSubAgentTaskSource src;
@@ -131,5 +118,5 @@ private slots:
 
 } // namespace
 
-QTEST_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 #include "test_qsoctoolagentstatus.moc"
