@@ -4,6 +4,7 @@
 #include "cli/qsoccliworker.h"
 #include "common/qsocconsole.h"
 #include "common/qsocproxy.h"
+#include "common/qsocwinconsole.h"
 #include "common/qstaticicontheme.h"
 #include "common/qstatictranslator.h"
 #include "gui/mainwindow/mainwindow.h"
@@ -28,6 +29,10 @@ bool isGui(int &argc, char *argv[])
 int main(int argc, char *argv[])
 {
     int result = 0;
+    /* Force UTF-8 + VT on Windows console before any output happens. No-op
+       on POSIX. Must run before QSocConsole::install() so the first byte
+       written lands in a console already configured for UTF-8 + ANSI. */
+    QSocWinConsole::bootstrap();
     /* Install message handler to direct outputs to appropriate streams */
     QSocConsole::install();
     /* Bootstrap QNetworkProxyFactory once so QNetworkProxy::DefaultProxy
@@ -59,6 +64,8 @@ int main(int argc, char *argv[])
 
     /* Restore original message handler before exiting */
     QSocConsole::restore();
+    /* Restore the original console code page / mode (Windows only). */
+    QSocWinConsole::restore();
 
     return result;
 }
