@@ -45,7 +45,67 @@ The netlist processor performs sophisticated port direction validation to detect
 <soc-net-port-direction-drivers>
 - Identifies nets with multiple output drivers that could cause conflicts
 - Allows legitimate multiple drivers on non-overlapping bit ranges
+- Allows legitimate multiple drivers under mutually exclusive `ifdef`/`ifndef`
+  guards (see #emph[Macro guard exemption] below)
 - Reports potential bus contention issues with detailed diagnostic information
+
+==== Macro Guard Exemption
+<soc-net-port-direction-drivers-macro>
+A common pattern in technology-portable RTL is two competing drivers selected
+by `ifdef`/`ifndef` of a tech-flag macro (FPGA buffer vs. ASIC buffer, sim
+shim vs. silicon cell, etc.). After preprocessing, only one driver is
+present per build configuration, so the net is single-driven; flagging it
+as a conflict produces a false positive.
+
+QSoC models each instance's `ifdef` / `ifndef` lists as a Boolean cube
+(conjunction of literals over macro symbols):
+
+$ C = (and.big_(m in "ifdef") +m) and (and.big_(m in "ifndef") not m) $
+
+Two drivers cannot be simultaneously active when their cubes are disjoint.
+For cubes built from `ifdef` / `ifndef` lists, this reduces to a
+constant-time test: cubes $C_1$ and $C_2$ are disjoint iff some macro
+appears positively in one driver and negatively in the other, that is
+
+$ exists m: (m in "ifdef"_1 and m in "ifndef"_2)
+            or (m in "ifndef"_1 and m in "ifdef"_2). $
+
+This is the standard cube-disjointness test from Boolean cube algebra (the
+same primitive used in classical logic minimization). It is decidable in
+$O(|C_1| + |C_2|)$ via hash-set lookup. No SAT/SMT solver is required, and
+no false positives arise from `defined(X)` versus `not "defined"(X)` of the
+same macro.
+
+Empty guards represent the universal cube (driver is always active) and
+are never disjoint with any other cube, so unguarded drivers continue to be
+checked unchanged.
+
+==== Example: Tech-Portable Buffer
+<soc-net-port-direction-drivers-tech-example>
+```yaml
+instance:
+  u_clkbuf_fpga:
+    module: clk_buf_fpga
+    ifdef:  [TECH_FPGA]    # active iff TECH_FPGA defined
+  u_clkbuf_asic:
+    module: clk_buf_asic
+    ifndef: [TECH_FPGA]    # active iff TECH_FPGA undefined
+
+net:
+  jtag_tck:
+    - { instance: u_clkbuf_fpga, port: z }
+    - { instance: u_clkbuf_asic, port: z }
+    - { instance: top,           port: jtag_tck }
+```
+
+The two drivers carry the cubes $C_1 = +"TECH_FPGA"$ and
+$C_2 = not "TECH_FPGA"$. The polarity collision on `TECH_FPGA` proves them
+disjoint, so QSoC suppresses the multi-driver `FIXME` for `jtag_tck`.
+
+If both drivers were guarded by different macros (for example
+`ifdef HAS_FPGA_CLKBUF` and `ifdef HAS_ASIC_CLKBUF`), there is no polarity
+collision and both could be defined simultaneously; QSoC keeps the warning
+in this conservative case, as it should.
 
 === Undriven Net Detection
 <soc-net-port-direction-undriven>

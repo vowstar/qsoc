@@ -115,36 +115,52 @@ public:
      */
     struct PortDetailInfo
     {
-        PortType type;
-        QString  instanceName; /**< For Module type only, empty for TopLevel */
-        QString  portName;
-        QString  width;
-        QString  direction;
-        QString  bitSelect; /**< Bit selection if specified (e.g. "[7:0]", "[3]") */
+        PortType    type;
+        QString     instanceName; /**< For Module type only, empty for TopLevel */
+        QString     portName;
+        QString     width;
+        QString     direction;
+        QString     bitSelect;   /**< Bit selection if specified (e.g. "[7:0]", "[3]") */
+        QStringList ifdefGuard;  /**< Macros that must be defined for this driver */
+        QStringList ifndefGuard; /**< Macros that must be undefined for this driver */
 
         PortDetailInfo(
-            PortType portType,
-            QString  instanceName,
-            QString  portName,
-            QString  widthSpec,
-            QString  direction,
-            QString  bitSelection = "")
+            PortType    portType,
+            QString     instanceName,
+            QString     portName,
+            QString     widthSpec,
+            QString     direction,
+            QString     bitSelection = "",
+            QStringList ifdefList    = {},
+            QStringList ifndefList   = {})
             : type(portType)
             , instanceName(std::move(instanceName))
             , portName(std::move(portName))
             , width(std::move(widthSpec))
             , direction(std::move(direction))
             , bitSelect(std::move(bitSelection))
+            , ifdefGuard(std::move(ifdefList))
+            , ifndefGuard(std::move(ifndefList))
         {}
 
         static PortDetailInfo createModulePort(
-            const QString &instanceName,
-            const QString &portName,
-            const QString &widthSpec,
-            const QString &direction,
-            const QString &bitSelection = "")
+            const QString     &instanceName,
+            const QString     &portName,
+            const QString     &widthSpec,
+            const QString     &direction,
+            const QString     &bitSelection = "",
+            const QStringList &ifdefList    = {},
+            const QStringList &ifndefList   = {})
         {
-            return {PortType::Module, instanceName, portName, widthSpec, direction, bitSelection};
+            return {
+                PortType::Module,
+                instanceName,
+                portName,
+                widthSpec,
+                direction,
+                bitSelection,
+                ifdefList,
+                ifndefList};
         }
 
         static PortDetailInfo createTopLevelPort(
@@ -180,6 +196,23 @@ public:
      */
     PortDirectionStatus checkPortDirectionConsistencyWithBitOverlap(
         const QList<PortDetailInfo> &portDetails);
+
+    /**
+     * @brief Test whether two driver guard cubes are mutually exclusive
+     * @details Each driver carries an `ifdef`/`ifndef` cube
+     *          $C = (\bigwedge_{m \in \text{ifdef}} +m) \wedge
+     *               (\bigwedge_{m \in \text{ifndef}} \neg m)$.
+     *          The cubes are disjoint iff some macro appears positively
+     *          in one driver and negatively in the other; the standard
+     *          cube-disjointness test from boolean cube algebra. Empty
+     *          guards represent the universal cube (always active) and
+     *          are never disjoint with any other cube.
+     * @param lhs First driver
+     * @param rhs Second driver
+     * @return true if the drivers can never be active under the same
+     *         macro configuration
+     */
+    static bool guardsAreDisjoint(const PortDetailInfo &lhs, const PortDetailInfo &rhs);
 
     /**
      * @brief Calculate the width of a bit selection expression
