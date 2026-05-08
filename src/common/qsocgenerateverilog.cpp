@@ -571,6 +571,28 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             /* Collect comb/seq/fsm signals (inputs and outputs) once before the loop */
             const QList<PortDetailInfo> combSeqFsmSignals = collectCombSeqFsmSignals();
 
+            /* Build per-instance ifdef/ifndef guard cache so the multi-driver
+               check can prove drivers under mutually exclusive macros are not
+               actually conflicting. */
+            QMap<QString, QPair<QStringList, QStringList>> instanceGuards;
+            if (netlistData["instance"] && netlistData["instance"].IsMap()) {
+                for (auto instIter = netlistData["instance"].begin();
+                     instIter != netlistData["instance"].end();
+                     ++instIter) {
+                    if (!instIter->first.IsScalar()) {
+                        continue;
+                    }
+                    const QString instanceName = QString::fromStdString(
+                        instIter->first.as<std::string>());
+                    QStringList ifdefList;
+                    QStringList ifndefList;
+                    if (instIter->second.IsMap()) {
+                        parseMacroCondition(instIter->second, instanceName, ifdefList, ifndefList);
+                    }
+                    instanceGuards.insert(instanceName, qMakePair(ifdefList, ifndefList));
+                }
+            }
+
             /* Track nets that resolved to scalar wires so per-port [0] / [0:0]
                selects on those nets can be scrubbed before instantiation. */
             QSet<QString> scalarNets;
@@ -806,10 +828,19 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             }
                         }
 
-                        /* Add to detailed port information */
+                        /* Add to detailed port information, attaching the
+                         * instance's macro guard cube so guard-disjoint
+                         * drivers are exempted from multi-driver detection. */
+                        const auto guardEntry = instanceGuards.value(instanceName);
                         portDetails.append(
                             PortDetailInfo::createModulePort(
-                                instanceName, portName, portWidthSpec, portDirection, bitSelection));
+                                instanceName,
+                                portName,
+                                portWidthSpec,
+                                portDirection,
+                                bitSelection,
+                                guardEntry.first,
+                                guardEntry.second));
                     }
                 }
 

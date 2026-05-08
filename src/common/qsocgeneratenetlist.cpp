@@ -1456,16 +1456,16 @@ QSocGenerateManager::checkPortDirectionConsistencyWithBitOverlap(
                 const QString &bitSelect1 = outputPorts[i].bitSelect;
                 const QString &bitSelect2 = outputPorts[j].bitSelect;
 
-                /* If both ports have bit selections, check for overlap */
+                bool bitsOverlap = false;
                 if (!bitSelect1.isEmpty() && !bitSelect2.isEmpty()) {
-                    if (doBitRangesOverlap(bitSelect1, bitSelect2)) {
-                        return PortDirectionStatus::Multidrive;
-                    }
-                } else if (bitSelect1.isEmpty() && bitSelect2.isEmpty()) {
-                    /* Both ports drive the entire net - definite conflict */
-                    return PortDirectionStatus::Multidrive;
+                    bitsOverlap = doBitRangesOverlap(bitSelect1, bitSelect2);
                 } else {
-                    /* One port has bit selection, other drives entire net - conflict */
+                    /* At least one drives the whole net: bits overlap by
+                     * definition (whole-net contains every range) */
+                    bitsOverlap = true;
+                }
+
+                if (bitsOverlap && !guardsAreDisjoint(outputPorts[i], outputPorts[j])) {
                     return PortDirectionStatus::Multidrive;
                 }
             }
@@ -1480,16 +1480,14 @@ QSocGenerateManager::checkPortDirectionConsistencyWithBitOverlap(
                 const QString &outputBitSelect = outputPort.bitSelect;
                 const QString &inoutBitSelect  = inoutPort.bitSelect;
 
-                /* If both have bit selections, check for overlap */
+                bool bitsOverlap = false;
                 if (!outputBitSelect.isEmpty() && !inoutBitSelect.isEmpty()) {
-                    if (doBitRangesOverlap(outputBitSelect, inoutBitSelect)) {
-                        return PortDirectionStatus::Multidrive;
-                    }
-                } else if (outputBitSelect.isEmpty() && inoutBitSelect.isEmpty()) {
-                    /* Both affect the entire net - conflict */
-                    return PortDirectionStatus::Multidrive;
+                    bitsOverlap = doBitRangesOverlap(outputBitSelect, inoutBitSelect);
                 } else {
-                    /* One has bit selection, other affects entire net - conflict */
+                    bitsOverlap = true;
+                }
+
+                if (bitsOverlap && !guardsAreDisjoint(outputPort, inoutPort)) {
                     return PortDirectionStatus::Multidrive;
                 }
             }
@@ -1498,6 +1496,26 @@ QSocGenerateManager::checkPortDirectionConsistencyWithBitOverlap(
 
     /* No conflicts found */
     return PortDirectionStatus::Valid;
+}
+
+bool QSocGenerateManager::guardsAreDisjoint(const PortDetailInfo &lhs, const PortDetailInfo &rhs)
+{
+    /* Cube disjointness: two cubes over the same macro space are
+     * disjoint iff some macro appears with opposite polarity. With
+     * `ifdef` lists holding +literals and `ifndef` lists holding
+     * -literals, that reduces to a non-empty intersection between
+     * one driver's `ifdef` and the other's `ifndef`. */
+    for (const QString &macro : lhs.ifdefGuard) {
+        if (rhs.ifndefGuard.contains(macro)) {
+            return true;
+        }
+    }
+    for (const QString &macro : lhs.ifndefGuard) {
+        if (rhs.ifdefGuard.contains(macro)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
