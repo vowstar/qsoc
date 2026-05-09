@@ -132,6 +132,7 @@ private slots:
     void blockReportsFoldable();
     void foldedBlockKeepsOnlyMetadataRow();
     void foldedBlockEmitsNoGraphicsPayload();
+    void foldedBlockToAnsiOmitsGraphicsEscape();
 
     /* iTerm2 path */
     void iTerm2FirstFrameEmitsInlineWithCellSize();
@@ -853,6 +854,26 @@ void Test::foldedBlockEmitsNoGraphicsPayload()
      * not emit any place sequence; the scroll view drives the
      * clear of any prior placement. */
     QCOMPARE(block.emitGraphicsLayer(3, 1, 60), QString());
+}
+
+/* The cooked-mode dump path must honor folded state so the
+ * scrollback after alt-screen exit shows just `[image: ...]` for
+ * folded blocks; otherwise a kitty placement plus the reserved
+ * empty cell rectangle would double the footprint. */
+void Test::foldedBlockToAnsiOmitsGraphicsEscape()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.setFolded(true);
+    const QString out = block.toAnsi(60);
+    QVERIFY(!out.contains(QLatin1String(kKittyEscapePrefix)));
+    QVERIFY(!out.contains(QLatin1String(kITerm2EscapePrefix)));
+    QVERIFY(out.contains(QStringLiteral("[image: ")));
 }
 
 QSOC_TEST_MAIN(Test)

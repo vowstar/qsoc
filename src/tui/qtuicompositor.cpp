@@ -72,6 +72,13 @@ void QTuiCompositor::stop()
         fflush(stdout);
     }
 
+    /* Fold every image preview before the cooked-mode dump runs.
+     * Otherwise toAnsi would emit a kitty placement followed by
+     * the reserved blank cell rectangle, doubling the vertical
+     * footprint and leaving a large visually empty gap below each
+     * image in the user's scrollback. */
+    scrollView.foldAllImagePreviews();
+
     exitAltScreen();
 
     /* Block-aware ANSI dump preserves headings, code blocks, tool

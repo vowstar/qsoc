@@ -137,6 +137,12 @@ public:
      * compositor on shutdown right before exiting the alt screen. */
     QString collectGraphicsDestroy() const;
 
+    /* Fold every image preview block currently in the history. The
+     * compositor invokes this on shutdown so the cooked-mode
+     * scrollback dump emits one metadata line per image instead of
+     * stacking a kitty placement on top of the placeholder cells. */
+    void foldAllImagePreviews();
+
 private:
     std::vector<std::unique_ptr<QTuiBlock>> blocks;
     QString                                 partialLine; /* Current incomplete line */

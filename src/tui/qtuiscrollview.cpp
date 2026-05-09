@@ -734,6 +734,15 @@ QString QTuiScrollView::collectGraphicsDestroy() const
     return out;
 }
 
+void QTuiScrollView::foldAllImagePreviews()
+{
+    for (auto &block : blocks) {
+        if (dynamic_cast<QTuiImagePreviewBlock *>(block.get()) != nullptr) {
+            block->setFolded(true);
+        }
+    }
+}
+
 void QTuiScrollView::clear()
 {
     blocks.clear();
