@@ -31,13 +31,23 @@ QString QSocToolFileRead::getName() const
 
 QString QSocToolFileRead::getDescription() const
 {
+    /* Only advertise image-reading when the active model actually
+     * accepts image content blocks. A text-only model would either
+     * silently drop the image attachment or refuse the call after
+     * seeing it; better to keep the tool description honest so the
+     * model never asks for a capability it does not have. */
+    const bool image = llmService != nullptr && llmService->currentSupportsImage();
+    if (image) {
+        return "Read the contents of a file. Any file on the system can be "
+               "read. Image files (PNG, JPG, GIF, WebP) are returned as visual "
+               "content that the multimodal LLM can see directly. When the "
+               "user attaches or references a screenshot or image path, "
+               "ALWAYS use this tool to view the file at the path; the tool "
+               "result will contain the actual image, not a description. "
+               "This tool will work with all temporary file paths.";
+    }
     return "Read the contents of a file. Any file on the system can be "
-           "read. Image files (PNG, JPG, GIF, WebP) are returned as visual "
-           "content that the multimodal LLM can see directly. When the "
-           "user attaches or references a screenshot or image path, "
-           "ALWAYS use this tool to view the file at the path; the tool "
-           "result will contain the actual image, not a description. "
-           "This tool will work with all temporary file paths.";
+           "read. This tool will work with all temporary file paths.";
 }
 
 json QSocToolFileRead::getParametersSchema() const

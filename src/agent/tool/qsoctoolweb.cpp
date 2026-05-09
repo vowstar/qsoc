@@ -242,11 +242,20 @@ QString QSocToolWebFetch::getName() const
 
 QString QSocToolWebFetch::getDescription() const
 {
+    /* Mirror read_file's policy: only mention image-URL handling
+     * when the active model accepts image content blocks. The agent
+     * rebuilds tool definitions per request, so a model switch
+     * picks up the right text on the next turn. */
+    const bool image = !llmService.isNull() && llmService->currentSupportsImage();
+    if (image) {
+        return "Fetch content from a URL. HTML pages are converted to "
+               "Markdown. Image URLs (PNG, JPG, GIF, WebP) are returned as "
+               "visual content that the multimodal LLM can see directly, the "
+               "same way as read_file on a local image. Returns the page "
+               "content (truncated if too large).";
+    }
     return "Fetch content from a URL. HTML pages are converted to "
-           "Markdown. Image URLs (PNG, JPG, GIF, WebP) are returned as "
-           "visual content that the multimodal LLM can see directly, the "
-           "same way as read_file on a local image. Returns the page "
-           "content (truncated if too large).";
+           "Markdown. Returns the page content (truncated if too large).";
 }
 
 json QSocToolWebFetch::getParametersSchema() const
