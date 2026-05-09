@@ -28,20 +28,11 @@ void clearGraphicsEnv()
     qunsetenv("QSOC_NO_IMAGE_GRAPHICS");
 }
 
-QTuiImagePreviewBlock makePngBlock()
-{
-    return {
-        QStringLiteral("/tmp/x.png"),
-        QStringLiteral("image/png"),
-        320,
-        240,
-        QByteArray("\x89PNG\r\n", 6)};
-}
-
-/* Build a real, decodable image buffer in the requested format. The
- * kitty-graphics path now re-encodes through QImage, so the magic-byte
- * stub used elsewhere in this file is not enough; we need bytes that
- * QImage::loadFromData accepts. */
+/* Build a real, decodable image buffer in the requested format.
+ * Tests must never embed magic-byte stubs because the project rule
+ * requires every test fixture (including images) to be generated
+ * at runtime from code; the codec path runs through QImage either
+ * way. */
 QByteArray makeRealImageBytes(const char *format)
 {
     QImage image(16, 16, QImage::Format_RGB32);
@@ -52,6 +43,16 @@ QByteArray makeRealImageBytes(const char *format)
     image.save(&buffer, format);
     buffer.close();
     return bytes;
+}
+
+QTuiImagePreviewBlock makePngBlock()
+{
+    return {
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG")};
 }
 
 constexpr auto kKittyEscapePrefix  = "\x1b_G";
@@ -98,9 +99,11 @@ private slots:
     void graphicsTerminalReservesCellRectangle();
     void cellRectFitsViewportWidth();
     void cellRectClampsTallImageToMaxRows();
-    void cellRectClampsWideImageToMinRows();
+    void wideBannerKeepsNativeFlatRowCount();
     void zeroDimensionsLeaveNoReservation();
     void reservedRowsArePaintedBlank();
+    void smallImageStaysAtNativeSize();
+    void resizePreservesAspectRatio();
 
     /* Live overlay state machine */
     void emitGraphicsLayerEmptyOnTextOnlyTerminal();
@@ -144,7 +147,7 @@ void Test::layoutProducesSingleRowPlaceholder()
         QStringLiteral("image/png"),
         800,
         600,
-        QByteArray("\x89PNG\r\n", 6));
+        makeRealImageBytes("PNG"));
     block.layout(80);
     QCOMPARE(block.rowCount(), 1);
 }
@@ -156,7 +159,7 @@ void Test::plainTextSummarisesMetadata()
         QStringLiteral("image/png"),
         800,
         600,
-        QByteArray("\x89PNG\r\n", 6));
+        makeRealImageBytes("PNG"));
     const QString text = block.toPlainText();
     QVERIFY(text.contains(QStringLiteral("/tmp/foo.png")));
     QVERIFY(text.contains(QStringLiteral("png")));
@@ -177,7 +180,7 @@ void Test::toAnsiContainsPlaceholderText()
         QStringLiteral("image/png"),
         320,
         240,
-        QByteArray("\x89PNG\r\n", 6));
+        makeRealImageBytes("PNG"));
     const QString out = block.toAnsi(60);
     QVERIFY(out.contains(QStringLiteral("[image: ")));
     QVERIFY(out.contains(QStringLiteral("x.png")));
@@ -381,15 +384,18 @@ void Test::cellRectClampsTallImageToMaxRows()
     QVERIFY(block.imageCellRows() <= 30);
 }
 
-void Test::cellRectClampsWideImageToMinRows()
+void Test::wideBannerKeepsNativeFlatRowCount()
 {
     qputenv("KITTY_WINDOW_ID", "1");
     QTuiImagePreviewBlock
         block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 4000, 100, QByteArray());
     block.layout(80);
-    /* A skinny banner needs a floor so the actual image is not too
-     * thin to recognise. */
-    QVERIFY(block.imageCellRows() >= 4);
+    /* A 4000x100 banner is genuinely flat. Inflating its row count
+     * to a fake floor would distort the placement: kitty `c=W,r=H`
+     * stretches the bitmap to fill the rectangle exactly. Verify
+     * the cell aspect stays close to native (40:1 in pixels). */
+    const double pixelAspect = (block.imageCellCols() * 8.0) / (block.imageCellRows() * 16.0);
+    QVERIFY(qAbs(pixelAspect - 40.0) / 40.0 < 0.10);
 }
 
 void Test::zeroDimensionsLeaveNoReservation()
@@ -400,6 +406,41 @@ void Test::zeroDimensionsLeaveNoReservation()
     block.layout(80);
     QCOMPARE(block.imageCellRows(), 0);
     QCOMPARE(block.rowCount(), 1);
+}
+
+void Test::smallImageStaysAtNativeSize()
+{
+    qputenv("KITTY_WINDOW_ID", "1");
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 16, 16, QByteArray());
+    block.layout(80);
+    /* 16 px / 8 px per cell = 2 cols; 16 px / 16 px per cell = 1 row.
+     * Tiny thumbnails must stay tiny instead of stretching to a
+     * fake minimum, otherwise kitty would scale the bitmap up and
+     * blur it. */
+    QCOMPARE(block.imageCellCols(), 2);
+    QCOMPARE(block.imageCellRows(), 1);
+}
+
+void Test::resizePreservesAspectRatio()
+{
+    /* 800x400 image at four different viewport widths must keep
+     * the same pixel aspect ratio (2.0) within rounding tolerance.
+     * Independent min/max clamps used to break this for narrow
+     * viewports where the cell rect ended up squarer than native. */
+    qputenv("KITTY_WINDOW_ID", "1");
+    auto cellPixelAspect = [](int viewportWidth) {
+        QTuiImagePreviewBlock
+            block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 800, 400, QByteArray());
+        block.layout(viewportWidth);
+        return (block.imageCellCols() * 8.0) / (block.imageCellRows() * 16.0);
+    };
+    constexpr double kNative   = 2.0;
+    constexpr double kRelDelta = 0.10;
+    QVERIFY(qAbs(cellPixelAspect(120) - kNative) / kNative < kRelDelta);
+    QVERIFY(qAbs(cellPixelAspect(80) - kNative) / kNative < kRelDelta);
+    QVERIFY(qAbs(cellPixelAspect(60) - kNative) / kNative < kRelDelta);
+    QVERIFY(qAbs(cellPixelAspect(40) - kNative) / kNative < kRelDelta);
 }
 
 void Test::reservedRowsArePaintedBlank()
