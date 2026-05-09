@@ -55,12 +55,22 @@ public:
      * normal scrollback alongside the metadata. */
     QString toAnsi(int width) override;
 
+    /* Cell-grid footprint reserved for the eventual graphics overlay.
+     * Zero on text-only terminals; positive when a graphics protocol
+     * is available so subsequent compositor frames can paint a real
+     * image into the same rectangle. */
+    int imageCellRows() const { return cellRows; }
+    int imageCellCols() const { return cellCols; }
+
 private:
     QString    sourceLabel;
     QString    mimeType;
     int        widthPx  = 0;
     int        heightPx = 0;
     QByteArray bytes;
+
+    int cellRows = 0;
+    int cellCols = 0;
 
     QList<QList<QTuiStyledRun>> rendered;
 };

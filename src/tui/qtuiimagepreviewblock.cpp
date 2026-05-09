@@ -85,6 +85,42 @@ QString shortMime(const QString &mime)
     return mime.mid(slash + 1).toLower();
 }
 
+/* Default terminal cell pixel size used when the host does not expose
+ * a query response. 8 x 16 covers most monospace fonts at 14-16pt and
+ * keeps the aspect-ratio math stable across detection failures. */
+constexpr int kCellWidthPx  = 8;
+constexpr int kCellHeightPx = 16;
+constexpr int kMinCellRows  = 4;
+constexpr int kMaxCellRows  = 30;
+constexpr int kMinCellCols  = 8;
+
+QPair<int, int> computeImageCellRect(int imageWidthPx, int imageHeightPx, int viewportWidth)
+{
+    /* Compute the cell rectangle a graphics-capable terminal will use
+     * to display the image. The formula keeps the pixel aspect ratio
+     * by reading every cell as 8 x 16 px, then clamps the row count
+     * so a wide banner stays readable and a tall portrait does not
+     * eat the entire scrollback. Returns (0, 0) when the image dims
+     * are not yet known so the block falls back to placeholder-only. */
+    if (imageWidthPx <= 0 || imageHeightPx <= 0 || viewportWidth <= 4) {
+        return {0, 0};
+    }
+    const int nativeCols = (imageWidthPx + kCellWidthPx - 1) / kCellWidthPx;
+    const int maxCols    = qMax(0, viewportWidth - 2);
+    int       cols       = qMin(nativeCols, maxCols);
+    cols                 = qMax(cols, kMinCellCols);
+    if (cols > maxCols) {
+        cols = maxCols;
+    }
+    /* rows = cols * imgH / imgW * (cellW / cellH); the cellW/cellH
+     * factor turns a pixel ratio into a cell ratio. */
+    int rows = static_cast<int>(
+        (static_cast<qint64>(cols) * imageHeightPx * kCellWidthPx)
+        / (static_cast<qint64>(imageWidthPx) * kCellHeightPx));
+    rows = qBound(kMinCellRows, rows, kMaxCellRows);
+    return {cols, rows};
+}
+
 QString iTermInlineEscape(const QString &filename, const QByteArray &bytes)
 {
     /* iTerm2 inline image: ESC ] 1337 ; File=...:base64 BEL.
@@ -164,16 +200,18 @@ QTuiImagePreviewBlock::QTuiImagePreviewBlock(
 
 void QTuiImagePreviewBlock::layout(int width)
 {
-    Q_UNUSED(width);
-    if (!layoutDirty) {
+    if (!layoutDirty && layoutWidth == width) {
         return;
     }
     layoutDirty = false;
+    layoutWidth = width;
     rendered.clear();
+    cellRows = 0;
+    cellCols = 0;
 
-    /* Single-row placeholder: [image: <name>  png 800x600 32 KB].
-     * This is what cell-grid mode shows; cooked-mode toAnsi prepends
-     * the actual graphics escape sequence on top. */
+    /* Metadata row: [image: <name>  png 800x600 32 KB]. Always emitted
+     * so the user can identify the file even when no graphics protocol
+     * is available. */
     QList<QTuiStyledRun> row;
     row.append(coloredRun(QStringLiteral("[image: "), QTuiFgColor::Cyan, /*bold=*/true));
     {
@@ -192,6 +230,20 @@ void QTuiImagePreviewBlock::layout(int width)
     stats.dim  = true;
     row.append(stats);
     rendered.append(row);
+
+    /* Reserve empty cells for a future graphics overlay only on
+     * terminals that have a real graphics protocol. Sixel and the
+     * text fallback would just leave a blank gap, which is worse than
+     * the bare placeholder. */
+    const GraphicsProtocol protocol = detectProtocol();
+    if (protocol == GraphicsProtocol::Kitty || protocol == GraphicsProtocol::ITerm2) {
+        const auto rect = computeImageCellRect(widthPx, heightPx, width);
+        cellCols        = rect.first;
+        cellRows        = rect.second;
+        for (int i = 0; i < cellRows; ++i) {
+            rendered.append(QList<QTuiStyledRun>{});
+        }
+    }
 }
 
 int QTuiImagePreviewBlock::rowCount() const

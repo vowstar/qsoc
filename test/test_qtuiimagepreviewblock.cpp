@@ -88,6 +88,15 @@ private slots:
     void kittyJpegIsReEncodedToPng();
     void kittyGifIsReEncodedToPng();
     void kittyPngPassesThrough();
+
+    /* Cell-rectangle reservation */
+    void textOnlyTerminalRowCountStaysAtOne();
+    void graphicsTerminalReservesCellRectangle();
+    void cellRectFitsViewportWidth();
+    void cellRectClampsTallImageToMaxRows();
+    void cellRectClampsWideImageToMinRows();
+    void zeroDimensionsLeaveNoReservation();
+    void reservedRowsArePaintedBlank();
 };
 
 void Test::layoutProducesSingleRowPlaceholder()
@@ -286,6 +295,90 @@ void Test::kittyPngPassesThrough()
     const QString out = block.toAnsi(60);
     QVERIFY(out.contains(QLatin1String(kKittyEscapePrefix)));
     QVERIFY(out.contains(QStringLiteral("f=100")));
+}
+
+/* Without a graphics protocol the block stays a single line so the
+ * scrollback does not grow a useless empty rectangle on terminals
+ * that cannot fill it. */
+void Test::textOnlyTerminalRowCountStaysAtOne()
+{
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 800, 600, QByteArray());
+    block.layout(80);
+    QCOMPARE(block.rowCount(), 1);
+    QCOMPARE(block.imageCellRows(), 0);
+    QCOMPARE(block.imageCellCols(), 0);
+}
+
+void Test::graphicsTerminalReservesCellRectangle()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 800, 600, QByteArray());
+    block.layout(80);
+    QVERIFY(block.imageCellCols() > 0);
+    QVERIFY(block.imageCellRows() >= 4);
+    QCOMPARE(block.rowCount(), 1 + block.imageCellRows());
+}
+
+void Test::cellRectFitsViewportWidth()
+{
+    qputenv("KITTY_WINDOW_ID", "1");
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 4096, 2048, QByteArray());
+    block.layout(60);
+    /* The 4096-px wide native image would need 512 cell columns at
+     * 8 px per cell; the layout must clamp to the viewport. */
+    QVERIFY(block.imageCellCols() <= 60);
+}
+
+void Test::cellRectClampsTallImageToMaxRows()
+{
+    qputenv("KITTY_WINDOW_ID", "1");
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 100, 8000, QByteArray());
+    block.layout(80);
+    /* A portrait taller than the screen would otherwise eat 500
+     * rows; the clamp keeps the chat usable. */
+    QVERIFY(block.imageCellRows() <= 30);
+}
+
+void Test::cellRectClampsWideImageToMinRows()
+{
+    qputenv("KITTY_WINDOW_ID", "1");
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 4000, 100, QByteArray());
+    block.layout(80);
+    /* A skinny banner needs a floor so the actual image is not too
+     * thin to recognise. */
+    QVERIFY(block.imageCellRows() >= 4);
+}
+
+void Test::zeroDimensionsLeaveNoReservation()
+{
+    qputenv("KITTY_WINDOW_ID", "1");
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 0, 0, QByteArray());
+    block.layout(80);
+    QCOMPARE(block.imageCellRows(), 0);
+    QCOMPARE(block.rowCount(), 1);
+}
+
+void Test::reservedRowsArePaintedBlank()
+{
+    qputenv("KITTY_WINDOW_ID", "1");
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 320, 240, QByteArray());
+    block.layout(60);
+    QVERIFY(block.imageCellRows() >= 1);
+
+    QTuiScreen screen(60, 30);
+    /* paintRow for any reserved row must leave the cell unchanged
+     * from its post-clear default; the graphics layer fills the area
+     * later. */
+    block.paintRow(screen, 0, 0, 0, 60, false, false); /* metadata row */
+    block.paintRow(screen, 1, 1, 0, 60, false, false); /* first reserved row */
+    QCOMPARE(screen.at(0, 1).character, QChar(QLatin1Char(' ')));
 }
 
 QSOC_TEST_MAIN(Test)
