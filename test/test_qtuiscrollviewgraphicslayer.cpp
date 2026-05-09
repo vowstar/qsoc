@@ -6,11 +6,29 @@
 #include "tui/qtuiimagepreviewblock.h"
 #include "tui/qtuiscrollview.h"
 
+#include <QBuffer>
+#include <QColor>
+#include <QImage>
 #include <QtTest>
 
 #include <memory>
 
 namespace {
+
+/* Real PNG buffer generated at runtime; the project bans static
+ * image fixtures so every test that needs decodable bytes goes
+ * through QImage at construction time. */
+QByteArray makeRealPngBytes()
+{
+    QImage image(16, 16, QImage::Format_RGB32);
+    image.fill(QColor(255, 64, 32));
+    QByteArray bytes;
+    QBuffer    buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    buffer.close();
+    return bytes;
+}
 
 /* Minimal block whose only purpose is to record the graphics-layer
  * arguments and emit a known token so we can verify the scroll view
@@ -293,32 +311,20 @@ void Test::appendingImageFoldsPriorImagePreviews()
 {
     QTuiScrollView view;
     auto           first = std::make_unique<QTuiImagePreviewBlock>(
-        QStringLiteral("/tmp/first.png"),
-        QStringLiteral("image/png"),
-        320,
-        240,
-        QByteArray("\x89PNG\r\n", 6));
+        QStringLiteral("/tmp/first.png"), QStringLiteral("image/png"), 320, 240, makeRealPngBytes());
     auto *firstPtr = first.get();
     view.appendBlock(std::move(first));
     QVERIFY(!firstPtr->isFolded());
 
     auto second = std::make_unique<QTuiImagePreviewBlock>(
-        QStringLiteral("/tmp/second.png"),
-        QStringLiteral("image/png"),
-        320,
-        240,
-        QByteArray("\x89PNG\r\n", 6));
+        QStringLiteral("/tmp/second.png"), QStringLiteral("image/png"), 320, 240, makeRealPngBytes());
     auto *secondPtr = second.get();
     view.appendBlock(std::move(second));
     QVERIFY(firstPtr->isFolded());
     QVERIFY(!secondPtr->isFolded());
 
     auto third = std::make_unique<QTuiImagePreviewBlock>(
-        QStringLiteral("/tmp/third.png"),
-        QStringLiteral("image/png"),
-        320,
-        240,
-        QByteArray("\x89PNG\r\n", 6));
+        QStringLiteral("/tmp/third.png"), QStringLiteral("image/png"), 320, 240, makeRealPngBytes());
     auto *thirdPtr = third.get();
     view.appendBlock(std::move(third));
     QVERIFY(firstPtr->isFolded());
@@ -370,11 +376,7 @@ void Test::appendingNonImageDoesNotFoldImages()
 {
     QTuiScrollView view;
     auto           img = std::make_unique<QTuiImagePreviewBlock>(
-        QStringLiteral("/tmp/a.png"),
-        QStringLiteral("image/png"),
-        320,
-        240,
-        QByteArray("\x89PNG\r\n", 6));
+        QStringLiteral("/tmp/a.png"), QStringLiteral("image/png"), 320, 240, makeRealPngBytes());
     auto *imgPtr = img.get();
     view.appendBlock(std::move(img));
 

@@ -111,34 +111,42 @@ QString shortMime(const QString &mime)
  * keeps the aspect-ratio math stable across detection failures. */
 constexpr int kCellWidthPx  = 8;
 constexpr int kCellHeightPx = 16;
-constexpr int kMinCellRows  = 4;
 constexpr int kMaxCellRows  = 30;
-constexpr int kMinCellCols  = 8;
 
 QPair<int, int> computeImageCellRect(int imageWidthPx, int imageHeightPx, int viewportWidth)
 {
-    /* Compute the cell rectangle a graphics-capable terminal will use
-     * to display the image. The formula keeps the pixel aspect ratio
-     * by reading every cell as 8 x 16 px, then clamps the row count
-     * so a wide banner stays readable and a tall portrait does not
-     * eat the entire scrollback. Returns (0, 0) when the image dims
-     * are not yet known so the block falls back to placeholder-only. */
+    /* Compute the cell rectangle a graphics-capable terminal will
+     * use to display the image. A small image keeps its native cell
+     * footprint; only oversize images scale down, and the scale-down
+     * uses a single ratio on both axes so kitty's `c=W,r=H`
+     * placement reproduces the source aspect. */
     if (imageWidthPx <= 0 || imageHeightPx <= 0 || viewportWidth <= 4) {
         return {0, 0};
     }
     const int nativeCols = (imageWidthPx + kCellWidthPx - 1) / kCellWidthPx;
-    const int maxCols    = qMax(0, viewportWidth - 2);
-    int       cols       = qMin(nativeCols, maxCols);
-    cols                 = qMax(cols, kMinCellCols);
-    if (cols > maxCols) {
-        cols = maxCols;
+    const int nativeRows = (imageHeightPx + kCellHeightPx - 1) / kCellHeightPx;
+
+    /* Drawable bound: viewport width minus a one-cell gutter, plus a
+     * row cap so a portrait does not eat the entire chat. No minimum
+     * floor: a 16x16 thumbnail must stay 2x1 cells, not get inflated
+     * to a 8x4 blurry rectangle. */
+    const int maxCols = qMax(1, viewportWidth - 2);
+
+    if (nativeCols <= maxCols && nativeRows <= kMaxCellRows) {
+        return {nativeCols, nativeRows};
     }
-    /* rows = cols * imgH / imgW * (cellW / cellH); the cellW/cellH
-     * factor turns a pixel ratio into a cell ratio. */
-    int rows = static_cast<int>(
-        (static_cast<qint64>(cols) * imageHeightPx * kCellWidthPx)
-        / (static_cast<qint64>(imageWidthPx) * kCellHeightPx));
-    rows = qBound(kMinCellRows, rows, kMaxCellRows);
+
+    /* Oversize on at least one axis: scale BOTH axes by the same
+     * ratio (the tighter of the two overruns) so the displayed
+     * shape matches the source pixel aspect. Independent clamps
+     * would distort the image; kitty's `c,r` placement scales the
+     * bitmap to fill exactly W x H cells. */
+    const double ratioCols = static_cast<double>(nativeCols) / maxCols;
+    const double ratioRows = static_cast<double>(nativeRows) / kMaxCellRows;
+    const double ratio     = qMax(ratioCols, ratioRows);
+
+    const int cols = qMax(1, static_cast<int>(nativeCols / ratio));
+    const int rows = qMax(1, static_cast<int>(nativeRows / ratio));
     return {cols, rows};
 }
 
