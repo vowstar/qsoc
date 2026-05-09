@@ -61,7 +61,7 @@ public:
      * the kitty graphics protocol, so per-frame cost stays trivial
      * even at the 100 ms compositor tick. */
     QString emitGraphicsLayer(
-        int firstScreenRow, int firstScreenCol, int contentWidth) const override;
+        int firstScreenRow, int firstScreenCol, int contentWidth, int visibleRows) const override;
 
     /* Erase the live placement so the cell rectangle returns to
      * blank when the block scrolls out of the viewport. The transmit

@@ -162,14 +162,18 @@ private:
     /* Visible-block snapshot rebuilt by every render() call; consumed
      * by collectGraphicsLayer(). Each entry pins the block pointer
      * (non-owning, lifetime tracked by `blocks`), the 1-based screen
-     * row of its first visible viewport row, and the drawable cell
-     * width passed to the block on that frame. */
+     * row of its first visible viewport row, the drawable cell width
+     * passed to the block on that frame, and the row count actually
+     * visible inside the viewport (less than rowCount when the block
+     * straddles the viewport edge) so a graphical block can refuse
+     * to paint past the scroll area. */
     struct VisibleGraphicsEntry
     {
         QTuiBlock *block;
         int        firstScreenRow;
         int        firstScreenCol;
         int        width;
+        int        visibleRows;
     };
     std::vector<VisibleGraphicsEntry> visibleGraphicsEntries_;
 

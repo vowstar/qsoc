@@ -195,14 +195,21 @@ public:
      *        leftmost cell after the scrollview gutter.
      * @param contentWidth Drawable width in cells available to the
      *        block on the current frame.
+     * @param visibleRows How many rows of this block are currently
+     *        inside the scroll viewport. A graphical block must
+     *        clamp or skip its placement when its full footprint
+     *        does not fit so the image never paints past the
+     *        viewport into the status or input bar.
      * @return Raw ANSI/CSI bytes to emit, or an empty string when
      *         the block does not need a graphics overlay this frame.
      */
-    virtual QString emitGraphicsLayer(int firstScreenRow, int firstScreenCol, int contentWidth) const
+    virtual QString emitGraphicsLayer(
+        int firstScreenRow, int firstScreenCol, int contentWidth, int visibleRows) const
     {
         Q_UNUSED(firstScreenRow);
         Q_UNUSED(firstScreenCol);
         Q_UNUSED(contentWidth);
+        Q_UNUSED(visibleRows);
         return {};
     }
 

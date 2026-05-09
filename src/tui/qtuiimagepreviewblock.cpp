@@ -476,7 +476,7 @@ QString QTuiImagePreviewBlock::toAnsi(int width)
 }
 
 QString QTuiImagePreviewBlock::emitGraphicsLayer(
-    int firstScreenRow, int firstScreenCol, int contentWidth) const
+    int firstScreenRow, int firstScreenCol, int contentWidth, int visibleRows) const
 {
     /* Live overlay: paint the image into the cell rectangle
      * reserved by layout(). The cell-grid pass has already drawn
@@ -486,6 +486,16 @@ QString QTuiImagePreviewBlock::emitGraphicsLayer(
      * view diff sees it stayed visible but produced no payload
      * and emits the clear for any prior placement. */
     if (folded || cellRows <= 0 || cellCols <= 0 || bytes.isEmpty()) {
+        return QString();
+    }
+
+    /* Block does not fully fit in the current viewport. Emitting
+     * the placement at full size would paint past the scroll-view
+     * bottom into the status or input bar; better to drop the
+     * graphics overlay this frame and let the cells stay blank
+     * until the user grows the terminal or scrolls. */
+    const int requiredRows = 1 + cellRows;
+    if (visibleRows < requiredRows) {
         return QString();
     }
 

@@ -67,17 +67,20 @@ public:
 
     QString toPlainText() const override { return tag; }
 
-    QString emitGraphicsLayer(int firstScreenRow, int firstScreenCol, int contentWidth) const override
+    QString emitGraphicsLayer(
+        int firstScreenRow, int firstScreenCol, int contentWidth, int visibleRows) const override
     {
         ++callCount;
         lastFirstScreenRow = firstScreenRow;
         lastFirstScreenCol = firstScreenCol;
         lastContentWidth   = contentWidth;
-        return QStringLiteral("<%1@%2,%3w%4>")
+        lastVisibleRows    = visibleRows;
+        return QStringLiteral("<%1@%2,%3w%4v%5>")
             .arg(tag)
             .arg(firstScreenRow)
             .arg(firstScreenCol)
-            .arg(contentWidth);
+            .arg(contentWidth)
+            .arg(visibleRows);
     }
 
     QString emitGraphicsClear() const override
@@ -98,6 +101,7 @@ public:
     mutable int lastFirstScreenRow = 0;
     mutable int lastFirstScreenCol = 0;
     mutable int lastContentWidth   = 0;
+    mutable int lastVisibleRows    = 0;
     mutable int clearCount         = 0;
     mutable int destroyCount       = 0;
 };
