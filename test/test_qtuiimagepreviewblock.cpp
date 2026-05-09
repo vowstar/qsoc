@@ -4,6 +4,9 @@
 #include "qsoc_test.h"
 #include "tui/qtuiimagepreviewblock.h"
 
+#include <QBuffer>
+#include <QColor>
+#include <QImage>
 #include <QtTest>
 
 namespace {
@@ -29,6 +32,22 @@ QTuiImagePreviewBlock makePngBlock()
         320,
         240,
         QByteArray("\x89PNG\r\n", 6)};
+}
+
+/* Build a real, decodable image buffer in the requested format. The
+ * kitty-graphics path now re-encodes through QImage, so the magic-byte
+ * stub used elsewhere in this file is not enough; we need bytes that
+ * QImage::loadFromData accepts. */
+QByteArray makeRealImageBytes(const char *format)
+{
+    QImage image(16, 16, QImage::Format_RGB32);
+    image.fill(QColor(255, 64, 32));
+    QByteArray bytes;
+    QBuffer    buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, format);
+    buffer.close();
+    return bytes;
 }
 
 constexpr auto kKittyEscapePrefix  = "\x1b_G";
@@ -64,6 +83,11 @@ private slots:
     void vscodeSelectsITerm2();
     void minttySelectsITerm2();
     void termProgramCaseInsensitive();
+
+    /* Re-encode path */
+    void kittyJpegIsReEncodedToPng();
+    void kittyGifIsReEncodedToPng();
+    void kittyPngPassesThrough();
 };
 
 void Test::layoutProducesSingleRowPlaceholder()
@@ -217,6 +241,51 @@ void Test::termProgramCaseInsensitive()
     qputenv("TERM_PROGRAM", "GHOSTTY");
     QTuiImagePreviewBlock block = makePngBlock();
     QVERIFY(block.toAnsi(60).contains(QLatin1String(kKittyEscapePrefix)));
+}
+
+/* The canonical ghostty failure mode: the user attaches a JPEG and the
+ * old code returned an empty graphics escape because it only accepted
+ * PNG bytes, leaving ghostty / kitty / wezterm with just the placeholder
+ * text. After the re-encode, every supported raster format produces a
+ * non-empty kitty graphics escape that carries valid PNG payload. */
+void Test::kittyJpegIsReEncodedToPng()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    const QByteArray jpegBytes = makeRealImageBytes("JPEG");
+    QVERIFY2(!jpegBytes.isEmpty(), "QImage failed to encode JPEG fixture");
+
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.jpg"), QStringLiteral("image/jpeg"), 16, 16, jpegBytes);
+    const QString out = block.toAnsi(60);
+    QVERIFY(out.contains(QLatin1String(kKittyEscapePrefix)));
+    QVERIFY(out.contains(QStringLiteral("f=100")));
+}
+
+void Test::kittyGifIsReEncodedToPng()
+{
+    qputenv("KITTY_WINDOW_ID", "1");
+    const QByteArray gifBytes = makeRealImageBytes("GIF");
+    if (gifBytes.isEmpty()) {
+        QSKIP("Qt build lacks GIF write support");
+    }
+
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.gif"), QStringLiteral("image/gif"), 16, 16, gifBytes);
+    const QString out = block.toAnsi(60);
+    QVERIFY(out.contains(QLatin1String(kKittyEscapePrefix)));
+}
+
+void Test::kittyPngPassesThrough()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    const QByteArray pngBytes = makeRealImageBytes("PNG");
+    QVERIFY2(!pngBytes.isEmpty(), "QImage failed to encode PNG fixture");
+
+    QTuiImagePreviewBlock
+        block(QStringLiteral("/tmp/x.png"), QStringLiteral("image/png"), 16, 16, pngBytes);
+    const QString out = block.toAnsi(60);
+    QVERIFY(out.contains(QLatin1String(kKittyEscapePrefix)));
+    QVERIFY(out.contains(QStringLiteral("f=100")));
 }
 
 QSOC_TEST_MAIN(Test)

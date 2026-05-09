@@ -5,8 +5,10 @@
 
 #include "tui/qtuiwidget.h"
 
+#include <QBuffer>
 #include <QByteArray>
 #include <QFileInfo>
+#include <QImage>
 #include <QProcessEnvironment>
 
 #include <utility>
@@ -104,13 +106,29 @@ QString iTermInlineEscape(const QString &filename, const QByteArray &bytes)
 QString kittyInlineEscape(const QByteArray &bytes, const QString &mime)
 {
     /* Kitty graphics: ESC _ G f=<format>,a=T;<base64> ESC \\
-     * Format 100 is PNG; we only attempt the protocol for PNG bytes
-     * and fall back to placeholder for other formats. The terminal
-     * picks reasonable display dimensions when c/r aren't given. */
-    if (!mime.contains(QStringLiteral("png"))) {
-        return QString();
+     * Format 100 is PNG. JPEG/GIF/WebP attachments are decoded through
+     * QImage and re-encoded as PNG so terminals like ghostty / kitty /
+     * wezterm see the image instead of just the placeholder text. The
+     * terminal picks reasonable display dimensions when c/r aren't
+     * given. */
+    QByteArray pngBytes;
+    if (mime.contains(QStringLiteral("png"))) {
+        pngBytes = bytes;
+    } else {
+        QImage image;
+        if (!image.loadFromData(bytes)) {
+            return QString();
+        }
+        QBuffer buffer(&pngBytes);
+        if (!buffer.open(QIODevice::WriteOnly)) {
+            return QString();
+        }
+        if (!image.save(&buffer, "PNG")) {
+            return QString();
+        }
+        buffer.close();
     }
-    const QByteArray b64 = bytes.toBase64();
+    const QByteArray b64 = pngBytes.toBase64();
     /* Chunked transfer keeps individual escape payloads short enough
      * for terminals that bound their parsing buffers. m=1 marks a
      * non-final chunk, m=0 the last. */
