@@ -516,6 +516,17 @@ void QTuiCompositor::render()
     QString ansi = screen.toAnsi();
     fputs(ansi.toUtf8().constData(), stdout);
 
+    /* Graphics overlay: each visible block that owns a graphics
+     * payload (image preview, future plot widgets) emits its raw
+     * escape sequence directly to stdout on top of the cell grid.
+     * The cell grid has already reserved blank cells for the image
+     * area, so the image lands in the right place without clobbering
+     * any text. Empty for blocks that do not need overlays. */
+    const QString graphicsOverlay = scrollView.collectGraphicsLayer();
+    if (!graphicsOverlay.isEmpty()) {
+        fputs(graphicsOverlay.toUtf8().constData(), stdout);
+    }
+
     /* Park real cursor at input line for IME support.
      * Terminal emulators render IME preedit at the physical cursor.
      * Disable auto-wrap to prevent IME preedit from causing line wrap.

@@ -174,6 +174,38 @@ public:
      */
     virtual QString toAnsi(int width);
 
+    /**
+     * @brief Emit a raw escape payload that overlays the cell grid
+     *        for one frame of live alt-screen rendering.
+     * @details Called by the scroll view after the cell-grid pass
+     *          on every block currently visible in the viewport.
+     *          The default implementation returns an empty string
+     *          so non-graphical blocks contribute nothing. Concrete
+     *          graphical blocks (for instance the image preview
+     *          block) move the cursor with `\x1b[<row>;<col>H` and
+     *          emit Kitty / iTerm2 graphics escapes at the cell
+     *          coordinates the cell-grid pass already reserved for
+     *          them. The compositor pipes the result straight to
+     *          stdout after the cell grid, so the graphics paint
+     *          on top of the empty placeholder cells.
+     * @param firstScreenRow 1-based screen row of the block's first
+     *        visible viewport row. Suitable for use directly in a
+     *        CSI cursor-position escape.
+     * @param firstScreenCol 1-based screen column of the block's
+     *        leftmost cell after the scrollview gutter.
+     * @param contentWidth Drawable width in cells available to the
+     *        block on the current frame.
+     * @return Raw ANSI/CSI bytes to emit, or an empty string when
+     *         the block does not need a graphics overlay this frame.
+     */
+    virtual QString emitGraphicsLayer(int firstScreenRow, int firstScreenCol, int contentWidth) const
+    {
+        Q_UNUSED(firstScreenRow);
+        Q_UNUSED(firstScreenCol);
+        Q_UNUSED(contentWidth);
+        return {};
+    }
+
 protected:
     /** Cached width that produced the current row layout. */
     int layoutWidth = -1;
