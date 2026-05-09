@@ -31,7 +31,12 @@ QString QSocToolFileRead::getName() const
 
 QString QSocToolFileRead::getDescription() const
 {
-    return "Read the contents of a file. Any file on the system can be read.";
+    return "Read the contents of a file. Any file on the system can be "
+           "read. Image files (PNG, JPG, GIF, WebP) are returned as visual "
+           "content that the multimodal LLM can see directly. When the "
+           "user attaches or references a screenshot or image path, "
+           "ALWAYS use this tool to view the file at the path; the tool "
+           "result will contain the actual image, not a description.";
 }
 
 json QSocToolFileRead::getParametersSchema() const

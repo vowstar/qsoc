@@ -242,8 +242,11 @@ QString QSocToolWebFetch::getName() const
 
 QString QSocToolWebFetch::getDescription() const
 {
-    return "Fetch content from a URL. HTML pages are converted to Markdown. "
-           "Returns the page content (truncated if too large).";
+    return "Fetch content from a URL. HTML pages are converted to "
+           "Markdown. Image URLs (PNG, JPG, GIF, WebP) are returned as "
+           "visual content that the multimodal LLM can see directly, the "
+           "same way as read_file on a local image. Returns the page "
+           "content (truncated if too large).";
 }
 
 json QSocToolWebFetch::getParametersSchema() const
