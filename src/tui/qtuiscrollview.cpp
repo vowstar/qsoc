@@ -317,6 +317,7 @@ void QTuiScrollView::appendLine(const QString &text, LineStyle style)
     blocks.push_back(std::make_unique<PlainLineBlock>(text, style));
     while (static_cast<int>(blocks.size()) > MAX_BLOCKS) {
         blocks.erase(blocks.begin());
+        previousVisibleBlocks_.clear();
         if (scrollOffset > 0) {
             scrollOffset--;
         }
@@ -328,6 +329,7 @@ void QTuiScrollView::appendStyledLine(const QList<QTuiStyledRun> &runs)
     blocks.push_back(std::make_unique<StyledLineBlock>(runs));
     while (static_cast<int>(blocks.size()) > MAX_BLOCKS) {
         blocks.erase(blocks.begin());
+        previousVisibleBlocks_.clear();
         if (scrollOffset > 0) {
             scrollOffset--;
         }
@@ -351,6 +353,7 @@ void QTuiScrollView::appendBlock(std::unique_ptr<QTuiBlock> block)
     blocks.push_back(std::move(block));
     while (static_cast<int>(blocks.size()) > MAX_BLOCKS) {
         blocks.erase(blocks.begin());
+        previousVisibleBlocks_.clear();
         if (scrollOffset > 0) {
             scrollOffset--;
         }
@@ -659,15 +662,52 @@ QString QTuiScrollView::toAnsi(int width)
     return out;
 }
 
-QString QTuiScrollView::collectGraphicsLayer() const
+QString QTuiScrollView::collectGraphicsLayer()
 {
     QString out;
+
+    /* Diff: blocks that were visible last frame but no longer are
+     * receive a clear so the terminal does not retain a stale
+     * placement underneath the now-blank cells. */
+    std::vector<QTuiBlock *> currentBlocks;
+    currentBlocks.reserve(visibleGraphicsEntries_.size());
+    for (const auto &entry : visibleGraphicsEntries_) {
+        currentBlocks.push_back(entry.block);
+    }
+    for (QTuiBlock *prev : previousVisibleBlocks_) {
+        if (prev == nullptr) {
+            continue;
+        }
+        const bool stillVisible = std::find(currentBlocks.begin(), currentBlocks.end(), prev)
+                                  != currentBlocks.end();
+        if (!stillVisible) {
+            out.append(prev->emitGraphicsClear());
+        }
+    }
+
+    /* Place every block that is visible this frame. The block's own
+     * state machine decides whether to also re-emit the bitmap
+     * upload or just the placement escape. */
     for (const auto &entry : visibleGraphicsEntries_) {
         if (entry.block == nullptr) {
             continue;
         }
         out.append(
             entry.block->emitGraphicsLayer(entry.firstScreenRow, entry.firstScreenCol, entry.width));
+    }
+
+    previousVisibleBlocks_ = std::move(currentBlocks);
+    return out;
+}
+
+QString QTuiScrollView::collectGraphicsDestroy() const
+{
+    QString out;
+    for (const auto &block : blocks) {
+        if (block == nullptr) {
+            continue;
+        }
+        out.append(block->emitGraphicsDestroy());
     }
     return out;
 }
@@ -677,4 +717,6 @@ void QTuiScrollView::clear()
     blocks.clear();
     partialLine.clear();
     scrollOffset = 0;
+    previousVisibleBlocks_.clear();
+    visibleGraphicsEntries_.clear();
 }

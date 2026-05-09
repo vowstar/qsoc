@@ -61,6 +61,17 @@ void QTuiCompositor::stop()
     }
     timer->stop();
     active = false;
+
+    /* Free any bitmap caches that the live graphics layer asked the
+     * terminal to hold. Sent before exiting the alt screen so the
+     * destroy escapes execute while the terminal still considers
+     * qsoc the foreground app. */
+    const QString graphicsDestroy = scrollView.collectGraphicsDestroy();
+    if (!graphicsDestroy.isEmpty()) {
+        fputs(graphicsDestroy.toUtf8().constData(), stdout);
+        fflush(stdout);
+    }
+
     exitAltScreen();
 
     /* Block-aware ANSI dump preserves headings, code blocks, tool

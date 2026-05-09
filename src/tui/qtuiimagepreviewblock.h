@@ -63,6 +63,17 @@ public:
     QString emitGraphicsLayer(
         int firstScreenRow, int firstScreenCol, int contentWidth) const override;
 
+    /* Erase the live placement so the cell rectangle returns to
+     * blank when the block scrolls out of the viewport. The transmit
+     * cache is kept so a scroll back in only re-emits the small
+     * placement escape, not the full bitmap upload. */
+    QString emitGraphicsClear() const override;
+
+    /* Free the bitmap from the terminal cache on compositor shutdown
+     * so qsoc does not leak megabytes of image data into the host
+     * terminal's memory after exit. */
+    QString emitGraphicsDestroy() const override;
+
     /* Cell-grid footprint reserved for the eventual graphics overlay.
      * Zero on text-only terminals; positive when a graphics protocol
      * is available so subsequent compositor frames can paint a real

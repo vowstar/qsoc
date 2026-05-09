@@ -106,6 +106,11 @@ private slots:
     void uniqueImageIdAcrossBlocks();
     void emitGraphicsLayerReencodesJpeg();
     void emitGraphicsLayerCursorMoveMatchesArguments();
+
+    /* Lifecycle */
+    void clearWithoutPlaceIsNoop();
+    void clearAfterPlaceEmitsKittyDelete();
+    void destroyAfterPlaceEmitsKittyCapitalDelete();
 };
 
 void Test::layoutProducesSingleRowPlaceholder()
@@ -496,6 +501,55 @@ void Test::emitGraphicsLayerCursorMoveMatchesArguments()
     /* Image rectangle starts one row below the metadata line, in
      * the same column as the block (1-based). */
     QVERIFY(out.contains(QStringLiteral("\x1b[8;4H")));
+}
+
+/* Without a previous transmit there is nothing to clear; the block
+ * stays silent so we do not flood ghostty with deletes for images
+ * that were never uploaded. */
+void Test::clearWithoutPlaceIsNoop()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    QCOMPARE(block.emitGraphicsClear(), QString());
+}
+
+void Test::clearAfterPlaceEmitsKittyDelete()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    block.emitGraphicsLayer(3, 1, 60);
+
+    const QString out = block.emitGraphicsClear();
+    QVERIFY(out.contains(QStringLiteral("a=d"))); /* delete placement */
+    QVERIFY(out.contains(QStringLiteral("p=1"))); /* same placement id */
+}
+
+void Test::destroyAfterPlaceEmitsKittyCapitalDelete()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    block.emitGraphicsLayer(3, 1, 60);
+
+    const QString out = block.emitGraphicsDestroy();
+    QVERIFY(out.contains(QStringLiteral("a=D"))); /* delete bitmap */
 }
 
 QSOC_TEST_MAIN(Test)
