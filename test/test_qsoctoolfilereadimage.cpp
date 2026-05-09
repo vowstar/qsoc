@@ -222,6 +222,93 @@ llm:
         const QString openMarker = QString::fromLatin1(QSocImageAttach::attachmentMarkerOpen());
         QVERIFY2(result.contains(openMarker), qPrintable(result.left(200)));
     }
+
+    /* Vision model: getDescription advertises image-reading so the
+     * model knows the tool can return visual content. */
+    void visionModelDescriptionMentionsImages()
+    {
+        const QByteArray yaml = R"(
+llm:
+  model: vision
+  models:
+    vision:
+      url: http://example.invalid/v1/chat/completions
+      modalities:
+        image: true
+)";
+        ScopedConfig     scope(yaml);
+        auto            *config = new QSocConfig(this, nullptr);
+        auto            *llm    = new QLLMService(this, nullptr);
+        llm->setConfig(config);
+
+        QSocToolFileRead tool(this, nullptr, llm);
+        const QString    desc = tool.getDescription();
+        QVERIFY(desc.contains(QStringLiteral("PNG")));
+        QVERIFY(desc.contains(QStringLiteral("multimodal")));
+        QVERIFY(desc.contains(QStringLiteral("ALWAYS use this tool")));
+    }
+
+    /* Text-only model: description must NOT promise image reading
+     * so the model never asks for a capability the endpoint lacks. */
+    void textOnlyModelDescriptionOmitsImages()
+    {
+        const QByteArray yaml = R"(
+llm:
+  model: textonly
+  models:
+    textonly:
+      url: http://example.invalid/v1/chat/completions
+)";
+        ScopedConfig     scope(yaml);
+        auto            *config = new QSocConfig(this, nullptr);
+        auto            *llm    = new QLLMService(this, nullptr);
+        llm->setConfig(config);
+
+        QSocToolFileRead tool(this, nullptr, llm);
+        const QString    desc = tool.getDescription();
+        QVERIFY(!desc.contains(QStringLiteral("PNG")));
+        QVERIFY(!desc.contains(QStringLiteral("multimodal")));
+        QVERIFY(!desc.contains(QStringLiteral("screenshot")));
+    }
+
+    /* Null LLM (remote-mode parity): conservative text-only desc. */
+    void nullLlmDescriptionOmitsImages()
+    {
+        QSocToolFileRead tool(this, nullptr, nullptr);
+        const QString    desc = tool.getDescription();
+        QVERIFY(!desc.contains(QStringLiteral("PNG")));
+        QVERIFY(!desc.contains(QStringLiteral("multimodal")));
+    }
+
+    /* Switching the active model flips the description on the next
+     * read so the agent sends the right tool schema next turn. */
+    void switchingModelUpdatesDescription()
+    {
+        const QByteArray yaml = R"(
+llm:
+  model: vision
+  models:
+    vision:
+      url: http://example.invalid/v1/chat/completions
+      modalities:
+        image: true
+    textonly:
+      url: http://example.invalid/v1/chat/completions
+)";
+        ScopedConfig     scope(yaml);
+        auto            *config = new QSocConfig(this, nullptr);
+        auto            *llm    = new QLLMService(this, nullptr);
+        llm->setConfig(config);
+
+        QSocToolFileRead tool(this, nullptr, llm);
+        QVERIFY(tool.getDescription().contains(QStringLiteral("PNG")));
+
+        QVERIFY(llm->setCurrentModel(QStringLiteral("textonly")));
+        QVERIFY(!tool.getDescription().contains(QStringLiteral("PNG")));
+
+        QVERIFY(llm->setCurrentModel(QStringLiteral("vision")));
+        QVERIFY(tool.getDescription().contains(QStringLiteral("PNG")));
+    }
 };
 
 } // namespace

@@ -259,6 +259,48 @@ llm:
         QVERIFY(result.contains(QStringLiteral("even after resize")));
         QVERIFY(!result.contains(QString::fromLatin1(QSocToolWebFetch::attachmentMarkerOpen())));
     }
+
+    void visionModelDescriptionMentionsImages()
+    {
+        const QByteArray yaml = R"(
+llm:
+  model: vision
+  models:
+    vision:
+      url: http://example.invalid/v1/chat/completions
+      modalities:
+        image: true
+)";
+        ScopedConfig     scope(yaml);
+        auto            *config = new QSocConfig(this, nullptr);
+        auto            *llm    = new QLLMService(this, nullptr);
+        llm->setConfig(config);
+
+        QSocToolWebFetch tool(this, nullptr, llm);
+        const QString    desc = tool.getDescription();
+        QVERIFY(desc.contains(QStringLiteral("Image URLs")));
+        QVERIFY(desc.contains(QStringLiteral("multimodal")));
+    }
+
+    void textOnlyModelDescriptionOmitsImages()
+    {
+        const QByteArray yaml = R"(
+llm:
+  model: textonly
+  models:
+    textonly:
+      url: http://example.invalid/v1/chat/completions
+)";
+        ScopedConfig     scope(yaml);
+        auto            *config = new QSocConfig(this, nullptr);
+        auto            *llm    = new QLLMService(this, nullptr);
+        llm->setConfig(config);
+
+        QSocToolWebFetch tool(this, nullptr, llm);
+        const QString    desc = tool.getDescription();
+        QVERIFY(!desc.contains(QStringLiteral("Image URLs")));
+        QVERIFY(!desc.contains(QStringLiteral("multimodal")));
+    }
 };
 
 } // namespace
