@@ -140,6 +140,30 @@ QString iTermInlineEscape(const QString &filename, const QByteArray &bytes)
     return out;
 }
 
+QString iTermPlaceWithSize(
+    const QString &filename, const QByteArray &bytes, int cellCols, int cellRows)
+{
+    /* OSC 1337 inline image with cell-unit sizing and aspect-ratio
+     * preservation. `width=N;height=M` (no unit) is iTerm2's
+     * character-cell measure, so a placement at N cols x M rows lines
+     * up exactly with the cell rectangle the block reserved. */
+    if (bytes.isEmpty() || cellCols <= 0 || cellRows <= 0) {
+        return {};
+    }
+    QString out = QStringLiteral("\x1b]1337;File=");
+    if (!filename.isEmpty()) {
+        const QByteArray nameB64 = filename.toUtf8().toBase64();
+        out += QStringLiteral("name=") + QString::fromLatin1(nameB64) + QLatin1Char(';');
+    }
+    out += QStringLiteral("size=%1;").arg(bytes.size());
+    out += QStringLiteral("inline=1;preserveAspectRatio=1;width=%1;height=%2:")
+               .arg(cellCols)
+               .arg(cellRows);
+    out += QString::fromLatin1(bytes.toBase64());
+    out += QChar(0x07);
+    return out;
+}
+
 /* Process-wide allocator for kitty image ids. The protocol allows
  * any non-zero 32-bit id; starting at 1 and incrementing keeps
  * collisions impossible inside one qsoc session. Multiple sessions
@@ -415,25 +439,9 @@ QString QTuiImagePreviewBlock::emitGraphicsLayer(
     /* Live overlay: paint the image into the cell rectangle
      * reserved by layout(). The cell-grid pass has already drawn
      * the metadata line and left the rest of the rectangle blank,
-     * so the kitty placement lands right where the user expects. */
+     * so the placement lands right where the user expects. */
     if (cellRows <= 0 || cellCols <= 0 || bytes.isEmpty()) {
         return QString();
-    }
-    if (detectProtocol() != GraphicsProtocol::Kitty) {
-        return QString();
-    }
-
-    QString out;
-    if (!kittyState.transmitted) {
-        const QByteArray pngBytes = reEncodeAsPngIfNeeded(bytes, mimeType);
-        if (pngBytes.isEmpty()) {
-            return QString();
-        }
-        if (kittyState.imageId == 0) {
-            kittyState.imageId = allocateKittyImageId();
-        }
-        out += kittyTransmitOnly(pngBytes, kittyState.imageId);
-        kittyState.transmitted = true;
     }
 
     /* Place the rectangle one row below the metadata line so the
@@ -442,13 +450,53 @@ QString QTuiImagePreviewBlock::emitGraphicsLayer(
      * after layout but before this frame. */
     const int placeRow  = firstScreenRow + 1;
     const int placeCols = qMin(cellCols, qMax(1, contentWidth));
-    out += QStringLiteral("\x1b[%1;%2H").arg(placeRow).arg(firstScreenCol);
-    out += kittyPlaceAtCursor(kittyState.imageId, /*placementId=*/1, placeCols, cellRows);
-    return out;
+
+    const GraphicsProtocol protocol = detectProtocol();
+    if (protocol == GraphicsProtocol::Kitty) {
+        QString out;
+        if (!kittyState.transmitted) {
+            const QByteArray pngBytes = reEncodeAsPngIfNeeded(bytes, mimeType);
+            if (pngBytes.isEmpty()) {
+                return QString();
+            }
+            if (kittyState.imageId == 0) {
+                kittyState.imageId = allocateKittyImageId();
+            }
+            out += kittyTransmitOnly(pngBytes, kittyState.imageId);
+            kittyState.transmitted = true;
+        }
+        out += QStringLiteral("\x1b[%1;%2H").arg(placeRow).arg(firstScreenCol);
+        out += kittyPlaceAtCursor(kittyState.imageId, /*placementId=*/1, placeCols, cellRows);
+        return out;
+    }
+
+    if (protocol == GraphicsProtocol::ITerm2) {
+        /* iTerm2 has no place-by-id, so every emission re-uploads
+         * the bitmap. Throttle: skip when neither the cell grid
+         * nor the block coordinates moved since the last frame. */
+        if (iTerm2LastRow == placeRow && iTerm2LastCol == firstScreenCol) {
+            return QString();
+        }
+        iTerm2LastRow = placeRow;
+        iTerm2LastCol = firstScreenCol;
+        QString out;
+        out += QStringLiteral("\x1b[%1;%2H").arg(placeRow).arg(firstScreenCol);
+        out += iTermPlaceWithSize(QFileInfo(sourceLabel).fileName(), bytes, placeCols, cellRows);
+        return out;
+    }
+
+    return QString();
 }
 
 QString QTuiImagePreviewBlock::emitGraphicsClear() const
 {
+    /* iTerm2 has no protocol delete: the cells get overwritten by
+     * the next frame's text, which is enough to erase the bitmap.
+     * Reset the throttle so a future re-entry into the viewport
+     * unconditionally re-emits the inline image. */
+    iTerm2LastRow = -1;
+    iTerm2LastCol = -1;
+
     /* `a=d` deletes a placement; the transmitted bitmap referenced
      * by `i=<id>` survives so a re-entry into the viewport only
      * needs the placement escape again, not a full re-upload. */

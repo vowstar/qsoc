@@ -104,6 +104,15 @@ private:
     };
     mutable KittyState kittyState;
 
+    /* iTerm2 has no transmit-once primitive: every place embeds the
+     * full base64 again. Throttle by remembering the last placement
+     * coords; we only re-emit when the block has actually moved
+     * (scroll, layout change). The same-coord skip means a stable
+     * frame emits nothing for the image, since iTerm2 keeps the
+     * pixels until the underlying cells get overwritten. */
+    mutable int iTerm2LastRow = -1;
+    mutable int iTerm2LastCol = -1;
+
     QList<QList<QTuiStyledRun>> rendered;
 };
 

@@ -111,6 +111,12 @@ private slots:
     void clearWithoutPlaceIsNoop();
     void clearAfterPlaceEmitsKittyDelete();
     void destroyAfterPlaceEmitsKittyCapitalDelete();
+
+    /* iTerm2 path */
+    void iTerm2FirstFrameEmitsInlineWithCellSize();
+    void iTerm2SameCoordsAreThrottled();
+    void iTerm2ScrollReEmitsAtNewCoords();
+    void iTerm2ClearResetsThrottle();
 };
 
 void Test::layoutProducesSingleRowPlaceholder()
@@ -550,6 +556,80 @@ void Test::destroyAfterPlaceEmitsKittyCapitalDelete()
 
     const QString out = block.emitGraphicsDestroy();
     QVERIFY(out.contains(QStringLiteral("a=D"))); /* delete bitmap */
+}
+
+/* iTerm2 path: the first frame must emit OSC 1337 with cell-unit
+ * width and height plus preserveAspectRatio so the inline image
+ * fits exactly inside the placeholder rectangle. */
+void Test::iTerm2FirstFrameEmitsInlineWithCellSize()
+{
+    qputenv("TERM_PROGRAM", "iTerm.app");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    const QString out = block.emitGraphicsLayer(3, 1, 60);
+    QVERIFY(out.contains(QStringLiteral("\x1b]1337;File=")));
+    QVERIFY(out.contains(QStringLiteral("preserveAspectRatio=1")));
+    QVERIFY(out.contains(QStringLiteral("width=")));
+    QVERIFY(out.contains(QStringLiteral("height=")));
+    QVERIFY(out.contains(QStringLiteral("inline=1")));
+}
+
+void Test::iTerm2SameCoordsAreThrottled()
+{
+    qputenv("TERM_PROGRAM", "iTerm.app");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    block.emitGraphicsLayer(3, 1, 60);
+    const QString second = block.emitGraphicsLayer(3, 1, 60);
+    /* Same coords - iTerm2 keeps the bitmap until the cells under
+     * it get overwritten, so re-uploading would only burn bandwidth. */
+    QCOMPARE(second, QString());
+}
+
+void Test::iTerm2ScrollReEmitsAtNewCoords()
+{
+    qputenv("TERM_PROGRAM", "iTerm.app");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    block.emitGraphicsLayer(3, 1, 60);
+    const QString moved = block.emitGraphicsLayer(7, 1, 60);
+    /* Scroll changed the screen row, so the inline image must be
+     * re-uploaded at the new cursor position. */
+    QVERIFY(moved.contains(QStringLiteral("\x1b]1337;File=")));
+    QVERIFY(moved.contains(QStringLiteral("\x1b[8;1H")));
+}
+
+void Test::iTerm2ClearResetsThrottle()
+{
+    qputenv("TERM_PROGRAM", "iTerm.app");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    block.emitGraphicsLayer(3, 1, 60);
+    block.emitGraphicsClear();
+    const QString reentry = block.emitGraphicsLayer(3, 1, 60);
+    /* After clear (block scrolled out and back in), the throttle
+     * resets so the inline image is re-uploaded at the next place. */
+    QVERIFY(reentry.contains(QStringLiteral("\x1b]1337;File=")));
 }
 
 QSOC_TEST_MAIN(Test)
