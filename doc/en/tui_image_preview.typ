@@ -57,10 +57,10 @@ bitmap". QSoC uploads the PNG bytes a single time using
 `a=t,i=N,f=100` chunked transfer:
 
 ```
-ESC _ G i=<id>,a=t,f=100,m=1; <chunk1> ESC \
-ESC _ G m=1; <chunk2> ESC \
+ESC _ G i=<id>,a=t,f=100,q=2,m=1; <chunk1> ESC \
+ESC _ G q=2,m=1; <chunk2> ESC \
 ...
-ESC _ G m=0; <last> ESC \
+ESC _ G q=2,m=0; <last> ESC \
 ```
 
 Subsequent compositor frames only re-emit the lightweight placement
@@ -68,13 +68,24 @@ escape after a cursor jump:
 
 ```
 ESC [ <row> ; <col> H
-ESC _ G a=p,i=<id>,p=1,c=<W>,r=<H> ESC \
+ESC _ G a=p,i=<id>,p=1,c=<W>,r=<H>,C=1,q=2 ESC \
 ```
 
 The `p=1` placement id keeps the same rectangle reused across frames
-so back-to-back emits at the same coords are no-ops. JPEG, GIF and
-WebP attachments are decoded through QImage and re-encoded as PNG
-before transmit because the kitty `f=100` slot only accepts PNG.
+so back-to-back emits at the same coords are no-ops. `C=1` keeps the
+cursor where it was before the placement so the cell-grid diff stays
+stable. `q=2` suppresses the per-command OK reply that would
+otherwise race the agent stdin reader. JPEG, GIF and WebP
+attachments are decoded through QImage and re-encoded as PNG before
+transmit because the kitty `f=100` slot only accepts PNG.
+
+When a block scrolls out of the viewport the scroll view emits
+`a=d,d=p,i=<id>,p=1,q=2`, which deletes only that one placement and
+keeps the bitmap cached for a future scroll-in. On compositor stop
+every transmitted image is freed via `a=d,d=I,i=<id>,q=2`. The
+kitty spec has no `a=D` action; uppercase only ever appears as the
+`d=` selector to choose between "keep image data" (lowercase) and
+"free image data" (uppercase).
 
 == ITERM2: PER-FRAME OSC 1337 WITH THROTTLE
 <tui-image-preview-iterm2>

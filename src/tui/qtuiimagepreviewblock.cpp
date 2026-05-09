@@ -199,9 +199,10 @@ QByteArray reEncodeAsPngIfNeeded(const QByteArray &bytes, const QString &mime)
 QString kittyTransmitOnly(const QByteArray &pngBytes, quint32 imageId)
 {
     /* Chunked `a=t` (transmit-only): upload the bytes into the
-     * terminal's image cache without displaying. The image stays
-     * referenceable by `i=<id>` until the program issues `a=D,i=<id>`
-     * or the terminal evicts it under memory pressure. */
+     * terminal's image cache without displaying. `q=2` suppresses
+     * the per-command OK/EINVAL response so the response payload
+     * does not race the agent stdin reader, matching the pattern
+     * timg and notcurses both use for TUI integrations. */
     if (pngBytes.isEmpty() || imageId == 0) {
         return {};
     }
@@ -216,9 +217,9 @@ QString kittyTransmitOnly(const QByteArray &pngBytes, quint32 imageId)
         const bool last  = offset + take >= b64.size();
         QString    header;
         if (first) {
-            header = QStringLiteral("\x1b_Gi=%1,a=t,f=100,m=%2;").arg(imageId).arg(last ? 0 : 1);
+            header = QStringLiteral("\x1b_Gi=%1,a=t,f=100,q=2,m=%2;").arg(imageId).arg(last ? 0 : 1);
         } else {
-            header = QStringLiteral("\x1b_Gm=%1;").arg(last ? 0 : 1);
+            header = QStringLiteral("\x1b_Gq=2,m=%1;").arg(last ? 0 : 1);
         }
         out += header;
         out += QString::fromLatin1(chunk);
@@ -233,14 +234,15 @@ QString kittyPlaceAtCursor(quint32 imageId, quint32 placementId, int cellCols, i
 {
     /* `a=p` re-uses the previously transmitted image referenced by
      * `i=<id>`. `p=<pid>` keeps the placement slot stable so back-
-     * to-back frames at the same coords are no-ops; ghostty / kitty
-     * read this as "update placement at <pid>" rather than stacking
-     * fresh ones. `c,r` constrain the image to a cell rectangle so
-     * scaling matches the placeholder reservation. */
+     * to-back frames at the same coords are no-ops. `c,r` constrain
+     * the image to a cell rectangle so scaling matches the
+     * placeholder reservation. `C=1` keeps the cursor where it was
+     * before the placement, so the next frame's cursor jump and
+     * cell-grid diff stay stable. `q=2` suppresses the OK reply. */
     if (imageId == 0 || cellCols <= 0 || cellRows <= 0) {
         return {};
     }
-    return QStringLiteral("\x1b_Ga=p,i=%1,p=%2,c=%3,r=%4\x1b\\")
+    return QStringLiteral("\x1b_Ga=p,i=%1,p=%2,c=%3,r=%4,C=1,q=2\x1b\\")
         .arg(imageId)
         .arg(placementId)
         .arg(cellCols)
@@ -271,8 +273,8 @@ QString kittyInlineEscape(const QByteArray &bytes, const QString &mime)
         const int     take   = qMin(chunkSize, b64.size() - offset);
         const auto    chunk  = b64.mid(offset, take);
         const bool    last   = offset + take >= b64.size();
-        const QString header = first ? QStringLiteral("\x1b_Gf=100,a=T,m=%1;").arg(last ? 0 : 1)
-                                     : QStringLiteral("\x1b_Gm=%1;").arg(last ? 0 : 1);
+        const QString header = first ? QStringLiteral("\x1b_Gf=100,a=T,q=2,m=%1;").arg(last ? 0 : 1)
+                                     : QStringLiteral("\x1b_Gq=2,m=%1;").arg(last ? 0 : 1);
         out += header;
         out += QString::fromLatin1(chunk);
         out += QStringLiteral("\x1b\\");
@@ -497,28 +499,33 @@ QString QTuiImagePreviewBlock::emitGraphicsClear() const
     iTerm2LastRow = -1;
     iTerm2LastCol = -1;
 
-    /* `a=d` deletes a placement; the transmitted bitmap referenced
-     * by `i=<id>` survives so a re-entry into the viewport only
-     * needs the placement escape again, not a full re-upload. */
+    /* `a=d` is the only delete action; the `d=` parameter selects
+     * what to delete. `d=p,i=<id>,p=<pid>` removes exactly one
+     * placement while keeping the bitmap cached, so a scroll back
+     * into the viewport only needs the lightweight placement
+     * escape again, not a full re-upload. */
     if (!kittyState.transmitted || kittyState.imageId == 0) {
         return QString();
     }
     if (detectProtocol() != GraphicsProtocol::Kitty) {
         return QString();
     }
-    return QStringLiteral("\x1b_Ga=d,d=i,i=%1,p=1\x1b\\").arg(kittyState.imageId);
+    return QStringLiteral("\x1b_Ga=d,d=p,i=%1,p=1,q=2\x1b\\").arg(kittyState.imageId);
 }
 
 QString QTuiImagePreviewBlock::emitGraphicsDestroy() const
 {
-    /* `a=D` deletes both the bitmap and any placements referencing
-     * it; called once per shutdown so the terminal can reclaim the
-     * memory we asked it to hold during the session. */
+    /* `a=d,d=I,i=<id>` deletes every placement of the image AND
+     * frees the bitmap from the terminal's cache. The kitty
+     * protocol has no `a=D` action; uppercase only ever appears as
+     * a `d=` selector to distinguish "free image data" from "keep
+     * image data". Called once per shutdown so the terminal
+     * reclaims any memory the session asked it to hold. */
     if (!kittyState.transmitted || kittyState.imageId == 0) {
         return QString();
     }
     if (detectProtocol() != GraphicsProtocol::Kitty) {
         return QString();
     }
-    return QStringLiteral("\x1b_Ga=D,d=i,i=%1\x1b\\").arg(kittyState.imageId);
+    return QStringLiteral("\x1b_Ga=d,d=I,i=%1,q=2\x1b\\").arg(kittyState.imageId);
 }
