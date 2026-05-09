@@ -134,6 +134,9 @@ private slots:
     void foldedBlockEmitsNoGraphicsPayload();
     void foldedBlockToAnsiOmitsGraphicsEscape();
 
+    /* Viewport clip */
+    void emitGraphicsLayerSkipsWhenViewportTooShort();
+
     /* iTerm2 path */
     void iTerm2FirstFrameEmitsInlineWithCellSize();
     void iTerm2SameCoordsAreThrottled();
@@ -472,7 +475,7 @@ void Test::emitGraphicsLayerEmptyOnTextOnlyTerminal()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    QCOMPARE(block.emitGraphicsLayer(5, 1, 60), QString());
+    QCOMPARE(block.emitGraphicsLayer(5, 1, 60, 100), QString());
 }
 
 void Test::firstFrameTransmitsAndPlaces()
@@ -485,7 +488,7 @@ void Test::firstFrameTransmitsAndPlaces()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    const QString out = block.emitGraphicsLayer(3, 1, 60);
+    const QString out = block.emitGraphicsLayer(3, 1, 60, 100);
     QVERIFY(out.contains(QStringLiteral("a=t")));   /* transmit-only */
     QVERIFY(out.contains(QStringLiteral("a=p")));   /* placement */
     QVERIFY(out.contains(QStringLiteral("f=100"))); /* PNG */
@@ -501,8 +504,8 @@ void Test::subsequentFrameOnlyPlaces()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    block.emitGraphicsLayer(3, 1, 60);
-    const QString out2 = block.emitGraphicsLayer(4, 1, 60);
+    block.emitGraphicsLayer(3, 1, 60, 100);
+    const QString out2 = block.emitGraphicsLayer(4, 1, 60, 100);
     /* The second frame must NOT re-upload the bitmap; only the
      * lightweight placement escape is allowed through. */
     QVERIFY(!out2.contains(QStringLiteral("a=t")));
@@ -526,8 +529,8 @@ void Test::uniqueImageIdAcrossBlocks()
         makeRealImageBytes("PNG"));
     blockA.layout(60);
     blockB.layout(60);
-    const QString outA = blockA.emitGraphicsLayer(3, 1, 60);
-    const QString outB = blockB.emitGraphicsLayer(3, 1, 60);
+    const QString outA = blockA.emitGraphicsLayer(3, 1, 60, 100);
+    const QString outB = blockB.emitGraphicsLayer(3, 1, 60, 100);
     /* Ids appear as i=<n> in the placement escape; capture them. */
     static const QRegularExpression idRegex("i=(\\d+),");
     const auto                      matchA = idRegex.match(outA);
@@ -547,7 +550,7 @@ void Test::emitGraphicsLayerReencodesJpeg()
         240,
         makeRealImageBytes("JPEG"));
     block.layout(60);
-    const QString out = block.emitGraphicsLayer(3, 1, 60);
+    const QString out = block.emitGraphicsLayer(3, 1, 60, 100);
     /* The transmit chunk must declare format 100 (PNG) regardless
      * of the source MIME because kitty's f=100 only accepts PNG. */
     QVERIFY(out.contains(QStringLiteral("f=100")));
@@ -563,7 +566,7 @@ void Test::emitGraphicsLayerCursorMoveMatchesArguments()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    const QString out = block.emitGraphicsLayer(7, 4, 60);
+    const QString out = block.emitGraphicsLayer(7, 4, 60, 100);
     /* Image rectangle starts one row below the metadata line, in
      * the same column as the block (1-based). */
     QVERIFY(out.contains(QStringLiteral("\x1b[8;4H")));
@@ -595,7 +598,7 @@ void Test::clearAfterPlaceEmitsKittyPlacementDelete()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    block.emitGraphicsLayer(3, 1, 60);
+    block.emitGraphicsLayer(3, 1, 60, 100);
 
     const QString out = block.emitGraphicsClear();
     /* Per the kitty spec, the only delete action is `a=d`; the
@@ -617,7 +620,7 @@ void Test::destroyAfterPlaceEmitsKittyImageDelete()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    block.emitGraphicsLayer(3, 1, 60);
+    block.emitGraphicsLayer(3, 1, 60, 100);
 
     const QString out = block.emitGraphicsDestroy();
     /* `a=d,d=I,i=N` is the protocol-correct way to delete every
@@ -639,7 +642,7 @@ void Test::kittyTransmitContainsSuppressResponses()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    const QString out = block.emitGraphicsLayer(3, 1, 60);
+    const QString out = block.emitGraphicsLayer(3, 1, 60, 100);
     /* Without q=2 the terminal answers every command with an OK
      * payload that races the agent stdin reader; this guards
      * against regressing back to the noisy emission. */
@@ -659,11 +662,38 @@ void Test::kittyPlacementContainsSuppressAndNoMove()
     /* Drain the first-frame transmit so the second emission is a
      * pure place sequence; we want to look at the placement keys
      * specifically. */
-    block.emitGraphicsLayer(3, 1, 60);
-    const QString out = block.emitGraphicsLayer(4, 1, 60);
+    block.emitGraphicsLayer(3, 1, 60, 100);
+    const QString out = block.emitGraphicsLayer(4, 1, 60, 100);
     QVERIFY(out.contains(QStringLiteral("a=p")));
     QVERIFY(out.contains(QStringLiteral("C=1")));
     QVERIFY(out.contains(QStringLiteral("q=2")));
+}
+
+/* When the viewport cannot fit the block's full footprint (1 row
+ * for metadata + cellRows for the image), the graphics escape must
+ * be suppressed so the placement does not paint past the scroll
+ * area into the input or status bar. */
+void Test::emitGraphicsLayerSkipsWhenViewportTooShort()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    const int rowsNeeded = block.rowCount();
+    QVERIFY(rowsNeeded > 1);
+
+    /* Plenty of room: graphics emitted. */
+    QVERIFY(!block.emitGraphicsLayer(3, 1, 60, rowsNeeded).isEmpty());
+
+    /* Viewport too short by even one row: nothing emitted. */
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60, rowsNeeded - 1), QString());
+
+    /* Only the metadata row visible: nothing emitted. */
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60, 1), QString());
 }
 
 /* iTerm2 path: the first frame must emit OSC 1337 with cell-unit
@@ -679,7 +709,7 @@ void Test::iTerm2FirstFrameEmitsInlineWithCellSize()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    const QString out = block.emitGraphicsLayer(3, 1, 60);
+    const QString out = block.emitGraphicsLayer(3, 1, 60, 100);
     QVERIFY(out.contains(QStringLiteral("\x1b]1337;File=")));
     QVERIFY(out.contains(QStringLiteral("preserveAspectRatio=1")));
     QVERIFY(out.contains(QStringLiteral("width=")));
@@ -697,8 +727,8 @@ void Test::iTerm2SameCoordsAreThrottled()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    block.emitGraphicsLayer(3, 1, 60);
-    const QString second = block.emitGraphicsLayer(3, 1, 60);
+    block.emitGraphicsLayer(3, 1, 60, 100);
+    const QString second = block.emitGraphicsLayer(3, 1, 60, 100);
     /* Same coords - iTerm2 keeps the bitmap until the cells under
      * it get overwritten, so re-uploading would only burn bandwidth. */
     QCOMPARE(second, QString());
@@ -714,8 +744,8 @@ void Test::iTerm2ScrollReEmitsAtNewCoords()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    block.emitGraphicsLayer(3, 1, 60);
-    const QString moved = block.emitGraphicsLayer(7, 1, 60);
+    block.emitGraphicsLayer(3, 1, 60, 100);
+    const QString moved = block.emitGraphicsLayer(7, 1, 60, 100);
     /* Scroll changed the screen row, so the inline image must be
      * re-uploaded at the new cursor position. */
     QVERIFY(moved.contains(QStringLiteral("\x1b]1337;File=")));
@@ -732,9 +762,9 @@ void Test::iTerm2ClearResetsThrottle()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    block.emitGraphicsLayer(3, 1, 60);
+    block.emitGraphicsLayer(3, 1, 60, 100);
     block.emitGraphicsClear();
-    const QString reentry = block.emitGraphicsLayer(3, 1, 60);
+    const QString reentry = block.emitGraphicsLayer(3, 1, 60, 100);
     /* After clear (block scrolled out and back in), the throttle
      * resets so the inline image is re-uploaded at the next place. */
     QVERIFY(reentry.contains(QStringLiteral("\x1b]1337;File=")));
@@ -758,7 +788,7 @@ void Test::tmuxSuppressesGraphicsAndReservesNoCells()
     QCOMPARE(block.rowCount(), 1);
     /* No graphics escape on any path. */
     QVERIFY(!block.toAnsi(60).contains(QLatin1String(kKittyEscapePrefix)));
-    QCOMPARE(block.emitGraphicsLayer(3, 1, 60), QString());
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60, 100), QString());
 }
 
 /* GNU screen has the same problem as tmux for the same reason. */
@@ -791,7 +821,7 @@ void Test::optOutEnvSuppressesGraphics()
         makeRealImageBytes("PNG"));
     block.layout(60);
     QCOMPARE(block.imageCellRows(), 0);
-    QCOMPARE(block.emitGraphicsLayer(3, 1, 60), QString());
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60, 100), QString());
 }
 
 /* An empty value of the opt-out env must NOT trigger the gate so a
@@ -853,7 +883,7 @@ void Test::foldedBlockEmitsNoGraphicsPayload()
     /* Even with a graphics-capable terminal, a folded block must
      * not emit any place sequence; the scroll view drives the
      * clear of any prior placement. */
-    QCOMPARE(block.emitGraphicsLayer(3, 1, 60), QString());
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60, 100), QString());
 }
 
 /* The cooked-mode dump path must honor folded state so the

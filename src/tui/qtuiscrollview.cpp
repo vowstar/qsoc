@@ -451,14 +451,18 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
             ++blockIdx;
             break;
         }
-        /* Record the first visible screen row of this block so the
-         * graphics-layer pass can position its escapes correctly.
-         * `firstScreenRow` is 1-based to match CSI cursor-position. */
+        /* Record the first visible screen row of this block plus the
+         * count of rows actually visible so the graphics-layer pass
+         * can refuse to paint past the viewport. `firstScreenRow`
+         * is 1-based to match CSI cursor-position. */
         {
             const int blockTopGRow      = qMax(globalRow, viewTop);
+            const int blockBottomGRow   = qMin(globalRow + rows, viewBottom);
             const int firstScreenRowOne = (startRow + (blockTopGRow - viewTop)) + 1;
+            const int visible           = qMax(0, blockBottomGRow - blockTopGRow);
             visibleGraphicsEntries_.push_back(
-                VisibleGraphicsEntry{block.get(), firstScreenRowOne, /*col=*/1, contentWidth});
+                VisibleGraphicsEntry{
+                    block.get(), firstScreenRowOne, /*col=*/1, contentWidth, visible});
         }
         const bool focused = (blockIdx == focusedBlockIdx_);
         for (int rowInBlock = 0; rowInBlock < rows; ++rowInBlock) {
@@ -714,8 +718,8 @@ QString QTuiScrollView::collectGraphicsLayer()
         if (entry.block == nullptr || entry.block->isFolded()) {
             continue;
         }
-        out.append(
-            entry.block->emitGraphicsLayer(entry.firstScreenRow, entry.firstScreenCol, entry.width));
+        out.append(entry.block->emitGraphicsLayer(
+            entry.firstScreenRow, entry.firstScreenCol, entry.width, entry.visibleRows));
     }
 
     previousVisibleBlocks_ = std::move(eligibleBlocks);
