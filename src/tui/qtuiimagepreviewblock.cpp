@@ -442,18 +442,25 @@ QString QTuiImagePreviewBlock::toAnsi(int width)
         return QString();
     }
     layout(width);
+    /* Folded blocks contribute only the metadata line so the
+     * cooked-mode scrollback dump (alt-screen exit path) does not
+     * stack a kitty image on top of the placeholder cells, which
+     * would double the vertical footprint into a large blank gap
+     * after the image renders. */
     QString graphicsEscape;
-    switch (detectProtocol()) {
-    case GraphicsProtocol::Kitty:
-        graphicsEscape = kittyInlineEscape(bytes, mimeType);
-        break;
-    case GraphicsProtocol::ITerm2:
-        graphicsEscape = iTermInlineEscape(QFileInfo(sourceLabel).fileName(), bytes);
-        break;
-    case GraphicsProtocol::SixelPlaceholder:
-    case GraphicsProtocol::None:
-    default:
-        break;
+    if (!folded) {
+        switch (detectProtocol()) {
+        case GraphicsProtocol::Kitty:
+            graphicsEscape = kittyInlineEscape(bytes, mimeType);
+            break;
+        case GraphicsProtocol::ITerm2:
+            graphicsEscape = iTermInlineEscape(QFileInfo(sourceLabel).fileName(), bytes);
+            break;
+        case GraphicsProtocol::SixelPlaceholder:
+        case GraphicsProtocol::None:
+        default:
+            break;
+        }
     }
     /* Compose: the graphics escape lands at the cursor, then a
      * newline pushes the cell-grid placeholder down so the image and

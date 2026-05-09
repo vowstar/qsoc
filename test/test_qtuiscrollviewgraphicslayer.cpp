@@ -125,6 +125,7 @@ private slots:
     void foldedBlockTriggersClearOnNextFrame();
     void foldedBlockNotPlacedEvenWhenVisible();
     void appendingNonImageDoesNotFoldImages();
+    void foldAllImagePreviewsTouchesOnlyImageBlocks();
 };
 
 void Test::emptyScrollViewProducesNoOverlay()
@@ -383,6 +384,30 @@ void Test::appendingNonImageDoesNotFoldImages()
     /* A non-image block must not retroactively fold image blocks. */
     view.appendBlock(std::make_unique<ProbeBlock>(QStringLiteral("plain")));
     QVERIFY(!imgPtr->isFolded());
+}
+
+/* The compositor calls foldAllImagePreviews on stop so the cooked
+ * dump emits only metadata lines for images. The method must touch
+ * QTuiImagePreviewBlock instances only and leave other blocks alone. */
+void Test::foldAllImagePreviewsTouchesOnlyImageBlocks()
+{
+    QTuiScrollView view;
+    auto           image = std::make_unique<QTuiImagePreviewBlock>(
+        QStringLiteral("/tmp/i.png"), QStringLiteral("image/png"), 320, 240, makeRealPngBytes());
+    auto *imagePtr = image.get();
+    view.appendBlock(std::move(image));
+
+    auto  probe    = std::make_unique<ProbeBlock>(QStringLiteral("plain"));
+    auto *probePtr = probe.get();
+    view.appendBlock(std::move(probe));
+
+    QVERIFY(!imagePtr->isFolded());
+    QVERIFY(!probePtr->isFolded());
+
+    view.foldAllImagePreviews();
+
+    QVERIFY(imagePtr->isFolded());
+    QVERIFY(!probePtr->isFolded());
 }
 
 QSOC_TEST_MAIN(Test)
