@@ -125,6 +125,11 @@ private slots:
     void optOutEnvSuppressesGraphics();
     void optOutEmptyValueDoesNotSuppress();
 
+    /* Fold semantics */
+    void blockReportsFoldable();
+    void foldedBlockKeepsOnlyMetadataRow();
+    void foldedBlockEmitsNoGraphicsPayload();
+
     /* iTerm2 path */
     void iTerm2FirstFrameEmitsInlineWithCellSize();
     void iTerm2SameCoordsAreThrottled();
@@ -762,6 +767,51 @@ void Test::optOutEmptyValueDoesNotSuppress()
         makeRealImageBytes("PNG"));
     block.layout(60);
     QVERIFY(block.imageCellRows() > 0);
+}
+
+/* Image previews must opt into fold so the scroll view's
+ * focused-fold key (and the auto-fold path on new images) work. */
+void Test::blockReportsFoldable()
+{
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    QVERIFY(block.isFoldable());
+}
+
+void Test::foldedBlockKeepsOnlyMetadataRow()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.setFolded(true);
+    block.layout(60);
+    QCOMPARE(block.imageCellRows(), 0);
+    QCOMPARE(block.rowCount(), 1);
+}
+
+void Test::foldedBlockEmitsNoGraphicsPayload()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.setFolded(true);
+    block.layout(60);
+    /* Even with a graphics-capable terminal, a folded block must
+     * not emit any place sequence; the scroll view drives the
+     * clear of any prior placement. */
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60), QString());
 }
 
 QSOC_TEST_MAIN(Test)
