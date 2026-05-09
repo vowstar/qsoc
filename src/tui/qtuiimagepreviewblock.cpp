@@ -351,7 +351,12 @@ void QTuiImagePreviewBlock::layout(int width)
     /* Reserve empty cells for a future graphics overlay only on
      * terminals that have a real graphics protocol. Sixel and the
      * text fallback would just leave a blank gap, which is worse than
-     * the bare placeholder. */
+     * the bare placeholder. Folded blocks also stay at one row so
+     * an older image preview collapses to its metadata line when a
+     * newer image arrives. */
+    if (folded) {
+        return;
+    }
     const GraphicsProtocol protocol = detectProtocol();
     if (protocol == GraphicsProtocol::Kitty || protocol == GraphicsProtocol::ITerm2) {
         const auto rect = computeImageCellRect(widthPx, heightPx, width);
@@ -461,8 +466,11 @@ QString QTuiImagePreviewBlock::emitGraphicsLayer(
     /* Live overlay: paint the image into the cell rectangle
      * reserved by layout(). The cell-grid pass has already drawn
      * the metadata line and left the rest of the rectangle blank,
-     * so the placement lands right where the user expects. */
-    if (cellRows <= 0 || cellCols <= 0 || bytes.isEmpty()) {
+     * so the placement lands right where the user expects. A
+     * folded block contributes nothing this frame; the scroll
+     * view diff sees it stayed visible but produced no payload
+     * and emits the clear for any prior placement. */
+    if (folded || cellRows <= 0 || cellCols <= 0 || bytes.isEmpty()) {
         return QString();
     }
 

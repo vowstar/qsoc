@@ -107,6 +107,23 @@ the cell-grid pass already reserved. iTerm2 keeps the bitmap in
 place until the underlying cells are overwritten, so a stable frame
 costs nothing.
 
+== AUTO-FOLD ON NEW IMAGE
+<tui-image-preview-fold>
+The chat history can accumulate many image attachments over a long
+conversation. To keep only the latest bitmap rendered as graphics
+and avoid the host terminal carrying every prior image, the scroll
+view auto-folds older image previews when a new one arrives:
+
+- New `QTuiImagePreviewBlock` appended via `appendBlock`
+- Scroll view walks existing blocks, marks every prior image
+  preview as folded
+- Folded blocks shrink to their `[image: ...]` metadata line
+- The next `collectGraphicsLayer` call sees the prior placement
+  is no longer eligible and emits the kitty `a=d,d=p,...` clear
+
+The user can still scroll back through the metadata lines and the
+focused-fold key (Tab on the focused block) toggles the fold state.
+
 == LIFECYCLE
 <tui-image-preview-lifecycle>
 Per visible block, the scroll view drives three signals:

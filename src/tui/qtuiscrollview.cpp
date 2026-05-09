@@ -3,6 +3,7 @@
 
 #include "tui/qtuiscrollview.h"
 
+#include "tui/qtuiimagepreviewblock.h"
 #include "tui/qtuiwidget.h"
 
 #include <utility>
@@ -350,6 +351,21 @@ void QTuiScrollView::appendBlock(std::unique_ptr<QTuiBlock> block)
     if (block == nullptr) {
         return;
     }
+
+    /* Auto-fold prior image previews when a new image arrives so the
+     * chat history keeps only the latest bitmap rendered as graphics
+     * and older ones collapse into their `[image: ...]` line. The
+     * scroll view's collectGraphicsLayer drops the placements of the
+     * newly folded blocks on the next frame so the cells return to
+     * normal text flow. */
+    if (dynamic_cast<QTuiImagePreviewBlock *>(block.get()) != nullptr) {
+        for (auto &existing : blocks) {
+            if (dynamic_cast<QTuiImagePreviewBlock *>(existing.get()) != nullptr) {
+                existing->setFolded(true);
+            }
+        }
+    }
+
     blocks.push_back(std::move(block));
     while (static_cast<int>(blocks.size()) > MAX_BLOCKS) {
         blocks.erase(blocks.begin());
@@ -666,37 +682,43 @@ QString QTuiScrollView::collectGraphicsLayer()
 {
     QString out;
 
-    /* Diff: blocks that were visible last frame but no longer are
-     * receive a clear so the terminal does not retain a stale
-     * placement underneath the now-blank cells. */
-    std::vector<QTuiBlock *> currentBlocks;
-    currentBlocks.reserve(visibleGraphicsEntries_.size());
+    /* "Eligible" = visible this frame AND not folded. A folded block
+     * contributes no payload of its own and any prior placement must
+     * be cleared so a freshly folded image collapses cleanly. */
+    std::vector<QTuiBlock *> eligibleBlocks;
+    eligibleBlocks.reserve(visibleGraphicsEntries_.size());
     for (const auto &entry : visibleGraphicsEntries_) {
-        currentBlocks.push_back(entry.block);
+        if (entry.block != nullptr && !entry.block->isFolded()) {
+            eligibleBlocks.push_back(entry.block);
+        }
     }
+
+    /* Diff: blocks that contributed graphics last frame but no longer
+     * do (left the viewport, or folded into a single line) receive a
+     * clear so the terminal drops their stale placement. */
     for (QTuiBlock *prev : previousVisibleBlocks_) {
         if (prev == nullptr) {
             continue;
         }
-        const bool stillVisible = std::find(currentBlocks.begin(), currentBlocks.end(), prev)
-                                  != currentBlocks.end();
-        if (!stillVisible) {
+        const bool stillEligible = std::find(eligibleBlocks.begin(), eligibleBlocks.end(), prev)
+                                   != eligibleBlocks.end();
+        if (!stillEligible) {
             out.append(prev->emitGraphicsClear());
         }
     }
 
-    /* Place every block that is visible this frame. The block's own
-     * state machine decides whether to also re-emit the bitmap
-     * upload or just the placement escape. */
+    /* Place every eligible block. The block's own state machine
+     * decides whether to also re-emit the bitmap upload or just the
+     * placement escape. */
     for (const auto &entry : visibleGraphicsEntries_) {
-        if (entry.block == nullptr) {
+        if (entry.block == nullptr || entry.block->isFolded()) {
             continue;
         }
         out.append(
             entry.block->emitGraphicsLayer(entry.firstScreenRow, entry.firstScreenCol, entry.width));
     }
 
-    previousVisibleBlocks_ = std::move(currentBlocks);
+    previousVisibleBlocks_ = std::move(eligibleBlocks);
     return out;
 }
 

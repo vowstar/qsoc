@@ -3,6 +3,7 @@
 
 #include "qsoc_test.h"
 #include "tui/qtuiblock.h"
+#include "tui/qtuiimagepreviewblock.h"
 #include "tui/qtuiscrollview.h"
 
 #include <QtTest>
@@ -100,6 +101,12 @@ private slots:
     void blockScrolledOutEmitsClear();
     void blockReturnsAfterScrollDoesNotEmitClear();
     void collectGraphicsDestroyWalksAllBlocks();
+
+    /* Fold semantics */
+    void appendingImageFoldsPriorImagePreviews();
+    void foldedBlockTriggersClearOnNextFrame();
+    void foldedBlockNotPlacedEvenWhenVisible();
+    void appendingNonImageDoesNotFoldImages();
 };
 
 void Test::emptyScrollViewProducesNoOverlay()
@@ -277,6 +284,103 @@ void Test::collectGraphicsDestroyWalksAllBlocks()
         QCOMPARE(probes[idx]->destroyCount, 1);
         QVERIFY(out.contains(QStringLiteral("[destroy:d%1]").arg(idx)));
     }
+}
+
+/* Auto-fold: when a new QTuiImagePreviewBlock is appended, every
+ * previously appended image preview must be folded so the chat
+ * keeps only the latest bitmap rendered as graphics. */
+void Test::appendingImageFoldsPriorImagePreviews()
+{
+    QTuiScrollView view;
+    auto           first = std::make_unique<QTuiImagePreviewBlock>(
+        QStringLiteral("/tmp/first.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        QByteArray("\x89PNG\r\n", 6));
+    auto *firstPtr = first.get();
+    view.appendBlock(std::move(first));
+    QVERIFY(!firstPtr->isFolded());
+
+    auto second = std::make_unique<QTuiImagePreviewBlock>(
+        QStringLiteral("/tmp/second.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        QByteArray("\x89PNG\r\n", 6));
+    auto *secondPtr = second.get();
+    view.appendBlock(std::move(second));
+    QVERIFY(firstPtr->isFolded());
+    QVERIFY(!secondPtr->isFolded());
+
+    auto third = std::make_unique<QTuiImagePreviewBlock>(
+        QStringLiteral("/tmp/third.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        QByteArray("\x89PNG\r\n", 6));
+    auto *thirdPtr = third.get();
+    view.appendBlock(std::move(third));
+    QVERIFY(firstPtr->isFolded());
+    QVERIFY(secondPtr->isFolded());
+    QVERIFY(!thirdPtr->isFolded());
+}
+
+void Test::foldedBlockTriggersClearOnNextFrame()
+{
+    /* A probe with a fake clear+place payload makes it easy to see
+     * which side of the diff fires. */
+    QTuiScrollView view;
+    auto           probe = std::make_unique<ProbeBlock>(QStringLiteral("img"));
+    auto          *raw   = probe.get();
+    view.appendBlock(std::move(probe));
+
+    QTuiScreen screen(40, 6);
+    view.render(screen, 0, 6, 40);
+    view.collectGraphicsLayer();
+    QCOMPARE(raw->callCount, 1);
+    QCOMPARE(raw->clearCount, 0);
+
+    /* Fold the block: it stays visible (still 1 row), but the next
+     * collectGraphicsLayer must emit its clear. */
+    raw->setFolded(true);
+    view.render(screen, 0, 6, 40);
+    const QString out = view.collectGraphicsLayer();
+    QCOMPARE(raw->clearCount, 1);
+    QVERIFY(out.contains(QStringLiteral("[clear:img]")));
+    /* And it must not also emit a fresh place. */
+    QCOMPARE(raw->callCount, 1);
+}
+
+void Test::foldedBlockNotPlacedEvenWhenVisible()
+{
+    QTuiScrollView view;
+    auto           probe = std::make_unique<ProbeBlock>(QStringLiteral("img"));
+    auto          *raw   = probe.get();
+    raw->setFolded(true);
+    view.appendBlock(std::move(probe));
+
+    QTuiScreen screen(40, 6);
+    view.render(screen, 0, 6, 40);
+    view.collectGraphicsLayer();
+    QCOMPARE(raw->callCount, 0);
+}
+
+void Test::appendingNonImageDoesNotFoldImages()
+{
+    QTuiScrollView view;
+    auto           img = std::make_unique<QTuiImagePreviewBlock>(
+        QStringLiteral("/tmp/a.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        QByteArray("\x89PNG\r\n", 6));
+    auto *imgPtr = img.get();
+    view.appendBlock(std::move(img));
+
+    /* A non-image block must not retroactively fold image blocks. */
+    view.appendBlock(std::make_unique<ProbeBlock>(QStringLiteral("plain")));
+    QVERIFY(!imgPtr->isFolded());
 }
 
 QSOC_TEST_MAIN(Test)

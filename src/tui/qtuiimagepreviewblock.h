@@ -74,6 +74,13 @@ public:
      * terminal's memory after exit. */
     QString emitGraphicsDestroy() const override;
 
+    /* Image previews participate in fold so older bitmaps collapse
+     * into their `[image: ...]` line when a newer image arrives.
+     * Folding drops the cell rectangle from layout(), suppresses
+     * future placement escapes, and the scroll view emits a clear
+     * for any placement that was active on the prior frame. */
+    bool isFoldable() const override { return true; }
+
     /* Cell-grid footprint reserved for the eventual graphics overlay.
      * Zero on text-only terminals; positive when a graphics protocol
      * is available so subsequent compositor frames can paint a real
