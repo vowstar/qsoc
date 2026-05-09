@@ -27,6 +27,7 @@ metadata line so the conversation stays readable.
     [mintty], [yes (OSC 1337)], [`TERM=mintty`, `TERM_PROGRAM=mintty`],
     [foot, mlterm, contour], [placeholder text only], [`TERM` substring],
     [other], [placeholder text only], [no signal],
+    [tmux / screen], [placeholder text only], [`TMUX` or `STY` set],
   )]
 )
 
@@ -124,9 +125,31 @@ A scroll out followed by a scroll back in costs only the placement
 escape on kitty (the upload cache survives) and the full inline
 image on iTerm2 (no protocol-level cache to reuse).
 
+== MULTIPLEXER AND OPT-OUT GATING
+<tui-image-preview-gating>
+Two gates force the text-only fallback before any cell rectangle
+gets reserved, so a session that cannot actually display the image
+does not waste vertical space:
+
+- `TMUX` or `STY` env var present: tmux and GNU screen both strip
+  the kitty / iTerm2 graphics escapes by default, so the host
+  terminal would never see the bitmap. The detector returns
+  text-only in this case. tmux has an opt-in passthrough mode but
+  it requires a host config change plus DCS wrapping; that is out
+  of scope for the gate.
+- `QSOC_NO_IMAGE_GRAPHICS` set to a non-empty value: explicit user
+  opt-out for bandwidth-conscious SSH sessions or any context
+  where the user prefers a single placeholder line over a
+  best-effort image.
+
+Both gates take effect at the layout stage, so the cell-grid
+footprint of the block stays at one row and the chat history
+keeps reading naturally.
+
 == CONFIGURATION HOOKS
 <tui-image-preview-config>
 Live preview activates automatically whenever the detection picks
-up a graphics-capable terminal. There is no `[tui]` knob to turn it
-off; on a text-only terminal the placeholder line is the same one
-non-graphical builds always rendered, so the change is invisible.
+up a graphics-capable terminal and neither gate above fires. There
+is no `[tui]` knob to turn it off; on a text-only terminal the
+placeholder line is the same one non-graphical builds always
+rendered, so the change is invisible.

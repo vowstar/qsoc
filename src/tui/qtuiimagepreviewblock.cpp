@@ -32,6 +32,26 @@ GraphicsProtocol detectProtocol()
     const QString             term = env.value(QStringLiteral("TERM"), QString()).toLower();
     const QString termProgram      = env.value(QStringLiteral("TERM_PROGRAM"), QString()).toLower();
 
+    /* Explicit user opt-out. Any non-empty QSOC_NO_IMAGE_GRAPHICS
+     * forces the text-only fallback regardless of terminal
+     * capability, so SSH bandwidth-conscious sessions or users who
+     * prefer not to see large blank rectangles when graphics get
+     * stripped can suppress the cell reservation. */
+    if (!env.value(QStringLiteral("QSOC_NO_IMAGE_GRAPHICS"), QString()).isEmpty()) {
+        return GraphicsProtocol::None;
+    }
+
+    /* Multiplexers (tmux, GNU screen) strip kitty / iTerm2 graphics
+     * escapes by default, so a graphics-capable host terminal still
+     * never sees the bitmap. Detect via the multiplexer-set env
+     * vars and force the text fallback so layout does not reserve
+     * a tall rectangle that stays visually blank. tmux has an
+     * opt-in passthrough mode that requires a host config change
+     * plus DCS wrapping; that is out of scope for this gate. */
+    if (env.contains(QStringLiteral("TMUX")) || env.contains(QStringLiteral("STY"))) {
+        return GraphicsProtocol::None;
+    }
+
     /* Kitty graphics protocol. WezTerm and Rio also speak iTerm2
      * inline, but Kitty's chunked transfer is the more capable
      * dialect on every terminal that supports both. */

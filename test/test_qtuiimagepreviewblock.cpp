@@ -23,6 +23,9 @@ void clearGraphicsEnv()
     qunsetenv("KONSOLE_VERSION");
     qunsetenv("TERM");
     qunsetenv("TERM_PROGRAM");
+    qunsetenv("TMUX");
+    qunsetenv("STY");
+    qunsetenv("QSOC_NO_IMAGE_GRAPHICS");
 }
 
 QTuiImagePreviewBlock makePngBlock()
@@ -115,6 +118,12 @@ private slots:
     /* Protocol conformance */
     void kittyTransmitContainsSuppressResponses();
     void kittyPlacementContainsSuppressAndNoMove();
+
+    /* Multiplexer / opt-out gating */
+    void tmuxSuppressesGraphicsAndReservesNoCells();
+    void screenSuppressesGraphicsAndReservesNoCells();
+    void optOutEnvSuppressesGraphics();
+    void optOutEmptyValueDoesNotSuppress();
 
     /* iTerm2 path */
     void iTerm2FirstFrameEmitsInlineWithCellSize();
@@ -682,6 +691,77 @@ void Test::iTerm2ClearResetsThrottle()
     /* After clear (block scrolled out and back in), the throttle
      * resets so the inline image is re-uploaded at the next place. */
     QVERIFY(reentry.contains(QStringLiteral("\x1b]1337;File=")));
+}
+
+/* Inside tmux the graphics escapes get stripped, so the layout
+ * must NOT reserve a tall cell rectangle that the user would see
+ * as blank space with no image. */
+void Test::tmuxSuppressesGraphicsAndReservesNoCells()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    qputenv("TMUX", "/tmp/tmux-1000/default,1234,0");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    QCOMPARE(block.imageCellRows(), 0);
+    QCOMPARE(block.rowCount(), 1);
+    /* No graphics escape on any path. */
+    QVERIFY(!block.toAnsi(60).contains(QLatin1String(kKittyEscapePrefix)));
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60), QString());
+}
+
+/* GNU screen has the same problem as tmux for the same reason. */
+void Test::screenSuppressesGraphicsAndReservesNoCells()
+{
+    qputenv("KITTY_WINDOW_ID", "1");
+    qputenv("STY", "12345.pts-0.host");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    QCOMPARE(block.imageCellRows(), 0);
+    QCOMPARE(block.rowCount(), 1);
+}
+
+/* Explicit user opt-out forces text-only regardless of any other
+ * detection signals. */
+void Test::optOutEnvSuppressesGraphics()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    qputenv("QSOC_NO_IMAGE_GRAPHICS", "1");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    QCOMPARE(block.imageCellRows(), 0);
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60), QString());
+}
+
+/* An empty value of the opt-out env must NOT trigger the gate so a
+ * user who simply set the variable then unset it leaves the
+ * default behavior intact. */
+void Test::optOutEmptyValueDoesNotSuppress()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    qputenv("QSOC_NO_IMAGE_GRAPHICS", "");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    QVERIFY(block.imageCellRows() > 0);
 }
 
 QSOC_TEST_MAIN(Test)
