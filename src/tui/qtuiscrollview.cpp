@@ -414,6 +414,7 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
     lastRenderHeight_   = height;
     lastRenderWidth_    = contentWidth;
     rowToBlock_.assign(static_cast<std::size_t>(qMax(0, height)), -1);
+    visibleGraphicsEntries_.clear();
 
     /* Walk blocks once, mapping viewport rows to (block, rowInBlock).
      * Records each painted screen row's owning block index so a later
@@ -430,6 +431,15 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
         if (globalRow >= viewBottom) {
             ++blockIdx;
             break;
+        }
+        /* Record the first visible screen row of this block so the
+         * graphics-layer pass can position its escapes correctly.
+         * `firstScreenRow` is 1-based to match CSI cursor-position. */
+        {
+            const int blockTopGRow      = qMax(globalRow, viewTop);
+            const int firstScreenRowOne = (startRow + (blockTopGRow - viewTop)) + 1;
+            visibleGraphicsEntries_.push_back(
+                VisibleGraphicsEntry{block.get(), firstScreenRowOne, /*col=*/1, contentWidth});
         }
         const bool focused = (blockIdx == focusedBlockIdx_);
         for (int rowInBlock = 0; rowInBlock < rows; ++rowInBlock) {
@@ -645,6 +655,19 @@ QString QTuiScrollView::toAnsi(int width)
         if (!partialLine.endsWith(QLatin1Char('\n'))) {
             out.append(QLatin1Char('\n'));
         }
+    }
+    return out;
+}
+
+QString QTuiScrollView::collectGraphicsLayer() const
+{
+    QString out;
+    for (const auto &entry : visibleGraphicsEntries_) {
+        if (entry.block == nullptr) {
+            continue;
+        }
+        out.append(
+            entry.block->emitGraphicsLayer(entry.firstScreenRow, entry.firstScreenCol, entry.width));
     }
     return out;
 }

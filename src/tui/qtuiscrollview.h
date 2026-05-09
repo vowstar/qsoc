@@ -118,6 +118,14 @@ public:
      * as styled text without cursor-positioning escapes. */
     QString toAnsi(int width);
 
+    /* Concatenate the graphics-overlay payload of every block whose
+     * first viewport row landed on screen during the most recent
+     * render(). Returns an empty string when nothing visible has
+     * graphics to emit. The compositor pipes the result to stdout
+     * right after the cell grid so live image previews paint on top
+     * of the placeholder cells reserved by the block layout. */
+    QString collectGraphicsLayer() const;
+
 private:
     std::vector<std::unique_ptr<QTuiBlock>> blocks;
     QString                                 partialLine; /* Current incomplete line */
@@ -133,6 +141,20 @@ private:
     int              lastRenderStartRow_ = 0;
     int              lastRenderHeight_   = 0;
     int              lastRenderWidth_    = 0; /* contentWidth of last paint */
+
+    /* Visible-block snapshot rebuilt by every render() call; consumed
+     * by collectGraphicsLayer(). Each entry pins the block pointer
+     * (non-owning, lifetime tracked by `blocks`), the 1-based screen
+     * row of its first visible viewport row, and the drawable cell
+     * width passed to the block on that frame. */
+    struct VisibleGraphicsEntry
+    {
+        QTuiBlock *block;
+        int        firstScreenRow;
+        int        firstScreenCol;
+        int        width;
+    };
+    std::vector<VisibleGraphicsEntry> visibleGraphicsEntries_;
 };
 
 #endif // QTUISCROLLVIEW_H
