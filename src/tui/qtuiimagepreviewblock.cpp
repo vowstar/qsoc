@@ -446,3 +446,31 @@ QString QTuiImagePreviewBlock::emitGraphicsLayer(
     out += kittyPlaceAtCursor(kittyState.imageId, /*placementId=*/1, placeCols, cellRows);
     return out;
 }
+
+QString QTuiImagePreviewBlock::emitGraphicsClear() const
+{
+    /* `a=d` deletes a placement; the transmitted bitmap referenced
+     * by `i=<id>` survives so a re-entry into the viewport only
+     * needs the placement escape again, not a full re-upload. */
+    if (!kittyState.transmitted || kittyState.imageId == 0) {
+        return QString();
+    }
+    if (detectProtocol() != GraphicsProtocol::Kitty) {
+        return QString();
+    }
+    return QStringLiteral("\x1b_Ga=d,d=i,i=%1,p=1\x1b\\").arg(kittyState.imageId);
+}
+
+QString QTuiImagePreviewBlock::emitGraphicsDestroy() const
+{
+    /* `a=D` deletes both the bitmap and any placements referencing
+     * it; called once per shutdown so the terminal can reclaim the
+     * memory we asked it to hold during the session. */
+    if (!kittyState.transmitted || kittyState.imageId == 0) {
+        return QString();
+    }
+    if (detectProtocol() != GraphicsProtocol::Kitty) {
+        return QString();
+    }
+    return QStringLiteral("\x1b_Ga=D,d=i,i=%1\x1b\\").arg(kittyState.imageId);
+}

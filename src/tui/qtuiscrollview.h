@@ -120,11 +120,22 @@ public:
 
     /* Concatenate the graphics-overlay payload of every block whose
      * first viewport row landed on screen during the most recent
-     * render(). Returns an empty string when nothing visible has
-     * graphics to emit. The compositor pipes the result to stdout
-     * right after the cell grid so live image previews paint on top
-     * of the placeholder cells reserved by the block layout. */
-    QString collectGraphicsLayer() const;
+     * render(). The returned string also carries clear escapes for
+     * blocks that were visible on the previous call but have since
+     * scrolled out, so the terminal erases their last placement and
+     * the cell area returns to blank. Subsequent scroll-ins only
+     * re-issue the lightweight placement, not the full bitmap.
+     * Empty when nothing visible has graphics to emit. The
+     * compositor pipes the result to stdout right after the cell
+     * grid so live image previews paint on top of the placeholder
+     * cells reserved by the block layout. */
+    QString collectGraphicsLayer();
+
+    /* Concatenate destroy escapes for every block currently held in
+     * the scroll history so the terminal can reclaim any bitmap
+     * cache it allocated during the session. Called by the
+     * compositor on shutdown right before exiting the alt screen. */
+    QString collectGraphicsDestroy() const;
 
 private:
     std::vector<std::unique_ptr<QTuiBlock>> blocks;
@@ -155,6 +166,13 @@ private:
         int        width;
     };
     std::vector<VisibleGraphicsEntry> visibleGraphicsEntries_;
+
+    /* Pointers visible during the most recent collectGraphicsLayer()
+     * call; diffed against the next frame so blocks that scrolled
+     * out can emit their clear-placement escape. Cleared when blocks
+     * are erased from the history (MAX_BLOCKS overflow, clear()) so
+     * dangling pointers never reach a future emit. */
+    std::vector<QTuiBlock *> previousVisibleBlocks_;
 };
 
 #endif // QTUISCROLLVIEW_H

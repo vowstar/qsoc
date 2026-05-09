@@ -206,6 +206,25 @@ public:
         return {};
     }
 
+    /**
+     * @brief Emit an escape that erases this block's live placement.
+     * @details Called by the scroll view when the block was visible
+     *          on the previous collectGraphicsLayer call but is no
+     *          longer visible on the current one. Concrete graphics
+     *          blocks return the protocol-specific `delete placement`
+     *          escape so the terminal reclaims the cells covered by
+     *          the previous frame's image. Default: empty.
+     */
+    virtual QString emitGraphicsClear() const { return {}; }
+
+    /**
+     * @brief Emit an escape that destroys this block's transmitted
+     *        image so the terminal can reclaim its bitmap cache.
+     * @details Called once per block during compositor shutdown,
+     *          before the alt screen unwinds. Default: empty.
+     */
+    virtual QString emitGraphicsDestroy() const { return {}; }
+
 protected:
     /** Cached width that produced the current row layout. */
     int layoutWidth = -1;

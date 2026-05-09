@@ -61,12 +61,26 @@ public:
             .arg(contentWidth);
     }
 
+    QString emitGraphicsClear() const override
+    {
+        ++clearCount;
+        return QStringLiteral("[clear:%1]").arg(tag);
+    }
+
+    QString emitGraphicsDestroy() const override
+    {
+        ++destroyCount;
+        return QStringLiteral("[destroy:%1]").arg(tag);
+    }
+
     QString     tag;
     int         rowCountValue;
     mutable int callCount          = 0;
     mutable int lastFirstScreenRow = 0;
     mutable int lastFirstScreenCol = 0;
     mutable int lastContentWidth   = 0;
+    mutable int clearCount         = 0;
+    mutable int destroyCount       = 0;
 };
 
 } // namespace
@@ -81,6 +95,11 @@ private slots:
     void visibleBlockProbeReceivesScreenCoords();
     void offViewportBlockNotInvoked();
     void multipleVisibleBlocksConcatenateInOrder();
+
+    /* Lifecycle */
+    void blockScrolledOutEmitsClear();
+    void blockReturnsAfterScrollDoesNotEmitClear();
+    void collectGraphicsDestroyWalksAllBlocks();
 };
 
 void Test::emptyScrollViewProducesNoOverlay()
@@ -171,6 +190,93 @@ void Test::multipleVisibleBlocksConcatenateInOrder()
     QVERIFY(out.indexOf(QStringLiteral("<third@")) >= 0);
     QVERIFY(out.indexOf(QStringLiteral("<first@")) < out.indexOf(QStringLiteral("<second@")));
     QVERIFY(out.indexOf(QStringLiteral("<second@")) < out.indexOf(QStringLiteral("<third@")));
+}
+
+/* When a block was visible last frame but no longer is, the scroll
+ * view must emit its clear escape so the terminal forgets the
+ * previous placement. The new visible blocks then run their own
+ * place hooks. */
+void Test::blockScrolledOutEmitsClear()
+{
+    QTuiScrollView view;
+    /* 20 single-row blocks, viewport of 6 rows: bottom-aligned, so
+     * blocks p14..p19 are visible. After scrollUp(6), the viewport
+     * moves to p8..p13 and p14..p19 should now scroll out. */
+    std::vector<ProbeBlock *> probes;
+    for (int i = 0; i < 20; ++i) {
+        auto probe = std::make_unique<ProbeBlock>(QStringLiteral("p%1").arg(i));
+        probes.push_back(probe.get());
+        view.appendBlock(std::move(probe));
+    }
+    QTuiScreen screen(40, 6);
+
+    view.render(screen, 0, 6, 40);
+    view.collectGraphicsLayer();
+
+    view.scrollUp(6);
+    view.render(screen, 0, 6, 40);
+    const QString out = view.collectGraphicsLayer();
+
+    /* Previously visible blocks (p14..p19) emitted their clear. */
+    for (int idx = 14; idx <= 19; ++idx) {
+        QVERIFY2(
+            probes[idx]->clearCount == 1,
+            qPrintable(QStringLiteral("p%1 should have cleared once").arg(idx)));
+        QVERIFY(out.contains(QStringLiteral("[clear:p%1]").arg(idx)));
+    }
+    /* Newly visible blocks (p8..p13) emitted their place. */
+    for (int idx = 8; idx <= 13; ++idx) {
+        QVERIFY2(
+            probes[idx]->callCount == 1,
+            qPrintable(QStringLiteral("p%1 should have placed once").arg(idx)));
+    }
+}
+
+void Test::blockReturnsAfterScrollDoesNotEmitClear()
+{
+    QTuiScrollView view;
+    auto           probe = std::make_unique<ProbeBlock>(QStringLiteral("img"));
+    auto          *raw   = probe.get();
+    view.appendBlock(std::move(probe));
+    /* Stack enough filler blocks to push the image out when scrolled. */
+    for (int i = 0; i < 10; ++i) {
+        view.appendBlock(std::make_unique<ProbeBlock>(QStringLiteral("f%1").arg(i)));
+    }
+    QTuiScreen screen(40, 4);
+
+    /* Frame 1: image is at the top, currently NOT in viewport (only
+     * the last 4 fillers are). */
+    view.render(screen, 0, 4, 40);
+    view.collectGraphicsLayer();
+    QCOMPARE(raw->callCount, 0);
+    QCOMPARE(raw->clearCount, 0);
+
+    /* Scroll up just enough to bring the image into the viewport.
+     * Total rows is 11 with a 4-row viewport, so scroll offsets in
+     * [7, 10] show the image at row 0; pick 8 to keep it solidly
+     * inside the visible window. */
+    view.scrollUp(8);
+    view.render(screen, 0, 4, 40);
+    view.collectGraphicsLayer();
+    QCOMPARE(raw->callCount, 1);
+    QCOMPARE(raw->clearCount, 0);
+}
+
+void Test::collectGraphicsDestroyWalksAllBlocks()
+{
+    QTuiScrollView            view;
+    std::vector<ProbeBlock *> probes;
+    for (int i = 0; i < 5; ++i) {
+        auto probe = std::make_unique<ProbeBlock>(QStringLiteral("d%1").arg(i));
+        probes.push_back(probe.get());
+        view.appendBlock(std::move(probe));
+    }
+
+    const QString out = view.collectGraphicsDestroy();
+    for (int idx = 0; idx < 5; ++idx) {
+        QCOMPARE(probes[idx]->destroyCount, 1);
+        QVERIFY(out.contains(QStringLiteral("[destroy:d%1]").arg(idx)));
+    }
 }
 
 QSOC_TEST_MAIN(Test)
