@@ -63,6 +63,7 @@
     #include "format_power.typ"
     #include "format_template.typ"
     #include "format_validation.typ"
+    #include "tui_image_preview.typ"
     #include "config.typ"
   ],
 )
