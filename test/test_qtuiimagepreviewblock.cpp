@@ -109,8 +109,12 @@ private slots:
 
     /* Lifecycle */
     void clearWithoutPlaceIsNoop();
-    void clearAfterPlaceEmitsKittyDelete();
-    void destroyAfterPlaceEmitsKittyCapitalDelete();
+    void clearAfterPlaceEmitsKittyPlacementDelete();
+    void destroyAfterPlaceEmitsKittyImageDelete();
+
+    /* Protocol conformance */
+    void kittyTransmitContainsSuppressResponses();
+    void kittyPlacementContainsSuppressAndNoMove();
 
     /* iTerm2 path */
     void iTerm2FirstFrameEmitsInlineWithCellSize();
@@ -525,7 +529,7 @@ void Test::clearWithoutPlaceIsNoop()
     QCOMPARE(block.emitGraphicsClear(), QString());
 }
 
-void Test::clearAfterPlaceEmitsKittyDelete()
+void Test::clearAfterPlaceEmitsKittyPlacementDelete()
 {
     qputenv("TERM_PROGRAM", "ghostty");
     QTuiImagePreviewBlock block(
@@ -538,11 +542,16 @@ void Test::clearAfterPlaceEmitsKittyDelete()
     block.emitGraphicsLayer(3, 1, 60);
 
     const QString out = block.emitGraphicsClear();
-    QVERIFY(out.contains(QStringLiteral("a=d"))); /* delete placement */
-    QVERIFY(out.contains(QStringLiteral("p=1"))); /* same placement id */
+    /* Per the kitty spec, the only delete action is `a=d`; the
+     * `d=p` selector means "delete placement matched by both i= and
+     * p=", which preserves the image cache for a future scroll-in. */
+    QVERIFY(out.contains(QStringLiteral("a=d")));
+    QVERIFY(out.contains(QStringLiteral("d=p")));
+    QVERIFY(out.contains(QStringLiteral("p=1")));
+    QVERIFY(out.contains(QStringLiteral("q=2")));
 }
 
-void Test::destroyAfterPlaceEmitsKittyCapitalDelete()
+void Test::destroyAfterPlaceEmitsKittyImageDelete()
 {
     qputenv("TERM_PROGRAM", "ghostty");
     QTuiImagePreviewBlock block(
@@ -555,7 +564,50 @@ void Test::destroyAfterPlaceEmitsKittyCapitalDelete()
     block.emitGraphicsLayer(3, 1, 60);
 
     const QString out = block.emitGraphicsDestroy();
-    QVERIFY(out.contains(QStringLiteral("a=D"))); /* delete bitmap */
+    /* `a=d,d=I,i=N` is the protocol-correct way to delete every
+     * placement and free the bitmap. The kitty spec has no `a=D`
+     * action; the uppercase only ever appears as the d= selector. */
+    QVERIFY(out.contains(QStringLiteral("a=d")));
+    QVERIFY(out.contains(QStringLiteral("d=I")));
+    QVERIFY(!out.contains(QStringLiteral("a=D")));
+    QVERIFY(out.contains(QStringLiteral("q=2")));
+}
+
+void Test::kittyTransmitContainsSuppressResponses()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    const QString out = block.emitGraphicsLayer(3, 1, 60);
+    /* Without q=2 the terminal answers every command with an OK
+     * payload that races the agent stdin reader; this guards
+     * against regressing back to the noisy emission. */
+    QVERIFY(out.contains(QStringLiteral("q=2")));
+}
+
+void Test::kittyPlacementContainsSuppressAndNoMove()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    /* Drain the first-frame transmit so the second emission is a
+     * pure place sequence; we want to look at the placement keys
+     * specifically. */
+    block.emitGraphicsLayer(3, 1, 60);
+    const QString out = block.emitGraphicsLayer(4, 1, 60);
+    QVERIFY(out.contains(QStringLiteral("a=p")));
+    QVERIFY(out.contains(QStringLiteral("C=1")));
+    QVERIFY(out.contains(QStringLiteral("q=2")));
 }
 
 /* iTerm2 path: the first frame must emit OSC 1337 with cell-unit
