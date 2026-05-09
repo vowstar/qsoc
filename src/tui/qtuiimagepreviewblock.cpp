@@ -11,6 +11,7 @@
 #include <QImage>
 #include <QProcessEnvironment>
 
+#include <atomic>
 #include <utility>
 
 namespace {
@@ -139,6 +140,89 @@ QString iTermInlineEscape(const QString &filename, const QByteArray &bytes)
     return out;
 }
 
+/* Process-wide allocator for kitty image ids. The protocol allows
+ * any non-zero 32-bit id; starting at 1 and incrementing keeps
+ * collisions impossible inside one qsoc session. Multiple sessions
+ * sharing one terminal are fine because each uses its own id space
+ * and explicitly destroys its images on stop(). */
+quint32 allocateKittyImageId()
+{
+    static std::atomic<quint32> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+QByteArray reEncodeAsPngIfNeeded(const QByteArray &bytes, const QString &mime)
+{
+    if (mime.contains(QStringLiteral("png"))) {
+        return bytes;
+    }
+    QImage image;
+    if (!image.loadFromData(bytes)) {
+        return {};
+    }
+    QByteArray pngBytes;
+    QBuffer    buffer(&pngBytes);
+    if (!buffer.open(QIODevice::WriteOnly)) {
+        return {};
+    }
+    if (!image.save(&buffer, "PNG")) {
+        return {};
+    }
+    buffer.close();
+    return pngBytes;
+}
+
+QString kittyTransmitOnly(const QByteArray &pngBytes, quint32 imageId)
+{
+    /* Chunked `a=t` (transmit-only): upload the bytes into the
+     * terminal's image cache without displaying. The image stays
+     * referenceable by `i=<id>` until the program issues `a=D,i=<id>`
+     * or the terminal evicts it under memory pressure. */
+    if (pngBytes.isEmpty() || imageId == 0) {
+        return {};
+    }
+    const QByteArray b64       = pngBytes.toBase64();
+    constexpr int    chunkSize = 4096;
+    QString          out;
+    int              offset = 0;
+    bool             first  = true;
+    while (offset < b64.size()) {
+        const int  take  = qMin(chunkSize, static_cast<int>(b64.size() - offset));
+        const auto chunk = b64.mid(offset, take);
+        const bool last  = offset + take >= b64.size();
+        QString    header;
+        if (first) {
+            header = QStringLiteral("\x1b_Gi=%1,a=t,f=100,m=%2;").arg(imageId).arg(last ? 0 : 1);
+        } else {
+            header = QStringLiteral("\x1b_Gm=%1;").arg(last ? 0 : 1);
+        }
+        out += header;
+        out += QString::fromLatin1(chunk);
+        out += QStringLiteral("\x1b\\");
+        offset += take;
+        first = false;
+    }
+    return out;
+}
+
+QString kittyPlaceAtCursor(quint32 imageId, quint32 placementId, int cellCols, int cellRows)
+{
+    /* `a=p` re-uses the previously transmitted image referenced by
+     * `i=<id>`. `p=<pid>` keeps the placement slot stable so back-
+     * to-back frames at the same coords are no-ops; ghostty / kitty
+     * read this as "update placement at <pid>" rather than stacking
+     * fresh ones. `c,r` constrain the image to a cell rectangle so
+     * scaling matches the placeholder reservation. */
+    if (imageId == 0 || cellCols <= 0 || cellRows <= 0) {
+        return {};
+    }
+    return QStringLiteral("\x1b_Ga=p,i=%1,p=%2,c=%3,r=%4\x1b\\")
+        .arg(imageId)
+        .arg(placementId)
+        .arg(cellCols)
+        .arg(cellRows);
+}
+
 QString kittyInlineEscape(const QByteArray &bytes, const QString &mime)
 {
     /* Kitty graphics: ESC _ G f=<format>,a=T;<base64> ESC \\
@@ -147,22 +231,9 @@ QString kittyInlineEscape(const QByteArray &bytes, const QString &mime)
      * wezterm see the image instead of just the placeholder text. The
      * terminal picks reasonable display dimensions when c/r aren't
      * given. */
-    QByteArray pngBytes;
-    if (mime.contains(QStringLiteral("png"))) {
-        pngBytes = bytes;
-    } else {
-        QImage image;
-        if (!image.loadFromData(bytes)) {
-            return QString();
-        }
-        QBuffer buffer(&pngBytes);
-        if (!buffer.open(QIODevice::WriteOnly)) {
-            return QString();
-        }
-        if (!image.save(&buffer, "PNG")) {
-            return QString();
-        }
-        buffer.close();
+    const QByteArray pngBytes = reEncodeAsPngIfNeeded(bytes, mime);
+    if (pngBytes.isEmpty()) {
+        return QString();
     }
     const QByteArray b64 = pngBytes.toBase64();
     /* Chunked transfer keeps individual escape payloads short enough
@@ -335,5 +406,43 @@ QString QTuiImagePreviewBlock::toAnsi(int width)
         out.append(QLatin1Char('\n'));
     }
     out.append(QTuiBlock::toAnsi(width));
+    return out;
+}
+
+QString QTuiImagePreviewBlock::emitGraphicsLayer(
+    int firstScreenRow, int firstScreenCol, int contentWidth) const
+{
+    /* Live overlay: paint the image into the cell rectangle
+     * reserved by layout(). The cell-grid pass has already drawn
+     * the metadata line and left the rest of the rectangle blank,
+     * so the kitty placement lands right where the user expects. */
+    if (cellRows <= 0 || cellCols <= 0 || bytes.isEmpty()) {
+        return QString();
+    }
+    if (detectProtocol() != GraphicsProtocol::Kitty) {
+        return QString();
+    }
+
+    QString out;
+    if (!kittyState.transmitted) {
+        const QByteArray pngBytes = reEncodeAsPngIfNeeded(bytes, mimeType);
+        if (pngBytes.isEmpty()) {
+            return QString();
+        }
+        if (kittyState.imageId == 0) {
+            kittyState.imageId = allocateKittyImageId();
+        }
+        out += kittyTransmitOnly(pngBytes, kittyState.imageId);
+        kittyState.transmitted = true;
+    }
+
+    /* Place the rectangle one row below the metadata line so the
+     * label stays readable above the image. The width is clamped to
+     * the current viewport in case the user shrank the terminal
+     * after layout but before this frame. */
+    const int placeRow  = firstScreenRow + 1;
+    const int placeCols = qMin(cellCols, qMax(1, contentWidth));
+    out += QStringLiteral("\x1b[%1;%2H").arg(placeRow).arg(firstScreenCol);
+    out += kittyPlaceAtCursor(kittyState.imageId, /*placementId=*/1, placeCols, cellRows);
     return out;
 }
