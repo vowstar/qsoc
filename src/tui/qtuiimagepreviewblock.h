@@ -55,6 +55,14 @@ public:
      * normal scrollback alongside the metadata. */
     QString toAnsi(int width) override;
 
+    /* Live alt-screen overlay: transmit the PNG once, then re-place
+     * it at the block's current cell rectangle on every frame. The
+     * placement re-emission is small (~30 bytes) and idempotent in
+     * the kitty graphics protocol, so per-frame cost stays trivial
+     * even at the 100 ms compositor tick. */
+    QString emitGraphicsLayer(
+        int firstScreenRow, int firstScreenCol, int contentWidth) const override;
+
     /* Cell-grid footprint reserved for the eventual graphics overlay.
      * Zero on text-only terminals; positive when a graphics protocol
      * is available so subsequent compositor frames can paint a real
@@ -71,6 +79,19 @@ private:
 
     int cellRows = 0;
     int cellCols = 0;
+
+    /* Kitty graphics state machine. The first emitGraphicsLayer call
+     * uploads the PNG bytes once with `a=t,i=<id>` so subsequent
+     * frames only need a small `a=p` placement at the new cursor
+     * position. Mutable because emitGraphicsLayer is logically
+     * `const` from the scroll view's point of view but caches the
+     * upload-once decision. */
+    struct KittyState
+    {
+        quint32 imageId     = 0;
+        bool    transmitted = false;
+    };
+    mutable KittyState kittyState;
 
     QList<QList<QTuiStyledRun>> rendered;
 };

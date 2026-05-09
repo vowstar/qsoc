@@ -7,6 +7,7 @@
 #include <QBuffer>
 #include <QColor>
 #include <QImage>
+#include <QRegularExpression>
 #include <QtTest>
 
 namespace {
@@ -97,6 +98,14 @@ private slots:
     void cellRectClampsWideImageToMinRows();
     void zeroDimensionsLeaveNoReservation();
     void reservedRowsArePaintedBlank();
+
+    /* Live overlay state machine */
+    void emitGraphicsLayerEmptyOnTextOnlyTerminal();
+    void firstFrameTransmitsAndPlaces();
+    void subsequentFrameOnlyPlaces();
+    void uniqueImageIdAcrossBlocks();
+    void emitGraphicsLayerReencodesJpeg();
+    void emitGraphicsLayerCursorMoveMatchesArguments();
 };
 
 void Test::layoutProducesSingleRowPlaceholder()
@@ -379,6 +388,114 @@ void Test::reservedRowsArePaintedBlank()
     block.paintRow(screen, 0, 0, 0, 60, false, false); /* metadata row */
     block.paintRow(screen, 1, 1, 0, 60, false, false); /* first reserved row */
     QCOMPARE(screen.at(0, 1).character, QChar(QLatin1Char(' ')));
+}
+
+/* Without a graphics protocol the live hook contributes nothing so
+ * text-only terminals stay at the placeholder line. */
+void Test::emitGraphicsLayerEmptyOnTextOnlyTerminal()
+{
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    QCOMPARE(block.emitGraphicsLayer(5, 1, 60), QString());
+}
+
+void Test::firstFrameTransmitsAndPlaces()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    const QString out = block.emitGraphicsLayer(3, 1, 60);
+    QVERIFY(out.contains(QStringLiteral("a=t")));   /* transmit-only */
+    QVERIFY(out.contains(QStringLiteral("a=p")));   /* placement */
+    QVERIFY(out.contains(QStringLiteral("f=100"))); /* PNG */
+}
+
+void Test::subsequentFrameOnlyPlaces()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    block.emitGraphicsLayer(3, 1, 60);
+    const QString out2 = block.emitGraphicsLayer(4, 1, 60);
+    /* The second frame must NOT re-upload the bitmap; only the
+     * lightweight placement escape is allowed through. */
+    QVERIFY(!out2.contains(QStringLiteral("a=t")));
+    QVERIFY(out2.contains(QStringLiteral("a=p")));
+}
+
+void Test::uniqueImageIdAcrossBlocks()
+{
+    qputenv("KITTY_WINDOW_ID", "1");
+    QTuiImagePreviewBlock blockA(
+        QStringLiteral("/tmp/a.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    QTuiImagePreviewBlock blockB(
+        QStringLiteral("/tmp/b.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    blockA.layout(60);
+    blockB.layout(60);
+    const QString outA = blockA.emitGraphicsLayer(3, 1, 60);
+    const QString outB = blockB.emitGraphicsLayer(3, 1, 60);
+    /* Ids appear as i=<n> in the placement escape; capture them. */
+    static const QRegularExpression idRegex("i=(\\d+),");
+    const auto                      matchA = idRegex.match(outA);
+    const auto                      matchB = idRegex.match(outB);
+    QVERIFY(matchA.hasMatch());
+    QVERIFY(matchB.hasMatch());
+    QVERIFY(matchA.captured(1) != matchB.captured(1));
+}
+
+void Test::emitGraphicsLayerReencodesJpeg()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.jpg"),
+        QStringLiteral("image/jpeg"),
+        320,
+        240,
+        makeRealImageBytes("JPEG"));
+    block.layout(60);
+    const QString out = block.emitGraphicsLayer(3, 1, 60);
+    /* The transmit chunk must declare format 100 (PNG) regardless
+     * of the source MIME because kitty's f=100 only accepts PNG. */
+    QVERIFY(out.contains(QStringLiteral("f=100")));
+}
+
+void Test::emitGraphicsLayerCursorMoveMatchesArguments()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    const QString out = block.emitGraphicsLayer(7, 4, 60);
+    /* Image rectangle starts one row below the metadata line, in
+     * the same column as the block (1-based). */
+    QVERIFY(out.contains(QStringLiteral("\x1b[8;4H")));
 }
 
 QSOC_TEST_MAIN(Test)
