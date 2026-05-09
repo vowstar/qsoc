@@ -36,7 +36,8 @@ QString QSocToolFileRead::getDescription() const
            "content that the multimodal LLM can see directly. When the "
            "user attaches or references a screenshot or image path, "
            "ALWAYS use this tool to view the file at the path; the tool "
-           "result will contain the actual image, not a description.";
+           "result will contain the actual image, not a description. "
+           "This tool will work with all temporary file paths.";
 }
 
 json QSocToolFileRead::getParametersSchema() const
