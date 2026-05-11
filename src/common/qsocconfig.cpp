@@ -317,14 +317,14 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "# Configure URL, key (if needed), and model name.\n\n";
 
     out << "# llm:\n";
-    out << "#   url: https://api.deepseek.com/v1/chat/completions\n";
+    out << "#   url: https://api.deepseek.com/chat/completions\n";
     out << "#   key: sk-xxx\n";
-    out << "#   model: deepseek-chat\n";
+    out << "#   model: deepseek-v4-pro\n";
     out << "#   timeout: 30000\n";
     out << "#   max_output_tokens: 8192   # Max output tokens (0 or omit = API default)\n\n";
 
     out << "# Common endpoints:\n";
-    out << "# - DeepSeek:  https://api.deepseek.com/v1/chat/completions\n";
+    out << "# - DeepSeek:  https://api.deepseek.com/chat/completions\n";
     out << "# - OpenAI:    https://api.openai.com/v1/chat/completions\n";
     out << "# - Groq:      https://api.groq.com/openai/v1/chat/completions\n";
     out << "# - Ollama:    http://localhost:11434/v1/chat/completions\n\n";

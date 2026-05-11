@@ -40,7 +40,7 @@ LLM tool calling to execute multi-step workflows through natural language.
 ```bash
 qsoc agent
 qsoc agent -d /path/to/project -p myproject
-qsoc agent --effort high --model-reasoning deepseek-reasoner
+qsoc agent --effort high --model-reasoning deepseek-v4-pro
 qsoc agent --continue
 qsoc agent --resume abc123
 ```
@@ -326,7 +326,7 @@ output is displayed in dim text.
     [not set], [set], [Primary model; reasoning model idle],
     [`high`], [not set], [Primary model + `reasoning_effort`],
     [`high`],
-    [`deepseek-reasoner`],
+    [`deepseek-v4-pro`],
     [Switch to reasoning model + `reasoning_effort`],
   )],
   caption: [MODEL SELECTION BEHAVIOR],
