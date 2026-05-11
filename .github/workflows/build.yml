@@ -251,6 +251,37 @@ jobs:
         cd build
         QT_QPA_PLATFORM=offscreen ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure
 
+  build-nix:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v27
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+
+    - name: Nix build (with submodules)
+      run: nix build ".?submodules=1" --print-build-logs
+
+    - name: Smoke Test
+      run: |
+        set -e
+        QSOC=./result/bin/qsoc
+        echo "--- version ---"
+        $QSOC -v
+        echo "--- no missing libs ---"
+        if ldd $QSOC | grep -q "not found"; then
+          ldd $QSOC | grep "not found"
+          exit 1
+        fi
+        echo "--- ok ---"
+
   cppcheck:
     runs-on: ubuntu-latest
 
