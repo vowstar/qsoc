@@ -108,7 +108,7 @@ All major LLM providers support the OpenAI Chat Completions format:
     align: (auto, left),
     table.header([Provider], [Endpoint URL]),
     table.hline(),
-    [DeepSeek], [`https://api.deepseek.com/v1/chat/completions`],
+    [DeepSeek], [`https://api.deepseek.com/chat/completions`],
     [OpenAI], [`https://api.openai.com/v1/chat/completions`],
     [Groq], [`https://api.groq.com/openai/v1/chat/completions`],
     [Ollama], [`http://localhost:11434/v1/chat/completions`],
@@ -124,9 +124,9 @@ Example configurations for different providers:
 ```yaml
 # DeepSeek
 llm:
-  url: https://api.deepseek.com/v1/chat/completions
+  url: https://api.deepseek.com/chat/completions
   key: sk-xxx
-  model: deepseek-chat
+  model: deepseek-v4-pro
 
 # OpenAI
 llm:
@@ -289,10 +289,9 @@ Below is an example of a complete QSoC configuration file:
 ```yaml
 # LLM Configuration
 llm:
-  url: https://api.deepseek.com/v1/chat/completions
+  url: https://api.deepseek.com/chat/completions
   key: sk-xxx
-  model: deepseek-chat
-  model_reasoning: deepseek-reasoner
+  model: deepseek-v4-pro
   timeout: 30000
 
 # Agent Configuration
