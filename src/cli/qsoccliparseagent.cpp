@@ -1281,25 +1281,46 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             /* Streaming single query mode */
             QEventLoop loop;
 
-            connect(agent, &QSocAgent::contentChunk, [&qout](const QString &chunk) {
-                qout << chunk << Qt::flush;
+            /* Reuse the TUI scrollback model in headless mode: ingest
+             * markdown chunks into the same block tree the interactive
+             * compositor builds, then dump the rendered ANSI in one
+             * shot at runComplete. start() is never called, so no
+             * alt-screen entry, no timer, no live painting; only the
+             * markdown -> styled-blocks -> ANSI pipeline is exercised. */
+            auto headlessCompositor = std::make_shared<QTuiCompositor>();
+            connect(agent, &QSocAgent::contentChunk, [headlessCompositor](const QString &chunk) {
+                headlessCompositor->appendAssistantChunk(chunk);
+            });
+            connect(agent, &QSocAgent::reasoningChunk, [headlessCompositor](const QString &chunk) {
+                headlessCompositor->appendReasoningChunk(chunk);
             });
 
-            auto reasoningCollapser = std::make_shared<ReasoningNewlineCollapser>();
             connect(
-                agent,
-                &QSocAgent::reasoningChunk,
-                [&qout, reasoningCollapser](const QString &chunk) {
-                    const QString filtered = reasoningCollapser->feed(chunk);
-                    if (!filtered.isEmpty()) {
-                        qout << QSocConsole::dim(filtered) << Qt::flush;
+                agent, &QSocAgent::runComplete, [&qout, &loop, headlessCompositor](const QString &) {
+                    headlessCompositor->finishStream();
+                    /* Leave one cell of right margin so the terminal's
+                     * auto-wrap never fires before our explicit newline;
+                     * otherwise every full-width row would render as
+                     * itself plus an empty wrap line in cooked mode. */
+                    const int width = qMax(20, headlessCompositor->getTerminalWidth() - 1);
+                    QString   content = headlessCompositor->contentView().toAnsi(width);
+                    /* The input monitor disables OPOST so the TTY no
+                     * longer expands '\n' to '\r\n'. Force the carriage
+                     * return ourselves so each rendered row starts at
+                     * column 0 instead of marching right one cell at a
+                     * time after the prior row's trailing padding. */
+                    content.replace(QLatin1Char('\n'), QStringLiteral("\r\n"));
+                    if (!content.isEmpty()) {
+                        qout << content;
+                        if (!content.endsWith(QLatin1Char('\n'))) {
+                            qout << "\r\n";
+                        }
+                        qout.flush();
+                    } else {
+                        qout << "\r\n" << Qt::flush;
                     }
+                    loop.quit();
                 });
-
-            connect(agent, &QSocAgent::runComplete, [&qout, &loop](const QString &) {
-                qout << Qt::endl;
-                loop.quit();
-            });
 
             connect(agent, &QSocAgent::runError, [this, &loop](const QString &error) {
                 showError(1, error);
