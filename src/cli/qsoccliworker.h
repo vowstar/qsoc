@@ -395,7 +395,8 @@ private:
         class QSocTaskRegistry      *taskRegistry      = nullptr,
         class QSocTaskEventQueue    *taskEventQueue    = nullptr,
         class QSocMonitorTaskSource *monitorTaskSource = nullptr,
-        class QSocHostCatalog       *hostCatalog       = nullptr);
+        class QSocHostCatalog       *hostCatalog       = nullptr,
+        class QSocGoalCatalog       *goalCatalog       = nullptr);
 
     /**
      * @brief Show application name and version and emit exit with exitCode.

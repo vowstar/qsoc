@@ -11,6 +11,7 @@
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsocbashtasksource.h"
 #include "agent/qsocfilehistory.h"
+#include "agent/qsocgoal.h"
 #include "agent/qsochookmanager.h"
 #include "agent/qsoclooptasksource.h"
 #include "agent/qsocsession.h"
@@ -34,6 +35,7 @@
 #include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolfile.h"
 #include "agent/tool/qsoctoolgenerate.h"
+#include "agent/tool/qsoctoolgoalcomplete.h"
 #include "agent/tool/qsoctoolhostcatalog.h"
 #include "agent/tool/qsoctoollsp.h"
 #include "agent/tool/qsoctoolmemory.h"
@@ -1156,6 +1158,14 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     }
     agent->setHostCatalog(hostCatalog);
 
+    /* Project goal catalog: at most one active goal per project,
+     * persisted to .qsoc/goal.yml plus .qsoc/goal_log.jsonl. The
+     * run loop's continuation hook reads from this catalog to
+     * decide whether to keep working after a turn ends. */
+    auto *goalCatalog = new QSocGoalCatalog(this);
+    goalCatalog->load(projectManager->getProjectPath());
+    agent->setGoalCatalog(goalCatalog);
+
     auto *agentTool = new QSocToolAgent(
         this, llmService, toolRegistry, config, agentDefinitions, subAgentTaskSource);
     agentTool->setMemoryManager(memoryManager);
@@ -1195,6 +1205,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * once the TUI is up; sub-agent dispatch leaves it unset so a
      * child cannot block mid-LLM-turn waiting on user input. */
     toolRegistry->registerTool(new QSocToolAskUser(this, nullptr));
+
+    /* goal_complete: LLM-driven completion declaration. Schema
+     * restricts the status payload to "complete"; all other
+     * transitions go through the user-facing /goal slash family. */
+    toolRegistry->registerTool(new QSocToolGoalComplete(this, goalCatalog));
 
     /* Companion tool: prepares a resume payload from a prior run's
      * meta sidecar + transcript so the LLM can re-spawn an evicted /
@@ -1466,7 +1481,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         taskRegistry,
         taskEventQueue,
         monitorTaskSource,
-        hostCatalog);
+        hostCatalog,
+        goalCatalog);
 }
 
 bool QSocCliWorker::runAgentLoop(
@@ -1479,7 +1495,8 @@ bool QSocCliWorker::runAgentLoop(
     QSocTaskRegistry      *taskRegistry,
     QSocTaskEventQueue    *taskEventQueue,
     QSocMonitorTaskSource *monitorTaskSource,
-    QSocHostCatalog       *hostCatalog)
+    QSocHostCatalog       *hostCatalog,
+    QSocGoalCatalog       *goalCatalog)
 {
     /* Require interactive terminal for TUI */
     QTerminalCapability termCap;
@@ -5084,6 +5101,119 @@ bool QSocCliWorker::runAgentLoop(
 
             statusBarWidget.setStatus("Ready");
             compositor.printContent("Returned to local workspace (binding kept).\n");
+            continue;
+        }
+        if (cmd == QStringLiteral("/goal") || cmd.startsWith(QStringLiteral("/goal "))) {
+            const QString arg = input.mid(5).trimmed();
+            const auto    cur = goalCatalog->current();
+
+            auto printStatus = [&]() {
+                if (!cur.has_value()) {
+                    compositor.printContent(
+                        "No active goal. Usage:\n"
+                        "  /goal <objective>          set a new goal\n"
+                        "  /goal pause                pause auto-continuation\n"
+                        "  /goal resume               resume\n"
+                        "  /goal budget <tokens>      set token budget (0 = none)\n"
+                        "  /goal clear                drop the active goal\n");
+                    return;
+                }
+                QString line = QString("Goal [%1]: %2\n")
+                                   .arg(qSocGoalStatusToString(cur->status), cur->objective);
+                if (cur->tokenBudget > 0) {
+                    line += QString("  Tokens: %1 / %2  Elapsed: %3s\n")
+                                .arg(cur->tokensUsed)
+                                .arg(cur->tokenBudget)
+                                .arg(cur->secondsUsed);
+                } else {
+                    line += QString("  Tokens: %1 (no budget)  Elapsed: %2s\n")
+                                .arg(cur->tokensUsed)
+                                .arg(cur->secondsUsed);
+                }
+                compositor.printContent(line);
+            };
+
+            if (arg.isEmpty()) {
+                printStatus();
+                continue;
+            }
+
+            QString err;
+            if (arg == QStringLiteral("clear")) {
+                if (goalCatalog->clear(&err)) {
+                    compositor.printContent("Goal cleared.\n");
+                } else {
+                    compositor.printContent(QString("Error: %1\n").arg(err));
+                }
+                continue;
+            }
+            if (arg == QStringLiteral("pause")) {
+                if (goalCatalog->setStatus(QSocGoalStatus::Paused, &err)) {
+                    compositor.printContent("Goal paused.\n");
+                } else {
+                    compositor.printContent(QString("Error: %1\n").arg(err));
+                }
+                continue;
+            }
+            if (arg == QStringLiteral("resume")) {
+                if (goalCatalog->setStatus(QSocGoalStatus::Active, &err)) {
+                    compositor.printContent("Goal resumed.\n");
+                } else {
+                    compositor.printContent(QString("Error: %1\n").arg(err));
+                }
+                continue;
+            }
+            if (arg.startsWith(QStringLiteral("budget"))) {
+                const QString rest = arg.mid(6).trimmed();
+                bool          ok   = false;
+                const int     bud  = rest.toInt(&ok);
+                if (!ok || bud < 0) {
+                    compositor.printContent("Usage: /goal budget <non-negative integer>\n");
+                    continue;
+                }
+                if (goalCatalog->setTokenBudget(bud, &err)) {
+                    compositor.printContent(QString("Goal token budget set to %1.\n").arg(bud));
+                } else {
+                    compositor.printContent(QString("Error: %1\n").arg(err));
+                }
+                continue;
+            }
+
+            /* Treat anything else as a new objective. Replacing an
+             * existing goal goes through ask_user for confirmation
+             * to match the codex flow. */
+            if (cur.has_value()) {
+                QList<QTuiMenu::MenuItem> items;
+                QTuiMenu::MenuItem        keep;
+                keep.label = QStringLiteral("Keep current goal");
+                items.append(keep);
+                QTuiMenu::MenuItem replace;
+                replace.label = QStringLiteral("Replace with new objective");
+                items.append(replace);
+                QTuiMenu menu;
+                menu.setTitle(QString("Replace goal '%1' with '%2'?")
+                                  .arg(cur->objective.left(40), arg.left(40)));
+                menu.setItems(items);
+                const int picked = menu.exec();
+                inputMonitor.resetEscState();
+                compositor.invalidate();
+                compositor.render();
+                if (picked != 1) {
+                    compositor.printContent("Kept the current goal.\n");
+                    continue;
+                }
+                if (!goalCatalog->replace(arg, cur->tokenBudget, &err)) {
+                    compositor.printContent(QString("Error: %1\n").arg(err));
+                    continue;
+                }
+                compositor.printContent("Goal replaced.\n");
+            } else {
+                if (!goalCatalog->create(arg, 0, &err)) {
+                    compositor.printContent(QString("Error: %1\n").arg(err));
+                    continue;
+                }
+                compositor.printContent("Goal set.\n");
+            }
             continue;
         }
         if (cmd == QStringLiteral("/cwd") || cmd.startsWith(QStringLiteral("/cwd "))) {
