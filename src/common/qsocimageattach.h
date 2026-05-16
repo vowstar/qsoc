@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QString>
 
+class QImage;
 class QLLMService;
 
 /**
@@ -67,6 +68,45 @@ const char *attachmentMarkerClose();
  */
 QString buildAttachmentResult(
     const QString &sourceLabel, const QString &mimeHint, const QByteArray &body, QLLMService *llm);
+
+/**
+ * @brief Outcome of @ref compressWithinBudget.
+ * @details `format` may differ from the source MIME when the cascade
+ *          had to swap encoders (e.g. PNG -> JPEG to shed alpha for a
+ *          screenshot that would not fit). `finalWidth` / `finalHeight`
+ *          reflect the post-shrink dimensions when the cascade reached
+ *          the dimension-halving step. `data` is empty only on a hard
+ *          encoder failure; callers must still check it against
+ *          `maxBytes` because the cascade returns the smallest sample
+ *          it produced even when the final byte budget still loses.
+ */
+struct CompressOutcome
+{
+    QByteArray  data;
+    const char *format       = "JPEG";
+    bool        downgraded   = false;
+    int         finalQuality = -1;
+    int         finalWidth   = 0;
+    int         finalHeight  = 0;
+};
+
+/**
+ * @brief Cascade re-encode until the image fits a byte budget.
+ * @details Three steps mirroring claude-code's imageResizer cascade:
+ *          1. JPEG / WEBP quality ladder (80 -> 65 -> 50 -> 40).
+ *          2. For PNG with alpha: indexed-palette PNG, then drop alpha
+ *             and ride the JPEG ladder.
+ *          3. Halve dimensions once and run a final JPEG ladder at
+ *             50 / 40 / 30 quality.
+ * @param img       Decoded source image; already dimension-capped by
+ *                  the caller's earlier resize step.
+ * @param sourceMime MIME hint used only to pick the preferred encoder.
+ * @param maxBytes  Hard byte cap. Zero or negative disables the
+ *                  cascade and just runs the default encoder once.
+ * @return Outcome carrying the encoded bytes, final format, and
+ *         downgrade markers for the summary log line.
+ */
+CompressOutcome compressWithinBudget(const QImage &img, const QString &sourceMime, int maxBytes);
 
 } // namespace QSocImageAttach
 

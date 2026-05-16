@@ -365,6 +365,9 @@ void QLLMService::loadConfigSettings()
                     if (mod["image_max_dimension"]) {
                         modelCfg.imageMaxDimension = mod["image_max_dimension"].as<int>();
                     }
+                    if (mod["image_max_bytes"]) {
+                        modelCfg.imageMaxBytes = mod["image_max_bytes"].as<int>();
+                    }
                     if (mod["image_provider_hint"]) {
                         modelCfg.imageProviderHint = QString::fromStdString(
                             mod["image_provider_hint"].as<std::string>());
