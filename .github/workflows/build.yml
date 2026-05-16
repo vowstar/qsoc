@@ -259,12 +259,38 @@ jobs:
       with:
         submodules: recursive
 
+    - name: Refresh submodules
+      # Belt and braces: `submodules: recursive` above already clones
+      # external/*, but some recently-added entries (libssh2, cmark-gfm,
+      # lexbor) were observed missing in the nix sandbox on older Nix
+      # versions. Re-running update ensures the working tree mirrors
+      # `.gitmodules` exactly before nix snapshots it.
+      run: git submodule update --init --recursive --force
+
     - name: Install Nix
-      uses: cachix/install-nix-action@v27
+      uses: cachix/install-nix-action@v31
       with:
         nix_path: nixpkgs=channel:nixos-unstable
         extra_nix_config: |
           experimental-features = nix-command flakes
+
+    - name: Diagnose source tree
+      run: |
+        echo "external/ entries:"
+        ls -1 external/ | head -25
+        echo
+        echo "missing submodule check:"
+        for d in libssh2 cmark-gfm lexbor mbedtls slang; do
+          if [ ! -d "external/$d" ]; then
+            echo "MISSING: external/$d"
+            exit 1
+          fi
+          if [ -z "$(ls -A external/$d 2>/dev/null)" ]; then
+            echo "EMPTY: external/$d"
+            exit 1
+          fi
+        done
+        echo "ok"
 
     - name: Nix build (with submodules)
       run: nix build ".?submodules=1" --print-build-logs

@@ -42,4 +42,4 @@
 	url = https://github.com/github/cmark-gfm.git
 [submodule "external/lexbor"]
 	path = external/lexbor
-	url = https://github.com/lexbor/lexbor
+	url = https://github.com/lexbor/lexbor.git
