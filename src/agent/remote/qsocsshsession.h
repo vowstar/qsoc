@@ -8,6 +8,7 @@
 
 #include <libssh2.h>
 
+#include <functional>
 #include <QObject>
 #include <QString>
 
@@ -84,6 +85,25 @@ public:
      */
     static int waitSocket(int sockFd, LIBSSH2_SESSION *session, int timeoutMs);
 
+    /**
+     * @brief Callback invoked when auth needs an interactive secret
+     *        (encrypted private-key passphrase or `password` method).
+     * @details The session never logs, stores, or echoes the returned
+     *          value. The callback's @p prompt is a UI-safe label like
+     *          "Passphrase for id_ed25519:" or "Password for user@host:".
+     *          Return an empty string to skip this auth attempt.
+     */
+    using SecretCallback = std::function<QString(const QString &prompt)>;
+
+    /**
+     * @brief Install an interactive-secret callback. When unset, the
+     *        session never prompts: ssh-agent and empty-passphrase
+     *        identity files are the only auth routes attempted. The
+     *        sub-agent dispatch path leaves this unset so an
+     *        in-flight LLM turn never blocks on user input.
+     */
+    void setSecretCallback(SecretCallback callback);
+
 private:
     ConnectStatus openSocket(const QString &host, int port, QString *errorMessage);
     ConnectStatus performHandshake(QString *errorMessage);
@@ -103,12 +123,17 @@ private:
         int sockFd, const void *buf, size_t len, int flags, void **abstract);
     static long long recvOverChannel(int sockFd, void *buf, size_t len, int flags, void **abstract);
 
+    bool tryPassphrasePrompt(
+        const QString &user, const QStringList &identityPaths, QStringList *triedKeys);
+    bool tryPasswordPrompt(const QString &user, const QString &hostname, int port);
+
     LIBSSH2_SESSION *m_session       = nullptr;
     int              m_socket        = -1;
     int              m_timeoutMs     = 30000;
     QSocSshSession  *m_parent        = nullptr; /* non-owning */
     LIBSSH2_CHANNEL *m_parentChannel = nullptr;
     QString          m_lastError;
+    SecretCallback   m_secretCallback;
 };
 
 #endif // QSOCSSHSESSION_H
