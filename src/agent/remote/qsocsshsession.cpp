@@ -472,6 +472,69 @@ bool QSocSshSession::tryIdentityFileAuth(
     return rc == 0;
 }
 
+void QSocSshSession::setSecretCallback(SecretCallback callback)
+{
+    m_secretCallback = std::move(callback);
+}
+
+bool QSocSshSession::tryPassphrasePrompt(
+    const QString &user, const QStringList &identityPaths, QStringList *triedKeys)
+{
+    if (!m_secretCallback) {
+        return false;
+    }
+    for (const QString &identity : identityPaths) {
+        const QString prompt
+            = QStringLiteral("Passphrase for %1: ").arg(QFileInfo(identity).fileName());
+        const QString phrase = m_secretCallback(prompt);
+        if (phrase.isEmpty()) {
+            continue;
+        }
+        if (tryIdentityFileAuth(user, identity, phrase)) {
+            return true;
+        }
+        triedKeys->append(QFileInfo(identity).fileName() + QStringLiteral(" (passphrase)"));
+    }
+    return false;
+}
+
+bool QSocSshSession::tryPasswordPrompt(const QString &user, const QString &hostname, int port)
+{
+    if (!m_secretCallback || m_session == nullptr) {
+        return false;
+    }
+    const QByteArray userBytes = user.toUtf8();
+    /* Query which methods the server accepts so we only prompt for a
+     * password when the server actually has the `password` method.
+     * The call also primes libssh2's userauth state. */
+    libssh2_session_set_blocking(m_session, 1);
+    char *methods = libssh2_userauth_list(
+        m_session, userBytes.constData(), static_cast<unsigned int>(userBytes.size()));
+    libssh2_session_set_blocking(m_session, 0);
+    if (methods == nullptr) {
+        return false;
+    }
+    const QByteArray methodList(methods);
+    if (!methodList.contains("password")) {
+        return false;
+    }
+    const QString prompt = QStringLiteral("Password for %1@%2:%3: ").arg(user, hostname).arg(port);
+    const QString pwd    = m_secretCallback(prompt);
+    if (pwd.isEmpty()) {
+        return false;
+    }
+    const QByteArray pwdBytes = pwd.toUtf8();
+    int              status   = 0;
+    while (
+        (status = libssh2_userauth_password(m_session, userBytes.constData(), pwdBytes.constData()))
+        == LIBSSH2_ERROR_EAGAIN) {
+        if (waitSocket(m_socket, m_session, m_timeoutMs) <= 0) {
+            return false;
+        }
+    }
+    return status == 0;
+}
+
 QSocSshSession::ConnectStatus QSocSshSession::authenticate(
     const QSocSshHostConfig &host, QString *errorMessage)
 {
@@ -524,6 +587,20 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
             return ConnectStatus::Ok;
         }
         triedKeys.append(QFileInfo(identity).fileName());
+    }
+
+    /* Interactive fallback (only when a secret callback is wired by the
+     * caller). First retry each identity file with a callback-supplied
+     * passphrase, then attempt password auth if the server advertises
+     * it. Sub-agent dispatch leaves the callback unset so a child run
+     * can never block on user input mid-LLM-turn. */
+    if (m_secretCallback) {
+        if (tryPassphrasePrompt(user, identityPaths, &triedKeys)) {
+            return ConnectStatus::Ok;
+        }
+        if (tryPasswordPrompt(user, host.hostname, host.port)) {
+            return ConnectStatus::Ok;
+        }
     }
 
     const QString hint = triedKeys.isEmpty()
