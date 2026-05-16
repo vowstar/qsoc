@@ -409,12 +409,18 @@ private:
     QSocLoopScheduler     *loopScheduler = nullptr;
     class QSocHostCatalog *hostCatalog   = nullptr;
     class QSocGoalCatalog *goalCatalog   = nullptr;
-    /* Re-entry guard for the goal-continuation hook. Atomic so a
-     * future async continuation path cannot race with the sync run
-     * loop. Mirrors codex's continuation_lock semaphore. */
+    /* Re-entry guard for the goal-continuation hook. Atomic so the
+     * sync run() and async runStream() paths cannot race. Mirrors
+     * codex's continuation_lock semaphore. */
     std::atomic<bool> goalContinuationInFlight{false};
-    QSocAgentConfig   agentConfig;
-    json              messages;
+
+    /* Per-stream-iteration accounting state. Snapshot at the start
+     * of each runStream() so each iteration's token + elapsed delta
+     * can be charged against the active goal's budget. */
+    int             streamPrevTokensEstimate = 0;
+    QElapsedTimer   streamIterationTimer;
+    QSocAgentConfig agentConfig;
+    json            messages;
 
     /* Streaming state */
     bool    isStreaming     = false;
