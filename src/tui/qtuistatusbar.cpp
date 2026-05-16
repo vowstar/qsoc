@@ -44,6 +44,11 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
         if (!modelId.isEmpty()) {
             line += " [" + modelId + "]";
         }
+        if (!goalText_.isEmpty()) {
+            QString tag = goalStatusTag_.isEmpty() ? QString()
+                                                   : QStringLiteral("|%1").arg(goalStatusTag_);
+            line += QString(" [Goal: %1%2]").arg(goalText_, tag);
+        }
         screen.putString(0, startY, QTuiText::truncate(line, mainWidth), false, true); /* dim */
         if (!taskPill.isEmpty()) {
             /* Focus state takes precedence: pill is bold + inverted so the

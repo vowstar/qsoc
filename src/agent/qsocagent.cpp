@@ -228,6 +228,12 @@ void QSocAgent::runStream(const QString &userQuery)
     totalInputTokens  = 0;
     totalOutputTokens = 0;
 
+    /* Snapshot the rolling token estimate and start the wall-clock
+     * timer so each stream iteration's delta can be charged against
+     * the active goal's budget. */
+    streamPrevTokensEstimate = estimateMessagesTokens();
+    streamIterationTimer.start();
+
     /* Start timing */
     runElapsedTimer.start();
     heartbeatTimer->start();
@@ -542,8 +548,19 @@ void QSocAgent::handleStreamComplete(const json &response)
         /* Push full message to preserve reasoning_content for DeepSeek R1 */
         messages.push_back(message);
 
+        accountGoalUsageForIteration(streamPrevTokensEstimate, streamIterationTimer);
+
         /* Continue if there are queued requests */
         if (hasPendingRequests()) {
+            processStreamIteration();
+            return;
+        }
+
+        if (maybeQueueGoalContinuation()) {
+            /* A continuation (or budget-limit) prompt was just
+             * appended; feed it back into the stream loop so the
+             * model sees and answers it without exiting back to
+             * the REPL idle state. */
             processStreamIteration();
             return;
         }
@@ -556,8 +573,15 @@ void QSocAgent::handleStreamComplete(const json &response)
         /* Push full message to preserve reasoning_content for DeepSeek R1 */
         messages.push_back(message);
 
+        accountGoalUsageForIteration(streamPrevTokensEstimate, streamIterationTimer);
+
         /* Continue if there are queued requests */
         if (hasPendingRequests()) {
+            processStreamIteration();
+            return;
+        }
+
+        if (maybeQueueGoalContinuation()) {
             processStreamIteration();
             return;
         }
