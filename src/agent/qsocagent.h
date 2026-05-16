@@ -197,6 +197,13 @@ public:
     void setHostCatalog(class QSocHostCatalog *catalog) { hostCatalog = catalog; }
 
     /**
+     * @brief Inject the project goal catalog so the run loop appends
+     *        an auto-continuation prompt after each turn when a goal
+     *        is Active and the request queue is empty.
+     */
+    void setGoalCatalog(class QSocGoalCatalog *catalog) { goalCatalog = catalog; }
+
+    /**
      * @brief Set the hook manager for lifecycle event dispatch.
      * @details The agent fires user-defined hook commands at well-known
      *          lifecycle points (tool dispatch, prompt admission, session
@@ -401,8 +408,13 @@ private:
     QSocHookManager       *hookManager   = nullptr;
     QSocLoopScheduler     *loopScheduler = nullptr;
     class QSocHostCatalog *hostCatalog   = nullptr;
-    QSocAgentConfig        agentConfig;
-    json                   messages;
+    class QSocGoalCatalog *goalCatalog   = nullptr;
+    /* Re-entry guard for the goal-continuation hook. Atomic so a
+     * future async continuation path cannot race with the sync run
+     * loop. Mirrors codex's continuation_lock semaphore. */
+    std::atomic<bool> goalContinuationInFlight{false};
+    QSocAgentConfig   agentConfig;
+    json              messages;
 
     /* Streaming state */
     bool    isStreaming     = false;
@@ -478,6 +490,25 @@ private:
      *        and sub-agent prompt assembly paths.
      */
     void appendDynamicSystemSections(QString &prompt) const;
+
+    /**
+     * @brief Charge the active goal's usage counters with the token
+     *        delta since the previous call and the wall-clock seconds
+     *        spent on this iteration. No-op when there is no catalog
+     *        or no active goal. Updates @p prevTokensEstimate in place
+     *        and restarts @p iterationTimer.
+     */
+    void accountGoalUsageForIteration(int &prevTokensEstimate, class QElapsedTimer &iterationTimer);
+
+    /**
+     * @brief When the run loop ends a turn with no pending user input
+     *        and the active goal is still Active, append a
+     *        continuation (or budget-limit) prompt as a user message
+     *        and return true so the caller can loop again. Returns
+     *        false otherwise. Atomic re-entry guard prevents two
+     *        continuations from racing.
+     */
+    bool maybeQueueGoalContinuation();
 
     /**
      * @brief Layer 1: Prune old tool outputs to reduce token usage
