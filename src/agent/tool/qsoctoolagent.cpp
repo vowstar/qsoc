@@ -8,6 +8,10 @@
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsochookmanager.h"
 #include "agent/qsocsubagenttasksource.h"
+#include "agent/remote/qsochostprofile.h"
+#include "agent/remote/qsocsftpclient.h"
+#include "agent/remote/qsocsshconfigparser.h"
+#include "agent/remote/qsocsshsession.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "common/qllmservice.h"
 
@@ -36,6 +40,86 @@ QSocToolAgent::QSocToolAgent(
     , taskSource_(taskSource)
 {}
 
+QSocToolAgent::~QSocToolAgent()
+{
+    /* Tear down every cached host binding: registry first (it owns
+     * the tool instances), then SFTP, then the SSH session, then
+     * the ProxyJump chain in reverse so children disconnect before
+     * their parents. */
+    for (auto *binding : std::as_const(hostCache_)) {
+        if (binding == nullptr) {
+            continue;
+        }
+        if (binding->registry != nullptr) {
+            delete binding->registry;
+        }
+        if (binding->state.sftp != nullptr) {
+            binding->state.sftp->close();
+            delete binding->state.sftp;
+        }
+        if (binding->state.session != nullptr) {
+            binding->state.session->disconnectFromHost();
+            delete binding->state.session;
+        }
+        for (auto it = binding->state.jumps.rbegin(); it != binding->state.jumps.rend(); ++it) {
+            (*it)->disconnectFromHost();
+            delete *it;
+        }
+        delete binding;
+    }
+    hostCache_.clear();
+}
+
+QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QString *errorMessage)
+{
+    const auto cached = hostCache_.constFind(host);
+    if (cached != hostCache_.constEnd()) {
+        return cached.value()->registry;
+    }
+
+    ResolvedHostTarget resolved;
+    if (!resolveHostTarget(host, hostCatalog_, sshConfigParser_, &resolved, errorMessage)) {
+        return nullptr;
+    }
+    if (resolved.workspaceHint.isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral(
+                                "no workspace registered for host '%1'; call "
+                                "host_register or /ssh first")
+                                .arg(host);
+        }
+        return nullptr;
+    }
+
+    auto *binding = new HostBinding{};
+    if (!connectAgentSshSession(resolved.connectString, this, &binding->state, errorMessage)) {
+        delete binding;
+        return nullptr;
+    }
+    if (!prepareAgentRemoteWorkspace(resolved.workspaceHint, &binding->state, errorMessage)) {
+        if (binding->state.sftp != nullptr) {
+            binding->state.sftp->close();
+            delete binding->state.sftp;
+        }
+        if (binding->state.session != nullptr) {
+            binding->state.session->disconnectFromHost();
+            delete binding->state.session;
+        }
+        for (auto it = binding->state.jumps.rbegin(); it != binding->state.jumps.rend(); ++it) {
+            (*it)->disconnectFromHost();
+            delete *it;
+        }
+        delete binding;
+        return nullptr;
+    }
+    /* Pass nullptr for socConfig + monitorTaskSource: sub-agent
+     * dispatch only needs file/shell/path tools on the remote.
+     * Web/doc are intentionally local-only for now. */
+    binding->registry = buildAgentRemoteRegistry(this, &binding->state, nullptr, nullptr);
+    hostCache_.insert(host, binding);
+    return binding->registry;
+}
+
 QString QSocToolAgent::getName() const
 {
     return QStringLiteral("agent");
@@ -53,6 +137,23 @@ QString QSocToolAgent::getDescription() const
     if (defRegistry_ != nullptr) {
         desc += defRegistry_->describeAvailable();
     }
+    if (hostCatalog_ != nullptr) {
+        const auto entries = hostCatalog_->allList();
+        if (!entries.isEmpty()) {
+            desc += QStringLiteral(
+                "\nAvailable host values (sub-agent dispatch target):\n"
+                "  local: parent's current execution context\n");
+            for (const auto &entry : entries) {
+                const QString cap = entry.capability.isEmpty()
+                                        ? QStringLiteral("(no capability text)")
+                                        : entry.capability;
+                desc += QStringLiteral("  %1: %2\n").arg(entry.alias, cap);
+            }
+            desc += QStringLiteral(
+                "\nOmit `host` to use the parent's current binding. Pick a "
+                "named host above only when its capability matches the task.\n");
+        }
+    }
     return desc;
 }
 
@@ -61,8 +162,15 @@ json QSocToolAgent::getParametersSchema() const
     json enumValues = json::array();
     enumValues.push_back("fork");
     if (defRegistry_ != nullptr) {
-        for (const QString &name : defRegistry_->availableNames()) {
-            enumValues.push_back(name.toStdString());
+        for (const QString &subName : defRegistry_->availableNames()) {
+            enumValues.push_back(subName.toStdString());
+        }
+    }
+    json hostEnum = json::array();
+    hostEnum.push_back("local");
+    if (hostCatalog_ != nullptr) {
+        for (const auto &entry : hostCatalog_->allList()) {
+            hostEnum.push_back(entry.alias.toStdString());
         }
     }
     return json{
@@ -94,7 +202,16 @@ json QSocToolAgent::getParametersSchema() const
             {"description",
              "When 'worktree', the child runs inside a fresh git worktree of the "
              "current project, so its file changes are isolated from the parent. "
-             "Silently falls back to 'none' if the project is not a git repo."}}}}},
+             "Silently falls back to 'none' if the project is not a git repo."}}},
+          {"host",
+           {{"type", "string"},
+            {"enum", hostEnum},
+            {"description",
+             "Execution host for this sub-agent. 'local' (default) runs on the "
+             "parent's current binding. A named catalog alias opens (or reuses) "
+             "an SSH session to that host. Only catalog entries with a "
+             "workspace are dispatchable; pure ~/.ssh/config aliases without a "
+             "catalog entry are not listed here."}}}}},
         {"required", json::array({"description", "prompt"})}};
 }
 
@@ -311,6 +428,31 @@ QString QSocToolAgent::execute(const json &arguments)
         if (auto *liveLlm = parentAgent_->getLLMService()) {
             effectiveLlm = liveLlm;
         }
+    }
+
+    /* Optional per-spawn host override. Catalog alias -> open (or
+     * reuse) an SSH session for the child only, leaving the
+     * parent's binding alone. 'local' or empty falls back to the
+     * named definition's `preferred_host` (when set), then to the
+     * parent's effective registry above. */
+    QString hostArg = jsonStringField(arguments, "host");
+    if (hostArg.isEmpty() && def != nullptr && !def->preferredHost.isEmpty()) {
+        hostArg = def->preferredHost;
+    }
+    if (!hostArg.isEmpty() && hostArg != QStringLiteral("local")) {
+        QString           hostErr;
+        QSocToolRegistry *hostReg = resolveHostRegistry(hostArg, &hostErr);
+        if (hostReg == nullptr) {
+            return QString::fromUtf8(
+                json{
+                    {"status", "error"},
+                    {"error",
+                     QString("host '%1' is not dispatchable: %2").arg(hostArg, hostErr).toStdString()},
+                    {"host", hostArg.toStdString()}}
+                    .dump()
+                    .c_str());
+        }
+        effectiveRegistry = hostReg;
     }
 
     /* Concurrency cap: protect remote-LLM RPM limits and bound memory.

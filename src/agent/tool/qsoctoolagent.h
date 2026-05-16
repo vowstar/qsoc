@@ -6,6 +6,9 @@
 
 #include "agent/qsocagentconfig.h"
 #include "agent/qsoctool.h"
+#include "agent/remote/qsocagentremote.h"
+
+#include <QMap>
 
 class QLLMService;
 class QSocAgent;
@@ -14,6 +17,8 @@ class QSocHookManager;
 class QSocLoopScheduler;
 class QSocMemoryManager;
 class QSocSubAgentTaskSource;
+class QSocHostCatalog;
+class QSocSshConfigParser;
 
 /**
  * @brief LLM-facing `agent` tool that spawns a child sub-agent.
@@ -41,7 +46,21 @@ public:
         QSocAgentConfig              parentConfig,
         QSocAgentDefinitionRegistry *defRegistry,
         QSocSubAgentTaskSource      *taskSource);
-    ~QSocToolAgent() override = default;
+    ~QSocToolAgent() override;
+
+    /**
+     * @brief Inject the host catalog so `host` parameter resolves
+     *        named SSH targets. When null, the tool only allows
+     *        `host: "local"` (or the parent's current active host).
+     */
+    void setHostCatalog(QSocHostCatalog *catalog) { hostCatalog_ = catalog; }
+
+    /**
+     * @brief Inject a shared parsed `~/.ssh/config`. Used to mark
+     *        which catalog aliases come from ssh-config in the
+     *        host-list description.
+     */
+    void setSshConfigParser(QSocSshConfigParser *parser) { sshConfigParser_ = parser; }
 
     QString getName() const override;
     QString getDescription() const override;
@@ -91,15 +110,39 @@ public:
     static int sweepStaleWorktrees(int maxAgeSec = 24 * 60 * 60);
 
 private:
+    /**
+     * @brief One cached remote binding for a host alias. Lives as
+     *        long as the parent QSocToolAgent so sibling sub-agent
+     *        spawns to the same alias reuse the SSH session.
+     */
+    struct HostBinding
+    {
+        AgentRemoteState state;
+        /* registry is parented to QSocToolAgent and owned via Qt's
+         * tree; explicit delete happens in the destructor. */
+        QSocToolRegistry *registry = nullptr;
+    };
+
+    /**
+     * @brief Resolve a host alias to a tool registry. Opens an SSH
+     *        session + remote registry on first use, caches for
+     *        subsequent siblings, returns nullptr on failure with
+     *        a populated @p errorMessage.
+     */
+    QSocToolRegistry *resolveHostRegistry(const QString &host, QString *errorMessage);
+
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;
     QSocAgentConfig              parentConfig_;
-    QSocAgentDefinitionRegistry *defRegistry_   = nullptr;
-    QSocSubAgentTaskSource      *taskSource_    = nullptr;
-    QSocMemoryManager           *memoryManager_ = nullptr;
-    QSocHookManager             *hookManager_   = nullptr;
-    QSocLoopScheduler           *loopScheduler_ = nullptr;
-    QSocAgent                   *parentAgent_   = nullptr;
+    QSocAgentDefinitionRegistry *defRegistry_     = nullptr;
+    QSocSubAgentTaskSource      *taskSource_      = nullptr;
+    QSocMemoryManager           *memoryManager_   = nullptr;
+    QSocHookManager             *hookManager_     = nullptr;
+    QSocLoopScheduler           *loopScheduler_   = nullptr;
+    QSocAgent                   *parentAgent_     = nullptr;
+    QSocHostCatalog             *hostCatalog_     = nullptr;
+    QSocSshConfigParser         *sshConfigParser_ = nullptr;
+    QMap<QString, HostBinding *> hostCache_;
 };
 
 #endif /* QSOCTOOLAGENT_H */
