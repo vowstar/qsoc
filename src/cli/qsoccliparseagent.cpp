@@ -1588,6 +1588,41 @@ bool QSocCliWorker::runAgentLoop(
     statusBarWidget.setModel(llmService->getCurrentModelId());
     statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
 
+    /* Project goal indicator: a compact chip next to the model tag
+     * showing the current objective, status, and budget usage. The
+     * lambda re-reads the catalog on every goalChanged emission so
+     * the chip stays in sync with /goal commands and goal_complete
+     * tool calls. */
+    auto refreshGoalChip = [&statusBarWidget, goalCatalog, &compositor]() {
+        if (goalCatalog == nullptr) {
+            statusBarWidget.setGoalIndicator(QString(), QString());
+            return;
+        }
+        const auto cur = goalCatalog->current();
+        if (!cur.has_value()) {
+            statusBarWidget.setGoalIndicator(QString(), QString());
+            compositor.invalidate();
+            return;
+        }
+        const int briefCap = 30;
+        QString   brief    = cur->objective.simplified();
+        if (brief.size() > briefCap) {
+            brief = brief.left(briefCap - 1) + QStringLiteral("…");
+        }
+        QString tokens;
+        if (cur->tokenBudget > 0) {
+            tokens = QStringLiteral(" %1/%2").arg(cur->tokensUsed).arg(cur->tokenBudget);
+        } else if (cur->tokensUsed > 0) {
+            tokens = QStringLiteral(" %1").arg(cur->tokensUsed);
+        }
+        statusBarWidget.setGoalIndicator(brief + tokens, qSocGoalStatusToString(cur->status));
+        compositor.invalidate();
+    };
+    if (goalCatalog != nullptr) {
+        QObject::connect(goalCatalog, &QSocGoalCatalog::goalChanged, refreshGoalChip);
+        refreshGoalChip();
+    }
+
     /* Top banner widget: chip mascot beside the intro lines. The
      * widget is responsive (re-layouts on resize) and blinks its eyes
      * occasionally; the compositor hides it as soon as scroll content
