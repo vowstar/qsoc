@@ -29,6 +29,7 @@
 #include "agent/tool/qsoctoolagent.h"
 #include "agent/tool/qsoctoolagentresume.h"
 #include "agent/tool/qsoctoolagentstatus.h"
+#include "agent/tool/qsoctoolaskuser.h"
 #include "agent/tool/qsoctoolbus.h"
 #include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolfile.h"
@@ -65,6 +66,7 @@
 #include "tui/qtuidiffblock.h"
 #include "tui/qtuiimagepreviewblock.h"
 #include "tui/qtuiinputline.h"
+#include "tui/qtuilineinput.h"
 #include "tui/qtuimenu.h"
 #include "tui/qtuipathpicker.h"
 #include "tui/qtuiqueuedlist.h"
@@ -1188,6 +1190,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(new QSocToolHostUpdate(this, hostCatalog));
     toolRegistry->registerTool(new QSocToolHostRemove(this, hostCatalog));
 
+    /* User-question tool: 2-4 options + auto-Other free-form. The
+     * compositor-driving callback is installed inside runAgentLoop
+     * once the TUI is up; sub-agent dispatch leaves it unset so a
+     * child cannot block mid-LLM-turn waiting on user input. */
+    toolRegistry->registerTool(new QSocToolAskUser(this, nullptr));
+
     /* Companion tool: prepares a resume payload from a prior run's
      * meta sidecar + transcript so the LLM can re-spawn an evicted /
      * crashed sub-agent with the original context restored. */
@@ -1622,6 +1630,67 @@ bool QSocCliWorker::runAgentLoop(
             compositor.scrollContentDown(3);
         }
     });
+
+    /* Install the ask_user TUI callback now that compositor + monitor
+     * exist. The callback pops a QTuiMenu with the caller's 2-4
+     * options plus an automatically appended Other... entry that
+     * opens a free-form QTuiLineInput. */
+    if (auto *askTool = dynamic_cast<QSocToolAskUser *>(
+            agent->getToolRegistry()->getTool(QStringLiteral("ask_user")))) {
+        askTool->setCallback(
+            [&compositor, &inputMonitor](
+                const QString                  &question,
+                const QString                  &header,
+                const QList<QSocAskUserOption> &options) -> QSocAskUserResult {
+                QSocAskUserResult         result;
+                QList<QTuiMenu::MenuItem> items;
+                items.reserve(options.size() + 1);
+                for (const auto &opt : options) {
+                    QTuiMenu::MenuItem entry;
+                    entry.label  = opt.label;
+                    entry.hint   = opt.description;
+                    entry.marked = false;
+                    items.append(entry);
+                }
+                QTuiMenu::MenuItem other;
+                other.label  = QStringLiteral("Other...");
+                other.hint   = QStringLiteral("type a free-form answer");
+                other.marked = false;
+                items.append(other);
+
+                QString title = question;
+                if (!header.isEmpty()) {
+                    title = QStringLiteral("[%1] %2").arg(header, question);
+                }
+                QTuiMenu menu;
+                menu.setTitle(title);
+                menu.setItems(items);
+                menu.setSearchable(true);
+                const int selected = menu.exec();
+                inputMonitor.resetEscState();
+                compositor.invalidate();
+                compositor.render();
+                if (selected < 0 || selected >= items.size()) {
+                    result.canceled = true;
+                    return result;
+                }
+                if (selected == options.size()) {
+                    compositor.pause();
+                    const QString typed = QTuiLineInput::exec(QStringLiteral("Your answer: "));
+                    compositor.resume();
+                    inputMonitor.resetEscState();
+                    if (typed.isEmpty()) {
+                        result.canceled = true;
+                        return result;
+                    }
+                    result.choice = QStringLiteral("Other");
+                    result.text   = typed;
+                    return result;
+                }
+                result.choice = options.at(selected).label;
+                return result;
+            });
+    }
 
     connect(&inputMonitor, &QAgentInputMonitor::pageKey, [&compositor](int direction) {
         /* Half-screen steps so the last line of the previous view stays
