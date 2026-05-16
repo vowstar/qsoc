@@ -86,8 +86,89 @@ The workspace is created on demand via SFTP `mkdir -p`. Tool calls (shell,
 file, path) execute remotely; hooks still run on the local host but
 their JSON payload includes a `remote` section so scripts can branch on
 it. `/local` inside the REPL returns to the local workspace; the sticky
-binding (`<project>/.qsoc/remote.yml`) is *not* written for one-shot
+binding (`<project>/.qsoc/host.yml`) is *not* written for one-shot
 `--ssh` runs.
+
+=== Host Catalog
+<agent-host-catalog>
+
+The host catalog supplements `~/.ssh/config` with two things SSH-config
+does not carry: the remote workspace path and a free-form *capability*
+description used by the parent agent to dispatch sub-agents.
+
+The catalog lives in two YAML files:
+
+- User scope: `~/.config/qsoc/host.yml`
+- Project scope: `<project>/.qsoc/host.yml` (overrides user by alias)
+
+```yaml
+active: fpga-build              # currently-bound alias, or ad-hoc {target,workspace}
+hostList:
+  - alias: fpga-build           # matches Host fpga-build in ~/.ssh/config
+    workspace: /home/bob/build
+    capability: |
+      Vivado 2024.2 synthesis, bitstream generation,
+      JTAG programming for XC7A200T
+  - alias: gpu-sim              # not in ssh-config; uses fallback target
+    target: alice@gpu01:22
+    workspace: /home/alice/sim
+    capability: |
+      large RTL simulation, CUDA-accelerated verilator
+```
+
+Two separate concerns share the file:
+
++ The *catalog* (`hostList:`) holds named entries. Add, update, and
+  remove are driven by natural-language dialogue with the agent
+  through three tools; no slash command edits the list.
++ The *active binding* (`active:`) is the project's currently-bound
+  target. `/ssh` and `/local` manage it directly.
+
+The three LLM-facing catalog tools edit `hostList:` atomically:
+
+- `host_register` creates an entry. Required: `alias`, `workspace`.
+  Optional: `capability`, `target` (only needed when `alias` is not in
+  `~/.ssh/config`).
+- `host_update` applies an op-list of `capability_append`,
+  `capability_remove`, `capability_replace`, `set_workspace`,
+  `set_target`. Ops apply atomically; partial failure leaves the file
+  unchanged.
+- `host_remove` drops an entry and clears `active:` when it was bound.
+
+Bare `/ssh` opens a TUI menu that merges both sources: catalog aliases
+appear first (with a `catalog` hint and a one-line capability excerpt),
+then `~/.ssh/config` aliases (with the `ssh-config` hint). Catalog
+aliases shadow ssh-config aliases of the same name.
+
+`/ssh <alias>` connects through the catalog when the alias matches one
+above; the catalog workspace is reused, skipping the SFTP picker. The
+post-connect sticky binding writes the alias (or the raw target as
+ad-hoc with the picker-selected workspace) into `host.yml`'s `active:`
+field. `/local` returns to the local workspace but *keeps* `active:`
+so the next `qsoc agent` launch auto-reconnects via a synthesized
+`/ssh` step printed as "Auto-connecting <alias>".
+
+When spawning a sub-agent through the `agent` tool, set the optional
+`host` parameter to a catalog alias to run the child on that machine.
+A per-parent-run SSH session cache keeps sibling spawns to the same
+alias on the same session, so a second child to the same host does not
+re-authenticate. Pure `~/.ssh/config` aliases that lack a catalog
+entry are not dispatchable because they have no workspace.
+
+Sub-agent dispatch never prompts for credentials. If a host needs an
+interactive secret (encrypted private-key passphrase or `password`
+method) and the per-parent cache does not already hold a session, the
+spawn returns an error asking the user to authenticate once via
+`/ssh <alias>` in the main session; the cached session then services
+all subsequent sub-agent spawns to that host.
+
+Agent definitions may declare `preferred_host:` in their frontmatter to
+default sub-agent spawns of that type to a specific catalog alias.
+
+The `capability` field is injected verbatim into the parent agent's
+system prompt and is therefore visible to the LLM provider. Treat it as
+human-facing description text; do not record secrets, tokens, internal
+hostnames, or other sensitive operational details there.
 
 == INTERACTIVE COMMANDS
 <agent-commands>
@@ -679,6 +760,18 @@ ssh-agent) reads the key material internally during authentication. Logs
 refer to "configured IdentityFile" rather than literal paths where
 practical, and passphrases are kept in memory only for the duration needed
 to authenticate.
+
+When automatic auth (ssh-agent + identity files with empty passphrase)
+fails, `/ssh` in the main TUI prompts interactively for a secret. The
+prompt runs in hidden-input mode: `termios` is flipped to disable
+`ECHO` and `ICANON`, the typed bytes never appear on screen or in
+terminal scrollback, and the previous terminal state is restored even
+when the user cancels with `Esc` or `Ctrl+C`. The same callback handles
+both encrypted private-key passphrases and the `password` userauth
+method. Sub-agent dispatch deliberately leaves the callback unset so
+a mid-LLM-turn child cannot block waiting on user input; the user must
+first run `/ssh <alias>` in the main session to seed an authenticated
+session that subsequent sub-agent spawns reuse from cache.
 
 === Background Jobs
 <agent-remote-bg>

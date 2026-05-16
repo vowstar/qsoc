@@ -22,6 +22,7 @@ Desktop.ini
 /.vscode
 /.qtcreator
 /.cache
+/.qsoc
 /*.*.user
 /*.*.user*
 /*.local
