@@ -3,11 +3,15 @@
 
 #include "agent/qsocagent.h"
 
+#include "agent/qsocgoal.h"
+#include "agent/qsocgoalprompt.h"
 #include "agent/qsochookmanager.h"
 #include "agent/qsochooktypes.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qsocconsole.h"
+
+#include <QElapsedTimer>
 
 #include <QDateTime>
 #include <QDebug>
@@ -130,6 +134,12 @@ QString QSocAgent::run(const QString &userQuery)
     const int turnCap   = agentConfig.maxTurnsOverride > 0 ? agentConfig.maxTurnsOverride
                                                            : agentConfig.maxIterations;
 
+    /* Snapshot the rolling token estimate so each iteration's
+     * delta can be charged against the active goal's budget. */
+    int           prevTokensEstimate = estimateMessagesTokens();
+    QElapsedTimer iterationTimer;
+    iterationTimer.start();
+
     while (iteration < turnCap) {
         iteration++;
 
@@ -151,16 +161,29 @@ QString QSocAgent::run(const QString &userQuery)
         /* Process one iteration */
         bool isComplete = processIteration();
 
+        accountGoalUsageForIteration(prevTokensEstimate, iterationTimer);
+
         if (isComplete) {
-            /* Get the final assistant message */
+            QString finalText;
             if (!messages.empty()) {
                 auto lastMessage = messages.back();
                 if (lastMessage["role"] == "assistant" && lastMessage.contains("content")
                     && lastMessage["content"].is_string()) {
-                    return QString::fromStdString(lastMessage["content"].get<std::string>());
+                    finalText = QString::fromStdString(lastMessage["content"].get<std::string>());
+                } else {
+                    finalText = QStringLiteral("[Agent completed without final message]");
                 }
+            } else {
+                finalText = QStringLiteral("[Agent completed without final message]");
             }
-            return "[Agent completed without final message]";
+            if (maybeQueueGoalContinuation()) {
+                /* The continuation prompt was appended as a user
+                 * message; loop back so processIteration handles
+                 * the next turn. Token budget enforcement caps the
+                 * total spend; turnCap caps the iteration count. */
+                continue;
+            }
+            return finalText;
         }
     }
 
@@ -1332,6 +1355,59 @@ void QSocAgent::addToolMessage(
 void QSocAgent::clearHistory()
 {
     messages = json::array();
+}
+
+void QSocAgent::accountGoalUsageForIteration(int &prevTokensEstimate, QElapsedTimer &iterationTimer)
+{
+    if (goalCatalog == nullptr) {
+        return;
+    }
+    const int newEstimate = estimateMessagesTokens();
+    const int deltaTokens = newEstimate > prevTokensEstimate ? newEstimate - prevTokensEstimate : 0;
+    const qint64 deltaSec = iterationTimer.elapsed() / 1000;
+    prevTokensEstimate    = newEstimate;
+    iterationTimer.restart();
+    if (deltaTokens > 0 || deltaSec > 0) {
+        QString innerErr;
+        goalCatalog->accountUsage(deltaTokens, deltaSec, &innerErr);
+    }
+}
+
+bool QSocAgent::maybeQueueGoalContinuation()
+{
+    if (goalCatalog == nullptr) {
+        return false;
+    }
+    if (hasPendingRequests()) {
+        return false;
+    }
+    if (goalContinuationInFlight.exchange(true)) {
+        return false;
+    }
+
+    bool queued      = false;
+    auto currentGoal = goalCatalog->current();
+    if (currentGoal.has_value() && currentGoal->status == QSocGoalStatus::Active) {
+        if (currentGoal->tokenBudget > 0 && currentGoal->tokensUsed >= currentGoal->tokenBudget) {
+            /* Flip to BudgetLimited and inject the wrap-up prompt
+             * exactly once; the next turn must not auto-continue
+             * because Active is no longer the status. */
+            QString innerErr;
+            goalCatalog->setStatus(QSocGoalStatus::BudgetLimited, &innerErr);
+            const auto refreshed = goalCatalog->current();
+            if (refreshed.has_value()) {
+                addMessage("user", QSocGoalPrompt::budgetLimit(*refreshed));
+                goalCatalog->noteContinuation(QStringLiteral("budget_limited"));
+                queued = true;
+            }
+        } else {
+            addMessage("user", QSocGoalPrompt::continuation(*currentGoal));
+            goalCatalog->noteContinuation(QStringLiteral("auto"));
+            queued = true;
+        }
+    }
+    goalContinuationInFlight.store(false);
+    return queued;
 }
 
 void QSocAgent::queueRequest(const QString &request)
