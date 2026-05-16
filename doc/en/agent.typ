@@ -170,6 +170,93 @@ system prompt and is therefore visible to the LLM provider. Treat it as
 human-facing description text; do not record secrets, tokens, internal
 hostnames, or other sensitive operational details there.
 
+=== Project Goal
+<agent-project-goal>
+
+A *project goal* lets the user say "keep working on X until you've
+actually finished it" and the agent keeps taking turns automatically
+until either the goal is marked complete or the token budget runs out.
+The design mirrors codex's thread-goal feature but stays SQLite-free.
+
+The catalog lives in two files under the project's `.qsoc/` directory:
+
+- `goal.yml` carries the active goal record (single entry, atomic
+  temp+rename writes via QSaveFile).
+- `goal_log.jsonl` is an append-only timeline of lifecycle events
+  (created, status_changed, objective_updated, usage_accounted,
+  continued, cleared, discarded). One line per event so `tail -f` and
+  `jq` work directly.
+
+```yaml
+goal:
+  id: 8a7c6b3e-f1d2-4a9b-c8e7-d6f5a4b3c2d1
+  objective: |
+    Build top-level RTL and verify against the reference simulation
+  status: active
+  token_budget: 20000
+  tokens_used: 1850
+  seconds_used: 412
+  created_at: 2026-05-16T22:00:00+08:00
+  updated_at: 2026-05-16T22:06:52+08:00
+```
+
+Status values: `active`, `paused`, `budget_limited`, `complete`. The
+runtime auto-trips `budget_limited` when `tokens_used` reaches
+`token_budget`; `complete` is terminal and drops the record so a fresh
+goal can be set without an extra clear step.
+
+==== Lifecycle
+
+When a goal is `active` and no user input is pending at the end of a
+turn, the run loop appends a `<goal_context>` user message to the
+conversation and takes another iteration. Three template variants live
+in `QSocGoalPrompt`:
+
+- *continuation* runs on every auto-continuation turn; it restates the
+  objective, demands a "completion audit" before marking done, and
+  prints the live token usage.
+- *budget_limit* runs once when the budget threshold trips; it tells
+  the LLM to wrap up and stops further auto-continuations.
+- *objective_updated* runs once after the user replaces the objective
+  on an in-flight goal.
+
+All three are injected at the user role (not the system prompt) so the
+prompt cache stays warm.
+
+==== Slash commands
+
+- `/goal` — show the current goal status; usage hint when none.
+- `/goal <objective>` — set a new goal. If one is already active the
+  user is asked to confirm replacement through a two-option menu.
+- `/goal pause` / `/goal resume` — flip between `active` and `paused`;
+  paused goals do not auto-continue.
+- `/goal clear` — drop the active goal immediately (no confirmation).
+- `/goal budget <N>` — set or change the token budget (`0` to disable).
+
+==== goal_complete tool
+
+Goal completion is *LLM-driven*. The agent exposes a single tool,
+`goal_complete`, whose schema enum restricts the status payload to
+`"complete"`. The LLM calls it only when its completion audit proves
+the objective has been met. Sub-agent dispatch deliberately leaves the
+catalog pointer unset so a child run cannot declare the parent's goal
+done; the parent must judge from its own context.
+
+The status-line chip surfaces the live state at all times:
+
+```
+[E:high] [Qwen3.6-35B-A3B-FP8] [Goal: Build top-level RTL 1850/20000|active]
+```
+
+==== Audit
+
+Because everything is plain text the user can inspect the timeline
+without touching the agent:
+
+```bash
+tail -20 .qsoc/goal_log.jsonl | jq -c '{ts,event,goal_id}'
+```
+
 == INTERACTIVE COMMANDS
 <agent-commands>
 The following commands are available during an interactive session:
