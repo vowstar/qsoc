@@ -191,6 +191,12 @@ public:
     QSocMemoryManager *getMemoryManager() const { return memoryManager; }
 
     /**
+     * @brief Inject the host catalog so the system prompt advertises
+     *        available named SSH targets and their capabilities.
+     */
+    void setHostCatalog(class QSocHostCatalog *catalog) { hostCatalog = catalog; }
+
+    /**
      * @brief Set the hook manager for lifecycle event dispatch.
      * @details The agent fires user-defined hook commands at well-known
      *          lifecycle points (tool dispatch, prompt admission, session
@@ -389,13 +395,14 @@ signals:
     void reasoningChunk(const QString &chunk);
 
 private:
-    QLLMService       *llmService    = nullptr;
-    QSocToolRegistry  *toolRegistry  = nullptr;
-    QSocMemoryManager *memoryManager = nullptr;
-    QSocHookManager   *hookManager   = nullptr;
-    QSocLoopScheduler *loopScheduler = nullptr;
-    QSocAgentConfig    agentConfig;
-    json               messages;
+    QLLMService           *llmService    = nullptr;
+    QSocToolRegistry      *toolRegistry  = nullptr;
+    QSocMemoryManager     *memoryManager = nullptr;
+    QSocHookManager       *hookManager   = nullptr;
+    QSocLoopScheduler     *loopScheduler = nullptr;
+    class QSocHostCatalog *hostCatalog   = nullptr;
+    QSocAgentConfig        agentConfig;
+    json                   messages;
 
     /* Streaming state */
     bool    isStreaming     = false;

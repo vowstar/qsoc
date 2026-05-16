@@ -5,6 +5,7 @@
 
 #include "agent/qsochookmanager.h"
 #include "agent/qsochooktypes.h"
+#include "agent/remote/qsochostprofile.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qsocconsole.h"
 
@@ -1082,6 +1083,59 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
             "libssh2; the private key file content is never exposed to tools, prompts, logs,\n"
             "or memory.\n");
         prompt += remoteSection;
+    }
+
+    /* Host catalog: emitted when the catalog has entries OR the
+     * active binding is non-local, so the LLM knows what hosts it
+     * can dispatch sub-agents to and where it is currently bound.
+     * Capability text is fed verbatim from the user-curated YAML. */
+    if (hostCatalog != nullptr) {
+        const auto entries = hostCatalog->allList();
+        const auto active  = hostCatalog->active();
+        if (!entries.isEmpty() || !active.isLocal()) {
+            QString section = QStringLiteral("\n# Host Catalog\n\n");
+            section += QStringLiteral("## Current host binding\n\n");
+            if (active.isAlias()) {
+                section += QStringLiteral("Active: ") + active.alias + QStringLiteral("\n");
+                for (const auto &entry : entries) {
+                    if (entry.alias == active.alias) {
+                        section += QStringLiteral("Workspace: ") + entry.workspace
+                                   + QStringLiteral("\n");
+                        break;
+                    }
+                }
+            } else if (active.isAdHoc()) {
+                section += QStringLiteral("Active: ") + active.adHocTarget
+                           + QStringLiteral(" (ad-hoc)\n");
+                section += QStringLiteral("Workspace: ") + active.adHocWorkspace
+                           + QStringLiteral("\n");
+            } else {
+                section += QStringLiteral("Active: local\nWorkspace: (none)\n");
+            }
+            if (!entries.isEmpty()) {
+                section += QStringLiteral("\n## Available execution host\n\n");
+                section += QStringLiteral("- local: this machine\n");
+                for (const auto &entry : entries) {
+                    const QString cap = entry.capability.isEmpty()
+                                            ? QStringLiteral("(no capability text)")
+                                            : entry.capability;
+                    section += QStringLiteral("- ") + entry.alias + QStringLiteral(": ") + cap
+                               + QStringLiteral("\n");
+                }
+                section += QStringLiteral(
+                    "\nWhen spawning an `agent` tool call, set `host` to a name above when "
+                    "the capability matches the task. Omit `host` to use the active binding.\n");
+            }
+            section += QStringLiteral(
+                "\n## Host catalog learning\n\n"
+                "The catalog is live. Update via host_register / host_update / host_remove when "
+                "you OBSERVE a material change: the user states or retracts a capability, a run "
+                "reveals a tool not yet listed, or a failure contradicts a listed capability. "
+                "Do not log every successful command. When in doubt, ask the user before "
+                "recording. To save the currently-bound ad-hoc target, call host_register with "
+                "the active target+workspace shown above.\n");
+            prompt += section;
+        }
     }
 
     /* Section 9: Project instructions (AGENTS.md / AGENTS.local.md). */
