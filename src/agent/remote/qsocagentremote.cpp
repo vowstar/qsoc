@@ -4,6 +4,7 @@
 #include "agent/remote/qsocagentremote.h"
 
 #include "agent/qsoctool.h"
+#include "agent/remote/qsochostprofile.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshconfigparser.h"
 #include "agent/remote/qsocsshhostconfig.h"
@@ -100,7 +101,11 @@ QString defaultOsUser()
 } // namespace
 
 bool connectAgentSshSession(
-    const QString &target, QObject *parent, AgentRemoteState *state, QString *errorMessage)
+    const QString                 &target,
+    QObject                       *parent,
+    AgentRemoteState              *state,
+    QString                       *errorMessage,
+    QSocSshSession::SecretCallback secretCallback)
 {
     if (state == nullptr) {
         if (errorMessage != nullptr) {
@@ -209,7 +214,14 @@ bool connectAgentSshSession(
             localJumps.append(hopSession);
             currentParent = hopSession;
         }
-        auto                         *session = new QSocSshSession(parent);
+        auto *session = new QSocSshSession(parent);
+        /* ProxyJump children skip prompting: their auth bytes ride
+         * through the parent channel and the agent socket path is
+         * not reachable; the interactive route only makes sense at
+         * the outermost session. */
+        if (secretCallback && currentParent == nullptr) {
+            session->setSecretCallback(secretCallback);
+        }
         QSocSshSession::ConnectStatus status
             = (currentParent != nullptr) ? session->connectToVia(cfg, currentParent, errOut)
                                          : session->connectTo(cfg, errOut);
@@ -319,4 +331,70 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     }
     state->registry = registry;
     return registry;
+}
+
+bool resolveHostTarget(
+    const QString             &arg,
+    const QSocHostCatalog     *catalog,
+    const QSocSshConfigParser *parser,
+    ResolvedHostTarget        *out,
+    QString                   *errorMessage)
+{
+    if (out == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("internal error: null out");
+        }
+        return false;
+    }
+    *out                  = ResolvedHostTarget{};
+    const QString trimmed = arg.trimmed();
+    if (trimmed.isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("empty alias or target");
+        }
+        return false;
+    }
+    out->connectString = trimmed;
+
+    if (parser != nullptr) {
+        const auto resolved = parser->resolve(trimmed);
+        if (resolved.fromConfig) {
+            out->fromSshConfig = true;
+            if (catalog != nullptr) {
+                const auto *entry = catalog->find(trimmed);
+                if (entry != nullptr) {
+                    out->workspaceHint = entry->workspace;
+                    out->capability    = entry->capability;
+                    out->fromCatalog   = true;
+                }
+            }
+            return true;
+        }
+    }
+
+    if (catalog != nullptr) {
+        const auto *entry = catalog->find(trimmed);
+        if (entry != nullptr) {
+            out->fromCatalog   = true;
+            out->workspaceHint = entry->workspace;
+            out->capability    = entry->capability;
+            if (!entry->target.isEmpty()) {
+                out->connectString = entry->target;
+                return true;
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral(
+                                    "alias %1 is in the catalog but has no target "
+                                    "and is not in ~/.ssh/config; set target via "
+                                    "host_update or define Host %1 in ~/.ssh/config")
+                                    .arg(trimmed);
+            }
+            return false;
+        }
+    }
+
+    /* Pass through: connectAgentSshSession() understands raw
+     * `[user@]host[:port]` strings and will report a parse error if
+     * the input is malformed. */
+    return true;
 }
