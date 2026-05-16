@@ -115,6 +115,11 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     if (!modelId.isEmpty()) {
         line += QString(" [%1]").arg(modelId);
     }
+    if (!goalText_.isEmpty()) {
+        QString tag = goalStatusTag_.isEmpty() ? QString()
+                                               : QStringLiteral("|%1").arg(goalStatusTag_);
+        line += QString(" [Goal: %1%2]").arg(goalText_, tag);
+    }
     line += warning;
 
     screen.putString(0, startY, QTuiText::truncate(line, mainWidth));
@@ -153,6 +158,12 @@ void QTuiStatusBar::setTaskAlert(bool alert)
 void QTuiStatusBar::setTaskPillFocused(bool focused)
 {
     taskPillFocused_ = focused;
+}
+
+void QTuiStatusBar::setGoalIndicator(const QString &text, const QString &statusTag)
+{
+    goalText_      = text;
+    goalStatusTag_ = statusTag;
 }
 
 void QTuiStatusBar::toolCalled(const QString &toolName, const QString &detail)

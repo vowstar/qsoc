@@ -34,6 +34,18 @@ public:
     void setTaskAlert(bool alert);
     /** @brief Whether the pill currently has keyboard focus (Down-arrow parked). */
     void setTaskPillFocused(bool focused);
+
+    /**
+     * @brief Update the project-goal indicator chip drawn alongside
+     *        the model/effort tags. Pass an empty @p text to hide the
+     *        chip (no active goal).
+     * @param text       Short objective excerpt + usage numbers.
+     * @param statusTag  Single token: active / paused / budget_limited.
+     *                   Hints colour: paused/budget shown dim, others
+     *                   normal. Render is colour-agnostic for now and
+     *                   relies on the line stream to convey state.
+     */
+    void setGoalIndicator(const QString &text, const QString &statusTag);
     void resetProgress();
     void startTimers();
     void stopTimers(); /* Stop animation + timer (idle state) */
@@ -59,6 +71,9 @@ private:
     int  taskCount_       = 0;
     bool taskAlert_       = false;
     bool taskPillFocused_ = false;
+
+    QString goalText_;
+    QString goalStatusTag_;
 
     static const QStringList spinnerFrames;
     static const QStringList dotFrames;
