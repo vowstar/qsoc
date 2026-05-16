@@ -19,7 +19,7 @@
 #include "agent/qsoctaskregistry.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
-#include "agent/remote/qsocremotebinding.h"
+#include "agent/remote/qsochostprofile.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshconfigparser.h"
@@ -33,6 +33,7 @@
 #include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolfile.h"
 #include "agent/tool/qsoctoolgenerate.h"
+#include "agent/tool/qsoctoolhostcatalog.h"
 #include "agent/tool/qsoctoollsp.h"
 #include "agent/tool/qsoctoolmemory.h"
 #include "agent/tool/qsoctoolmodule.h"
@@ -67,6 +68,7 @@
 #include "tui/qtuimenu.h"
 #include "tui/qtuipathpicker.h"
 #include "tui/qtuiqueuedlist.h"
+#include "tui/qtuisecretprompt.h"
 #include "tui/qtuistatusbar.h"
 #include "tui/qtuitodoblock.h"
 #include "tui/qtuitodolist.h"
@@ -1102,6 +1104,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);
     agent->setMemoryManager(memoryManager);
     agent->setLoopScheduler(loopScheduler);
+    /* hostCatalog is constructed below; defer setHostCatalog until then. */
 
     /* Hook manager: parses agent.hooks from the merged config layers,
      * dispatches lifecycle events to user-defined commands. Always
@@ -1137,11 +1140,26 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * crashed processes (mtime > 24h). Idempotent + best-effort. */
     QSocToolAgent::sweepStaleWorktrees();
 
+    /* Host catalog: named SSH targets with workspace + free-form
+     * capability text. User scope at ~/.config/qsoc/host.yml,
+     * project scope at <project>/.qsoc/host.yml. Loaded once here
+     * and shared with the agent tool (for the host enum) and the
+     * three LLM-facing CRUD tools below. */
+    auto *hostCatalog = new QSocHostCatalog(this);
+    {
+        const QString userHostDir = QStandardPaths::writableLocation(
+            QStandardPaths::AppConfigLocation);
+        const QString projectRoot = projectManager->getProjectPath();
+        hostCatalog->load(userHostDir, projectRoot);
+    }
+    agent->setHostCatalog(hostCatalog);
+
     auto *agentTool = new QSocToolAgent(
         this, llmService, toolRegistry, config, agentDefinitions, subAgentTaskSource);
     agentTool->setMemoryManager(memoryManager);
     agentTool->setHookManager(hookManager);
     agentTool->setLoopScheduler(loopScheduler);
+    agentTool->setHostCatalog(hostCatalog);
     /* Bind to the live parent agent so the spawn tool re-resolves the
      * registry + config from it on every execute(). This is what keeps
      * sub-agents correct across `/remote` -> `/local` toggles: the
@@ -1161,6 +1179,14 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * async sub-agent without waiting for completion. */
     auto *sendMessageTool = new QSocToolSendMessage(this, subAgentTaskSource);
     toolRegistry->registerTool(sendMessageTool);
+
+    /* Host catalog LLM tools: register / update / remove named SSH
+     * targets in `<project>/.qsoc/host.yml`. No network I/O at write
+     * time; the catalog drives the `host` enum on the agent tool and
+     * the host-list block in the parent system prompt. */
+    toolRegistry->registerTool(new QSocToolHostRegister(this, hostCatalog));
+    toolRegistry->registerTool(new QSocToolHostUpdate(this, hostCatalog));
+    toolRegistry->registerTool(new QSocToolHostRemove(this, hostCatalog));
 
     /* Companion tool: prepares a resume payload from a prior run's
      * meta sidecar + transcript so the LLM can re-spawn an evicted /
@@ -1302,7 +1328,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                      * auto-wrap never fires before our explicit newline;
                      * otherwise every full-width row would render as
                      * itself plus an empty wrap line in cooked mode. */
-                    const int width = qMax(20, headlessCompositor->getTerminalWidth() - 1);
+                    const int width   = qMax(20, headlessCompositor->getTerminalWidth() - 1);
                     QString   content = headlessCompositor->contentView().toAnsi(width);
                     /* The input monitor disables OPOST so the TTY no
                      * longer expands '\n' to '\r\n'. Force the carriage
@@ -1431,7 +1457,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         preLocalRegistry,
         taskRegistry,
         taskEventQueue,
-        monitorTaskSource);
+        monitorTaskSource,
+        hostCatalog);
 }
 
 bool QSocCliWorker::runAgentLoop(
@@ -1443,7 +1470,8 @@ bool QSocCliWorker::runAgentLoop(
     QSocToolRegistry      *preLocalRegistry,
     QSocTaskRegistry      *taskRegistry,
     QSocTaskEventQueue    *taskEventQueue,
-    QSocMonitorTaskSource *monitorTaskSource)
+    QSocMonitorTaskSource *monitorTaskSource,
+    QSocHostCatalog       *hostCatalog)
 {
     /* Require interactive terminal for TUI */
     QTerminalCapability termCap;
@@ -1569,17 +1597,14 @@ bool QSocCliWorker::runAgentLoop(
     if (preconnected == nullptr && pathContext != nullptr) {
         const QString projectRootOnStart = pathContext->getProjectDir();
         if (!projectRootOnStart.isEmpty()) {
-            const auto binding = QSocRemoteBinding::read(projectRootOnStart);
-            if (!binding.target.isEmpty() && !binding.workspace.isEmpty()) {
-                /* The /ssh handler re-reads remote.yml for the workspace,
-                 * so dispatch with the bare target. Appending the
-                 * workspace here used to produce a contradictory log
-                 * pair: the parser printed "Ignoring workspace path"
-                 * even though the binding's workspace was correctly
-                 * applied moments later. */
-                pendingAutoInputs.append(QStringLiteral("/ssh ") + binding.target);
-                compositor.printContent(QString("Auto-connecting remote target %1 (workspace %2)\n")
-                                            .arg(binding.target, binding.workspace));
+            const auto binding = hostCatalog->active();
+            if (binding.isAlias()) {
+                pendingAutoInputs.append(QStringLiteral("/ssh ") + binding.alias);
+                compositor.printContent(QString("Auto-connecting host %1\n").arg(binding.alias));
+            } else if (binding.isAdHoc()) {
+                pendingAutoInputs.append(QStringLiteral("/ssh ") + binding.adHocTarget);
+                compositor.printContent(QString("Auto-connecting %1 (workspace %2)\n")
+                                            .arg(binding.adHocTarget, binding.adHocWorkspace));
             }
         }
     }
@@ -4667,13 +4692,18 @@ bool QSocCliWorker::runAgentLoop(
                     targets.append(value);
                 };
 
-                const QString projectRootLocal = pathContext ? pathContext->getProjectDir()
-                                                             : QString();
-                if (!projectRootLocal.isEmpty()) {
-                    const auto bound = QSocRemoteBinding::read(projectRootLocal);
-                    if (!bound.target.isEmpty()) {
-                        addItem(bound.target, QStringLiteral("saved"), bound.target);
-                    }
+                /* Catalog entries come first so the LLM-curated aliases
+                 * with workspace + capability rank above plain
+                 * ~/.ssh/config hosts. */
+                QSet<QString> shownAliases;
+                for (const auto &entry : hostCatalog->allList()) {
+                    addItem(
+                        entry.alias,
+                        entry.capability.isEmpty()
+                            ? QStringLiteral("catalog")
+                            : QStringLiteral("catalog: ") + entry.capability.section('\n', 0, 0),
+                        entry.alias);
+                    shownAliases.insert(entry.alias);
                 }
 
                 const QString sshConfigPath = QDir::homePath() + QStringLiteral("/.ssh/config");
@@ -4681,7 +4711,10 @@ bool QSocCliWorker::runAgentLoop(
                     QSocSshConfigParser parser;
                     parser.parse(sshConfigPath);
                     for (const QString &alias : parser.listMenuHosts()) {
-                        addItem(alias, QString(), alias);
+                        if (shownAliases.contains(alias)) {
+                            continue;
+                        }
+                        addItem(alias, QStringLiteral("ssh-config"), alias);
                     }
                 }
                 addItem(QStringLiteral("(type /ssh [user@]host[:port])"), QString(), QString());
@@ -4700,11 +4733,11 @@ bool QSocCliWorker::runAgentLoop(
                 const QString picked = targets.at(selected);
                 if (picked.isEmpty()) {
                     compositor.printContent(
-                        "Usage: /ssh [user@]host[:port]\n"
+                        "Usage: /ssh [user@]host[:port] | <alias>\n"
                         "  User defaults to the current OS user and port defaults to 22.\n"
                         "  After connect a directory browser asks for the remote workspace;\n"
-                        "  the choice is stored in <project>/.qsoc/remote.yml and reused\n"
-                        "  on the next connect. Use /local to return to the local workspace.\n");
+                        "  the choice is stored in <project>/.qsoc/host.yml and reused on\n"
+                        "  the next connect. Use /local to return to the local workspace.\n");
                     continue;
                 }
                 arg = picked;
@@ -4720,22 +4753,60 @@ bool QSocCliWorker::runAgentLoop(
                     "/cwd later to change it.\n");
             }
 
+            /* Pre-resolve the arg through the host catalog and
+             * ~/.ssh/config. A catalog-only alias substitutes its
+             * `target` field as the connect string; the workspace
+             * hint comes from the catalog entry (skips the picker
+             * later). */
+            QSocSshConfigParser sshConfigForResolve;
+            {
+                const QString cfg = QDir::homePath() + QStringLiteral("/.ssh/config");
+                if (QFileInfo::exists(cfg)) {
+                    sshConfigForResolve.parse(cfg);
+                }
+            }
+            ResolvedHostTarget resolved;
+            {
+                QString resolveErr;
+                if (!resolveHostTarget(
+                        arg, hostCatalog, &sshConfigForResolve, &resolved, &resolveErr)) {
+                    compositor.printContent(QString("%1\n").arg(resolveErr));
+                    continue;
+                }
+            }
+
             AgentRemoteState newState;
             QString          err;
 
+            /* Interactive secret callback: handles encrypted private-key
+             * passphrase prompts and `password`-method auth. Compositor
+             * pauses so termios can claim the TTY for hidden input; the
+             * secret never reaches the compositor's buffer. Sub-agent
+             * dispatch leaves the callback unset so a mid-LLM-turn
+             * child cannot block waiting on user input. */
+            QSocSshSession::SecretCallback interactiveSecret =
+                [&compositor, &inputMonitor](const QString &prompt) -> QString {
+                compositor.pause();
+                const QString secret = QTuiSecretPrompt::exec(prompt);
+                compositor.resume();
+                inputMonitor.resetEscState();
+                return secret;
+            };
+
             compositor.printContent(QString("Connecting to %1 ...\n").arg(arg));
             compositor.render();
-            if (!connectAgentSshSession(arg, this, &newState, &err)) {
+            if (!connectAgentSshSession(
+                    resolved.connectString, this, &newState, &err, interactiveSecret)) {
                 compositor.printContent(QString("%1\n").arg(err));
                 continue;
             }
 
             const QString projectRoot = pathContext ? pathContext->getProjectDir() : QString();
-            QString       workspace;
-            if (!projectRoot.isEmpty()) {
-                const auto bound = QSocRemoteBinding::read(projectRoot);
-                if (bound.target == newState.targetKey) {
-                    workspace = bound.workspace;
+            QString       workspace   = resolved.workspaceHint;
+            if (workspace.isEmpty()) {
+                const auto active = hostCatalog->active();
+                if (active.isAdHoc() && active.adHocTarget == arg) {
+                    workspace = active.adHocWorkspace;
                 }
             }
 
@@ -4871,13 +4942,17 @@ bool QSocCliWorker::runAgentLoop(
                 agent->setConfig(newCfg);
             }
 
-            /* Sticky binding. */
+            /* Sticky binding: catalog hit -> active alias, ad-hoc
+             * target -> active ad-hoc with the original user-typed
+             * string (so reconnects match on `arg`, not the
+             * canonical user@host:port targetKey). */
             if (!projectRoot.isEmpty()) {
-                QSocRemoteBinding::Entry toStore;
-                toStore.target    = newState.targetKey;
-                toStore.workspace = newState.workspace;
                 QString bindErr;
-                QSocRemoteBinding::write(projectRoot, toStore, &bindErr);
+                if (resolved.fromCatalog && hostCatalog->find(arg) != nullptr) {
+                    hostCatalog->setActiveAlias(arg, &bindErr);
+                } else {
+                    hostCatalog->setActiveAdHoc(arg, newState.workspace, &bindErr);
+                }
                 if (!bindErr.isEmpty()) {
                     compositor.printContent(QString("Binding write warning: %1\n").arg(bindErr));
                 }

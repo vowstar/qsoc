@@ -5,6 +5,7 @@
 #define QSOCAGENTREMOTE_H
 
 #include "agent/remote/qsocremotepathcontext.h"
+#include "agent/remote/qsocsshsession.h"
 
 #include <QList>
 #include <QObject>
@@ -15,6 +16,8 @@ class QSocSftpClient;
 class QSocToolRegistry;
 class QSocConfig;
 class QSocMonitorTaskSource;
+class QSocHostCatalog;
+class QSocSshConfigParser;
 
 /**
  * @brief Bundle of remote-session state shared by the agent and its tools.
@@ -50,7 +53,11 @@ struct AgentRemoteState
  * @return True on success, false on any connect or SFTP failure.
  */
 bool connectAgentSshSession(
-    const QString &target, QObject *parent, AgentRemoteState *state, QString *errorMessage);
+    const QString                 &target,
+    QObject                       *parent,
+    AgentRemoteState              *state,
+    QString                       *errorMessage,
+    QSocSshSession::SecretCallback secretCallback = {});
 
 /**
  * @brief Ensure the workspace directory exists and seed the path context.
@@ -81,5 +88,49 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     AgentRemoteState      *state,
     QSocConfig            *socConfig,
     QSocMonitorTaskSource *monitorSource = nullptr);
+
+/**
+ * @brief Outcome of an alias-or-target resolution against the host catalog
+ *        and `~/.ssh/config`.
+ * @details Tells the caller which connect string to hand to
+ *          `connectAgentSshSession()` and, when known, what workspace to
+ *          jump straight to (skipping the SFTP path picker).
+ */
+struct ResolvedHostTarget
+{
+    QString connectString; /**< Empty when not resolvable. */
+    QString workspaceHint; /**< Non-empty when the catalog supplied a workspace. */
+    QString capability;    /**< Non-empty when the catalog supplied a capability. */
+    bool    fromCatalog   = false;
+    bool    fromSshConfig = false;
+};
+
+/**
+ * @brief Resolve an alias or raw target into a connect string + workspace.
+ * @details Precedence:
+ *          1. If @p arg matches a `Host` block in `~/.ssh/config`, return
+ *             the alias as-is so the existing flow uses ssh-config for
+ *             HostName/User/Port/IdentityFile/ProxyJump. Workspace and
+ *             capability come from the catalog if it also has an entry
+ *             under the same alias.
+ *          2. Else if @p arg matches a catalog alias with a `target`
+ *             fallback, return that target. Workspace and capability come
+ *             from the catalog entry.
+ *          3. Else if @p arg looks like a raw `[user@]host[:port]` string,
+ *             return it as-is.
+ *          4. Else return an empty `connectString` with an error message.
+ * @param arg User-supplied alias or target.
+ * @param catalog Host catalog (may be null to skip catalog lookup).
+ * @param parser Parsed `~/.ssh/config` (may be null to skip ssh-config lookup).
+ * @param out Resolved outcome; populated on success.
+ * @param errorMessage Optional sink for failure detail.
+ * @return True on success.
+ */
+bool resolveHostTarget(
+    const QString             &arg,
+    const QSocHostCatalog     *catalog,
+    const QSocSshConfigParser *parser,
+    ResolvedHostTarget        *out,
+    QString                   *errorMessage = nullptr);
 
 #endif // QSOCAGENTREMOTE_H
