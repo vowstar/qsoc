@@ -477,6 +477,8 @@ QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdownContent(
             def.injectSkills = parseBoolField(value, def.injectSkills);
         } else if (key == QLatin1String("inject_project_md")) {
             def.injectProjectMd = parseBoolField(value, def.injectProjectMd);
+        } else if (key == QLatin1String("preferred_host")) {
+            def.preferredHost = value;
         }
     }
 

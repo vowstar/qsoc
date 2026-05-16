@@ -100,6 +100,14 @@ struct QSocAgentDefinition
      * conventions) apply to children too. */
     bool injectProjectMd = true;
 
+    /* Optional host alias the spawn tool should default to when the
+     * caller omits the `host` argument. Falls back to the parent's
+     * active binding when empty. Resolved against QSocHostCatalog at
+     * spawn time; an alias that does not exist in the catalog is
+     * ignored with a one-line log line. Frontmatter key:
+     * `preferred_host`. */
+    QString preferredHost;
+
     /* Non-empty iff the definition failed to load; surfaced by
      * `/agents` listing for diagnostics. */
     QString parseError;
