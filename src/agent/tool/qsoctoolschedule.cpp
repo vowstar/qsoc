@@ -32,7 +32,16 @@ QString QSocToolScheduleCreate::getDescription() const
            "day-of-week). Recurring tasks use patterns like \"*/5 * * * *\" with recurring=true; "
            "one-shot tasks pin minute+hour+dom+month like \"30 14 27 2 *\" with recurring=false. "
            "Default durable=false (session-only); set durable=true only when the user asks the "
-           "task to survive QSoC restarts. Preserve /commands and !commands verbatim in prompt.";
+           "task to survive QSoC restarts. Preserve /commands and !commands verbatim in prompt.\n"
+           "\n"
+           "Pick a non-round minute when the user's request is approximate. Every other QSoC "
+           "user who asks for \"9am\" or \"hourly\" lands on \"0 9 * * *\" and \"0 * * * *\", "
+           "so jobs from across the planet hit upstream APIs at the same instant. Avoid the :00 "
+           "and :30 marks unless the user pinned an exact time:\n"
+           "  \"every morning around 9\" -> \"57 8 * * *\" or \"3 9 * * *\" (not \"0 9 * * *\")\n"
+           "  \"hourly\" -> \"7 * * * *\" or \"23 * * * *\" (not \"0 * * * *\")\n"
+           "  \"every 10 minutes\" -> \"3,13,23,33,43,53 * * * *\" (not \"*/10 * * * *\")\n"
+           "Honor exact user times verbatim (\"at 09:30\" stays \"30 9 * * *\").";
 }
 
 json QSocToolScheduleCreate::getParametersSchema() const
@@ -51,7 +60,9 @@ json QSocToolScheduleCreate::getParametersSchema() const
             {"description",
              "Standard 5-field cron in local time: \"M H DoM Mon DoW\" "
              "(e.g. \"*/5 * * * *\" = every 5 minutes; \"30 14 27 2 *\" = Feb 27 at 2:30pm "
-             "local once)."}}},
+             "local once). For approximate user times prefer an off-:00/:30 minute "
+             "(e.g. \"7 * * * *\" instead of \"0 * * * *\") so global QSoC traffic does "
+             "not synchronize on the same instant."}}},
           {"recurring",
            {{"type", "boolean"},
             {"description",
