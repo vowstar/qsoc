@@ -1085,6 +1085,26 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
         prompt += remoteSection;
     }
 
+    /* Model capability: emitted only when the active model has no
+     * vision support so the LLM stops suggesting screenshots, image
+     * uploads, or tool calls that produce image content. Text-only
+     * models silently drop image content blocks otherwise, which
+     * surfaces as the agent appearing to "ignore" the user's image. */
+    if (llmService != nullptr && !llmService->currentSupportsImage()) {
+        prompt += QStringLiteral(
+            "\n# Model Capability\n"
+            "- The active model is text-only; it cannot see images.\n"
+            "- Do NOT ask the user to attach screenshots, paste images, or\n"
+            "  upload pictures; describe what you need in words instead.\n"
+            "- Do NOT call web_image, image-extracting variants of web_fetch,\n"
+            "  or any tool whose primary output is an image. Prefer the\n"
+            "  text-rendering tool of the same family when available.\n"
+            "- When a tool returns an image surrogate like\n"
+            "  `[image: file mime=... dims=... bytes=... est_tokens=...]`,\n"
+            "  treat the surrogate text as the only information you have\n"
+            "  about that image; do not pretend to have seen its contents.\n");
+    }
+
     /* Host catalog: emitted when the catalog has entries OR the
      * active binding is non-local, so the LLM knows what hosts it
      * can dispatch sub-agents to and where it is currently bound.
