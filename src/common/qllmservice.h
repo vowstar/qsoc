@@ -55,6 +55,7 @@ struct LLMModelConfig
     bool acceptsImage      = false;
     int  imageMaxTokens    = 5000; /* Hard reject when client estimate exceeds this */
     int  imageMaxDimension = 1568; /* Resize short edge to this before encoding */
+    int  imageMaxBytes     = 0;    /* On-wire byte cap. 0 = no byte limit. */
     /* Provider hint for the token-cost formula; the request payload
      * still uses the OpenAI-compatible image_url shape regardless. */
     QString imageProviderHint;

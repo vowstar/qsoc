@@ -94,6 +94,84 @@ private slots:
         QVERIFY(openMarker.contains(QStringLiteral("qsoc:image_attachment")));
         QVERIFY(closeMarker.contains(QStringLiteral("qsoc:image_attachment")));
     }
+
+    /* Compression cascade smoke tests. The fixture is a high-entropy
+     * gradient so the default JPEG encoder cannot shrink it past the
+     * target without dropping quality or dimensions. */
+    static QImage gradient(int width, int height)
+    {
+        QImage img(width, height, QImage::Format_RGB32);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const int red   = (x * 255) / width;
+                const int green = (y * 255) / height;
+                const int blue  = ((x + y) * 255) / (width + height);
+                img.setPixel(x, y, qRgb(red, green, blue));
+            }
+        }
+        return img;
+    }
+
+    void compressNoBudgetReturnsUnchanged()
+    {
+        const QImage src = gradient(64, 64);
+        const auto out = QSocImageAttach::compressWithinBudget(src, QStringLiteral("image/png"), 0);
+        QVERIFY(!out.data.isEmpty());
+        QVERIFY(!out.downgraded);
+    }
+
+    void compressJpegLadderShrinksUnderTinyBudget()
+    {
+        const QImage src = gradient(512, 512);
+        QBuffer      defaultBuf;
+        defaultBuf.open(QIODevice::WriteOnly);
+        src.save(&defaultBuf, "JPEG", 80);
+        const int baseline = defaultBuf.data().size();
+
+        const int  target = baseline / 2;
+        const auto out
+            = QSocImageAttach::compressWithinBudget(src, QStringLiteral("image/jpeg"), target);
+        QVERIFY2(!out.data.isEmpty(), "cascade produced no data");
+        QVERIFY2(out.data.size() <= target, "cascade did not fit budget");
+        QVERIFY2(out.downgraded, "cascade should mark downgrade when it dropped quality");
+        QCOMPARE(QString::fromLatin1(out.format), QStringLiteral("JPEG"));
+    }
+
+    void compressFallsBackToDimensionHalvingForBrutalBudget()
+    {
+        const QImage src    = gradient(1024, 1024);
+        const int    target = 4096;
+        const auto   out
+            = QSocImageAttach::compressWithinBudget(src, QStringLiteral("image/jpeg"), target);
+        QVERIFY(!out.data.isEmpty());
+        QVERIFY(out.downgraded);
+        QVERIFY2(
+            out.finalWidth > 0 && out.finalWidth < src.width(),
+            "cascade should shrink dims as last resort");
+    }
+
+    void compressPngWithAlphaCanDropToJpeg()
+    {
+        QImage src(512, 512, QImage::Format_ARGB32);
+        for (int y = 0; y < src.height(); ++y) {
+            for (int x = 0; x < src.width(); ++x) {
+                const int alpha = (x * 255) / src.width();
+                src.setPixel(x, y, qRgba(120, 200, 80, alpha));
+            }
+        }
+        QVERIFY(src.hasAlphaChannel());
+
+        QBuffer pngBuf;
+        pngBuf.open(QIODevice::WriteOnly);
+        src.save(&pngBuf, "PNG");
+        const int target = pngBuf.data().size() / 4;
+        QVERIFY(target > 32);
+
+        const auto out
+            = QSocImageAttach::compressWithinBudget(src, QStringLiteral("image/png"), target);
+        QVERIFY(!out.data.isEmpty());
+        QVERIFY(out.downgraded);
+    }
 };
 
 } // namespace
