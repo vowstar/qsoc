@@ -26,6 +26,11 @@ void MainWindow::on_actionSchematicEditor_triggered()
     openSchematicEditor(); // No file path = new untitled file
 }
 
+void MainWindow::on_actionBusEditor_triggered()
+{
+    openBusEditor();
+}
+
 void MainWindow::on_actionPRCEditor_triggered()
 {
     openPrcEditor(); // No file path = new untitled file

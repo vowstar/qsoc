@@ -6,10 +6,60 @@
 
 #include "common/qsocprojectmanager.h"
 
+#include <QList>
 #include <QObject>
 #include <QRegularExpression>
+#include <QStringList>
 
 #include <yaml-cpp/yaml.h>
+
+struct QSocBusSignalMode
+{
+    QString    signal;
+    QString    mode;
+    QString    direction;
+    QString    width;
+    QString    qualifier;
+    QString    description;
+    YAML::Node signalExtraAttributes;
+    YAML::Node modeExtraAttributes;
+};
+
+struct QSocBusDefinition
+{
+    QString                  libraryName;
+    QString                  busName;
+    YAML::Node               extraAttributes;
+    QList<QSocBusSignalMode> rows;
+};
+
+enum class QSocBusProblemSeverity { Warning, Error };
+
+struct QSocBusProblem
+{
+    QSocBusProblemSeverity severity = QSocBusProblemSeverity::Error;
+    QString                code;
+    QString                libraryName;
+    QString                busName;
+    QString                signal;
+    QString                mode;
+    QString                moduleLibrary;
+    QString                moduleName;
+    QString                interfaceName;
+    int                    row = -1;
+    QString                message;
+};
+
+struct QSocBusUsage
+{
+    QString     moduleLibrary;
+    QString     moduleName;
+    QString     interfaceName;
+    QString     busName;
+    QString     mode;
+    QStringList mappingSignals;
+    QStringList emptyMappingSignals;
+};
 
 /**
  * @brief The QSocBusManager class.
@@ -83,6 +133,44 @@ public slots:
      */
     bool importFromFileList(
         const QString &libraryName, const QString &busName, const QStringList &filePathList);
+
+    QStringList       listLoadedLibraries() const;
+    QStringList       listBusesInLibrary(const QString &libraryName) const;
+    QSocBusDefinition getBusDefinition(const QString &libraryName, const QString &busName) const;
+    bool              createLibrary(const QString &libraryName);
+    bool              replaceBusDefinition(const QSocBusDefinition &definition);
+    bool              renameBusInLibrary(
+        const QString &libraryName, const QString &oldName, const QString &newName);
+    bool              removeBusFromLibrary(const QString &libraryName, const QString &busName);
+    bool              removeLibraryIfEmpty(const QString &libraryName);
+    YAML::Node        busDefinitionToYaml(const QSocBusDefinition &definition) const;
+    QSocBusDefinition busYamlToDefinition(
+        const QString &libraryName, const QString &busName, const YAML::Node &node) const;
+    QList<QSocBusSignalMode> parseBusCsvFiles(
+        const QStringList &filePaths, QStringList *warnings = nullptr) const;
+    YAML::Node rowsToBusYaml(const QString &busName, const QList<QSocBusSignalMode> &rows) const;
+    QList<QSocBusProblem> validateBusDefinition(const QSocBusDefinition &definition) const;
+    QList<QSocBusProblem> validateBusReferences(
+        const QSocBusDefinition &definition, QStringList *scanErrors = nullptr) const;
+    QList<QSocBusUsage> scanBusUsages(
+        const QString &busName = QString(), QStringList *scanErrors = nullptr) const;
+    bool renameBusReferences(
+        const QString &oldBusName,
+        const QString &newBusName,
+        QStringList   *changedModules = nullptr,
+        QStringList   *errors         = nullptr) const;
+    bool renameSignalReferences(
+        const QString &busName,
+        const QString &oldSignalName,
+        const QString &newSignalName,
+        QStringList   *changedModules = nullptr,
+        QStringList   *errors         = nullptr) const;
+    bool renameModeReferences(
+        const QString &busName,
+        const QString &oldModeName,
+        const QString &newModeName,
+        QStringList   *changedModules = nullptr,
+        QStringList   *errors         = nullptr) const;
 
     /**
      * @brief Save the library YAML object to library file.

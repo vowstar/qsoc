@@ -2,6 +2,39 @@
 <bus-interface-format>
 The bus interface format provides high-level connectivity abstractions for protocol-based connections and advanced signal routing through bit selection capabilities.
 
+== BUS DEFINITION LIBRARY
+<soc-bus-definition-library>
+Project bus libraries use `.soc_bus` YAML files. Each library maps a bus name to
+`port.<signal>.<mode>` entries. The editor and importer treat each
+`(signal, mode)` pair as one table row.
+
+```yaml
+apb4:
+  port:
+    paddr:
+      master:
+        direction: out
+        width: 32
+        qualifier: address
+        description: address bus
+      slave:
+        direction: in
+        width: 32
+        qualifier: address
+```
+
+Standard mode fields are `direction`, `width`, `qualifier`, and `description`.
+`width` is stored as scalar text so legacy symbolic widths can round-trip. Extra
+attributes at the bus root and mode level are preserved by structured editing.
+Signal-level map children are modes when they contain a standard mode field.
+
+=== GUI Bus Editor
+<soc-bus-gui-editor>
+Use `Tools > Bus Editor` or double-click a `.soc_bus` file in the project tree.
+The editor uses one `(signal, mode)` row for each `port.<signal>.<mode>` entry
+and preserves the YAML structure described here. See @gui-bus-editor for the GUI
+workflow.
+
 == BUS SECTION
 <soc-net-bus>
 The `bus` section defines bus interface connections that will be automatically expanded into individual net connections. Bus connections use the list format:
