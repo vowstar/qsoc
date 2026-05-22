@@ -35,15 +35,46 @@ void MainWindow::handleTreeDoubleClick(const QModelIndex &index)
     if (fileInfo.suffix() == "soc_sch") {
         /* Open Schematic Editor using unified method */
         openSchematicEditor(filePath);
+    } else if (fileInfo.suffix() == "soc_mod") {
+        openModuleEditor(filePath);
     } else if (fileInfo.suffix() == "soc_bus") {
         openBusEditor(filePath);
     } else if (fileInfo.suffix() == "soc_prc") {
         /* Open PRC Editor using unified method */
         openPrcEditor(filePath);
     }
-    /* Future extension points:
-     * else if (fileInfo.suffix() == "soc_mod") { ... }
-     */
+}
+
+void MainWindow::openModuleEditor(const QString &filePath)
+{
+    QSocConsole::debug() << "MainWindow: Opening module editor"
+                         << (filePath.isEmpty() ? "(project)" : filePath);
+
+    if (moduleEditorWindow.isVisible()) {
+        if (!moduleEditorWindow.close()) {
+            QSocConsole::debug() << "MainWindow: User cancelled close";
+            return;
+        }
+    }
+
+    moduleEditorWindow.setParent(this);
+    moduleEditorWindow.setWindowFlag(Qt::Window, true);
+
+    if (projectManager && projectManager->isValid()) {
+        QSocConsole::debug() << "MainWindow: Setting project manager to module editor";
+        moduleEditorWindow.setProjectManager(projectManager);
+    } else {
+        QSocConsole::debug() << "MainWindow: No valid project manager, module editor is read-only";
+        moduleEditorWindow.setProjectManager(nullptr);
+    }
+
+    if (!filePath.isEmpty())
+        moduleEditorWindow.openFile(filePath);
+
+    moduleEditorWindow.show();
+    moduleEditorWindow.raise();
+    moduleEditorWindow.activateWindow();
+    QSocConsole::debug() << "MainWindow: Module editor opened";
 }
 
 void MainWindow::openBusEditor(const QString &filePath)
