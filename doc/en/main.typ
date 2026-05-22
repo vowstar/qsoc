@@ -54,6 +54,7 @@
     #include "command.typ"
     #include "agent.typ"
     #include "gui_bus_editor.typ"
+    #include "gui_module_editor.typ"
     #include "format_overview.typ"
     #include "format_netlist.typ"
     #include "format_bus.typ"

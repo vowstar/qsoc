@@ -31,6 +31,11 @@ void MainWindow::on_actionBusEditor_triggered()
     openBusEditor();
 }
 
+void MainWindow::on_actionModuleEditor_triggered()
+{
+    openModuleEditor();
+}
+
 void MainWindow::on_actionPRCEditor_triggered()
 {
     openPrcEditor(); // No file path = new untitled file

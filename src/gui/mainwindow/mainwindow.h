@@ -6,6 +6,7 @@
 
 #include "common/qsocprojectmanager.h"
 #include "gui/buseditorwindow/buseditorwindow.h"
+#include "gui/moduleeditorwindow/moduleeditorwindow.h"
 #include "gui/prcwindow/prcwindow.h"
 #include "gui/schematicwindow/schematicwindow.h"
 
@@ -84,6 +85,12 @@ private slots:
     void on_actionRefresh_triggered();
 
     /* Editor Actions (Qt Auto-connected) */
+
+    /**
+     * @brief Open module editor action.
+     * @details Opens the module editor with the current project module libraries.
+     */
+    void on_actionModuleEditor_triggered();
 
     /**
      * @brief Open bus editor action.
@@ -176,6 +183,13 @@ private:
     /* Editor Management */
 
     /**
+     * @brief Open module editor with optional file.
+     * @details Unified method to open module editor. Ensures project manager is set.
+     * @param[in] filePath optional path to module library file
+     */
+    void openModuleEditor(const QString &filePath = QString());
+
+    /**
      * @brief Open bus editor with optional file.
      * @details Unified method to open bus editor. Ensures project manager is set.
      * @param[in] filePath optional path to bus library file
@@ -208,6 +222,8 @@ private:
     QString lastProjectDir = QDir::currentPath();
     /* Project manager instance (parent-managed) */
     QSocProjectManager *projectManager = nullptr;
+    /* Module editor window object */
+    ModuleEditorWindow moduleEditorWindow;
     /* Bus editor window object */
     BusEditorWindow busEditorWindow;
     /* Schematic window object */

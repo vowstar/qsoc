@@ -35,6 +35,9 @@ The editor uses one `(signal, mode)` row for each `port.<signal>.<mode>` entry
 and preserves the YAML structure described here. See @gui-bus-editor for the GUI
 workflow.
 
+Module-to-bus interface mappings are edited in the Module Editor. See
+@gui-module-editor for that workflow.
+
 == BUS SECTION
 <soc-net-bus>
 The `bus` section defines bus interface connections that will be automatically expanded into individual net connections. Bus connections use the list format:

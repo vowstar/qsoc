@@ -9,13 +9,97 @@
 #include "common/qsocbusmanager.h"
 #include "common/qsocprojectmanager.h"
 
+#include <QList>
+#include <QMap>
 #include <QObject>
 #include <QRegularExpression>
+#include <QSet>
+#include <QStringList>
 
 #include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
 
 using json = nlohmann::json;
+
+struct QSocModulePort
+{
+    QString    name;
+    QString    direction;
+    QString    type;
+    bool       hasVisible = false;
+    bool       visible    = false;
+    QString    group;
+    QString    description;
+    YAML::Node extraAttributes;
+};
+
+struct QSocModuleParameter
+{
+    QString    name;
+    QString    type;
+    QString    value;
+    QString    description;
+    YAML::Node extraAttributes;
+};
+
+struct QSocModuleBusMapping
+{
+    QString busSignal;
+    QString modulePort;
+};
+
+struct QSocModuleBusInterface
+{
+    QString                     name;
+    QString                     busName;
+    QString                     mode;
+    QList<QSocModuleBusMapping> mapping;
+    YAML::Node                  extraAttributes;
+};
+
+struct QSocModuleDefinition
+{
+    QString                       libraryName;
+    QString                       moduleName;
+    bool                          isNullDefinition = false;
+    YAML::Node                    extraAttributes;
+    QList<QSocModulePort>         ports;
+    QList<QSocModuleParameter>    parameters;
+    QList<QSocModuleBusInterface> busInterfaces;
+};
+
+enum class QSocModuleProblemSeverity { Warning, Error };
+
+struct QSocModuleProblem
+{
+    QSocModuleProblemSeverity severity = QSocModuleProblemSeverity::Error;
+    QString                   code;
+    QString                   libraryName;
+    QString                   moduleName;
+    QString                   section;
+    QString                   itemName;
+    int                       row = -1;
+    QString                   message;
+};
+
+struct QSocModuleOverlay
+{
+    QString     moduleName;
+    QString     activeLibrary;
+    QStringList libraries;
+    QStringList shadowedLibraries;
+};
+
+struct QSocModuleUsage
+{
+    QString     sourceType;
+    QString     filePath;
+    QString     instanceName;
+    QString     moduleName;
+    QStringList portNames;
+    QStringList busInterfaces;
+    QString     status;
+};
 
 /**
  * @brief The QSocModuleManager class.
@@ -135,6 +219,24 @@ public slots:
         const QStringList        &filePathList,
         const QStringList        &macroDefines   = QStringList(),
         const QStringList        &macroUndefines = QStringList());
+
+    QStringList          listLoadedLibraries() const;
+    QStringList          listModulesInLibrary(const QString &libraryName) const;
+    QSocModuleDefinition getModuleDefinition(
+        const QString &libraryName, const QString &moduleName) const;
+    bool createLibrary(const QString &libraryName);
+    bool replaceModuleDefinition(const QSocModuleDefinition &definition);
+    bool renameModuleInLibrary(
+        const QString &libraryName, const QString &oldName, const QString &newName);
+    bool       removeModuleFromLibrary(const QString &libraryName, const QString &moduleName);
+    bool       removeLibraryIfEmpty(const QString &libraryName);
+    YAML::Node moduleDefinitionToYaml(const QSocModuleDefinition &definition) const;
+    QSocModuleDefinition moduleYamlToDefinition(
+        const QString &libraryName, const QString &moduleName, const YAML::Node &node) const;
+    QList<QSocModuleProblem> validateModuleDefinition(const QSocModuleDefinition &definition) const;
+    QList<QSocModuleOverlay> scanModuleOverlays(const QString &moduleName = QString()) const;
+    QList<QSocModuleUsage>   scanModuleUsages(
+        const QString &moduleName = QString(), QStringList *scanErrors = nullptr) const;
 
     /**
      * @brief Get the Module Yaml object.
@@ -536,6 +638,12 @@ private:
     /* Module library YAML node. */
     YAML::Node moduleData;
 
+    /* Per-library YAML nodes used by library editors. */
+    QMap<QString, YAML::Node> libraryData;
+
+    /* Library load order. Later libraries win global overlay resolution. */
+    QStringList libraryLoadOrder;
+
     /**
      * @brief Merge two YAML nodes.
      * @details This function will merge two YAML nodes. It returns a new map
@@ -574,6 +682,10 @@ private:
      * @param moduleName The name of the module to be removed.
      */
     void libraryMapRemove(const QString &libraryName, const QString &moduleName);
+
+    QString activeLibraryForModule(const QString &moduleName) const;
+    void    rebuildActiveModule(const QString &moduleName);
+    void    rememberLoadedLibrary(const QString &libraryName);
 
 signals:
 };
