@@ -18,9 +18,8 @@ void ModuleMappingProxyModel::setShowOnlyProblems(bool enabled)
 {
     if (m_showOnlyProblems == enabled)
         return;
-    beginFilterChange();
     m_showOnlyProblems = enabled;
-    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+    invalidateFilter();
 }
 
 bool ModuleMappingProxyModel::showEmptyMappings() const
@@ -32,9 +31,8 @@ void ModuleMappingProxyModel::setShowEmptyMappings(bool enabled)
 {
     if (m_showEmptyMappings == enabled)
         return;
-    beginFilterChange();
     m_showEmptyMappings = enabled;
-    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+    invalidateFilter();
 }
 
 bool ModuleMappingProxyModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
