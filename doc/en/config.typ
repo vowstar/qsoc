@@ -140,6 +140,72 @@ llm:
   model: llama3
 ```
 
+=== Per-Model Registry
+<llm-models-registry>
+The flat `llm.url` / `llm.key` form above is fine for a single backend.
+For multi-model setups, declare each model under `llm.models.<id>:` and
+point `llm.model` at the default one. Every key under `<id>:` is
+optional except `url`.
+
+#figure(
+  align(center)[#table(
+    columns: (0.45fr, 1fr),
+    align: (auto, left),
+    table.header([Field], [Description]),
+    table.hline(),
+    [`name`], [Display name shown in pickers and status lines],
+    [`url`], [Chat Completions endpoint URL (required)],
+    [`key`], [API key; empty for keyless local services],
+    [`auth_header`],
+    [Auth header name. Empty or `Authorization` sends
+    `Bearer <key>` (default). Any other value sends the bare key
+    under that header],
+    [`timeout`], [Request timeout in milliseconds],
+    [`context`], [Context window in tokens],
+    [`max_output_tokens`], [Reply cap; `0` defers to the backend],
+    [`reasoning`], [`true` enables thinking / reasoning mode],
+    [`effort`], [Reasoning effort: `low`, `medium`, `high`],
+    [`modalities.image`], [`true` opts the model into image input],
+    [`modalities.image_max_tokens`],
+    [Reject the image when the client-side estimate exceeds this],
+    [`modalities.image_max_dimension`],
+    [Resize short edge to this many pixels before encoding],
+    [`modalities.image_max_bytes`],
+    [On-wire byte cap; `0` means no byte limit],
+    [`modalities.image_provider_hint`],
+    [Token-cost formula hint; the wire payload still uses the
+    OpenAI `image_url` shape],
+  )],
+  caption: [PER-MODEL CONFIGURATION FIELDS],
+  kind: table,
+)
+
+```yaml
+llm:
+  model: my-pro
+  models:
+    my-pro:
+      name: My Pro (thinking)
+      url: https://api.example.com/v1/chat/completions
+      key: sk-xxx
+      timeout: 180000
+      context: 131072
+      max_output_tokens: 32768
+      reasoning: true
+      effort: high
+    my-omni:
+      name: My Omnimodal
+      url: https://api.example.com/v1/chat/completions
+      key: sk-xxx
+      auth_header: api-key
+      context: 1048576
+      max_output_tokens: 32768
+      modalities:
+        image: true
+        image_max_tokens: 4000
+        image_max_dimension: 1568
+```
+
 == NETWORK PROXY CONFIGURATION
 <proxy-config>
 QSoC resolves the proxy used for every HTTP-based subsystem (LLM
