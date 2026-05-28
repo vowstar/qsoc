@@ -153,6 +153,7 @@ bool QLLMService::setCurrentModel(const QString &modelId)
     endpoint.model           = modelConf.id;
     endpoint.timeout         = modelConf.timeout;
     endpoint.maxOutputTokens = modelConf.maxOutputTokens;
+    endpoint.authHeader      = modelConf.authHeader;
     endpoints.append(endpoint);
 
     return true;
@@ -334,6 +335,10 @@ void QLLMService::loadConfigSettings()
                 if (node["key"]) {
                     modelCfg.key = QString::fromStdString(node["key"].as<std::string>());
                 }
+                if (node["auth_header"]) {
+                    modelCfg.authHeader = QString::fromStdString(
+                        node["auth_header"].as<std::string>());
+                }
                 if (node["timeout"]) {
                     modelCfg.timeout = node["timeout"].as<int>();
                 }
@@ -470,9 +475,18 @@ QNetworkRequest QLLMService::prepareRequest(const LLMEndpoint &endpoint) const
     QNetworkRequest request(endpoint.url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
-    /* All providers use Bearer token authentication */
+    /* Auth header dispatch: empty or "Authorization" sends the
+     * "Bearer <key>" pattern; any other value sends the bare key
+     * under that header. */
     if (!endpoint.key.isEmpty()) {
-        request.setRawHeader("Authorization", ("Bearer " + endpoint.key).toUtf8());
+        const bool isBearer = endpoint.authHeader.isEmpty()
+                              || endpoint.authHeader.compare("Authorization", Qt::CaseInsensitive)
+                                     == 0;
+        if (isBearer) {
+            request.setRawHeader("Authorization", ("Bearer " + endpoint.key).toUtf8());
+        } else {
+            request.setRawHeader(endpoint.authHeader.toUtf8(), endpoint.key.toUtf8());
+        }
     }
 
     return request;

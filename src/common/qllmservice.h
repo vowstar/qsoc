@@ -28,6 +28,9 @@ struct LLMEndpoint
     QString model;                   /* Model name to use */
     int     timeout         = 30000; /* Request timeout in milliseconds */
     int     maxOutputTokens = 0;     /* Max output tokens (0 = API default) */
+    /* Auth header name. Empty or "Authorization" sends "Bearer <key>";
+     * any other value sends the bare key under that header name. */
+    QString authHeader;
 };
 
 /**
@@ -40,6 +43,7 @@ struct LLMModelConfig
     QString name;                     /* Friendly display name */
     QString url;                      /* API endpoint URL */
     QString key;                      /* API key (empty = no auth) */
+    QString authHeader;               /* See LLMEndpoint::authHeader */
     int     timeout         = 120000; /* Request timeout ms */
     int     contextTokens   = 128000; /* Context window size */
     int     maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
