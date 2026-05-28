@@ -764,8 +764,14 @@ void QLLMService::sendChatCompletionStream(
                         && currentStreamReply->error() != QNetworkReply::OperationCanceledError;
 
         if (hasError) {
-            /* Include any data already read by readyRead (error response body) */
-            QString    errorMsg  = currentStreamReply->errorString();
+            /* Prefix the HTTP status code so downstream classification can
+             * dispatch on an exact code instead of fuzzy-matching the body.
+             * Status 0 means the request never reached the server (DNS,
+             * TLS, connection-refused, abort, etc). */
+            const int httpStatus
+                = currentStreamReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            QString    errorMsg  = QString("[HTTP %1] ").arg(httpStatus)
+                                   + currentStreamReply->errorString();
             QByteArray errorBody = currentStreamReply->readAll();
             if (!errorBody.isEmpty()) {
                 errorMsg += "\n" + QString::fromUtf8(errorBody);

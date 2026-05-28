@@ -303,16 +303,22 @@ void QSocAgent::handleStreamError(const QString &error)
 
     /* Reactive compaction: when the server rejects the request because
      * the prompt overshoots the context window, force a compact and
-     * retry once. Beats letting the user re-trigger manually because
-     * our estimator was off (CJK + base64 tool results are the usual
-     * culprit). Capped at maxCompactRetries to avoid infinite loops
-     * when even the post-compact prompt still does not fit. */
+     * retry once. qllmservice prefixes the error with "[HTTP <code>] ",
+     * so we dispatch on the status code, never on free-text substring.
+     * HTTP 413 is always overflow; 400 only counts when the body says
+     * so (some providers, e.g. DeepSeek, return 400 for over-long
+     * prompts with a generic "Bad Request" header but a specific body).
+     * Auth/permission failures (401/403) must surface to the user
+     * verbatim; retrying a bad key is pointless. */
     static constexpr int maxCompactRetries = 2;
-    const bool isContextOverflow = error.contains("Entity Too Large", Qt::CaseInsensitive)
+    const bool hasContextPhrase  = error.contains("Entity Too Large", Qt::CaseInsensitive)
                                    || error.contains("context_length_exceeded", Qt::CaseInsensitive)
                                    || error.contains("maximum context length", Qt::CaseInsensitive)
-                                   || error.contains("prompt is too long", Qt::CaseInsensitive)
-                                   || error.contains("400", Qt::CaseSensitive); /* DeepSeek's 400 */
+                                   || error.contains("prompt is too long", Qt::CaseInsensitive);
+    const bool isHttp413         = error.startsWith("[HTTP 413]");
+    const bool isHttp400         = error.startsWith("[HTTP 400]");
+    const bool isContextOverflow = isHttp413 || (isHttp400 && hasContextPhrase)
+                                   || (hasContextPhrase && !error.startsWith("[HTTP "));
     if (isContextOverflow && contextOverflowRetryCount < maxCompactRetries) {
         contextOverflowRetryCount++;
         if (agentConfig.verbose) {
