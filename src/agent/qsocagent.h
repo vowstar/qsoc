@@ -452,6 +452,7 @@ private:
     /* Retry tracking */
     int currentRetryCount         = 0;
     int contextOverflowRetryCount = 0;
+    int emptyResponseRetryCount   = 0;
 
     /**
      * @brief Fire user_prompt_submit and react to its outcome.

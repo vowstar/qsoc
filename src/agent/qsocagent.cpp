@@ -220,6 +220,7 @@ void QSocAgent::runStream(const QString &userQuery)
     streamIteration           = 0;
     currentRetryCount         = 0;
     contextOverflowRetryCount = 0;
+    emptyResponseRetryCount   = 0;
     streamFinalContent.clear();
     abortRequested   = false;
     lastProgressTime = QDateTime::currentMSecsSinceEpoch();
@@ -365,6 +366,7 @@ void QSocAgent::handleStreamError(const QString &error)
     heartbeatTimer->stop();
     currentRetryCount         = 0;
     contextOverflowRetryCount = 0;
+    emptyResponseRetryCount   = 0;
     emit runError(error);
 }
 
@@ -543,60 +545,102 @@ void QSocAgent::handleStreamComplete(const json &response)
         return;
     }
 
-    /* Regular response without tool calls */
+    /* Regular response without tool calls. Treat a missing content
+     * field and a present-but-empty content string identically so the
+     * empty-response handler only lives in one place. */
+    QString content;
     if (message.contains("content") && message["content"].is_string()) {
-        QString content = QString::fromStdString(message["content"].get<std::string>());
+        content = QString::fromStdString(message["content"].get<std::string>());
+    }
 
-        if (agentConfig.verbose) {
-            emit verboseOutput(QString("[Assistant]: %1").arg(content));
-        }
+    if (agentConfig.verbose) {
+        emit verboseOutput(QString("[Assistant]: %1").arg(content));
+    }
 
-        /* Push full message to preserve reasoning_content for DeepSeek R1 */
-        messages.push_back(message);
+    /* Push full message to preserve reasoning_content for the next
+     * iteration; some thinking-mode providers require it. */
+    messages.push_back(message);
 
-        accountGoalUsageForIteration(streamPrevTokensEstimate, streamIterationTimer);
+    accountGoalUsageForIteration(streamPrevTokensEstimate, streamIterationTimer);
 
-        /* Continue if there are queued requests */
-        if (hasPendingRequests()) {
-            processStreamIteration();
-            return;
-        }
+    /* Continue if there are queued requests */
+    if (hasPendingRequests()) {
+        processStreamIteration();
+        return;
+    }
 
-        if (maybeQueueGoalContinuation()) {
-            /* A continuation (or budget-limit) prompt was just
-             * appended; feed it back into the stream loop so the
-             * model sees and answers it without exiting back to
-             * the REPL idle state. */
-            processStreamIteration();
-            return;
-        }
+    if (maybeQueueGoalContinuation()) {
+        /* A continuation (or budget-limit) prompt was just appended;
+         * feed it back into the stream loop so the model answers it
+         * without exiting to the REPL idle state. */
+        processStreamIteration();
+        return;
+    }
 
+    if (!content.isEmpty()) {
         isStreaming = false;
         heartbeatTimer->stop();
         fireStopHook(content);
         emit runComplete(content);
-    } else {
-        /* Push full message to preserve reasoning_content for DeepSeek R1 */
-        messages.push_back(message);
-
-        accountGoalUsageForIteration(streamPrevTokensEstimate, streamIterationTimer);
-
-        /* Continue if there are queued requests */
-        if (hasPendingRequests()) {
-            processStreamIteration();
-            return;
-        }
-
-        if (maybeQueueGoalContinuation()) {
-            processStreamIteration();
-            return;
-        }
-
-        isStreaming = false;
-        heartbeatTimer->stop();
-        fireStopHook(QString());
-        emit runComplete("");
+        return;
     }
+
+    /* Empty content path. Classify the cause: length-truncated runs
+     * are deterministic and not worth retrying (same prompt would
+     * exhaust the same budget); other empty responses get up to two
+     * retries before surfacing a diagnostic. */
+    QString finishReason;
+    if (response["choices"][0].contains("finish_reason")
+        && response["choices"][0]["finish_reason"].is_string()) {
+        finishReason = QString::fromStdString(
+            response["choices"][0]["finish_reason"].get<std::string>());
+    }
+    const bool hasReasoning = message.contains("reasoning_content")
+                              && message["reasoning_content"].is_string()
+                              && !message["reasoning_content"].get<std::string>().empty();
+
+    QString diag;
+    bool    retryable = false;
+    if (finishReason == "length" && hasReasoning) {
+        diag = QStringLiteral(
+            "Output truncated by max_output_tokens; the model spent the whole "
+            "budget on reasoning before emitting any reply. Raise "
+            "max_output_tokens or lower effort.");
+    } else if (finishReason == "length") {
+        diag = QStringLiteral(
+            "Output truncated by max_output_tokens before any content was "
+            "emitted. Raise max_output_tokens.");
+    } else if (hasReasoning) {
+        diag      = QStringLiteral("Model returned reasoning content but no reply text.");
+        retryable = true;
+    } else {
+        diag      = QStringLiteral("Empty response from the model.");
+        retryable = true;
+    }
+
+    static constexpr int maxEmptyRetries = 2;
+    if (retryable && emptyResponseRetryCount < maxEmptyRetries) {
+        emptyResponseRetryCount++;
+        /* Drop the empty assistant turn so the retry isn't conditioned
+         * on the model having just produced nothing. */
+        if (!messages.empty()) {
+            messages.erase(messages.end() - 1);
+        }
+        if (agentConfig.verbose) {
+            emit verboseOutput(QString("[Empty response %1/%2: retrying]")
+                                   .arg(emptyResponseRetryCount)
+                                   .arg(maxEmptyRetries));
+        }
+        lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+        processStreamIteration();
+        return;
+    }
+
+    isStreaming = false;
+    heartbeatTimer->stop();
+    emptyResponseRetryCount = 0;
+    fireStopHook(QString());
+    emit runError(diag);
 }
 
 bool QSocAgent::processIteration()
