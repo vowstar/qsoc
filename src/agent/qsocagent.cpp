@@ -1358,28 +1358,33 @@ QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentS
 void QSocAgent::addToolMessage(
     const QString &toolCallId, const QString &content, const QList<AttachmentSpec> &attachments)
 {
-    json msg = {{"role", "tool"}, {"tool_call_id", toolCallId.toStdString()}};
+    /* Tool messages always carry a plain string. OpenAI defines a
+     * content-array form for tool responses, but several backends
+     * reject it ("text is not set"); a string keeps every provider
+     * on the same path. Binary attachments are delivered on a
+     * follow-up user message instead. */
+    json toolMsg
+        = {{"role", "tool"},
+           {"tool_call_id", toolCallId.toStdString()},
+           {"content", content.toStdString()}};
+    messages.push_back(toolMsg);
+
     if (attachments.isEmpty()) {
-        msg["content"] = content.toStdString();
-        messages.push_back(msg);
         return;
     }
 
-    /* OpenAI-compatible content array: one text part for the model's
-     * narrative summary, then one image_url part per attachment using
-     * a data URL so providers that cannot egress to the original host
-     * (self-hosted vLLM/SGLang/Ollama) still see the bytes. */
+    /* Synthetic user message: one text part (required by strict
+     * providers) plus one image_url part per attachment, encoded
+     * as a data URL so the server never has to fetch the original
+     * host. */
     json contentArr = json::array();
-    if (!content.isEmpty()) {
-        contentArr.push_back({{"type", "text"}, {"text", content.toStdString()}});
-    }
+    contentArr.push_back({{"type", "text"}, {"text", std::string("Tool attachment payload:")}});
     for (const auto &att : attachments) {
         const QString dataUrl = QStringLiteral("data:%1;base64,%2").arg(att.mime, att.dataB64);
         contentArr.push_back(
             {{"type", "image_url"}, {"image_url", {{"url", dataUrl.toStdString()}}}});
     }
-    msg["content"] = contentArr;
-    messages.push_back(msg);
+    messages.push_back({{"role", "user"}, {"content", contentArr}});
 }
 
 void QSocAgent::clearHistory()
