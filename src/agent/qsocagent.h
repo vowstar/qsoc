@@ -9,6 +9,7 @@
 #include "agent/qsoctool.h"
 #include "common/qllmservice.h"
 
+class QLongTaskMonitor;
 class QSocHookManager;
 class QSocLoopScheduler;
 
@@ -431,6 +432,12 @@ private:
     QTimer       *heartbeatTimer = nullptr;
     QElapsedTimer runElapsedTimer;
 
+    /* Per-iteration stall + wall-clock watchdog. Reborn at every
+     * processStreamIteration() so each LLM round trip is measured
+     * independently. nullptr between iterations or when no run is in
+     * flight. */
+    QLongTaskMonitor *streamMonitor = nullptr;
+
     struct QueuedRequest
     {
         QString text;
@@ -441,9 +448,6 @@ private:
     QList<QueuedRequest> requestQueue;
     mutable QMutex       queueMutex;
     std::atomic<bool>    abortRequested{false};
-
-    /* Progress tracking for stuck detection */
-    std::atomic<qint64> lastProgressTime{0};
 
     /* Token tracking */
     std::atomic<qint64> totalInputTokens{0};
@@ -602,6 +606,19 @@ private:
      * @details Initiates one streaming request to LLM, handles response via signals
      */
     void processStreamIteration();
+
+    /**
+     * @brief Construct, wire, and start a fresh per-iteration watchdog.
+     */
+    void armStreamMonitor();
+
+    /**
+     * @brief Stop and delete the current per-iteration watchdog.
+     * @param cancelReason non-empty marks the teardown as a cancel
+     *                    (emits the monitor's cancelled signal); empty
+     *                    marks it as a normal finish (silent).
+     */
+    void teardownStreamMonitor(const QString &cancelReason);
 
     /**
      * @brief Handle streaming complete response

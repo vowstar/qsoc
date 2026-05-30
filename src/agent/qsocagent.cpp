@@ -9,6 +9,7 @@
 #include "agent/qsochooktypes.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/tool/qsoctoolweb.h"
+#include "common/qlongtaskmonitor.h"
 #include "common/qsocconsole.h"
 
 #include <QElapsedTimer>
@@ -30,37 +31,15 @@ QSocAgent::QSocAgent(
     , messages(json::array())
     , heartbeatTimer(new QTimer(this))
 {
-    /* Setup heartbeat timer - fires every 5 seconds during operation */
+    /* UI keepalive: every 5 s while streaming, emit heartbeat +
+     * token usage so the status line can tick. Stall detection lives
+     * in the per-iteration QLongTaskMonitor, not here. */
     heartbeatTimer->setInterval(5000);
     connect(heartbeatTimer, &QTimer::timeout, this, [this]() {
         if (isStreaming) {
             int  elapsed = static_cast<int>(runElapsedTimer.elapsed() / 1000);
             emit heartbeat(streamIteration, elapsed);
-
-            /* Emit token usage update */
             emit tokenUsage(totalInputTokens.load(), totalOutputTokens.load());
-
-            /* Stuck detection: check if no progress for configured threshold */
-            if (agentConfig.enableStuckDetection) {
-                qint64 now      = QDateTime::currentMSecsSinceEpoch();
-                qint64 lastProg = lastProgressTime.load();
-                if (lastProg > 0) {
-                    int silentSeconds = static_cast<int>((now - lastProg) / 1000);
-                    if (silentSeconds >= agentConfig.stuckThresholdSeconds) {
-                        /* Reset to avoid repeated triggers */
-                        lastProgressTime = now;
-                        emit stuckDetected(streamIteration, silentSeconds);
-
-                        /* Auto status check: inject status query */
-                        if (agentConfig.autoStatusCheck) {
-                            queueRequest(
-                                "[System: No progress detected. Please briefly report: "
-                                "1) What are you doing? 2) Any issues? 3) Estimated time "
-                                "remaining?]");
-                        }
-                    }
-                }
-            }
         }
     });
 }
@@ -222,8 +201,7 @@ void QSocAgent::runStream(const QString &userQuery)
     contextOverflowRetryCount = 0;
     emptyResponseRetryCount   = 0;
     streamFinalContent.clear();
-    abortRequested   = false;
-    lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+    abortRequested = false;
 
     /* Reset token counters for this run */
     totalInputTokens  = 0;
@@ -274,7 +252,9 @@ void QSocAgent::runStream(const QString &userQuery)
 
 void QSocAgent::handleStreamChunk(const QString &chunk)
 {
-    lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+    if (streamMonitor != nullptr) {
+        streamMonitor->notifyProgress();
+    }
 
     /* Estimate output tokens from this chunk */
     int chunkTokens = estimateTokens(chunk);
@@ -285,8 +265,10 @@ void QSocAgent::handleStreamChunk(const QString &chunk)
 
 void QSocAgent::handleReasoningChunk(const QString &chunk)
 {
-    lastProgressTime = QDateTime::currentMSecsSinceEpoch();
-    int chunkTokens  = estimateTokens(chunk);
+    if (streamMonitor != nullptr) {
+        streamMonitor->notifyProgress();
+    }
+    int chunkTokens = estimateTokens(chunk);
     totalOutputTokens.fetch_add(chunkTokens);
     emit reasoningChunk(chunk);
 }
@@ -297,6 +279,7 @@ void QSocAgent::handleStreamError(const QString &error)
     if (abortRequested) {
         isStreaming = false;
         heartbeatTimer->stop();
+        teardownStreamMonitor(QStringLiteral("user abort"));
         abortRequested = false;
         emit runAborted(streamFinalContent);
         return;
@@ -330,7 +313,6 @@ void QSocAgent::handleStreamError(const QString &error)
         emit compacting(2, estimateMessagesTokens(), 0);
         compact();
         emit compacting(2, 0, estimateMessagesTokens());
-        lastProgressTime = QDateTime::currentMSecsSinceEpoch();
         processStreamIteration();
         return;
     }
@@ -353,10 +335,8 @@ void QSocAgent::handleStreamError(const QString &error)
                                    .arg(error));
         }
 
-        /* Reset progress timer for retry */
-        lastProgressTime = QDateTime::currentMSecsSinceEpoch();
-
-        /* Retry the current iteration */
+        /* Retry the current iteration: the next processStreamIteration()
+         * call will spin up a fresh monitor scoped to that try. */
         processStreamIteration();
         return;
     }
@@ -364,6 +344,7 @@ void QSocAgent::handleStreamError(const QString &error)
     /* No more retries or non-retryable error */
     isStreaming = false;
     heartbeatTimer->stop();
+    teardownStreamMonitor(QString());
     currentRetryCount         = 0;
     contextOverflowRetryCount = 0;
     emptyResponseRetryCount   = 0;
@@ -381,9 +362,15 @@ void QSocAgent::processStreamIteration()
         isStreaming = false;
         heartbeatTimer->stop();
         abortRequested = false;
+        teardownStreamMonitor(QStringLiteral("user abort"));
         emit runAborted(streamFinalContent);
         return;
     }
+
+    /* Each iteration owns its watchdog: discard the previous one (so
+     * its timer stops) and build a fresh one scoped to this round. */
+    teardownStreamMonitor(QString());
+    armStreamMonitor();
 
     /* Check for pending requests - inject them into conversation */
     {
@@ -426,6 +413,7 @@ void QSocAgent::processStreamIteration()
     if (streamIteration > streamCap) {
         isStreaming = false;
         heartbeatTimer->stop();
+        teardownStreamMonitor(QString());
         const QString msg
             = agentConfig.maxTurnsOverride > 0
                   ? QString("Reached max turns limit (%1)").arg(streamCap)
@@ -504,6 +492,7 @@ void QSocAgent::handleStreamComplete(const json &response)
         QString errorMsg = QString::fromStdString(response["error"].get<std::string>());
         isStreaming      = false;
         heartbeatTimer->stop();
+        teardownStreamMonitor(QString());
         emit runError(errorMsg);
         return;
     }
@@ -512,6 +501,7 @@ void QSocAgent::handleStreamComplete(const json &response)
     if (!response.contains("choices") || response["choices"].empty()) {
         isStreaming = false;
         heartbeatTimer->stop();
+        teardownStreamMonitor(QString());
         emit runError("Invalid response from LLM");
         return;
     }
@@ -580,6 +570,7 @@ void QSocAgent::handleStreamComplete(const json &response)
     if (!content.isEmpty()) {
         isStreaming = false;
         heartbeatTimer->stop();
+        teardownStreamMonitor(QString());
         fireStopHook(content);
         emit runComplete(content);
         return;
@@ -631,13 +622,13 @@ void QSocAgent::handleStreamComplete(const json &response)
                                    .arg(emptyResponseRetryCount)
                                    .arg(maxEmptyRetries));
         }
-        lastProgressTime = QDateTime::currentMSecsSinceEpoch();
         processStreamIteration();
         return;
     }
 
     isStreaming = false;
     heartbeatTimer->stop();
+    teardownStreamMonitor(QString());
     emptyResponseRetryCount = 0;
     fireStopHook(QString());
     emit runError(diag);
@@ -738,7 +729,9 @@ bool QSocAgent::processIteration()
 void QSocAgent::handleToolCalls(const json &toolCalls)
 {
     /* Tool calls count as progress */
-    lastProgressTime = QDateTime::currentMSecsSinceEpoch();
+    if (streamMonitor != nullptr) {
+        streamMonitor->notifyProgress();
+    }
 
     for (const auto &toolCall : toolCalls) {
         QString toolCallId   = QString::fromStdString(toolCall["id"].get<std::string>());
@@ -1537,6 +1530,12 @@ void QSocAgent::abort()
 {
     abortRequested = true;
 
+    /* Latch the watchdog first so its tick handler sees the cancel
+     * before the network reply tears down. */
+    if (streamMonitor != nullptr) {
+        streamMonitor->cancel(QStringLiteral("user abort"));
+    }
+
     /* Cascade to LLM stream */
     if (llmService) {
         llmService->abortStream();
@@ -1546,6 +1545,44 @@ void QSocAgent::abort()
     if (toolRegistry) {
         toolRegistry->abortAll();
     }
+}
+
+void QSocAgent::armStreamMonitor()
+{
+    const QLongTaskMonitor::Config cfg{
+        1000 /*tickIntervalMs*/,
+        agentConfig.stuckThresholdSeconds > 0 ? agentConfig.stuckThresholdSeconds * 1000 : 30000,
+        300000 /*wallClockMs (5 min)*/,
+        3 /*consecutiveIdleTicks*/,
+    };
+    streamMonitor = new QLongTaskMonitor(this, cfg);
+    connect(streamMonitor, &QLongTaskMonitor::stalled, this, [this](int silentMs, int /*streak*/) {
+        const int silentSec = silentMs / 1000;
+        emit      stuckDetected(streamIteration, silentSec);
+        if (agentConfig.autoStatusCheck) {
+            queueRequest(
+                "[System: No progress detected. Please briefly report: "
+                "1) What are you doing? 2) Any issues? 3) Estimated time remaining?]");
+        }
+    });
+    connect(streamMonitor, &QLongTaskMonitor::wallClockExceeded, this, [this](int elapsedMs) {
+        emit stuckDetected(streamIteration, elapsedMs / 1000);
+    });
+    streamMonitor->start();
+}
+
+void QSocAgent::teardownStreamMonitor(const QString &cancelReason)
+{
+    if (streamMonitor == nullptr) {
+        return;
+    }
+    if (cancelReason.isEmpty()) {
+        streamMonitor->finish();
+    } else {
+        streamMonitor->cancel(cancelReason);
+    }
+    streamMonitor->deleteLater();
+    streamMonitor = nullptr;
 }
 
 bool QSocAgent::isRunning() const
