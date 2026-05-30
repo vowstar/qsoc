@@ -3,6 +3,7 @@
 
 #include "agent/tool/qsoctoolweb.h"
 
+#include "common/qlongtaskmonitor.h"
 #include "common/qsocimageattach.h"
 #include "common/qsocproxy.h"
 
@@ -125,9 +126,24 @@ QString QSocToolWebSearch::execute(const json &arguments)
         loop.quit();
     });
 
-    QTimer::singleShot(kSearchTimeout, &loop, [&loop]() { loop.quit(); });
+    /* Wall-clock cap via QLongTaskMonitor: stall is meaningless for a
+     * search response (no per-byte progress events to feed), so only
+     * the hard timeout fires. */
+    QLongTaskMonitor monitor(
+        reply,
+        QLongTaskMonitor::Config{
+            .tickIntervalMs       = 1000,
+            .stallThresholdMs     = 0, /* no per-byte progress to track */
+            .wallClockMs          = kSearchTimeout,
+            .consecutiveIdleTicks = 2,
+        });
+    QObject::connect(&monitor, &QLongTaskMonitor::wallClockExceeded, &loop, [&loop](int) {
+        loop.quit();
+    });
+    monitor.start();
 
     loop.exec();
+    monitor.finish();
     currentReply = nullptr;
     currentLoop  = nullptr;
 
@@ -825,18 +841,39 @@ QString QSocToolWebFetch::execute(const json &arguments)
     QNetworkReply *reply = networkManager->get(request);
     currentReply         = reply;
 
-    /* Track download size */
+    QEventLoop       loop;
+    QLongTaskMonitor monitor(
+        reply,
+        QLongTaskMonitor::Config{
+            .tickIntervalMs       = 1000,
+            .stallThresholdMs     = 30000, /* abort if no bytes for 30 s */
+            .wallClockMs          = timeout,
+            .consecutiveIdleTicks = 2,
+        });
+
+    /* Track download size and feed progress into the watchdog. */
     qint64 downloadedBytes = 0;
-    bool   aborted         = false;
+    bool   tooLarge        = false;
     QObject::connect(reply, &QNetworkReply::downloadProgress, reply, [&](qint64 received, qint64) {
         downloadedBytes = received;
-        if (received > kMaxBytes && !aborted) {
-            aborted = true;
+        monitor.notifyProgress();
+        if (received > kMaxBytes && !tooLarge) {
+            tooLarge = true;
             reply->abort();
         }
     });
 
-    QEventLoop loop;
+    bool stalled = false;
+    QObject::connect(&monitor, &QLongTaskMonitor::stalled, &loop, [&](int, int) {
+        stalled = true;
+        reply->abort();
+        loop.quit();
+    });
+    QObject::connect(&monitor, &QLongTaskMonitor::wallClockExceeded, &loop, [&loop](int) {
+        loop.quit();
+    });
+    monitor.start();
+
     currentLoop = &loop;
 
     bool finished = false;
@@ -845,11 +882,15 @@ QString QSocToolWebFetch::execute(const json &arguments)
         loop.quit();
     });
 
-    QTimer::singleShot(timeout, &loop, [&loop]() { loop.quit(); });
-
     loop.exec();
+    monitor.finish();
     currentReply = nullptr;
     currentLoop  = nullptr;
+
+    if (stalled) {
+        reply->deleteLater();
+        return QString("Error: no download progress for 30s after %1 bytes").arg(downloadedBytes);
+    }
 
     if (!finished) {
         reply->abort();
@@ -857,7 +898,7 @@ QString QSocToolWebFetch::execute(const json &arguments)
         return QString("Error: request timed out after %1ms").arg(timeout);
     }
 
-    if (aborted) {
+    if (tooLarge) {
         reply->deleteLater();
         return QString("Error: response too large (>%1 bytes)").arg(kMaxBytes);
     }
