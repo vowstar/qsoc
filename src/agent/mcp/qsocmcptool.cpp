@@ -4,6 +4,7 @@
 #include "agent/mcp/qsocmcptool.h"
 
 #include "agent/mcp/qsocmcpclient.h"
+#include "common/qlongtaskmonitor.h"
 
 #include <QEventLoop>
 #include <QObject>
@@ -94,6 +95,24 @@ QString QSocMcpTool::execute(const json &arguments)
     currentLoop_ = &loop;
     QString result;
     bool    completed = false;
+    bool    timedOut  = false;
+
+    /* Watchdog: cap the round trip and surface a timeout instead of
+     * hanging forever on a server that never answers. Stall detection
+     * is disabled since JSON-RPC has no per-byte progress to feed. */
+    QLongTaskMonitor monitor(
+        this,
+        QLongTaskMonitor::Config{
+            .tickIntervalMs       = 1000,
+            .stallThresholdMs     = 0,
+            .wallClockMs          = 60000,
+            .consecutiveIdleTicks = 2,
+        });
+    QObject::connect(&monitor, &QLongTaskMonitor::wallClockExceeded, &loop, [&](int) {
+        timedOut = true;
+        loop.quit();
+    });
+    monitor.start();
 
     const auto responseConn = QObject::connect(
         client_.data(), &QSocMcpClient::responseReceived, this, [&](int id, const json &resultJson) {
@@ -128,12 +147,26 @@ QString QSocMcpTool::execute(const json &arguments)
     });
 
     loop.exec();
+    monitor.finish();
 
     QObject::disconnect(responseConn);
     QObject::disconnect(failureConn);
     QObject::disconnect(closedConn);
     currentLoop_ = nullptr;
 
+    /* Tell the server to drop the in-flight request when we walked
+     * away. Without this the server keeps working on output we will
+     * never consume. */
+    if ((aborted_ || timedOut) && !completed && !client_.isNull()) {
+        json cancelParams;
+        cancelParams["requestId"] = requestId;
+        cancelParams["reason"]    = aborted_ ? "user abort" : "wall-clock timeout";
+        client_->notify(QStringLiteral("notifications/cancelled"), cancelParams);
+    }
+
+    if (timedOut) {
+        return QStringLiteral("[mcp timeout] no response after 60s; sent cancel notification");
+    }
     if (aborted_) {
         return QStringLiteral("[mcp aborted]");
     }
