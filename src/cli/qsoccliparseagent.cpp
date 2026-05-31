@@ -4949,6 +4949,7 @@ bool QSocCliWorker::runAgentLoop(
                 QSocSftpClient *sftp = newState.sftp;
                 picker.setTitle(QStringLiteral("Remote workspace"));
                 picker.setStartPath(homeHint);
+                picker.setHomePath(homeHint);
                 picker.setListDirs([sftp](const QString &path) -> QStringList {
                     QString     ignored;
                     const auto  entries = sftp->listDir(path, 500, &ignored);
@@ -5261,6 +5262,14 @@ bool QSocCliWorker::runAgentLoop(
                 QTuiPathPicker picker;
                 picker.setTitle(QStringLiteral("Remote cwd"));
                 picker.setStartPath(remotePath.cwd());
+                {
+                    QSocSshExec   homeExec(*remoteSession);
+                    const auto    homeResult = homeExec.run(QStringLiteral("echo $HOME"), 5000);
+                    const QString raw        = QString::fromUtf8(homeResult.stdoutBytes).trimmed();
+                    if (!raw.isEmpty() && raw.startsWith(QLatin1Char('/'))) {
+                        picker.setHomePath(raw);
+                    }
+                }
                 QSocSftpClient *sftp = remoteSftp;
                 picker.setListDirs([sftp](const QString &path) -> QStringList {
                     QString     ignored;
@@ -5301,6 +5310,7 @@ bool QSocCliWorker::runAgentLoop(
                 const QString base = pathContext ? pathContext->getWorkingDir()
                                                  : QDir::currentPath();
                 picker.setStartPath(base);
+                picker.setHomePath(QDir::homePath());
                 picker.setListDirs([](const QString &path) -> QStringList {
                     QStringList names = QDir(path).entryList(
                         QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks, QDir::Name);
