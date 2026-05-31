@@ -77,6 +77,58 @@ void QTuiPathPicker::setListDirs(ListDirsFn listDirs)
     m_listDirs = std::move(listDirs);
 }
 
+void QTuiPathPicker::setHomePath(const QString &path)
+{
+    m_homePath = path;
+}
+
+QString QTuiPathPicker::resolveJumpTarget(
+    const QString &cur, const QString &input, const ListDirsFn &listDirs, const QString &homePath)
+{
+    if (!listDirs) {
+        return cur;
+    }
+    QString text = input.trimmed();
+    if (text.isEmpty()) {
+        return cur;
+    }
+
+    /* Leading "~" expands to the configured home directory. */
+    if (!homePath.isEmpty()
+        && (text == QStringLiteral("~") || text.startsWith(QStringLiteral("~/")))) {
+        text = homePath + text.mid(1);
+    }
+
+    /* Absolute input anchors at root, relative input at the current dir. */
+    QString base = QStringLiteral("/");
+    if (!text.startsWith(QLatin1Char('/')) && !cur.isEmpty()) {
+        base = cur;
+    }
+
+    /* Walk segment by segment, descending only into dirs that exist.
+     * candidate is the path under test, resolved the deepest valid one. */
+    QString           candidate = base;
+    QString           resolved  = base;
+    const QStringList segs      = text.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &seg : segs) {
+        if (seg == QStringLiteral(".")) {
+            continue;
+        }
+        if (seg == QStringLiteral("..")) {
+            candidate = parentOf(candidate);
+            resolved  = candidate;
+            continue;
+        }
+        if (listDirs(candidate).contains(seg)) {
+            candidate = joinPath(candidate, seg);
+            resolved  = candidate;
+        } else {
+            break;
+        }
+    }
+    return resolved;
+}
+
 QString QTuiPathPicker::exec()
 {
     if (!m_listDirs) {
@@ -120,6 +172,12 @@ QString QTuiPathPicker::exec()
     QList<Entry> leftEntries;
     int          leftHighlight = 0;
     QStringList  rightPreview;
+
+    /* Locate prompt: when active, typed bytes accumulate in jumpBuf and
+     * the title row turns into an editable input line. jumpBuf holds raw
+     * UTF-8 so multibyte path components survive intact. */
+    bool       jumpMode = false;
+    QByteArray jumpBuf;
 
     auto rebuildLeft = [&]() {
         leftEntries.clear();
@@ -231,11 +289,20 @@ QString QTuiPathPicker::exec()
         const int rightMargin = qMax(0, termW - leftMargin - pickerW);
 
         /* Title row shows the current absolute path so the user always
-         * knows where the view is anchored. */
+         * knows where the view is anchored. In locate mode it becomes an
+         * editable input line with a cursor block at the end. */
         fprintf(stdout, "\033[%d;1H", startY + 1);
         writeMargin(leftMargin);
-        QString titleLine = QStringLiteral("  ") + m_title + QStringLiteral("  ") + currentPath;
-        fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_TITLE, BG_NORMAL);
+        QString titleLine;
+        int     titleFg = FG_TITLE;
+        if (jumpMode) {
+            titleLine = QStringLiteral("  Go to: ") + QString::fromUtf8(jumpBuf)
+                        + QStringLiteral("▏");
+            titleFg   = FG_HIGHLIGHT;
+        } else {
+            titleLine = QStringLiteral("  ") + m_title + QStringLiteral("  ") + currentPath;
+        }
+        fprintf(stdout, "\033[38;5;%d;48;5;%dm", titleFg, BG_NORMAL);
         fputs(padTo(titleLine, pickerW).toUtf8().constData(), stdout);
         fputs("\033[0m", stdout);
         writeMargin(rightMargin);
@@ -298,7 +365,9 @@ QString QTuiPathPicker::exec()
         /* Footer row documents the navigation keys. */
         fprintf(stdout, "\033[%d;1H", startY + menuH);
         writeMargin(leftMargin);
-        QString footer = QStringLiteral("  Enter/Right: open   Left: up   ESC: cancel");
+        QString footer = jumpMode ? QStringLiteral("  Enter: jump   ESC: cancel input")
+                                  : QStringLiteral(
+                                        "  Enter/Right: open   Left: up   /: locate   ESC: cancel");
         fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_DIM, BG_NORMAL);
         fputs(padTo(footer, pickerW).toUtf8().constData(), stdout);
         fputs("\033[0m", stdout);
@@ -451,10 +520,61 @@ QString QTuiPathPicker::exec()
         }
     };
 
+    auto chopUtf8 = [&]() {
+        if (jumpBuf.isEmpty()) {
+            return;
+        }
+        int i = jumpBuf.size() - 1;
+        while (i > 0 && (static_cast<unsigned char>(jumpBuf.at(i)) & 0xC0) == 0x80) {
+            i--;
+        }
+        jumpBuf.truncate(i);
+    };
+
+    auto commitJump = [&]() {
+        descendTo(
+            QTuiPathPicker::resolveJumpTarget(
+                currentPath, QString::fromUtf8(jumpBuf), m_listDirs, m_homePath));
+        jumpMode = false;
+        jumpBuf.clear();
+    };
+
     while (!done) {
         char byte = 0;
         if (!readByte(&byte, -1)) {
             break;
+        }
+
+        /* Locate mode owns the keyboard until Enter commits or ESC aborts. */
+        if (jumpMode) {
+#ifdef Q_OS_WIN
+            /* Arrow virtual keys surface as bytes 0..3; ignore while typing. */
+            if (byte >= 0 && byte <= 3) {
+                continue;
+            }
+#endif
+            if (byte == 0x1B) {
+                char seq[2] = {};
+                if (readByte(&seq[0], 500) && seq[0] == '[') {
+                    readByte(&seq[1], 500); /* swallow the arrow sequence */
+                } else {
+                    jumpMode = false;
+                    jumpBuf.clear();
+                    renderOverlay();
+                }
+            } else if (byte == 0x0D || byte == 0x0A) {
+                commitJump();
+                renderOverlay();
+            } else if (byte == 0x7F || byte == 0x08) {
+                chopUtf8();
+                renderOverlay();
+            } else if (byte == 0x03) {
+                done = true;
+            } else if (static_cast<unsigned char>(byte) >= 0x20) {
+                jumpBuf.append(byte);
+                renderOverlay();
+            }
+            continue;
         }
 
 #ifdef Q_OS_WIN
@@ -508,6 +628,11 @@ QString QTuiPathPicker::exec()
             if (!done) {
                 renderOverlay();
             }
+        } else if (byte == 0x2F) {
+            /* "/" opens the locate prompt, seeded as an absolute path. */
+            jumpMode = true;
+            jumpBuf  = QByteArrayLiteral("/");
+            renderOverlay();
         } else if (byte == 0x03) {
             done = true;
         }

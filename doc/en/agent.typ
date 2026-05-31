@@ -309,6 +309,12 @@ The following commands are available during an interactive session:
   kind: table,
 )
 
+The directory picker shared by `/cwd`, `/ssh`, and workspace selection
+navigates with Up/Down plus Enter/Right to descend and Left to go up.
+Press `/` to open a locate prompt: type a path and Enter jumps to the
+deepest existing directory along it, so deep targets need no click-by-
+click descent. A leading `~` expands to the home directory.
+
 == KEYBOARD AND INPUT
 <agent-keyboard>
 Editing and navigation in the prompt:
