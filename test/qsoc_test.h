@@ -11,7 +11,16 @@
 #include <QCoreApplication>
 #include <QString>
 #include <QStringList>
+#include <QtGlobal>
 #include <QtTest>
+
+/* QSOC_TEST_MAIN calls _exit(); pull its declaration in directly rather
+ * than relying on a transitive include. */
+#ifdef Q_OS_WIN
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 /**
  * @brief Captures CLI output for tests.
