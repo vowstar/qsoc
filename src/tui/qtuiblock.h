@@ -15,7 +15,7 @@
  *          treats them as opaque rendering primitives so different
  *          content kinds (assistant prose, tool calls, diffs,
  *          tables, code, images, ...) can pick the right strategy
- *          for wrapping, horizontal scroll, and clipboard output.
+ *          for wrapping and clipboard output.
  *
  *          Lifecycle:
  *          1. The owner mutates the block via its kind-specific
