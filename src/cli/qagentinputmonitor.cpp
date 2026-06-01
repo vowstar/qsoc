@@ -354,6 +354,14 @@ void QAgentInputMonitor::processEscSequence()
                 resetEscBuffer();
                 return;
             }
+            /* Shift+Tab (ESC [ Z): toggle plan mode, like a permission-mode
+             * cycle. Independent of Tab, which only confirms popups. */
+            if (last == 'Z') {
+                emit planModeToggleRequested();
+                cancelDoubleEscArming();
+                resetEscBuffer();
+                return;
+            }
         }
 
         /* Other CSI: check if final byte received (0x40-0x7E) */

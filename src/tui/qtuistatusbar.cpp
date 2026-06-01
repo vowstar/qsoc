@@ -38,6 +38,9 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     if (!running) {
         /* Idle state: static, no spinner/timer */
         line = currentStatus;
+        if (planMode_) {
+            line += QStringLiteral(" [⏸ PLAN]");
+        }
         if (!effortLevel.isEmpty()) {
             line += " [E:" + effortLevel + "]";
         }
@@ -114,6 +117,9 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     if (!toolInfo.isEmpty()) {
         line += " " + toolInfo;
     }
+    if (planMode_) {
+        line += QStringLiteral(" [⏸ PLAN]");
+    }
     if (!effortLevel.isEmpty()) {
         line += QString(" [E:%1]").arg(effortLevel);
     }
@@ -188,6 +194,11 @@ void QTuiStatusBar::updateTokens(qint64 input, qint64 output)
 void QTuiStatusBar::setEffortLevel(const QString &level)
 {
     effortLevel = level;
+}
+
+void QTuiStatusBar::setPlanMode(bool active)
+{
+    planMode_ = active;
 }
 
 void QTuiStatusBar::setModel(const QString &model)

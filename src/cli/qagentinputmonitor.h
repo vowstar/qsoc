@@ -175,6 +175,13 @@ signals:
      */
     void taskOverlayRequested();
 
+    /**
+     * @brief Emitted on Shift+Tab (ESC [ Z) — toggle read-only plan mode,
+     *        mirroring a permission-mode cycle hotkey. The REPL flips the
+     *        agent's planMode and updates the status chip.
+     */
+    void planModeToggleRequested();
+
 private:
     ExternalKeyConsumer externalKeyConsumer_;
 
