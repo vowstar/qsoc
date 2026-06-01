@@ -1782,6 +1782,19 @@ bool QSocCliWorker::runAgentLoop(
             compositor.render();
         });
 
+    /* Terminal focus (DECSET 1004): track whether the user is watching so
+     * the agent can steer away from blocking ask_user when they're away.
+     * Default true; unknown / unsupported terminals stay "watching". */
+    bool userWatching = true;
+    connect(
+        &inputMonitor,
+        &QAgentInputMonitor::terminalFocusChanged,
+        [&userWatching, &statusBarWidget, &compositor](bool focused) {
+            userWatching = focused;
+            statusBarWidget.setUserWatching(focused);
+            compositor.render();
+        });
+
     /* Mouse click-drag text selection: press starts, drag updates, release
      * copies to clipboard via OSC 52 and clears the highlight. SGR coords
      * are 1-based; screen buffer is 0-based. */
@@ -2594,6 +2607,10 @@ bool QSocCliWorker::runAgentLoop(
                 return approval;
             });
     }
+    /* Focus probe: the agent reads this each turn to decide whether to
+     * steer away from blocking ask_user (user not watching). */
+    agent->setUserWatchingProbe([&userWatching]() { return userWatching; });
+
     /* Plan-mode shell safety judge: an isolated, fail-closed LLM
      * classifier (no hardcoded allowlist). */
     agent->setBashSafetyJudge([this](const QString &command) -> QSocBashSafety {

@@ -44,6 +44,12 @@ struct QSocBashSafety
  * mutating). */
 using QSocBashSafetyJudge = std::function<QSocBashSafety(const QString &command)>;
 
+/* Reports whether the user is actively watching the terminal (terminal
+ * focus, DECSET 1004). Injected so the agent can steer away from
+ * blocking ask_user prompts when nobody is looking. Empty / returns true
+ * = assume watching (no steering). */
+using QSocUserWatchingProbe = std::function<bool()>;
+
 /**
  * @brief The QSocAgent class provides an AI agent for SoC design automation
  * @details Implements an agent loop that interacts with an LLM using tool calling
@@ -213,6 +219,17 @@ public:
      * @brief Read the installed shell safety judge (may be empty).
      */
     const QSocBashSafetyJudge &bashSafetyJudge() const { return bashSafetyJudge_; }
+
+    /**
+     * @brief Install the terminal-focus probe (user-watching signal).
+     * @details Consulted each turn; when it returns false the agent is
+     *          steered away from non-critical ask_user prompts. Unset =
+     *          assume the user is watching.
+     */
+    void setUserWatchingProbe(QSocUserWatchingProbe probe)
+    {
+        userWatchingProbe_ = std::move(probe);
+    }
 
     /**
      * @brief Set the reasoning effort level
@@ -455,6 +472,8 @@ private:
     QString approvedPlan_;
     /* Plan-mode shell safety judge (empty = fail-closed). */
     QSocBashSafetyJudge bashSafetyJudge_;
+    /* Terminal-focus probe (empty = assume the user is watching). */
+    QSocUserWatchingProbe userWatchingProbe_;
 
     QLLMService           *llmService    = nullptr;
     QSocToolRegistry      *toolRegistry  = nullptr;
