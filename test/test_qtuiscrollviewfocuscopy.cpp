@@ -3,6 +3,7 @@
 
 #include "qsoc_test.h"
 #include "tui/qtuiassistanttextblock.h"
+#include "tui/qtuicodeblock.h"
 #include "tui/qtuiscrollview.h"
 
 #include <QtTest>
@@ -16,6 +17,7 @@ class Test : public QObject
 private slots:
     void blockAtScreenRowResolvesFocus();
     void mapScreenToBlockResolvesBlockAndRow();
+    void blockSelectedLogicalTextRoutesPerBlock();
     void renderTintsFocusedBlockBackground();
     void copyFocusedReturnsBlockMarkdown();
     void copyFocusedReturnsEmptyWhenNoFocus();
@@ -74,6 +76,26 @@ void Test::mapScreenToBlockResolvesBlockAndRow()
     QCOMPARE(view.mapScreenToBlock(0).rowInBlock, -1);
     /* Out-of-range rows map to nothing. */
     QCOMPARE(view.mapScreenToBlock(999).blockIdx, -1);
+}
+
+void Test::blockSelectedLogicalTextRoutesPerBlock()
+{
+    /* A selection rectangle resolves to each touched block's logical
+     * extractor: assistant prose returns its text, a code block returns
+     * raw code without the banner/gutter. */
+    QTuiScrollView view;
+    view.appendBlock(std::make_unique<QTuiAssistantTextBlock>(QStringLiteral("hello world")));
+    view.appendBlock(
+        std::make_unique<QTuiCodeBlock>(QStringLiteral("py"), QStringLiteral("x = 1\n"), false, 1));
+
+    QTuiScreen screen(40, 12);
+    view.render(screen, 0, 12, 40);
+
+    /* Generous row bounds; each block clamps to its own row count. */
+    QCOMPARE(view.blockSelectedLogicalText(0, 0, 0, 100, 1000), QStringLiteral("hello world"));
+    QCOMPARE(view.blockSelectedLogicalText(1, 0, 0, 100, 1000), QStringLiteral("x = 1"));
+    /* Out-of-range block index yields a null QString (caller falls back). */
+    QVERIFY(view.blockSelectedLogicalText(9, 0, 0, 0, 0).isNull());
 }
 
 void Test::renderTintsFocusedBlockBackground()
