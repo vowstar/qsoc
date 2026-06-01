@@ -11,25 +11,24 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
-    void narrowTableExposesHorizontalScroll();
+    void narrowTableDegradesToRecords();
     void plainProseHasNoHorizontalScroll();
-    void scrollOffsetClipsLeftSide();
+    void longCodeLineClipsOnHorizontalScroll();
 };
 
-void Test::narrowTableExposesHorizontalScroll()
+void Test::narrowTableDegradesToRecords()
 {
-    /* A 5-column table whose minimum row width inevitably exceeds 20
-     * cells. With layoutWidth=20 the renderer cannot fit it; the
-     * block must report a non-zero maxXOffset so the user can pan
-     * across with Shift+Right. */
+    /* A 5-column table whose minimum row width cannot fit 20 cells must
+     * degrade to vertical key/value records (one wrapped line per cell),
+     * not horizontal scroll. So rowCount grows and maxXOffset stays 0. */
     const QString markdown = QStringLiteral(
         "| Column One | Column Two | Column Three | Column Four | Column Five |\n"
         "|---|---|---|---|---|\n"
         "| value-aaaa | value-bbbb | value-cccc | value-dddd | value-eeee |\n");
     QTuiAssistantTextBlock block(markdown);
     block.layout(20);
-    QVERIFY(block.rowCount() >= 3);
-    QVERIFY(block.maxXOffset(20) > 0);
+    QVERIFY(block.rowCount() >= 5);
+    QCOMPARE(block.maxXOffset(20), 0);
 }
 
 void Test::plainProseHasNoHorizontalScroll()
@@ -40,16 +39,15 @@ void Test::plainProseHasNoHorizontalScroll()
     QCOMPARE(block.maxXOffset(15), 0);
 }
 
-void Test::scrollOffsetClipsLeftSide()
+void Test::longCodeLineClipsOnHorizontalScroll()
 {
-    /* Same wide-table; with xOffset > 0 the leftmost cells should be
-     * clipped from paintRow output. We verify by checking that the
-     * first painted character at xOffset=4 is not the same as at
-     * xOffset=0. */
+    /* Code blocks stay noWrap and keep horizontal scroll. A long code
+     * line wider than the pane reports maxXOffset > 0, and painting with
+     * xOffset > 0 clips the leftmost cells. */
     const QString markdown = QStringLiteral(
-        "| AAAAAAA | BBBBBBB | CCCCCCC | DDDDDDD |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 2 | 3 | 4 |\n");
+        "```\n"
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n"
+        "```\n");
     QTuiAssistantTextBlock block(markdown);
     block.layout(20);
     QVERIFY(block.maxXOffset(20) > 0);
