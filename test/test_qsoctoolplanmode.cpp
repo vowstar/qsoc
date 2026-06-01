@@ -37,6 +37,7 @@ private slots:
     void exitToolRequiresPlanText();
     void exitToolApproveAndReject();
     void enterToolFiresCallback();
+    void subAgentInheritsPlanModeGate();
 };
 
 void Test::isReadOnlyClassification()
@@ -186,6 +187,37 @@ void Test::enterToolFiresCallback()
     const QString out = enter.execute(json::object());
     QVERIFY(fired);
     QVERIFY(!out.isEmpty());
+}
+
+void Test::subAgentInheritsPlanModeGate()
+{
+    /* A spawned child carries planMode (copied from the parent config) and
+     * isSubAgent=true. No model needed: this is pure gate logic with a
+     * null LLM service, the same pattern the sub-agent-guard tests use. */
+    QObject           owner;
+    QSocToolRegistry *reg = makeRegistry(&owner);
+    QString           rd;
+    QString           wr;
+    for (const QString &n : reg->toolNames()) {
+        QSocTool *t = reg->getTool(n);
+        if (t->isReadOnly() && n != QStringLiteral("enter_plan_mode")
+            && n != QStringLiteral("exit_plan_mode")) {
+            rd = n;
+        } else if (!t->isReadOnly()) {
+            wr = n;
+        }
+    }
+    QSocAgentConfig childCfg;
+    childCfg.planMode   = true;
+    childCfg.isSubAgent = true;
+    QSocAgent child(&owner, nullptr, reg, childCfg);
+
+    QVERIFY(child.isToolAllowed(rd));                                 /* read OK */
+    QVERIFY(!child.isToolAllowed(wr));                                /* write blocked */
+    QVERIFY(child.isToolAllowed(QStringLiteral("bash")));             /* shell judged */
+    QVERIFY(!child.isToolAllowed(QStringLiteral("agent")));           /* no recursion */
+    QVERIFY(!child.isToolAllowed(QStringLiteral("exit_plan_mode")));  /* child can't exit */
+    QVERIFY(!child.isToolAllowed(QStringLiteral("enter_plan_mode"))); /* child can't enter */
 }
 
 QSOC_TEST_MAIN(Test)
