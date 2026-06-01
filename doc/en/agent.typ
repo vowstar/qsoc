@@ -283,6 +283,11 @@ The following commands are available during an interactive session:
      stays on disk so the next `/ssh <same target>` or next startup can
      auto-reuse it.],
     [`/model [id]`], [Show or switch the active model],
+    [`/plan [on|off]`],
+    [Toggle read-only plan mode (or press *Shift+Tab*). While on, the agent
+     may only explore and ask questions until it calls `exit_plan_mode` and
+     you approve a plan. Bare `/plan` toggles. The model can also enter plan
+     mode itself.],
     [`/project <path>`],
     [Switch project root (reloads config, starts a new session)],
     [`/rename <title>`], [Set session title for the resume picker],
@@ -314,6 +319,27 @@ navigates with Up/Down plus Enter/Right to descend and Left to go up.
 Press `/` to open a locate prompt: type a path and Enter jumps to the
 deepest existing directory along it, so deep targets need no click-by-
 click descent. A leading `~` expands to the home directory.
+
+=== Plan Mode
+<agent-plan-mode>
+
+Plan mode is a read-only brake for non-trivial or hard-to-undo work
+(RTL edits, remote synthesis runs). Toggle it with *Shift+Tab* or
+`/plan on|off`, or let the model enter it itself with the
+`enter_plan_mode` tool. While active
+the agent may only take read-only actions: read files, search, query
+LSP, run read-only shell, and spawn read-only sub-agents. File writes,
+mutating shell, commits, and config changes are rejected, and the status
+line shows a `⏸ PLAN` chip.
+
+Shell commands are not gated by a fixed allowlist; each one is judged by
+a separate LLM safety classifier and blocked (with a reason) if it could
+change state. The agent explores, clarifies with `ask_user` across as
+many rounds as needed, then calls `exit_plan_mode` to present a plan. You
+approve it or keep planning. On approval the agent leaves plan mode, the
+plan is saved to `<project>/.qsoc/plans/<session>.md`, and a budget-capped
+copy rides every subsequent turn so the executing agent keeps following
+it across context compaction. A newer approved plan replaces the old one.
 
 == KEYBOARD AND INPUT
 <agent-keyboard>
