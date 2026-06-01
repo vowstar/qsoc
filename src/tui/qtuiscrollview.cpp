@@ -433,6 +433,7 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
     lastRenderHeight_   = height;
     lastRenderWidth_    = contentWidth;
     rowToBlock_.assign(static_cast<std::size_t>(qMax(0, height)), -1);
+    rowToRowInBlock_.assign(static_cast<std::size_t>(qMax(0, height)), -1);
     visibleGraphicsEntries_.clear();
 
     /* Walk blocks once, mapping viewport rows to (block, rowInBlock).
@@ -473,7 +474,8 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
             const int screenY  = startRow + (gRow - viewTop);
             const int rowLocal = screenY - lastRenderStartRow_;
             if (rowLocal >= 0 && rowLocal < static_cast<int>(rowToBlock_.size())) {
-                rowToBlock_[rowLocal] = blockIdx;
+                rowToBlock_[rowLocal]      = blockIdx;
+                rowToRowInBlock_[rowLocal] = rowInBlock;
             }
             block->paintRow(
                 screen, screenY, rowInBlock, block->xOffset(), contentWidth, focused, false);
@@ -577,6 +579,24 @@ int QTuiScrollView::blockAtScreenRow(int screenRow) const
         return -1;
     }
     return rowToBlock_[local];
+}
+
+QTuiScrollView::ScreenRowMap QTuiScrollView::mapScreenToBlock(int screenRow) const
+{
+    const int local = screenRow - lastRenderStartRow_;
+    if (local < 0 || local >= static_cast<int>(rowToBlock_.size())) {
+        return {};
+    }
+    return {.blockIdx = rowToBlock_[local], .rowInBlock = rowToRowInBlock_[local]};
+}
+
+QString QTuiScrollView::blockSelectedLogicalText(
+    int blockIdx, int rowStartInBlock, int colStart, int rowEndInBlock, int colEnd) const
+{
+    if (blockIdx < 0 || blockIdx >= static_cast<int>(blocks.size())) {
+        return {};
+    }
+    return blocks[blockIdx]->selectedLogicalText(rowStartInBlock, colStart, rowEndInBlock, colEnd);
 }
 
 QString QTuiScrollView::copyFocusedAsMarkdown() const

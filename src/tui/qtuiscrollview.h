@@ -93,6 +93,24 @@ public:
     void setFocusedBlockIdx(int idx);
     int  blockAtScreenRow(int screenRow) const;
 
+    /* Resolve a screen row to its owning block and the row's index
+     * within that block, using the table cached on the last render().
+     * blockIdx == -1 when the row mapped to no block (blank area). */
+    struct ScreenRowMap
+    {
+        int blockIdx   = -1;
+        int rowInBlock = -1;
+    };
+    ScreenRowMap mapScreenToBlock(int screenRow) const;
+
+    /* Route a block-local visual sub-rectangle to its block's logical
+     * text extractor. Returns null QString when the block is out of
+     * range or cannot map (caller falls back to a screen-cell scrape).
+     * Content column origin is 0; the scrollbar occupies the rightmost
+     * column, so screen columns pass through unchanged. */
+    QString blockSelectedLogicalText(
+        int blockIdx, int rowStartInBlock, int colStart, int rowEndInBlock, int colEnd) const;
+
     /* Copy: returns toMarkdown() of the focused block, or empty if no
      * block is focused. The caller is responsible for delivering the
      * result to the system clipboard (OSC 52, xclip, etc.). */
@@ -155,6 +173,9 @@ private:
      * test convert a mouse click back to a block without re-doing the
      * scroll math. */
     std::vector<int> rowToBlock_;
+    /* Parallel to rowToBlock_: the row's index within its owning block,
+     * so a selection can address block-local visual rows. */
+    std::vector<int> rowToRowInBlock_;
     int              lastRenderStartRow_ = 0;
     int              lastRenderHeight_   = 0;
     int              lastRenderWidth_    = 0; /* contentWidth of last paint */

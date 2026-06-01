@@ -815,9 +815,9 @@ void QTuiCompositor::applySelectionHighlight()
     }
 }
 
-void QTuiCompositor::copySelectionToClipboard()
+QString QTuiCompositor::buildSelectionPayload() const
 {
-    /* Normalise. */
+    /* Normalise so start <= end in reading order. */
     int startRow = selection.anchorRow;
     int startCol = selection.anchorCol;
     int endRow   = selection.focusRow;
@@ -827,14 +827,70 @@ void QTuiCompositor::copySelectionToClipboard()
         std::swap(startCol, endCol);
     }
 
-    /* Extract text from screen buffer, skipping decorative cells (so
-     * the clipboard never receives gutter / banner / frame chars or
-     * the scrollbar track) and trimming trailing spaces per row. */
+    const int lastCol = screen.width() - 1; /* scrollbar occupies width-1 */
+
+    /* Preferred path: route each touched block's visual sub-rectangle to
+     * its logical-text extractor so wrapped lines copy as one line and
+     * gutters / line numbers / signs stay out of the clipboard. Bail to
+     * the cell scrape below if any row maps to no block or any block
+     * declines to map (null result). */
+    bool    routed = true;
+    QString routedText;
+    int     curBlk     = -2;
+    int     spanFirst  = 0;
+    int     spanLast   = 0;
+    int     spanCol0   = 0;
+    int     spanColEnd = 0;
+    auto    flushSpan  = [&]() -> bool {
+        if (curBlk < 0) {
+            return false;
+        }
+        const QString piece
+            = scrollView.blockSelectedLogicalText(curBlk, spanFirst, spanCol0, spanLast, spanColEnd);
+        if (piece.isNull()) {
+            return false;
+        }
+        if (!routedText.isEmpty()) {
+            routedText += QLatin1Char('\n');
+        }
+        routedText += piece;
+        return true;
+    };
+    for (int row = startRow; row <= endRow && row < screen.height() && routed; row++) {
+        const QTuiScrollView::ScreenRowMap map = scrollView.mapScreenToBlock(row);
+        if (map.blockIdx < 0) {
+            routed = false;
+            break;
+        }
+        const int colBegin = (row == startRow) ? startCol : 0;
+        const int colEnd   = (row == endRow) ? endCol : lastCol;
+        if (map.blockIdx != curBlk) {
+            if (curBlk != -2 && !flushSpan()) {
+                routed = false;
+                break;
+            }
+            curBlk    = map.blockIdx;
+            spanFirst = map.rowInBlock;
+            spanCol0  = colBegin;
+        }
+        spanLast   = map.rowInBlock;
+        spanColEnd = colEnd;
+    }
+    if (routed && curBlk != -2 && !flushSpan()) {
+        routed = false;
+    }
+    if (routed) {
+        return routedText;
+    }
+
+    /* Fallback: scrape the screen cell buffer, skipping decorative cells
+     * (gutter / banner / frame / scrollbar track) and trimming trailing
+     * spaces per row. */
     QString text;
     for (int row = startRow; row <= endRow && row < screen.height(); row++) {
-        int     colBegin = (row == startRow) ? startCol : 0;
-        int     colEnd   = (row == endRow) ? endCol : screen.width() - 1;
-        QString line;
+        const int colBegin = (row == startRow) ? startCol : 0;
+        const int colEnd   = (row == endRow) ? endCol : lastCol;
+        QString   line;
         for (int col = colBegin; col <= colEnd && col < screen.width(); col++) {
             const QTuiCell &cell = screen.at(col, row);
             if (cell.decorative) {
@@ -842,7 +898,6 @@ void QTuiCompositor::copySelectionToClipboard()
             }
             line += cell.character;
         }
-        /* Trim trailing spaces from each line. */
         while (line.endsWith(QLatin1Char(' '))) {
             line.chop(1);
         }
@@ -851,7 +906,12 @@ void QTuiCompositor::copySelectionToClipboard()
         }
         text += line;
     }
+    return text;
+}
 
+void QTuiCompositor::copySelectionToClipboard()
+{
+    const QString text = buildSelectionPayload();
     if (text.isEmpty()) {
         return;
     }
