@@ -5,9 +5,11 @@
 #define QTUICODEBLOCK_H
 
 #include "tui/qtuiblock.h"
+#include "tui/qtuitextlayout.h"
 
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 /**
  * @brief Standalone fenced-code-block that lives outside markdown text.
@@ -59,9 +61,10 @@ public:
         bool        selected) const override;
 
     bool    isFoldable() const override { return true; }
-    int     maxXOffset(int width) const override;
     QString toPlainText() const override;
     QString toMarkdown() const override;
+    QString selectedLogicalText(
+        int rowStartInBlock, int colStart, int rowEndInBlock, int colEnd) const override;
 
 private:
     QString language;
@@ -69,10 +72,11 @@ private:
     bool    forceDim_ = false;
     int     groupId_  = 0;
 
-    /* Cached layout, rebuilt on dirty. Each row is a list of styled
-     * runs already including the gutter prefix; the banner row is
-     * always at index 0 of the unfolded layout. */
-    QList<QList<QTuiStyledRun>> rendered;
+    /* Cached visual rows (banner + soft-wrapped code lines). Each code
+     * row's logicalLineIndex points into logicalLines_ (the raw code
+     * lines); the banner / fold-summary row carries index -1. */
+    QList<QTuiVisualRow> rows;
+    QStringList          logicalLines_;
 };
 
 #endif // QTUICODEBLOCK_H

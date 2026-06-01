@@ -17,7 +17,7 @@ private slots:
     void markdownWrapsBodyInFencedBlock();
     void foldCollapsesToSummary();
     void appendBodyExtendsAndInvalidatesLayout();
-    void wideCodeRowReportsHorizontalOverflow();
+    void wideCodeRowWrapsAcrossRows();
 };
 
 void Test::emptyBodyShowsBannerOnly()
@@ -74,12 +74,14 @@ void Test::appendBodyExtendsAndInvalidatesLayout()
     QVERIFY(block.rowCount() > before);
 }
 
-void Test::wideCodeRowReportsHorizontalOverflow()
+void Test::wideCodeRowWrapsAcrossRows()
 {
+    /* A code line far wider than the viewport wraps onto extra rows
+     * (horizontal scroll was removed). Banner + several wrapped rows. */
     QTuiCodeBlock block(
         QStringLiteral("python"), QString(120, QLatin1Char('x')) + QLatin1Char('\n'), false, 1);
     block.layout(40);
-    QVERIFY(block.maxXOffset(40) > 0);
+    QVERIFY(block.rowCount() > 2);
 }
 
 QSOC_TEST_MAIN(Test)

@@ -477,8 +477,7 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
                 rowToBlock_[rowLocal]      = blockIdx;
                 rowToRowInBlock_[rowLocal] = rowInBlock;
             }
-            block->paintRow(
-                screen, screenY, rowInBlock, block->xOffset(), contentWidth, focused, false);
+            block->paintRow(screen, screenY, rowInBlock, /*xOffset=*/0, contentWidth, focused, false);
             if (focused) {
                 /* Subtle bg tint across the painted row so the focused
                  * block stands out without overdrawing block content.
@@ -625,26 +624,6 @@ void QTuiScrollView::toggleFocusedFold()
         return;
     }
     block->setFolded(!block->isFolded());
-}
-
-void QTuiScrollView::scrollFocusedHorizontal(int delta)
-{
-    if (focusedBlockIdx_ < 0 || focusedBlockIdx_ >= static_cast<int>(blocks.size())) {
-        return;
-    }
-    auto     &block     = blocks[focusedBlockIdx_];
-    const int maxOffset = block->maxXOffset(qMax(1, lastRenderWidth_));
-    if (maxOffset <= 0) {
-        return;
-    }
-    int newOffset = block->xOffset() + delta;
-    if (newOffset < 0) {
-        newOffset = 0;
-    }
-    if (newOffset > maxOffset) {
-        newOffset = maxOffset;
-    }
-    block->setXOffset(newOffset);
 }
 
 void QTuiScrollView::scrollUp(int count)

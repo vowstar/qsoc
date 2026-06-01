@@ -119,7 +119,7 @@ QString QTuiBlock::toAnsi(int width)
     }
     QTuiScreen screen(width, rows);
     for (int row = 0; row < rows; ++row) {
-        paintRow(screen, row, row, xOffset(), width, /*focused=*/false, /*selected=*/false);
+        paintRow(screen, row, row, /*xOffset=*/0, width, /*focused=*/false, /*selected=*/false);
     }
     QString out;
     for (int row = 0; row < rows; ++row) {

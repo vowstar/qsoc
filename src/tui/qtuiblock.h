@@ -65,9 +65,8 @@ public:
      * @param screen      The screen buffer to paint into.
      * @param screenRow   Y coordinate inside the screen.
      * @param viewportRow Row index inside this block (0-based).
-     * @param xOffset     Horizontal scroll offset in cells. Blocks
-     *                    that report maxXOffset>0 are expected to
-     *                    honour this; others ignore it.
+     * @param xOffset     Reserved (always 0). All blocks wrap or fit to
+     *                    width; there is no horizontal scroll.
      * @param width       Drawable width in cells (excluding scrollbar).
      * @param focused     True when the cursor focus is on this block.
      * @param selected    True when the block is part of an active
@@ -101,35 +100,6 @@ public:
     {
         if (folded != foldedFlag) {
             folded = foldedFlag;
-            invalidate();
-        }
-    }
-
-    /**
-     * @brief Maximum horizontal scroll offset for the given viewport
-     *        width. Returns 0 when the block fits and does not need
-     *        horizontal scroll (default).
-     */
-    virtual int maxXOffset(int width) const
-    {
-        Q_UNUSED(width);
-        return 0;
-    }
-
-    /**
-     * @brief Current horizontal scroll offset. The render loop hands
-     *        this to paintRow; concrete blocks decide whether to honour
-     *        it. The base accessor is shared so the scrollview can
-     *        drive scroll without each block reimplementing storage.
-     */
-    int  xOffset() const { return xOffset_; }
-    void setXOffset(int offset)
-    {
-        if (offset < 0) {
-            offset = 0;
-        }
-        if (xOffset_ != offset) {
-            xOffset_ = offset;
             invalidate();
         }
     }
@@ -262,8 +232,6 @@ protected:
     bool layoutDirty = true;
     /** Fold state. Concrete blocks decide whether to honour it. */
     bool folded = false;
-    /** Horizontal scroll offset honoured by blocks that opt in. */
-    int xOffset_ = 0;
 };
 
 #endif // QTUIBLOCK_H

@@ -165,25 +165,16 @@ void QTuiToolBlock::paintRow(
     bool        focused,
     bool        selected) const
 {
+    Q_UNUSED(xOffset);
     Q_UNUSED(focused);
     Q_UNUSED(selected);
     if (viewportRow < 0 || viewportRow >= rows.size()) {
         return;
     }
-    int       skipped = 0;
-    int       painted = 0;
-    const int effX    = std::max(0, xOffset);
+    int painted = 0;
     for (const QTuiStyledRun &run : rows[viewportRow]) {
         for (const QChar character : run.text) {
             const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
-            if (skipped + chW <= effX) {
-                skipped += chW;
-                continue;
-            }
-            if (skipped < effX) {
-                skipped += chW;
-                continue;
-            }
             if (painted + chW > width) {
                 return;
             }
