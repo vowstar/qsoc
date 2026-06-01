@@ -362,6 +362,19 @@ void QAgentInputMonitor::processEscSequence()
                 resetEscBuffer();
                 return;
             }
+            /* Terminal focus reporting (DECSET 1004): ESC [ I = focus in,
+             * ESC [ O = focus out. These are CSI finals, distinct from the
+             * SS3 "ESC O" arrow prefix. Track state, emit only on change. */
+            if (last == 'I' || last == 'O') {
+                const bool nowFocused = (last == 'I');
+                if (nowFocused != focused_) {
+                    focused_ = nowFocused;
+                    emit terminalFocusChanged(focused_);
+                }
+                cancelDoubleEscArming();
+                resetEscBuffer();
+                return;
+            }
         }
 
         /* Other CSI: check if final byte received (0x40-0x7E) */
@@ -893,8 +906,8 @@ void QAgentInputMonitor::start()
     });
     pollTimer->start();
 
-    /* Enable bracketed paste mode */
-    fputs("\033[?2004h", stdout);
+    /* Enable bracketed paste + focus reporting (DECSET 1004) */
+    fputs("\033[?2004h\033[?1004h", stdout);
     fflush(stdout);
 
     active = true;
@@ -920,10 +933,10 @@ void QAgentInputMonitor::start()
         }
     });
 
-    /* Enable bracketed paste mode */
+    /* Enable bracketed paste + focus reporting (DECSET 1004) */
     {
-        const char *seq     = "\033[?2004h";
-        ssize_t     written = write(STDOUT_FILENO, seq, 8);
+        const char *seq     = "\033[?2004h\033[?1004h";
+        ssize_t     written = write(STDOUT_FILENO, seq, 16);
         (void) written;
     }
 
@@ -944,8 +957,8 @@ void QAgentInputMonitor::stop()
         pollTimer = nullptr;
     }
 
-    /* Disable bracketed paste mode */
-    fputs("\033[?2004l", stdout);
+    /* Disable bracketed paste + focus reporting */
+    fputs("\033[?2004l\033[?1004l", stdout);
     fflush(stdout);
 
     if (termiosSaved) {
@@ -958,10 +971,10 @@ void QAgentInputMonitor::stop()
         notifier = nullptr;
     }
 
-    /* Disable bracketed paste mode before restoring termios */
+    /* Disable bracketed paste + focus reporting before restoring termios */
     {
-        const char *seq     = "\033[?2004l";
-        ssize_t     written = write(STDOUT_FILENO, seq, 8);
+        const char *seq     = "\033[?2004l\033[?1004l";
+        ssize_t     written = write(STDOUT_FILENO, seq, 16);
         (void) written;
     }
 

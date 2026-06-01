@@ -182,6 +182,13 @@ signals:
      */
     void planModeToggleRequested();
 
+    /**
+     * @brief Emitted when terminal focus changes (DECSET 1004): true on
+     *        FOCUS_IN (ESC[I), false on FOCUS_OUT (ESC[O). Lets the REPL
+     *        tell the agent whether the user is actively watching.
+     */
+    void terminalFocusChanged(bool focused);
+
 private:
     ExternalKeyConsumer externalKeyConsumer_;
 
@@ -247,6 +254,7 @@ private:
     bool          inBracketedPaste    = false; /* True while inside \033[200~ ... \033[201~ */
     bool          submitBlocked       = false; /* Enter/Tab emit submitBlockedKey instead */
     bool          inCtrlXChord        = false; /* True after Ctrl+X, waiting for second key */
+    bool          focused_            = true;  /* Terminal focus (DECSET 1004); unknown=focused */
 
     void processEscSequence();
 

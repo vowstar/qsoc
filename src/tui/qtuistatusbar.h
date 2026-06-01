@@ -26,6 +26,8 @@ public:
     void setModel(const QString &modelId);
     /** @brief Toggle the read-only plan-mode chip (paused indicator). */
     void setPlanMode(bool active);
+    /** @brief Toggle the "away" chip when the terminal loses focus. */
+    void setUserWatching(bool watching);
     /**
      * @brief Number of active background tasks (loops + bash + future
      *        sub-agents) for the right-aligned `▶ N tasks` pill.
@@ -66,7 +68,8 @@ private:
     qint64        outputTokens = 0;
     QString       effortLevel;
     QString       modelId;
-    bool          planMode_ = false;
+    bool          planMode_     = false;
+    bool          userWatching_ = true;
     QElapsedTimer stepTimer;
     QElapsedTimer totalTimer;
     bool          running = false; /* true = agent executing, false = idle */
