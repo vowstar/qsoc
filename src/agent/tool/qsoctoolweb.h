@@ -28,6 +28,7 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    bool    isReadOnly() const override { return true; }
     void    abort() override;
 
 private:
@@ -55,6 +56,7 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    bool    isReadOnly() const override { return true; }
     void    abort() override;
 
     static QString htmlToMarkdown(const QString &html);

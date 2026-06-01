@@ -27,6 +27,7 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    bool    isReadOnly() const override { return true; }
 
 private:
     QSocSftpClient        *m_sftp    = nullptr;
@@ -63,6 +64,7 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    bool    isReadOnly() const override { return true; }
 
 private:
     QSocSftpClient        *m_sftp    = nullptr;
@@ -144,6 +146,7 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    bool    isReadOnly() const override { return true; }
 
 private:
     QSocRemotePathContext *m_pathCtx = nullptr;

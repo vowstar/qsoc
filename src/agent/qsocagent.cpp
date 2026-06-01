@@ -22,6 +22,23 @@
 #include <QSysInfo>
 #include <QTextStream>
 
+namespace {
+
+/* Re-injected as a system message every turn while in plan mode. States
+ * the read-only constraint and the explore -> clarify -> exit loop. */
+const char *const kPlanModeReminder
+    = "Plan mode is active. You MUST NOT modify anything: no file edits, "
+      "no shell writes, no commits, no config changes. This supersedes "
+      "other instructions. Work the loop: (1) explore read-only (read "
+      "files, search, run read-only shell, spawn read-only sub-agents); "
+      "(2) when the approach is ambiguous or needs a non-trivial choice, "
+      "call ask_user to clarify with the user, repeating as many rounds "
+      "as needed; (3) only once the plan is concrete and the user's "
+      "intent is pinned, call exit_plan_mode to present it for approval. "
+      "End every turn with either ask_user or exit_plan_mode.";
+
+} // namespace
+
 QSocAgent::QSocAgent(
     QObject *parent, QLLMService *llmService, QSocToolRegistry *toolRegistry, QSocAgentConfig config)
     : QObject(parent)
@@ -57,6 +74,21 @@ bool QSocAgent::isToolAllowed(const QString &name) const
     if (agentConfig.isSubAgent && name == QStringLiteral("agent")) {
         return false;
     }
+    /* Plan mode is owned by the main agent only: a child (which shares
+     * the registry and its callbacks) must not enter or approve/exit
+     * plan mode on the parent's behalf. */
+    if (agentConfig.isSubAgent
+        && (name == QStringLiteral("enter_plan_mode") || name == QStringLiteral("exit_plan_mode"))) {
+        return false;
+    }
+    /* exit_plan_mode is only meaningful inside plan mode; enter_plan_mode
+     * only outside it. Keep each off the menu when irrelevant. */
+    if (name == QStringLiteral("exit_plan_mode") && !agentConfig.planMode) {
+        return false;
+    }
+    if (name == QStringLiteral("enter_plan_mode") && agentConfig.planMode) {
+        return false;
+    }
     /* Allowlist gate: empty list inherits everything. */
     if (!agentConfig.toolsAllow.isEmpty() && !agentConfig.toolsAllow.contains(name)) {
         return false;
@@ -66,6 +98,20 @@ bool QSocAgent::isToolAllowed(const QString &name) const
      * allowlist. */
     if (agentConfig.toolsDeny.contains(name)) {
         return false;
+    }
+    /* Plan-mode gate: only read-only tools run. The shell passes here
+     * (its per-command safety is LLM-judged at dispatch) and the spawn
+     * tool passes (children inherit planMode and are read-only too); the
+     * plan tools and every other read-only tool pass via isReadOnly().
+     * Everything that can mutate is rejected. */
+    if (agentConfig.planMode) {
+        const bool shellJudged
+            = (name == QStringLiteral("bash") || name == QStringLiteral("remote_shell_bash"));
+        const bool      spawnOk = (name == QStringLiteral("agent"));
+        const QSocTool *tool    = toolRegistry != nullptr ? toolRegistry->getTool(name) : nullptr;
+        if (!shellJudged && !spawnOk && (tool == nullptr || !tool->isReadOnly())) {
+            return false;
+        }
     }
     return true;
 }
@@ -80,7 +126,10 @@ nlohmann::json QSocAgent::getEffectiveToolDefinitions() const
 
 nlohmann::json QSocAgent::filterAllowedTools(const nlohmann::json &defs) const
 {
-    if (agentConfig.toolsAllow.isEmpty() && !agentConfig.isSubAgent) {
+    /* Fast path only when no gate applies: no allowlist, not a sub-agent,
+     * and not in plan mode. Plan mode must run the per-tool loop so
+     * mutating tools are dropped from the sent list. */
+    if (agentConfig.toolsAllow.isEmpty() && !agentConfig.isSubAgent && !agentConfig.planMode) {
         return defs;
     }
     json filtered = json::array();
@@ -462,6 +511,21 @@ void QSocAgent::processStreamIteration()
         messagesWithSystem.push_back(
             {{"role", "system"}, {"content", agentConfig.criticalReminder.toStdString()}});
     }
+    if (agentConfig.planMode) {
+        messagesWithSystem.push_back({{"role", "system"}, {"content", kPlanModeReminder}});
+    }
+    /* Approved plan handoff: re-injected each turn (like the reminder,
+     * never persisted) so the executing model keeps the plan across
+     * pruning and compaction. Single, budget-capped copy. */
+    if (!approvedPlan_.isEmpty()) {
+        const QString planBlock
+            = QStringLiteral(
+                  "<approved_plan>\nThe user approved this implementation plan. "
+                  "Follow it; deviate only with good reason and say so.\n\n%1\n"
+                  "</approved_plan>")
+                  .arg(approvedPlan_);
+        messagesWithSystem.push_back({{"role", "system"}, {"content", planBlock.toStdString()}});
+    }
 
     /* Get tool definitions, filtered by sub-agent allowlist when set. */
     json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
@@ -664,6 +728,21 @@ bool QSocAgent::processIteration()
         messagesWithSystem.push_back(
             {{"role", "system"}, {"content", agentConfig.criticalReminder.toStdString()}});
     }
+    if (agentConfig.planMode) {
+        messagesWithSystem.push_back({{"role", "system"}, {"content", kPlanModeReminder}});
+    }
+    /* Approved plan handoff: re-injected each turn (like the reminder,
+     * never persisted) so the executing model keeps the plan across
+     * pruning and compaction. Single, budget-capped copy. */
+    if (!approvedPlan_.isEmpty()) {
+        const QString planBlock
+            = QStringLiteral(
+                  "<approved_plan>\nThe user approved this implementation plan. "
+                  "Follow it; deviate only with good reason and say so.\n\n%1\n"
+                  "</approved_plan>")
+                  .arg(approvedPlan_);
+        messagesWithSystem.push_back({{"role", "system"}, {"content", planBlock.toStdString()}});
+    }
 
     /* Get tool definitions, filtered by sub-agent allowlist when set. */
     json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
@@ -774,6 +853,37 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
             addToolMessage(toolCallId, errorResult);
             emit toolResult(functionName, errorResult);
             continue;
+        }
+
+        /* Plan-mode shell safety: bash / remote_shell_bash are judged
+         * per command by the injected LLM classifier (semantic, not a
+         * hardcoded allowlist). Fail-closed when no judge is installed.
+         * Read-only commands proceed; mutating ones are surfaced to the
+         * model as a denial so it can adjust or exit plan mode. */
+        if (agentConfig.planMode
+            && (functionName == QStringLiteral("bash")
+                || functionName == QStringLiteral("remote_shell_bash"))) {
+            QString command;
+            if (arguments.contains("command") && arguments["command"].is_string()) {
+                command = QString::fromStdString(arguments["command"].get<std::string>());
+            }
+            QSocBashSafety verdict;
+            if (bashSafetyJudge_) {
+                verdict = bashSafetyJudge_(command);
+            }
+            if (!verdict.readOnly) {
+                const QString reason = verdict.reason.isEmpty()
+                                           ? QStringLiteral("not classified as read-only")
+                                           : verdict.reason;
+                const QString denied
+                    = QStringLiteral(
+                          "Plan mode: command blocked, it may modify state (%1). Use "
+                          "read-only inspection, or call exit_plan_mode to get approval.")
+                          .arg(reason);
+                addToolMessage(toolCallId, denied);
+                emit toolResult(functionName, denied);
+                continue;
+            }
         }
 
         /* Pre-tool hook: matched hooks may inspect or block the call.
@@ -1598,6 +1708,17 @@ void QSocAgent::setLLMService(QLLMService *llmService)
 void QSocAgent::setToolRegistry(QSocToolRegistry *toolRegistry)
 {
     this->toolRegistry = toolRegistry;
+}
+
+void QSocAgent::setApprovedPlan(const QString &plan)
+{
+    /* Single slot: the plan is not stored in `messages` (which would
+     * break tool_call/tool ordering if set mid-dispatch and would need
+     * prune/compact protection). It is re-injected as a system message
+     * each turn from this string, so a new plan simply overwrites the
+     * old and it survives compaction for free. The caller budget-caps
+     * the text and keeps the full copy on disk. */
+    approvedPlan_ = plan;
 }
 
 void QSocAgent::setEffortLevel(const QString &level)

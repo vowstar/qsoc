@@ -142,6 +142,15 @@ struct QSocAgentConfig
      * spawn. The cap protects per-API-key RPM limits at remote
      * providers. 1 = strict serial (legacy behavior). */
     int maxConcurrentSubagents = 4;
+
+    /* Plan mode. When true the agent may only run read-only tools (plus
+     * the shell, whose per-command safety is LLM-judged, and the spawn
+     * tool, whose children inherit this flag); all mutating tools are
+     * hidden from the model and rejected at dispatch. The model explores
+     * and then calls exit_plan_mode to present a plan for user approval.
+     * Propagated into spawned sub-agents so read-only exploration runs
+     * under the same gate. */
+    bool planMode = false;
 };
 
 #endif // QSOCAGENTCONFIG_H

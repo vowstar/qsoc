@@ -23,6 +23,7 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    bool    isReadOnly() const override { return true; }
 
     void setModuleManager(QSocModuleManager *moduleManager);
 
@@ -46,6 +47,7 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    bool    isReadOnly() const override { return true; }
 
     void setModuleManager(QSocModuleManager *moduleManager);
 
