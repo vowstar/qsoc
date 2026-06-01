@@ -273,6 +273,12 @@ private:
 
     void applySelectionHighlight();
     void copySelectionToClipboard();
+    /* Build the clipboard text for the current selection. Routes the
+     * screen-space selection to each touched block's logical-text
+     * extractor (wrap undone, decorations excluded); falls back to a
+     * decorative-aware screen-cell scrape when any block cannot map.
+     * Pure (no I/O) so it is unit-testable. */
+    QString buildSelectionPayload() const;
 
     /* Render each region to screen buffer */
     void renderTitle();

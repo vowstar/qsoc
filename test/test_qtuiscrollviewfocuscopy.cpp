@@ -15,6 +15,7 @@ class Test : public QObject
 
 private slots:
     void blockAtScreenRowResolvesFocus();
+    void mapScreenToBlockResolvesBlockAndRow();
     void renderTintsFocusedBlockBackground();
     void copyFocusedReturnsBlockMarkdown();
     void copyFocusedReturnsEmptyWhenNoFocus();
@@ -38,6 +39,41 @@ void Test::blockAtScreenRowResolvesFocus()
     /* Empty rows above the content map to no block. */
     QCOMPARE(view.blockAtScreenRow(0), -1);
     QCOMPARE(view.blockAtScreenRow(1), -1);
+}
+
+void Test::mapScreenToBlockResolvesBlockAndRow()
+{
+    /* A multi-row block (fenced code) lets us check that a screen row
+     * resolves to both its block and the row index within that block,
+     * and that blank area above the content maps to no block. */
+    QTuiScrollView view;
+    view.appendBlock(
+        std::make_unique<QTuiAssistantTextBlock>(QStringLiteral("```\naaa\nbbb\nccc\n```\n")));
+
+    QTuiScreen screen(20, 12);
+    view.render(screen, 0, 12, 20);
+
+    int firstRow = -1;
+    for (int r = 0; r < 12; ++r) {
+        if (view.mapScreenToBlock(r).blockIdx == 0) {
+            firstRow = r;
+            break;
+        }
+    }
+    QVERIFY(firstRow > 0); /* content is bottom-aligned, blank rows above */
+
+    const auto m0 = view.mapScreenToBlock(firstRow);
+    QCOMPARE(m0.blockIdx, 0);
+    QCOMPARE(m0.rowInBlock, 0);
+    const auto m1 = view.mapScreenToBlock(firstRow + 1);
+    QCOMPARE(m1.blockIdx, 0);
+    QCOMPARE(m1.rowInBlock, 1);
+
+    /* Blank area above the content maps to no block. */
+    QCOMPARE(view.mapScreenToBlock(0).blockIdx, -1);
+    QCOMPARE(view.mapScreenToBlock(0).rowInBlock, -1);
+    /* Out-of-range rows map to nothing. */
+    QCOMPARE(view.mapScreenToBlock(999).blockIdx, -1);
 }
 
 void Test::renderTintsFocusedBlockBackground()

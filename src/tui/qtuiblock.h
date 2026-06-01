@@ -148,6 +148,29 @@ public:
     virtual QString toMarkdown() const { return toPlainText(); }
 
     /**
+     * @brief Logical text covered by a visual sub-rectangle of this
+     *        block, with wrapping undone and decorations excluded.
+     * @details Used by mouse-drag selection copy. Visual rows belonging
+     *          to the same logical line are joined with no separator
+     *          (unwrap); distinct logical lines are separated by '\n'.
+     *          Row indices are block-local visual rows (0 = first row of
+     *          this block); columns are block-local visual cell columns
+     *          (0 = first content cell). Bounds are clamped per row.
+     *          Returns a null QString (not empty) when the block cannot
+     *          map the region, signalling the caller to fall back to the
+     *          screen-cell scrape. Default: null (unmapped).
+     */
+    virtual QString selectedLogicalText(
+        int rowStartInBlock, int colStart, int rowEndInBlock, int colEnd) const
+    {
+        Q_UNUSED(rowStartInBlock);
+        Q_UNUSED(colStart);
+        Q_UNUSED(rowEndInBlock);
+        Q_UNUSED(colEnd);
+        return {};
+    }
+
+    /**
      * @brief Drop the layout cache so the next layout() call
      *        recomputes display rows. Called automatically by fold
      *        toggle; concrete blocks must call it from any setter
