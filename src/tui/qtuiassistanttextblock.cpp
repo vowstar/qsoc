@@ -6,22 +6,36 @@
 #include "common/qsocmarkdownrenderer.h"
 #include "tui/qtuiwidget.h"
 
+#include <algorithm>
+#include <climits>
+
 namespace {
+
+/* One soft-wrapped visual row plus the offset of its first cell within
+ * the decoration-stripped logical line, so copy can map a visual
+ * sub-rectangle back to unwrapped logical text. */
+struct WrappedRow
+{
+    QList<QTuiStyledRun> runs;
+    int                  startColInLogical = 0;
+};
 
 /* Soft-wrap one styled-runs row into several rows of the given visual
  * width, preserving per-character style attribution. Mirrors the
  * scrollview's wrap helper but lives here because the block layout
  * needs to compose multiple rendered lines (headings, list items,
- * blockquote gutters, table borders) into a single cached grid. */
-QList<QList<QTuiStyledRun>> wrapRunsToWidth(const QList<QTuiStyledRun> &runs, int width)
+ * blockquote gutters, table borders) into a single cached grid.
+ * startColInLogical counts only non-decorative cells, matching the
+ * logical line stored alongside the rows. */
+QList<WrappedRow> wrapRunsToWidth(const QList<QTuiStyledRun> &runs, int width)
 {
-    QList<QList<QTuiStyledRun>> out;
+    QList<WrappedRow> out;
     if (runs.isEmpty()) {
-        out.append(QList<QTuiStyledRun>{});
+        out.append({.runs = QList<QTuiStyledRun>{}, .startColInLogical = 0});
         return out;
     }
     if (width <= 0) {
-        out.append(runs);
+        out.append({.runs = runs, .startColInLogical = 0});
         return out;
     }
 
@@ -30,18 +44,33 @@ QList<QList<QTuiStyledRun>> wrapRunsToWidth(const QList<QTuiStyledRun> &runs, in
         QChar character;
         int   runIdx;
         int   visualWidth;
+        bool  decorative;
     };
     QList<Cell> cells;
     cells.reserve(256);
     for (int idx = 0; idx < runs.size(); ++idx) {
         for (const QChar character : runs[idx].text) {
             const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
-            cells.append({.character = character, .runIdx = idx, .visualWidth = chW});
+            cells.append(
+                {.character   = character,
+                 .runIdx      = idx,
+                 .visualWidth = chW,
+                 .decorative  = runs[idx].decorative});
         }
     }
     if (cells.isEmpty()) {
-        out.append(QList<QTuiStyledRun>{});
+        out.append({.runs = QList<QTuiStyledRun>{}, .startColInLogical = 0});
         return out;
+    }
+
+    /* Prefix count of non-decorative cells, so a row's first-cell index
+     * yields its char offset within the logical (decoration-stripped)
+     * line directly. */
+    QList<int> nonDecoBefore;
+    nonDecoBefore.reserve(cells.size() + 1);
+    nonDecoBefore.append(0);
+    for (const Cell &cell : cells) {
+        nonDecoBefore.append(nonDecoBefore.last() + (cell.decorative ? 0 : 1));
     }
 
     auto regroup = [&](int begin, int end) -> QList<QTuiStyledRun> {
@@ -76,7 +105,8 @@ QList<QList<QTuiStyledRun>> wrapRunsToWidth(const QList<QTuiStyledRun> &runs, in
         const Cell &cell = cells[idx];
         if (rowWidth + cell.visualWidth > width && idx > rowStart) {
             const int breakAt = (lastSpace > rowStart) ? lastSpace : idx;
-            out.append(regroup(rowStart, breakAt));
+            out.append(
+                {.runs = regroup(rowStart, breakAt), .startColInLogical = nonDecoBefore[rowStart]});
             const int next = (lastSpace > rowStart) ? (breakAt + 1) : breakAt;
             rowStart       = next;
             rowWidth       = 0;
@@ -91,10 +121,24 @@ QList<QList<QTuiStyledRun>> wrapRunsToWidth(const QList<QTuiStyledRun> &runs, in
         rowWidth += cell.visualWidth;
     }
     if (rowStart < cells.size()) {
-        out.append(regroup(rowStart, cells.size()));
+        out.append(
+            {.runs = regroup(rowStart, cells.size()), .startColInLogical = nonDecoBefore[rowStart]});
     }
     if (out.isEmpty()) {
-        out.append(QList<QTuiStyledRun>{});
+        out.append({.runs = QList<QTuiStyledRun>{}, .startColInLogical = 0});
+    }
+    return out;
+}
+
+/* Decoration-stripped text of a rendered line: the logical content a
+ * copy should yield, with gutters / borders / fold markers removed. */
+QString logicalTextOf(const QSocMarkdownRenderer::RenderedLine &line)
+{
+    QString out;
+    for (const QTuiStyledRun &run : line.runs) {
+        if (!run.decorative) {
+            out.append(run.text);
+        }
     }
     return out;
 }
@@ -129,6 +173,7 @@ void QTuiAssistantTextBlock::layout(int width)
         return;
     }
     rows.clear();
+    logicalLines_.clear();
     layoutWidth = width;
     layoutDirty = false;
 
@@ -144,6 +189,9 @@ void QTuiAssistantTextBlock::layout(int width)
      * summary even after we throw the row buffer away. */
     QList<Row> fullRows;
     for (const auto &line : rendered) {
+        const int lineIdx = logicalLines_.size();
+        logicalLines_.append(logicalTextOf(line));
+
         QList<QTuiStyledRun> runs;
         if (line.runs.isEmpty()) {
             runs.append(QTuiStyledRun{});
@@ -157,10 +205,15 @@ void QTuiAssistantTextBlock::layout(int width)
         const bool noWrap = line.kind == QSocMarkdownRenderer::Kind::Table
                             || line.kind == QSocMarkdownRenderer::Kind::CodeBlock;
         if (noWrap) {
-            fullRows.append({.runs = runs, .noWrap = true});
+            fullRows.append(
+                {.runs = runs, .noWrap = true, .logicalLineIndex = lineIdx, .startColInLogical = 0});
         } else {
             for (const auto &wrappedRow : wrapRunsToWidth(runs, width)) {
-                fullRows.append({.runs = wrappedRow, .noWrap = false});
+                fullRows.append(
+                    {.runs              = wrappedRow.runs,
+                     .noWrap            = false,
+                     .logicalLineIndex  = lineIdx,
+                     .startColInLogical = wrappedRow.startColInLogical});
             }
         }
     }
@@ -264,4 +317,100 @@ QString QTuiAssistantTextBlock::toPlainText() const
      * it unmodified keeps copy/paste round-trip safe even when the
      * cached layout has been wrapped or stylized. */
     return source;
+}
+
+QString QTuiAssistantTextBlock::selectedLogicalText(
+    int rowStartInBlock, int colStart, int rowEndInBlock, int colEnd) const
+{
+    if (rows.isEmpty() || rowStartInBlock > rowEndInBlock) {
+        return {};
+    }
+    const int firstRow = std::max(0, rowStartInBlock);
+    const int lastRow  = std::min(static_cast<int>(rows.size()) - 1, rowEndInBlock);
+
+    QString result;
+    int     curLine    = -1; /* logical line currently being sliced */
+    int     curMin     = 0;
+    int     curMax     = -1;
+    bool    curTouched = false;
+    bool    firstPiece = true;
+
+    auto flush = [&]() {
+        if (curLine < 0 || curLine >= logicalLines_.size()) {
+            return;
+        }
+        if (!firstPiece) {
+            result += QLatin1Char('\n');
+        }
+        firstPiece = false;
+        if (curTouched && curMax >= curMin) {
+            const QString &logical = logicalLines_[curLine];
+            const int      from    = std::clamp(curMin, 0, static_cast<int>(logical.size()));
+            const int      to      = std::clamp(curMax + 1, from, static_cast<int>(logical.size()));
+            result += logical.mid(from, to - from);
+        }
+    };
+
+    for (int r = firstRow; r <= lastRow; ++r) {
+        const Row &row = rows[r];
+        if (row.logicalLineIndex < 0) {
+            /* Folded summary or unmappable row: bail to cell scrape. */
+            return {};
+        }
+        const int colBegin = (r == firstRow) ? colStart : 0;
+        const int colLimit = (r == lastRow) ? colEnd : INT_MAX;
+
+        /* Walk this row's cells exactly as paintRow does (honouring the
+         * block xOffset for noWrap rows) and record the logical offsets
+         * of non-decorative chars whose painted columns fall in range. */
+        const int effX    = row.noWrap ? xOffset() : 0;
+        int       skipped = 0;
+        int       painted = 0;
+        int       k       = 0; /* non-decorative char index within row */
+        int       rowMin  = 0;
+        int       rowMax  = -1;
+        bool      rowHit  = false;
+        for (const QTuiStyledRun &run : row.runs) {
+            for (const QChar character : run.text) {
+                const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+                if (skipped < effX) {
+                    skipped += chW;
+                    if (!run.decorative) {
+                        k++;
+                    }
+                    continue;
+                }
+                if (!run.decorative) {
+                    const int colA = painted;
+                    const int colB = painted + chW - 1;
+                    if (colB >= colBegin && colA <= colLimit) {
+                        const int off = row.startColInLogical + k;
+                        if (!rowHit) {
+                            rowMin = off;
+                            rowHit = true;
+                        }
+                        rowMax = off;
+                    }
+                    k++;
+                }
+                painted += chW;
+            }
+        }
+
+        if (row.logicalLineIndex != curLine) {
+            flush();
+            curLine    = row.logicalLineIndex;
+            curMin     = rowHit ? rowMin : 0;
+            curMax     = rowHit ? rowMax : -1;
+            curTouched = rowHit;
+        } else if (rowHit) {
+            if (!curTouched) {
+                curMin     = rowMin;
+                curTouched = true;
+            }
+            curMax = std::max(curMax, rowMax);
+        }
+    }
+    flush();
+    return result;
 }

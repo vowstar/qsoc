@@ -8,6 +8,7 @@
 
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 /**
  * @brief Markdown-rendered assistant prose block.
@@ -52,21 +53,32 @@ public:
 
     QString toPlainText() const override;
     QString toMarkdown() const override { return source; }
+    QString selectedLogicalText(
+        int rowStartInBlock, int colStart, int rowEndInBlock, int colEnd) const override;
 
 private:
     /* Each cached row is a list of styled runs. Rows tagged noWrap
      * (tables, code blocks) carry visual widths greater than
      * layoutWidth and rely on xOffset-based horizontal scrolling
-     * instead of soft-wrapping. */
+     * instead of soft-wrapping.
+     *
+     * logicalLineIndex points into logicalLines_ (the decoration-
+     * stripped pre-wrap text of the rendered line this row came from);
+     * startColInLogical is the char offset of this row's first cell
+     * within that logical line. Together they let selectedLogicalText
+     * map a visual sub-rectangle back to unwrapped logical text. */
     struct Row
     {
         QList<QTuiStyledRun> runs;
-        bool                 noWrap = false;
+        bool                 noWrap            = false;
+        int                  logicalLineIndex  = -1;
+        int                  startColInLogical = 0;
     };
 
-    QString    source;
-    QList<Row> rows;
-    bool       forceDim = false;
+    QString     source;
+    QList<Row>  rows;
+    QStringList logicalLines_;
+    bool        forceDim = false;
 };
 
 #endif // QTUIASSISTANTTEXTBLOCK_H
