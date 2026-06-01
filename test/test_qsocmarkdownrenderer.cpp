@@ -390,6 +390,70 @@ private slots:
         }
     }
 
+    /* A many-column table that cannot fit even at minimum column widths
+     * must degrade to vertical key/value records: no box-drawing lines,
+     * each cell shown as "Header: value" so a narrow pane stays readable
+     * instead of overflowing. */
+    void tableDegradesToRecordsOnNarrowTerminal()
+    {
+        const QString md = QStringLiteral(
+            "| Signal | Direction | Width | Description |\n"
+            "|--------|-----------|-------|-------------|\n"
+            "| clk    | input     | 1     | main clock  |\n"
+            "| rst_n  | input     | 1     | async reset |\n");
+        const auto out = QSocMarkdownRenderer::render(md, 24);
+
+        static const QList<QChar> boxChars = {
+            QChar(0x250C),
+            QChar(0x2510),
+            QChar(0x2514),
+            QChar(0x2518),
+            QChar(0x252C),
+            QChar(0x2534),
+            QChar(0x251C),
+            QChar(0x2524),
+            QChar(0x253C),
+            QChar(0x2502),
+        };
+        bool sawTableKind = false;
+        bool sawLabel     = false;
+        for (const auto &line : out) {
+            if (line.kind == Kind::Table) {
+                sawTableKind = true;
+            }
+            const QString text = concat(line);
+            for (const QChar &box : boxChars) {
+                QVERIFY2(
+                    !text.contains(box),
+                    qPrintable(QStringLiteral("box char leaked: %1").arg(text)));
+            }
+            if (text.contains(QStringLiteral("Signal: clk"))) {
+                sawLabel = true;
+            }
+        }
+        QVERIFY(!sawTableKind);
+        QVERIFY(sawLabel);
+    }
+
+    /* The same table on a wide terminal must still render as a real
+     * box-drawing table: degradation is conditional on overflow only. */
+    void tableKeepsBoxFormOnWideTerminal()
+    {
+        const QString md = QStringLiteral(
+            "| Signal | Direction | Width | Description |\n"
+            "|--------|-----------|-------|-------------|\n"
+            "| clk    | input     | 1     | main clock  |\n");
+        const auto out          = QSocMarkdownRenderer::render(md, 200);
+        bool       sawTableKind = false;
+        for (const auto &line : out) {
+            if (line.kind == Kind::Table) {
+                sawTableKind = true;
+                break;
+            }
+        }
+        QVERIFY(sawTableKind);
+    }
+
     /* Smoke test on a realistic mixed document: walker must survive
      * heading + bold + list + code + quote interleaving without
      * crashing or emitting bogus lines. */

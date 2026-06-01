@@ -493,6 +493,30 @@ QList<int> planColumnWidths(const TableData &table, int terminalWidth)
     return widths;
 }
 
+/* True when even the minimum column widths overflow the terminal, so a
+ * box-drawing table cannot fit. Mirrors the budget math in
+ * planColumnWidths(); used to switch to the vertical key/value form. */
+bool tableMinExceedsBudget(const TableData &table, int terminalWidth)
+{
+    if (terminalWidth <= 0 || table.rows.isEmpty()) {
+        return false;
+    }
+    const int columns  = table.rows.first().cells.size();
+    const int overhead = 3 * columns + 1;
+    const int budget   = terminalWidth - overhead;
+    int       minTotal = 0;
+    for (int col = 0; col < columns; ++col) {
+        int minMax = 1;
+        for (const TableRow &row : table.rows) {
+            if (col < row.cells.size()) {
+                minMax = std::max(minMax, cellMinWidth(row.cells[col]));
+            }
+        }
+        minTotal += minMax;
+    }
+    return minTotal >= budget;
+}
+
 /* Return a styled-run with the cell's collapsed style applied. */
 QSocMarkdownRenderer::StyledRun cellRun(const TableCell &cell, const QString &text)
 {
@@ -523,10 +547,68 @@ QSocMarkdownRenderer::StyledRun dimRun(const QString &text)
     return run;
 }
 
+/* Vertical key/value fallback for tables too wide for the terminal.
+ * Each body row becomes a record: one "Header: value" line per column,
+ * records separated by a dim rule. The header label is bold and stays
+ * copyable; only the rule is decorative. Keeps a many-column table
+ * readable on a narrow pane instead of overflowing. */
+void emitTableAsRecords(Walker &walker, const TableData &table)
+{
+    const TableRow *header = nullptr;
+    for (const TableRow &row : table.rows) {
+        if (row.isHeader) {
+            header = &row;
+            break;
+        }
+    }
+    const int ruleWidth = std::min(walker.terminalWidth, 40);
+    bool      firstBody = true;
+    for (const TableRow &row : table.rows) {
+        if (row.isHeader) {
+            continue;
+        }
+        if (!firstBody) {
+            QSocMarkdownRenderer::RenderedLine rule;
+            rule.kind = QSocMarkdownRenderer::Kind::Plain;
+            rule.runs.append(dimRun(QString(ruleWidth, QChar(0x2500)))); /* ─ */
+            walker.lines.append(rule);
+        }
+        firstBody = false;
+        for (int col = 0; col < row.cells.size(); ++col) {
+            const QString label = (header != nullptr && col < header->cells.size())
+                                      ? header->cells[col].text
+                                      : QStringLiteral("Column %1").arg(col + 1);
+            QSocMarkdownRenderer::RenderedLine out;
+            out.kind = QSocMarkdownRenderer::Kind::Plain;
+            QSocMarkdownRenderer::StyledRun labelRun;
+            labelRun.text = label + QStringLiteral(": ");
+            labelRun.bold = true;
+            out.runs.append(labelRun);
+            out.runs.append(cellRun(row.cells[col], row.cells[col].text));
+            walker.lines.append(out);
+        }
+    }
+}
+
 void emitTable(Walker &walker, const TableData &table)
 {
     if (table.rows.isEmpty() || table.rows.first().cells.isEmpty()) {
         return;
+    }
+    /* When even minimum column widths overflow, a box table is
+     * unreadable; degrade to vertical key/value records instead. Needs
+     * a header for labels and at least one body row. */
+    if (tableMinExceedsBudget(table, walker.terminalWidth)) {
+        bool hasHeader = false;
+        bool hasBody   = false;
+        for (const TableRow &row : table.rows) {
+            hasHeader = hasHeader || row.isHeader;
+            hasBody   = hasBody || !row.isHeader;
+        }
+        if (hasHeader && hasBody) {
+            emitTableAsRecords(walker, table);
+            return;
+        }
     }
     const QList<int> widths  = planColumnWidths(table, walker.terminalWidth);
     const int        columns = widths.size();
