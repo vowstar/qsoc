@@ -36,6 +36,23 @@ class Test : public QObject
 private slots:
     void initTestCase() { TestApp::instance(); }
 
+    /* Terminal focus reporting (DECSET 1004): ESC[O = blur, ESC[I = focus.
+     * Default state is focused, so only changes emit. No model needed. */
+    void terminalFocusEvents()
+    {
+        QAgentInputMonitor monitor;
+        QList<bool>        events;
+        connect(&monitor, &QAgentInputMonitor::terminalFocusChanged, [&events](bool focused) {
+            events.append(focused);
+        });
+        monitor.processBytes("\033[O", 3); /* blur  -> false */
+        monitor.processBytes("\033[I", 3); /* focus -> true */
+        monitor.processBytes("\033[I", 3); /* no change -> no emit */
+        QCOMPARE(events.size(), 2);
+        QCOMPARE(events.at(0), false);
+        QCOMPARE(events.at(1), true);
+    }
+
     /* Lifecycle tests */
 
     void testStartStop()
