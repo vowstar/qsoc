@@ -14,6 +14,7 @@ class QSocHookManager;
 class QSocLoopScheduler;
 
 #include <atomic>
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <QElapsedTimer>
 #include <QList>
@@ -24,6 +25,24 @@ class QSocLoopScheduler;
 #include <QTimer>
 
 using json = nlohmann::json;
+
+/**
+ * @brief Verdict from the plan-mode shell safety judge
+ * @details readOnly is true when the command only observes state; reason
+ *          carries a short human explanation surfaced to the model when a
+ *          command is blocked.
+ */
+struct QSocBashSafety
+{
+    bool    readOnly = false;
+    QString reason;
+};
+
+/* Judges whether a shell command is read-only for plan mode. Injected so
+ * production wires it to an isolated LLM classifier call while tests pass
+ * a deterministic stub. Unset = fail-closed (treat every command as
+ * mutating). */
+using QSocBashSafetyJudge = std::function<QSocBashSafety(const QString &command)>;
 
 /**
  * @brief The QSocAgent class provides an AI agent for SoC design automation
@@ -166,6 +185,34 @@ public:
      * @return Pointer (may be nullptr if never set).
      */
     QSocToolRegistry *getToolRegistry() const { return toolRegistry; }
+
+    /**
+     * @brief Set the approved plan carried into the execution phase
+     * @details Single-slot string, re-injected as a system message each
+     *          turn (never persisted into the history), so a new plan
+     *          overwrites the old and it survives pruning/compaction for
+     *          free. Empty clears the plan. The caller budget-caps the
+     *          text and keeps the full copy on disk.
+     * @param plan Approved plan text (already budget-capped by the caller)
+     */
+    void setApprovedPlan(const QString &plan);
+
+    /**
+     * @brief Get the active approved plan (empty when none).
+     */
+    QString approvedPlan() const { return approvedPlan_; }
+
+    /**
+     * @brief Install the plan-mode shell safety judge
+     * @details Called at dispatch for bash / remote_shell_bash while in
+     *          plan mode. Unset means fail-closed (all shell blocked).
+     */
+    void setBashSafetyJudge(QSocBashSafetyJudge judge) { bashSafetyJudge_ = std::move(judge); }
+
+    /**
+     * @brief Read the installed shell safety judge (may be empty).
+     */
+    const QSocBashSafetyJudge &bashSafetyJudge() const { return bashSafetyJudge_; }
 
     /**
      * @brief Set the reasoning effort level
@@ -403,6 +450,12 @@ signals:
     void reasoningChunk(const QString &chunk);
 
 private:
+    /* Approved plan carried into the execution phase (plan mode). Single
+     * slot: pinned into the message history exactly once. */
+    QString approvedPlan_;
+    /* Plan-mode shell safety judge (empty = fail-closed). */
+    QSocBashSafetyJudge bashSafetyJudge_;
+
     QLLMService           *llmService    = nullptr;
     QSocToolRegistry      *toolRegistry  = nullptr;
     QSocMemoryManager     *memoryManager = nullptr;

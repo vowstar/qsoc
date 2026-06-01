@@ -65,6 +65,17 @@ public:
     virtual void abort();
 
     /**
+     * @brief Whether the tool only observes state and never mutates it
+     * @details Fail-closed default: tools are assumed to write unless they
+     *          explicitly opt in. Plan mode uses this to permit read-only
+     *          tools while blocking anything that could change the project,
+     *          filesystem, or remote host. Shell tools stay false (their
+     *          per-command safety is judged at dispatch instead).
+     * @return true if the tool is side-effect-free
+     */
+    virtual bool isReadOnly() const { return false; }
+
+    /**
      * @brief Get the tool definition in OpenAI function format
      * @return JSON object in OpenAI tool format
      */

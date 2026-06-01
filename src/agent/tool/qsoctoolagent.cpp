@@ -552,6 +552,12 @@ QString QSocToolAgent::execute(const json &arguments)
     auto *childLlm = effectiveLlm->clone(nullptr);
     auto *child    = new QSocAgent(nullptr, childLlm, effectiveRegistry, childCfg);
     childLlm->setParent(child); /* tie LLM lifetime to child */
+    /* planMode rides childCfg (copied from the parent). The shell safety
+     * judge is a separate member, so hand it down too: a read-only
+     * exploration child judges its own bash the same way. */
+    if (childCfg.planMode && parentAgent_ != nullptr) {
+        child->setBashSafetyJudge(parentAgent_->bashSafetyJudge());
+    }
     if (memoryManager_ != nullptr && def->injectMemory) {
         child->setMemoryManager(memoryManager_);
     }
