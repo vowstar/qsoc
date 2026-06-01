@@ -37,6 +37,15 @@ const char *const kPlanModeReminder
       "intent is pinned, call exit_plan_mode to present it for approval. "
       "End every turn with either ask_user or exit_plan_mode.";
 
+/* Injected each turn while the terminal is unfocused (user not watching).
+ * Steers away from blocking ask_user prompts so an unattended run keeps
+ * moving. Never persisted. */
+const char *const kNotWatchingReminder
+    = "The user is not actively watching the terminal right now. Do not "
+      "pause for non-critical clarifications: prefer the most reasonable, "
+      "reversible default, state the assumption, and keep going. Reserve "
+      "ask_user for a genuinely blocking, irreversible decision.";
+
 } // namespace
 
 QSocAgent::QSocAgent(
@@ -514,6 +523,11 @@ void QSocAgent::processStreamIteration()
     if (agentConfig.planMode) {
         messagesWithSystem.push_back({{"role", "system"}, {"content", kPlanModeReminder}});
     }
+    /* Focus-aware: when the user is not watching, steer away from
+     * blocking ask_user prompts. Never persisted (tracks live focus). */
+    if (userWatchingProbe_ && !userWatchingProbe_()) {
+        messagesWithSystem.push_back({{"role", "system"}, {"content", kNotWatchingReminder}});
+    }
     /* Approved plan handoff: re-injected each turn (like the reminder,
      * never persisted) so the executing model keeps the plan across
      * pruning and compaction. Single, budget-capped copy. */
@@ -730,6 +744,11 @@ bool QSocAgent::processIteration()
     }
     if (agentConfig.planMode) {
         messagesWithSystem.push_back({{"role", "system"}, {"content", kPlanModeReminder}});
+    }
+    /* Focus-aware: when the user is not watching, steer away from
+     * blocking ask_user prompts. Never persisted (tracks live focus). */
+    if (userWatchingProbe_ && !userWatchingProbe_()) {
+        messagesWithSystem.push_back({{"role", "system"}, {"content", kNotWatchingReminder}});
     }
     /* Approved plan handoff: re-injected each turn (like the reminder,
      * never persisted) so the executing model keeps the plan across
