@@ -2588,9 +2588,6 @@ bool QSocCliWorker::runAgentLoop(
                                 + QStringLiteral("\n...[truncated; full plan at %1]").arg(planFile);
                 }
                 agent->setApprovedPlan(inContext);
-                if (currentSession) {
-                    currentSession->appendMeta(QStringLiteral("approved_plan"), planFile);
-                }
                 compositor
                     .printContent(QStringLiteral("Plan approved. Executing.\n"), QTuiScrollView::Dim);
                 approval.approved = true;
