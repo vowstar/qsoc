@@ -341,6 +341,17 @@ plan is saved to `<project>/.qsoc/plans/<session>.md`, and a budget-capped
 copy rides every subsequent turn so the executing agent keeps following
 it across context compaction. A newer approved plan replaces the old one.
 
+=== Focus-Aware Prompting
+
+When the terminal supports focus reporting (DECSET 1004), qsoc tracks
+whether its window is the active one. If you switch away mid-run, the
+agent is steered to stop pausing for non-critical `ask_user` questions
+and instead proceed on reasonable, reversible defaults, so an unattended
+run keeps moving instead of blocking on a prompt nobody answers; a
+`[away]` chip shows in the status bar. Terminals or multiplexers that do
+not report focus (e.g. tmux without `focus-events on`) are treated as
+focused, so behavior is unchanged there.
+
 == KEYBOARD AND INPUT
 <agent-keyboard>
 Editing and navigation in the prompt:
