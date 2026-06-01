@@ -16,7 +16,7 @@ private slots:
     void plainTextRoundsTripsAsUnifiedDiff();
     void markdownWrapsInDiffFence();
     void foldCollapsesToSummary();
-    void wideRowReportsHorizontalOverflow();
+    void wideRowLaysOut();
 };
 
 void Test::emptyDiffStillCarriesHeaders()
@@ -74,12 +74,14 @@ void Test::foldCollapsesToSummary()
     QCOMPARE(block.rowCount(), 1);
 }
 
-void Test::wideRowReportsHorizontalOverflow()
+void Test::wideRowLaysOut()
 {
+    /* A row far wider than the viewport still lays out without error.
+     * Horizontal scroll has been removed; Stage 4 makes diffs wrap. */
     QTuiDiffBlock block(QStringLiteral("a/x"), QStringLiteral("b/x"));
     block.addRow(QTuiDiffBlock::Kind::Add, QString(120, QLatin1Char('A')));
     block.layout(40);
-    QVERIFY(block.maxXOffset(40) > 0);
+    QVERIFY(block.rowCount() >= 1);
 }
 
 QSOC_TEST_MAIN(Test)

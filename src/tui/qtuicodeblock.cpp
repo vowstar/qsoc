@@ -4,6 +4,7 @@
 #include "tui/qtuicodeblock.h"
 
 #include "common/qsoccodehighlighter.h"
+#include "tui/qtuitextlayout.h"
 #include "tui/qtuiwidget.h"
 
 #include <QStringList>
@@ -52,33 +53,35 @@ void QTuiCodeBlock::appendBody(const QString &chunk)
 
 void QTuiCodeBlock::layout(int width)
 {
-    Q_UNUSED(width);
-    if (!layoutDirty) {
+    if (!layoutDirty && layoutWidth == width) {
         return;
     }
     layoutDirty = false;
-    rendered.clear();
+    layoutWidth = width;
+    rows.clear();
+    logicalLines_.clear();
 
     if (folded) {
         const int lines = sourceCode.count(QLatin1Char('\n'))
                           + (sourceCode.isEmpty() || sourceCode.endsWith(QLatin1Char('\n')) ? 0 : 1);
-        rendered.append(
-            QList<QTuiStyledRun>{
-                summaryRun(QStringLiteral("▸ %1 code (%2 lines)")
-                               .arg(language.isEmpty() ? QStringLiteral("code") : language)
-                               .arg(lines))});
+        rows.append(
+            {.runs             = QList<QTuiStyledRun>{summaryRun(
+                 QStringLiteral("▸ %1 code (%2 lines)")
+                     .arg(language.isEmpty() ? QStringLiteral("code") : language)
+                     .arg(lines))},
+             .logicalLineIndex = -1});
         return;
     }
 
     /* Header banner mirrors the markdown renderer's CodeBlock kind so
      * a streaming-split block is visually indistinguishable from a
-     * non-streaming one. */
+     * non-streaming one. Index -1 keeps drag-copy off the banner. */
     {
         QList<QTuiStyledRun> header;
         header.append(cyanDim(QStringLiteral("┄┄┄ ")));
         header.append(cyanDim(language.isEmpty() ? QStringLiteral("code") : language));
         header.append(cyanDim(QStringLiteral(" ┄┄┄")));
-        rendered.append(header);
+        rows.append({.runs = header, .logicalLineIndex = -1});
     }
 
     const QStringList lines = sourceCode.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
@@ -89,6 +92,12 @@ void QTuiCodeBlock::layout(int width)
         --count;
     }
     for (int idx = 0; idx < count; ++idx) {
+        const int lineIdx = logicalLines_.size();
+        logicalLines_.append(lines[idx]);
+
+        /* `▎ ` decorative gutter then the highlighted code. The whole
+         * row soft-wraps to width; continuation rows carry no gutter,
+         * which is fine because the gutter is decoration only. */
         QList<QTuiStyledRun> row;
         row.append(cyanDim(QStringLiteral("▎ ")));
         const auto tokens = QSocCodeHighlighter::highlight(lines[idx], language);
@@ -97,19 +106,16 @@ void QTuiCodeBlock::layout(int width)
             if (forceDim_) {
                 run.dim    = true;
                 run.italic = true;
-                /* Keep the highlighter colors visible but a notch
-                 * dimmer; resetting the fg would erase reasoning code
-                 * differentiation entirely. */
             }
             row.append(run);
         }
-        rendered.append(row);
+        rows.append(qtuiWrapStyledRuns(row, lineIdx, width));
     }
 }
 
 int QTuiCodeBlock::rowCount() const
 {
-    return static_cast<int>(rendered.size());
+    return static_cast<int>(rows.size());
 }
 
 void QTuiCodeBlock::paintRow(
@@ -121,27 +127,16 @@ void QTuiCodeBlock::paintRow(
     bool        focused,
     bool        selected) const
 {
+    Q_UNUSED(xOffset);
     Q_UNUSED(focused);
     Q_UNUSED(selected);
-    if (viewportRow < 0 || viewportRow >= rendered.size()) {
+    if (viewportRow < 0 || viewportRow >= rows.size()) {
         return;
     }
-    /* Code rows are noWrap by design — long lines clip via xOffset
-     * rather than soft-wrapping which would break gutter alignment. */
-    int       skipped = 0;
-    int       painted = 0;
-    const int effX    = std::max(0, xOffset);
-    for (const QTuiStyledRun &run : rendered[viewportRow]) {
+    int painted = 0;
+    for (const QTuiStyledRun &run : rows[viewportRow].runs) {
         for (const QChar character : run.text) {
             const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
-            if (skipped + chW <= effX) {
-                skipped += chW;
-                continue;
-            }
-            if (skipped < effX) {
-                skipped += chW;
-                continue;
-            }
             if (painted + chW > width) {
                 return;
             }
@@ -161,29 +156,21 @@ void QTuiCodeBlock::paintRow(
     }
 }
 
-int QTuiCodeBlock::maxXOffset(int width) const
-{
-    if (width <= 0) {
-        return 0;
-    }
-    int longest = 0;
-    for (const auto &row : rendered) {
-        int rowWidth = 0;
-        for (const QTuiStyledRun &run : row) {
-            for (const QChar character : run.text) {
-                rowWidth += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
-            }
-        }
-        longest = std::max(longest, rowWidth);
-    }
-    return std::max(0, longest - width);
-}
-
 QString QTuiCodeBlock::toPlainText() const
 {
     /* Raw body verbatim. No fences, no banner, no gutter. This is the
      * whole reason the block exists. */
     return sourceCode;
+}
+
+QString QTuiCodeBlock::selectedLogicalText(
+    int rowStartInBlock, int colStart, int rowEndInBlock, int colEnd) const
+{
+    if (folded) {
+        return {};
+    }
+    return qtuiSelectedLogicalText(
+        rows, logicalLines_, rowStartInBlock, colStart, rowEndInBlock, colEnd);
 }
 
 QString QTuiCodeBlock::toMarkdown() const

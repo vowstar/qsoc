@@ -3,6 +3,7 @@
 
 #include "qsoc_test.h"
 #include "tui/qtuiassistanttextblock.h"
+#include "tui/qtuicodeblock.h"
 
 #include <QtTest>
 
@@ -15,6 +16,8 @@ private slots:
     void blockquoteCopyExcludesGutter();
     void columnSubrangeWithinRowCopiesSubstring();
     void foldedBlockDeclinesMapping();
+    void codeBlockCopyExcludesGutterAndBanner();
+    void wrappedCodeLineCopiesAsSingleLine();
 };
 
 void Test::wrappedParagraphCopiesAsSingleLine()
@@ -62,6 +65,30 @@ void Test::foldedBlockDeclinesMapping()
 
     const QString copied = block.selectedLogicalText(0, 0, block.rowCount() - 1, 1000);
     QVERIFY(copied.isNull());
+}
+
+void Test::codeBlockCopyExcludesGutterAndBanner()
+{
+    /* Copying a code block yields the raw code lines: no banner, no
+     * `▎ ` gutter (both decorative). */
+    QTuiCodeBlock block(QStringLiteral("py"), QStringLiteral("x = 1\ny = 2\n"), false, 1);
+    block.layout(40);
+
+    const QString copied = block.selectedLogicalText(0, 0, block.rowCount() - 1, 1000);
+    QCOMPARE(copied, QStringLiteral("x = 1\ny = 2"));
+}
+
+void Test::wrappedCodeLineCopiesAsSingleLine()
+{
+    /* A long code line wraps onto several rows but copies back as one
+     * logical line (no fragmentation). */
+    const QString code = QStringLiteral("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ");
+    QTuiCodeBlock block(QString(), code + QLatin1Char('\n'), false, 1);
+    block.layout(20);
+    QVERIFY(block.rowCount() > 2); /* banner + multiple wrapped rows */
+
+    const QString copied = block.selectedLogicalText(0, 0, block.rowCount() - 1, 1000);
+    QCOMPARE(copied, code);
 }
 
 QSOC_TEST_MAIN(Test)

@@ -61,7 +61,6 @@ public:
         bool        selected) const override;
 
     bool isFoldable() const override { return true; }
-    int  maxXOffset(int width) const override;
 
     QString toPlainText() const override;
     QString toMarkdown() const override;

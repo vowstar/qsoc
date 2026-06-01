@@ -11,16 +11,16 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
-    void narrowTableDegradesToRecords();
-    void plainProseHasNoHorizontalScroll();
-    void longCodeLineClipsOnHorizontalScroll();
+    void narrowTableProducesRecordRows();
+    void plainProseWrapsToMultipleRows();
+    void longCodeLineWrapsWhenNarrow();
 };
 
-void Test::narrowTableDegradesToRecords()
+void Test::narrowTableProducesRecordRows()
 {
-    /* A 5-column table whose minimum row width cannot fit 20 cells must
-     * degrade to vertical key/value records (one wrapped line per cell),
-     * not horizontal scroll. So rowCount grows and maxXOffset stays 0. */
+    /* A 5-column table that cannot fit at width 20 degrades to vertical
+     * key/value records (one row per cell), so a single body row yields
+     * at least 5 rows instead of overflowing. */
     const QString markdown = QStringLiteral(
         "| Column One | Column Two | Column Three | Column Four | Column Five |\n"
         "|---|---|---|---|---|\n"
@@ -28,39 +28,35 @@ void Test::narrowTableDegradesToRecords()
     QTuiAssistantTextBlock block(markdown);
     block.layout(20);
     QVERIFY(block.rowCount() >= 5);
-    QCOMPARE(block.maxXOffset(20), 0);
 }
 
-void Test::plainProseHasNoHorizontalScroll()
+void Test::plainProseWrapsToMultipleRows()
 {
+    /* Long prose soft-wraps to the viewport width across several rows. */
     QTuiAssistantTextBlock block(
-        QStringLiteral("alpha bravo charlie delta echo foxtrot golf hotel\n"));
+        QStringLiteral("alpha bravo charlie delta echo foxtrot golf hotel india"));
     block.layout(15);
-    QCOMPARE(block.maxXOffset(15), 0);
+    QVERIFY(block.rowCount() >= 3);
 }
 
-void Test::longCodeLineClipsOnHorizontalScroll()
+void Test::longCodeLineWrapsWhenNarrow()
 {
-    /* Code blocks stay noWrap and keep horizontal scroll. A long code
-     * line wider than the pane reports maxXOffset > 0, and painting with
-     * xOffset > 0 clips the leftmost cells. */
+    /* Code blocks now wrap instead of horizontally scrolling: a long
+     * code line occupies more rows at a narrow width than at a wide
+     * one. */
     const QString markdown = QStringLiteral(
         "```\n"
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n"
         "```\n");
     QTuiAssistantTextBlock block(markdown);
+
     block.layout(20);
-    QVERIFY(block.maxXOffset(20) > 0);
+    const int narrowRows = block.rowCount();
+    block.layout(200);
+    const int wideRows = block.rowCount();
 
-    QTuiScreen left(20, 6);
-    block.paintRow(left, 0, 0, 0, 20, false, false);
-    const QChar leftFirst = left.at(0, 0).character;
-
-    QTuiScreen shifted(20, 6);
-    block.paintRow(shifted, 0, 0, 4, 20, false, false);
-    const QChar shiftedFirst = shifted.at(0, 0).character;
-
-    QVERIFY(leftFirst != shiftedFirst);
+    QVERIFY(wideRows >= 2);         /* banner + one code row */
+    QVERIFY(narrowRows > wideRows); /* the long line wrapped */
 }
 
 QSOC_TEST_MAIN(Test)

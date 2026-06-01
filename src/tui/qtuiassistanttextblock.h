@@ -5,6 +5,7 @@
 #define QTUIASSISTANTTEXTBLOCK_H
 
 #include "tui/qtuiblock.h"
+#include "tui/qtuitextlayout.h"
 
 #include <QList>
 #include <QString>
@@ -49,7 +50,6 @@ public:
         bool        selected) const override;
 
     bool isFoldable() const override { return true; }
-    int  maxXOffset(int width) const override;
 
     QString toPlainText() const override;
     QString toMarkdown() const override { return source; }
@@ -57,28 +57,14 @@ public:
         int rowStartInBlock, int colStart, int rowEndInBlock, int colEnd) const override;
 
 private:
-    /* Each cached row is a list of styled runs. Rows tagged noWrap
-     * (tables, code blocks) carry visual widths greater than
-     * layoutWidth and rely on xOffset-based horizontal scrolling
-     * instead of soft-wrapping.
-     *
-     * logicalLineIndex points into logicalLines_ (the decoration-
-     * stripped pre-wrap text of the rendered line this row came from);
-     * startColInLogical is the char offset of this row's first cell
-     * within that logical line. Together they let selectedLogicalText
-     * map a visual sub-rectangle back to unwrapped logical text. */
-    struct Row
-    {
-        QList<QTuiStyledRun> runs;
-        bool                 noWrap            = false;
-        int                  logicalLineIndex  = -1;
-        int                  startColInLogical = 0;
-    };
-
-    QString     source;
-    QList<Row>  rows;
-    QStringList logicalLines_;
-    bool        forceDim = false;
+    /* Cached visual rows (post soft-wrap) plus the decoration-stripped
+     * logical text of each rendered line. Each row's logicalLineIndex /
+     * startColInLogical let selectedLogicalText map a visual rectangle
+     * back to unwrapped logical text. */
+    QString              source;
+    QList<QTuiVisualRow> rows;
+    QStringList          logicalLines_;
+    bool                 forceDim = false;
 };
 
 #endif // QTUIASSISTANTTEXTBLOCK_H

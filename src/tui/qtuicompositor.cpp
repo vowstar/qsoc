@@ -419,13 +419,6 @@ void QTuiCompositor::clearBlockFocus()
     render();
 }
 
-void QTuiCompositor::scrollFocusedBlockHorizontal(int delta)
-{
-    scrollView.scrollFocusedHorizontal(delta);
-    screen.invalidate();
-    render();
-}
-
 bool QTuiCompositor::copyFocusedBlock()
 {
     /* Markdown form is the right copy default: it round-trips through
