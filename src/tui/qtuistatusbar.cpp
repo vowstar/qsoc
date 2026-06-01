@@ -41,6 +41,9 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
         if (planMode_) {
             line += QStringLiteral(" [⏸ PLAN]");
         }
+        if (!userWatching_) {
+            line += QStringLiteral(" [away]");
+        }
         if (!effortLevel.isEmpty()) {
             line += " [E:" + effortLevel + "]";
         }
@@ -119,6 +122,9 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     }
     if (planMode_) {
         line += QStringLiteral(" [⏸ PLAN]");
+    }
+    if (!userWatching_) {
+        line += QStringLiteral(" [away]");
     }
     if (!effortLevel.isEmpty()) {
         line += QString(" [E:%1]").arg(effortLevel);
@@ -199,6 +205,11 @@ void QTuiStatusBar::setEffortLevel(const QString &level)
 void QTuiStatusBar::setPlanMode(bool active)
 {
     planMode_ = active;
+}
+
+void QTuiStatusBar::setUserWatching(bool watching)
+{
+    userWatching_ = watching;
 }
 
 void QTuiStatusBar::setModel(const QString &model)
