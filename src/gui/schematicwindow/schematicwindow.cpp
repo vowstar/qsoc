@@ -123,6 +123,11 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
 
 SchematicWindow::~SchematicWindow()
 {
+    /* Detach filters before delete ui: a widget destroyed by delete ui
+     * can still deliver events, and routing them into eventFilter after
+     * schematicView is half-freed dereferences a dangling pointer. */
+    ui->schematicView->viewport()->removeEventFilter(this);
+    ui->schematicView->removeEventFilter(this);
     delete ui;
 }
 
