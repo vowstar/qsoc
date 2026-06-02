@@ -72,7 +72,13 @@ class TestQSocLoopScheduler : public QObject
     Q_OBJECT
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
+    void initTestCase()
+    {
+        TestApp::instance();
+#ifdef Q_OS_WIN
+        QSKIP("requires a POSIX shell (/bin/bash); not supported on Windows");
+#endif
+    }
 
     /* ---- parseLoopArgs (cron-based) ---- */
 
