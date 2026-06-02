@@ -44,6 +44,30 @@ bool QSocSftpClient::waitReady()
     return QSocSshSession::waitSocket(m_session.socketFd(), m_session.rawSession(), kWaitMs) >= 0;
 }
 
+void QSocSftpClient::drainClose(LIBSSH2_SFTP_HANDLE *handle)
+{
+    if (handle == nullptr) {
+        return;
+    }
+    while (libssh2_sftp_close(handle) == LIBSSH2_ERROR_EAGAIN) {
+        if (!waitReady()) {
+            break;
+        }
+    }
+}
+
+void QSocSftpClient::drainUnlink(const QByteArray &path)
+{
+    if (m_sftp == nullptr) {
+        return;
+    }
+    while (libssh2_sftp_unlink(m_sftp, path.constData()) == LIBSSH2_ERROR_EAGAIN) {
+        if (!waitReady()) {
+            break;
+        }
+    }
+}
+
 bool QSocSftpClient::open(QString *errorMessage)
 {
     if (m_sftp != nullptr) {
@@ -118,16 +142,16 @@ QByteArray QSocSftpClient::readFile(const QString &path, qint64 maxBytes, QStrin
         if (nread == LIBSSH2_ERROR_EAGAIN) {
             if (!waitReady()) {
                 setError(QStringLiteral("Timed out reading %1").arg(path), errorMessage);
-                libssh2_sftp_close(handle);
+                drainClose(handle);
                 return {};
             }
             continue;
         }
         setError(QStringLiteral("SFTP read error on %1").arg(path), errorMessage);
-        libssh2_sftp_close(handle);
+        drainClose(handle);
         return {};
     }
-    libssh2_sftp_close(handle);
+    drainClose(handle);
     return out;
 }
 
@@ -170,34 +194,62 @@ bool QSocSftpClient::writeFile(const QString &path, const QByteArray &content, Q
         if (written == LIBSSH2_ERROR_EAGAIN) {
             if (!waitReady()) {
                 setError(QStringLiteral("Timed out writing %1").arg(tempPath), errorMessage);
-                libssh2_sftp_close(handle);
-                libssh2_sftp_unlink(m_sftp, tempPathBytes.constData());
+                drainClose(handle);
+                drainUnlink(tempPathBytes);
                 return false;
             }
             continue;
         }
         setError(QStringLiteral("SFTP write error on %1").arg(tempPath), errorMessage);
-        libssh2_sftp_close(handle);
-        libssh2_sftp_unlink(m_sftp, tempPathBytes.constData());
+        drainClose(handle);
+        drainUnlink(tempPathBytes);
         return false;
     }
-    libssh2_sftp_close(handle);
+    /* Drain the close: it flushes buffered writes and releases the server
+     * handle. In non-blocking mode an ignored EAGAIN here can leave the
+     * temp truncated or still-open when the rename below runs. */
+    while (libssh2_sftp_close(handle) == LIBSSH2_ERROR_EAGAIN) {
+        if (!waitReady()) {
+            setError(QStringLiteral("Timed out closing %1").arg(tempPath), errorMessage);
+            drainUnlink(tempPathBytes);
+            return false;
+        }
+    }
 
-    /* Unlink + rename rather than rename-over-existing. */
+    /* Replace the target with the temp file. The session is non-blocking,
+     * so the destination unlink MUST be driven to completion: a
+     * half-issued unlink (EAGAIN ignored) leaves the target in place and
+     * SSH_FXP_RENAME then fails on servers that refuse to overwrite on
+     * rename (standard SFTP v3 / OpenSSH). This is why editing an
+     * existing file failed intermittently while writing a new file did
+     * not. */
     const QByteArray finalBytes = path.toUtf8();
-    libssh2_sftp_unlink(m_sftp, finalBytes.constData());
+    int              urc        = 0;
+    while ((urc = libssh2_sftp_unlink(m_sftp, finalBytes.constData())) == LIBSSH2_ERROR_EAGAIN) {
+        if (!waitReady()) {
+            setError(QStringLiteral("Timed out clearing %1 before rename").arg(path), errorMessage);
+            drainUnlink(tempPathBytes);
+            return false;
+        }
+    }
+    /* urc == 0 (removed) or a NO_SUCH_FILE failure (target was absent)
+     * are both fine; the rename below reports anything that still bites. */
+
     int rc = 0;
     while ((rc = libssh2_sftp_rename(m_sftp, tempPathBytes.constData(), finalBytes.constData()))
            == LIBSSH2_ERROR_EAGAIN) {
         if (!waitReady()) {
             setError(QStringLiteral("Timed out renaming temp file for %1").arg(path), errorMessage);
-            libssh2_sftp_unlink(m_sftp, tempPathBytes.constData());
+            drainUnlink(tempPathBytes);
             return false;
         }
     }
     if (rc != 0) {
-        setError(QStringLiteral("SFTP rename failed for %1").arg(path), errorMessage);
-        libssh2_sftp_unlink(m_sftp, tempPathBytes.constData());
+        const unsigned long sftpErr = libssh2_sftp_last_error(m_sftp);
+        setError(
+            QStringLiteral("SFTP rename failed for %1 (sftp error %2)").arg(path).arg(sftpErr),
+            errorMessage);
+        drainUnlink(tempPathBytes);
         return false;
     }
     return true;
@@ -315,7 +367,11 @@ QList<QSocSftpClient::Entry> QSocSftpClient::listDir(
         }
         break;
     }
-    libssh2_sftp_closedir(handle);
+    while (libssh2_sftp_closedir(handle) == LIBSSH2_ERROR_EAGAIN) {
+        if (!waitReady()) {
+            break;
+        }
+    }
     return entries;
 }
 
