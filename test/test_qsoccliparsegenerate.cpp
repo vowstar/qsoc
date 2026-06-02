@@ -3971,15 +3971,12 @@ net:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        const QString outPath
-            = QDir(projectManager.getOutputPath()).filePath("test_net_top_collision.v");
-        QFile rawOut(outPath);
-        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QByteArray rawBytes = rawOut.readAll();
-        rawOut.close();
-        QVERIFY(rawBytes.contains("output wire [7:0] data_bus"));
-        QVERIFY(!rawBytes.contains("wire [7:0] data_bus;"));
-        QVERIFY(rawBytes.contains("u_drv (.out8(data_bus))"));
+        /* Assert via verifyVerilogContent so the check is whitespace- and
+         * formatter-agnostic: the instance reads compact or multi-line
+         * depending on whether verible-verilog-format is present. */
+        QVERIFY(verifyVerilogContent("test_net_top_collision", "output wire [7:0] data_bus"));
+        QVERIFY(!verifyVerilogContent("test_net_top_collision", "wire [7:0] data_bus;"));
+        QVERIFY(verifyVerilogContent("test_net_top_collision", "u_drv (.out8(data_bus))"));
     }
 
     /**
@@ -4206,15 +4203,10 @@ net:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        const QString outPath
-            = QDir(projectManager.getOutputPath()).filePath("test_bits_malformed.v");
-        QFile rawOut(outPath);
-        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QByteArray rawBytes = rawOut.readAll();
-        rawOut.close();
-        QVERIFY(rawBytes.contains("u_drv (.out4(data_bus))"));
-        QVERIFY(rawBytes.contains("u_rcv (.in8(data_bus))"));
-        QVERIFY(!rawBytes.contains("data_bus[]"));
+        /* Formatter-agnostic assertions (see the wire-decl test above). */
+        QVERIFY(verifyVerilogContent("test_bits_malformed", "u_drv (.out4(data_bus))"));
+        QVERIFY(verifyVerilogContent("test_bits_malformed", "u_rcv (.in8(data_bus))"));
+        QVERIFY(!verifyVerilogContent("test_bits_malformed", "data_bus[]"));
     }
 
     /**
