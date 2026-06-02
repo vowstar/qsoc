@@ -88,6 +88,33 @@ private:
         return !QStandardPaths::findExecutable(QStringLiteral("ssh-keygen")).isEmpty();
     }
 
+    /* A named-curve P-256 key embeds the prime256v1 OID; an explicit-parameter
+     * key (LibreSSL's "-m PEM" output) spells out the field prime instead and
+     * lacks the OID. mbedTLS cannot parse the explicit form. */
+    static bool keyHasExplicitEcParams(const QString &privPath)
+    {
+        QFile file(privPath);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return false;
+        }
+        QByteArray              body;
+        bool                    inKey = false;
+        const QList<QByteArray> lines = file.readAll().split('\n');
+        for (const QByteArray &line : lines) {
+            const QByteArray trimmed = line.trimmed();
+            if (trimmed.startsWith("-----BEGIN EC PRIVATE KEY")) {
+                inKey = true;
+            } else if (trimmed.startsWith("-----END EC PRIVATE KEY")) {
+                break;
+            } else if (inKey) {
+                body += trimmed;
+            }
+        }
+        const QByteArray        der      = QByteArray::fromBase64(body);
+        static const QByteArray kP256Oid = QByteArray::fromHex("06082a8648ce3d030107");
+        return !der.isEmpty() && !der.contains(kP256Oid);
+    }
+
 private slots:
     void initTestCase() { TestApp::instance(); }
 
@@ -131,6 +158,37 @@ private slots:
              QStringLiteral("256"),
              QStringLiteral("-m"),
              QStringLiteral("PEM")}));
+        const QString priv = QDir(tmp.path()).absoluteFilePath(QStringLiteral("priv"));
+        const QString want = readPubTruth(priv);
+        QVERIFY(!want.isEmpty());
+        QVERIFY(QFile::remove(priv + QStringLiteral(".pub")));
+        const QString got = stripComment(QSocSshPubDerive::fromPrivateKeyFile(priv));
+        if (got.isEmpty() && keyHasExplicitEcParams(priv)) {
+            /* LibreSSL's ssh-keygen (macOS) writes "-m PEM" ECDSA keys with
+             * explicit curve parameters, which mbedTLS cannot parse. Named
+             * curves and the OpenSSH container are both supported and
+             * exercised by the other cases. */
+            QSKIP(
+                "ssh-keygen emitted explicit EC parameters; mbedTLS cannot "
+                "parse them. OpenSSH-format ECDSA is covered separately.");
+        }
+        QCOMPARE(got, want);
+    }
+
+    void ecdsaP256OpensshContainer()
+    {
+        if (!haveSshKeygen()) {
+            QSKIP("ssh-keygen not available, skipping.");
+        }
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY(generateKey(
+            tmp.path(),
+            QStringLiteral("priv"),
+            {QStringLiteral("-t"),
+             QStringLiteral("ecdsa"),
+             QStringLiteral("-b"),
+             QStringLiteral("256")}));
         const QString priv = QDir(tmp.path()).absoluteFilePath(QStringLiteral("priv"));
         const QString want = readPubTruth(priv);
         QVERIFY(!want.isEmpty());
