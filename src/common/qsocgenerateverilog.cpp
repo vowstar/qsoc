@@ -442,7 +442,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
             try {
                 /* Build connections using List format only */
-                const YAML::Node &netNode = netIter->second;
+                const YAML::Node netNode = netIter->second;
                 if (netNode.IsSequence()) {
                     /* Per-net guard: a single instance.port can connect to a net at
                        most once. A second entry would silently overwrite the first
@@ -622,7 +622,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     continue;
                 }
 
-                const YAML::Node &connections = netIter->second;
+                const YAML::Node connections = netIter->second;
 
                 if (connections.size() == 0) {
                     QSocConsole::warn() << "Net" << netName << "has no connections, skipping";
@@ -1377,7 +1377,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 continue;
             }
 
-            const YAML::Node &instanceData = instanceIter->second;
+            const YAML::Node instanceData = instanceIter->second;
 
             if (!instanceData["module"] || !instanceData["module"].IsScalar()) {
                 QSocConsole::warn() << "Invalid module name for instance" << instanceName;

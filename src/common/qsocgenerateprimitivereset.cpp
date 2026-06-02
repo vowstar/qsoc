@@ -134,7 +134,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
     // Parse targets with component-based configuration
     if (resetNode["target"] && resetNode["target"].IsMap()) {
         for (auto tgtIt = resetNode["target"].begin(); tgtIt != resetNode["target"].end(); ++tgtIt) {
-            const YAML::Node &tgtNode = tgtIt->second;
+            const YAML::Node tgtNode = tgtIt->second;
             if (!tgtNode.IsMap())
                 continue;
 
