@@ -250,8 +250,8 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
     prepared.reserve(instanceCount);
 
     for (auto it = instances.begin(); it != instances.end(); ++it) {
-        const QString     instanceName = QString::fromStdString(it->first.as<std::string>());
-        const YAML::Node &instNode     = it->second;
+        const QString    instanceName = QString::fromStdString(it->first.as<std::string>());
+        const YAML::Node instNode     = it->second;
         if (!instNode.IsMap()) {
             continue;
         }
