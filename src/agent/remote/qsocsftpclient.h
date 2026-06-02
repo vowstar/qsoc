@@ -73,6 +73,13 @@ public:
 private:
     bool waitReady();
     void setError(const QString &msg, QString *sink);
+    /* Drive a close / unlink to completion on the non-blocking session.
+     * Best-effort: an EAGAIN is retried until the socket is ready, but a
+     * waitReady timeout stops the loop so a cleanup path cannot hang.
+     * Used everywhere instead of bare libssh2 calls so a half-issued
+     * (EAGAIN-ignored) op never leaks a handle or a temp file. */
+    void drainClose(LIBSSH2_SFTP_HANDLE *handle);
+    void drainUnlink(const QByteArray &path);
 
     QSocSshSession &m_session;
     LIBSSH2_SFTP   *m_sftp = nullptr;
