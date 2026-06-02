@@ -7,8 +7,14 @@
 #include <QtTest>
 
 #ifndef Q_OS_WIN
-#include <pty.h>
 #include <unistd.h>
+#if defined(__FreeBSD__)
+#include <libutil.h>
+#elif defined(__APPLE__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#include <util.h>
+#else
+#include <pty.h>
+#endif
 #endif
 
 class Test : public QObject
