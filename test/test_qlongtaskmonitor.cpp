@@ -4,8 +4,6 @@
 #include "common/qlongtaskmonitor.h"
 #include "qsoc_test.h"
 
-#include <unistd.h>
-
 #include <QObject>
 #include <QSignalSpy>
 #include <QtCore>
