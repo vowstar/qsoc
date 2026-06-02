@@ -127,6 +127,11 @@ PrcWindow::PrcWindow(QWidget *parent, QSocProjectManager *projectManager)
  */
 PrcWindow::~PrcWindow()
 {
+    /* Detach filters before delete ui: a widget destroyed by delete ui
+     * can still deliver events, and routing them into eventFilter after
+     * prcView is half-freed dereferences a dangling pointer. */
+    ui->prcView->viewport()->removeEventFilter(this);
+    ui->prcView->removeEventFilter(this);
     delete ui;
 }
 
