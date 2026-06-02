@@ -1936,6 +1936,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
 bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
 {
+    /* Verible formatting is a runtime convenience only. Tests set
+     * QSOC_SKIP_VERIBLE_FORMAT=1 so generated output is deterministic and
+     * independent of whether (or which) verible-verilog-format is on PATH. */
+    if (qEnvironmentVariableIsSet("QSOC_SKIP_VERIBLE_FORMAT")) {
+        return false;
+    }
     /* Check if verible-verilog-format tool is available in the system */
     QProcess which;
     which.start("which", QStringList() << "verible-verilog-format");
