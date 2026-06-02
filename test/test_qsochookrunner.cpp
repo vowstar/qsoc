@@ -45,6 +45,9 @@ private:
 private slots:
     void initTestCase()
     {
+#ifdef Q_OS_WIN
+        QSKIP("requires a POSIX shell (/bin/bash); not supported on Windows");
+#endif
         static auto                   argc      = 1;
         static char                   appName[] = "qsoc_test";
         static std::array<char *, 1>  argv      = {{appName}};

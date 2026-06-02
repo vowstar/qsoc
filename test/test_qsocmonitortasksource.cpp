@@ -27,6 +27,13 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("requires a POSIX shell (/bin/bash); not supported on Windows");
+#endif
+    }
+
     void localMonitorEmitsLineEventsAndCompletion()
     {
         QSocTaskEventQueue    queue;
