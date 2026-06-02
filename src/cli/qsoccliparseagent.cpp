@@ -5878,7 +5878,9 @@ bool QSocCliWorker::runAgentLoop(
                      * the new content so the diff reads as a creation. */
                     if ((toolName == "edit_file" || toolName == "write_file")
                         && !pendingDiffPath.isEmpty()
-                        && result.startsWith(QStringLiteral("Successfully"))) {
+                        && (result.startsWith(QStringLiteral("Successfully"))
+                            || result.startsWith(QStringLiteral("Wrote"))
+                            || result.startsWith(QStringLiteral("Edited")))) {
                         renderDiffToScrollView(
                             pendingDiffPath, pendingDiffOldString, pendingDiffNewString);
                     }
@@ -6441,7 +6443,9 @@ bool QSocCliWorker::runAgentLoop(
                      * the new content so the diff reads as a creation. */
                     if ((toolName == "edit_file" || toolName == "write_file")
                         && !pendingDiffPath.isEmpty()
-                        && result.startsWith(QStringLiteral("Successfully"))) {
+                        && (result.startsWith(QStringLiteral("Successfully"))
+                            || result.startsWith(QStringLiteral("Wrote"))
+                            || result.startsWith(QStringLiteral("Edited")))) {
                         renderDiffToScrollView(
                             pendingDiffPath, pendingDiffOldString, pendingDiffNewString);
                     }
