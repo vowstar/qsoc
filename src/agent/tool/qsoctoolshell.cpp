@@ -28,9 +28,9 @@ constexpr qint64 kStuckTailBytes = 4096;
 
 /* Static members */
 QMap<int, QSocBashProcessInfo> QSocToolShellBash::activeProcesses;
-int                            QSocToolShellBash::nextProcessId  = 1;
-QProcess                      *QSocToolShellBash::currentProcess = nullptr;
-QEventLoop                    *QSocToolShellBash::currentLoop    = nullptr;
+int                            QSocToolShellBash::nextProcessId = 1;
+QSet<QProcess *>               QSocToolShellBash::inFlightProcs_;
+QSet<QEventLoop *>             QSocToolShellBash::inFlightLoops_;
 
 QSocToolShellBash::QSocToolShellBash(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
@@ -386,12 +386,15 @@ QString QSocToolShellBash::execute(const json &arguments)
 
     QTimer::singleShot(timeout, &loop, [&loop]() { loop.quit(); });
 
-    /* Set static pointers so abort() can reach us */
-    currentProcess = process;
-    currentLoop    = &loop;
+    /* Register this wait so abort() can reach it, even when several
+     * sub-agents run a foreground bash concurrently. Removed as soon as
+     * exec() returns; no event dispatch happens between, so the set
+     * stays balanced and never holds a returned (destroyed) loop. */
+    inFlightProcs_.insert(process);
+    inFlightLoops_.insert(&loop);
     loop.exec();
-    currentProcess = nullptr;
-    currentLoop    = nullptr;
+    inFlightLoops_.remove(&loop);
+    inFlightProcs_.remove(process);
 
     if (finished) {
         /* Process completed within timeout. Output is already on disk
@@ -457,11 +460,17 @@ QString QSocToolShellBash::execute(const json &arguments)
 
 void QSocToolShellBash::abort()
 {
-    if (currentProcess && currentProcess->state() != QProcess::NotRunning) {
-        currentProcess->kill();
+    /* Cancel every in-flight foreground wait, not just the most recent
+     * one: concurrent sub-agents may each be blocked in their own bash. */
+    for (QProcess *proc : std::as_const(inFlightProcs_)) {
+        if (proc != nullptr && proc->state() != QProcess::NotRunning) {
+            proc->kill();
+        }
     }
-    if (currentLoop && currentLoop->isRunning()) {
-        currentLoop->quit();
+    for (QEventLoop *loop : std::as_const(inFlightLoops_)) {
+        if (loop != nullptr && loop->isRunning()) {
+            loop->quit();
+        }
     }
 }
 

@@ -10,6 +10,7 @@
 #include <QEventLoop>
 #include <QMap>
 #include <QProcess>
+#include <QSet>
 #include <QTimer>
 
 /**
@@ -115,8 +116,14 @@ signals:
 private:
     QSocProjectManager *projectManager = nullptr;
 
-    static QProcess   *currentProcess;
-    static QEventLoop *currentLoop;
+    /* In-flight synchronous waits. A single shared slot would be
+     * trampled when concurrent sub-agents each run a foreground bash
+     * (one nested inside another's event loop), so abort() must reach
+     * every live wait, not just the last one registered. Single-thread,
+     * so a plain set is safe; entries are added before loop.exec() and
+     * removed right after it returns (no event dispatch in between). */
+    static QSet<QProcess *>   inFlightProcs_;
+    static QSet<QEventLoop *> inFlightLoops_;
 
     static QMap<int, QSocBashProcessInfo> activeProcesses;
     static int                            nextProcessId;

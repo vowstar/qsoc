@@ -115,10 +115,10 @@ QString QSocToolWebSearch::execute(const json &arguments)
 
     /* Execute request */
     QNetworkReply *reply = networkManager->get(request);
-    currentReply         = reply;
 
     QEventLoop loop;
-    currentLoop = &loop;
+    inFlightReplies_.insert(reply);
+    inFlightLoops_.insert(&loop);
 
     bool finished = false;
     QObject::connect(reply, &QNetworkReply::finished, &loop, [&finished, &loop]() {
@@ -144,8 +144,8 @@ QString QSocToolWebSearch::execute(const json &arguments)
 
     loop.exec();
     monitor.finish();
-    currentReply = nullptr;
-    currentLoop  = nullptr;
+    inFlightLoops_.remove(&loop);
+    inFlightReplies_.remove(reply);
 
     if (!finished) {
         reply->abort();
@@ -220,11 +220,17 @@ QString QSocToolWebSearch::execute(const json &arguments)
 
 void QSocToolWebSearch::abort()
 {
-    if (currentReply && currentReply->isRunning()) {
-        currentReply->abort();
+    /* Cancel every in-flight request/wait, not just the most recent:
+     * concurrent sub-agents may share this tool instance. */
+    for (QNetworkReply *reply : std::as_const(inFlightReplies_)) {
+        if (reply != nullptr && reply->isRunning()) {
+            reply->abort();
+        }
     }
-    if (currentLoop && currentLoop->isRunning()) {
-        currentLoop->quit();
+    for (QEventLoop *loop : std::as_const(inFlightLoops_)) {
+        if (loop != nullptr && loop->isRunning()) {
+            loop->quit();
+        }
     }
 }
 
@@ -839,7 +845,6 @@ QString QSocToolWebFetch::execute(const json &arguments)
 
     /* Execute request */
     QNetworkReply *reply = networkManager->get(request);
-    currentReply         = reply;
 
     QEventLoop       loop;
     QLongTaskMonitor monitor(
@@ -874,7 +879,8 @@ QString QSocToolWebFetch::execute(const json &arguments)
     });
     monitor.start();
 
-    currentLoop = &loop;
+    inFlightReplies_.insert(reply);
+    inFlightLoops_.insert(&loop);
 
     bool finished = false;
     QObject::connect(reply, &QNetworkReply::finished, &loop, [&finished, &loop]() {
@@ -884,8 +890,8 @@ QString QSocToolWebFetch::execute(const json &arguments)
 
     loop.exec();
     monitor.finish();
-    currentReply = nullptr;
-    currentLoop  = nullptr;
+    inFlightLoops_.remove(&loop);
+    inFlightReplies_.remove(reply);
 
     if (stalled) {
         reply->deleteLater();
@@ -968,11 +974,17 @@ QString QSocToolWebFetch::execute(const json &arguments)
 
 void QSocToolWebFetch::abort()
 {
-    if (currentReply && currentReply->isRunning()) {
-        currentReply->abort();
+    /* Cancel every in-flight request/wait, not just the most recent:
+     * concurrent sub-agents may share this tool instance. */
+    for (QNetworkReply *reply : std::as_const(inFlightReplies_)) {
+        if (reply != nullptr && reply->isRunning()) {
+            reply->abort();
+        }
     }
-    if (currentLoop && currentLoop->isRunning()) {
-        currentLoop->quit();
+    for (QEventLoop *loop : std::as_const(inFlightLoops_)) {
+        if (loop != nullptr && loop->isRunning()) {
+            loop->quit();
+        }
     }
 }
 

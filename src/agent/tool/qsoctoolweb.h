@@ -12,6 +12,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QPointer>
+#include <QSet>
 
 /**
  * @brief Tool to search the web via SearXNG
@@ -34,8 +35,13 @@ public:
 private:
     QSocConfig            *config         = nullptr;
     QNetworkAccessManager *networkManager = nullptr;
-    QNetworkReply         *currentReply   = nullptr;
-    QEventLoop            *currentLoop    = nullptr;
+    /* In-flight synchronous waits. Tool instances are shared across
+     * concurrent sub-agents, so a single slot would be trampled when
+     * two fetches/searches overlap (one nested in the other's loop).
+     * abort() must reach every live wait. Single-thread; entries added
+     * before loop.exec(), removed right after it returns. */
+    QSet<QNetworkReply *> inFlightReplies_;
+    QSet<QEventLoop *>    inFlightLoops_;
 
     void setupProxy();
 };
@@ -91,8 +97,13 @@ private:
     QSocConfig            *config = nullptr;
     QPointer<QLLMService>  llmService;
     QNetworkAccessManager *networkManager = nullptr;
-    QNetworkReply         *currentReply   = nullptr;
-    QEventLoop            *currentLoop    = nullptr;
+    /* In-flight synchronous waits. Tool instances are shared across
+     * concurrent sub-agents, so a single slot would be trampled when
+     * two fetches/searches overlap (one nested in the other's loop).
+     * abort() must reach every live wait. Single-thread; entries added
+     * before loop.exec(), removed right after it returns. */
+    QSet<QNetworkReply *> inFlightReplies_;
+    QSet<QEventLoop *>    inFlightLoops_;
 
     void setupProxy();
 };
