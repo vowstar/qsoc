@@ -62,6 +62,7 @@ private slots:
         QSocSubAgentTaskSource src;
         const QString          id
             = src.registerRun(QStringLiteral("loop"), QStringLiteral("explore"), makeAgent());
+        src.start(id, []() {}); /* admit so the run is Running */
         src.appendTranscript(id, QStringLiteral("[tool] read_file foo\n"));
 
         QSocToolAgentStatus tool(this, &src);

@@ -371,6 +371,35 @@ public:
      */
     void addExternalTokenUsage(qint64 inputTokens, qint64 outputTokens);
 
+    /**
+     * @brief How a stream error should be retried.
+     * @details None: not retryable (surface to the user). Transient:
+     *          timeout / network / connection blip. RateLimited: the
+     *          provider pushed back (HTTP 429 / 503 / 529 / "overloaded")
+     *          and we should wait longer before trying again.
+     */
+    enum class RetryKind : quint8 { None, Transient, RateLimited };
+
+    /**
+     * @brief Classify a stream error string into a retry category.
+     * @details Dispatches on the `[HTTP <code>] ` prefix that
+     *          QLLMService prepends, plus a few free-text fallbacks.
+     *          Context-overflow (413 / 400-with-context-phrase) is NOT
+     *          classified here; that is handled separately upstream so
+     *          it routes to compaction, not a dumb retry. Static + pure
+     *          for unit testing.
+     */
+    static RetryKind classifyRetry(const QString &error);
+
+    /**
+     * @brief Backoff delay in milliseconds before retry attempt @p
+     *        attempt (1-based). Exponential (base * 2^(attempt-1),
+     *        capped) plus jitter to de-synchronize many sub-agents that
+     *        hit the same rate limit at once. Rate-limited errors use a
+     *        larger base than transient ones.
+     */
+    static int backoffDelayMs(int attempt, bool rateLimit);
+
 signals:
     /**
      * @brief Signal emitted when a tool is called
@@ -499,6 +528,11 @@ private:
     bool    isStreaming     = false;
     int     streamIteration = 0;
     QString streamFinalContent;
+    /* Monotonic run id. Bumped at every runStream() so a deferred
+     * backoff retry scheduled in run N is dropped if it fires after the
+     * run was aborted and a new run N+1 started (no double-driving the
+     * stream loop across turns). */
+    quint64 streamEpoch_ = 0;
 
     /* Timing state */
     QTimer       *heartbeatTimer = nullptr;

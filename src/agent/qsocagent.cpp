@@ -19,6 +19,7 @@
 #include <QDir>
 #include <QFile>
 #include <QMutexLocker>
+#include <QRandomGenerator>
 #include <QSysInfo>
 #include <QTextStream>
 
@@ -253,7 +254,8 @@ void QSocAgent::runStream(const QString &userQuery)
     addMessage("user", prompt);
 
     /* Setup streaming */
-    isStreaming               = true;
+    isStreaming = true;
+    ++streamEpoch_; /* invalidate any deferred retry from a prior run */
     streamIteration           = 0;
     currentRetryCount         = 0;
     contextOverflowRetryCount = 0;
@@ -331,6 +333,55 @@ void QSocAgent::handleReasoningChunk(const QString &chunk)
     emit reasoningChunk(chunk);
 }
 
+QSocAgent::RetryKind QSocAgent::classifyRetry(const QString &error)
+{
+    /* Provider pushback: wait longer. QLLMService prefixes HTTP errors
+     * with `[HTTP <code>] `, so dispatch on the code, not free text.
+     * 529 is a non-standard provider "overloaded" status. */
+    if (error.startsWith(QStringLiteral("[HTTP 429]"))
+        || error.startsWith(QStringLiteral("[HTTP 503]"))
+        || error.startsWith(QStringLiteral("[HTTP 529]"))) {
+        return RetryKind::RateLimited;
+    }
+    /* For any other HTTP-coded error, classify ONLY by the code, never
+     * by the body: a 401/403/400 whose provider message happens to
+     * contain "timeout"/"network"/"connection" must NOT be retried.
+     * 5xx is a transient server fault worth a short backoff; remaining
+     * 4xx (auth, bad request) is a client error that surfaces at once. */
+    if (error.startsWith(QStringLiteral("[HTTP 5"))) {
+        return RetryKind::Transient;
+    }
+    if (error.startsWith(QStringLiteral("[HTTP "))) {
+        return RetryKind::None;
+    }
+    /* No HTTP prefix: a transport-level failure (no response arrived).
+     * Here the free-text match is the only signal available. */
+    if (error.contains(QStringLiteral("overloaded"), Qt::CaseInsensitive)) {
+        return RetryKind::RateLimited;
+    }
+    if (error.contains(QStringLiteral("timeout"), Qt::CaseInsensitive)
+        || error.contains(QStringLiteral("network"), Qt::CaseInsensitive)
+        || error.contains(QStringLiteral("connection"), Qt::CaseInsensitive)) {
+        return RetryKind::Transient;
+    }
+    return RetryKind::None;
+}
+
+int QSocAgent::backoffDelayMs(int attempt, bool rateLimit)
+{
+    /* Exponential base * 2^(attempt-1), capped, plus jitter. Rate-limit
+     * waits start higher because the server explicitly asked us to slow
+     * down. Jitter de-synchronizes many sub-agents that hit the same
+     * limit on the same tick, avoiding a thundering-herd re-retry. */
+    const int        safeAttempt = qMax(attempt, 1);
+    const qint64     baseMs      = rateLimit ? 2000 : 500;
+    constexpr qint64 capMs       = 30000;
+    const int        shift       = qMin(safeAttempt - 1, 16); /* avoid overflow */
+    const qint64     delay       = qMin(baseMs * (qint64{1} << shift), capMs);
+    const int        jitter = QRandomGenerator::global()->bounded(static_cast<int>(baseMs / 2) + 1);
+    return static_cast<int>(delay) + jitter;
+}
+
 void QSocAgent::handleStreamError(const QString &error)
 {
     /* Check if this error was caused by user abort */
@@ -375,27 +426,60 @@ void QSocAgent::handleStreamError(const QString &error)
         return;
     }
 
-    /* Check if error is retryable (timeout or network error) */
-    bool isRetryable = error.contains("timeout", Qt::CaseInsensitive)
-                       || error.contains("network", Qt::CaseInsensitive)
-                       || error.contains("connection", Qt::CaseInsensitive);
+    /* Classify the error. Rate-limit (429/503/529/overloaded) and
+     * transient (timeout/network/connection) errors are retried; the
+     * provider's 429 backpressure plus this client-side backoff is the
+     * real flow-control mechanism once sub-agent concurrency is
+     * unbounded. */
+    const RetryKind kind = classifyRetry(error);
 
-    if (isRetryable && currentRetryCount < agentConfig.maxRetries) {
+    if (kind != RetryKind::None && currentRetryCount < agentConfig.maxRetries) {
         currentRetryCount++;
+        const bool rateLimited = (kind == RetryKind::RateLimited);
+        const int  delayMs     = backoffDelayMs(currentRetryCount, rateLimited);
 
         /* Always emit retrying signal for UI feedback */
         emit retrying(currentRetryCount, agentConfig.maxRetries, error);
 
         if (agentConfig.verbose) {
-            emit verboseOutput(QString("[Retry %1/%2: %3]")
+            emit verboseOutput(QString("[Retry %1/%2 in %3ms: %4]")
                                    .arg(currentRetryCount)
                                    .arg(agentConfig.maxRetries)
+                                   .arg(delayMs)
                                    .arg(error));
         }
 
-        /* Retry the current iteration: the next processStreamIteration()
-         * call will spin up a fresh monitor scoped to that try. */
-        processStreamIteration();
+        /* Tear down the failed iteration's watchdog now so its stall /
+         * wall-clock timers do not fire a spurious "stuck" during the
+         * backoff wait; processStreamIteration() arms a fresh one. */
+        teardownStreamMonitor(QString());
+
+        /* Defer the retry on the event loop: never sleep the single Qt
+         * thread (it would freeze the UI, heartbeat, abort, and every
+         * sibling sub-agent). The run may be aborted during the wait. If
+         * so, finalize it as aborted here, because no network callback
+         * is in flight to do it: otherwise the run would hang in
+         * isStreaming forever (a background sub-agent would never reach
+         * a terminal state, leak, and never notify its parent). */
+        const quint64 epoch = streamEpoch_;
+        QTimer::singleShot(delayMs, this, [this, epoch]() {
+            /* Drop the retry if the run it belonged to is gone: either
+             * streaming stopped, or it was aborted and a new run started
+             * (epoch bumped) - retrying then would double-drive the new
+             * run's stream loop. */
+            if (!isStreaming || streamEpoch_ != epoch) {
+                return;
+            }
+            if (abortRequested) {
+                isStreaming = false;
+                heartbeatTimer->stop();
+                teardownStreamMonitor(QStringLiteral("user abort"));
+                abortRequested = false;
+                emit runAborted(streamFinalContent);
+                return;
+            }
+            processStreamIteration();
+        });
         return;
     }
 
@@ -585,6 +669,13 @@ void QSocAgent::handleStreamComplete(const json &response)
     }
 
     auto message = response["choices"][0]["message"];
+
+    /* A valid streamed response means the connection is healthy: reset
+     * the transient/rate-limit and context-overflow retry budgets so a
+     * later independent stall on a long multi-turn run gets the full
+     * allowance instead of a leaked count. */
+    currentRetryCount         = 0;
+    contextOverflowRetryCount = 0;
 
     /* Embed the server-reported usage on the assistant message itself
      * (private `_usage` field). The token estimator scans backwards

@@ -35,15 +35,23 @@ private slots:
             QStringLiteral("read README"), QStringLiteral("general-purpose"), makeAgent());
         QVERIFY(!id.isEmpty());
         QCOMPARE(spy.count(), 1);
-        const auto rows = src.listTasks();
+        auto rows = src.listTasks();
         QCOMPARE(rows.size(), 1);
         QCOMPARE(rows[0].id, id);
         QCOMPARE(rows[0].kind, QSocTask::Kind::SubAgent);
-        QCOMPARE(rows[0].status, QSocTask::Status::Running);
+        /* A freshly registered run is queued (Pending) and cancellable;
+         * it does not count as active until admitted by start(). */
+        QCOMPARE(rows[0].status, QSocTask::Status::Pending);
         QCOMPARE(rows[0].label, QStringLiteral("read README"));
         QVERIFY(rows[0].canKill);
         QVERIFY(rows[0].summary.startsWith(QStringLiteral("general-purpose")));
         QCOMPARE(src.runCount(), 1);
+        QVERIFY(!src.hasActiveRun());
+
+        /* Admitting it (a slot is free) flips it Running and active. */
+        src.start(id, []() {});
+        rows = src.listTasks();
+        QCOMPARE(rows[0].status, QSocTask::Status::Running);
         QVERIFY(src.hasActiveRun());
     }
 

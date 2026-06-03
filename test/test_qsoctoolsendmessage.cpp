@@ -65,6 +65,7 @@ private slots:
         QSocSubAgentTaskSource src;
         const QString          id
             = src.registerRun(QStringLiteral("live"), QStringLiteral("explore"), makeAgent());
+        src.start(id, []() {}); /* admit so the run is Running */
 
         QSocToolSendMessage tool(this, &src);
         const QString       out = tool.execute(

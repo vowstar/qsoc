@@ -334,6 +334,35 @@ bool runGitFromInsideWorktree(const QStringList &args, const QString &cwd)
 
 } // namespace
 
+QString QSocToolAgent::buildTaskNotification(
+    const QString &taskId,
+    const QString &subagentType,
+    const QString &status,
+    const QString &body,
+    const QString &transcriptPath)
+{
+    constexpr int kBodyCap = 4000;
+    QString       capped   = body;
+    if (capped.size() > kBodyCap) {
+        capped = capped.left(kBodyCap)
+                 + QStringLiteral("\n[... truncated; read the transcript for the full output ...]");
+    }
+    const bool isError = (status == QStringLiteral("failed") || status == QStringLiteral("aborted"));
+    const QString bodyTag = isError ? QStringLiteral("error") : QStringLiteral("result");
+    QString       out;
+    out += QStringLiteral("<task-notification>\n");
+    out += QStringLiteral("<task-id>") + taskId + QStringLiteral("</task-id>\n");
+    out += QStringLiteral("<subagent-type>") + subagentType + QStringLiteral("</subagent-type>\n");
+    out += QStringLiteral("<status>") + status + QStringLiteral("</status>\n");
+    if (!transcriptPath.isEmpty()) {
+        out += QStringLiteral("<transcript>") + transcriptPath + QStringLiteral("</transcript>\n");
+    }
+    out += QStringLiteral("<") + bodyTag + QStringLiteral(">\n") + capped + QStringLiteral("\n</")
+           + bodyTag + QStringLiteral(">\n");
+    out += QStringLiteral("</task-notification>");
+    return out;
+}
+
 int QSocToolAgent::sweepStaleWorktrees(int maxAgeSec)
 {
     const QString root = worktreeRootDir();
@@ -454,28 +483,16 @@ QString QSocToolAgent::execute(const json &arguments)
         effectiveRegistry = hostReg;
     }
 
-    /* Concurrency cap: protect remote-LLM RPM limits and bound memory.
-     * Default 4 (qsocagentconfig.h); user can lower to 1 for strict
-     * serial behavior or raise once they trust their provider quota.
-     * Checked before the llm-null guard so a capped spawn fails for
-     * the right reason regardless of llm wiring. */
-    const int cap     = effectiveConfig.maxConcurrentSubagents > 0
-                            ? effectiveConfig.maxConcurrentSubagents
-                            : 1;
-    const int running = taskSource_->countRunning();
-    if (running >= cap) {
-        return QString::fromUtf8(
-            json{
-                {"status", "error"},
-                {"error",
-                 std::string("max concurrent sub-agents reached (") + std::to_string(running) + "/"
-                     + std::to_string(cap)
-                     + "); wait for one to finish or kill it from the task overlay"},
-                {"running", running},
-                {"cap", cap}}
-                .dump()
-                .c_str());
-    }
+    /* Concurrency policy: a sliding window the task source enforces.
+     * 0 (the default) means unbounded; spawns run as soon as they are
+     * registered and flow control is left to the provider's 429
+     * backpressure plus the agent loop's backoff. A positive value
+     * caps in-flight children and queues the rest (Pending), admitting
+     * the next as each slot frees. Set `agent.max_concurrent_subagents`
+     * / `QSOC_MAX_CONCURRENT_SUBAGENTS` to re-bound for a strict
+     * single-key provider. The sentinel is owned by the task source;
+     * pass the config value through verbatim. */
+    taskSource_->setMaxConcurrent(effectiveConfig.maxConcurrentSubagents);
 
     /* Fork-mode preconditions: needs a live parent agent to copy
      * the message history from, and rejects nested forks via the
@@ -557,7 +574,9 @@ QString QSocToolAgent::execute(const json &arguments)
     if (childCfg.planMode && parentAgent_ != nullptr) {
         child->setBashSafetyJudge(parentAgent_->bashSafetyJudge());
     }
-    if (memoryManager_ != nullptr && def->injectMemory) {
+    /* def is null in fork mode; a fork inherits the parent context and
+     * never opts into memory injection, so guard the deref. */
+    if (memoryManager_ != nullptr && def != nullptr && def->injectMemory) {
         child->setMemoryManager(memoryManager_);
     }
     /* Per-definition hooks override: when def declares its own
@@ -693,84 +712,171 @@ QString QSocToolAgent::execute(const json &arguments)
         }
     }
 
+    /* Terminal-state wiring shared by foreground and background runs.
+     * Order per the lifecycle invariant: state transition first
+     * (markCompleted/markFailed), then the notification (delivery,
+     * only once the run is backgrounded), then the hang-prone worktree
+     * cleanup last so it never gates either. `notified` makes the
+     * three terminal signals mutually single-shot; `parentGuard`
+     * tolerates a parent that died before the child finished;
+     * `backgrounded` is true from the start for an explicit background
+     * spawn and flips true when a foreground run exceeds
+     * autoBackgroundMs. A foreground run that finishes in time returns
+     * its result inline and never notifies (the result is the tool's
+     * return value, so a notification would double-report it). */
+    QPointer<QSocAgent> parentGuard(parentAgent_);
+    auto                notified     = std::make_shared<bool>(false);
+    auto                backgrounded = std::make_shared<bool>(background);
+    auto pushNotification            = [srcGuard,
+                                        parentGuard,
+                                        notified,
+                                        backgrounded,
+                                        taskId,
+                                        effectiveType](const QString &status, const QString &body) {
+        if (!*backgrounded || parentGuard.isNull() || *notified) {
+            return;
+        }
+        *notified                    = true;
+        const QString transcriptPath = srcGuard.isNull() ? QString()
+                                                         : srcGuard->transcriptPathFor(taskId);
+        parentGuard->queueTaskNotification(
+            buildTaskNotification(taskId, effectiveType, status, body, transcriptPath));
+    };
+    QObject::connect(
+        child,
+        &QSocAgent::runComplete,
+        taskSource_,
+        [srcGuard, taskId, wtCleanup, pushNotification](const QString &finalText) {
+            if (!srcGuard.isNull()) {
+                srcGuard->markCompleted(taskId, finalText);
+            }
+            pushNotification(QStringLiteral("completed"), finalText);
+            wtCleanup();
+        });
+    QObject::connect(
+        child,
+        &QSocAgent::runError,
+        taskSource_,
+        [srcGuard, taskId, wtCleanup, pushNotification](const QString &error) {
+            if (!srcGuard.isNull()) {
+                srcGuard->markFailed(taskId, error);
+            }
+            pushNotification(QStringLiteral("failed"), error);
+            wtCleanup();
+        });
+    QObject::connect(
+        child,
+        &QSocAgent::runAborted,
+        taskSource_,
+        [srcGuard, taskId, wtCleanup, pushNotification](const QString &) {
+            if (!srcGuard.isNull()) {
+                srcGuard->markFailed(taskId, QStringLiteral("aborted"));
+            }
+            pushNotification(QStringLiteral("aborted"), QStringLiteral("aborted"));
+            wtCleanup();
+        });
+
+    const json launchedResponse = json{
+        {"status", "async_launched"},
+        {"task_id", taskId.toStdString()},
+        {"subagent_type", effectiveType.toStdString()},
+        {"description", label.toStdString()},
+        {"isolation", isolation.toStdString()},
+        {"worktree", worktreePath.toStdString()}};
+
+    /* The task source owns admission: start() runs the child now when a
+     * slot is free, else queues it (Pending) until one frees. */
+    auto launcher = [child, effectivePrompt]() { child->runStream(effectivePrompt); };
+
     if (background) {
-        QObject::connect(
-            child,
-            &QSocAgent::runComplete,
-            taskSource_,
-            [srcGuard, taskId, wtCleanup](const QString &finalText) {
-                if (!srcGuard.isNull()) {
-                    srcGuard->markCompleted(taskId, finalText);
-                }
-                wtCleanup();
-            });
-        QObject::connect(
-            child,
-            &QSocAgent::runError,
-            taskSource_,
-            [srcGuard, taskId, wtCleanup](const QString &error) {
-                if (!srcGuard.isNull()) {
-                    srcGuard->markFailed(taskId, error);
-                }
-                wtCleanup();
-            });
-        QObject::connect(
-            child,
-            &QSocAgent::runAborted,
-            taskSource_,
-            [srcGuard, taskId, wtCleanup](const QString &) {
-                if (!srcGuard.isNull()) {
-                    srcGuard->markFailed(taskId, QStringLiteral("aborted"));
-                }
-                wtCleanup();
-            });
-        child->runStream(effectivePrompt);
-        return QString::fromUtf8(
-            json{
-                {"status", "async_launched"},
-                {"task_id", taskId.toStdString()},
-                {"subagent_type", effectiveType.toStdString()},
-                {"description", label.toStdString()},
-                {"isolation", isolation.toStdString()},
-                {"worktree", worktreePath.toStdString()}}
-                .dump()
-                .c_str());
+        taskSource_->start(taskId, launcher);
+        QSocTask::Row row;
+        const bool    queued = taskSource_->findRow(taskId, &row)
+                               && row.status == QSocTask::Status::Pending;
+        json          resp   = launchedResponse;
+        if (queued) {
+            resp["status"] = "queued";
+        }
+        return QString::fromUtf8(resp.dump().c_str());
     }
 
-    /* Auto-background hint: a single-shot timer notes long-running
-     * sync work in the transcript so the human + the LLM (via
-     * agent_status) can decide whether to ESC and re-spawn with
-     * run_in_background=true. This does NOT change blocking
-     * semantics; the parent stays in child->run() until the child
-     * returns, matching the existing nested-event-loop invariant. */
-    auto *autoBgTimer = new QTimer(this);
-    autoBgTimer->setSingleShot(true);
-    QObject::connect(autoBgTimer, &QTimer::timeout, taskSource_, [srcGuard, taskId]() {
-        if (!srcGuard.isNull()) {
-            srcGuard->appendTranscript(
-                taskId,
-                QStringLiteral(
-                    "\n[long-running: 120s elapsed; consider "
-                    "spawning with run_in_background=true]\n"));
+    /* Foreground: drive the child through the streaming loop and wait
+     * on a local event loop that quits on either the child's terminal
+     * state or the auto-background timeout. The temp connections below
+     * steer only this local loop; they are disconnected before it
+     * leaves scope, so a terminal signal arriving after the run is
+     * backgrounded reaches only the persistent handlers above (never a
+     * dangling stack object). Nesting depth matches the legacy
+     * blocking path, which also ran a nested loop per child turn. */
+    QEventLoop fgLoop;
+    bool       fgTerminal = false;
+    QString    fgBody;
+    auto       stopFg = [&fgLoop, &fgTerminal, &fgBody](const QString &body) {
+        if (fgTerminal) {
+            return;
         }
+        fgTerminal = true;
+        fgBody     = body;
+        fgLoop.quit();
+    };
+    QList<QMetaObject::Connection> fgConns;
+    fgConns << QObject::connect(
+        child, &QSocAgent::runComplete, &fgLoop, [&stopFg](const QString &text) { stopFg(text); });
+    fgConns << QObject::connect(child, &QSocAgent::runError, &fgLoop, [&stopFg](const QString &err) {
+        stopFg(err);
     });
-    autoBgTimer->start(120 * 1000);
+    fgConns << QObject::connect(
+        child, &QSocAgent::runAborted, &fgLoop, [&stopFg](const QString &partial) {
+            stopFg(partial);
+        });
 
-    /* Synchronous: child->run() nests a QEventLoop internally. The
-     * parent is blocked here, so its own LLM service is idle; the
-     * child uses its own cloned service. */
-    const QString result = child->run(effectivePrompt);
-    autoBgTimer->stop();
-    autoBgTimer->deleteLater();
-    taskSource_->markCompleted(taskId, result);
-    wtCleanup();
+    QTimer autoBg;
+    autoBg.setSingleShot(true);
+    QObject::connect(&autoBg, &QTimer::timeout, &fgLoop, [&fgLoop, backgrounded]() {
+        *backgrounded = true;
+        fgLoop.quit();
+    });
+    if (effectiveConfig.autoBackgroundMs > 0) {
+        autoBg.start(effectiveConfig.autoBackgroundMs);
+    }
 
+    taskSource_->start(taskId, launcher);
+    /* start() may run the child synchronously and the child may
+     * terminate before returning (e.g. a blocking user_prompt_submit
+     * hook makes runStream emit runError at once). That fires stopFg ->
+     * fgLoop.quit() BEFORE exec(), and Qt resets the exit flag on
+     * exec() entry, so the quit would be lost and exec() would block
+     * forever. Only enter the loop if the run is still pending. */
+    if (!fgTerminal) {
+        fgLoop.exec();
+    }
+
+    /* Detach the local-loop steering before fgLoop / autoBg leave
+     * scope. No event processing happens between exec() returning and
+     * here, so no steered signal can fire in the gap. */
+    for (const auto &conn : fgConns) {
+        QObject::disconnect(conn);
+    }
+    autoBg.stop();
+
+    if (*backgrounded) {
+        /* Timed out: the child keeps running on the parent's event
+         * loop. Its terminal state arrives later as a task
+         * notification via the persistent handlers. */
+        return QString::fromUtf8(launchedResponse.dump().c_str());
+    }
+
+    /* Finished within the window: the persistent handler already
+     * transitioned task state and (because the run never backgrounded)
+     * skipped the notification. Return the result inline as the tool's
+     * value, preserving the legacy {"status":"ok","result":...}
+     * contract regardless of the child's terminal flavor. */
     return QString::fromUtf8(
         json{
             {"status", "ok"},
             {"task_id", taskId.toStdString()},
             {"subagent_type", subagentType.toStdString()},
-            {"result", result.toStdString()},
+            {"result", fgBody.toStdString()},
             {"isolation", isolation.toStdString()},
             {"worktree", worktreePath.toStdString()}}
             .dump()

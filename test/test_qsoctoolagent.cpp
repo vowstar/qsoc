@@ -103,7 +103,168 @@ private slots:
         QCOMPARE(parsed["status"].get<std::string>(), std::string("error"));
     }
 
-    void testRejectsSpawnAtMaxConcurrencyCap()
+    /* The sliding-window scheduler runs up to maxConcurrent at once and
+     * queues the rest as Pending; finishing one admits the next in FIFO
+     * order. The launcher records the admission order so we can assert
+     * the window held and the queue drained correctly. */
+    void testSchedulerSlidingWindowQueuesPastCap()
+    {
+        auto *src = new QSocSubAgentTaskSource(this);
+        src->setMaxConcurrent(2);
+
+        QStringList started;
+        auto        admit = [&](const QString &lbl) {
+            auto         *dummy = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
+            const QString runId = src->registerRun(lbl, QStringLiteral("general-purpose"), dummy);
+            src->start(runId, [&started, runId]() { started << runId; });
+            return runId;
+        };
+
+        const QString idA = admit(QStringLiteral("a"));
+        const QString idB = admit(QStringLiteral("b"));
+        const QString idC = admit(QStringLiteral("c"));
+
+        /* Window of 2: a and b run, c waits. */
+        QCOMPARE(src->countRunning(), 2);
+        QCOMPARE(started.size(), 2);
+        QVERIFY(started.contains(idA));
+        QVERIFY(started.contains(idB));
+        QVERIFY(!started.contains(idC));
+
+        /* Finishing a frees a slot; c is admitted automatically. */
+        src->markCompleted(idA, QStringLiteral("done"));
+        QCOMPARE(src->countRunning(), 2); /* b + c */
+        QCOMPARE(started.size(), 3);
+        QVERIFY(started.contains(idC));
+    }
+
+    /* A queued (never-started) run is cancellable from the overlay, and
+     * cancelling it does not start it. */
+    void testSchedulerCancelQueuedRun()
+    {
+        auto *src = new QSocSubAgentTaskSource(this);
+        src->setMaxConcurrent(1);
+
+        QStringList started;
+        auto        admit = [&](const QString &lbl) {
+            auto         *dummy = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
+            const QString runId = src->registerRun(lbl, QStringLiteral("general-purpose"), dummy);
+            src->start(runId, [&started, runId]() { started << runId; });
+            return runId;
+        };
+
+        const QString idA = admit(QStringLiteral("a")); /* runs */
+        const QString idB = admit(QStringLiteral("b")); /* queued */
+        QCOMPARE(src->countRunning(), 1);
+        QVERIFY(!started.contains(idB));
+
+        /* Cancel the queued one: it must never start. */
+        QVERIFY(src->killTask(idB));
+        QCOMPARE(src->countRunning(), 1); /* a still runs */
+        QVERIFY(!started.contains(idB));
+    }
+
+    /* maxConcurrent 0 means unbounded: every registered run is admitted
+     * immediately, no queueing. This is the project default. */
+    void testSchedulerUnboundedAdmitsAll()
+    {
+        auto *src = new QSocSubAgentTaskSource(this);
+        src->setMaxConcurrent(0); /* unbounded */
+
+        QStringList started;
+        auto        admit = [&](const QString &lbl) {
+            auto         *dummy = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
+            const QString runId = src->registerRun(lbl, QStringLiteral("general-purpose"), dummy);
+            src->start(runId, [&started, runId]() { started << runId; });
+            return runId;
+        };
+
+        for (int i = 0; i < 5; ++i) {
+            admit(QStringLiteral("a") + QString::number(i));
+        }
+        QCOMPARE(src->countRunning(), 5);
+        QCOMPARE(started.size(), 5);
+    }
+
+    /* A negative cap collapses to the same unbounded sentinel as 0. */
+    void testSchedulerNegativeIsUnbounded()
+    {
+        auto *src = new QSocSubAgentTaskSource(this);
+        src->setMaxConcurrent(-1);
+        QCOMPARE(src->maxConcurrent(), 0);
+
+        QStringList started;
+        for (int i = 0; i < 3; ++i) {
+            auto         *dummy = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
+            const QString runId = src->registerRun(
+                QStringLiteral("n") + QString::number(i), QStringLiteral("general-purpose"), dummy);
+            src->start(runId, [&started, runId]() { started << runId; });
+        }
+        QCOMPARE(src->countRunning(), 3);
+        QCOMPARE(started.size(), 3);
+    }
+
+    /* Stream-error classification drives the retry/backoff decision.
+     * 429/503/529/overloaded are rate-limit (long backoff);
+     * timeout/network/connection are transient; everything else,
+     * including auth (401) and context-overflow (413, handled
+     * upstream), is non-retryable here. */
+    void testClassifyRetry()
+    {
+        using RK = QSocAgent::RetryKind;
+        QCOMPARE(
+            QSocAgent::classifyRetry(QStringLiteral("[HTTP 429] Too Many Requests")),
+            RK::RateLimited);
+        QCOMPARE(
+            QSocAgent::classifyRetry(QStringLiteral("[HTTP 503] Service Unavailable")),
+            RK::RateLimited);
+        QCOMPARE(QSocAgent::classifyRetry(QStringLiteral("[HTTP 529] overloaded")), RK::RateLimited);
+        QCOMPARE(
+            QSocAgent::classifyRetry(QStringLiteral("Server overloaded, retry")), RK::RateLimited);
+        QCOMPARE(QSocAgent::classifyRetry(QStringLiteral("connection reset by peer")), RK::Transient);
+        QCOMPARE(QSocAgent::classifyRetry(QStringLiteral("Request timeout")), RK::Transient);
+        /* 5xx is a transient server fault. */
+        QCOMPARE(
+            QSocAgent::classifyRetry(QStringLiteral("[HTTP 500] Internal Server Error")),
+            RK::Transient);
+        QCOMPARE(QSocAgent::classifyRetry(QStringLiteral("[HTTP 502] Bad Gateway")), RK::Transient);
+        /* Other 4xx is a client error: never retry, even when the body
+         * text happens to contain a transient-looking keyword. */
+        QCOMPARE(QSocAgent::classifyRetry(QStringLiteral("[HTTP 401] Unauthorized")), RK::None);
+        QCOMPARE(
+            QSocAgent::classifyRetry(QStringLiteral("[HTTP 403] network access forbidden")),
+            RK::None);
+        QCOMPARE(
+            QSocAgent::classifyRetry(QStringLiteral("[HTTP 400] invalid 'timeout' field")),
+            RK::None);
+        QCOMPARE(QSocAgent::classifyRetry(QStringLiteral("[HTTP 413] Payload Too Large")), RK::None);
+        QCOMPARE(QSocAgent::classifyRetry(QStringLiteral("some other error")), RK::None);
+    }
+
+    /* Backoff grows with the attempt, never exceeds the cap (+ jitter),
+     * and rate-limit waits start no shorter than transient ones. */
+    void testBackoffDelayMs()
+    {
+        /* base 500 transient, 2000 rate-limit; cap 30000; jitter < base/2. */
+        const int delay1 = QSocAgent::backoffDelayMs(1, false);
+        const int delay2 = QSocAgent::backoffDelayMs(2, false);
+        const int delay3 = QSocAgent::backoffDelayMs(3, false);
+        QVERIFY(delay1 >= 500 && delay1 < 500 + 250);
+        QVERIFY(delay2 >= 1000 && delay2 < 1000 + 250);
+        QVERIFY(delay3 >= 2000 && delay3 < 2000 + 250);
+
+        /* Large attempt clamps to the 30s cap (+ jitter slack). */
+        const int big = QSocAgent::backoffDelayMs(20, false);
+        QVERIFY(big >= 30000 && big <= 30000 + 250);
+
+        /* Rate-limit base (2000) exceeds transient base (500) at attempt 1. */
+        QVERIFY(QSocAgent::backoffDelayMs(1, true) >= 2000);
+    }
+
+    /* The spawn tool no longer rejects at the cap: with the LLM unwired
+     * it always reaches the llm-null gate (the cap path now queues
+     * rather than returns an error). */
+    void testSpawnNeverRejectsForCap()
     {
         auto *defs = new QSocAgentDefinitionRegistry(this);
         defs->registerBuiltins();
@@ -113,9 +274,11 @@ private slots:
         parentCfg.maxConcurrentSubagents = 1; /* strict serial */
         auto *tool = new QSocToolAgent(this, nullptr, reg, parentCfg, defs, src);
 
-        /* Fake one busy run; with cap=1 a second spawn must be denied. */
-        auto *dummy = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
-        src->registerRun(QStringLiteral("busy"), QStringLiteral("general-purpose"), dummy);
+        /* Simulate one busy run. */
+        auto         *dummy = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
+        const QString busyId
+            = src->registerRun(QStringLiteral("busy"), QStringLiteral("general-purpose"), dummy);
+        src->start(busyId, []() {});
         QCOMPARE(src->countRunning(), 1);
 
         const QString out = tool->execute(
@@ -125,38 +288,8 @@ private slots:
                 {"prompt", "do something"}});
         const json parsed = json::parse(out.toStdString());
         QCOMPARE(parsed["status"].get<std::string>(), std::string("error"));
-        QVERIFY(
-            parsed["error"].get<std::string>().find("max concurrent sub-agents")
-            != std::string::npos);
-        QCOMPARE(parsed["running"].get<int>(), 1);
-        QCOMPARE(parsed["cap"].get<int>(), 1);
-    }
-
-    /* Default cap is 4: a single busy run does NOT block a new spawn
-     * by itself. The new spawn proceeds past the cap guard and is
-     * stopped at the next required gate (no LLMService configured),
-     * which proves we got past the cap-rejection path. */
-    void testDefaultCapAllowsSecondSpawnPastBusyRun()
-    {
-        auto *defs = new QSocAgentDefinitionRegistry(this);
-        defs->registerBuiltins();
-        auto *src  = new QSocSubAgentTaskSource(this);
-        auto *reg  = new QSocToolRegistry(this);
-        auto *tool = new QSocToolAgent(this, nullptr, reg, QSocAgentConfig(), defs, src);
-
-        auto *dummy = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
-        src->registerRun(QStringLiteral("busy"), QStringLiteral("general-purpose"), dummy);
-        QCOMPARE(src->countRunning(), 1);
-
-        const QString out = tool->execute(
-            json{
-                {"subagent_type", "general-purpose"},
-                {"description", "another"},
-                {"prompt", "do something"}});
-        const json parsed = json::parse(out.toStdString());
-        QCOMPARE(parsed["status"].get<std::string>(), std::string("error"));
-        /* We got PAST the cap check (cap=4 > running=1). The next gate
-         * fails because llmService is nullptr in this test harness. */
+        /* No cap rejection; the only gate hit is the missing LLM. */
+        QVERIFY(parsed["error"].get<std::string>().find("max concurrent") == std::string::npos);
         QVERIFY(parsed["error"].get<std::string>().find("LLM service") != std::string::npos);
     }
 
@@ -172,8 +305,10 @@ private slots:
     {
         QSocSubAgentTaskSource *src  = nullptr;
         auto                   *tool = makeTool(nullptr, &src, nullptr);
-        auto *dummyAgent             = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
-        src->registerRun(QStringLiteral("running"), QStringLiteral("general-purpose"), dummyAgent);
+        auto         *dummyAgent     = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
+        const QString runId          = src->registerRun(
+            QStringLiteral("running"), QStringLiteral("general-purpose"), dummyAgent);
+        src->start(runId, []() {});
         QVERIFY(src->hasActiveRun());
         tool->abort();
         QVERIFY(src->runCount() >= 1);
@@ -395,6 +530,98 @@ private slots:
         parent->addExternalTokenUsage(0, 0);
         parent->addExternalTokenUsage(-5, -5);
         QCOMPARE(spy.count(), 2);
+    }
+
+    /* Completed background runs wrap the result in a <result> body and
+     * carry the task id, subagent type, and transcript path so the
+     * parent can read the full run on demand. */
+    void testTaskNotificationCompletedFormat()
+    {
+        const QString note = QSocToolAgent::buildTaskNotification(
+            QStringLiteral("a7"),
+            QStringLiteral("explorer"),
+            QStringLiteral("completed"),
+            QStringLiteral("found three call sites"),
+            QStringLiteral("/run/user/1000/qsoc/agents/a7.jsonl"));
+        QVERIFY(note.startsWith(QStringLiteral("<task-notification>")));
+        QVERIFY(note.contains(QStringLiteral("<task-id>a7</task-id>")));
+        QVERIFY(note.contains(QStringLiteral("<subagent-type>explorer</subagent-type>")));
+        QVERIFY(note.contains(QStringLiteral("<status>completed</status>")));
+        QVERIFY(note.contains(QStringLiteral(
+            "<transcript>/run/user/1000/qsoc/agents/a7.jsonl"
+            "</transcript>")));
+        QVERIFY(note.contains(QStringLiteral("<result>")));
+        QVERIFY(note.contains(QStringLiteral("found three call sites")));
+        QVERIFY(!note.contains(QStringLiteral("<error>")));
+    }
+
+    /* Failed / aborted runs use an <error> body instead of <result>. */
+    void testTaskNotificationFailedUsesErrorTag()
+    {
+        const QString failed = QSocToolAgent::buildTaskNotification(
+            QStringLiteral("a8"),
+            QStringLiteral("builder"),
+            QStringLiteral("failed"),
+            QStringLiteral("compile error"),
+            QString());
+        QVERIFY(failed.contains(QStringLiteral("<status>failed</status>")));
+        QVERIFY(failed.contains(QStringLiteral("<error>")));
+        QVERIFY(failed.contains(QStringLiteral("compile error")));
+        QVERIFY(!failed.contains(QStringLiteral("<result>")));
+
+        const QString aborted = QSocToolAgent::buildTaskNotification(
+            QStringLiteral("a9"),
+            QStringLiteral("builder"),
+            QStringLiteral("aborted"),
+            QStringLiteral("aborted"),
+            QString());
+        QVERIFY(aborted.contains(QStringLiteral("<status>aborted</status>")));
+        QVERIFY(aborted.contains(QStringLiteral("<error>")));
+    }
+
+    /* An empty transcript path emits no <transcript> tag. */
+    void testTaskNotificationOmitsEmptyTranscript()
+    {
+        const QString note = QSocToolAgent::buildTaskNotification(
+            QStringLiteral("a1"),
+            QStringLiteral("general-purpose"),
+            QStringLiteral("completed"),
+            QStringLiteral("ok"),
+            QString());
+        QVERIFY(!note.contains(QStringLiteral("<transcript>")));
+    }
+
+    /* Oversized bodies are capped with a pointer to the transcript so a
+     * runaway child cannot flood the parent's context. */
+    void testTaskNotificationTruncatesLongBody()
+    {
+        const QString huge = QString(20000, QLatin1Char('x'));
+        const QString note = QSocToolAgent::buildTaskNotification(
+            QStringLiteral("a2"),
+            QStringLiteral("explorer"),
+            QStringLiteral("completed"),
+            huge,
+            QStringLiteral("/tmp/a2.jsonl"));
+        QVERIFY(note.size() < huge.size());
+        QVERIFY(note.contains(QStringLiteral("truncated")));
+    }
+
+    /* queueTaskNotification feeds the parent's request queue exactly
+     * like the background terminal-state callbacks do: one pending
+     * entry per terminal child. This is the seam the spawn tool drives
+     * via QSocToolAgent::buildTaskNotification + parent->queueTask... */
+    void testParentQueuesTaskNotification()
+    {
+        auto *parent = new QSocAgent(this, nullptr, nullptr, QSocAgentConfig());
+        QCOMPARE(parent->pendingRequestCount(), 0);
+        parent->queueTaskNotification(
+            QSocToolAgent::buildTaskNotification(
+                QStringLiteral("a3"),
+                QStringLiteral("explorer"),
+                QStringLiteral("completed"),
+                QStringLiteral("done"),
+                QString()));
+        QCOMPARE(parent->pendingRequestCount(), 1);
     }
 };
 

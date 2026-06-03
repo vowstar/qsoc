@@ -587,8 +587,10 @@ The `agent` tool accepts:
     [`prompt`],
     [Full instructions for the child.],
     [`run_in_background`],
-    [`false` blocks until the child finishes; `true` returns a `task_id`
-     immediately and the child runs detached.],
+    [`true` returns a `task_id` immediately and the child runs detached.
+     `false` (default) waits for the child, but a foreground run that
+     exceeds the auto-background timeout is detached automatically and
+     its result is delivered later as a notification.],
     [`isolation`],
     [`worktree` runs the child in its own `git worktree --detach` under
      `<runtime>/qsoc-worktrees/<task_id>`. Default is none.],
@@ -597,9 +599,21 @@ The `agent` tool accepts:
   kind: table,
 )
 
-`description` and `prompt` are required. The concurrency cap defaults to
-four in-flight children; the limit is enforced before the LLM is touched
-so a capped spawn fails fast.
+`description` and `prompt` are required. Sub-agent concurrency is
+unbounded by default (`agent.max_concurrent_subagents` /
+`QSOC_MAX_CONCURRENT_SUBAGENTS` = `0`): every spawn runs at once and
+flow control is left to the provider's HTTP 429 backpressure, which the
+agent loop retries with exponential backoff and jitter. Set a positive
+value to re-bound for a strict single-key provider; spawns past the cap
+are then queued (status `queued`) and admitted FIFO as each slot frees,
+forming a sliding window. The foreground auto-background timeout in
+milliseconds (`agent.auto_background_ms`, env `QSOC_AUTO_BACKGROUND_MS`,
+default `120000`, `0` disables) is independently configurable.
+
+When a detached child reaches a terminal state, the parent receives a
+`task-notification` carrying the status, a capped result body, and the
+transcript path; it is injected at the next turn boundary, never
+interrupting an in-progress turn.
 
 === Fork Mode
 <agent-subagents-fork>

@@ -30,9 +30,11 @@ class QSocSshConfigParser;
  *          `QSocSubAgentTaskSource` so it shows up in the Ctrl+B
  *          task overlay. Synchronous execution blocks until the
  *          child returns; asynchronous returns immediately with a
- *          `task_id`. A single-in-flight policy is enforced
- *          because the shared `QLLMService` cannot stream two
- *          conversations at once.
+ *          `task_id` and pushes a `<task-notification>` into the
+ *          parent's request queue when the child reaches a terminal
+ *          state. Each child clones the parent's `QLLMService` for
+ *          independent streaming state, so concurrent children are
+ *          bounded only by `maxConcurrentSubagents`.
  */
 class QSocToolAgent : public QSocTool
 {
@@ -108,6 +110,23 @@ public:
      *        is idempotent).
      */
     static int sweepStaleWorktrees(int maxAgeSec = 24 * 60 * 60);
+
+    /**
+     * @brief Build the model-visible `<task-notification>` envelope
+     *        pushed into the parent's request queue when a background
+     *        sub-agent reaches a terminal state. Carries the status,
+     *        a capped result/error body, and the transcript path so
+     *        the parent reads the full run on demand rather than
+     *        inlining a large transcript. Stateless; exposed for
+     *        format testing.
+     * @param status One of "completed", "failed", "aborted".
+     */
+    static QString buildTaskNotification(
+        const QString &taskId,
+        const QString &subagentType,
+        const QString &status,
+        const QString &body,
+        const QString &transcriptPath);
 
 private:
     /**

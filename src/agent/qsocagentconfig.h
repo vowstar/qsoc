@@ -138,10 +138,20 @@ struct QSocAgentConfig
     QString criticalReminder;
 
     /* Maximum number of sub-agents that may be Running concurrently.
-     * Read by the spawn tool when deciding whether to admit a new
-     * spawn. The cap protects per-API-key RPM limits at remote
-     * providers. 1 = strict serial (legacy behavior). */
-    int maxConcurrentSubagents = 4;
+     * 0 (the default) means unbounded: every spawn runs at once and
+     * flow control is left to the provider's HTTP 429 backpressure plus
+     * the agent loop's exponential backoff. A positive value caps
+     * in-flight children and queues the rest; 1 = strict serial. Set it
+     * to re-bound for a strict single-key provider. */
+    int maxConcurrentSubagents = 0;
+
+    /* A foreground sub-agent that has not finished within this many
+     * milliseconds is automatically detached to the background: the
+     * spawn tool returns a task_id and the child keeps running, with
+     * its terminal result delivered later as a task notification.
+     * 0 disables auto-background (the parent waits for the child no
+     * matter how long it takes). */
+    int autoBackgroundMs = 120000;
 
     /* Plan mode. When true the agent may only run read-only tools (plus
      * the shell, whose per-command safety is LLM-judged, and the spawn

@@ -27,8 +27,12 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::listTasks() const
         row.kind        = QSocTask::Kind::SubAgent;
         row.status      = run.status;
         row.startedAtMs = run.startedAtMs;
-        row.canKill     = (run.status == QSocTask::Status::Running);
+        row.canKill
+            = (run.status == QSocTask::Status::Running || run.status == QSocTask::Status::Pending);
         QString summary = run.subagentType;
+        if (run.status == QSocTask::Status::Pending) {
+            summary += QStringLiteral(" · queued");
+        }
         if (run.startedAtMs > 0) {
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
             const qint64 elapsedSec
@@ -97,23 +101,34 @@ QString QSocSubAgentTaskSource::tailFor(const QString &id, int maxBytes) const
 
 bool QSocSubAgentTaskSource::killTask(const QString &id)
 {
+    bool killed = false;
     for (RunState &run : runs_) {
         if (run.id != id) {
             continue;
         }
-        if (run.status != QSocTask::Status::Running) {
+        const bool isRunning = (run.status == QSocTask::Status::Running);
+        const bool isPending = (run.status == QSocTask::Status::Pending);
+        if (!isRunning && !isPending) {
             return false;
         }
-        if (run.agent != nullptr) {
+        /* Running: abort the live child. Pending: it never started, so
+         * drop its launcher and fail it without abort. */
+        if (isRunning && run.agent != nullptr) {
             run.agent->abort();
         }
+        run.launcher       = {};
         run.status         = QSocTask::Status::Failed;
         run.errorText      = QStringLiteral("aborted by user");
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
         emit tasksChanged();
-        return true;
+        killed = true;
+        break;
     }
-    return false;
+    /* Cancelling a run frees a slot; admit the next queued one. */
+    if (killed) {
+        pumpQueue();
+    }
+    return killed;
 }
 
 QString QSocSubAgentTaskSource::registerRun(
@@ -126,20 +141,79 @@ QString QSocSubAgentTaskSource::registerRun(
     run.label          = label;
     run.subagentType   = subagentType;
     run.agent          = agent;
-    run.status         = QSocTask::Status::Running;
-    run.startedAtMs    = QDateTime::currentMSecsSinceEpoch();
-    run.lastActivityMs = run.startedAtMs;
+    run.status         = QSocTask::Status::Pending;
+    run.queuedAtMs     = QDateTime::currentMSecsSinceEpoch();
+    run.lastActivityMs = run.queuedAtMs;
     if (agent != nullptr) {
         agent->setParent(this);
     }
     runs_.append(run);
-    appendDiskEvent(
-        run.id,
-        QStringLiteral("start"),
-        QStringLiteral("run %1 (%2): %3").arg(run.id, run.subagentType, run.label));
     writeMeta(run);
     emit tasksChanged();
     return run.id;
+}
+
+void QSocSubAgentTaskSource::setMaxConcurrent(int maxConcurrent)
+{
+    /* 0 (or any non-positive) means unbounded: every queued run is
+     * admitted at once and flow control is left to the provider's 429
+     * backpressure plus the agent loop's backoff. Negatives collapse to
+     * the same unbounded sentinel so downstream only checks `<= 0`. */
+    maxConcurrent_ = maxConcurrent > 0 ? maxConcurrent : 0;
+    pumpQueue();
+}
+
+void QSocSubAgentTaskSource::start(const QString &id, std::function<void()> launcher)
+{
+    for (RunState &run : runs_) {
+        if (run.id != id) {
+            continue;
+        }
+        run.launcher = std::move(launcher);
+        break;
+    }
+    pumpQueue();
+}
+
+void QSocSubAgentTaskSource::pumpQueue()
+{
+    /* Re-entry guard: a launcher that fails synchronously routes back
+     * through markFailed() -> pumpQueue(). The outer loop already
+     * re-checks countRunning() each pass, so the nested call can
+     * safely no-op. runs_ is never structurally mutated here (only
+     * status fields), so the iterator stays valid across the launcher
+     * call. */
+    if (pumping_) {
+        return;
+    }
+    pumping_ = true;
+    /* Promote Pending runs to Running in FIFO order while a slot is
+     * free. Flip status before firing the launcher so countRunning()
+     * accounts for the run even if the launcher re-enters. The
+     * launcher fires at most once. */
+    for (RunState &run : runs_) {
+        if (maxConcurrent_ > 0 && countRunning() >= maxConcurrent_) {
+            break;
+        }
+        if (run.status != QSocTask::Status::Pending || run.launched) {
+            continue;
+        }
+        run.launched       = true;
+        run.status         = QSocTask::Status::Running;
+        run.startedAtMs    = QDateTime::currentMSecsSinceEpoch();
+        run.lastActivityMs = run.startedAtMs;
+        appendDiskEvent(
+            run.id,
+            QStringLiteral("start"),
+            QStringLiteral("run %1 (%2): %3").arg(run.id, run.subagentType, run.label));
+        writeMeta(run);
+        emit tasksChanged();
+        if (run.launcher) {
+            auto launcher = run.launcher;
+            launcher();
+        }
+    }
+    pumping_ = false;
 }
 
 void QSocSubAgentTaskSource::appendTranscript(const QString &id, const QString &chunk)
@@ -170,8 +244,10 @@ void QSocSubAgentTaskSource::markCompleted(const QString &id, const QString &fin
         appendDiskEvent(id, QStringLiteral("final"), finalResult);
         writeMeta(run);
         emit tasksChanged();
-        return;
+        break;
     }
+    /* A finished run frees a slot; admit the next queued one. */
+    pumpQueue();
 }
 
 void QSocSubAgentTaskSource::markFailed(const QString &id, const QString &errorText)
@@ -186,8 +262,10 @@ void QSocSubAgentTaskSource::markFailed(const QString &id, const QString &errorT
         appendDiskEvent(id, QStringLiteral("error"), errorText);
         writeMeta(run);
         emit tasksChanged();
-        return;
+        break;
     }
+    /* A finished run frees a slot; admit the next queued one. */
+    pumpQueue();
 }
 
 void QSocSubAgentTaskSource::setIsolationMetadata(
@@ -227,11 +305,34 @@ int QSocSubAgentTaskSource::runCount() const
 
 void QSocSubAgentTaskSource::abortAll()
 {
+    /* Re-entry guard. A child sub-agent shares the parent's tool
+     * registry, so child->abort() cascades back through
+     * QSocToolRegistry::abortAll() into the spawn tool and here again.
+     * Without this guard that recursion is unbounded (one full descent
+     * per running child, re-triggering itself) and overflows the stack.
+     * Children still get their in-flight tools aborted on the first
+     * pass via the registry; the nested re-entry simply no-ops. */
+    if (aborting_) {
+        return;
+    }
+    aborting_ = true;
+
+    /* Cancel queued (never-started) runs outright so a freed slot does
+     * not revive them, then abort the live ones. */
+    for (RunState &run : runs_) {
+        if (run.status == QSocTask::Status::Pending) {
+            run.launcher       = {};
+            run.status         = QSocTask::Status::Failed;
+            run.errorText      = QStringLiteral("aborted by user");
+            run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+        }
+    }
     for (RunState &run : runs_) {
         if (run.status == QSocTask::Status::Running && run.agent != nullptr) {
             run.agent->abort();
         }
     }
+    aborting_ = false;
 }
 
 bool QSocSubAgentTaskSource::queueRequestFor(const QString &id, const QString &message)
@@ -263,7 +364,9 @@ bool QSocSubAgentTaskSource::findRow(const QString &id, QSocTask::Row *out) cons
             out->kind        = QSocTask::Kind::SubAgent;
             out->status      = run.status;
             out->startedAtMs = run.startedAtMs;
-            out->canKill     = (run.status == QSocTask::Status::Running);
+            out->canKill
+                = (run.status == QSocTask::Status::Running
+                   || run.status == QSocTask::Status::Pending);
         }
         return true;
     }

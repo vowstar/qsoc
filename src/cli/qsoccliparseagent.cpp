@@ -842,7 +842,34 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             config.memoryMaxChars = memoryMaxCharsStr.toInt();
         }
 
+        QString maxConcurrentStr = socConfig->getValue("agent.max_concurrent_subagents");
+        if (!maxConcurrentStr.isEmpty()) {
+            config.maxConcurrentSubagents = maxConcurrentStr.toInt();
+        }
+
+        QString autoBackgroundMsStr = socConfig->getValue("agent.auto_background_ms");
+        if (!autoBackgroundMsStr.isEmpty()) {
+            config.autoBackgroundMs = autoBackgroundMsStr.toInt();
+        }
+
         config.hooks = socConfig->agentHooks();
+    }
+
+    /* Environment overrides win over the config file: the sub-agent
+     * concurrency cap and the foreground auto-background timeout. */
+    if (qEnvironmentVariableIsSet("QSOC_MAX_CONCURRENT_SUBAGENTS")) {
+        bool      validInt = false;
+        const int parsed = qEnvironmentVariableIntValue("QSOC_MAX_CONCURRENT_SUBAGENTS", &validInt);
+        if (validInt) {
+            config.maxConcurrentSubagents = parsed;
+        }
+    }
+    if (qEnvironmentVariableIsSet("QSOC_AUTO_BACKGROUND_MS")) {
+        bool      validInt = false;
+        const int parsed   = qEnvironmentVariableIntValue("QSOC_AUTO_BACKGROUND_MS", &validInt);
+        if (validInt) {
+            config.autoBackgroundMs = parsed;
+        }
     }
 
     /* Command line overrides config file */

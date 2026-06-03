@@ -6,6 +6,7 @@
 
 #include "agent/qsoctasksource.h"
 
+#include <functional>
 #include <QList>
 #include <QString>
 
@@ -36,11 +37,34 @@ public:
 
     /**
      * @brief Register a new sub-agent run. The source takes ownership
-     *        of the agent (reparents it). Status starts as Running.
+     *        of the agent (reparents it). Status starts as Pending;
+     *        the run does not begin until start() supplies a launcher
+     *        and a concurrency slot is free.
      * @return Stable rolling id ("a1", "a2", ...) used by the spawn
      *         tool to feed progress.
      */
     QString registerRun(const QString &label, const QString &subagentType, QSocAgent *agent);
+
+    /**
+     * @brief Attach the launcher that actually starts a registered
+     *        run, then pump the queue. The run begins immediately when
+     *        fewer than maxConcurrent() runs are active; otherwise it
+     *        stays Pending (FIFO) until a slot frees. The launcher is
+     *        invoked at most once, after the run is flipped to Running.
+     *        No-op for unknown ids.
+     */
+    void start(const QString &id, std::function<void()> launcher);
+
+    /**
+     * @brief Set the sliding-window concurrency cap. Runs past the cap
+     *        queue rather than fail. Values <= 0 mean unbounded (every
+     *        queued run is admitted at once; flow control is left to the
+     *        provider's rate limiting plus the agent loop's backoff).
+     */
+    void setMaxConcurrent(int maxConcurrent);
+
+    /** @brief Current concurrency cap. */
+    int maxConcurrent() const { return maxConcurrent_; }
 
     /**
      * @brief Append text to the run's transcript buffer (kept ~64 KiB
@@ -190,19 +214,27 @@ public:
 private:
     struct RunState
     {
-        QString          id;
-        QString          label;
-        QString          subagentType;
-        QSocAgent       *agent          = nullptr;
-        QSocTask::Status status         = QSocTask::Status::Running;
-        qint64           startedAtMs    = 0;
-        qint64           lastActivityMs = 0;
-        QString          transcript;  /* rolling, capped */
-        QString          finalResult; /* on Completed */
-        QString          errorText;   /* on Failed */
-        QString          isolation;   /* "none" | "worktree" */
-        QString          worktreePath;
+        QString               id;
+        QString               label;
+        QString               subagentType;
+        QSocAgent            *agent          = nullptr;
+        QSocTask::Status      status         = QSocTask::Status::Pending;
+        qint64                queuedAtMs     = 0;
+        qint64                startedAtMs    = 0;
+        qint64                lastActivityMs = 0;
+        QString               transcript;  /* rolling, capped */
+        QString               finalResult; /* on Completed */
+        QString               errorText;   /* on Failed */
+        QString               isolation;   /* "none" | "worktree" */
+        QString               worktreePath;
+        std::function<void()> launcher; /* set by start(); fired by pumpQueue */
+        bool                  launched = false;
     };
+
+    /* Promote Pending runs to Running (firing their launcher) while a
+     * concurrency slot is free, in FIFO order. Called on start() and
+     * whenever a run reaches a terminal state and frees a slot. */
+    void pumpQueue();
 
     /* Drop Completed / Failed runs older than completionTtlMs_,
      * deleteLater()'ing their agents. Called whenever a new run is
@@ -222,6 +254,9 @@ private:
     QList<RunState>      runs_; /* preserves registration order; small N */
     QList<HistoricalRun> historical_;
     int                  nextSerial_      = 1;
+    int                  maxConcurrent_   = 0;                 /* sliding-window cap; 0=unbounded */
+    bool                 pumping_         = false;             /* pumpQueue re-entry guard */
+    bool                 aborting_        = false;             /* abortAll re-entry guard */
     qint64               completionTtlMs_ = qint64{60} * 1000; /* 60 s lingering window */
     int                  transcriptCap_   = 64 * 1024;
     QString              transcriptDir_; /* empty = compute from QStandardPaths */
