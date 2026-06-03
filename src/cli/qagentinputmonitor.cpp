@@ -792,11 +792,14 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
         }
 
         /* Tab: when submit is blocked (completion popup open), Tab confirms.
-         * Otherwise ignored — @file completion is triggered live by the REPL
-         * on inputChanged, not by Tab. */
+         * On an empty buffer it offers to materialize predicted ghost text
+         * (the REPL listens). Otherwise ignored: @file completion is
+         * triggered live by the REPL on inputChanged, not by Tab. */
         if (byte == '\t') {
             if (submitBlocked) {
                 emit submitBlockedKey('T');
+            } else if (inputBuffer.isEmpty()) {
+                emit tabOnEmptyBuffer();
             }
             continue;
         }

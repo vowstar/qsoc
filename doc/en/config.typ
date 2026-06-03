@@ -314,6 +314,8 @@ These settings can also be overridden by command-line options (see @agent-comman
     [agent.memory_max_chars],
     [Max characters of memory to inject (default: 24000)],
     [agent.system_prompt], [Custom system prompt override],
+    [agent.predict_input],
+    [Predict next input as ghost text: true/false (default: true)],
   )],
   caption: [AGENT CONFIGURATION OPTIONS],
   kind: table,

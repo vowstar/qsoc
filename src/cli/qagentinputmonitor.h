@@ -88,6 +88,14 @@ signals:
     void inputReady(const QString &text);
     void inputChanged(const QString &text);
 
+    /**
+     * @brief Emitted when Tab is pressed on an empty buffer with submit not
+     *        blocked. The REPL uses this to materialize predicted ghost text
+     *        into the editable buffer (fill, not submit). A no-op for the
+     *        monitor itself when nothing is listening.
+     */
+    void tabOnEmptyBuffer();
+
     /* Mouse events (SGR format: ESC [ < btn ; x ; y M/m) */
     void mouseWheel(int direction); /* 0=up, 1=down */
     void mouseClick(int button, int col, int row, bool pressed);

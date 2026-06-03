@@ -179,11 +179,11 @@ void QTuiInputLine::render(QTuiScreen &screen, int startY, int width)
         return;
     }
 
-    /* Empty buffer with a placeholder set: show the dim hint after "> "
-     * so new users can discover slash / @ / ! / Ctrl+R shortcuts. */
-    if (text.isEmpty() && !placeholder.isEmpty()) {
+    /* Empty buffer: show the dim hint after "> ". A predicted next input
+     * (ghost text) takes precedence over the static discovery placeholder. */
+    if (text.isEmpty() && !(ghostText.isEmpty() && placeholder.isEmpty())) {
         screen.putString(0, startY, QStringLiteral("> "));
-        QString hint      = placeholder;
+        QString hint      = ghostText.isEmpty() ? placeholder : ghostText;
         int     available = width - 2;
         if (available > 0) {
             screen.putString(

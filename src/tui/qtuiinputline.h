@@ -54,6 +54,15 @@ public:
      */
     void setTrailingHint(const QString &hint) { trailingHint = hint; }
 
+    /**
+     * @brief Set the dim ghost text predicting the user's next input.
+     * @details Shown after the "> " prompt on an empty buffer, taking
+     *          precedence over the static placeholder. The REPL sets it from
+     *          an async prediction once a turn completes and clears it on the
+     *          first keystroke. Empty string disables.
+     */
+    void setGhostText(const QString &text) { ghostText = text; }
+
     /* Set cursor position (QChar index into text) for cursor rendering */
     void setCursorPos(int pos);
     int  getCursorPos() const { return cursorPos; }
@@ -100,6 +109,7 @@ private:
     int     terminalWidth = 80;
     QString placeholder;
     QString trailingHint;
+    QString ghostText;
 
     bool    searchMode = false;
     QString searchQuery;

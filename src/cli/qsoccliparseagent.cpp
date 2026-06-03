@@ -55,6 +55,7 @@
 #include "cli/qagentinputmonitor.h"
 #include "cli/qsocexternaleditor.h"
 #include "cli/qsocloopscheduler.h"
+#include "cli/qsocpredictioncontroller.h"
 #include "cli/qterminalcapability.h"
 #include "common/qlspconfigloader.h"
 #include "common/qlspservice.h"
@@ -1711,6 +1712,92 @@ bool QSocCliWorker::runAgentLoop(
      * atomic glyphs so Backspace / Delete never leave a half-eaten chip. */
     inputMonitor.setAtomicPattern(
         QRegularExpression(QStringLiteral(R"(\[Pasted text #\d+(?: \+\d+ lines)?\])")));
+
+    /* Ghost-text predictor: after a turn completes, an isolated cloned LLM
+     * predicts the next user input and offers it as dim ghost text. Accepted
+     * by Enter on an empty buffer; cleared on the first keystroke. */
+    QSocPredictionController predictor(this, llmService);
+    {
+        const QString predictCfg
+            = socConfig ? socConfig->getValue("agent.predict_input").trimmed().toLower()
+                        : QString();
+        predictor.setEnabled(
+            !(predictCfg == "false" || predictCfg == "0" || predictCfg == "off"
+              || predictCfg == "no"));
+    }
+    connect(
+        &predictor,
+        &QSocPredictionController::ghostReady,
+        [&compositor, &inputWidget, &inputMonitor, &predictor](const QString &text) {
+            /* Only surface a ghost while the empty input line holds focus. If
+             * focus moved (or the user typed) while the prediction was in
+             * flight, drop it so it can never be filled while invisible. */
+            if (compositor.currentFocus() != QTuiCompositor::FocusOwner::Input
+                || !inputMonitor.getInputBuffer().isEmpty()) {
+                predictor.cancel();
+                return;
+            }
+            inputWidget.setGhostText(text);
+            /* Empty-buffer Enter never fires inputReady; a thin consumer
+             * catches CR/LF and submits the ghost. The accept is deferred via
+             * a queued call so the consumer is never reassigned mid-dispatch. */
+            inputMonitor.setExternalKeyConsumer(
+                [&compositor, &inputMonitor, &predictor](unsigned char byte) {
+                    if ((byte == 0x0D || byte == 0x0A)
+                        && compositor.currentFocus() == QTuiCompositor::FocusOwner::Input
+                        && inputMonitor.getInputBuffer().isEmpty() && predictor.hasGhost()) {
+                        const QString accepted = predictor.currentGhost();
+                        QMetaObject::invokeMethod(
+                            &inputMonitor,
+                            [&inputMonitor, &predictor, accepted]() {
+                                predictor.cancel();
+                                inputMonitor.insertText(accepted);
+                                inputMonitor.submitNow();
+                            },
+                            Qt::QueuedConnection);
+                        return true;
+                    }
+                    return false;
+                });
+            compositor.invalidate();
+            compositor.render();
+        });
+    connect(
+        &predictor,
+        &QSocPredictionController::ghostCleared,
+        [&compositor, &inputWidget, &inputMonitor]() {
+            inputWidget.setGhostText(QString());
+            /* Only drop the consumer while Input holds focus: a focused
+             * task pill owns the consumer slot and must not be disturbed. */
+            if (compositor.currentFocus() == QTuiCompositor::FocusOwner::Input) {
+                inputMonitor.setExternalKeyConsumer({});
+            }
+            compositor.invalidate();
+            compositor.render();
+        });
+    /* A failed turn suppresses exactly one follow-up prediction. */
+    connect(agent, &QSocAgent::runError, &predictor, [&predictor](const QString &) {
+        predictor.markError();
+    });
+    /* Tab materializes the ghost into the editable buffer without submitting,
+     * so the user can tweak it before pressing Enter. */
+    connect(
+        &inputMonitor,
+        &QAgentInputMonitor::tabOnEmptyBuffer,
+        [&compositor, &inputWidget, &inputMonitor, &predictor]() {
+            if (compositor.currentFocus() != QTuiCompositor::FocusOwner::Input
+                || !predictor.hasGhost()) {
+                return;
+            }
+            const QString filled = predictor.currentGhost();
+            predictor.cancel(); /* Clears ghost + removes the accept consumer */
+            inputMonitor.insertText(filled);
+            inputWidget.setText(inputMonitor.getInputBuffer());
+            inputWidget.setCursorPos(inputMonitor.getCursorPos());
+            compositor.invalidate();
+            compositor.render();
+        });
+
     connect(&inputMonitor, &QAgentInputMonitor::mouseWheel, [&compositor](int direction) {
         if (direction == 0) {
             compositor.scrollContentUp(3);
@@ -2000,7 +2087,12 @@ bool QSocCliWorker::runAgentLoop(
          &searchQuery,
          &searchCurrentMatch,
          &searchFailed,
+         &predictor,
          &compositor](const QString &text) {
+            /* First keystroke dismisses the predicted ghost text. */
+            if (!text.isEmpty()) {
+                predictor.cancel();
+            }
             if (searching) {
                 searchQuery = text;
                 historySearch.rewind();
@@ -2729,6 +2821,9 @@ bool QSocCliWorker::runAgentLoop(
          * working. */
         if (key == 'B' && taskRegistry != nullptr && taskRegistry->activeCount() > 0
             && historyPos < 0 && inputMonitor.getInputBuffer().isEmpty()) {
+            /* Drop the ghost before the pill grabs the consumer slot, so we
+             * never leave a visible-but-unacceptable suggestion behind. */
+            predictor.cancel();
             compositor.setFocusOwner(QTuiCompositor::FocusOwner::TaskPill);
             compositor.statusBar().setTaskPillFocused(true);
             /* Enter on an empty buffer never fires inputReady (submitNow
@@ -3618,6 +3713,10 @@ bool QSocCliWorker::runAgentLoop(
         if (!pendingAutoInputs.isEmpty()) {
             input = pendingAutoInputs.takeFirst();
         } else {
+            /* Idle at the prompt: predict the user's likely next input and
+             * offer it as ghost text while we wait. Guards inside dedupe and
+             * suppress; the async reply arrives during promptLoop.exec(). */
+            predictor.requestPrediction(agent->getMessages());
             idlePromptLoop = &promptLoop;
             promptLoop.exec();
             idlePromptLoop = nullptr;
@@ -3634,6 +3733,10 @@ bool QSocCliWorker::runAgentLoop(
         QObject::disconnect(connCtrlC);
         QObject::disconnect(connEsc);
         QObject::disconnect(connEscEsc);
+
+        /* Leaving the idle prompt: drop any lingering ghost and its consumer
+         * before a command or agent turn runs. */
+        predictor.cancel();
 
         if (exitRequested) {
             break;
