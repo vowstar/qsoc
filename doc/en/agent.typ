@@ -21,7 +21,9 @@ LLM tool calling to execute multi-step workflows through natural language.
     [`--effort <level>`], [Reasoning effort: low, medium, high],
     [`--model-reasoning <model>`], [Model to use when effort is set],
     [`--resume [id]`],
-    [Resume a previous session; pick from list if id omitted],
+    [Resume a session by id prefix, title, or branch; pick from list if
+     omitted. A short title is auto-generated after the first turn (see
+     `agent.session_title`); `/rename` always overrides it],
     [`--continue`], [Continue the most recent session for this project],
     [`--workspace <path>`],
     [Working directory for tool execution. Local absolute path by default;
@@ -356,12 +358,17 @@ run keeps moving instead of blocking on a prompt nobody answers; a
 not report focus (e.g. tmux without `focus-events on`) are treated as
 focused, so behavior is unchanged there.
 
+The status bar also shows a `[ctx N%]` chip tracking how full the context
+window is against the effective budget; as auto-compaction nears it reads
+`N% to compact`, then `compacting`.
+
 == KEYBOARD AND INPUT
 <agent-keyboard>
 Editing and navigation in the prompt:
 
 - *Left/Right*, *Ctrl+A/E*: Move cursor / jump to start or end of line
-- *Up/Down*: Browse prompt history
+- *Up/Down*: Browse prompt history (global across projects, current project
+  surfaced first)
 - *Ctrl+K*, *Ctrl+U*, *Ctrl+W*: Delete to end of line / start of line / previous word
 - *Backspace*: Delete character before cursor (CJK/emoji aware)
 - *Ctrl+\_*: Undo the last edit
@@ -370,7 +377,7 @@ Editing and navigation in the prompt:
 External editor and search:
 
 - *Ctrl+X Ctrl+E* or *Ctrl+G*: Edit current input in `$EDITOR`
-- *Ctrl+R*: Reverse-i-search through prompt history
+- *Ctrl+R*: Reverse-i-search through prompt history (across all projects)
 
 View and selection:
 
@@ -435,7 +442,9 @@ The agent provides the following tools through natural language:
 - *Generation*: `generate_verilog` (RTL from `.soc_net`), `generate_template`
   (Jinja2 rendering)
 - *Files*: `read_file`, `list_files`, `write_file`, `edit_file`; `path_context`
-  reports and adjusts allowed write directories
+  reports and adjusts allowed write directories. `edit_file` and overwriting
+  `write_file` require the file to have been read first and reject a file
+  changed on disk since that read (local and remote)
 - *Shell*: `bash` (synchronous, or `background=true` for detached jobs),
   `bash_manage` to inspect, tail, or kill backgrounded jobs
 - *Monitors*: `monitor` starts a line-oriented watcher whose output wakes

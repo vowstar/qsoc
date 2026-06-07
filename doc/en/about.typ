@@ -82,6 +82,11 @@ document are property of their respective owners, and are hereby acknowledged.
     [Huang Rui],
     [Memory system: selective recall, background extraction, and dream
      consolidation],
+    [1.0.12],
+    [2026-06-07],
+    [Huang Rui],
+    [Context and session: read-before-edit guard, context-usage chip, auto
+     session titles, resume by title/branch, global command history],
   )],
   kind: table,
 )
