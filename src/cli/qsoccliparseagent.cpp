@@ -12,6 +12,7 @@
 #include "agent/qsocbashtasksource.h"
 #include "agent/qsocfilehistory.h"
 #include "agent/qsocgoal.h"
+#include "agent/qsochistoryorder.h"
 #include "agent/qsochookmanager.h"
 #include "agent/qsoclooptasksource.h"
 #include "agent/qsocmemorydream.h"
@@ -2669,46 +2670,87 @@ bool QSocCliWorker::runAgentLoop(
         todoWidget.setItems(widgetItems);
     };
 
-    /* Clear and reload the input history + paste maps from the given
-     * project's <projectPath>/.qsoc/history.jsonl. Silent on missing /
-     * malformed lines: history is advisory, not authoritative. */
+    /* Global command-history file shared across projects so Up-arrow and
+     * Ctrl-R recall commands from any project. Lives next to the user config
+     * (~/.config/qsoc/history.jsonl). */
+    auto globalHistoryPath = []() {
+        return QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+            .filePath(QStringLiteral("history.jsonl"));
+    };
+
+    /* Reload the input history + paste maps from the global file, plus any
+     * legacy per-project history that predates the global store. Entries from
+     * other projects come first and this project's last, so Up-arrow surfaces
+     * the current project's recent commands before others. Deduped by display
+     * text (most recent wins). Silent on missing / malformed lines. */
     auto loadInputHistory = [&](const QString &projectPath) {
         inputHistory.clear();
         inputHistoryPastes.clear();
-        if (projectPath.isEmpty()) {
-            return;
-        }
-        QFile histFile(QDir(projectPath).filePath(QStringLiteral(".qsoc/history.jsonl")));
-        if (!histFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            return;
-        }
-        QTextStream stream(&histFile);
-        while (!stream.atEnd()) {
-            QString line = stream.readLine();
-            if (line.isEmpty()) {
-                continue;
-            }
-            QJsonParseError err{};
-            QJsonDocument   doc = QJsonDocument::fromJson(line.toUtf8(), &err);
-            if (err.error != QJsonParseError::NoError || !doc.isObject()) {
-                continue;
-            }
-            QJsonObject obj     = doc.object();
-            QString     display = obj.value(QStringLiteral("display")).toString();
-            if (display.isEmpty()) {
-                continue;
-            }
+
+        struct Entry
+        {
+            QString            display;
             QMap<int, QString> pastes;
-            QJsonObject        pastesObj = obj.value(QStringLiteral("pastes")).toObject();
-            for (auto pIt = pastesObj.begin(); pIt != pastesObj.end(); ++pIt) {
-                bool parseOk = false;
-                int  pasteId = pIt.key().toInt(&parseOk);
-                if (parseOk) {
-                    pastes[pasteId] = pIt.value().toString();
-                }
+            bool               current = false;
+        };
+        QList<Entry> entries;
+
+        const auto readFile = [&](const QString &path, const QString &forcedProject) {
+            QFile histFile(path);
+            if (!histFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                return;
             }
-            inputHistory.append(display);
-            inputHistoryPastes.append(pastes);
+            QTextStream stream(&histFile);
+            while (!stream.atEnd()) {
+                const QString line = stream.readLine();
+                if (line.isEmpty()) {
+                    continue;
+                }
+                QJsonParseError err{};
+                QJsonDocument   doc = QJsonDocument::fromJson(line.toUtf8(), &err);
+                if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+                    continue;
+                }
+                const QJsonObject obj     = doc.object();
+                const QString     display = obj.value(QStringLiteral("display")).toString();
+                if (display.isEmpty()) {
+                    continue;
+                }
+                QMap<int, QString> pastes;
+                const QJsonObject  pastesObj = obj.value(QStringLiteral("pastes")).toObject();
+                for (auto pIt = pastesObj.begin(); pIt != pastesObj.end(); ++pIt) {
+                    bool parseOk = false;
+                    int  pasteId = pIt.key().toInt(&parseOk);
+                    if (parseOk) {
+                        pastes[pasteId] = pIt.value().toString();
+                    }
+                }
+                const QString project = forcedProject.isEmpty()
+                                            ? obj.value(QStringLiteral("project")).toString()
+                                            : forcedProject;
+                /* Legacy entries carry no project; treat them as the writing
+                 * project's so they stay surfaced there. */
+                const bool current = project.isEmpty() || project == projectPath;
+                entries.append({display, pastes, current});
+            }
+        };
+
+        readFile(globalHistoryPath(), QString());
+        if (!projectPath.isEmpty()) {
+            readFile(QDir(projectPath).filePath(QStringLiteral(".qsoc/history.jsonl")), projectPath);
+        }
+
+        QStringList displays;
+        QList<bool> current;
+        displays.reserve(entries.size());
+        current.reserve(entries.size());
+        for (const Entry &entry : entries) {
+            displays.append(entry.display);
+            current.append(entry.current);
+        }
+        for (int idx : QSocHistoryOrder::orderedDedup(displays, current)) {
+            inputHistory.append(entries[idx].display);
+            inputHistoryPastes.append(entries[idx].pastes);
         }
     };
 
@@ -4029,24 +4071,27 @@ bool QSocCliWorker::runAgentLoop(
             inputHistory.append(input);
             inputHistoryPastes.append(entryPastes);
 
-            /* Persist to .qsoc/history.jsonl as one JSON object per line. */
-            QString projectPath = projectManager->getProjectPath();
-            if (!projectPath.isEmpty()) {
-                QString histDir = QDir(projectPath).filePath(".qsoc");
-                QDir(histDir).mkpath(".");
-                QFile histFile(QDir(histDir).filePath("history.jsonl"));
-                if (histFile.open(QIODevice::Append)) {
-                    QJsonObject obj;
-                    obj[QStringLiteral("display")] = input;
-                    QJsonObject pastesJson;
-                    for (auto pIt = entryPastes.begin(); pIt != entryPastes.end(); ++pIt) {
-                        pastesJson[QString::number(pIt.key())] = pIt.value();
-                    }
-                    obj[QStringLiteral("pastes")] = pastesJson;
-                    QJsonDocument doc(obj);
-                    histFile.write(doc.toJson(QJsonDocument::Compact));
-                    histFile.write("\n");
+            /* Persist to the global history.jsonl as one JSON object per
+             * line, tagged with project + host so cross-project recall can
+             * prioritise the current project and show remote origin. */
+            const QString histPath = globalHistoryPath();
+            QDir(QFileInfo(histPath).absolutePath()).mkpath(QStringLiteral("."));
+            QFile histFile(histPath);
+            if (histFile.open(QIODevice::Append)) {
+                QJsonObject obj;
+                obj[QStringLiteral("display")] = input;
+                QJsonObject pastesJson;
+                for (auto pIt = entryPastes.begin(); pIt != entryPastes.end(); ++pIt) {
+                    pastesJson[QString::number(pIt.key())] = pIt.value();
                 }
+                obj[QStringLiteral("pastes")]  = pastesJson;
+                obj[QStringLiteral("project")] = projectManager->getProjectPath();
+                obj[QStringLiteral("host")]    = agent->getConfig().remoteMode
+                                                     ? agent->getConfig().remoteName
+                                                     : QStringLiteral("local");
+                QJsonDocument doc(obj);
+                histFile.write(doc.toJson(QJsonDocument::Compact));
+                histFile.write("\n");
             }
         }
 
