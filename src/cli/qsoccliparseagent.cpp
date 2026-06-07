@@ -14,6 +14,8 @@
 #include "agent/qsocgoal.h"
 #include "agent/qsochookmanager.h"
 #include "agent/qsoclooptasksource.h"
+#include "agent/qsocmemorydream.h"
+#include "agent/qsocmemoryextractor.h"
 #include "agent/qsocsession.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctaskeventqueue.h"
@@ -843,6 +845,74 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             config.memoryMaxChars = memoryMaxCharsStr.toInt();
         }
 
+        QString memoryRecallStr = socConfig->getValue("agent.memory_recall");
+        if (!memoryRecallStr.isEmpty()) {
+            config.memoryRecallEnabled
+                = (memoryRecallStr.toLower() == "true" || memoryRecallStr == "1");
+        }
+
+        QString memoryRecallModelStr = socConfig->getValue("agent.memory_recall_model");
+        if (!memoryRecallModelStr.isEmpty()) {
+            config.memoryRecallModel = memoryRecallModelStr;
+        }
+
+        QString memoryRecallMaxFilesStr = socConfig->getValue("agent.memory_recall_max_files");
+        if (!memoryRecallMaxFilesStr.isEmpty()) {
+            config.memoryRecallMaxFiles = memoryRecallMaxFilesStr.toInt();
+        }
+
+        QString memoryRecallPerFileCapStr = socConfig->getValue("agent.memory_recall_per_file_cap");
+        if (!memoryRecallPerFileCapStr.isEmpty()) {
+            config.memoryRecallPerFileCap = memoryRecallPerFileCapStr.toInt();
+        }
+
+        QString memoryRecallTurnBudgetStr = socConfig->getValue("agent.memory_recall_turn_budget");
+        if (!memoryRecallTurnBudgetStr.isEmpty()) {
+            config.memoryRecallTurnBudget = memoryRecallTurnBudgetStr.toInt();
+        }
+
+        QString memoryExtractStr = socConfig->getValue("agent.memory_extract");
+        if (!memoryExtractStr.isEmpty()) {
+            config.memoryExtractEnabled
+                = (memoryExtractStr.toLower() == "true" || memoryExtractStr == "1");
+        }
+
+        QString memoryExtractModelStr = socConfig->getValue("agent.memory_extract_model");
+        if (!memoryExtractModelStr.isEmpty()) {
+            config.memoryExtractModel = memoryExtractModelStr;
+        }
+
+        QString memoryExtractCadenceStr = socConfig->getValue("agent.memory_extract_cadence");
+        if (!memoryExtractCadenceStr.isEmpty()) {
+            config.memoryExtractEveryTurns = memoryExtractCadenceStr.toInt();
+        }
+
+        QString memoryExtractMinMsgStr = socConfig->getValue("agent.memory_extract_min_messages");
+        if (!memoryExtractMinMsgStr.isEmpty()) {
+            config.memoryExtractMinNewMessages = memoryExtractMinMsgStr.toInt();
+        }
+
+        QString memoryDreamStr = socConfig->getValue("agent.memory_dream");
+        if (!memoryDreamStr.isEmpty()) {
+            config.memoryDreamEnabled
+                = (memoryDreamStr.toLower() == "true" || memoryDreamStr == "1");
+        }
+
+        QString memoryDreamModelStr = socConfig->getValue("agent.memory_dream_model");
+        if (!memoryDreamModelStr.isEmpty()) {
+            config.memoryDreamModel = memoryDreamModelStr;
+        }
+
+        QString memoryDreamMinHoursStr = socConfig->getValue("agent.memory_dream_min_hours");
+        if (!memoryDreamMinHoursStr.isEmpty()) {
+            config.memoryDreamMinHours = memoryDreamMinHoursStr.toInt();
+        }
+
+        QString memoryDreamMinSessStr = socConfig->getValue("agent.memory_dream_min_sessions");
+        if (!memoryDreamMinSessStr.isEmpty()) {
+            config.memoryDreamMinSessions = memoryDreamMinSessStr.toInt();
+        }
+
         QString maxConcurrentStr = socConfig->getValue("agent.max_concurrent_subagents");
         if (!maxConcurrentStr.isEmpty()) {
             config.maxConcurrentSubagents = maxConcurrentStr.toInt();
@@ -1017,11 +1087,13 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     toolRegistry->registerTool(docQueryTool);
 
     /* Memory manager and tools */
-    auto *memoryManager   = new QSocMemoryManager(this, projectManager);
-    auto *memoryReadTool  = new QSocToolMemoryRead(this, memoryManager);
-    auto *memoryWriteTool = new QSocToolMemoryWrite(this, memoryManager);
+    auto *memoryManager    = new QSocMemoryManager(this, projectManager);
+    auto *memoryReadTool   = new QSocToolMemoryRead(this, memoryManager);
+    auto *memoryWriteTool  = new QSocToolMemoryWrite(this, memoryManager);
+    auto *memoryDeleteTool = new QSocToolMemoryDelete(this, memoryManager);
     toolRegistry->registerTool(memoryReadTool);
     toolRegistry->registerTool(memoryWriteTool);
+    toolRegistry->registerTool(memoryDeleteTool);
 
     /* Todo tools */
     auto *todoListTool   = new QSocToolTodoList(this, projectManager);
@@ -1321,6 +1393,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         cliRemoteState.registry->registerTool(agentStatusTool);
         cliRemoteState.registry->registerTool(sendMessageTool);
         cliRemoteState.registry->registerTool(resumeTool);
+        /* Memory tools are local-scoped; carry them across so background
+         * extraction / dream still work while on a remote workspace. */
+        cliRemoteState.registry->registerTool(memoryReadTool);
+        cliRemoteState.registry->registerTool(memoryWriteTool);
+        cliRemoteState.registry->registerTool(memoryDeleteTool);
 
         preLocalRegistry = agent->getToolRegistry();
         agent->setToolRegistry(cliRemoteState.registry);
@@ -2074,6 +2151,7 @@ bool QSocCliWorker::runAgentLoop(
      * what each slash command expects without re-reading help text. */
     static const QMap<QString, QString> kSlashHints{
         {QStringLiteral("/effort"), QStringLiteral("off|low|medium|high")},
+        {QStringLiteral("/memory"), QStringLiteral("[<name> | rm <name>]")},
         {QStringLiteral("/model"), QStringLiteral("<model-id>")},
     };
 
@@ -2149,6 +2227,7 @@ bool QSocCliWorker::runAgentLoop(
            QStringLiteral("diff"),
            QStringLiteral("effort"),
            QStringLiteral("loop"),
+           QStringLiteral("memory"),
            QStringLiteral("model"),
            QStringLiteral("project"),
            QStringLiteral("rename"),
@@ -2379,6 +2458,18 @@ bool QSocCliWorker::runAgentLoop(
     std::unique_ptr<QSocSession>     currentSession;
     std::unique_ptr<QSocFileHistory> currentFileHistory;
     int                              lastPersistedIndex = 0;
+    /* Cursor into the message array marking what background extraction has
+     * already processed. Advances past extracted slices; reset to the
+     * message count on resume so a resumed session does not re-extract
+     * already-seen history. */
+    int lastMemoryIndex = 0;
+    /* Consolidation ("dream") is attempted once per process, after the
+     * first turn settles, so it never blocks startup. The time/session
+     * gates inside maybeRun decide whether it actually runs. */
+    bool dreamAttempted = false;
+    /* One-time notice when the topic store nears its cap (oldest are
+     * dropped silently beyond it). */
+    bool memoryCapNotified = false;
     /* Monotonic turn counter driven by user-message count. Initialised from
      * the resumed message history so snapshots continue the sequence after
      * --continue / --resume. */
@@ -2595,6 +2686,18 @@ bool QSocCliWorker::runAgentLoop(
             if (restored.is_array() && !restored.empty()) {
                 agent->setMessages(restored);
                 lastPersistedIndex = static_cast<int>(agent->getMessages().size());
+                /* Restore the extraction cursor so a turn left unextracted
+                 * before a crash is picked up; fall back to the message
+                 * count (skip history) when no cursor was persisted. */
+                {
+                    bool          okIdx = false;
+                    const QString savedIdx
+                        = QSocSession::readMeta(sessionPath, QStringLiteral("last_memory_index"));
+                    const int parsed = savedIdx.toInt(&okIdx);
+                    lastMemoryIndex  = (okIdx && parsed >= 0 && parsed <= lastPersistedIndex)
+                                           ? parsed
+                                           : lastPersistedIndex;
+                }
                 /* Recreate the monotonic turn counter so the next snapshot
                  * continues the sequence from where the previous session
                  * left off. Prefer on-disk file-history state when it
@@ -3748,6 +3851,35 @@ bool QSocCliWorker::runAgentLoop(
             continue;
         }
 
+        /* `#<fact>` quick-add: save a project memory directly, no LLM turn. */
+        if (input.startsWith('#')) {
+            /* simplified() collapses internal newlines/tabs so they never
+             * leak into the YAML frontmatter or the derived name. */
+            const QString fact = input.mid(1).simplified();
+            auto         *mm   = agent->getMemoryManager();
+            if (fact.isEmpty() || mm == nullptr) {
+                compositor.printContent(
+                    QStringLiteral("Usage: #<fact to remember>\n"), QTuiScrollView::Dim);
+                continue;
+            }
+            const QString name = fact.split(' ', Qt::SkipEmptyParts).mid(0, 6).join('-');
+            /* A name with no ASCII alphanumerics sanitizes to "untitled" and
+             * would silently overwrite other such facts; reject it. */
+            static const QRegularExpression alnumRe(QStringLiteral("[A-Za-z0-9]"));
+            if (!name.contains(alnumRe)) {
+                compositor.printContent(
+                    QStringLiteral("Could not derive a topic name; include a word.\n"),
+                    QTuiScrollView::Dim);
+                continue;
+            }
+            const bool ok = mm->writeTopicFile("project", name, "project", fact.left(60), fact);
+            compositor.printContent(
+                ok ? QStringLiteral("(remembered: %1)\n").arg(name)
+                   : QStringLiteral("Failed to save memory.\n"),
+                QTuiScrollView::Dim);
+            continue;
+        }
+
         /* User submitting a prompt is the cue for "work has begun":
          * retire the top banner widget so the freed rows fold into
          * the scroll viewport. */
@@ -4562,7 +4694,10 @@ bool QSocCliWorker::runAgentLoop(
                 currentFileHistory->truncateAfter(-1);
             }
             lastPersistedIndex = 0;
+            lastMemoryIndex    = 0;
             turnCounter        = 0;
+            /* Re-arm the informational near-cap notice for the fresh start. */
+            memoryCapNotified = false;
             compositor.printContent("History cleared.\n");
             continue;
         }
@@ -4582,6 +4717,8 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent(
                 "  /loop [interval] <prompt> - Re-run a prompt periodically\n"
                 "                              (also: /loop list, /loop stop <id>, /loop clear)\n");
+            compositor.printContent(
+                "  /memory      - List memories; /memory <name> edit, rm <name> delete\n");
             compositor.printContent("  /model       - Show/switch model\n");
             compositor.printContent(
                 "  /project <p> - Switch to another project (reloads config, clears caches,\n"
@@ -4592,6 +4729,8 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent("  /local       - Leave remote workspace, back to local mode\n");
             compositor.printContent("  /status      - Show model, session, endpoint info\n");
             compositor.printContent("  !<command>   - Execute a shell command directly\n");
+            compositor.printContent(
+                "  #<fact>      - Save a fact to project memory (no LLM turn)\n");
             compositor.printContent("  /help        - Show this help message\n");
             compositor.printContent("\n");
             compositor.printContent("Keyboard shortcuts:\n");
@@ -5103,6 +5242,148 @@ bool QSocCliWorker::runAgentLoop(
             compositor.render();
             continue;
         }
+        if (cmd == "/memory" || cmd.startsWith("/memory ")) {
+            const QString arg = input.mid(7).trimmed();
+            auto         *mm  = agent->getMemoryManager();
+            if (mm == nullptr) {
+                compositor
+                    .printContent(QStringLiteral("Memory not available.\n"), QTuiScrollView::Dim);
+                continue;
+            }
+
+            /* Bare /memory: list topics across both scopes. */
+            if (arg.isEmpty()) {
+                const auto headers = mm->scanHeaders("all");
+                if (headers.isEmpty()) {
+                    compositor.printContent(
+                        QStringLiteral("No memory yet. Use #<fact> to add one.\n"),
+                        QTuiScrollView::Dim);
+                } else {
+                    compositor.printContent(QStringLiteral("Memory topics:\n"), QTuiScrollView::Bold);
+                    for (const auto &header : headers) {
+                        compositor.printContent(
+                            QStringLiteral("  %1 [%2/%3] %4\n")
+                                .arg(
+                                    header.name,
+                                    header.type.isEmpty() ? QStringLiteral("note") : header.type,
+                                    header.scope,
+                                    header.description),
+                            QTuiScrollView::Dim);
+                    }
+                    compositor.printContent(
+                        QStringLiteral(
+                            "Use '/memory <name>' to edit, '/memory rm <name>' to delete.\n"),
+                        QTuiScrollView::Dim);
+                }
+                continue;
+            }
+
+            /* Match a user-typed name against a topic, tolerating the
+             * underscore/hyphen/case divergence between a frontmatter name
+             * and its sanitized filename. */
+            const auto memNorm = [](const QString &str) {
+                return QString(str).toLower().replace('_', '-');
+            };
+            /* Split an optional scope qualifier: "user:foo" / "project:foo". */
+            const auto parseTarget = [](const QString &t, QString &scope, QString &name) {
+                if (t.startsWith(QStringLiteral("user:"), Qt::CaseInsensitive)) {
+                    scope = QStringLiteral("user");
+                    name  = t.mid(5).trimmed();
+                } else if (t.startsWith(QStringLiteral("project:"), Qt::CaseInsensitive)) {
+                    scope = QStringLiteral("project");
+                    name  = t.mid(8).trimmed();
+                } else {
+                    scope.clear();
+                    name = t;
+                }
+            };
+
+            /* /memory rm [scope:]<name>: delete matching topic(s). A bare
+             * name deletes the topic in every scope that has it. */
+            if (arg.startsWith(QStringLiteral("rm "), Qt::CaseInsensitive)) {
+                QString wantScope;
+                QString name;
+                parseTarget(arg.mid(3).trimmed(), wantScope, name);
+                QStringList deleted;
+                for (const auto &header : mm->scanHeaders("all")) {
+                    if (memNorm(header.name) != memNorm(name)) {
+                        continue;
+                    }
+                    if (!wantScope.isEmpty() && header.scope != wantScope) {
+                        continue;
+                    }
+                    if (mm->deleteTopicFile(header.scope, header.name)) {
+                        deleted << QStringLiteral("%1 (%2)").arg(header.name, header.scope);
+                    }
+                }
+                compositor.printContent(
+                    deleted.isEmpty() ? QStringLiteral("No memory named '%1'.\n").arg(name)
+                                      : QStringLiteral("Deleted %1.\n").arg(deleted.join(", ")),
+                    QTuiScrollView::Dim);
+                continue;
+            }
+
+            /* /memory [scope:]<name>: edit the topic body in $EDITOR. */
+            QString wantScope;
+            QString name;
+            parseTarget(arg, wantScope, name);
+            QString scope;
+            QString type;
+            QString desc;
+            QString canonical;
+            int     matchCount = 0;
+            for (const auto &header : mm->scanHeaders("all")) {
+                if (memNorm(header.name) != memNorm(name)) {
+                    continue;
+                }
+                if (!wantScope.isEmpty() && header.scope != wantScope) {
+                    continue;
+                }
+                matchCount++;
+                if (canonical.isEmpty()) {
+                    scope     = header.scope;
+                    type      = header.type;
+                    desc      = header.description;
+                    canonical = header.name;
+                }
+            }
+            if (canonical.isEmpty()) {
+                compositor.printContent(
+                    QStringLiteral("No memory named '%1'. Use '/memory' to list.\n").arg(name),
+                    QTuiScrollView::Dim);
+                continue;
+            }
+            if (matchCount > 1) {
+                compositor.printContent(
+                    QStringLiteral(
+                        "'%1' exists in multiple scopes; qualify it as "
+                        "'/memory user:%1' or '/memory project:%1'.\n")
+                        .arg(name),
+                    QTuiScrollView::Dim);
+                continue;
+            }
+
+            const QString body = QSocMemoryRecall::stripFrontmatter(
+                mm->readTopicFile(scope, canonical));
+            compositor.pause();
+            inputMonitor.stop();
+            QString    edited;
+            QString    editErr;
+            const bool ok = QSocExternalEditor::editText(body, edited, editErr);
+            inputMonitor.start();
+            compositor.resume();
+            if (!ok) {
+                compositor.printContent(
+                    QStringLiteral("Edit cancelled: %1\n").arg(editErr), QTuiScrollView::Dim);
+                continue;
+            }
+            const bool saved = mm->writeTopicFile(scope, canonical, type, desc, edited);
+            compositor.printContent(
+                saved ? QStringLiteral("Updated memory '%1'.\n").arg(canonical)
+                      : QStringLiteral("Failed to update '%1'.\n").arg(canonical),
+                QTuiScrollView::Dim);
+            continue;
+        }
         if (cmd.startsWith(QStringLiteral("/ssh"))) {
             QString arg = input.mid(4).trimmed();
 
@@ -5352,6 +5633,16 @@ bool QSocCliWorker::runAgentLoop(
             }
             if (auto *resumeT = localRegistry->getTool(QStringLiteral("agent_resume"))) {
                 remoteRegistry->registerTool(resumeT);
+            }
+            /* Memory tools are local-scoped; carry them across so background
+             * extraction / dream still work while on a remote workspace. */
+            for (const QString &mt :
+                 {QStringLiteral("memory_read"),
+                  QStringLiteral("memory_write"),
+                  QStringLiteral("memory_delete")}) {
+                if (auto *tool = localRegistry->getTool(mt)) {
+                    remoteRegistry->registerTool(tool);
+                }
             }
             agent->setToolRegistry(remoteRegistry);
             /* Pull the remote project's .qsoc/agents/ defs across SFTP
@@ -5775,7 +6066,12 @@ bool QSocCliWorker::runAgentLoop(
             agent->clearHistory();
             startFreshSessionAt(sessionProjectPath(projectManager));
             lastPersistedIndex = 0;
+            lastMemoryIndex    = 0;
             turnCounter        = 0;
+            /* Different project = different memory store: re-arm the
+             * once-per-process dream pass and the near-cap notice. */
+            dreamAttempted    = false;
+            memoryCapNotified = false;
 
             /* Reload per-project UI state: TODO widget and input history. */
             loadTodoWidget(projectManager->getProjectPath());
@@ -6355,6 +6651,57 @@ bool QSocCliWorker::runAgentLoop(
                 currentFileHistory->makeSnapshot(turnCounter);
             }
 
+            /* Background memory maintenance (extraction + once-per-process
+             * dream), idle-best-effort: skip while the user is mid-typing,
+             * show status, and let ESC abort the child. Runs before
+             * auto-compact so cursor indices match the live message array. */
+            if (inputMonitor.getInputBuffer().isEmpty()) {
+                auto onMemSpawn = [&inputMonitor, &statusBarWidget, &compositor](
+                                      QSocAgent *memChild) {
+                    statusBarWidget.setStatus("Saving memory");
+                    compositor.render();
+                    QObject::connect(
+                        &inputMonitor, &QAgentInputMonitor::escPressed, memChild, &QSocAgent::abort);
+                };
+                const int prevMemoryIndex = lastMemoryIndex;
+                lastMemoryIndex
+                    = QSocMemoryExtractor(agent, agent->getMemoryManager(), agent->getLLMService())
+                          .extract(lastMemoryIndex, turnCounter, onMemSpawn);
+                if (currentSession && lastMemoryIndex != prevMemoryIndex) {
+                    currentSession->appendMeta(
+                        QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
+                }
+                if (!dreamAttempted) {
+                    dreamAttempted             = true;
+                    const QString dreamSession = currentSession ? currentSession->id() : QString();
+                    const auto    dreamOutcome
+                        = QSocMemoryDream(agent, agent->getMemoryManager(), agent->getLLMService())
+                              .maybeRun(agent->getConfig().projectPath, dreamSession, onMemSpawn);
+                    if (dreamOutcome.ran) {
+                        compositor.printContent(
+                            QString("(memory consolidated: %1 -> %2 topics)\n")
+                                .arg(dreamOutcome.before)
+                                .arg(dreamOutcome.after),
+                            QTuiScrollView::Dim);
+                    }
+                }
+                if (!memoryCapNotified && agent->getMemoryManager() != nullptr) {
+                    const int cap   = QSocMemoryManager::maxTopicFiles();
+                    const int count = agent->getMemoryManager()->topicFileCount("all");
+                    if (count >= cap * 9 / 10) {
+                        memoryCapNotified = true;
+                        compositor.printContent(
+                            QString(
+                                "(memory near capacity: %1/%2 topics; the oldest stop being "
+                                "recalled past the cap. Prune via /memory or let it consolidate)\n")
+                                .arg(count)
+                                .arg(cap),
+                            QTuiScrollView::Dim);
+                    }
+                }
+                statusBarWidget.setStatus("Ready");
+            }
+
             /* Auto-compact: if context usage exceeds the configured threshold
              * and the circuit breaker hasn't tripped, compact now. */
             if (autoCompactFailures < AUTO_COMPACT_MAX_FAILURES) {
@@ -6897,6 +7244,55 @@ bool QSocCliWorker::runAgentLoop(
             if (currentFileHistory) {
                 turnCounter++;
                 currentFileHistory->makeSnapshot(turnCounter);
+            }
+
+            /* Background memory maintenance (same idle-best-effort logic
+             * as the streaming path). */
+            if (inputMonitor.getInputBuffer().isEmpty()) {
+                auto onMemSpawn = [&inputMonitor, &statusBarWidget, &compositor](
+                                      QSocAgent *memChild) {
+                    statusBarWidget.setStatus("Saving memory");
+                    compositor.render();
+                    QObject::connect(
+                        &inputMonitor, &QAgentInputMonitor::escPressed, memChild, &QSocAgent::abort);
+                };
+                const int prevMemoryIndex = lastMemoryIndex;
+                lastMemoryIndex
+                    = QSocMemoryExtractor(agent, agent->getMemoryManager(), agent->getLLMService())
+                          .extract(lastMemoryIndex, turnCounter, onMemSpawn);
+                if (currentSession && lastMemoryIndex != prevMemoryIndex) {
+                    currentSession->appendMeta(
+                        QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
+                }
+                if (!dreamAttempted) {
+                    dreamAttempted             = true;
+                    const QString dreamSession = currentSession ? currentSession->id() : QString();
+                    const auto    dreamOutcome
+                        = QSocMemoryDream(agent, agent->getMemoryManager(), agent->getLLMService())
+                              .maybeRun(agent->getConfig().projectPath, dreamSession, onMemSpawn);
+                    if (dreamOutcome.ran) {
+                        compositor.printContent(
+                            QString("(memory consolidated: %1 -> %2 topics)\n")
+                                .arg(dreamOutcome.before)
+                                .arg(dreamOutcome.after),
+                            QTuiScrollView::Dim);
+                    }
+                }
+                if (!memoryCapNotified && agent->getMemoryManager() != nullptr) {
+                    const int cap   = QSocMemoryManager::maxTopicFiles();
+                    const int count = agent->getMemoryManager()->topicFileCount("all");
+                    if (count >= cap * 9 / 10) {
+                        memoryCapNotified = true;
+                        compositor.printContent(
+                            QString(
+                                "(memory near capacity: %1/%2 topics; the oldest stop being "
+                                "recalled past the cap. Prune via /memory or let it consolidate)\n")
+                                .arg(count)
+                                .arg(cap),
+                            QTuiScrollView::Dim);
+                    }
+                }
+                statusBarWidget.setStatus("Ready");
             }
 
             /* Auto-compact (same logic as streaming path). */
