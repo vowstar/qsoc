@@ -85,8 +85,11 @@ QString QSocToolFileRead::execute(const json &arguments)
             basePath = QDir::currentPath();
         }
         filePath = QDir(basePath).absoluteFilePath(filePath);
-        fileInfo = QFileInfo(filePath);
     }
+    /* Canonicalize so read_file / edit_file / write_file key the read-state
+     * on one path spelling (./x, x, a/../x all fold together). */
+    filePath = QDir::cleanPath(filePath);
+    fileInfo = QFileInfo(filePath);
 
     /* Check if file exists */
     if (!fileInfo.exists()) {
@@ -390,8 +393,11 @@ QString QSocToolFileWrite::execute(const json &arguments)
             basePath = QDir::currentPath();
         }
         filePath = QDir(basePath).absoluteFilePath(filePath);
-        fileInfo = QFileInfo(filePath);
     }
+    /* Canonicalize so read_file / edit_file / write_file key the read-state
+     * on one path spelling (./x, x, a/../x all fold together). */
+    filePath = QDir::cleanPath(filePath);
+    fileInfo = QFileInfo(filePath);
 
     /* Security check */
     if (pathContext && !pathContext->isWriteAllowed(filePath)) {
@@ -405,11 +411,12 @@ QString QSocToolFileWrite::execute(const json &arguments)
     if (pathContext && fileInfo.exists() && fileInfo.isFile()) {
         QString existingContent;
         QFile   cur(filePath);
-        if (cur.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream curStream(&cur);
-            existingContent = curStream.readAll();
-            cur.close();
+        if (!cur.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            return QString("Error: Cannot open file to verify before overwrite: %1").arg(filePath);
         }
+        QTextStream curStream(&cur);
+        existingContent = curStream.readAll();
+        cur.close();
         if (!pathContext->readState().wasRead(filePath)) {
             return QString(
                        "Error: File not read yet: %1. Read it with read_file "
@@ -556,8 +563,11 @@ QString QSocToolFileEdit::execute(const json &arguments)
             basePath = QDir::currentPath();
         }
         filePath = QDir(basePath).absoluteFilePath(filePath);
-        fileInfo = QFileInfo(filePath);
     }
+    /* Canonicalize so read_file / edit_file / write_file key the read-state
+     * on one path spelling (./x, x, a/../x all fold together). */
+    filePath = QDir::cleanPath(filePath);
+    fileInfo = QFileInfo(filePath);
 
     /* Security check */
     if (pathContext && !pathContext->isWriteAllowed(filePath)) {

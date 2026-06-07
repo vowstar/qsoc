@@ -221,6 +221,10 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
         }
         QString          readErr;
         const QByteArray current = m_sftp->readFile(remotePath, 0, &readErr);
+        if (current.isNull() && !readErr.isEmpty()) {
+            /* A transport error must not be misread as a concurrent change. */
+            return QStringLiteral("Error: %1").arg(readErr);
+        }
         if (m_pathCtx->readState().changedSinceRead(remotePath, QString::fromUtf8(current))) {
             return QStringLiteral(
                        "Error: File changed on disk since last read: %1. "

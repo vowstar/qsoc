@@ -353,6 +353,26 @@ private slots:
         QVERIFY(result.contains("not read yet"));
     }
 
+    void testFileEditPathSpellingCanonicalized()
+    {
+        /* Reading via one spelling (./name) and editing via another (name)
+         * must share the read-state key, so the edit is not falsely rejected
+         * as "not read yet". */
+        QString testFile = tempDir.path() + "/canon.txt";
+        QFile   file(testFile);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        file.write("uno dos tres");
+        file.close();
+
+        QSocToolFileRead readTool(this, pathContext);
+        readTool.execute({{"file_path", "./canon.txt"}});
+
+        QSocToolFileEdit editTool(this, pathContext);
+        QString          result = editTool.execute(
+            {{"file_path", "canon.txt"}, {"old_string", "dos"}, {"new_string", "DOS"}});
+        QVERIFY2(result.contains("Successfully"), qPrintable(result));
+    }
+
     void testFileEditRejectsStaleOnDisk()
     {
         /* A file changed on disk after the read is rejected until re-read. */
