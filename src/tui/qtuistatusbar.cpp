@@ -202,7 +202,11 @@ QString QTuiStatusBar::formatContextChip(int used, int budget, double compactFra
     if (compactPct > 0 && pct >= compactPct) {
         return QStringLiteral(" [ctx %1%, compacting]").arg(pct);
     }
-    if (compactPct > 0 && pct >= compactPct - 15) {
+    /* Show the countdown only in the home stretch: the last 15 points, but
+     * never below half the threshold, so a low threshold does not make a
+     * near-empty context read as "about to compact". */
+    const int warnFloor = qMax(compactPct - 15, compactPct / 2);
+    if (compactPct > 0 && pct >= warnFloor) {
         return QStringLiteral(" [ctx %1%, %2% to compact]").arg(pct).arg(compactPct - pct);
     }
     return QStringLiteral(" [ctx %1%]").arg(pct);

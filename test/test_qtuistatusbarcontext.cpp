@@ -41,6 +41,17 @@ private slots:
         QCOMPARE(chip, QStringLiteral(" [ctx 65%, compacting]"));
     }
 
+    void testLowThresholdNoPrematureWarning()
+    {
+        /* With a low threshold (10%), a near-empty 3% context must not read
+         * as "about to compact" — countdown stays off below half-threshold. */
+        QCOMPARE(QTuiStatusBar::formatContextChip(3000, 100000, 0.10), QStringLiteral(" [ctx 3%]"));
+        /* But at 8% (past half of the 10% threshold) the countdown shows. */
+        QCOMPARE(
+            QTuiStatusBar::formatContextChip(8000, 100000, 0.10),
+            QStringLiteral(" [ctx 8%, 2% to compact]"));
+    }
+
     void testNoThresholdGivesPlainPercent()
     {
         /* A zero compaction fraction yields a plain percentage, no hint. */

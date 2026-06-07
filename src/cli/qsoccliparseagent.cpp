@@ -2839,9 +2839,10 @@ bool QSocCliWorker::runAgentLoop(
             }
         } else if (!sessionId.isEmpty()) {
             const QString resolved = QSocSession::resolveId(projectPath, sessionId);
-            if (!resolved.isEmpty()) {
-                sessionId = resolved;
-            }
+            /* Clear an unresolved value so the fall-through generates a fresh
+             * UUID instead of creating a session file named after the raw
+             * (typo / ambiguous) query. */
+            sessionId = resolved;
         }
 
         if (sessionId.isEmpty()) {
