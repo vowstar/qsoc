@@ -2519,6 +2519,37 @@ bool QSocCliWorker::runAgentLoop(
         wireFileHistoryTools();
     };
 
+    /* Persist the session after compaction. compact() rewrites the in-memory
+     * message array, so the append-only delta path would leave the stale
+     * pre-compact lines on disk and lose the summary; rewrite the JSONL to
+     * the compacted messages, re-emit meta (rewriteMessages truncates it),
+     * and reset both cursors to the new size so a resume restores the
+     * compacted history and extraction does not re-scan collapsed turns. */
+    auto persistCompactedSession = [&]() {
+        if (!currentSession) {
+            return;
+        }
+        const QSocSession::Info origInfo  = QSocSession::readInfo(currentSession->filePath());
+        const json              compacted = agent->getMessages();
+        currentSession->rewriteMessages(compacted);
+        if (origInfo.createdAt.isValid()) {
+            currentSession->appendMeta(
+                QStringLiteral("created"), origInfo.createdAt.toString(Qt::ISODateWithMs));
+        }
+        currentSession->appendMeta(QStringLiteral("cwd"), sessionProjectPath(projectManager));
+        if (!origInfo.title.isEmpty()) {
+            currentSession->appendMeta(QStringLiteral("title"), origInfo.title);
+        }
+        if (!origInfo.branch.isEmpty()) {
+            currentSession->appendMeta(QStringLiteral("branch"), origInfo.branch);
+        }
+        const int size     = static_cast<int>(compacted.size());
+        lastPersistedIndex = size;
+        lastMemoryIndex    = size;
+        currentSession
+            ->appendMeta(QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
+    };
+
     /* Replace the TODO widget contents with the pending items in
      * <projectPath>/.qsoc/todos.md. Clears on missing/empty file so a
      * /project switch doesn't leave old project's TODOs visible. */
@@ -4829,8 +4860,7 @@ bool QSocCliWorker::runAgentLoop(
                     QTuiScrollView::Dim);
             }
             statusBarWidget.setStatus("Ready");
-            lastPersistedIndex
-                = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
+            persistCompactedSession();
             continue;
         }
         if (cmd == "/agents-history") {
@@ -6715,10 +6745,11 @@ bool QSocCliWorker::runAgentLoop(
                     const int before = agent->estimateMessagesTokens();
                     const int saved  = agent->compact();
                     statusBarWidget.setStatus("Ready");
+                    /* compact() rewrote the in-memory array regardless of
+                     * savings; sync the JSONL so resume stays consistent. */
+                    persistCompactedSession();
                     if (saved > 0) {
                         autoCompactFailures = 0;
-                        lastPersistedIndex
-                            = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
                         compositor.printContent(
                             QString("(auto-compacted: %1 -> %2 tokens, saved %3)\n")
                                 .arg(before)
@@ -7303,10 +7334,11 @@ bool QSocCliWorker::runAgentLoop(
                 if (currentTokens > static_cast<int>(budget * threshold)) {
                     const int before = agent->estimateMessagesTokens();
                     const int saved  = agent->compact();
+                    /* compact() rewrote the in-memory array regardless of
+                     * savings; sync the JSONL so resume stays consistent. */
+                    persistCompactedSession();
                     if (saved > 0) {
                         autoCompactFailures = 0;
-                        lastPersistedIndex
-                            = persistSessionDelta(agent, currentSession.get(), lastPersistedIndex);
                         compositor.printContent(
                             QString("(auto-compacted: %1 -> %2 tokens, saved %3)\n")
                                 .arg(before)

@@ -206,6 +206,60 @@ private slots:
         QCOMPARE(restored[0]["content"].get<std::string>(), std::string("only"));
     }
 
+    void testCompactionRewritePreservesMetaAndHistory()
+    {
+        /* Mirrors persistCompactedSession: after compaction shrinks the
+         * message array, the JSONL is rewritten to the compacted messages
+         * and meta is re-emitted (rewriteMessages truncates it). On reload
+         * the history must be the compacted form, created preserved, and
+         * last_memory_index reset to the new size. */
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        QSocSession   session(id, path);
+
+        session.appendMeta(QStringLiteral("created"), QStringLiteral("2026-05-01T08:00:00.000Z"));
+        session.appendMeta(QStringLiteral("cwd"), tempDir.path());
+        for (int i = 0; i < 10; i++) {
+            session.appendMessage(
+                {{"role", "user"}, {"content", QString("msg %1").arg(i).toStdString()}});
+        }
+        QCOMPARE(static_cast<int>(QSocSession::loadMessages(path).size()), 10);
+
+        /* Simulate compaction output: summary + last 2 verbatim. */
+        const QSocSession::Info origInfo  = QSocSession::readInfo(path);
+        json                    compacted = json::array();
+        compacted.push_back({{"role", "user"}, {"content", "[Conversation Summary]\nrolled up"}});
+        compacted.push_back({{"role", "user"}, {"content", "msg 8"}});
+        compacted.push_back({{"role", "user"}, {"content", "msg 9"}});
+
+        session.rewriteMessages(compacted);
+        session.appendMeta(QStringLiteral("created"), origInfo.createdAt.toString(Qt::ISODateWithMs));
+        session.appendMeta(QStringLiteral("cwd"), tempDir.path());
+        const int newSize = static_cast<int>(compacted.size());
+        session.appendMeta(QStringLiteral("last_memory_index"), QString::number(newSize));
+
+        /* Reload: only the compacted history survives, no stale pre-compact
+         * lines, summary first. */
+        const json restored = QSocSession::loadMessages(path);
+        QCOMPARE(static_cast<int>(restored.size()), 3);
+        QVERIFY(
+            QString::fromStdString(restored[0]["content"].get<std::string>())
+                .startsWith("[Conversation Summary]"));
+        QCOMPARE(restored[2]["content"].get<std::string>(), std::string("msg 9"));
+
+        /* Meta survived the rewrite. */
+        const QSocSession::Info info = QSocSession::readInfo(path);
+        QCOMPARE(
+            info.createdAt.toUTC().toString(Qt::ISODateWithMs),
+            QStringLiteral("2026-05-01T08:00:00.000Z"));
+        QCOMPARE(
+            QSocSession::readMeta(path, QStringLiteral("last_memory_index")),
+            QString::number(newSize));
+    }
+
     void testMetaOnlySessionLeavesNoFile()
     {
         QTemporaryDir tempDir;
