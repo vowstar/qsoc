@@ -184,6 +184,33 @@ private slots:
         QCOMPARE(QSocSession::resolveId(tempDir.path(), QStringLiteral("ffff")), QString());
     }
 
+    void testResolveIdMatchesTitleAndBranch()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString idA = QStringLiteral("11111111-aaaa-bbbb-cccc-000000000001");
+        const QString idB = QStringLiteral("22222222-aaaa-bbbb-cccc-000000000002");
+        const QString pathA
+            = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(idA + ".jsonl");
+        const QString pathB
+            = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(idB + ".jsonl");
+
+        QSocSession a(idA, pathA);
+        a.appendMeta(QStringLiteral("title"), QStringLiteral("Refactor APB bridge"));
+        a.appendMessage({{"role", "user"}, {"content", "a"}});
+        QSocSession b(idB, pathB);
+        b.appendMeta(QStringLiteral("branch"), QStringLiteral("experiment-dma"));
+        b.appendMessage({{"role", "user"}, {"content", "b"}});
+
+        /* Case-insensitive substring of a title resolves to its session. */
+        QCOMPARE(QSocSession::resolveId(tempDir.path(), QStringLiteral("apb")), idA);
+        /* A branch label substring resolves too. */
+        QCOMPARE(QSocSession::resolveId(tempDir.path(), QStringLiteral("dma")), idB);
+        /* A token matching nothing stays empty. */
+        QCOMPARE(QSocSession::resolveId(tempDir.path(), QStringLiteral("zzz")), QString());
+    }
+
     void testRewriteMessagesTruncates()
     {
         QTemporaryDir tempDir;

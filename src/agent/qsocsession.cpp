@@ -319,9 +319,16 @@ QString QSocSession::resolveId(const QString &projectPath, const QString &idOrPr
     int        hits = 0;
     for (const Info &info : sessions) {
         if (info.id == idOrPrefix) {
-            return info.id; /* Exact wins immediately. */
+            return info.id; /* Exact id wins immediately. */
         }
-        if (info.id.startsWith(idOrPrefix, Qt::CaseInsensitive)) {
+        /* Beyond an id prefix, match a title or branch substring so a
+         * session can be resumed by its human-readable name. */
+        const bool byId     = info.id.startsWith(idOrPrefix, Qt::CaseInsensitive);
+        const bool byTitle  = !info.title.isEmpty()
+                              && info.title.contains(idOrPrefix, Qt::CaseInsensitive);
+        const bool byBranch = !info.branch.isEmpty()
+                              && info.branch.contains(idOrPrefix, Qt::CaseInsensitive);
+        if (byId || byTitle || byBranch) {
             match = info.id;
             hits++;
         }

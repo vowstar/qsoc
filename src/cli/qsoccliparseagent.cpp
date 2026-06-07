@@ -2669,6 +2669,12 @@ bool QSocCliWorker::runAgentLoop(
                     if (info.messageCount != 1) {
                         hint.append(QLatin1Char('s'));
                     }
+                    /* Surface the branch label (set on a fork) so forks are
+                     * distinguishable, and only when it is not already the
+                     * primary label. */
+                    if (!info.branch.isEmpty() && info.branch != primary) {
+                        hint.append(QString::fromUtf8(" \xc2\xb7 %1").arg(info.branch));
+                    }
                     /* Width-aware label budget: leave the hint intact
                      * since it is short and load-bearing, then give the
                      * label whatever cells remain after subtracting menu
