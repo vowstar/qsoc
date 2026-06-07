@@ -90,6 +90,13 @@ public:
     static nlohmann::json loadMessages(const QString &filePath);
 
     /**
+     * @brief Read the latest value of a meta key from a session JSONL.
+     * @details Walks every line (latest wins) so it sees meta written after
+     *          the file head, unlike readInfo(). Empty when absent.
+     */
+    static QString readMeta(const QString &filePath, const QString &key);
+
+    /**
      * @brief Read just enough of a session file to populate Info without
      *        building the message list. Reads up to ~16 KB from the head
      *        for meta + first prompt detection, plus filesystem mtime.

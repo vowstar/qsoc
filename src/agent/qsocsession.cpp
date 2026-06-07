@@ -138,6 +138,37 @@ void QSocSession::rewriteMessages(const nlohmann::json &messages)
     pendingMeta.clear();
 }
 
+QString QSocSession::readMeta(const QString &filePath, const QString &key)
+{
+    QString value;
+    QFile   file(filePath);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return value;
+    }
+    QTextStream       stream(&file);
+    const std::string wantKey = key.toStdString();
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine();
+        if (line.isEmpty()) {
+            continue;
+        }
+        try {
+            const nlohmann::json doc = nlohmann::json::parse(line.toStdString());
+            if (!doc.is_object() || doc.value("type", std::string()) != "meta") {
+                continue;
+            }
+            if (doc.value("key", std::string()) == wantKey && doc.contains("value")) {
+                /* Latest line wins; keep scanning to the end. */
+                value = QString::fromStdString(doc["value"].get<std::string>());
+            }
+        } catch (...) {
+            continue;
+        }
+    }
+    file.close();
+    return value;
+}
+
 nlohmann::json QSocSession::loadMessages(const QString &filePath)
 {
     nlohmann::json messages = nlohmann::json::array();
