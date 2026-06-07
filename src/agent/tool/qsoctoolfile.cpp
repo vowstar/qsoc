@@ -164,6 +164,19 @@ QString QSocToolFileRead::execute(const json &arguments)
 
     file.close();
 
+    /* Record a full read so edit_file / write_file can enforce
+     * read-before-edit and detect on-disk changes. Hash the whole file the
+     * same way the edit tools do; partial / offset reads do not qualify
+     * because the agent has not seen the entire file. */
+    if (pathContext && offset == 0 && truncatedLines == 0) {
+        QFile whole(filePath);
+        if (whole.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream wholeStream(&whole);
+            pathContext->readState().recordRead(filePath, wholeStream.readAll());
+            whole.close();
+        }
+    }
+
     if (result.isEmpty()) {
         return QString("File is empty or offset beyond file length: %1").arg(filePath);
     }
@@ -336,6 +349,8 @@ QString QSocToolFileWrite::getDescription() const
 {
     return "Write content to a file. "
            "Creates the file if it doesn't exist, overwrites if it does. "
+           "Overwriting an existing file requires reading it first with read_file; "
+           "a file changed on disk since it was read is rejected. "
            "File must be within an allowed directory (project, working, user dirs, or temp).";
 }
 
@@ -384,6 +399,31 @@ QString QSocToolFileWrite::execute(const json &arguments)
                "(project, working, user, or temp).";
     }
 
+    /* Read-before-overwrite + stale guard for EXISTING files: write_file
+     * replaces the whole file, so it must not clobber content the agent
+     * never read or a concurrent change. New files need no prior read. */
+    if (pathContext && fileInfo.exists() && fileInfo.isFile()) {
+        QString existingContent;
+        QFile   cur(filePath);
+        if (cur.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream curStream(&cur);
+            existingContent = curStream.readAll();
+            cur.close();
+        }
+        if (!pathContext->readState().wasRead(filePath)) {
+            return QString(
+                       "Error: File not read yet: %1. Read it with read_file "
+                       "before overwriting.")
+                .arg(filePath);
+        }
+        if (pathContext->readState().changedSinceRead(filePath, existingContent)) {
+            return QString(
+                       "Error: File changed on disk since last read: %1. "
+                       "Read it again before overwriting.")
+                .arg(filePath);
+        }
+    }
+
     /* Create parent directories if needed */
     QDir parentDir = fileInfo.absoluteDir();
     if (!parentDir.exists()) {
@@ -421,6 +461,12 @@ QString QSocToolFileWrite::execute(const json &arguments)
     out << content;
     file.close();
 
+    /* The written content is now the agent's known state, so a follow-up
+     * edit / overwrite in the same session needs no re-read. */
+    if (pathContext) {
+        pathContext->readState().recordRead(filePath, content);
+    }
+
     /* Notify LSP service about the file change. */
     QLspService::instance()->didSave(filePath);
 
@@ -454,6 +500,8 @@ QString QSocToolFileEdit::getName() const
 QString QSocToolFileEdit::getDescription() const
 {
     return "Edit a file by replacing a specific string with new content. "
+           "Read the file with read_file first: editing an unread file, or one "
+           "changed on disk since it was read, is rejected. "
            "The old_string must be unique in the file for the replacement to succeed. "
            "File must be within an allowed directory (project, working, user dirs, or temp).";
 }
@@ -532,6 +580,25 @@ QString QSocToolFileEdit::execute(const json &arguments)
     QString     content = readStream.readAll();
     file.close();
 
+    /* Read-before-edit + stale-on-disk guard: the agent must have read this
+     * exact file via read_file first, and it must not have changed on disk
+     * since, so an edit never blindly clobbers content the agent never saw
+     * or a concurrent modification. */
+    if (pathContext) {
+        if (!pathContext->readState().wasRead(filePath)) {
+            return QString(
+                       "Error: File not read yet: %1. Read it with read_file "
+                       "before editing.")
+                .arg(filePath);
+        }
+        if (pathContext->readState().changedSinceRead(filePath, content)) {
+            return QString(
+                       "Error: File changed on disk since last read: %1. "
+                       "Read it again before editing.")
+                .arg(filePath);
+        }
+    }
+
     /* Check for old_string */
     int count = content.count(oldString);
     if (count == 0) {
@@ -568,6 +635,12 @@ QString QSocToolFileEdit::execute(const json &arguments)
     QTextStream writeStream(&file);
     writeStream << newContent;
     file.close();
+
+    /* The agent now knows the post-edit content, so a follow-up edit in the
+     * same session is allowed without a re-read. */
+    if (pathContext) {
+        pathContext->readState().recordRead(filePath, newContent);
+    }
 
     /* Notify LSP service about the file change. */
     QLspService::instance()->didSave(filePath);

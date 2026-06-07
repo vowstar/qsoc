@@ -291,6 +291,10 @@ private slots:
         file.write("Hello World");
         file.close();
 
+        /* Read first to satisfy the read-before-edit guard. */
+        QSocToolFileRead readTool(this, pathContext);
+        readTool.execute({{"file_path", testFile.toStdString()}});
+
         /* Edit it */
         QSocToolFileEdit editTool(this, pathContext);
         json             editArgs
@@ -317,6 +321,10 @@ private slots:
         file.write("foo bar foo baz foo");
         file.close();
 
+        /* Read first to satisfy the read-before-edit guard. */
+        QSocToolFileRead readTool(this, pathContext);
+        readTool.execute({{"file_path", testFile.toStdString()}});
+
         /* Try to edit without replace_all */
         QSocToolFileEdit editTool(this, pathContext);
         json             editArgs
@@ -325,6 +333,54 @@ private slots:
         QString editResult = editTool.execute(editArgs);
         QVERIFY(editResult.contains("Error:"));
         QVERIFY(editResult.contains("3 times") || editResult.contains("replace_all"));
+    }
+
+    void testFileEditRequiresPriorRead()
+    {
+        /* Editing a file the agent never read is rejected. */
+        QString testFile = tempDir.path() + "/test_unread.txt";
+        QFile   file(testFile);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        file.write("alpha beta");
+        file.close();
+
+        QSocToolFileEdit editTool(this, pathContext);
+        QString          result = editTool.execute(
+            {{"file_path", testFile.toStdString()},
+             {"old_string", "beta"},
+             {"new_string", "gamma"}});
+        QVERIFY(result.contains("Error:"));
+        QVERIFY(result.contains("not read yet"));
+    }
+
+    void testFileEditRejectsStaleOnDisk()
+    {
+        /* A file changed on disk after the read is rejected until re-read. */
+        QString testFile = tempDir.path() + "/test_stale.txt";
+        QFile   file(testFile);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        file.write("one two three");
+        file.close();
+
+        QSocToolFileRead readTool(this, pathContext);
+        readTool.execute({{"file_path", testFile.toStdString()}});
+
+        /* External modification after the read. */
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        file.write("one two THREE changed");
+        file.close();
+
+        QSocToolFileEdit editTool(this, pathContext);
+        QString          stale = editTool.execute(
+            {{"file_path", testFile.toStdString()}, {"old_string", "two"}, {"new_string", "II"}});
+        QVERIFY(stale.contains("Error:"));
+        QVERIFY(stale.contains("changed on disk"));
+
+        /* Re-reading clears the staleness; the edit then succeeds. */
+        readTool.execute({{"file_path", testFile.toStdString()}});
+        QString ok = editTool.execute(
+            {{"file_path", testFile.toStdString()}, {"old_string", "two"}, {"new_string", "II"}});
+        QVERIFY(ok.contains("Successfully"));
     }
 
     /* Shell Tool Tests */

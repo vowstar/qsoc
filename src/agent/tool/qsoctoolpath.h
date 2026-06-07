@@ -4,6 +4,7 @@
 #ifndef QSOCTOOLPATH_H
 #define QSOCTOOLPATH_H
 
+#include "agent/qsocfilereadstate.h"
 #include "agent/qsoctool.h"
 #include "common/qsocprojectmanager.h"
 
@@ -47,8 +48,12 @@ public:
     /* Get full context as structured text */
     QString getFullContext() const;
 
+    /* Shared read-before-edit state for the local file tools. */
+    QSocFileReadState &readState() { return fileReadState; }
+
 private:
     QSocProjectManager *projectManager = nullptr;
+    QSocFileReadState   fileReadState;
     QString             workingDir;
     QStringList         userDirs;
     mutable QMutex      mutex;
