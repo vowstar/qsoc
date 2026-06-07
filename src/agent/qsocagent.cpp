@@ -20,6 +20,7 @@
 #include <QFile>
 #include <QMutexLocker>
 #include <QRandomGenerator>
+#include <QSet>
 #include <QSysInfo>
 #include <QTextStream>
 
@@ -167,6 +168,11 @@ QString QSocAgent::run(const QString &userQuery)
     /* Add user message to history */
     addMessage("user", prompt);
 
+    /* Rank relevant memories for this turn (synchronous, before the
+     * loop). Filled into recallBlock_ and injected as a non-persisted
+     * reminder each iteration. */
+    computeRecallForTurn(prompt);
+
     /* Agent loop */
     int       iteration = 0;
     const int turnCap   = agentConfig.maxTurnsOverride > 0 ? agentConfig.maxTurnsOverride
@@ -262,6 +268,13 @@ void QSocAgent::runStream(const QString &userQuery)
     emptyResponseRetryCount   = 0;
     streamFinalContent.clear();
     abortRequested = false;
+
+    /* Rank relevant memories for this turn. Runs after streamEpoch_ is
+     * bumped and abortRequested cleared, so the synchronous selector's
+     * nested event loop cannot dispatch a stale deferred retry from a
+     * prior run. Fills recallBlock_, injected as a non-persisted reminder
+     * each iteration. */
+    computeRecallForTurn(prompt);
 
     /* Reset token counters for this run */
     totalInputTokens  = 0;
@@ -493,6 +506,117 @@ void QSocAgent::handleStreamError(const QString &error)
     emit runError(error);
 }
 
+void QSocAgent::computeRecallForTurn(const QString &query)
+{
+    recallBlock_.clear();
+
+    /* Recall is a parent/interactive concern: disabled, sub-agent, or no
+     * memory manager means nothing to inject. */
+    if (!agentConfig.memoryRecallEnabled || agentConfig.isSubAgent || !memoryManager) {
+        return;
+    }
+    if (!QSocMemoryRecall::queryIsRecallable(query)) {
+        return;
+    }
+
+    const QList<QSocMemoryManager::MemoryHeader> headers = memoryManager->scanHeaders("all");
+    if (headers.isEmpty()) {
+        return;
+    }
+
+    QSocMemoryRecall::Config recallCfg;
+    recallCfg.maxFiles   = agentConfig.memoryRecallMaxFiles;
+    recallCfg.perFileCap = agentConfig.memoryRecallPerFileCap;
+    recallCfg.turnBudget = agentConfig.memoryRecallTurnBudget;
+    const QSocMemoryRecall recall(recallCfg);
+
+    QSocMemoryManager *manager = memoryManager;
+    const auto         reader  = [manager](const QString &scope, const QString &name) {
+        return manager->readTopicFile(scope, name);
+    };
+
+    /* Small-memory fast path: when candidates are no more than we would
+     * select anyway, skip the selector LLM round trip and inject them all
+     * (still subject to per-file cap and turn budget). */
+    if (headers.size() <= recallCfg.maxFiles) {
+        recallBlock_ = recall.assembleBlock(headers, reader);
+        return;
+    }
+
+    /* Selection path: ask a cheap model to rank headers by relevance.
+     * Lazily clone the service onto the recall model; fall back to the
+     * primary service when no model is set or the id is unknown. */
+    QLLMService *selector = llmService;
+    if (!agentConfig.memoryRecallModel.isEmpty()) {
+        if (!recallLlm_) {
+            recallLlm_ = llmService->clone(this);
+            if (!recallLlm_->setCurrentModel(agentConfig.memoryRecallModel)) {
+                recallLlm_->deleteLater();
+                recallLlm_ = nullptr;
+            }
+        }
+        if (recallLlm_) {
+            selector = recallLlm_;
+        }
+    }
+
+    json selMessages = json::array();
+    selMessages.push_back(
+        {{"role", "system"}, {"content", QSocMemoryRecall::selectorSystemPrompt().toStdString()}});
+    selMessages.push_back(
+        {{"role", "user"}, {"content", recall.buildSelectorPrompt(headers, query).toStdString()}});
+
+    QStringList selectedNames;
+    bool        selectorOk = false;
+    try {
+        /* Synchronous: safe here because no stream is in flight yet. */
+        const json resp = selector->sendChatCompletion(selMessages, json::array(), 0.1);
+        if (resp.contains("choices") && resp["choices"].is_array() && !resp["choices"].empty()) {
+            /* Got a response; guard every nested key (const operator[] on a
+             * missing key is UB, not an exception). */
+            selectorOk         = true;
+            const json &choice = resp["choices"][0];
+            if (choice.contains("message") && choice["message"].contains("content")
+                && choice["message"]["content"].is_string()) {
+                selectedNames = QSocMemoryRecall::parseSelection(
+                    QString::fromStdString(choice["message"]["content"].get<std::string>()));
+            }
+        }
+    } catch (const std::exception &) {
+        selectorOk = false;
+    }
+
+    /* Selector unreachable or errored: fall back to the most recent topics
+     * so memory still surfaces under a flaky cheap model. A successful but
+     * empty selection is respected (the model judged nothing relevant). */
+    if (!selectorOk) {
+        if (agentConfig.verbose) {
+            emit verboseOutput(
+                QStringLiteral("[memory recall: selector unavailable, using recent topics]"));
+        }
+        recallBlock_
+            = recall.assembleBlock(headers.mid(0, agentConfig.memoryRecallMaxFiles), reader);
+        return;
+    }
+
+    if (selectedNames.isEmpty()) {
+        return;
+    }
+
+    /* Map selected names back to headers, preserving mtime order. Dedup by
+     * name so a topic present in both scopes is injected once (freshest). */
+    QList<QSocMemoryManager::MemoryHeader> selected;
+    QSet<QString>                          seenNames;
+    for (const auto &header : headers) {
+        if (selectedNames.contains(header.name) && !seenNames.contains(header.name)) {
+            seenNames.insert(header.name);
+            selected.append(header);
+        }
+    }
+
+    recallBlock_ = recall.assembleBlock(selected, reader);
+}
+
 void QSocAgent::processStreamIteration()
 {
     if (!isStreaming) {
@@ -623,6 +747,13 @@ void QSocAgent::processStreamIteration()
                   "</approved_plan>")
                   .arg(approvedPlan_);
         messagesWithSystem.push_back({{"role", "system"}, {"content", planBlock.toStdString()}});
+    }
+
+    /* Selective memory recall: relevant memories for this turn, injected
+     * as a non-persisted reminder so the system-prompt prefix (and its
+     * cache) stays untouched. */
+    if (!recallBlock_.isEmpty()) {
+        messagesWithSystem.push_back({{"role", "system"}, {"content", recallBlock_.toStdString()}});
     }
 
     /* Get tool definitions, filtered by sub-agent allowlist when set. */
@@ -852,6 +983,13 @@ bool QSocAgent::processIteration()
                   "</approved_plan>")
                   .arg(approvedPlan_);
         messagesWithSystem.push_back({{"role", "system"}, {"content", planBlock.toStdString()}});
+    }
+
+    /* Selective memory recall: relevant memories for this turn, injected
+     * as a non-persisted reminder so the system-prompt prefix (and its
+     * cache) stays untouched. */
+    if (!recallBlock_.isEmpty()) {
+        messagesWithSystem.push_back({{"role", "system"}, {"content", recallBlock_.toStdString()}});
     }
 
     /* Get tool definitions, filtered by sub-agent allowlist when set. */
@@ -1532,8 +1670,11 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
         }
     }
 
-    /* Section 11: Memory */
-    if (agentConfig.autoLoadMemory && memoryManager) {
+    /* Section 11: Memory. When selective recall is enabled, relevant
+     * memories are injected per turn as a non-persisted reminder instead,
+     * so the full index is kept out of the (cached) system prompt. Full
+     * index injection remains the fallback when recall is disabled. */
+    if (agentConfig.autoLoadMemory && !agentConfig.memoryRecallEnabled && memoryManager) {
         QString memoryContent = memoryManager->loadMemoryForPrompt(agentConfig.memoryMaxChars);
         if (!memoryContent.isEmpty()) {
             prompt += QStringLiteral(
@@ -1981,6 +2122,13 @@ int QSocAgent::estimateTotalTokens() const
                 tokens += estimateTokens(QString::fromStdString(tools.dump()));
             }
         }
+        /* Reminders are appended to messagesWithSystem every turn but never
+         * stored in `messages`, so the walk misses them. Count them only in
+         * the anchorless case; once anchored, prompt_tokens already includes
+         * the reminders sent that turn, so adding them again double-counts. */
+        tokens += estimateTokens(recallBlock_);
+        tokens += estimateTokens(approvedPlan_);
+        tokens += estimateTokens(agentConfig.criticalReminder);
     }
 
     return tokens;

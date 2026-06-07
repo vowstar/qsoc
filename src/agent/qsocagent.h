@@ -6,6 +6,7 @@
 
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocmemorymanager.h"
+#include "agent/qsocmemoryrecall.h"
 #include "agent/qsoctool.h"
 #include "common/qllmservice.h"
 
@@ -499,6 +500,15 @@ private:
     /* Approved plan carried into the execution phase (plan mode). Single
      * slot: pinned into the message history exactly once. */
     QString approvedPlan_;
+
+    /* Selective memory recall (Phase 1). recallBlock_ holds the reminder
+     * text computed once per user turn and appended to the wire payload
+     * each iteration; never persisted to `messages`, so the system-prompt
+     * prefix stays byte-stable and the provider cache survives.
+     * recallLlm_ is a lazily-cloned service pinned to the recall model
+     * when one is configured; nullptr means use the primary llmService. */
+    QString      recallBlock_;
+    QLLMService *recallLlm_ = nullptr;
     /* Plan-mode shell safety judge (empty = fail-closed). */
     QSocBashSafetyJudge bashSafetyJudge_;
     /* Terminal-focus probe (empty = assume the user is watching). */
@@ -706,6 +716,17 @@ private:
      * @brief Compress history if needed based on token count
      */
     void compressHistoryIfNeeded();
+
+    /**
+     * @brief Rank topic-file headers against the turn query and fill
+     *        recallBlock_ with the relevant memories. Synchronous (runs
+     *        at turn start, before the stream begins). No-op when recall
+     *        is disabled, this is a sub-agent, the query is too short, or
+     *        no memory exists. Uses a cheap selector model when configured,
+     *        and a fast path that skips the selector when candidates are
+     *        few enough to inject wholesale.
+     */
+    void computeRecallForTurn(const QString &query);
 
     /**
      * @brief Process streaming iteration

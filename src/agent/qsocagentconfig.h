@@ -68,6 +68,36 @@ struct QSocAgentConfig
     bool autoLoadMemory = true;  /* Auto-inject memory into system prompt */
     int  memoryMaxChars = 24000; /* Max chars (~6000 tokens) for memory in prompt */
 
+    /* Selective recall. When enabled, instead of injecting the whole
+     * MEMORY.md index into the (cached) system prompt, the agent ranks
+     * topic-file headers against each turn's query and injects only the
+     * most relevant files as a non-persisted reminder. Keeps the system
+     * prompt prefix byte-stable so the provider prompt cache survives.
+     * Disabling falls back to full-index injection (legacy behavior). */
+    bool    memoryRecallEnabled = true;
+    QString memoryRecallModel;              /* Empty = primary model */
+    int     memoryRecallMaxFiles   = 5;     /* Max files selected per turn */
+    int     memoryRecallPerFileCap = 4096;  /* Max bytes injected per file */
+    int     memoryRecallTurnBudget = 61440; /* Max cumulative bytes per turn */
+
+    /* Background extraction. After each turn the REPL forks a constrained
+     * child (memory_read / memory_write only) that distills the new
+     * conversation slice into memory files, so memory accrues without the
+     * main agent having to call memory_write explicitly. */
+    bool    memoryExtractEnabled = true;
+    QString memoryExtractModel;              /* Empty = primary model */
+    int     memoryExtractEveryTurns     = 1; /* Run every N turns */
+    int     memoryExtractMinNewMessages = 2; /* Skip trivial turns */
+
+    /* Consolidation ("dream"). Periodically a constrained child merges
+     * near-duplicate memories, normalizes dates, drops contradicted facts,
+     * and prunes the index. Gated by time + session count and serialized
+     * by a lock file. */
+    bool    memoryDreamEnabled = true;
+    QString memoryDreamModel;            /* Empty = primary model */
+    int     memoryDreamMinHours    = 24; /* Min hours between dreams */
+    int     memoryDreamMinSessions = 5;  /* Min sessions since last dream */
+
     /* Enable verbose output */
     bool verbose = true;
 
