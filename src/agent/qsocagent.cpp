@@ -717,6 +717,7 @@ void QSocAgent::processStreamIteration()
          * only; OpenAI / DeepSeek reject unknown top-level fields on
          * messages, so strip it before the wire. */
         sanitized.erase("_usage");
+        sanitized.erase("_img_tokens");
         messagesWithSystem.push_back(sanitized);
     }
 
@@ -950,11 +951,13 @@ bool QSocAgent::processIteration()
             {{"role", "system"}, {"content", fullSystemPrompt.toStdString()}});
     }
 
-    /* Add conversation history (strip the internal `_usage` annotation
-     * so the wire stays standard chat completion shape). */
+    /* Add conversation history (strip the internal `_usage` /
+     * `_img_tokens` annotations so the wire stays standard chat
+     * completion shape). */
     for (const auto &msg : messages) {
         json sanitized = msg;
         sanitized.erase("_usage");
+        sanitized.erase("_img_tokens");
         messagesWithSystem.push_back(sanitized);
     }
 
@@ -1775,14 +1778,23 @@ void QSocAgent::addToolMessage(
      * providers) plus one image_url part per attachment, encoded
      * as a data URL so the server never has to fetch the original
      * host. */
-    json contentArr = json::array();
+    json contentArr  = json::array();
+    int  imageTokens = 0;
     contentArr.push_back({{"type", "text"}, {"text", std::string("Tool attachment payload:")}});
     for (const auto &att : attachments) {
         const QString dataUrl = QStringLiteral("data:%1;base64,%2").arg(att.mime, att.dataB64);
         contentArr.push_back(
             {{"type", "image_url"}, {"image_url", {{"url", dataUrl.toStdString()}}}});
+        imageTokens += att.estTokens;
     }
-    messages.push_back({{"role", "user"}, {"content", contentArr}});
+    /* Record the image token cost as an internal annotation (stripped on
+     * the wire like `_usage`) so the token estimator counts array-content
+     * image messages, which it otherwise skips. */
+    json imageMsg = {{"role", "user"}, {"content", contentArr}};
+    if (imageTokens > 0) {
+        imageMsg["_img_tokens"] = imageTokens;
+    }
+    messages.push_back(imageMsg);
 }
 
 void QSocAgent::clearHistory()
@@ -2093,6 +2105,11 @@ int QSocAgent::estimateMessagesTokens() const
         }
         if (msg.contains("tool_calls")) {
             total += estimateTokens(QString::fromStdString(msg["tool_calls"].dump()));
+        }
+        /* Image messages carry array content the string branch skips; add
+         * the precomputed per-image cost recorded in `_img_tokens`. */
+        if (msg.contains("_img_tokens") && msg["_img_tokens"].is_number_integer()) {
+            total += msg["_img_tokens"].get<int>();
         }
         total += 10; /* per-message structural overhead */
     }

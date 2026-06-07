@@ -548,6 +548,30 @@ private slots:
         delete floored;
     }
 
+    void testImageTokensCounted()
+    {
+        /* Array-content image messages are skipped by the string branch of
+         * the estimator; the internal _img_tokens annotation must still be
+         * counted so prune/compact thresholds see image weight. */
+        auto *agent = createAgent();
+
+        json msgs = json::array();
+        msgs.push_back({{"role", "user"}, {"content", "hi"}});
+        agent->setMessages(msgs);
+        const int baseline = agent->estimateMessagesTokens();
+
+        json imgContent = json::array();
+        imgContent.push_back({{"type", "text"}, {"text", "Tool attachment payload:"}});
+        imgContent.push_back(
+            {{"type", "image_url"}, {"image_url", {{"url", "data:image/png;base64,AAAA"}}}});
+        msgs.push_back({{"role", "user"}, {"content", imgContent}, {"_img_tokens", 1200}});
+        agent->setMessages(msgs);
+
+        QVERIFY(agent->estimateMessagesTokens() >= baseline + 1200);
+
+        delete agent;
+    }
+
     void testCompactingSignal()
     {
         QSocAgentConfig config;
