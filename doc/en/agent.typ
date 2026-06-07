@@ -282,6 +282,10 @@ The following commands are available during an interactive session:
     [Leave SSH remote mode and return to local workspace. The sticky binding
      stays on disk so the next `/ssh <same target>` or next startup can
      auto-reuse it.],
+    [`/memory [name|rm name]`],
+    [List memory topics; `/memory <name>` edits the body in `$EDITOR`;
+     `/memory rm <name>` deletes a topic. `#<fact>` saves a project memory
+     directly without an LLM turn.],
     [`/model [id]`], [Show or switch the active model],
     [`/plan [on|off]`],
     [Toggle read-only plan mode (or press *Shift+Tab*). While on, the agent
@@ -562,6 +566,54 @@ Each compaction also produces a rolling anchored summary that is preserved
 across subsequent compactions. The earliest decisions, file paths, and
 constraints survive even after multiple rounds, so long sessions retain
 their starting context instead of drifting.
+
+== MEMORY SYSTEM
+<agent-memory-system>
+Persistent memory is stored as topic files with YAML frontmatter in two
+scopes: user-global (`<user root>/memory/`) and project-local
+(`<project>/.qsoc/memory/`), each with an auto-maintained `MEMORY.md` index.
+The three mechanisms below are on by default; their knobs are in the agent
+configuration table.
+
+=== Selective Recall
+<agent-memory-recall>
+Each turn the agent ranks the topic-file headers (name, type, age,
+description) against the current query and injects the relevant files as a
+reminder for that turn. When there are no more topics than
+`agent.memory_recall_max_files`, the selector call is skipped and they are
+all injected. Each file is capped (`agent.memory_recall_per_file_cap`) and
+the per-turn total is bounded (`agent.memory_recall_turn_budget`); recalled
+files carry a freshness note. With `agent.memory_recall: false`, the full
+`MEMORY.md` index is injected instead.
+
+=== Background Extraction
+<agent-memory-extraction>
+After each turn a child agent restricted to `memory_read` / `memory_write`
+distills new durable facts into memory files. Trivial turns (fewer than
+`agent.memory_extract_min_messages` new messages) and turns where the agent
+already saved memory are skipped. It does not save anything derivable from
+code or git, debugging recipes, ephemeral state, or secrets.
+
+=== Consolidation (Dream)
+<agent-memory-dream>
+Periodically a child (also allowed `memory_delete`) merges near-duplicate
+topics, normalizes dates, and drops contradicted facts. It runs at most once
+per `agent.memory_dream_min_hours` and only after
+`agent.memory_dream_min_sessions` new sessions.
+
+=== Model for Memory Work
+<agent-memory-models>
+Recall, extraction, and consolidation use the agent's configured model and
+reasoning effort. To run memory work on a different model, set
+`agent.memory_recall_model`, `agent.memory_extract_model`, or
+`agent.memory_dream_model`; an empty value uses the configured model.
+
+```yaml
+agent:
+  memory_recall_model: other-model
+  memory_extract_model: other-model
+  memory_dream_model: other-model
+```
 
 == SUB-AGENTS
 <agent-subagents>

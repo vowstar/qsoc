@@ -77,6 +77,11 @@ document are property of their respective owners, and are hereby acknowledged.
     [2026-04-30],
     [Huang Rui],
     [Sub-agent system with spawn, resume, fork, and isolation worktrees],
+    [1.0.11],
+    [2026-06-07],
+    [Huang Rui],
+    [Memory system: selective recall, background extraction, and dream
+     consolidation],
   )],
   kind: table,
 )
