@@ -6707,8 +6707,8 @@ bool QSocCliWorker::runAgentLoop(
             if (autoCompactFailures < AUTO_COMPACT_MAX_FAILURES) {
                 const int    currentTokens = agent->estimateTotalTokens();
                 const double threshold     = agent->getConfig().compactThreshold;
-                const int    maxCtx        = agent->getConfig().maxContextTokens;
-                if (currentTokens > static_cast<int>(maxCtx * threshold)) {
+                const int    budget        = agent->effectiveContextTokens();
+                if (currentTokens > static_cast<int>(budget * threshold)) {
                     compositor.printContent("(auto-compacting...)\n", QTuiScrollView::Dim);
                     statusBarWidget.setStatus("Compacting");
                     compositor.render();
@@ -7299,8 +7299,8 @@ bool QSocCliWorker::runAgentLoop(
             if (autoCompactFailures < AUTO_COMPACT_MAX_FAILURES) {
                 const int    currentTokens = agent->estimateTotalTokens();
                 const double threshold     = agent->getConfig().compactThreshold;
-                const int    maxCtx        = agent->getConfig().maxContextTokens;
-                if (currentTokens > static_cast<int>(maxCtx * threshold)) {
+                const int    budget        = agent->effectiveContextTokens();
+                if (currentTokens > static_cast<int>(budget * threshold)) {
                     const int before = agent->estimateMessagesTokens();
                     const int saved  = agent->compact();
                     if (saved > 0) {

@@ -513,6 +513,36 @@ private slots:
         QVERIFY(config.pruneThreshold < config.compactThreshold);
     }
 
+    void testEffectiveContextTokens()
+    {
+        /* Effective budget = maxContextTokens - reservedOutputTokens, with
+         * reserved clamped to at most half the window and the result floored
+         * at 1024. Auto-compact thresholds must run against this figure so
+         * the CLI check matches compactWithLLM. */
+        QSocAgentConfig config;
+        config.maxContextTokens     = 128000;
+        config.reservedOutputTokens = 16384;
+        auto *agent                 = createAgent(config);
+        QCOMPARE(agent->effectiveContextTokens(), 128000 - 16384);
+        delete agent;
+
+        /* Reserved above half the window is clamped to half. */
+        QSocAgentConfig clamp;
+        clamp.maxContextTokens     = 10000;
+        clamp.reservedOutputTokens = 9000;
+        auto *clamped              = createAgent(clamp);
+        QCOMPARE(clamped->effectiveContextTokens(), 5000);
+        delete clamped;
+
+        /* Result floored at 1024 for tiny windows. */
+        QSocAgentConfig tiny;
+        tiny.maxContextTokens     = 1000;
+        tiny.reservedOutputTokens = 500;
+        auto *floored             = createAgent(tiny);
+        QCOMPARE(floored->effectiveContextTokens(), 1024);
+        delete floored;
+    }
+
     void testCompactingSignal()
     {
         QSocAgentConfig config;
