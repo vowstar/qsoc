@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
 #include <QTextStream>
 #include <QUuid>
 
@@ -167,6 +168,39 @@ QString QSocSession::readMeta(const QString &filePath, const QString &key)
     }
     file.close();
     return value;
+}
+
+QMap<QString, QString> QSocSession::readMetas(const QString &filePath, const QStringList &keys)
+{
+    QMap<QString, QString> out;
+    QFile                  file(filePath);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return out;
+    }
+    QSet<QString> wanted(keys.begin(), keys.end());
+    QTextStream   stream(&file);
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine();
+        if (line.isEmpty()) {
+            continue;
+        }
+        try {
+            const nlohmann::json doc = nlohmann::json::parse(line.toStdString());
+            if (!doc.is_object() || doc.value("type", std::string()) != "meta"
+                || !doc.contains("value")) {
+                continue;
+            }
+            const QString key = QString::fromStdString(doc.value("key", std::string()));
+            if (wanted.contains(key)) {
+                /* Latest line wins; keep scanning to the end. */
+                out[key] = QString::fromStdString(doc["value"].get<std::string>());
+            }
+        } catch (...) {
+            continue;
+        }
+    }
+    file.close();
+    return out;
 }
 
 nlohmann::json QSocSession::loadMessages(const QString &filePath)

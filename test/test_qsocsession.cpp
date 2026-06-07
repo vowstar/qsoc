@@ -287,6 +287,26 @@ private slots:
             QString::number(newSize));
     }
 
+    void testReadMetasSinglePass()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        QSocSession   session(id, path);
+
+        session.appendMessage({{"role", "user"}, {"content", "hi"}});
+        session.appendMeta(QStringLiteral("title"), QStringLiteral("first"));
+        session.appendMeta(QStringLiteral("title"), QStringLiteral("latest")); /* latest wins */
+        session.appendMeta(QStringLiteral("auto_title"), QStringLiteral("auto"));
+
+        const QMap<QString, QString> got = QSocSession::readMetas(
+            path, {QStringLiteral("title"), QStringLiteral("auto_title"), QStringLiteral("absent")});
+        QCOMPARE(got.value(QStringLiteral("title")), QStringLiteral("latest"));
+        QCOMPARE(got.value(QStringLiteral("auto_title")), QStringLiteral("auto"));
+        QVERIFY(!got.contains(QStringLiteral("absent")));
+    }
+
     void testAutoTitlePreservedAcrossRewrite()
     {
         /* Mirrors persistCompactedSession's meta handling: an auto title must

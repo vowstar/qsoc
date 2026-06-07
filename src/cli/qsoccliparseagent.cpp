@@ -2545,35 +2545,33 @@ bool QSocCliWorker::runAgentLoop(
         if (!currentSession) {
             return;
         }
-        const QString           path     = currentSession->filePath();
-        const QSocSession::Info origInfo = QSocSession::readInfo(path);
-        /* Read the raw meta lines BEFORE the rewrite truncates them. Keep
-         * manual title and auto title under their own keys so an auto title
-         * is not promoted to a manual one (which would block regeneration);
-         * preserve branch and fork lineage too. */
-        const QString manualTitle = QSocSession::readMeta(path, QStringLiteral("title"));
-        const QString autoTitle   = QSocSession::readMeta(path, QStringLiteral("auto_title"));
-        const QString branchMeta  = QSocSession::readMeta(path, QStringLiteral("branch"));
-        const QString forkedFrom  = QSocSession::readMeta(path, QStringLiteral("forkedFrom"));
-        const json    compacted   = agent->getMessages();
+        const QString path = currentSession->filePath();
+        /* One pass over the live file BEFORE the rewrite truncates it: keep
+         * the raw created/cwd-irrelevant metas. Manual title and auto title
+         * stay under their own keys so an auto title is not promoted to a
+         * manual one (which would block regeneration); branch and fork
+         * lineage are preserved too. */
+        const QMap<QString, QString> metas = QSocSession::readMetas(
+            path,
+            {QStringLiteral("created"),
+             QStringLiteral("title"),
+             QStringLiteral("auto_title"),
+             QStringLiteral("branch"),
+             QStringLiteral("forkedFrom")});
+        const json compacted = agent->getMessages();
         currentSession->rewriteMessages(compacted);
-        if (origInfo.createdAt.isValid()) {
-            currentSession->appendMeta(
-                QStringLiteral("created"), origInfo.createdAt.toString(Qt::ISODateWithMs));
-        }
+        const auto reemit = [&](const QString &key) {
+            const QString value = metas.value(key);
+            if (!value.isEmpty()) {
+                currentSession->appendMeta(key, value);
+            }
+        };
+        reemit(QStringLiteral("created"));
         currentSession->appendMeta(QStringLiteral("cwd"), sessionProjectPath(projectManager));
-        if (!manualTitle.isEmpty()) {
-            currentSession->appendMeta(QStringLiteral("title"), manualTitle);
-        }
-        if (!autoTitle.isEmpty()) {
-            currentSession->appendMeta(QStringLiteral("auto_title"), autoTitle);
-        }
-        if (!branchMeta.isEmpty()) {
-            currentSession->appendMeta(QStringLiteral("branch"), branchMeta);
-        }
-        if (!forkedFrom.isEmpty()) {
-            currentSession->appendMeta(QStringLiteral("forkedFrom"), forkedFrom);
-        }
+        reemit(QStringLiteral("title"));
+        reemit(QStringLiteral("auto_title"));
+        reemit(QStringLiteral("branch"));
+        reemit(QStringLiteral("forkedFrom"));
         const int size     = static_cast<int>(compacted.size());
         lastPersistedIndex = size;
         lastMemoryIndex    = size;

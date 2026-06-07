@@ -6,8 +6,10 @@
 
 #include <QDateTime>
 #include <QList>
+#include <QMap>
 #include <QPair>
 #include <QString>
+#include <QStringList>
 
 #include <nlohmann/json.hpp>
 
@@ -95,6 +97,13 @@ public:
      *          the file head, unlike readInfo(). Empty when absent.
      */
     static QString readMeta(const QString &filePath, const QString &key);
+
+    /**
+     * @brief Read several meta keys in a single file scan (latest wins).
+     * @details One pass instead of one per key, for hot paths that need
+     *          multiple metas at once. Absent keys are omitted from the map.
+     */
+    static QMap<QString, QString> readMetas(const QString &filePath, const QStringList &keys);
 
     /**
      * @brief Read just enough of a session file to populate Info without
