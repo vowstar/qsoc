@@ -287,6 +287,43 @@ private slots:
             QString::number(newSize));
     }
 
+    void testAutoTitlePreservedAcrossRewrite()
+    {
+        /* Mirrors persistCompactedSession's meta handling: an auto title must
+         * survive a compaction rewrite as auto_title, not be promoted to a
+         * manual title (which would block future regeneration). */
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        QSocSession   session(id, path);
+
+        session.appendMeta(QStringLiteral("auto_title"), QStringLiteral("Wire Up Reset"));
+        session.appendMessage({{"role", "user"}, {"content", "hi"}});
+
+        /* Re-emit only the keys the raw metas carried (manual title empty). */
+        const QString manualTitle = QSocSession::readMeta(path, QStringLiteral("title"));
+        const QString autoTitle   = QSocSession::readMeta(path, QStringLiteral("auto_title"));
+        QVERIFY(manualTitle.isEmpty());
+        QCOMPARE(autoTitle, QStringLiteral("Wire Up Reset"));
+
+        json compacted = json::array();
+        compacted.push_back({{"role", "user"}, {"content", "[Conversation Summary]\nx"}});
+        session.rewriteMessages(compacted);
+        if (!autoTitle.isEmpty()) {
+            session.appendMeta(QStringLiteral("auto_title"), autoTitle);
+        }
+
+        /* After the rewrite: auto_title persists, no manual title appeared,
+         * and readInfo still surfaces it via the fallback. */
+        QCOMPARE(
+            QSocSession::readMeta(path, QStringLiteral("auto_title")),
+            QStringLiteral("Wire Up Reset"));
+        QVERIFY(QSocSession::readMeta(path, QStringLiteral("title")).isEmpty());
+        QCOMPARE(QSocSession::readInfo(path).title, QStringLiteral("Wire Up Reset"));
+    }
+
     void testMetaOnlySessionLeavesNoFile()
     {
         QTemporaryDir tempDir;

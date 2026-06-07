@@ -2545,19 +2545,34 @@ bool QSocCliWorker::runAgentLoop(
         if (!currentSession) {
             return;
         }
-        const QSocSession::Info origInfo  = QSocSession::readInfo(currentSession->filePath());
-        const json              compacted = agent->getMessages();
+        const QString           path     = currentSession->filePath();
+        const QSocSession::Info origInfo = QSocSession::readInfo(path);
+        /* Read the raw meta lines BEFORE the rewrite truncates them. Keep
+         * manual title and auto title under their own keys so an auto title
+         * is not promoted to a manual one (which would block regeneration);
+         * preserve branch and fork lineage too. */
+        const QString manualTitle = QSocSession::readMeta(path, QStringLiteral("title"));
+        const QString autoTitle   = QSocSession::readMeta(path, QStringLiteral("auto_title"));
+        const QString branchMeta  = QSocSession::readMeta(path, QStringLiteral("branch"));
+        const QString forkedFrom  = QSocSession::readMeta(path, QStringLiteral("forkedFrom"));
+        const json    compacted   = agent->getMessages();
         currentSession->rewriteMessages(compacted);
         if (origInfo.createdAt.isValid()) {
             currentSession->appendMeta(
                 QStringLiteral("created"), origInfo.createdAt.toString(Qt::ISODateWithMs));
         }
         currentSession->appendMeta(QStringLiteral("cwd"), sessionProjectPath(projectManager));
-        if (!origInfo.title.isEmpty()) {
-            currentSession->appendMeta(QStringLiteral("title"), origInfo.title);
+        if (!manualTitle.isEmpty()) {
+            currentSession->appendMeta(QStringLiteral("title"), manualTitle);
         }
-        if (!origInfo.branch.isEmpty()) {
-            currentSession->appendMeta(QStringLiteral("branch"), origInfo.branch);
+        if (!autoTitle.isEmpty()) {
+            currentSession->appendMeta(QStringLiteral("auto_title"), autoTitle);
+        }
+        if (!branchMeta.isEmpty()) {
+            currentSession->appendMeta(QStringLiteral("branch"), branchMeta);
+        }
+        if (!forkedFrom.isEmpty()) {
+            currentSession->appendMeta(QStringLiteral("forkedFrom"), forkedFrom);
         }
         const int size     = static_cast<int>(compacted.size());
         lastPersistedIndex = size;
