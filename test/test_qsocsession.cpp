@@ -66,6 +66,27 @@ private slots:
         QCOMPARE(restored[1]["role"].get<std::string>(), std::string("assistant"));
     }
 
+    void testReadMetaLatestWins()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        QSocSession   session(id, path);
+
+        /* A message flushes buffered meta; later meta lines override. */
+        session.appendMessage({{"role", "user"}, {"content", "hi"}});
+        session.appendMeta(QStringLiteral("last_memory_index"), QStringLiteral("2"));
+        session.appendMeta(QStringLiteral("last_memory_index"), QStringLiteral("5"));
+
+        QCOMPARE(
+            QSocSession::readMeta(path, QStringLiteral("last_memory_index")), QStringLiteral("5"));
+        QVERIFY(QSocSession::readMeta(path, QStringLiteral("absent")).isEmpty());
+        QVERIFY(
+            QSocSession::readMeta(QStringLiteral("/no/such/file"), QStringLiteral("x")).isEmpty());
+    }
+
     void testLoadIgnoresPartialTail()
     {
         QTemporaryDir tempDir;
