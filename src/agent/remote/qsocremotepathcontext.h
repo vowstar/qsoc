@@ -4,6 +4,8 @@
 #ifndef QSOCREMOTEPATHCONTEXT_H
 #define QSOCREMOTEPATHCONTEXT_H
 
+#include "agent/qsocfilereadstate.h"
+
 #include <QString>
 #include <QStringList>
 
@@ -54,14 +56,19 @@ public:
      */
     QString resolveCwdRequest(const QString &requested) const;
 
+    /* Shared read-before-edit state for the remote file tools, keyed by
+     * normalized remote path. Mirrors the local path context. */
+    QSocFileReadState &readState() { return m_readState; }
+
 private:
     static QStringList splitPosix(const QString &path);
     static QString     joinPosix(const QStringList &parts, bool absolute);
     static QString     lexicalNormalize(const QString &path);
 
-    QString     m_root;
-    QString     m_cwd;
-    QStringList m_writableDirs;
+    QString           m_root;
+    QString           m_cwd;
+    QStringList       m_writableDirs;
+    QSocFileReadState m_readState;
 };
 
 #endif // QSOCREMOTEPATHCONTEXT_H

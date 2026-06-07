@@ -125,18 +125,28 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
 
     const QStringList lines = QString::fromUtf8(bytes).split(QLatin1Char('\n'));
     QString           snippet;
-    int               lineNum = 0;
-    int               emitted = 0;
+    int               lineNum   = 0;
+    int               emitted   = 0;
+    bool              truncated = false;
     for (const QString &line : lines) {
         if (lineNum >= offset) {
-            snippet += line + QLatin1Char('\n');
-            ++emitted;
             if (emitted >= maxLines) {
+                truncated = true;
                 break;
             }
+            snippet += line + QLatin1Char('\n');
+            ++emitted;
         }
         ++lineNum;
     }
+
+    /* Record a full read so the remote edit_file / write_file tools can
+     * enforce read-before-edit and detect on-disk changes. Partial / offset
+     * reads do not qualify: the agent has not seen the whole file. */
+    if (m_pathCtx && offset == 0 && !truncated) {
+        m_pathCtx->readState().recordRead(remotePath, QString::fromUtf8(bytes));
+    }
+
     if (snippet.isEmpty()) {
         return QStringLiteral("File is empty or offset beyond file length: %1").arg(remotePath);
     }
@@ -161,7 +171,9 @@ QString QSocToolRemoteFileWrite::getDescription() const
 {
     return QStringLiteral(
         "Write (or overwrite) a remote file via SFTP. The parent directory is "
-        "created if missing. Writes are restricted to configured writable directories.");
+        "created if missing. Overwriting an existing file requires reading it "
+        "first with read_file; a file changed since the read is rejected. "
+        "Writes are restricted to configured writable directories.");
 }
 
 json QSocToolRemoteFileWrite::getParametersSchema() const
@@ -196,11 +208,34 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
         return QStringLiteral("Error: remote path is outside writable directories: %1")
             .arg(remotePath);
     }
+
+    /* Read-before-overwrite + stale guard for EXISTING remote files: an
+     * overwrite must not clobber content the agent never read or a
+     * concurrent change. New files need no prior read. */
+    if (m_sftp->exists(remotePath)) {
+        if (!m_pathCtx->readState().wasRead(remotePath)) {
+            return QStringLiteral(
+                       "Error: File not read yet: %1. Read it with read_file "
+                       "before overwriting.")
+                .arg(remotePath);
+        }
+        QString          readErr;
+        const QByteArray current = m_sftp->readFile(remotePath, 0, &readErr);
+        if (m_pathCtx->readState().changedSinceRead(remotePath, QString::fromUtf8(current))) {
+            return QStringLiteral(
+                       "Error: File changed on disk since last read: %1. "
+                       "Read it again before overwriting.")
+                .arg(remotePath);
+        }
+    }
+
     const QString content = QString::fromStdString(arguments["content"].get<std::string>());
     QString       err;
     if (!m_sftp->writeFile(remotePath, content.toUtf8(), &err)) {
         return QStringLiteral("Error: %1").arg(err);
     }
+    /* The written content is now the agent's known state. */
+    m_pathCtx->readState().recordRead(remotePath, content);
     return QStringLiteral("Wrote %1 (%2 bytes) on remote")
         .arg(remotePath)
         .arg(content.toUtf8().size());
@@ -291,8 +326,9 @@ QString QSocToolRemoteFileEdit::getName() const
 QString QSocToolRemoteFileEdit::getDescription() const
 {
     return QStringLiteral(
-        "Edit a remote file by replacing a unique substring. Fails if the old "
-        "string is missing or appears more than once.");
+        "Edit a remote file by replacing a unique substring. Read the file with "
+        "read_file first: editing an unread file, or one changed since the read, "
+        "is rejected. Fails if the old string is missing or appears more than once.");
 }
 
 json QSocToolRemoteFileEdit::getParametersSchema() const
@@ -336,8 +372,25 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     if (bytes.isNull() && !err.isEmpty()) {
         return QStringLiteral("Error: %1").arg(err);
     }
-    QString   content = QString::fromUtf8(bytes);
-    const int first   = content.indexOf(oldString);
+    QString content = QString::fromUtf8(bytes);
+
+    /* Read-before-edit + stale-on-disk guard: the agent must have read this
+     * exact remote file first, and it must not have changed since, so an
+     * edit never blindly clobbers unseen content or a concurrent change. */
+    if (!m_pathCtx->readState().wasRead(remotePath)) {
+        return QStringLiteral(
+                   "Error: File not read yet: %1. Read it with read_file "
+                   "before editing.")
+            .arg(remotePath);
+    }
+    if (m_pathCtx->readState().changedSinceRead(remotePath, content)) {
+        return QStringLiteral(
+                   "Error: File changed on disk since last read: %1. "
+                   "Read it again before editing.")
+            .arg(remotePath);
+    }
+
+    const int first = content.indexOf(oldString);
     if (first < 0) {
         return QStringLiteral("Error: old_string not found in %1").arg(remotePath);
     }
@@ -350,6 +403,8 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     if (!m_sftp->writeFile(remotePath, content.toUtf8(), &err)) {
         return QStringLiteral("Error: %1").arg(err);
     }
+    /* The agent now knows the post-edit content. */
+    m_pathCtx->readState().recordRead(remotePath, content);
     return QStringLiteral("Edited %1 on remote").arg(remotePath);
 }
 

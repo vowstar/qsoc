@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocfilehistory.h"
+#include "agent/qsocfilereadstate.h"
 #include "agent/tool/qsoctoolfile.h"
 #include "qsoc_test.h"
 
@@ -60,6 +61,31 @@ private:
     }
 
 private slots:
+    void testReadStateTracksContent()
+    {
+        /* Shared read-before-edit state used by both local and remote file
+         * tools: a path is "read" only after recordRead, and counts as
+         * changed when the content hash differs from the recorded one. */
+        QSocFileReadState state;
+        const QString     path = QStringLiteral("/ws/file.txt");
+
+        QVERIFY(!state.wasRead(path));
+        /* Unrecorded paths never report a change. */
+        QVERIFY(!state.changedSinceRead(path, QStringLiteral("anything")));
+
+        state.recordRead(path, QStringLiteral("one two three"));
+        QVERIFY(state.wasRead(path));
+        QVERIFY(!state.changedSinceRead(path, QStringLiteral("one two three")));
+        QVERIFY(state.changedSinceRead(path, QStringLiteral("one two THREE")));
+
+        /* Recording the new content (as a write would) clears staleness. */
+        state.recordRead(path, QStringLiteral("one two THREE"));
+        QVERIFY(!state.changedSinceRead(path, QStringLiteral("one two THREE")));
+
+        /* Keys are independent per path. */
+        QVERIFY(!state.wasRead(QStringLiteral("/ws/other.txt")));
+    }
+
     void initTestCase() { TestApp::instance(); }
 
     void testSha256HexIsStable()
