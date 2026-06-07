@@ -4112,11 +4112,13 @@ bool QSocCliWorker::runAgentLoop(
                 histFile.write(jsonLine);
                 histFile.close();
             }
-            /* Cap the global history so it cannot grow without bound. Trim
-             * only when well over the cap (batched) to avoid rewriting on
-             * every command. */
-            constexpr qint64 kHistoryMaxBytes = 2 * 1024 * 1024;
-            constexpr int    kHistoryKeep     = 2000;
+            /* Cap the global history by BYTES so it cannot grow without bound
+             * regardless of line size (paste blobs make lines large). When it
+             * exceeds the hard cap, keep the most recent lines that fit a
+             * smaller target, dropping the oldest; trimming below the trigger
+             * keeps this batched, not per-command. */
+            constexpr qint64 kHistoryMaxBytes    = 2 * 1024 * 1024;
+            constexpr qint64 kHistoryTargetBytes = 1536 * 1024;
             if (QFileInfo(histPath).size() > kHistoryMaxBytes) {
                 QFile trimIn(histPath);
                 if (trimIn.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -4129,12 +4131,23 @@ bool QSocCliWorker::runAgentLoop(
                         }
                     }
                     trimIn.close();
-                    if (allLines.size() > kHistoryKeep) {
-                        allLines = allLines.mid(allLines.size() - kHistoryKeep);
-                        QFile trimOut(histPath);
+                    /* Walk back from newest, keeping lines until the target is
+                     * reached; always keep at least the last line. */
+                    qint64 acc   = 0;
+                    int    start = allLines.size();
+                    for (int i = allLines.size() - 1; i >= 0; --i) {
+                        acc += static_cast<qint64>(allLines[i].toUtf8().size()) + 1;
+                        start = i;
+                        if (acc > kHistoryTargetBytes) {
+                            break;
+                        }
+                    }
+                    if (start > 0) {
+                        const QStringList kept = allLines.mid(start);
+                        QFile             trimOut(histPath);
                         if (trimOut.open(
                                 QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-                            trimOut.write(allLines.join(QLatin1Char('\n')).toUtf8());
+                            trimOut.write(kept.join(QLatin1Char('\n')).toUtf8());
                             trimOut.write("\n");
                             trimOut.close();
                         }
