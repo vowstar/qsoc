@@ -6767,6 +6767,13 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
 
+            /* Refresh the context-usage chip so the idle status bar shows how
+             * full the window is and how close auto-compact is. */
+            statusBarWidget.setContextUsage(
+                agent->estimateTotalTokens(),
+                agent->effectiveContextTokens(),
+                agent->getConfig().compactThreshold);
+
             /* Disconnect all signals to avoid stale connections */
             QObject::disconnect(connToolCalled);
             QObject::disconnect(connToolResult);
@@ -7355,6 +7362,13 @@ bool QSocCliWorker::runAgentLoop(
                     }
                 }
             }
+
+            /* Refresh the context-usage chip so the idle status bar shows how
+             * full the window is and how close auto-compact is. */
+            statusBarWidget.setContextUsage(
+                agent->estimateTotalTokens(),
+                agent->effectiveContextTokens(),
+                agent->getConfig().compactThreshold);
 
             /* Display complete result at once */
             if (!finalResult.isEmpty()) {

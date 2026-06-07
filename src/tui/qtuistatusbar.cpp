@@ -50,6 +50,7 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
         if (!modelId.isEmpty()) {
             line += " [" + modelId + "]";
         }
+        line += contextChip();
         if (!goalText_.isEmpty()) {
             QString tag = goalStatusTag_.isEmpty() ? QString()
                                                    : QStringLiteral("|%1").arg(goalStatusTag_);
@@ -132,6 +133,7 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     if (!modelId.isEmpty()) {
         line += QString(" [%1]").arg(modelId);
     }
+    line += contextChip();
     if (!goalText_.isEmpty()) {
         QString tag = goalStatusTag_.isEmpty() ? QString()
                                                : QStringLiteral("|%1").arg(goalStatusTag_);
@@ -181,6 +183,34 @@ void QTuiStatusBar::setGoalIndicator(const QString &text, const QString &statusT
 {
     goalText_      = text;
     goalStatusTag_ = statusTag;
+}
+
+void QTuiStatusBar::setContextUsage(int used, int budget, double compactFraction)
+{
+    ctxUsed_            = used;
+    ctxBudget_          = budget;
+    ctxCompactFraction_ = compactFraction;
+}
+
+QString QTuiStatusBar::formatContextChip(int used, int budget, double compactFraction)
+{
+    if (budget <= 0 || used <= 0) {
+        return {};
+    }
+    const int pct        = qBound(0, qRound(100.0 * used / budget), 999);
+    const int compactPct = compactFraction > 0.0 ? qRound(100.0 * compactFraction) : 0;
+    if (compactPct > 0 && pct >= compactPct) {
+        return QStringLiteral(" [ctx %1%, compacting]").arg(pct);
+    }
+    if (compactPct > 0 && pct >= compactPct - 15) {
+        return QStringLiteral(" [ctx %1%, %2% to compact]").arg(pct).arg(compactPct - pct);
+    }
+    return QStringLiteral(" [ctx %1%]").arg(pct);
+}
+
+QString QTuiStatusBar::contextChip() const
+{
+    return formatContextChip(ctxUsed_, ctxBudget_, ctxCompactFraction_);
 }
 
 void QTuiStatusBar::toolCalled(const QString &toolName, const QString &detail)

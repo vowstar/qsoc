@@ -22,8 +22,26 @@ public:
     void setStatus(const QString &status);
     void toolCalled(const QString &toolName, const QString &detail = QString());
     void updateTokens(qint64 input, qint64 output);
-    void setEffortLevel(const QString &level);
-    void setModel(const QString &modelId);
+    /**
+     * @brief Update the context-usage chip (used vs effective budget).
+     * @param used            Estimated tokens the next request would carry.
+     * @param budget          Effective input budget (window minus reply room).
+     * @param compactFraction Auto-compact threshold as a fraction of budget;
+     *                        drives the "N% to compact" / "compacting" hint.
+     *                        Pass used <= 0 or budget <= 0 to hide the chip.
+     */
+    void setContextUsage(int used, int budget, double compactFraction);
+
+    /**
+     * @brief Pure formatter for the context-usage chip text.
+     * @details Static and side-effect free so it can be unit-tested. Returns
+     *          an empty string when there is nothing to show (no budget or no
+     *          usage). Near the compaction threshold it appends a
+     *          "N% to compact" hint; at or above it, "compacting".
+     */
+    static QString formatContextChip(int used, int budget, double compactFraction);
+    void           setEffortLevel(const QString &level);
+    void           setModel(const QString &modelId);
     /** @brief Toggle the read-only plan-mode chip (paused indicator). */
     void setPlanMode(bool active);
     /** @brief Toggle the "away" chip when the terminal loses focus. */
@@ -80,6 +98,14 @@ private:
 
     QString goalText_;
     QString goalStatusTag_;
+
+    int    ctxUsed_            = 0;
+    int    ctxBudget_          = 0;
+    double ctxCompactFraction_ = 0.0;
+
+    /* Build the context-usage chip text (empty when there is nothing to
+     * show). Shared by the idle and running render paths. */
+    QString contextChip() const;
 
     static const QStringList spinnerFrames;
     static const QStringList dotFrames;
