@@ -511,6 +511,11 @@ private slots:
         QCOMPARE(config.compactThreshold, 0.6);
         QCOMPARE(config.pruneThreshold, 0.4);
         QVERIFY(config.pruneThreshold < config.compactThreshold);
+
+        /* compaction_model must default empty: empty means the user's
+         * primary model. A non-empty default would silently bind a model
+         * the user did not choose. */
+        QVERIFY(config.compactionModel.isEmpty());
     }
 
     void testEffectiveContextTokens()

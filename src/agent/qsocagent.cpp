@@ -2490,8 +2490,21 @@ bool QSocAgent::compactWithLLM(bool force)
               "never call tools."}});
         summaryMessages.push_back({{"role", "user"}, {"content", summaryPrompt.toStdString()}});
 
+        /* Honor an explicit compaction_model for the summary call only; an
+         * empty value keeps the user's primary model. Captured before the
+         * switch and restored right after, so normal turns are unaffected. */
+        const QString priorModelId  = agentConfig.compactionModel.isEmpty()
+                                          ? QString()
+                                          : llmService->getCurrentModelId();
+        const bool    modelSwitched = !agentConfig.compactionModel.isEmpty()
+                                      && llmService->setCurrentModel(agentConfig.compactionModel);
+
         /* Use synchronous call - safe because we're at the start of processStreamIteration */
         json response = llmService->sendChatCompletion(summaryMessages, json::array(), 0.1);
+
+        if (modelSwitched) {
+            llmService->setCurrentModel(priorModelId);
+        }
 
         if (response.contains("choices") && !response["choices"].empty()) {
             auto msg = response["choices"][0]["message"];
