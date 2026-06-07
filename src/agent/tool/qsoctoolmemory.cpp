@@ -61,17 +61,21 @@ QString QSocToolMemoryRead::execute(const json &arguments)
     if (arguments.contains("name") && arguments["name"].is_string()) {
         QString name = QString::fromStdString(arguments["name"].get<std::string>());
 
-        /* Try user scope first, then project */
+        /* Try user scope first, then project. Return the body with
+         * frontmatter stripped so a caller that echoes this back into
+         * memory_write cannot nest frontmatter. */
         if (scope == "user" || scope == "all") {
             QString content = memoryManager->readTopicFile("user", name);
             if (!content.isEmpty()) {
-                return QString("## %1 (user scope)\n\n%2").arg(name, content);
+                return QString("## %1 (user scope)\n\n%2")
+                    .arg(name, QSocMemoryManager::stripFrontmatter(content));
             }
         }
         if (scope == "project" || scope == "all") {
             QString content = memoryManager->readTopicFile("project", name);
             if (!content.isEmpty()) {
-                return QString("## %1 (project scope)\n\n%2").arg(name, content);
+                return QString("## %1 (project scope)\n\n%2")
+                    .arg(name, QSocMemoryManager::stripFrontmatter(content));
             }
         }
         return QString("No topic file found: %1").arg(name);
@@ -218,6 +222,72 @@ QString QSocToolMemoryWrite::execute(const json &arguments)
 }
 
 void QSocToolMemoryWrite::setMemoryManager(QSocMemoryManager *memoryManager)
+{
+    this->memoryManager = memoryManager;
+}
+
+/* QSocToolMemoryDelete Implementation */
+
+QSocToolMemoryDelete::QSocToolMemoryDelete(QObject *parent, QSocMemoryManager *memoryManager)
+    : QSocTool(parent)
+    , memoryManager(memoryManager)
+{}
+
+QSocToolMemoryDelete::~QSocToolMemoryDelete() = default;
+
+QString QSocToolMemoryDelete::getName() const
+{
+    return "memory_delete";
+}
+
+QString QSocToolMemoryDelete::getDescription() const
+{
+    return "Delete a persistent memory topic file and rebuild the MEMORY.md index. "
+           "Use to prune stale, wrong, or superseded memories during consolidation.";
+}
+
+json QSocToolMemoryDelete::getParametersSchema() const
+{
+    return {
+        {"type", "object"},
+        {"properties",
+         {{"name",
+           {{"type", "string"}, {"description", "Topic filename to delete (e.g., 'old-topic')"}}},
+          {"scope",
+           {{"type", "string"},
+            {"enum", {"user", "project"}},
+            {"description", "Which scope the topic lives in"}}}}},
+        {"required", json::array({"name", "scope"})}};
+}
+
+QString QSocToolMemoryDelete::execute(const json &arguments)
+{
+    if (!memoryManager) {
+        return "Error: Memory manager not configured";
+    }
+
+    if (!arguments.contains("name") || !arguments["name"].is_string()) {
+        return "Error: 'name' is required (topic filename)";
+    }
+    if (!arguments.contains("scope") || !arguments["scope"].is_string()) {
+        return "Error: 'scope' is required ('user' or 'project')";
+    }
+
+    QString name  = QString::fromStdString(arguments["name"].get<std::string>());
+    QString scope = QString::fromStdString(arguments["scope"].get<std::string>());
+
+    if (scope != "user" && scope != "project") {
+        return "Error: scope must be 'user' or 'project'";
+    }
+
+    if (!memoryManager->deleteTopicFile(scope, name)) {
+        return QString("Error: Failed to delete memory topic '%1' (not found?)").arg(name);
+    }
+
+    return QString("Deleted memory '%1' from %2 scope").arg(name, scope);
+}
+
+void QSocToolMemoryDelete::setMemoryManager(QSocMemoryManager *memoryManager)
 {
     this->memoryManager = memoryManager;
 }

@@ -57,4 +57,29 @@ private:
     QSocMemoryManager *memoryManager = nullptr;
 };
 
+/**
+ * @brief Tool to delete an agent memory topic file.
+ * @details Removes a topic file and rebuilds the MEMORY.md index. Used by
+ *          consolidation ("dream") to prune stale or superseded memories.
+ */
+class QSocToolMemoryDelete : public QSocTool
+{
+    Q_OBJECT
+
+public:
+    explicit QSocToolMemoryDelete(
+        QObject *parent = nullptr, QSocMemoryManager *memoryManager = nullptr);
+    ~QSocToolMemoryDelete() override;
+
+    QString getName() const override;
+    QString getDescription() const override;
+    json    getParametersSchema() const override;
+    QString execute(const json &arguments) override;
+
+    void setMemoryManager(QSocMemoryManager *memoryManager);
+
+private:
+    QSocMemoryManager *memoryManager = nullptr;
+};
+
 #endif // QSOCTOOLMEMORY_H
