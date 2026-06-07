@@ -98,6 +98,11 @@ struct QSocAgentConfig
     int     memoryDreamMinHours    = 24; /* Min hours between dreams */
     int     memoryDreamMinSessions = 5;  /* Min sessions since last dream */
 
+    /* Auto session title: after the first turn a short title is generated so
+     * the resume picker is scannable. A manual /rename always wins. */
+    bool    sessionTitleEnabled = true;
+    QString sessionTitleModel; /* Empty = primary model */
+
     /* Enable verbose output */
     bool verbose = true;
 

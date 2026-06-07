@@ -258,7 +258,14 @@ QSocSession::Info QSocSession::readInfo(const QString &filePath)
                 } else if (key == QStringLiteral("first_prompt") && info.firstPrompt.isEmpty()) {
                     info.firstPrompt = value;
                 } else if (key == QStringLiteral("title")) {
+                    /* A manual /rename always wins over an auto title. */
                     info.title = value;
+                } else if (key == QStringLiteral("auto_title")) {
+                    /* Generated title fills in only when no manual title is
+                     * present (regardless of meta-line order). */
+                    if (info.title.isEmpty()) {
+                        info.title = value;
+                    }
                 } else if (key == QStringLiteral("branch")) {
                     info.branch = value;
                 }

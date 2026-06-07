@@ -17,6 +17,7 @@
 #include "agent/qsocmemorydream.h"
 #include "agent/qsocmemoryextractor.h"
 #include "agent/qsocsession.h"
+#include "agent/qsocsessiontitle.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctaskeventqueue.h"
 #include "agent/qsoctaskregistry.h"
@@ -911,6 +912,17 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         QString memoryDreamMinSessStr = socConfig->getValue("agent.memory_dream_min_sessions");
         if (!memoryDreamMinSessStr.isEmpty()) {
             config.memoryDreamMinSessions = memoryDreamMinSessStr.toInt();
+        }
+
+        QString sessionTitleStr = socConfig->getValue("agent.session_title");
+        if (!sessionTitleStr.isEmpty()) {
+            config.sessionTitleEnabled
+                = (sessionTitleStr.toLower() == "true" || sessionTitleStr == "1");
+        }
+
+        QString sessionTitleModelStr = socConfig->getValue("agent.session_title_model");
+        if (!sessionTitleModelStr.isEmpty()) {
+            config.sessionTitleModel = sessionTitleModelStr;
         }
 
         QString maxConcurrentStr = socConfig->getValue("agent.max_concurrent_subagents");
@@ -2467,6 +2479,9 @@ bool QSocCliWorker::runAgentLoop(
      * first turn settles, so it never blocks startup. The time/session
      * gates inside maybeRun decide whether it actually runs. */
     bool dreamAttempted = false;
+    /* Auto session title is attempted once per process after the first turn,
+     * skipped when the session already has a manual or generated title. */
+    bool titleGenerated = false;
     /* One-time notice when the topic store nears its cap (oldest are
      * dropped silently beyond it). */
     bool memoryCapNotified = false;
@@ -2548,6 +2563,70 @@ bool QSocCliWorker::runAgentLoop(
         lastMemoryIndex    = size;
         currentSession
             ->appendMeta(QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
+    };
+
+    /* Generate a short session title once, after the first turn, when the
+     * session has no manual or generated title yet. Runs at the post-turn
+     * idle point (a proven-safe synchronous-LLM site) using the user's
+     * configured model; an optional knob may override, empty = primary. */
+    auto maybeGenerateSessionTitle = [&]() {
+        const QSocAgentConfig &cfg = agent->getConfig();
+        if (titleGenerated || !cfg.sessionTitleEnabled || !currentSession || turnCounter < 1) {
+            return;
+        }
+        const QString path = currentSession->filePath();
+        if (!QSocSession::readMeta(path, QStringLiteral("title")).isEmpty()
+            || !QSocSession::readMeta(path, QStringLiteral("auto_title")).isEmpty()) {
+            titleGenerated = true; /* already titled */
+            return;
+        }
+        QString    firstPrompt;
+        const json msgs = agent->getMessages();
+        if (msgs.is_array()) {
+            for (const auto &msg : msgs) {
+                if (msg.value("role", std::string()) == "user" && msg.contains("content")
+                    && msg["content"].is_string()) {
+                    firstPrompt = QString::fromStdString(msg["content"].get<std::string>());
+                    break;
+                }
+            }
+        }
+        QLLMService *llm = agent->getLLMService();
+        if (firstPrompt.trimmed().isEmpty() || llm == nullptr || !llm->hasEndpoint()) {
+            return;
+        }
+        titleGenerated = true; /* one attempt per process regardless of outcome */
+        statusBarWidget.setStatus("Naming session");
+        compositor.render();
+
+        json titleMsgs = json::array();
+        titleMsgs.push_back(
+            {{"role", "system"}, {"content", QSocSessionTitle::systemPrompt().toStdString()}});
+        titleMsgs.push_back(
+            {{"role", "user"},
+             {"content", QSocSessionTitle::buildUserMessage(firstPrompt.left(2000)).toStdString()}});
+
+        const QString priorModel = cfg.sessionTitleModel.isEmpty() ? QString()
+                                                                   : llm->getCurrentModelId();
+        const bool    switched   = !cfg.sessionTitleModel.isEmpty()
+                                   && llm->setCurrentModel(cfg.sessionTitleModel);
+        const json    resp       = llm->sendChatCompletion(titleMsgs, json::array(), 0.3);
+        if (switched) {
+            llm->setCurrentModel(priorModel);
+        }
+        statusBarWidget.setStatus("Ready");
+
+        QString raw;
+        if (resp.contains("choices") && resp["choices"].is_array() && !resp["choices"].empty()) {
+            const auto &message = resp["choices"][0]["message"];
+            if (message.contains("content") && message["content"].is_string()) {
+                raw = QString::fromStdString(message["content"].get<std::string>());
+            }
+        }
+        const QString title = QSocSessionTitle::sanitize(raw);
+        if (!title.isEmpty()) {
+            currentSession->appendMeta(QStringLiteral("auto_title"), title);
+        }
     };
 
     /* Replace the TODO widget contents with the pending items in
@@ -4733,8 +4812,10 @@ bool QSocCliWorker::runAgentLoop(
             lastPersistedIndex = 0;
             lastMemoryIndex    = 0;
             turnCounter        = 0;
-            /* Re-arm the informational near-cap notice for the fresh start. */
+            /* Re-arm the informational near-cap notice and the auto title for
+             * the fresh start. */
             memoryCapNotified = false;
+            titleGenerated    = false;
             compositor.printContent("History cleared.\n");
             continue;
         }
@@ -6107,6 +6188,7 @@ bool QSocCliWorker::runAgentLoop(
             /* Different project = different memory store: re-arm the
              * once-per-process dream pass and the near-cap notice. */
             dreamAttempted    = false;
+            titleGenerated    = false;
             memoryCapNotified = false;
 
             /* Reload per-project UI state: TODO widget and input history. */
@@ -6707,6 +6789,7 @@ bool QSocCliWorker::runAgentLoop(
                     currentSession->appendMeta(
                         QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
                 }
+                maybeGenerateSessionTitle();
                 if (!dreamAttempted) {
                     dreamAttempted             = true;
                     const QString dreamSession = currentSession ? currentSession->id() : QString();
@@ -7308,6 +7391,7 @@ bool QSocCliWorker::runAgentLoop(
                     currentSession->appendMeta(
                         QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
                 }
+                maybeGenerateSessionTitle();
                 if (!dreamAttempted) {
                     dreamAttempted             = true;
                     const QString dreamSession = currentSession ? currentSession->id() : QString();
