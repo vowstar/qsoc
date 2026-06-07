@@ -40,6 +40,19 @@ public:
         int       ageDays = 0;
     };
 
+    /* Lightweight header (frontmatter only, no body). Feeds the recall
+     * selector so it can rank by name/type/description without reading
+     * full file bodies. */
+    struct MemoryHeader
+    {
+        QString   scope; /* "user" or "project" */
+        QString   name;
+        QString   type;
+        QString   description;
+        QDateTime lastModified;
+        int       ageDays = 0;
+    };
+
     /* Directory paths */
     QString userMemoryDir() const;
     QString projectMemoryDir() const;
@@ -52,6 +65,11 @@ public:
     /* Scan topic files (excludes MEMORY.md), sorted by mtime descending */
     QList<MemoryEntry> scanMemories(const QString &scope = "all") const;
 
+    /* Scan topic-file headers (frontmatter only), sorted by mtime
+     * descending. Cheaper than scanMemories: skips file bodies. Each
+     * header carries its scope ("user"/"project"). */
+    QList<MemoryHeader> scanHeaders(const QString &scope = "all") const;
+
     /* Write a topic file with frontmatter and rebuild the index */
     bool writeTopicFile(
         const QString &scope,
@@ -63,8 +81,18 @@ public:
     /* Rebuild MEMORY.md index from topic files in the given scope */
     bool updateIndex(const QString &scope);
 
+    /* Per-scope topic-file cap; beyond it the oldest are dropped. */
+    static int maxTopicFiles();
+
+    /* Uncapped count of topic files (excludes MEMORY.md) in the scope. */
+    int topicFileCount(const QString &scope = "all") const;
+
     /* Read a specific topic file by name and scope */
     QString readTopicFile(const QString &scope, const QString &name) const;
+
+    /* Strip a leading YAML frontmatter block from content. Returns the
+     * body as-is when there is no frontmatter. */
+    static QString stripFrontmatter(const QString &content);
 
     /* Delete a topic file and rebuild the index */
     bool deleteTopicFile(const QString &scope, const QString &name);
@@ -77,8 +105,17 @@ private:
     /* Parse YAML frontmatter from a memory file */
     MemoryEntry parseMemoryFile(const QString &path) const;
 
+    /* Parse frontmatter fields (name/type/description) from raw content.
+     * Shared by parseMemoryFile and scanHeadersDir; only overwrites a
+     * field when its key is present, so caller-supplied defaults survive. */
+    static void parseFrontmatter(
+        const QString &content, QString &name, QString &type, QString &description);
+
     /* Scan a single directory for topic files */
     QList<MemoryEntry> scanDir(const QString &dirPath) const;
+
+    /* Scan a single directory for topic-file headers, tagging scope */
+    QList<MemoryHeader> scanHeadersDir(const QString &dirPath, const QString &scope) const;
 
     /* File I/O helpers */
     QString readFile(const QString &path) const;

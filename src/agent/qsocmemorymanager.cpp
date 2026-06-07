@@ -171,6 +171,105 @@ QList<QSocMemoryManager::MemoryEntry> QSocMemoryManager::scanDir(const QString &
     return entries;
 }
 
+int QSocMemoryManager::maxTopicFiles()
+{
+    return MAX_TOPIC_FILES;
+}
+
+int QSocMemoryManager::topicFileCount(const QString &scope) const
+{
+    const auto countDir = [](const QString &dirPath) {
+        int  files = 0;
+        QDir dir(dirPath);
+        if (!dir.exists()) {
+            return files;
+        }
+        QDirIterator
+            iter(dirPath, {"*.md"}, QDir::Files | QDir::Readable, QDirIterator::NoIteratorFlags);
+        while (iter.hasNext()) {
+            iter.next();
+            if (iter.fileName() != INDEX_FILENAME) {
+                files++;
+            }
+        }
+        return files;
+    };
+
+    int total = 0;
+    if (scope == "user" || scope == "all") {
+        total += countDir(userMemoryDir());
+    }
+    if (scope == "project" || scope == "all") {
+        const QString projDir = projectMemoryDir();
+        if (!projDir.isEmpty()) {
+            total += countDir(projDir);
+        }
+    }
+    return total;
+}
+
+/* Scan topic-file headers (frontmatter only) */
+
+QList<QSocMemoryManager::MemoryHeader> QSocMemoryManager::scanHeaders(const QString &scope) const
+{
+    QList<MemoryHeader> headers;
+
+    if (scope == "user" || scope == "all") {
+        headers.append(scanHeadersDir(userMemoryDir(), "user"));
+    }
+
+    if (scope == "project" || scope == "all") {
+        QString projDir = projectMemoryDir();
+        if (!projDir.isEmpty()) {
+            headers.append(scanHeadersDir(projDir, "project"));
+        }
+    }
+
+    /* Sort by mtime descending (newest first) */
+    std::sort(headers.begin(), headers.end(), [](const MemoryHeader &lhs, const MemoryHeader &rhs) {
+        return lhs.lastModified > rhs.lastModified;
+    });
+
+    /* Enforce file limit */
+    if (headers.size() > MAX_TOPIC_FILES) {
+        headers.resize(MAX_TOPIC_FILES);
+    }
+
+    return headers;
+}
+
+QList<QSocMemoryManager::MemoryHeader> QSocMemoryManager::scanHeadersDir(
+    const QString &dirPath, const QString &scope) const
+{
+    QList<MemoryHeader> headers;
+    QDir                dir(dirPath);
+
+    if (!dir.exists()) {
+        return headers;
+    }
+
+    QDirIterator iter(dirPath, {"*.md"}, QDir::Files | QDir::Readable, QDirIterator::NoIteratorFlags);
+
+    while (iter.hasNext()) {
+        iter.next();
+        /* Skip the index file */
+        if (iter.fileName() == INDEX_FILENAME) {
+            continue;
+        }
+
+        QFileInfo    fileInfo(iter.filePath());
+        MemoryHeader header;
+        header.scope        = scope;
+        header.name         = fileInfo.completeBaseName();
+        header.lastModified = fileInfo.lastModified();
+        header.ageDays = static_cast<int>(header.lastModified.daysTo(QDateTime::currentDateTime()));
+        parseFrontmatter(readFile(iter.filePath()), header.name, header.type, header.description);
+        headers.append(header);
+    }
+
+    return headers;
+}
+
 /* Parse frontmatter from a memory file */
 
 QSocMemoryManager::MemoryEntry QSocMemoryManager::parseMemoryFile(const QString &path) const
@@ -192,14 +291,49 @@ QSocMemoryManager::MemoryEntry QSocMemoryManager::parseMemoryFile(const QString 
         return entry;
     }
 
-    /* Parse YAML frontmatter between --- delimiters */
+    parseFrontmatter(content, entry.name, entry.type, entry.description);
+
+    return entry;
+}
+
+/* Strip a leading YAML frontmatter block from content */
+
+QString QSocMemoryManager::stripFrontmatter(const QString &content)
+{
     if (!content.startsWith("---")) {
-        return entry;
+        return content;
+    }
+    const qsizetype endMarker = content.indexOf("\n---", 3);
+    if (endMarker < 0) {
+        return content;
+    }
+    /* Only treat the leading block as frontmatter when it actually holds a
+     * `key:` line; otherwise a body that merely opens with a `---` thematic
+     * rule would be silently truncated. */
+    static const QRegularExpression keyLine(QStringLiteral("(^|\\n)\\s*[A-Za-z0-9_-]+\\s*:"));
+    if (!content.left(endMarker).contains(keyLine)) {
+        return content;
+    }
+    const qsizetype bodyStart = content.indexOf('\n', endMarker + 1);
+    if (bodyStart < 0) {
+        return {};
+    }
+    return content.mid(bodyStart + 1).trimmed();
+}
+
+/* Parse YAML frontmatter fields shared by parseMemoryFile and scanHeaders */
+
+void QSocMemoryManager::parseFrontmatter(
+    const QString &content, QString &name, QString &type, QString &description)
+{
+    /* Frontmatter sits between --- delimiters at the top of the file */
+    if (!content.startsWith("---")) {
+        return;
     }
 
     qsizetype endMarker = content.indexOf("\n---", 3);
     if (endMarker < 0) {
-        return entry;
+        return;
     }
 
     QString           frontmatter = content.mid(4, endMarker - 4);
@@ -215,15 +349,13 @@ QSocMemoryManager::MemoryEntry QSocMemoryManager::parseMemoryFile(const QString 
         QString value = line.mid(colonPos + 1).trimmed();
 
         if (key == "name") {
-            entry.name = value;
+            name = value;
         } else if (key == "type") {
-            entry.type = value;
+            type = value;
         } else if (key == "description") {
-            entry.description = value;
+            description = value;
         }
     }
-
-    return entry;
 }
 
 /* Write a topic file with frontmatter and rebuild the index */
@@ -259,7 +391,9 @@ bool QSocMemoryManager::writeTopicFile(
         out << "description: " << description << "\n";
     }
     out << "---\n\n";
-    out << content;
+    /* Defensively drop any frontmatter the caller embedded in the body
+     * (e.g. a model that echoed memory_read output) to avoid nesting. */
+    out << stripFrontmatter(content);
 
     if (!writeFile(filePath, fileContent)) {
         return false;
