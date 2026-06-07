@@ -4104,9 +4104,41 @@ bool QSocCliWorker::runAgentLoop(
                 obj[QStringLiteral("host")]    = agent->getConfig().remoteMode
                                                      ? agent->getConfig().remoteName
                                                      : QStringLiteral("local");
-                QJsonDocument doc(obj);
-                histFile.write(doc.toJson(QJsonDocument::Compact));
-                histFile.write("\n");
+                /* One write() of the whole line keeps concurrent appenders
+                 * from interleaving a line with its newline. */
+                QByteArray jsonLine = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+                jsonLine.append('\n');
+                histFile.write(jsonLine);
+                histFile.close();
+            }
+            /* Cap the global history so it cannot grow without bound. Trim
+             * only when well over the cap (batched) to avoid rewriting on
+             * every command. */
+            constexpr qint64 kHistoryMaxBytes = 2 * 1024 * 1024;
+            constexpr int    kHistoryKeep     = 2000;
+            if (QFileInfo(histPath).size() > kHistoryMaxBytes) {
+                QFile trimIn(histPath);
+                if (trimIn.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    QStringList allLines;
+                    QTextStream trimStream(&trimIn);
+                    while (!trimStream.atEnd()) {
+                        const QString line = trimStream.readLine();
+                        if (!line.isEmpty()) {
+                            allLines.append(line);
+                        }
+                    }
+                    trimIn.close();
+                    if (allLines.size() > kHistoryKeep) {
+                        allLines = allLines.mid(allLines.size() - kHistoryKeep);
+                        QFile trimOut(histPath);
+                        if (trimOut.open(
+                                QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+                            trimOut.write(allLines.join(QLatin1Char('\n')).toUtf8());
+                            trimOut.write("\n");
+                            trimOut.close();
+                        }
+                    }
+                }
             }
         }
 
