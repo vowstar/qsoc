@@ -4861,6 +4861,13 @@ bool QSocCliWorker::runAgentLoop(
              * the fresh start. */
             memoryCapNotified = false;
             titleGenerated    = false;
+            /* Drop read-before-edit state and the context chip: the cleared
+             * conversation has read nothing and carries no context. */
+            if (pathContext) {
+                pathContext->readState().clear();
+            }
+            statusBarWidget.setContextUsage(
+                0, agent->effectiveContextTokens(), agent->getConfig().compactThreshold);
             compositor.printContent("History cleared.\n");
             continue;
         }
@@ -6235,6 +6242,12 @@ bool QSocCliWorker::runAgentLoop(
             dreamAttempted    = false;
             titleGenerated    = false;
             memoryCapNotified = false;
+            /* New project: drop read-before-edit state and the context chip. */
+            if (pathContext) {
+                pathContext->readState().clear();
+            }
+            statusBarWidget.setContextUsage(
+                0, agent->effectiveContextTokens(), agent->getConfig().compactThreshold);
 
             /* Reload per-project UI state: TODO widget and input history. */
             loadTodoWidget(projectManager->getProjectPath());

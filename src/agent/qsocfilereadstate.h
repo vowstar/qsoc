@@ -48,6 +48,9 @@ public:
         return it != shas.constEnd() && it.value() != sha(currentContent);
     }
 
+    /** @brief Forget all reads (on /clear or project switch). */
+    void clear() { shas.clear(); }
+
 private:
     QHash<QString, QString> shas;
 };
