@@ -9,6 +9,7 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsocawaysummary.h"
 #include "agent/qsocbashtasksource.h"
 #include "agent/qsocfilehistory.h"
 #include "agent/qsocgoal.h"
@@ -924,6 +925,22 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         QString sessionTitleModelStr = socConfig->getValue("agent.session_title_model");
         if (!sessionTitleModelStr.isEmpty()) {
             config.sessionTitleModel = sessionTitleModelStr;
+        }
+
+        QString awaySummaryStr = socConfig->getValue("agent.away_summary");
+        if (!awaySummaryStr.isEmpty()) {
+            config.awaySummaryEnabled
+                = (awaySummaryStr.toLower() == "true" || awaySummaryStr == "1");
+        }
+
+        QString awaySummaryModelStr = socConfig->getValue("agent.away_summary_model");
+        if (!awaySummaryModelStr.isEmpty()) {
+            config.awaySummaryModel = awaySummaryModelStr;
+        }
+
+        QString awaySummaryDelayStr = socConfig->getValue("agent.away_summary_delay_seconds");
+        if (!awaySummaryDelayStr.isEmpty()) {
+            config.awaySummaryDelaySeconds = awaySummaryDelayStr.toInt();
         }
 
         QString maxConcurrentStr = socConfig->getValue("agent.max_concurrent_subagents");
@@ -1990,14 +2007,28 @@ bool QSocCliWorker::runAgentLoop(
      * the agent can steer away from blocking ask_user when they're away.
      * Default true; unknown / unsupported terminals stay "watching". */
     bool userWatching = true;
-    connect(
-        &inputMonitor,
-        &QAgentInputMonitor::terminalFocusChanged,
-        [&userWatching, &statusBarWidget, &compositor](bool focused) {
-            userWatching = focused;
-            statusBarWidget.setUserWatching(focused);
-            compositor.render();
-        });
+
+    /* Away summary ("recap") state. The single-shot timer is armed when the
+     * terminal loses focus and fires after the configured idle delay; the
+     * recap is shown once per away period. awaySummaryPending defers the
+     * recap when the idle delay elapses mid-turn so it lands once the turn
+     * settles. Both reset at the start of each new user turn. */
+    QTimer awaySummaryTimer;
+    awaySummaryTimer.setSingleShot(true);
+    bool awaySummaryShown   = false;
+    bool awaySummaryPending = false;
+
+    connect(&inputMonitor, &QAgentInputMonitor::terminalFocusChanged, [&](bool focused) {
+        userWatching = focused;
+        statusBarWidget.setUserWatching(focused);
+        if (focused) {
+            awaySummaryTimer.stop();
+            awaySummaryPending = false;
+        } else if (agent->getConfig().awaySummaryEnabled && !awaySummaryShown) {
+            awaySummaryTimer.start(agent->getConfig().awaySummaryDelaySeconds * 1000);
+        }
+        compositor.render();
+    });
 
     /* Mouse click-drag text selection: press starts, drag updates, release
      * copies to clipboard via OSC 52 and clears the highlight. SGR coords
@@ -2642,6 +2673,77 @@ bool QSocCliWorker::runAgentLoop(
             currentSession->appendMeta(QStringLiteral("auto_title"), title);
         }
     };
+
+    /* Generate the "while you were away" recap once the terminal has been
+     * unfocused for the configured delay. Mirrors maybeGenerateSessionTitle:
+     * a synchronous LLM call at an idle point using the user's configured
+     * model (a knob may override; empty = primary). Defers when a turn is in
+     * flight; the post-turn site flushes the pending recap. Shown once per
+     * away period. */
+    auto maybeGenerateAwaySummary = [&]() {
+        const QSocAgentConfig &cfg = agent->getConfig();
+        if (!cfg.awaySummaryEnabled || awaySummaryShown || userWatching) {
+            return;
+        }
+        if (agent->isRunning()) {
+            awaySummaryPending = true; /* flushed when the turn settles */
+            return;
+        }
+        awaySummaryPending = false;
+        QLLMService *llm   = agent->getLLMService();
+        if (llm == nullptr || !llm->hasEndpoint()) {
+            return;
+        }
+        const json msgs  = agent->getMessages();
+        const int  count = msgs.is_array() ? static_cast<int>(msgs.size()) : 0;
+        if (count == 0) {
+            return;
+        }
+        /* Recent window only: enough for "where we left off" without blowing
+         * the summarizer's input budget on a long session. */
+        const int     start      = qMax(0, count - 30);
+        const QString transcript = agent->formatMessagesForSummary(start, count);
+        if (transcript.trimmed().isEmpty()) {
+            return;
+        }
+        awaySummaryShown = true; /* one recap per away period regardless of outcome */
+        statusBarWidget.setStatus("Recapping");
+        compositor.render();
+
+        json sumMsgs = json::array();
+        sumMsgs.push_back(
+            {{"role", "system"}, {"content", QSocAwaySummary::systemPrompt().toStdString()}});
+        sumMsgs.push_back(
+            {{"role", "user"},
+             {"content", QSocAwaySummary::buildUserMessage(transcript).toStdString()}});
+
+        const QString priorModel = cfg.awaySummaryModel.isEmpty() ? QString()
+                                                                  : llm->getCurrentModelId();
+        const bool    switched   = !cfg.awaySummaryModel.isEmpty()
+                                   && llm->setCurrentModel(cfg.awaySummaryModel);
+        const json    resp       = llm->sendChatCompletion(sumMsgs, json::array(), 0.3);
+        if (switched) {
+            llm->setCurrentModel(priorModel);
+        }
+        statusBarWidget.setStatus("Ready");
+
+        QString raw;
+        if (resp.contains("choices") && resp["choices"].is_array() && !resp["choices"].empty()) {
+            const auto &message = resp["choices"][0]["message"];
+            if (message.contains("content") && message["content"].is_string()) {
+                raw = QString::fromStdString(message["content"].get<std::string>());
+            }
+        }
+        const QString recap = QSocAwaySummary::sanitize(raw);
+        if (recap.isEmpty()) {
+            return;
+        }
+        /* Reference mark prefix on a dim line; survives in scrollback. */
+        compositor.printContent(QStringLiteral("※ %1\n").arg(recap), QTuiScrollView::Dim);
+        compositor.render();
+    };
+
+    QObject::connect(&awaySummaryTimer, &QTimer::timeout, [&]() { maybeGenerateAwaySummary(); });
 
     /* Replace the TODO widget contents with the pending items in
      * <projectPath>/.qsoc/todos.md. Clears on missing/empty file so a
@@ -6870,6 +6972,10 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.setTitle("QSoC Agent · " + (mid.isEmpty() ? "default" : mid));
             }
             compositor.start();
+            /* New user turn: clear away-recap state so the next away period
+             * generates a fresh recap. */
+            awaySummaryShown   = false;
+            awaySummaryPending = false;
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
@@ -6907,6 +7013,11 @@ bool QSocCliWorker::runAgentLoop(
                         QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
                 }
                 maybeGenerateSessionTitle();
+                /* Idle delay elapsed mid-turn while unfocused: show the
+                 * deferred recap now that the turn has settled. */
+                if (awaySummaryPending) {
+                    maybeGenerateAwaySummary();
+                }
                 if (!dreamAttempted) {
                     dreamAttempted             = true;
                     const QString dreamSession = currentSession ? currentSession->id() : QString();
@@ -7477,6 +7588,10 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.setTitle("QSoC Agent · " + (mid.isEmpty() ? "default" : mid));
             }
             compositor.start();
+            /* New user turn: clear away-recap state so the next away period
+             * generates a fresh recap. */
+            awaySummaryShown   = false;
+            awaySummaryPending = false;
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
@@ -7509,6 +7624,11 @@ bool QSocCliWorker::runAgentLoop(
                         QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
                 }
                 maybeGenerateSessionTitle();
+                /* Idle delay elapsed mid-turn while unfocused: show the
+                 * deferred recap now that the turn has settled. */
+                if (awaySummaryPending) {
+                    maybeGenerateAwaySummary();
+                }
                 if (!dreamAttempted) {
                     dreamAttempted             = true;
                     const QString dreamSession = currentSession ? currentSession->id() : QString();

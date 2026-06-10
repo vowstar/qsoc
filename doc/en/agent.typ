@@ -358,6 +358,13 @@ run keeps moving instead of blocking on a prompt nobody answers; a
 not report focus (e.g. tmux without `focus-events on`) are treated as
 focused, so behavior is unchanged there.
 
+If the window stays unfocused past `agent.away_summary_delay_seconds`
+(default 300), qsoc prints a one-line "while you were away" recap marked
+with `※`: the high-level task and the next step, so you can pick up where
+you left off on return. It is generated once per away period using your
+configured model (`agent.away_summary_model` overrides; empty = primary),
+and disabled with `agent.away_summary: false`.
+
 The status bar also shows a `[ctx N%]` chip tracking how full the context
 window is against the effective budget; as auto-compaction nears it reads
 `N% to compact`, then `compacting`.

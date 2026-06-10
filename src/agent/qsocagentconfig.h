@@ -103,6 +103,15 @@ struct QSocAgentConfig
     bool    sessionTitleEnabled = true;
     QString sessionTitleModel; /* Empty = primary model */
 
+    /* Away summary ("recap"): when the terminal loses focus (DECSET 1004)
+     * for awaySummaryDelaySeconds, a 1-3 sentence "while you were away"
+     * recap of the task and the next step is generated and printed once
+     * per away period, using the user's configured model (knob may
+     * override; empty = primary). */
+    bool    awaySummaryEnabled = true;
+    QString awaySummaryModel; /* Empty = primary model */
+    int     awaySummaryDelaySeconds = 300;
+
     /* Enable verbose output */
     bool verbose = true;
 

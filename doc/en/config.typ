@@ -343,6 +343,13 @@ These settings can also be overridden by command-line options (see @agent-comman
     [Auto-generate a session title after the first turn (default: true)],
     [agent.session_title_model],
     [Model for the title call (empty = use primary model)],
+    [agent.away_summary],
+    [Show a "while you were away" recap after the terminal loses focus
+     (default: true)],
+    [agent.away_summary_model],
+    [Model for the recap call (empty = use primary model)],
+    [agent.away_summary_delay_seconds],
+    [Idle seconds of lost focus before the recap is generated (default: 300)],
     [agent.system_prompt], [Custom system prompt override],
     [agent.predict_input],
     [Predict next input as ghost text: true/false (default: true)],
