@@ -348,10 +348,18 @@ public:
     QString buildSystemPromptWithMemory() const;
 
     /**
+     * @brief Why a tool name is rejected under the current agent config.
+     * @details Single source of truth for the tool gates: sub-agent
+     *          recursion guard, plan-mode tool visibility, allowlist,
+     *          denylist, and the plan-mode read-only gate. Returns a
+     *          human/LLM-readable reason, or an empty string when the
+     *          tool is allowed.
+     */
+    QString toolDenyReason(const QString &name) const;
+
+    /**
      * @brief Test whether a tool name is permitted under the current
-     *        agent config. Honors `agentConfig.toolsAllow` allowlist,
-     *        and unconditionally rejects the spawn-agent tool when
-     *        `agentConfig.isSubAgent` is true.
+     *        agent config. Equivalent to toolDenyReason(name).isEmpty().
      */
     bool isToolAllowed(const QString &name) const;
 

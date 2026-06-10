@@ -78,37 +78,37 @@ QSocAgent::~QSocAgent()
     /* No manual disconnect needed - doing so can cause crashes if llmService is already destroyed */
 }
 
-bool QSocAgent::isToolAllowed(const QString &name) const
+QString QSocAgent::toolDenyReason(const QString &name) const
 {
     /* Sub-agents must never spawn further sub-agents: closes the
      * recursion door regardless of allowlist. */
     if (agentConfig.isSubAgent && name == QStringLiteral("agent")) {
-        return false;
+        return QStringLiteral("sub-agents cannot spawn further sub-agents");
     }
     /* Plan mode is owned by the main agent only: a child (which shares
      * the registry and its callbacks) must not enter or approve/exit
      * plan mode on the parent's behalf. */
     if (agentConfig.isSubAgent
         && (name == QStringLiteral("enter_plan_mode") || name == QStringLiteral("exit_plan_mode"))) {
-        return false;
+        return QStringLiteral("plan mode is controlled by the main agent, not sub-agents");
     }
     /* exit_plan_mode is only meaningful inside plan mode; enter_plan_mode
      * only outside it. Keep each off the menu when irrelevant. */
     if (name == QStringLiteral("exit_plan_mode") && !agentConfig.planMode) {
-        return false;
+        return QStringLiteral("plan mode is not active");
     }
     if (name == QStringLiteral("enter_plan_mode") && agentConfig.planMode) {
-        return false;
+        return QStringLiteral("plan mode is already active");
     }
     /* Allowlist gate: empty list inherits everything. */
     if (!agentConfig.toolsAllow.isEmpty() && !agentConfig.toolsAllow.contains(name)) {
-        return false;
+        return QStringLiteral("not in this agent's allowed tool list");
     }
     /* Denylist gate: applied AFTER allowlist. Used to subtract a
      * couple of tools from "inherit everything" or from a broad
      * allowlist. */
     if (agentConfig.toolsDeny.contains(name)) {
-        return false;
+        return QStringLiteral("denied by this agent's tool denylist");
     }
     /* Plan-mode gate: only read-only tools run. The shell passes here
      * (its per-command safety is LLM-judged at dispatch) and the spawn
@@ -121,10 +121,16 @@ bool QSocAgent::isToolAllowed(const QString &name) const
         const bool      spawnOk = (name == QStringLiteral("agent"));
         const QSocTool *tool    = toolRegistry != nullptr ? toolRegistry->getTool(name) : nullptr;
         if (!shellJudged && !spawnOk && (tool == nullptr || !tool->isReadOnly())) {
-            return false;
+            return QStringLiteral(
+                "plan mode is read-only; call exit_plan_mode to get approval first");
         }
     }
-    return true;
+    return {};
+}
+
+bool QSocAgent::isToolAllowed(const QString &name) const
+{
+    return toolDenyReason(name).isEmpty();
 }
 
 nlohmann::json QSocAgent::getEffectiveToolDefinitions() const
@@ -1119,10 +1125,10 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
 
         /* Allowlist guard. Defends against an LLM that ignores the
          * filtered tool list or recalls a name from earlier history. */
-        if (!isToolAllowed(functionName)) {
-            const QString denied = QStringLiteral(
-                                       "Error: tool \"%1\" is not allowed in this sub-agent")
-                                       .arg(functionName);
+        const QString denyReason = toolDenyReason(functionName);
+        if (!denyReason.isEmpty()) {
+            const QString denied = QStringLiteral("Error: tool \"%1\" is not available: %2")
+                                       .arg(functionName, denyReason);
             addToolMessage(toolCallId, denied);
             emit toolResult(functionName, denied);
             continue;
