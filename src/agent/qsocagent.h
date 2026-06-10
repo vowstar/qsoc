@@ -638,6 +638,18 @@ private:
     bool maybeQueueGoalContinuation();
 
     /**
+     * @brief When a plan-mode turn is about to end with prose instead
+     *        of exit_plan_mode / ask_user, append a one-shot protocol
+     *        reminder as a user message and return true so the caller
+     *        loops again. Fires at most once per run and never for
+     *        sub-agents (plan tools are gated off for them).
+     */
+    bool maybeQueuePlanModeNudge();
+
+    /* Whether the plan-mode nudge already fired in the current run. */
+    bool planNudgeUsed = false;
+
+    /**
      * @brief Layer 1: Prune old tool outputs to reduce token usage
      * @param force Skip threshold check (for manual compact)
      * @return true if pruning saved enough tokens

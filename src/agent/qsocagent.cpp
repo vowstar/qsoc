@@ -168,6 +168,8 @@ QString QSocAgent::run(const QString &userQuery)
     /* Add user message to history */
     addMessage("user", prompt);
 
+    planNudgeUsed = false;
+
     /* Rank relevant memories for this turn (synchronous, before the
      * loop). Filled into recallBlock_ and injected as a non-persisted
      * reminder each iteration. */
@@ -227,6 +229,9 @@ QString QSocAgent::run(const QString &userQuery)
                  * total spend; turnCap caps the iteration count. */
                 continue;
             }
+            if (maybeQueuePlanModeNudge()) {
+                continue;
+            }
             return finalText;
         }
     }
@@ -266,6 +271,7 @@ void QSocAgent::runStream(const QString &userQuery)
     currentRetryCount         = 0;
     contextOverflowRetryCount = 0;
     emptyResponseRetryCount   = 0;
+    planNudgeUsed             = false;
     streamFinalContent.clear();
     abortRequested = false;
 
@@ -864,6 +870,14 @@ void QSocAgent::handleStreamComplete(const json &response)
         /* A continuation (or budget-limit) prompt was just appended;
          * feed it back into the stream loop so the model answers it
          * without exiting to the REPL idle state. */
+        processStreamIteration();
+        return;
+    }
+
+    /* Plan-mode protocol: a prose ending leaves the user with no
+     * approval dialog. Give the model one pointed chance to route the
+     * text through exit_plan_mode or ask_user before the turn ends. */
+    if (!content.trimmed().isEmpty() && maybeQueuePlanModeNudge()) {
         processStreamIteration();
         return;
     }
@@ -1853,6 +1867,28 @@ bool QSocAgent::maybeQueueGoalContinuation()
     }
     goalContinuationInFlight.store(false);
     return queued;
+}
+
+bool QSocAgent::maybeQueuePlanModeNudge()
+{
+    if (!agentConfig.planMode || agentConfig.isSubAgent || planNudgeUsed) {
+        return false;
+    }
+    if (hasPendingRequests()) {
+        return false;
+    }
+    planNudgeUsed = true;
+    addMessage(
+        "user",
+        QStringLiteral(
+            "You are in plan mode and ended your turn without calling a tool. "
+            "Do not reply in prose: if the plan is ready, call exit_plan_mode "
+            "with the complete plan; if you need anything from the user, call "
+            "ask_user with your question."));
+    if (agentConfig.verbose) {
+        emit verboseOutput("[Plan mode: nudging model to call exit_plan_mode or ask_user]");
+    }
+    return true;
 }
 
 void QSocAgent::queueRequest(const QString &request)

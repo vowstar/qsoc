@@ -347,6 +347,16 @@ plan is saved to `<project>/.qsoc/plans/<session>.md`, and a budget-capped
 copy rides every subsequent turn so the executing agent keeps following
 it across context compaction. A newer approved plan replaces the old one.
 
+If a model ends a plan-mode turn by writing prose instead of calling
+`exit_plan_mode` or `ask_user` (some models call tools less reliably),
+qsoc first sends it one automatic reminder to route the text through
+the proper tool, so a ready plan arrives via the normal approval prompt
+and a question via the normal `ask_user` flow. If the model still ends
+in prose, the final text is treated as the proposed plan and the same
+approval prompt is shown, so you are never left in plan mode with no
+way to approve. On approval qsoc leaves plan mode and immediately
+starts executing.
+
 === Focus-Aware Prompting
 
 When the terminal supports focus reporting (DECSET 1004), qsoc tracks

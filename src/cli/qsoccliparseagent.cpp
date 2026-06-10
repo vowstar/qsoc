@@ -3037,64 +3037,80 @@ bool QSocCliWorker::runAgentLoop(
                 QStringLiteral("Entered plan mode (read-only).\n"), QTuiScrollView::Dim);
         });
     }
+    /* Shared plan-approval dialog. Two callers drive it: the model calling
+     * exit_plan_mode, and the REPL when a plan-mode turn ends with prose
+     * instead of that tool call (weak tool-callers strand the user with no
+     * way to approve otherwise). echoPlan prints the plan first for the tool
+     * path; the stall path has already shown the prose. The shown-this-turn
+     * flag stops the stall path from re-asking in the same turn after the
+     * user already declined via exit_plan_mode. */
+    bool planApprovalShownThisTurn = false;
+    auto presentPlanForApproval =
+        [this,
+         agent,
+         &compositor,
+         &inputMonitor,
+         &statusBarWidget,
+         &currentSession,
+         &planApprovalShownThisTurn](const QString &plan, bool echoPlan) -> QSocPlanApproval {
+        QSocPlanApproval approval;
+        planApprovalShownThisTurn = true;
+        if (echoPlan) {
+            compositor.printContent(QString("\n%1\n\n").arg(plan));
+        }
+        QList<QTuiMenu::MenuItem> items;
+        QTuiMenu::MenuItem        yes;
+        yes.label = QStringLiteral("Approve & execute");
+        yes.hint  = QStringLiteral("start making changes per this plan");
+        QTuiMenu::MenuItem keep;
+        keep.label = QStringLiteral("Keep planning");
+        keep.hint  = QStringLiteral("stay read-only and refine");
+        items.append(yes);
+        items.append(keep);
+        QTuiMenu menu;
+        menu.setTitle(QStringLiteral("Approve this plan?"));
+        menu.setItems(items);
+        const int selected = menu.exec();
+        inputMonitor.resetEscState();
+        compositor.invalidate();
+        compositor.render();
+        if (selected != 0) {
+            approval.feedback = QStringLiteral("user chose to keep planning; refine the approach");
+            return approval;
+        }
+        /* Approved: clear plan mode, persist the full plan to disk, hand a
+         * budget-capped copy to the execution phase. */
+        auto cfg     = agent->getConfig();
+        cfg.planMode = false;
+        agent->setConfig(cfg);
+        statusBarWidget.setPlanMode(false);
+
+        const QString projectPath = sessionProjectPath(projectManager);
+        const QString plansDir    = QDir(projectPath).filePath(QStringLiteral(".qsoc/plans"));
+        QDir().mkpath(plansDir);
+        const QString sid      = currentSession ? currentSession->id() : QStringLiteral("session");
+        const QString planFile = QDir(plansDir).filePath(sid + QStringLiteral(".md"));
+        QFile         planOut(planFile);
+        if (planOut.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            planOut.write(plan.toUtf8());
+            planOut.close();
+        }
+        static constexpr int kPlanCharCap = 8000;
+        QString              inContext    = plan;
+        if (inContext.size() > kPlanCharCap) {
+            inContext = inContext.left(kPlanCharCap)
+                        + QStringLiteral("\n...[truncated; full plan at %1]").arg(planFile);
+        }
+        agent->setApprovedPlan(inContext);
+        compositor.printContent(QStringLiteral("Plan approved. Executing.\n"), QTuiScrollView::Dim);
+        approval.approved = true;
+        return approval;
+    };
     if (auto *exitTool = dynamic_cast<QSocToolExitPlanMode *>(
             agent->getToolRegistry()->getTool(QStringLiteral("exit_plan_mode")))) {
-        exitTool->setCallback(
-            [this, agent, &compositor, &inputMonitor, &statusBarWidget, &currentSession](
-                const QString &plan) -> QSocPlanApproval {
-                QSocPlanApproval approval;
-                compositor.printContent(QString("\n%1\n\n").arg(plan));
-                QList<QTuiMenu::MenuItem> items;
-                QTuiMenu::MenuItem        yes;
-                yes.label = QStringLiteral("Approve & execute");
-                yes.hint  = QStringLiteral("start making changes per this plan");
-                QTuiMenu::MenuItem keep;
-                keep.label = QStringLiteral("Keep planning");
-                keep.hint  = QStringLiteral("stay read-only and refine");
-                items.append(yes);
-                items.append(keep);
-                QTuiMenu menu;
-                menu.setTitle(QStringLiteral("Approve this plan?"));
-                menu.setItems(items);
-                const int selected = menu.exec();
-                inputMonitor.resetEscState();
-                compositor.invalidate();
-                compositor.render();
-                if (selected != 0) {
-                    approval.feedback = QStringLiteral(
-                        "user chose to keep planning; refine the approach");
-                    return approval;
-                }
-                /* Approved: clear plan mode, persist the full plan to disk,
-                 * hand a budget-capped copy to the execution phase. */
-                auto cfg     = agent->getConfig();
-                cfg.planMode = false;
-                agent->setConfig(cfg);
-                statusBarWidget.setPlanMode(false);
-
-                const QString projectPath = sessionProjectPath(projectManager);
-                const QString plansDir = QDir(projectPath).filePath(QStringLiteral(".qsoc/plans"));
-                QDir().mkpath(plansDir);
-                const QString sid      = currentSession ? currentSession->id()
-                                                        : QStringLiteral("session");
-                const QString planFile = QDir(plansDir).filePath(sid + QStringLiteral(".md"));
-                QFile         planOut(planFile);
-                if (planOut.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                    planOut.write(plan.toUtf8());
-                    planOut.close();
-                }
-                static constexpr int kPlanCharCap = 8000;
-                QString              inContext    = plan;
-                if (inContext.size() > kPlanCharCap) {
-                    inContext = inContext.left(kPlanCharCap)
-                                + QStringLiteral("\n...[truncated; full plan at %1]").arg(planFile);
-                }
-                agent->setApprovedPlan(inContext);
-                compositor
-                    .printContent(QStringLiteral("Plan approved. Executing.\n"), QTuiScrollView::Dim);
-                approval.approved = true;
-                return approval;
-            });
+        exitTool->setCallback([&presentPlanForApproval](const QString &plan) -> QSocPlanApproval {
+            return presentPlanForApproval(plan, /*echoPlan=*/true);
+        });
     }
     /* Focus probe: the agent reads this each turn to decide whether to
      * steer away from blocking ask_user (user not watching). */
@@ -6480,6 +6496,9 @@ bool QSocCliWorker::runAgentLoop(
         if (streaming) {
             QEventLoop loop;
             bool       loopRunning = true;
+            /* Final assistant text of this turn, used for plan-mode stall
+             * recovery when the model ends without calling exit_plan_mode. */
+            QString turnFinalText;
 
             /* Connect status line to agent signals (use QueuedConnection for thread safety) */
             auto connToolCalled = QObject::connect(
@@ -6728,7 +6747,9 @@ bool QSocCliWorker::runAgentLoop(
                  &todoWidget,
                  &queueWidget,
                  &inputWidget,
-                 &loopRunning](const QString &) {
+                 &loopRunning,
+                 &turnFinalText](const QString &final) {
+                    turnFinalText = final;
                     compositor.finishStream();
                     compositor.resetExecution();
                     compositor.printContent("\n");
@@ -6974,11 +6995,27 @@ bool QSocCliWorker::runAgentLoop(
             compositor.start();
             /* New user turn: clear away-recap state so the next away period
              * generates a fresh recap. */
-            awaySummaryShown   = false;
-            awaySummaryPending = false;
+            awaySummaryShown          = false;
+            awaySummaryPending        = false;
+            planApprovalShownThisTurn = false;
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
+
+            /* Plan-mode stall recovery: a weak tool-caller may end its turn
+             * in plan mode having written the plan as prose instead of
+             * calling exit_plan_mode, leaving the user with no way to
+             * approve and no sign of when execution starts. Offer the same
+             * dialog on that final text; on approval, queue an execution
+             * prompt so work begins at once, matching the tool path. Skipped
+             * when the dialog already ran this turn (user just declined). */
+            if (agent->getConfig().planMode && !planApprovalShownThisTurn
+                && !turnFinalText.trimmed().isEmpty()) {
+                if (presentPlanForApproval(turnFinalText, /*echoPlan=*/false).approved) {
+                    pendingAutoInputs.append(
+                        QStringLiteral("I approved the plan above. Execute it now."));
+                }
+            }
 
             /* Save conversation after each interaction */
             lastPersistedIndex
@@ -7590,8 +7627,9 @@ bool QSocCliWorker::runAgentLoop(
             compositor.start();
             /* New user turn: clear away-recap state so the next away period
              * generates a fresh recap. */
-            awaySummaryShown   = false;
-            awaySummaryPending = false;
+            awaySummaryShown          = false;
+            awaySummaryPending        = false;
+            planApprovalShownThisTurn = false;
             agent->runStream(input);
             loop.exec();
             loopRunning = false;
@@ -7700,6 +7738,16 @@ bool QSocCliWorker::runAgentLoop(
             /* Display complete result at once */
             if (!finalResult.isEmpty()) {
                 compositor.printContent("\n" + finalResult + "\n");
+            }
+
+            /* Plan-mode stall recovery (see the streaming path). The result
+             * was just printed above, so the dialog must not echo it again. */
+            if (agent->getConfig().planMode && !planApprovalShownThisTurn
+                && !finalResult.trimmed().isEmpty()) {
+                if (presentPlanForApproval(finalResult, /*echoPlan=*/false).approved) {
+                    pendingAutoInputs.append(
+                        QStringLiteral("I approved the plan above. Execute it now."));
+                }
             }
 
             /* Disconnect signals */
