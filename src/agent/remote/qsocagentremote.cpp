@@ -302,17 +302,18 @@ bool prepareAgentRemoteWorkspace(
 QSocToolRegistry *buildAgentRemoteRegistry(
     QObject               *parent,
     AgentRemoteState      *state,
+    QSocRemotePathContext *pathCtx,
     QSocConfig            *socConfig,
     QSocMonitorTaskSource *monitorSource)
 {
     auto *registry = new QSocToolRegistry(parent);
-    registry->registerTool(new QSocToolRemoteFileRead(parent, state->sftp, &state->path));
-    registry->registerTool(new QSocToolRemoteFileList(parent, state->sftp, &state->path));
-    registry->registerTool(new QSocToolRemoteFileWrite(parent, state->sftp, &state->path));
-    registry->registerTool(new QSocToolRemoteFileEdit(parent, state->sftp, &state->path));
-    registry->registerTool(new QSocToolRemoteShellBash(parent, state->session, &state->path));
-    registry->registerTool(new QSocToolRemoteBashManage(parent, state->session, &state->path));
-    registry->registerTool(new QSocToolRemotePath(parent, &state->path));
+    registry->registerTool(new QSocToolRemoteFileRead(parent, state->sftp, pathCtx));
+    registry->registerTool(new QSocToolRemoteFileList(parent, state->sftp, pathCtx));
+    registry->registerTool(new QSocToolRemoteFileWrite(parent, state->sftp, pathCtx));
+    registry->registerTool(new QSocToolRemoteFileEdit(parent, state->sftp, pathCtx));
+    registry->registerTool(new QSocToolRemoteShellBash(parent, state->session, pathCtx));
+    registry->registerTool(new QSocToolRemoteBashManage(parent, state->session, pathCtx));
+    registry->registerTool(new QSocToolRemotePath(parent, pathCtx));
     if (monitorSource != nullptr) {
         QSocMonitorTaskSource::RemoteSpec remote;
         remote.targetKey = state->targetKey;

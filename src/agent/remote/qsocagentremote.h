@@ -32,7 +32,11 @@ struct AgentRemoteState
     QSocSftpClient         *sftp    = nullptr;
     QList<QSocSshSession *> jumps; /* ProxyJump chain, outlives target */
     QSocToolRegistry       *registry = nullptr;
-    QSocRemotePathContext   path;
+    /* Staging values seeded by prepareAgentRemoteWorkspace(). Tools never
+     * bind to this member: buildAgentRemoteRegistry() takes the long-lived
+     * context explicitly, so a short-lived state struct cannot leave the
+     * tools holding a dangling pointer. */
+    QSocRemotePathContext path;
 
     QString targetKey; /* "user@alias:port", stable lookup key. */
     QString workspace; /* Remote absolute workspace path. */
@@ -79,13 +83,18 @@ bool prepareAgentRemoteWorkspace(
  *          control-plane tools (docs, web fetch, web search) that stay on
  *          the local side. Result is owned by @p parent.
  * @param parent QObject parent for the new registry and tools.
- * @param state Connected session/sftp/path; must be populated.
+ * @param state Connected session/sftp; must be populated.
+ * @param pathCtx Path context the tools bind to. Must outlive the
+ *                registry: pass the caller's long-lived context, never
+ *                the address of a temporary (copy `state->path` into it
+ *                first when the state struct is short-lived).
  * @param socConfig Used by the web tools; may be nullptr to skip search.
  * @return New registry. Never null.
  */
 QSocToolRegistry *buildAgentRemoteRegistry(
     QObject               *parent,
     AgentRemoteState      *state,
+    QSocRemotePathContext *pathCtx,
     QSocConfig            *socConfig,
     QSocMonitorTaskSource *monitorSource = nullptr);
 

@@ -115,7 +115,10 @@ QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QStrin
     /* Pass nullptr for socConfig + monitorTaskSource: sub-agent
      * dispatch only needs file/shell/path tools on the remote.
      * Web/doc are intentionally local-only for now. */
-    binding->registry = buildAgentRemoteRegistry(this, &binding->state, nullptr, nullptr);
+    /* binding is heap-cached for the process lifetime, so its state.path
+     * is a valid long-lived bind target. */
+    binding->registry
+        = buildAgentRemoteRegistry(this, &binding->state, &binding->state.path, nullptr, nullptr);
     hostCache_.insert(host, binding);
     return binding->registry;
 }

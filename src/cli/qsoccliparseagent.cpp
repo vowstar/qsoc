@@ -1412,7 +1412,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             }
             return showError(1, sshErr);
         }
-        buildAgentRemoteRegistry(this, &cliRemoteState, socConfig, monitorTaskSource);
+        /* cliRemoteState lives in this frame for the whole run; the REPL
+         * shares (never copies) its path context, so /cwd changes stay
+         * visible to the tools bound here. */
+        buildAgentRemoteRegistry(
+            this, &cliRemoteState, &cliRemoteState.path, socConfig, monitorTaskSource);
         /* Re-register the spawn tool + its companion into the remote
          * registry so the parent LLM still sees `agent` /
          * `agent_status` after the remote swap. Both tools are
@@ -1693,14 +1697,21 @@ bool QSocCliWorker::runAgentLoop(
     QSocSftpClient   *remoteSftp     = nullptr;
     QSocToolRegistry *remoteRegistry = nullptr;
     QList<QSocSshSession *> remoteJumps; /* ProxyJump chain, outlives target */
-    QSocRemotePathContext   remotePath;
-    QString                 remoteTargetKey;
+    /* Canonical remote path context. The remote tools bind to exactly this
+     * object (never a copy), so /cwd changes are visible to them and the
+     * tools can never outlive what they point at. In --ssh startup the
+     * canonical object is preconnected->path (the tools were already bound
+     * to it in parseAgent); otherwise it is the loop-local storage below.
+     * The pointer is fixed after this block: handlers assign through it. */
+    QSocRemotePathContext  remotePathStorage;
+    QSocRemotePathContext *remotePath = &remotePathStorage;
+    QString                remoteTargetKey;
     if (preconnected != nullptr && preconnected->session != nullptr) {
         remoteSession   = preconnected->session;
         remoteSftp      = preconnected->sftp;
         remoteRegistry  = preconnected->registry;
         remoteJumps     = preconnected->jumps;
-        remotePath      = preconnected->path;
+        remotePath      = &preconnected->path;
         remoteTargetKey = preconnected->targetKey;
     }
 
@@ -2467,7 +2478,7 @@ bool QSocCliWorker::runAgentLoop(
             QStringList matches;
             if (remoteSession != nullptr) {
                 matches
-                    = completionEngine.completeRemote(remoteSession, remotePath.root(), query, 50);
+                    = completionEngine.completeRemote(remoteSession, remotePath->root(), query, 50);
             } else {
                 QString projectPath = projectManager->getProjectPath();
                 if (projectPath.isEmpty()) {
@@ -4289,7 +4300,7 @@ bool QSocCliWorker::runAgentLoop(
                  * path picker), which reads as a flash. */
                 const QString output
                     = remoteSession != nullptr
-                          ? runRemoteShellEscape(*remoteSession, remotePath.cwd(), shellCmd)
+                          ? runRemoteShellEscape(*remoteSession, remotePath->cwd(), shellCmd)
                           : runShellEscape(shellCmd);
                 if (!output.isEmpty()) {
                     compositor.printContent(output, QTuiScrollView::Dim);
@@ -5929,7 +5940,11 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
 
-            buildAgentRemoteRegistry(this, &newState, socConfig, monitorTaskSource);
+            /* Adopt the staged path values into the loop-lifetime canonical
+             * context BEFORE binding tools to it: newState dies with this
+             * handler block, so tools must never hold &newState.path. */
+            *remotePath = newState.path;
+            buildAgentRemoteRegistry(this, &newState, remotePath, socConfig, monitorTaskSource);
 
             /* Tear down any previous remote session before adopting the new one. */
             if (remoteRegistry != nullptr) {
@@ -5958,7 +5973,6 @@ bool QSocCliWorker::runAgentLoop(
             remoteSftp      = newState.sftp;
             remoteJumps     = newState.jumps;
             remoteRegistry  = newState.registry;
-            remotePath      = newState.path;
             remoteTargetKey = newState.targetKey;
 
             /* Carry the spawn tool and its status companion across
@@ -6005,7 +6019,7 @@ bool QSocCliWorker::runAgentLoop(
                 newCfg.remoteDisplay      = newState.display;
                 newCfg.remoteWorkspace    = newState.workspace;
                 newCfg.remoteWorkingDir   = newState.workspace;
-                newCfg.remoteWritableDirs = remotePath.writableDirs();
+                newCfg.remoteWritableDirs = remotePath->writableDirs();
                 agent->setConfig(newCfg);
             }
 
@@ -6086,7 +6100,7 @@ bool QSocCliWorker::runAgentLoop(
                 delete *it;
             }
             remoteJumps.clear();
-            remotePath = QSocRemotePathContext{};
+            *remotePath = QSocRemotePathContext{};
 
             {
                 auto newCfg       = agent->getConfig();
@@ -6225,7 +6239,7 @@ bool QSocCliWorker::runAgentLoop(
             if (arg.isEmpty() && remoteSession != nullptr && remoteSftp != nullptr) {
                 QTuiPathPicker picker;
                 picker.setTitle(QStringLiteral("Remote cwd"));
-                picker.setStartPath(remotePath.cwd());
+                picker.setStartPath(remotePath->cwd());
                 {
                     QSocSshExec   homeExec(*remoteSession);
                     const auto    homeResult = homeExec.run(QStringLiteral("echo $HOME"), 5000);
@@ -6255,8 +6269,8 @@ bool QSocCliWorker::runAgentLoop(
                 if (picked.isEmpty()) {
                     continue;
                 }
-                const QString resolved = remotePath.resolveCwdRequest(picked);
-                remotePath.setCwd(resolved);
+                const QString resolved = remotePath->resolveCwdRequest(picked);
+                remotePath->setCwd(resolved);
                 {
                     auto newCfg             = agent->getConfig();
                     newCfg.remoteWorkingDir = resolved;
@@ -6301,8 +6315,8 @@ bool QSocCliWorker::runAgentLoop(
             /* Remote workspace: /cwd updates the remote cwd via
              * QSocRemotePathContext, clamped to the workspace root. */
             if (remoteSession != nullptr) {
-                const QString resolved = remotePath.resolveCwdRequest(arg);
-                remotePath.setCwd(resolved);
+                const QString resolved = remotePath->resolveCwdRequest(arg);
+                remotePath->setCwd(resolved);
                 {
                     auto newCfg             = agent->getConfig();
                     newCfg.remoteWorkingDir = resolved;
@@ -6919,7 +6933,7 @@ bool QSocCliWorker::runAgentLoop(
                             const QString output = remoteSession != nullptr
                                                        ? runRemoteShellEscape(
                                                              *remoteSession,
-                                                             remotePath.cwd(),
+                                                             remotePath->cwd(),
                                                              shellCmd)
                                                        : runShellEscape(shellCmd);
                             compositor.resume();
@@ -7551,7 +7565,7 @@ bool QSocCliWorker::runAgentLoop(
                             const QString output = remoteSession != nullptr
                                                        ? runRemoteShellEscape(
                                                              *remoteSession,
-                                                             remotePath.cwd(),
+                                                             remotePath->cwd(),
                                                              shellCmd)
                                                        : runShellEscape(shellCmd);
                             compositor.resume();
