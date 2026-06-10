@@ -414,7 +414,9 @@ Completion and interrupt:
 While the agent is executing, you can keep typing. Press *Enter* to submit; the
 agent consumes queued requests at the start of the next iteration. Pressing
 *ESC* aborts the current LLM stream, tool execution, and any pending tool
-calls; conversation history is preserved.
+calls; conversation history is preserved. With a queued message waiting, *ESC*
+cuts only the current step and the agent continues directly with your queued
+message; with nothing queued it stops the whole run.
 
 == DECISION FLOW
 <agent-decision-flow>

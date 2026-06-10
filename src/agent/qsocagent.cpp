@@ -405,6 +405,13 @@ void QSocAgent::handleStreamError(const QString &error)
 {
     /* Check if this error was caused by user abort */
     if (abortRequested) {
+        if (hasPendingRequests()) {
+            /* ESC with input queued: drop this iteration's reply and
+             * continue the run with the queued message. */
+            abortRequested = false;
+            processStreamIteration();
+            return;
+        }
         isStreaming = false;
         heartbeatTimer->stop();
         teardownStreamMonitor(QStringLiteral("user abort"));
@@ -490,6 +497,11 @@ void QSocAgent::handleStreamError(const QString &error)
                 return;
             }
             if (abortRequested) {
+                if (hasPendingRequests()) {
+                    abortRequested = false;
+                    processStreamIteration();
+                    return;
+                }
                 isStreaming = false;
                 heartbeatTimer->stop();
                 teardownStreamMonitor(QStringLiteral("user abort"));
@@ -629,14 +641,21 @@ void QSocAgent::processStreamIteration()
         return;
     }
 
-    /* Check for abort request */
+    /* Check for abort request. With input queued, ESC cuts only the
+     * current iteration: the queue drain below feeds the model the new
+     * message and the run continues (the whole run ends only when
+     * nothing is queued). */
     if (abortRequested) {
-        isStreaming = false;
-        heartbeatTimer->stop();
-        abortRequested = false;
-        teardownStreamMonitor(QStringLiteral("user abort"));
-        emit runAborted(streamFinalContent);
-        return;
+        if (hasPendingRequests()) {
+            abortRequested = false;
+        } else {
+            isStreaming = false;
+            heartbeatTimer->stop();
+            abortRequested = false;
+            teardownStreamMonitor(QStringLiteral("user abort"));
+            emit runAborted(streamFinalContent);
+            return;
+        }
     }
 
     /* Each iteration owns its watchdog: discard the previous one (so
