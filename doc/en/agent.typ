@@ -595,6 +595,24 @@ across subsequent compactions. The earliest decisions, file paths, and
 constraints survive even after multiple rounds, so long sessions retain
 their starting context instead of drifting.
 
+After every compaction (manual, automatic, or context-overflow), qsoc
+re-injects a bounded set of supplies so working memory survives the
+summary swap, and prints them as dim lines:
+
++ `Read <path> (N lines)` for the most recently read files small enough to
+  re-inline their current content.
++ `Referenced file <path>` for a recently read file too large to re-inline
+  (a path-only pointer; re-read it with `read_file` if needed).
++ `Skills restored (...)` for the skills invoked this session, whose bodies
+  are put back.
++ a running-background-agent line for each sub-agent still executing.
+
+At most `agent.context_restore_max_files` files (most recent first) and the
+recently invoked skills are restored, each capped per item and by an
+overall token budget. qsoc memory files and files still inside the kept
+window are skipped (memory is re-injected every turn already). Disable with
+`agent.context_restore: false`.
+
 == MEMORY SYSTEM
 <agent-memory-system>
 Persistent memory is stored as topic files with YAML frontmatter in two

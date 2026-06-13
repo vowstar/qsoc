@@ -112,6 +112,18 @@ struct QSocAgentConfig
     QString awaySummaryModel; /* Empty = primary model */
     int     awaySummaryDelaySeconds = 300;
 
+    /* Post-compaction context restore: after a compaction, re-inject the
+     * most recently read files (small ones inlined, large ones as a
+     * path-only pointer), the recently invoked skills, and any running
+     * background agents, so working memory survives the summary swap.
+     * Budget/count knobs only; the restore never touches the model. */
+    bool contextRestoreEnabled        = true;
+    int  contextRestoreMaxFiles       = 5;
+    int  contextRestoreFileBudget     = 50000;
+    int  contextRestoreMaxTokensFile  = 5000;
+    int  contextRestoreMaxTokensSkill = 5000;
+    int  contextRestoreSkillBudget    = 25000;
+
     /* Enable verbose output */
     bool verbose = true;
 

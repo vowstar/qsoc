@@ -943,6 +943,36 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             config.awaySummaryDelaySeconds = awaySummaryDelayStr.toInt();
         }
 
+        QString contextRestoreStr = socConfig->getValue("agent.context_restore");
+        if (!contextRestoreStr.isEmpty()) {
+            config.contextRestoreEnabled
+                = (contextRestoreStr.toLower() == "true" || contextRestoreStr == "1");
+        }
+        QString contextRestoreMaxFilesStr = socConfig->getValue("agent.context_restore_max_files");
+        if (!contextRestoreMaxFilesStr.isEmpty()) {
+            config.contextRestoreMaxFiles = contextRestoreMaxFilesStr.toInt();
+        }
+        QString contextRestoreFileBudgetStr = socConfig->getValue(
+            "agent.context_restore_file_budget");
+        if (!contextRestoreFileBudgetStr.isEmpty()) {
+            config.contextRestoreFileBudget = contextRestoreFileBudgetStr.toInt();
+        }
+        QString contextRestoreMaxTokensFileStr = socConfig->getValue(
+            "agent.context_restore_max_tokens_per_file");
+        if (!contextRestoreMaxTokensFileStr.isEmpty()) {
+            config.contextRestoreMaxTokensFile = contextRestoreMaxTokensFileStr.toInt();
+        }
+        QString contextRestoreMaxTokensSkillStr = socConfig->getValue(
+            "agent.context_restore_max_tokens_per_skill");
+        if (!contextRestoreMaxTokensSkillStr.isEmpty()) {
+            config.contextRestoreMaxTokensSkill = contextRestoreMaxTokensSkillStr.toInt();
+        }
+        QString contextRestoreSkillBudgetStr = socConfig->getValue(
+            "agent.context_restore_skill_budget");
+        if (!contextRestoreSkillBudgetStr.isEmpty()) {
+            config.contextRestoreSkillBudget = contextRestoreSkillBudgetStr.toInt();
+        }
+
         QString maxConcurrentStr = socConfig->getValue("agent.max_concurrent_subagents");
         if (!maxConcurrentStr.isEmpty()) {
             config.maxConcurrentSubagents = maxConcurrentStr.toInt();
@@ -2293,6 +2323,12 @@ bool QSocCliWorker::runAgentLoop(
     QMap<QString, QString> skillPaths;
     QMap<QString, QString> skillHints;
 
+    /* Session record of invoked skills (name -> monotonic seq), used to
+     * re-supply skill bodies after a compaction. qsoc skills are slash-only,
+     * so the single slash-dispatch update site below is complete. */
+    QHash<QString, quint64> invokedSkills;
+    quint64                 skillSeq = 1;
+
     /* Rebuild the skill dispatch table and agent system-prompt listing from
      * the current projectManager state. Called at startup and on /project. */
     auto reloadSkills = [&]() {
@@ -2331,6 +2367,172 @@ bool QSocCliWorker::runAgentLoop(
         agent->setConfig(cfg);
     };
     reloadSkills();
+
+    /* Post-compaction context restore. The provider builds the payload from
+     * current state (recent files, invoked skills, running agents) and is
+     * invoked by the agent only when a compaction fires. The render lambda
+     * prints the dim restore lines; it is driven from the agent signal for
+     * auto/overflow compaction and called directly for manual /compact. */
+    auto buildContextRestore = [&]() -> QSocContextRestore {
+        const QSocAgentConfig             cfg = agent->getConfig();
+        QSocContextRestoreBuilder::Inputs inputs;
+        inputs.enabled = cfg.contextRestoreEnabled;
+        inputs.estimateTokens = [agent](const QString &text) { return agent->estimateTokens(text); };
+        inputs.maxFiles          = cfg.contextRestoreMaxFiles;
+        inputs.fileBudget        = cfg.contextRestoreFileBudget;
+        inputs.maxTokensPerFile  = cfg.contextRestoreMaxTokensFile;
+        inputs.maxTokensPerSkill = cfg.contextRestoreMaxTokensSkill;
+        inputs.skillsBudget      = cfg.contextRestoreSkillBudget;
+
+        /* Candidate files + reader: remote over SFTP when a session is up,
+         * otherwise local from disk. */
+        if (remoteSession != nullptr && remoteSftp != nullptr) {
+            inputs.candidatePaths    = remotePath->readState().pathsByRecencyDesc(0);
+            QSocSftpClient *sftp     = remoteSftp;
+            const qint64    maxBytes = static_cast<qint64>(cfg.contextRestoreMaxTokensFile) * 8;
+            inputs.readFile = [sftp, maxBytes](const QString &path) -> std::optional<QString> {
+                QString          err;
+                const QByteArray data = sftp->readFile(path, maxBytes, &err);
+                if (!err.isEmpty()) {
+                    return std::nullopt;
+                }
+                return QString::fromUtf8(data);
+            };
+        } else if (pathContext != nullptr) {
+            inputs.candidatePaths = pathContext->readState().pathsByRecencyDesc(0);
+            inputs.readFile       = [](const QString &path) -> std::optional<QString> {
+                QFile file(path);
+                if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    return std::nullopt;
+                }
+                return QString::fromUtf8(file.readAll());
+            };
+        }
+
+        /* Exclusions: qsoc memory files (already re-injected per turn by
+         * recall) and files still present in the kept window. */
+        QSet<QString> excluded;
+        const QString userMem
+            = QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+                  .filePath(QStringLiteral("memory"));
+        QString projMem;
+        if (projectManager != nullptr && !projectManager->getProjectPath().isEmpty()) {
+            projMem
+                = QDir(projectManager->getProjectPath()).filePath(QStringLiteral(".qsoc/memory"));
+        }
+        for (const QString &path : inputs.candidatePaths) {
+            if (path.startsWith(userMem) || (!projMem.isEmpty() && path.startsWith(projMem))) {
+                excluded.insert(path);
+            }
+        }
+        const json msgs      = agent->getMessages();
+        const int  count     = msgs.is_array() ? static_cast<int>(msgs.size()) : 0;
+        const int  keepStart = qMax(0, count - cfg.keepRecentMessages);
+        for (int i = keepStart; i < count; ++i) {
+            const auto &msg = msgs[static_cast<size_t>(i)];
+            if (!msg.contains("tool_calls") || !msg["tool_calls"].is_array()) {
+                continue;
+            }
+            for (const auto &call : msg["tool_calls"]) {
+                if (!call.contains("function") || !call["function"].is_object()) {
+                    continue;
+                }
+                const auto &func = call["function"];
+                if (!func.contains("name") || !func["name"].is_string()) {
+                    continue;
+                }
+                const std::string name = func["name"].get<std::string>();
+                if (name != "read_file" && name != "write_file" && name != "edit_file") {
+                    continue;
+                }
+                if (!func.contains("arguments")) {
+                    continue;
+                }
+                json args;
+                try {
+                    args = func["arguments"].is_string()
+                               ? json::parse(func["arguments"].get<std::string>())
+                               : func["arguments"];
+                } catch (const std::exception &) {
+                    continue;
+                }
+                if (args.contains("file_path") && args["file_path"].is_string()) {
+                    excluded.insert(QString::fromStdString(args["file_path"].get<std::string>()));
+                }
+            }
+        }
+        inputs.excludedPaths = excluded;
+
+        /* Skills, most-recent first; body re-read by name. */
+        QList<QPair<quint64, QString>> ordered;
+        for (auto it = invokedSkills.constBegin(); it != invokedSkills.constEnd(); ++it) {
+            ordered.append({it.value(), it.key()});
+        }
+        std::sort(ordered.begin(), ordered.end(), [](const auto &lhs, const auto &rhs) {
+            return lhs.first > rhs.first;
+        });
+        for (const auto &pair : ordered) {
+            inputs.skillNames.append(pair.second);
+        }
+        auto *projMgr    = projectManager;
+        inputs.readSkill = [&skillPaths, projMgr](const QString &name) -> std::optional<QString> {
+            const QString path = skillPaths.value(QStringLiteral("/") + name);
+            if (path.isEmpty()) {
+                return std::nullopt;
+            }
+            QString body = QSocToolSkillFind(nullptr, projMgr).readSkillContent(path);
+            if (body.isEmpty()) {
+                return std::nullopt;
+            }
+            return body;
+        };
+
+        /* Running background sub-agents. */
+        if (auto *reg = agent->getToolRegistry()) {
+            if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(
+                    reg->getTool(QStringLiteral("agent")))) {
+                if (auto *src = spawnTool->taskSource()) {
+                    for (const auto &row : src->listTasks()) {
+                        if (row.status == QSocTask::Status::Running) {
+                            inputs.agents.append(
+                                {.id = row.id, .label = row.label, .summary = row.summary});
+                        }
+                    }
+                }
+            }
+        }
+
+        return QSocContextRestoreBuilder::build(inputs);
+    };
+    agent->setContextRestoreProvider(buildContextRestore);
+
+    auto renderContextRestore = [&compositor](const QSocContextRestore &restore) {
+        if (restore.isEmpty()) {
+            return;
+        }
+        for (const QSocContextRestore::FileItem &item : restore.files) {
+            if (item.mode == QSocContextRestore::Mode::Read) {
+                compositor.printContent(
+                    QStringLiteral("  ⎿  Read %1 (%2 lines)\n").arg(item.displayPath).arg(item.lines),
+                    QTuiScrollView::Dim);
+            } else {
+                compositor.printContent(
+                    QStringLiteral("  ⎿  Referenced file %1\n").arg(item.displayPath),
+                    QTuiScrollView::Dim);
+            }
+        }
+        if (!restore.skills.isEmpty()) {
+            compositor.printContent(
+                QStringLiteral("  ⎿  Skills restored (%1)\n").arg(restore.skillNames().join(", ")),
+                QTuiScrollView::Dim);
+        }
+        for (const QSocContextRestore::AgentItem &item : restore.agents) {
+            compositor.printContent(
+                QStringLiteral("  ⎿  Agent running: %1 (%2)\n").arg(item.label, item.id),
+                QTuiScrollView::Dim);
+        }
+        compositor.render();
+    };
 
     /* Helper: detect '/<word>' at start of buffer with cursor inside the
      * command word (no whitespace between '/' and cursor). Returns the
@@ -5054,6 +5256,8 @@ bool QSocCliWorker::runAgentLoop(
             if (pathContext) {
                 pathContext->readState().clear();
             }
+            invokedSkills.clear();
+            skillSeq = 1;
             statusBarWidget.setContextUsage(
                 0, agent->effectiveContextTokens(), agent->getConfig().compactThreshold);
             compositor.printContent("History cleared.\n");
@@ -5175,6 +5379,9 @@ bool QSocCliWorker::runAgentLoop(
                     .arg(tokBefore)
                     .arg(tokAfter)
                     .arg(saved));
+            /* Render the context restored after this synchronous compaction
+             * (the async signal path is only wired during a turn loop). */
+            renderContextRestore(agent->takeLastContextRestore());
             /* The summarizer can produce a 0% reduction when the recent
              * kept zone already exceeds the budget. Tell users why so
              * they pick /clear or trim keepRecentMessages instead of
@@ -6489,6 +6696,8 @@ bool QSocCliWorker::runAgentLoop(
                     }
                     compositor.printContent(
                         QString("(Running skill %1)\n").arg(skillCmd), QTuiScrollView::Dim);
+                    /* Record for post-compaction restore (bare name, no '/'). */
+                    invokedSkills.insert(skillCmd.mid(1), skillSeq++);
                     skillDispatched = true;
                 }
             }
@@ -6859,6 +7068,13 @@ bool QSocCliWorker::runAgentLoop(
                         QString("Compacting L%1: %2->%3 tokens").arg(layer).arg(before).arg(after));
                 });
 
+            /* Render the context restored by an auto/overflow compaction
+             * during this turn (manual /compact renders on its own path). */
+            auto connRestore = QObject::connect(
+                agent, &QSocAgent::contextRestored, &loop, [&renderContextRestore, agent]() {
+                    renderContextRestore(agent->takeLastContextRestore());
+                });
+
             /* Connect abort signal */
             auto connAborted = QObject::connect(
                 agent,
@@ -7112,6 +7328,9 @@ bool QSocCliWorker::runAgentLoop(
                     compositor.render();
                     const int before = agent->estimateMessagesTokens();
                     const int saved  = agent->compact();
+                    /* Idle auto-compact runs outside the per-turn loop, so
+                     * render the restore here rather than via the signal. */
+                    renderContextRestore(agent->takeLastContextRestore());
                     statusBarWidget.setStatus("Ready");
                     /* compact() rewrote the in-memory array regardless of
                      * savings; sync the JSONL so resume stays consistent. */
@@ -7502,6 +7721,13 @@ bool QSocCliWorker::runAgentLoop(
                  &inputWidget](int layer, int before, int after) {
                     statusBarWidget.setStatus(
                         QString("Compacting L%1: %2->%3 tokens").arg(layer).arg(before).arg(after));
+                });
+
+            /* Render the context restored by an auto/overflow compaction
+             * during this turn (manual /compact renders on its own path). */
+            auto connRestore = QObject::connect(
+                agent, &QSocAgent::contextRestored, &loop, [&renderContextRestore, agent]() {
+                    renderContextRestore(agent->takeLastContextRestore());
                 });
 
             /* Connect abort signal */

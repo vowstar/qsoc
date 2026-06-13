@@ -5,6 +5,7 @@
 #define QSOCAGENT_H
 
 #include "agent/qsocagentconfig.h"
+#include "agent/qsoccontextrestore.h"
 #include "agent/qsocmemorymanager.h"
 #include "agent/qsocmemoryrecall.h"
 #include "agent/qsoctool.h"
@@ -318,6 +319,23 @@ public:
     void setMessages(const json &msgs);
 
     /**
+     * @brief Install the lazy producer of the post-compaction restore.
+     * @details The CLI owns the read state, skills, and task source, so it
+     *          supplies a closure that builds the payload from current
+     *          state. The agent invokes it inside compactWithLLM (only when
+     *          a compaction actually fires, so no per-turn file I/O) and
+     *          appends the resulting messages after the summary. Covers
+     *          every compaction path: manual, auto, and overflow.
+     */
+    void setContextRestoreProvider(std::function<QSocContextRestore()> provider);
+
+    /**
+     * @brief The restore applied by the most recent compaction (for the
+     *        synchronous /compact render path). Empty when none applied.
+     */
+    QSocContextRestore takeLastContextRestore();
+
+    /**
      * @brief Estimate the number of tokens in a text.
      * @return Estimated token count (approximately 4 characters per token).
      */
@@ -499,6 +517,14 @@ signals:
     void compacting(int layer, int beforeTokens, int afterTokens);
 
     /**
+     * @brief Signal emitted after a compaction re-injects context (auto or
+     *        overflow paths), so the CLI can render the restore lines. The
+     *        payload is read via takeLastContextRestore(); the signal is a
+     *        bare trigger so it stays queued-connection safe.
+     */
+    void contextRestored();
+
+    /**
      * @brief Signal emitted for each reasoning chunk during streaming
      * @param chunk The reasoning content chunk
      */
@@ -541,6 +567,13 @@ private:
     QElapsedTimer   streamIterationTimer;
     QSocAgentConfig agentConfig;
     json            messages;
+
+    /* Post-compaction context restore. contextRestoreProvider_ is a lazy
+     * builder installed by the CLI and invoked inside compactWithLLM;
+     * lastApplied_ keeps the produced payload for the synchronous /compact
+     * render path. */
+    std::function<QSocContextRestore()> contextRestoreProvider_;
+    QSocContextRestore                  lastApplied_;
 
     /* Streaming state */
     bool    isStreaming     = false;

@@ -2077,6 +2077,18 @@ void QSocAgent::setMessages(const json &msgs)
     }
 }
 
+void QSocAgent::setContextRestoreProvider(std::function<QSocContextRestore()> provider)
+{
+    contextRestoreProvider_ = std::move(provider);
+}
+
+QSocContextRestore QSocAgent::takeLastContextRestore()
+{
+    QSocContextRestore out = lastApplied_;
+    lastApplied_           = {};
+    return out;
+}
+
 int QSocAgent::estimateTokens(const QString &text) const
 {
     /* Character-class weighted heuristic. Flat chars/4 severely
@@ -2650,6 +2662,24 @@ bool QSocAgent::compactWithLLM(bool force)
         newMessages.push_back(messages[static_cast<size_t>(i)]);
     }
 
+    /* Post-compaction context restore: append the supplies (recent files,
+     * invoked skills, running agents) after the kept messages so they are
+     * the newest context the model sees next turn. The provider builds the
+     * payload from current state; running it here (not per-turn) means file
+     * I/O happens only when a compaction actually fires. Covers every
+     * compaction path: manual, auto, overflow. */
+    lastApplied_ = {};
+    if (agentConfig.contextRestoreEnabled && contextRestoreProvider_) {
+        const QSocContextRestore restore = contextRestoreProvider_();
+        if (!restore.isEmpty()) {
+            const json restoreMsgs = QSocContextRestoreBuilder::toMessages(restore);
+            for (const auto &msg : restoreMsgs) {
+                newMessages.push_back(msg);
+            }
+            lastApplied_ = restore;
+        }
+    }
+
     /* Compute savings before swapping so we can warn the user when the
      * compact accomplished nothing meaningful. The "recent kept zone
      * dominates" pattern shows up as `before == after`: the LLM call
@@ -2684,6 +2714,10 @@ bool QSocAgent::compactWithLLM(bool force)
                                .arg(previousSummary.isEmpty() ? " (fresh)" : " (anchored)")
                                .arg(head)
                                .arg(summary.size() > dumpChars ? "\n... (truncated)" : ""));
+    }
+
+    if (!lastApplied_.isEmpty()) {
+        emit contextRestored();
     }
 
     return true;
