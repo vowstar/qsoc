@@ -3,6 +3,7 @@
 
 #include "agent/remote/qsoctoolremote.h"
 
+#include "agent/qsocfilehistory.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshexec.h"
@@ -212,7 +213,9 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
     /* Read-before-overwrite + stale guard for EXISTING remote files: an
      * overwrite must not clobber content the agent never read or a
      * concurrent change. New files need no prior read. */
-    if (m_sftp->exists(remotePath)) {
+    const bool existedBefore = m_sftp->exists(remotePath);
+    QString    beforeContent;
+    if (existedBefore) {
         if (!m_pathCtx->readState().wasRead(remotePath)) {
             return QStringLiteral(
                        "Error: File not read yet: %1. Read it with read_file "
@@ -225,12 +228,18 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
             /* A transport error must not be misread as a concurrent change. */
             return QStringLiteral("Error: %1").arg(readErr);
         }
-        if (m_pathCtx->readState().changedSinceRead(remotePath, QString::fromUtf8(current))) {
+        beforeContent = QString::fromUtf8(current);
+        if (m_pathCtx->readState().changedSinceRead(remotePath, beforeContent)) {
             return QStringLiteral(
                        "Error: File changed on disk since last read: %1. "
                        "Read it again before overwriting.")
                 .arg(remotePath);
         }
+    }
+
+    /* Checkpoint the pre-write state so rewind can restore the remote file. */
+    if (m_fileHistory != nullptr) {
+        m_fileHistory->trackEdit(remotePath, existedBefore, beforeContent);
     }
 
     const QString content = QString::fromStdString(arguments["content"].get<std::string>());
@@ -402,6 +411,10 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     if (second >= 0) {
         return QStringLiteral("Error: old_string is not unique in %1 (add more surrounding context)")
             .arg(remotePath);
+    }
+    /* Checkpoint the pre-edit content so rewind can restore the remote file. */
+    if (m_fileHistory != nullptr) {
+        m_fileHistory->trackEdit(remotePath, true, content);
     }
     content.replace(first, oldString.size(), newString);
     if (!m_sftp->writeFile(remotePath, content.toUtf8(), &err)) {

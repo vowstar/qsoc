@@ -23,9 +23,52 @@ QString isoNowUtc()
 
 } // namespace
 
+QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor()
+{
+    LiveFileAccessor accessor;
+    accessor.exists = [](const QString &path) { return QFileInfo::exists(path); };
+    accessor.read   = [](const QString &path) -> std::optional<QString> {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return std::nullopt;
+        }
+        const QByteArray utf8 = file.readAll();
+        file.close();
+        return QString::fromUtf8(utf8);
+    };
+    accessor.write = [](const QString &path, const QString &content) {
+        const QFileInfo info(path);
+        QDir            parent = info.absoluteDir();
+        if (!parent.exists()) {
+            parent.mkpath(QStringLiteral("."));
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            return false;
+        }
+        file.write(content.toUtf8());
+        file.close();
+        return true;
+    };
+    accessor.remove = [](const QString &path) {
+        QFile existing(path);
+        if (!existing.exists()) {
+            return true;
+        }
+        return existing.remove();
+    };
+    return accessor;
+}
+
+void QSocFileHistory::setLiveAccessor(LiveFileAccessor accessor)
+{
+    liveAccessor = std::move(accessor);
+}
+
 QSocFileHistory::QSocFileHistory(QString projectPath, QString sessionId)
     : projectPathValue(std::move(projectPath))
     , sessionIdValue(std::move(sessionId))
+    , liveAccessor(localAccessor())
 {
     /* Seed the trackedFiles set from any pre-existing snapshots so that
      * a resumed session continues to capture the same paths in its next
@@ -156,24 +199,16 @@ bool QSocFileHistory::makeSnapshot(int turn)
     snap.turn      = turn;
     snap.timestamp = QDateTime::currentDateTimeUtc();
     for (const QString &path : trackedFiles) {
-        QFileInfo info(path);
-        if (!info.exists()) {
-            /* File was deleted or was never created for this turn. */
+        const std::optional<QString> content = liveAccessor.read ? liveAccessor.read(path)
+                                                                 : std::nullopt;
+        if (!content.has_value()) {
+            /* Absent or unreadable at snapshot time: record as absent so
+             * rewind won't try to restore a stale blob. */
             snap.files.insert(path, QString());
             continue;
         }
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) {
-            /* Unreadable at snapshot time — record as absent so rewind
-             * won't try to restore a stale blob. */
-            snap.files.insert(path, QString());
-            continue;
-        }
-        const QByteArray utf8 = file.readAll();
-        file.close();
-        const QString content = QString::fromUtf8(utf8);
-        const QString sha     = sha256Hex(content);
-        writeBackup(sha, content);
+        const QString sha = sha256Hex(*content);
+        writeBackup(sha, *content);
         snap.files.insert(path, sha);
     }
 
@@ -228,9 +263,8 @@ QStringList QSocFileHistory::applySnapshot(int turn)
         const QString &sha  = it.value();
         if (sha.isEmpty()) {
             /* File was absent at the target turn — remove it if present. */
-            QFile existing(path);
-            if (existing.exists()) {
-                existing.remove();
+            const bool present = liveAccessor.exists && liveAccessor.exists(path);
+            if (present && liveAccessor.remove && liveAccessor.remove(path)) {
                 touched.append(path);
             }
             continue;
@@ -239,18 +273,9 @@ QStringList QSocFileHistory::applySnapshot(int turn)
         if (content.isNull()) {
             continue; /* backup missing; leave file alone rather than corrupt */
         }
-        QFileInfo info(path);
-        QDir      parent = info.absoluteDir();
-        if (!parent.exists()) {
-            parent.mkpath(QStringLiteral("."));
+        if (liveAccessor.write && liveAccessor.write(path, content)) {
+            touched.append(path);
         }
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            continue;
-        }
-        file.write(content.toUtf8());
-        file.close();
-        touched.append(path);
     }
     std::sort(touched.begin(), touched.end());
     return touched;

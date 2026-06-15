@@ -10,6 +10,7 @@ class QSocSftpClient;
 class QSocSshSession;
 class QSocSshExec;
 class QSocRemotePathContext;
+class QSocFileHistory;
 
 /**
  * @brief Remote read_file. Same schema and name as the local tool.
@@ -47,9 +48,13 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
+    /** @brief Wire the file-history checkpoint store (for rewind). */
+    void setFileHistory(QSocFileHistory *history) { m_fileHistory = history; }
+
 private:
-    QSocSftpClient        *m_sftp    = nullptr;
-    QSocRemotePathContext *m_pathCtx = nullptr;
+    QSocSftpClient        *m_sftp        = nullptr;
+    QSocRemotePathContext *m_pathCtx     = nullptr;
+    QSocFileHistory       *m_fileHistory = nullptr;
 };
 
 /** @brief Remote list_files via SFTP opendir/readdir. */
@@ -84,9 +89,13 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
+    /** @brief Wire the file-history checkpoint store (for rewind). */
+    void setFileHistory(QSocFileHistory *history) { m_fileHistory = history; }
+
 private:
-    QSocSftpClient        *m_sftp    = nullptr;
-    QSocRemotePathContext *m_pathCtx = nullptr;
+    QSocSftpClient        *m_sftp        = nullptr;
+    QSocRemotePathContext *m_pathCtx     = nullptr;
+    QSocFileHistory       *m_fileHistory = nullptr;
 };
 
 /** @brief Remote bash: run a shell command over an SSH exec channel. */

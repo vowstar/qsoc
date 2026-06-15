@@ -2714,7 +2714,55 @@ bool QSocCliWorker::runAgentLoop(
      * top of QSocCliWorker stashes it before calling runAgentLoop. */
     std::unique_ptr<QSocSession>     currentSession;
     std::unique_ptr<QSocFileHistory> currentFileHistory;
-    int                              lastPersistedIndex = 0;
+
+    /* File-history transport wiring. Backups stay local; only the live
+     * snapshot/restore reads and writes follow the active transport, so a
+     * rewind in remote mode restores the remote working tree over SFTP
+     * instead of touching a stale local path. */
+    auto remoteFileAccessor = [](QSocSftpClient *sftp) -> QSocFileHistory::LiveFileAccessor {
+        QSocFileHistory::LiveFileAccessor acc;
+        acc.exists = [sftp](const QString &path) { return sftp->exists(path); };
+        acc.read   = [sftp](const QString &path) -> std::optional<QString> {
+            QString          err;
+            const QByteArray bytes = sftp->readFile(path, 0, &err);
+            if (bytes.isNull() && !err.isEmpty()) {
+                return std::nullopt;
+            }
+            return QString::fromUtf8(bytes);
+        };
+        acc.write = [sftp](const QString &path, const QString &content) {
+            QString err;
+            return sftp->writeFile(path, content.toUtf8(), &err);
+        };
+        acc.remove = [sftp](const QString &path) {
+            QString err;
+            return sftp->removeFile(path, &err);
+        };
+        return acc;
+    };
+    auto wireRemoteFileHistory =
+        [&currentFileHistory, &remoteFileAccessor](QSocToolRegistry *reg, QSocSftpClient *sftp) {
+            if (currentFileHistory && sftp != nullptr) {
+                currentFileHistory->setLiveAccessor(remoteFileAccessor(sftp));
+            }
+            if (reg == nullptr) {
+                return;
+            }
+            if (auto *writeTool = dynamic_cast<QSocToolRemoteFileWrite *>(
+                    reg->getTool(QStringLiteral("write_file")))) {
+                writeTool->setFileHistory(currentFileHistory.get());
+            }
+            if (auto *editTool = dynamic_cast<QSocToolRemoteFileEdit *>(
+                    reg->getTool(QStringLiteral("edit_file")))) {
+                editTool->setFileHistory(currentFileHistory.get());
+            }
+        };
+    auto restoreLocalFileHistory = [&currentFileHistory]() {
+        if (currentFileHistory) {
+            currentFileHistory->setLiveAccessor(QSocFileHistory::localAccessor());
+        }
+    };
+    int lastPersistedIndex = 0;
     /* Cursor into the message array marking what background extraction has
      * already processed. Advances past extracted slices; reset to the
      * message count on resume so a resumed session does not re-extract
@@ -3165,6 +3213,12 @@ bool QSocCliWorker::runAgentLoop(
             = QDir(QSocSession::sessionsDir(projectPath)).filePath(sessionId + ".jsonl");
         currentSession     = std::make_unique<QSocSession>(sessionId, sessionPath);
         currentFileHistory = std::make_unique<QSocFileHistory>(projectPath, sessionId);
+
+        /* --ssh startup: the remote tools were built before this history
+         * existed, so wire them now to checkpoint remote edits for rewind. */
+        if (preconnected != nullptr && remoteSftp != nullptr && remoteRegistry != nullptr) {
+            wireRemoteFileHistory(remoteRegistry, remoteSftp);
+        }
 
         /* Resume an existing session if the JSONL already exists; otherwise
          * stamp the new session with creation metadata. */
@@ -4230,14 +4284,21 @@ bool QSocCliWorker::runAgentLoop(
                     return;
                 }
 
-                const UserMsgRef &pick            = userMsgs[selected];
-                const bool        hasFileSnapshot = turnsWithSnapshots.contains(pick.turn - 1)
-                                                    || pick.turn == 1;
+                const UserMsgRef &pick = userMsgs[selected];
+                /* The mode picker (and any file restore) only makes sense when
+                 * the rewound turn's pre-state snapshot exists. For turn 1
+                 * that pre-state is the turn-0 baseline; when no file was ever
+                 * edited there is no baseline, so this is false and the rewind
+                 * falls through to conversation-only with no mode prompt. */
+                const bool hasFileSnapshot = turnsWithSnapshots.contains(pick.turn - 1);
 
-                /* Second picker: choose mode. Only shown when a file
-                 * snapshot exists; otherwise we implicitly fall through to
-                 * context-only since there's nothing to restore anyway. */
-                bool restoreFiles = false;
+                /* Second picker: choose mode. Three modes mirror the
+                 * reference: both, conversation only, and code only. The
+                 * code-only / both modes are only offered when a file
+                 * snapshot exists; with no snapshot the only sensible action
+                 * is conversation-only, so the picker is skipped. */
+                bool restoreFiles        = false;
+                bool restoreConversation = true;
                 if (hasFileSnapshot && currentFileHistory) {
                     QList<QTuiMenu::MenuItem> modeItems;
                     QTuiMenu::MenuItem        withFiles;
@@ -4248,6 +4309,10 @@ bool QSocCliWorker::runAgentLoop(
                     convOnly.label = QStringLiteral("Restore conversation only");
                     convOnly.hint  = QStringLiteral("keep current files on disk");
                     modeItems.append(convOnly);
+                    QTuiMenu::MenuItem codeOnly;
+                    codeOnly.label = QStringLiteral("Restore code only");
+                    codeOnly.hint  = QStringLiteral("revert files, keep the conversation");
+                    modeItems.append(codeOnly);
 
                     QTuiMenu modeMenu;
                     modeMenu.setTitle("Rewind mode");
@@ -4260,58 +4325,77 @@ bool QSocCliWorker::runAgentLoop(
                     if (modeSel < 0) {
                         return; /* user cancelled mode pick */
                     }
-                    restoreFiles = (modeSel == 0);
+                    restoreFiles        = (modeSel == 0 || modeSel == 2);
+                    restoreConversation = (modeSel == 0 || modeSel == 1);
                 }
 
-                /* Preserve the original createdAt so the session picker
-                 * still shows the original timestamp after a rewind. The
-                 * rewriteMessages call truncates the file entirely, so
+                /* Conversation rollback (skipped in code-only mode). Preserve
+                 * the original createdAt so the session picker still shows the
+                 * original timestamp; rewriteMessages truncates the file, so
                  * meta must be re-emitted afterwards. */
-                const QSocSession::Info origInfo = QSocSession::readInfo(currentSession->filePath());
-
-                json truncated = json::array();
-                for (int idx = 0; idx < pick.index; idx++) {
-                    truncated.push_back(allMessages[idx]);
+                if (restoreConversation) {
+                    const QSocSession::Info origInfo = QSocSession::readInfo(
+                        currentSession->filePath());
+                    json truncated = json::array();
+                    for (int idx = 0; idx < pick.index; idx++) {
+                        truncated.push_back(allMessages[idx]);
+                    }
+                    agent->setMessages(truncated);
+                    currentSession->rewriteMessages(truncated);
+                    if (origInfo.createdAt.isValid()) {
+                        currentSession->appendMeta(
+                            QStringLiteral("created"),
+                            origInfo.createdAt.toString(Qt::ISODateWithMs));
+                    }
+                    lastPersistedIndex = static_cast<int>(truncated.size());
                 }
-                agent->setMessages(truncated);
-                currentSession->rewriteMessages(truncated);
-                if (origInfo.createdAt.isValid()) {
-                    currentSession->appendMeta(
-                        QStringLiteral("created"), origInfo.createdAt.toString(Qt::ISODateWithMs));
-                }
-                lastPersistedIndex = static_cast<int>(truncated.size());
 
-                /* File restore + snapshot truncation. The rewound turn's
-                 * pre-state is snapshot (turn - 1); applying that puts the
-                 * disk back where it was just before the picked message
-                 * ran, then we drop the orphaned future snapshots. */
+                /* File restore. The rewound turn's pre-state is snapshot
+                 * (turn - 1); applying it puts the tree back where it was
+                 * just before the picked message ran. When the conversation
+                 * is also rolled back, drop the now-orphaned future
+                 * snapshots and rewind the turn counter; in code-only mode
+                 * the conversation keeps going, so the snapshot history is
+                 * left intact for a later full rewind. */
                 QStringList restoredFiles;
                 if (restoreFiles && currentFileHistory) {
                     const int targetSnapshot = pick.turn - 1;
                     restoredFiles            = currentFileHistory->applySnapshot(targetSnapshot);
-                    currentFileHistory->truncateAfter(targetSnapshot);
-                    turnCounter = targetSnapshot;
+                    if (restoreConversation) {
+                        currentFileHistory->truncateAfter(targetSnapshot);
+                        turnCounter = targetSnapshot;
+                    }
                 }
 
                 /* Load the picked message back into the input buffer so the
-                 * user can edit and resubmit. setInputBuffer emits
-                 * inputChanged which the REPL's connected slot forwards to
-                 * inputWidget.setText — force a subsequent render so the
-                 * restored text is visible before the user types anything. */
-                inputMonitor.setInputBuffer(pick.content);
+                 * user can edit and resubmit, only when the conversation was
+                 * rolled back; code-only leaves the live input untouched. */
+                if (restoreConversation) {
+                    inputMonitor.setInputBuffer(pick.content);
+                }
 
                 const QString fileSummary = restoredFiles.isEmpty()
                                                 ? QString()
-                                                : QString(", %1 file%2 restored")
+                                                : QString("%1 file%2 restored")
                                                       .arg(restoredFiles.size())
                                                       .arg(restoredFiles.size() == 1 ? "" : "s");
-                compositor.printContent(
-                    QString(
-                        "\n(Rewound: kept %1 message%2%3, picked text restored for "
-                        "editing)\n")
-                        .arg(lastPersistedIndex)
-                        .arg(lastPersistedIndex == 1 ? "" : "s")
-                        .arg(fileSummary));
+                if (restoreConversation) {
+                    compositor.printContent(
+                        QString(
+                            "\n(Rewound: kept %1 message%2%3, picked text restored for "
+                            "editing)\n")
+                            .arg(lastPersistedIndex)
+                            .arg(lastPersistedIndex == 1 ? "" : "s")
+                            .arg(
+                                fileSummary.isEmpty() ? QString()
+                                                      : QStringLiteral(", ") + fileSummary));
+                } else {
+                    compositor.printContent(
+                        QString("\n(Rewound code only: %1, conversation unchanged)\n")
+                            .arg(
+                                fileSummary.isEmpty() ? QStringLiteral("no files changed")
+                                                      : fileSummary));
+                }
                 compositor.invalidate();
                 compositor.render();
             });
@@ -6212,6 +6296,9 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
             agent->setToolRegistry(remoteRegistry);
+            /* Point file history at the remote tree so rewind restores
+             * remote edits over SFTP. */
+            wireRemoteFileHistory(remoteRegistry, remoteSftp);
             /* Pull the remote project's .qsoc/agents/ defs across SFTP
              * so the parent agent sees them after `/remote`. */
             if (defs != nullptr && remoteSftp != nullptr && !newState.workspace.isEmpty()) {
@@ -6277,6 +6364,8 @@ bool QSocCliWorker::runAgentLoop(
             }
             /* Restore local tool registry and drop remote state. */
             agent->setToolRegistry(localRegistry);
+            /* Point file history back at the local disk. */
+            restoreLocalFileHistory();
             /* Drop project-scope defs that were sourced from the
              * remote workspace; user / builtin entries stay. */
             if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(

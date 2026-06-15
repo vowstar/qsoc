@@ -61,6 +61,9 @@ public:
     /** @brief Rename (or move) a remote path. */
     bool rename(const QString &oldPath, const QString &newPath, QString *errorMessage = nullptr);
 
+    /** @brief Delete a remote file. Succeeds if the file is already absent. */
+    bool removeFile(const QString &path, QString *errorMessage = nullptr);
+
     /** @brief List a directory; limit caps returned entries, 0 means unlimited. */
     QList<Entry> listDir(const QString &path, int limit = 0, QString *errorMessage = nullptr);
 

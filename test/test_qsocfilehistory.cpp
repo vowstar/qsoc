@@ -426,6 +426,86 @@ private slots:
         history.applySnapshot(2);
         QCOMPARE(readFile(fpath), QStringLiteral("edit2"));
     }
+
+    /* A custom live accessor (an in-memory map) stands in for a remote SFTP
+     * transport: snapshot capture reads through it and restore writes /
+     * deletes through it, never touching the local disk path. */
+    void testCustomAccessorSnapshotAndRestore()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        QSocFileHistory history(tempDir.path(), QStringLiteral("remote-sim"));
+
+        QHash<QString, QString>           store;
+        QSocFileHistory::LiveFileAccessor acc;
+        acc.exists = [&store](const QString &path) { return store.contains(path); };
+        acc.read   = [&store](const QString &path) -> std::optional<QString> {
+            if (!store.contains(path)) {
+                return std::nullopt;
+            }
+            return store.value(path);
+        };
+        acc.write = [&store](const QString &path, const QString &content) {
+            store.insert(path, content);
+            return true;
+        };
+        acc.remove = [&store](const QString &path) {
+            store.remove(path);
+            return true;
+        };
+        history.setLiveAccessor(acc);
+
+        const QString rpath = QStringLiteral("/vfs/remote/a.txt");
+        store.insert(rpath, QStringLiteral("v0"));
+
+        history.trackEdit(rpath, true, QStringLiteral("v0"));
+        store.insert(rpath, QStringLiteral("v1")); /* the "remote" edit */
+        history.makeSnapshot(1);
+
+        /* Local disk must be untouched: the accessor is the only backend. */
+        QVERIFY(!QFileInfo::exists(rpath));
+
+        history.applySnapshot(0);
+        QCOMPARE(store.value(rpath), QStringLiteral("v0"));
+
+        history.applySnapshot(1);
+        QCOMPARE(store.value(rpath), QStringLiteral("v1"));
+    }
+
+    /* Restoring to an absent baseline deletes the file through the accessor. */
+    void testCustomAccessorDeletesCreatedFile()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        QSocFileHistory history(tempDir.path(), QStringLiteral("remote-del"));
+
+        QHash<QString, QString>           store;
+        QSocFileHistory::LiveFileAccessor acc;
+        acc.exists = [&store](const QString &path) { return store.contains(path); };
+        acc.read   = [&store](const QString &path) -> std::optional<QString> {
+            if (!store.contains(path)) {
+                return std::nullopt;
+            }
+            return store.value(path);
+        };
+        acc.write = [&store](const QString &path, const QString &content) {
+            store.insert(path, content);
+            return true;
+        };
+        acc.remove = [&store](const QString &path) {
+            store.remove(path);
+            return true;
+        };
+        history.setLiveAccessor(acc);
+
+        const QString rpath = QStringLiteral("/vfs/remote/new.txt");
+        history.trackEdit(rpath, false, QString());     /* absent baseline */
+        store.insert(rpath, QStringLiteral("created")); /* the "remote" create */
+        history.makeSnapshot(1);
+
+        history.applySnapshot(0);
+        QVERIFY(!store.contains(rpath)); /* deleted via accessor.remove */
+    }
 };
 
 QSOC_TEST_MAIN(Test)

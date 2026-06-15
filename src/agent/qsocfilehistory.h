@@ -4,6 +4,9 @@
 #ifndef QSOCFILEHISTORY_H
 #define QSOCFILEHISTORY_H
 
+#include <functional>
+#include <optional>
+
 #include <QDateTime>
 #include <QHash>
 #include <QList>
@@ -68,12 +71,38 @@ public:
     };
 
     /**
+     * @brief Live-file backend for snapshot capture and restore.
+     * @details Backup blobs are always stored locally; only the live files
+     *          being snapshotted / restored go through this accessor. The
+     *          default is local disk; the CLI swaps in an SFTP-backed
+     *          accessor while a remote session is active so rewind restores
+     *          the remote working tree, not a stale local path.
+     */
+    struct LiveFileAccessor
+    {
+        std::function<bool(const QString &path)>                         exists;
+        std::function<std::optional<QString>(const QString &path)>       read;
+        std::function<bool(const QString &path, const QString &content)> write;
+        std::function<bool(const QString &path)>                         remove;
+    };
+
+    /** @brief Local-disk accessor (the default backend). */
+    static LiveFileAccessor localAccessor();
+
+    /**
      * @brief Construct a history bound to a session directory.
      * @param projectPath Absolute path to the project root (used to derive
      *                    the file-history directory).
      * @param sessionId   Session UUID — one history store per session.
      */
     QSocFileHistory(QString projectPath, QString sessionId);
+
+    /**
+     * @brief Swap the live-file backend (e.g. local <-> SFTP on /ssh).
+     * @details A no-op accessor field falls back to the local default, so a
+     *          partially-populated accessor is safe.
+     */
+    void setLiveAccessor(LiveFileAccessor accessor);
 
     /**
      * @brief Snapshot cap. Older turns are evicted LRU-style.
@@ -187,8 +216,9 @@ public:
     static QString sha256Hex(const QString &content);
 
 private:
-    QString projectPathValue;
-    QString sessionIdValue;
+    QString          projectPathValue;
+    QString          sessionIdValue;
+    LiveFileAccessor liveAccessor;
     /* Files that have been touched at least once this session, tracked so
      * subsequent snapshots capture their post-turn state even when the
      * file wasn't re-edited in that specific turn. */

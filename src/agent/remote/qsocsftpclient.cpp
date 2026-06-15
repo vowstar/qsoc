@@ -315,6 +315,30 @@ bool QSocSftpClient::rename(const QString &oldPath, const QString &newPath, QStr
     return true;
 }
 
+bool QSocSftpClient::removeFile(const QString &path, QString *errorMessage)
+{
+    if (!open(errorMessage)) {
+        return false;
+    }
+    /* An already-absent file is success: rewind-to-absent is idempotent. */
+    if (!exists(path)) {
+        return true;
+    }
+    const QByteArray pathBytes = path.toUtf8();
+    int              urc       = 0;
+    while ((urc = libssh2_sftp_unlink(m_sftp, pathBytes.constData())) == LIBSSH2_ERROR_EAGAIN) {
+        if (!waitReady()) {
+            setError(QStringLiteral("Timed out deleting %1").arg(path), errorMessage);
+            return false;
+        }
+    }
+    if (urc != 0) {
+        setError(QStringLiteral("SFTP unlink failed: %1").arg(path), errorMessage);
+        return false;
+    }
+    return true;
+}
+
 QList<QSocSftpClient::Entry> QSocSftpClient::listDir(
     const QString &path, int limit, QString *errorMessage)
 {
