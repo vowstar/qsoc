@@ -389,7 +389,10 @@ Editing and navigation in the prompt:
 - *Ctrl+K*, *Ctrl+U*, *Ctrl+W*: Delete to end of line / start of line / previous word
 - *Backspace*: Delete character before cursor (CJK/emoji aware)
 - *Ctrl+\_*: Undo the last edit
-- *`\` + Enter*: Continue on next line; multi-line paste is preserved as one input
+- *Shift+Enter* or *Ctrl+J*: Insert a newline for multi-line input. Shift+Enter
+  needs a terminal that reports modified keys (most modern terminals do);
+  Ctrl+J and *`\` + Enter* work everywhere. Multi-line paste is preserved as
+  one input
 
 External editor and search:
 

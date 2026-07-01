@@ -5387,7 +5387,7 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent("  Ctrl+U      - Delete to start of line\n");
             compositor.printContent("  Ctrl+W      - Delete previous word\n");
             compositor.printContent("  Backspace   - Delete character before cursor\n");
-            compositor.printContent("  \\ + Enter   - Continue on next line\n");
+            compositor.printContent("  Shift+Enter - Insert newline (also Ctrl+J or \\ + Enter)\n");
             compositor.printContent("  (paste)     - Multi-line paste preserved as one input\n");
             compositor.printContent("  Ctrl+X Ctrl+E or Ctrl+G - Edit current input in $EDITOR\n");
             compositor.printContent("  Ctrl+R      - Reverse-i-search through prompt history\n");

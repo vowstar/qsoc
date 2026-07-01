@@ -9,6 +9,8 @@
 #include <unistd.h>
 #endif
 
+#include <cstring>
+
 #include <QTimer>
 
 QAgentInputMonitor::QAgentInputMonitor(QObject *parent)
@@ -194,6 +196,62 @@ void QAgentInputMonitor::submitNow()
     clearUndoStack();
     emit inputChanged(inputBuffer);
     emit inputReady(text);
+}
+
+void QAgentInputMonitor::handleEnterKey()
+{
+    /* Submit blocked (completion popup open): REPL owns Enter semantics */
+    if (submitBlocked) {
+        emit submitBlockedKey('E');
+        return;
+    }
+    /* Backslash line continuation: trailing '\' + Enter → newline inserted, no submit.
+     * Mirrors bash behavior: the backslash must be the last character of the buffer. */
+    if (inputBuffer.endsWith(QLatin1Char('\\'))) {
+        pushUndoSnapshot(/*fromPrintable=*/false);
+        inputBuffer.chop(1);
+        inputBuffer.append(QLatin1Char('\n'));
+        int maxPos = static_cast<int>(inputBuffer.size());
+        cursorPos  = qMin(cursorPos, maxPos);
+        emit inputChanged(inputBuffer);
+        return;
+    }
+    submitNow();
+}
+
+bool QAgentInputMonitor::parseModifiedEnter(const QByteArray &seq, int &mod)
+{
+    mod = 1;
+    /* CSI u: ESC [ 13 [; mod] u */
+    if (seq.endsWith('u') && seq.startsWith("\033[13")) {
+        QByteArray params = seq.mid(4, seq.size() - 5);
+        if (params.isEmpty()) {
+            return true;
+        }
+        if (params.startsWith(';')) {
+            bool valid  = false;
+            int  parsed = params.mid(1).toInt(&valid);
+            if (valid) {
+                mod = parsed;
+                return true;
+            }
+        }
+        return false;
+    }
+    /* xterm modifyOtherKeys: ESC [ 27 ; mod ; 13 ~ */
+    if (seq.endsWith('~') && seq.startsWith("\033[27;")) {
+        QList<QByteArray> parts = seq.mid(5, seq.size() - 6).split(';');
+        if (parts.size() == 2 && parts[1] == "13") {
+            bool valid  = false;
+            int  parsed = parts[0].toInt(&valid);
+            if (valid) {
+                mod = parsed;
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
 }
 
 void QAgentInputMonitor::insertText(const QString &text)
@@ -466,6 +524,21 @@ void QAgentInputMonitor::processEscSequence()
                 resetEscBuffer();
                 return;
             }
+            /* Enter delivered as an escape sequence: kitty-style CSI u
+             * (ESC [ 13 ; mod u) or xterm modifyOtherKeys
+             * (ESC [ 27 ; mod ; 13 ~). Shift/Alt/Ctrl+Enter insert a
+             * newline; an unmodified CSI-u Enter submits like CR. */
+            int enterMod = 1;
+            if (parseModifiedEnter(escBuffer, enterMod)) {
+                cancelDoubleEscArming();
+                resetEscBuffer();
+                if (enterMod > 1) {
+                    insertAtCursor(QStringLiteral("\n"));
+                } else {
+                    handleEnterKey();
+                }
+                return;
+            }
             cancelDoubleEscArming();
             resetEscBuffer(); /* Complete — unknown CSI ignored */
             return;
@@ -475,6 +548,15 @@ void QAgentInputMonitor::processEscSequence()
         if (escBuffer.size() > 32) {
             resetEscBuffer();
         }
+        return;
+    }
+
+    /* Alt+Enter (ESC CR / ESC LF), also what some editor terminals send
+     * for a Shift+Enter keybinding: insert a newline. */
+    if (escBuffer.size() == 2 && (escBuffer[1] == '\r' || escBuffer[1] == '\n')) {
+        cancelDoubleEscArming();
+        resetEscBuffer();
+        insertAtCursor(QStringLiteral("\n"));
         return;
     }
 
@@ -657,31 +739,19 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
-        /* Enter */
-        if (byte == '\r' || byte == '\n') {
-            /* In bracketed paste: newline becomes literal content, never submit */
-            if (inBracketedPaste) {
-                insertAtCursor(QStringLiteral("\n"));
-                continue;
-            }
-            /* Submit blocked (completion popup open): REPL owns Enter semantics */
-            if (submitBlocked) {
-                emit submitBlockedKey('E');
-                continue;
-            }
-            /* Backslash line continuation: trailing '\' + Enter → newline inserted, no submit.
-             * Mirrors bash behavior: the backslash must be the last character of the buffer. */
-            if (inputBuffer.endsWith(QLatin1Char('\\'))) {
-                pushUndoSnapshot(/*fromPrintable=*/false);
-                inputBuffer.chop(1);
-                inputBuffer.append(QLatin1Char('\n'));
-                int maxPos = static_cast<int>(inputBuffer.size());
-                cursorPos  = qMin(cursorPos, maxPos);
-                emit inputChanged(inputBuffer);
-                continue;
-            }
-            /* Normal submit */
-            submitNow();
+        /* Ctrl+J (LF): insert a newline. The Enter key itself always
+         * arrives as CR here (raw mode clears ICRNL/INLCR), so a lone LF
+         * can only be Ctrl+J or a terminal keybinding sending a literal
+         * newline. Works on every terminal, unlike Shift+Enter which
+         * needs CSI u / modifyOtherKeys support. */
+        if (byte == '\n') {
+            insertAtCursor(QStringLiteral("\n"));
+            continue;
+        }
+
+        /* Enter (CR): submit */
+        if (byte == '\r') {
+            handleEnterKey();
             continue;
         }
 
@@ -884,6 +954,11 @@ void QAgentInputMonitor::start()
                 continue;
             }
             char ch = records[i].Event.KeyEvent.uChar.AsciiChar;
+            /* Shift+Enter: the console reports CR with SHIFT_PRESSED set.
+             * Remap to LF so it takes the newline-insert path like Ctrl+J. */
+            if (ch == '\r' && (records[i].Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED)) {
+                ch = '\n';
+            }
             if (ch != 0) {
                 processBytes(&ch, 1);
             }
@@ -891,8 +966,11 @@ void QAgentInputMonitor::start()
     });
     pollTimer->start();
 
-    /* Enable bracketed paste + focus reporting (DECSET 1004) */
-    fputs("\033[?2004h\033[?1004h", stdout);
+    /* Enable bracketed paste + focus reporting (DECSET 1004), and request
+     * xterm modifyOtherKeys level 1 so Shift+Enter gets its own encoding
+     * (ESC [ 27 ; 2 ; 13 ~). Level 1 leaves well-known keys untouched;
+     * terminals without the feature ignore the request. */
+    fputs("\033[?2004h\033[?1004h\033[>4;1m", stdout);
     fflush(stdout);
 
     active = true;
@@ -918,10 +996,13 @@ void QAgentInputMonitor::start()
         }
     });
 
-    /* Enable bracketed paste + focus reporting (DECSET 1004) */
+    /* Enable bracketed paste + focus reporting (DECSET 1004), and request
+     * xterm modifyOtherKeys level 1 so Shift+Enter gets its own encoding
+     * (ESC [ 27 ; 2 ; 13 ~). Level 1 leaves well-known keys untouched;
+     * terminals without the feature ignore the request. */
     {
-        const char *seq     = "\033[?2004h\033[?1004h";
-        ssize_t     written = write(STDOUT_FILENO, seq, 16);
+        const char *seq     = "\033[?2004h\033[?1004h\033[>4;1m";
+        ssize_t     written = write(STDOUT_FILENO, seq, strlen(seq));
         (void) written;
     }
 
@@ -942,8 +1023,8 @@ void QAgentInputMonitor::stop()
         pollTimer = nullptr;
     }
 
-    /* Disable bracketed paste + focus reporting */
-    fputs("\033[?2004l\033[?1004l", stdout);
+    /* Reset modifyOtherKeys, disable bracketed paste + focus reporting */
+    fputs("\033[>4m\033[?2004l\033[?1004l", stdout);
     fflush(stdout);
 
     if (termiosSaved) {
@@ -956,10 +1037,11 @@ void QAgentInputMonitor::stop()
         notifier = nullptr;
     }
 
-    /* Disable bracketed paste + focus reporting before restoring termios */
+    /* Reset modifyOtherKeys, disable bracketed paste + focus reporting
+     * before restoring termios */
     {
-        const char *seq     = "\033[?2004l\033[?1004l";
-        ssize_t     written = write(STDOUT_FILENO, seq, 16);
+        const char *seq     = "\033[>4m\033[?2004l\033[?1004l";
+        ssize_t     written = write(STDOUT_FILENO, seq, strlen(seq));
         (void) written;
     }
 

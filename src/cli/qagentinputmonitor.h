@@ -25,6 +25,8 @@
  * @details Uses termios raw mode and QSocketNotifier to detect ESC keypress
  *          and buffer user input. Supports full UTF-8 including CJK (3-byte)
  *          and emoji (4-byte) characters. Line editing: backspace, Ctrl-U, Ctrl-W.
+ *          Multi-line input: Shift+Enter (CSI u / modifyOtherKeys encodings),
+ *          Alt+Enter (ESC CR), and Ctrl+J insert a newline; Enter (CR) submits.
  */
 class QAgentInputMonitor : public QObject
 {
@@ -193,11 +195,32 @@ private:
 
     static int  utf8SeqLen(unsigned char lead);
     static bool isUtf8Continuation(unsigned char byte);
-    void        insertAtCursor(const QString &decoded);
-    int         prevCharStep() const;
-    int         nextCharStep() const;
-    void        moveCursorLeft();
-    void        moveCursorRight();
+
+    /**
+     * @brief Recognize an Enter key delivered as an escape sequence.
+     * @details Matches the two encodings terminals use for modified Enter:
+     *          CSI u (ESC [ 13 ; mod u, sent natively by most modern
+     *          terminals for Shift+Enter) and xterm modifyOtherKeys
+     *          (ESC [ 27 ; mod ; 13 ~). mod follows the xterm convention:
+     *          1 = unmodified, 2 = Shift, 3 = Alt, 5 = Ctrl.
+     * @param seq Complete escape sequence to test
+     * @param mod Out-param: modifier value (1 when the sequence omits it)
+     * @return true if seq encodes an Enter keypress
+     */
+    static bool parseModifiedEnter(const QByteArray &seq, int &mod);
+
+    /**
+     * @brief Enter-key submit path shared by CR and CSI-u unmodified Enter.
+     * @details Honors submitBlocked (popup confirmation) and trailing
+     *          backslash line continuation before submitting.
+     */
+    void handleEnterKey();
+
+    void insertAtCursor(const QString &decoded);
+    int  prevCharStep() const;
+    int  nextCharStep() const;
+    void moveCursorLeft();
+    void moveCursorRight();
 
     /* Undo stack primitives. A snapshot captures the buffer + cursor state
      * that existed BEFORE a mutation. Push callers tag whether the change

@@ -124,8 +124,8 @@ private slots:
             changes.append(text);
         });
 
-        /* Type "hello" then Enter */
-        monitor.processBytes("hello\n", 6);
+        /* Type "hello" then Enter (CR in raw mode) */
+        monitor.processBytes("hello\r", 6);
 
         QCOMPARE(submitted, "hello");
         /* Last inputChanged should be empty (buffer cleared after submit) */
@@ -156,11 +156,11 @@ private slots:
         });
 
         /* Enter with empty buffer should not emit inputReady */
-        monitor.processBytes("\n", 1);
+        monitor.processBytes("\r", 1);
         QCOMPARE(readyCount, 0);
 
         /* Multiple enters */
-        monitor.processBytes("\n\r\n", 3);
+        monitor.processBytes("\r\r\r", 3);
         QCOMPARE(readyCount, 0);
     }
 
@@ -728,7 +728,7 @@ private slots:
 
         /* Type "line1\" then Enter — should not submit, should become "line1\n" */
         monitor.processBytes("line1\\", 6);
-        const char enter = '\n';
+        const char enter = '\r';
         monitor.processBytes(&enter, 1);
 
         QCOMPARE(readyCount, 0);
@@ -749,10 +749,119 @@ private slots:
         for (int i = 0; i < 2; i++) {
             monitor.processBytes(arrowLeft, 3);
         }
-        const char enter = '\n';
+        const char enter = '\r';
         monitor.processBytes(&enter, 1);
 
         QCOMPARE(readyText, QStringLiteral("hel\\lo"));
+    }
+
+    /* Newline keys: Ctrl+J, Shift+Enter (CSI u / modifyOtherKeys), Alt+Enter */
+
+    void testCtrlJInsertsNewline()
+    {
+        QAgentInputMonitor monitor;
+        int                readyCount = 0;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyCount](const QString &) {
+            readyCount++;
+        });
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Ctrl+J arrives as a lone LF in raw mode: newline, never submit */
+        monitor.processBytes("ab", 2);
+        monitor.processBytes("\n", 1);
+        monitor.processBytes("cd", 2);
+        QCOMPARE(readyCount, 0);
+        QCOMPARE(lastText, QStringLiteral("ab\ncd"));
+    }
+
+    void testEnterSubmitsMultilineBuffer()
+    {
+        QAgentInputMonitor monitor;
+        QString            readyText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyText](const QString &text) {
+            readyText = text;
+        });
+
+        monitor.processBytes("ab\ncd", 5);
+        monitor.processBytes("\r", 1);
+        QCOMPARE(readyText, QStringLiteral("ab\ncd"));
+    }
+
+    void testShiftEnterCsiUInsertsNewline()
+    {
+        QAgentInputMonitor monitor;
+        int                readyCount = 0;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyCount](const QString &) {
+            readyCount++;
+        });
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Shift+Enter as kitty-style CSI u: ESC [ 13 ; 2 u */
+        monitor.processBytes("ab", 2);
+        monitor.processBytes("\033[13;2u", 7);
+        QCOMPARE(readyCount, 0);
+        QCOMPARE(lastText, QStringLiteral("ab\n"));
+    }
+
+    void testShiftEnterModifyOtherKeysInsertsNewline()
+    {
+        QAgentInputMonitor monitor;
+        int                readyCount = 0;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyCount](const QString &) {
+            readyCount++;
+        });
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Shift+Enter as xterm modifyOtherKeys: ESC [ 27 ; 2 ; 13 ~ */
+        monitor.processBytes("ab", 2);
+        monitor.processBytes("\033[27;2;13~", 10);
+        QCOMPARE(readyCount, 0);
+        QCOMPARE(lastText, QStringLiteral("ab\n"));
+    }
+
+    void testCsiUUnmodifiedEnterSubmits()
+    {
+        QAgentInputMonitor monitor;
+        QString            readyText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyText](const QString &text) {
+            readyText = text;
+        });
+
+        /* CSI u Enter without a modifier behaves like plain Enter */
+        monitor.processBytes("ab", 2);
+        monitor.processBytes("\033[13u", 5);
+        QCOMPARE(readyText, QStringLiteral("ab"));
+    }
+
+    void testAltEnterInsertsNewline()
+    {
+        QAgentInputMonitor monitor;
+        int                readyCount = 0;
+        int                escCount   = 0;
+        QString            lastText;
+        connect(&monitor, &QAgentInputMonitor::inputReady, [&readyCount](const QString &) {
+            readyCount++;
+        });
+        connect(&monitor, &QAgentInputMonitor::escPressed, [&escCount]() { escCount++; });
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&lastText](const QString &text) {
+            lastText = text;
+        });
+
+        /* Alt+Enter arrives as ESC CR in one burst: newline, no bare Esc */
+        monitor.processBytes("ab", 2);
+        monitor.processBytes("\033\r", 2);
+        QCOMPARE(readyCount, 0);
+        QCOMPARE(escCount, 0);
+        QCOMPARE(lastText, QStringLiteral("ab\n"));
     }
 
     /* Helper: bridge pastedReceived → insertText to simulate the REPL's
@@ -806,7 +915,7 @@ private slots:
         monitor.processBytes("a\nb", 3);
         monitor.processBytes(endMarker, 6);
 
-        const char enter = '\n';
+        const char enter = '\r';
         monitor.processBytes(&enter, 1);
         QCOMPARE(readyText, QStringLiteral("a\nb"));
     }
@@ -959,7 +1068,7 @@ private slots:
         monitor.processBytes("hello", 5);
         monitor.setSubmitBlocked(true);
 
-        const char enter = '\n';
+        const char enter = '\r';
         monitor.processBytes(&enter, 1);
         QCOMPARE(readyCount, 0);
         QCOMPARE(blockedCount, 1);
@@ -1231,7 +1340,7 @@ private slots:
         });
 
         monitor.processBytes("abc", 3);
-        const char enter = '\n';
+        const char enter = '\r';
         monitor.processBytes(&enter, 1);
         QCOMPARE(readyText, QStringLiteral("abc"));
         QCOMPARE(lastText, QString());
