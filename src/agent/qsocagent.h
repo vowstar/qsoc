@@ -366,6 +366,15 @@ public:
     QString buildSystemPromptWithMemory() const;
 
     /**
+     * @brief Append an ephemeral <system-reminder> block to a wire payload
+     *        as trailing user-turn content. Folds into the trailing user or
+     *        tool message to avoid consecutive user turns that strict chat
+     *        templates reject; never emits a role:"system" message. Static
+     *        and pure so the wire contract can be unit-tested directly.
+     */
+    static void appendTurnReminder(nlohmann::json &wire, const QString &content);
+
+    /**
      * @brief Why a tool name is rejected under the current agent config.
      * @details Single source of truth for the tool gates: sub-agent
      *          recursion guard, plan-mode tool visibility, allowlist,
@@ -658,6 +667,17 @@ private:
      *        and sub-agent prompt assembly paths.
      */
     void appendDynamicSystemSections(QString &prompt) const;
+
+    /**
+     * @brief Append the per-turn ephemeral reminders (critical reminder,
+     *        plan mode, focus, approved plan, memory recall) to the wire
+     *        payload as trailing <system-reminder> user-turn content.
+     *        Keeps the cached system prefix (messages[0]) byte-stable and
+     *        never emits a role:"system" message after the history, which
+     *        strict chat templates reject. Shared by the streaming and
+     *        synchronous iteration paths.
+     */
+    void injectPerTurnReminders(nlohmann::json &wire) const;
 
     /**
      * @brief Charge the active goal's usage counters with the token

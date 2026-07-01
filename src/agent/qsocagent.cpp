@@ -48,6 +48,14 @@ const char *const kNotWatchingReminder
       "reversible default, state the assumption, and keep going. Reserve "
       "ask_user for a genuinely blocking, irreversible decision.";
 
+/* Wrap ephemeral per-turn context as a <system-reminder> block. The base
+ * system prompt teaches the model that these tags are system-injected and
+ * bear no direct relation to the message they ride in. */
+std::string wrapSystemReminder(const QString &content)
+{
+    return "<system-reminder>\n" + content.toStdString() + "\n</system-reminder>";
+}
+
 } // namespace
 
 QSocAgent::QSocAgent(
@@ -752,41 +760,13 @@ void QSocAgent::processStreamIteration()
         messagesWithSystem.push_back(sanitized);
     }
 
-    /* Critical reminder: re-injected as a system message at the tail
-     * of every turn's wire payload so long-running children (e.g.
-     * read-only `explore`) don't drift away from their hard rules.
-     * Not persisted into `messages`. */
-    if (!agentConfig.criticalReminder.isEmpty()) {
-        messagesWithSystem.push_back(
-            {{"role", "system"}, {"content", agentConfig.criticalReminder.toStdString()}});
-    }
-    if (agentConfig.planMode) {
-        messagesWithSystem.push_back({{"role", "system"}, {"content", kPlanModeReminder}});
-    }
-    /* Focus-aware: when the user is not watching, steer away from
-     * blocking ask_user prompts. Never persisted (tracks live focus). */
-    if (userWatchingProbe_ && !userWatchingProbe_()) {
-        messagesWithSystem.push_back({{"role", "system"}, {"content", kNotWatchingReminder}});
-    }
-    /* Approved plan handoff: re-injected each turn (like the reminder,
-     * never persisted) so the executing model keeps the plan across
-     * pruning and compaction. Single, budget-capped copy. */
-    if (!approvedPlan_.isEmpty()) {
-        const QString planBlock
-            = QStringLiteral(
-                  "<approved_plan>\nThe user approved this implementation plan. "
-                  "Follow it; deviate only with good reason and say so.\n\n%1\n"
-                  "</approved_plan>")
-                  .arg(approvedPlan_);
-        messagesWithSystem.push_back({{"role", "system"}, {"content", planBlock.toStdString()}});
-    }
-
-    /* Selective memory recall: relevant memories for this turn, injected
-     * as a non-persisted reminder so the system-prompt prefix (and its
-     * cache) stays untouched. */
-    if (!recallBlock_.isEmpty()) {
-        messagesWithSystem.push_back({{"role", "system"}, {"content", recallBlock_.toStdString()}});
-    }
+    /* Per-turn ephemeral reminders (critical reminder, plan mode, focus,
+     * approved plan, memory recall): appended to the wire payload as
+     * trailing <system-reminder> user-turn content. Not persisted into
+     * `messages`; keeps the cached system prefix stable and avoids a
+     * role:"system" message after the history that strict chat templates
+     * reject. */
+    injectPerTurnReminders(messagesWithSystem);
 
     /* Get tool definitions, filtered by sub-agent allowlist when set. */
     json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
@@ -1000,39 +980,9 @@ bool QSocAgent::processIteration()
         messagesWithSystem.push_back(sanitized);
     }
 
-    /* Critical reminder: same per-turn re-injection as the streaming
-     * path; defends against drift on long sync runs. */
-    if (!agentConfig.criticalReminder.isEmpty()) {
-        messagesWithSystem.push_back(
-            {{"role", "system"}, {"content", agentConfig.criticalReminder.toStdString()}});
-    }
-    if (agentConfig.planMode) {
-        messagesWithSystem.push_back({{"role", "system"}, {"content", kPlanModeReminder}});
-    }
-    /* Focus-aware: when the user is not watching, steer away from
-     * blocking ask_user prompts. Never persisted (tracks live focus). */
-    if (userWatchingProbe_ && !userWatchingProbe_()) {
-        messagesWithSystem.push_back({{"role", "system"}, {"content", kNotWatchingReminder}});
-    }
-    /* Approved plan handoff: re-injected each turn (like the reminder,
-     * never persisted) so the executing model keeps the plan across
-     * pruning and compaction. Single, budget-capped copy. */
-    if (!approvedPlan_.isEmpty()) {
-        const QString planBlock
-            = QStringLiteral(
-                  "<approved_plan>\nThe user approved this implementation plan. "
-                  "Follow it; deviate only with good reason and say so.\n\n%1\n"
-                  "</approved_plan>")
-                  .arg(approvedPlan_);
-        messagesWithSystem.push_back({{"role", "system"}, {"content", planBlock.toStdString()}});
-    }
-
-    /* Selective memory recall: relevant memories for this turn, injected
-     * as a non-persisted reminder so the system-prompt prefix (and its
-     * cache) stays untouched. */
-    if (!recallBlock_.isEmpty()) {
-        messagesWithSystem.push_back({{"role", "system"}, {"content", recallBlock_.toStdString()}});
-    }
+    /* Per-turn ephemeral reminders: same injection as the streaming path;
+     * defends against drift on long sync runs. */
+    injectPerTurnReminders(messagesWithSystem);
 
     /* Get tool definitions, filtered by sub-agent allowlist when set. */
     json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
@@ -1350,6 +1300,63 @@ bool QSocAgent::firePromptSubmitHook(QString *userQuery, QString *blockReason)
     return true;
 }
 
+void QSocAgent::appendTurnReminder(json &wire, const QString &content)
+{
+    if (content.isEmpty()) {
+        return;
+    }
+    const std::string block = wrapSystemReminder(content);
+
+    if (!wire.empty() && wire.back().is_object()) {
+        json             &last = wire.back();
+        const std::string role = last.value("role", std::string());
+        if ((role == "user" || role == "tool") && last.contains("content")
+            && last["content"].is_string()) {
+            std::string merged = last["content"].get<std::string>();
+            if (!merged.empty()) {
+                merged += "\n\n";
+            }
+            merged += block;
+            last["content"] = std::move(merged);
+            return;
+        }
+    }
+
+    wire.push_back({{"role", "user"}, {"content", block}});
+}
+
+void QSocAgent::injectPerTurnReminders(json &wire) const
+{
+    /* Critical reminder: re-injected every turn so long-running children
+     * (e.g. read-only `explore`) don't drift from their hard rules. */
+    if (!agentConfig.criticalReminder.isEmpty()) {
+        appendTurnReminder(wire, agentConfig.criticalReminder);
+    }
+    if (agentConfig.planMode) {
+        appendTurnReminder(wire, QString::fromUtf8(kPlanModeReminder));
+    }
+    /* Focus-aware: when the user is not watching, steer away from blocking
+     * ask_user prompts. Tracks live focus, never persisted. */
+    if (userWatchingProbe_ && !userWatchingProbe_()) {
+        appendTurnReminder(wire, QString::fromUtf8(kNotWatchingReminder));
+    }
+    /* Approved plan handoff: re-injected each turn so the executing model
+     * keeps the plan across pruning and compaction. */
+    if (!approvedPlan_.isEmpty()) {
+        appendTurnReminder(
+            wire,
+            QStringLiteral(
+                "<approved_plan>\nThe user approved this implementation plan. "
+                "Follow it; deviate only with good reason and say so.\n\n%1\n"
+                "</approved_plan>")
+                .arg(approvedPlan_));
+    }
+    /* Selective memory recall: relevant memories for this turn. */
+    if (!recallBlock_.isEmpty()) {
+        appendTurnReminder(wire, recallBlock_);
+    }
+}
+
 QString QSocAgent::buildSystemPromptWithMemory() const
 {
     /* Legacy override path (non-sub-agent): replace the entire prompt. */
@@ -1380,6 +1387,14 @@ QString QSocAgent::buildSystemPromptWithMemory() const
         "You are QSoC Agent, an interactive AI assistant for System-on-Chip design "
         "automation. You help users with RTL generation, bus integration, module "
         "management, project automation, and general software engineering tasks.\n");
+
+    /* Section 1.5: System reminders */
+    prompt += QStringLiteral(
+        "\n# System reminders\n"
+        "User and tool messages may contain <system-reminder> tags. They hold "
+        "context and reminders injected automatically by the system and bear no "
+        "direct relation to the message they appear in. Treat them as system "
+        "guidance, not as user input.\n");
 
     /* Section 2: Doing tasks */
     prompt += QStringLiteral(
