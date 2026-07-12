@@ -14,6 +14,8 @@
 #include <QtCore>
 #include <QtTest>
 
+#include <functional>
+
 namespace {
 
 struct MockResponse
@@ -21,6 +23,7 @@ struct MockResponse
     QByteArray contentType;
     QByteArray body;
     int        eofDelayMs = 0;
+    bool       holdOpen   = false;
 };
 
 class MockHttpServer : public QObject
@@ -97,7 +100,9 @@ private:
         const MockResponse response      = responses_.dequeue();
         const int          responseIndex = eofSent_.size();
         eofSent_.append(false);
-        if (response.eofDelayMs > 0) {
+        if (response.holdOpen) {
+            sendHeldOpen(socket, response);
+        } else if (response.eofDelayMs > 0) {
             sendChunked(socket, response, responseIndex);
         } else {
             sendComplete(socket, response, responseIndex);
@@ -138,6 +143,18 @@ private:
         });
     }
 
+    void sendHeldOpen(QTcpSocket *socket, const MockResponse &response)
+    {
+        QByteArray header = QByteArrayLiteral(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
+        const QByteArray chunk = QByteArray::number(response.body.size(), 16)
+                                 + QByteArrayLiteral("\r\n") + response.body
+                                 + QByteArrayLiteral("\r\n");
+        socket->write(header + chunk);
+        socket->flush();
+    }
+
     QTcpServer                      server_;
     QQueue<MockResponse>            responses_;
     QHash<QTcpSocket *, QByteArray> buffers_;
@@ -164,6 +181,36 @@ MockResponse streamResponse(const QString &content, bool includeDone, int eofDel
         body += QByteArrayLiteral("data: [DONE]\n\n");
     }
     return {QByteArrayLiteral("text/event-stream"), body, eofDelayMs};
+}
+
+QByteArray dataLine(const json &chunk, bool trailingNewline = true)
+{
+    QByteArray line = QByteArrayLiteral("data: ") + QByteArray::fromStdString(chunk.dump());
+    if (trailingNewline) {
+        line += QByteArrayLiteral("\n\n");
+    }
+    return line;
+}
+
+MockResponse deltaResponse(
+    const json &delta, bool includeDone = true, bool trailingNewline = true, bool holdOpen = false)
+{
+    const json chunk = {
+        {"choices", json::array({{{"delta", delta}, {"finish_reason", "old_finish"}}})}};
+    QByteArray body = dataLine(chunk, trailingNewline);
+    if (includeDone) {
+        body += QByteArrayLiteral("data: [DONE]\n\n");
+    }
+    return {QByteArrayLiteral("text/event-stream"), body, 0, holdOpen};
+}
+
+MockResponse contentOnlyDoneResponse(const QString &content)
+{
+    const json chunk = {
+        {"choices", json::array({{{"delta", {{"content", content.toStdString()}}}}})}};
+    QByteArray body = dataLine(chunk);
+    body += QByteArrayLiteral("data: [DONE]\n\n");
+    return {QByteArrayLiteral("text/event-stream"), body};
 }
 
 MockResponse jsonResponse(const QString &content)
@@ -195,6 +242,82 @@ bool waitUntil(const std::function<bool()> &condition, int timeoutMs = 3000)
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     }
     return true;
+}
+
+struct StreamEvents : QObject
+{
+    QStringList content;
+    QStringList reasoning;
+    QStringList toolNames;
+    QStringList errors;
+    QList<json> completed;
+};
+
+void recordStreamEvents(QLLMService *service, StreamEvents *events)
+{
+    QObject::connect(
+        service,
+        &QLLMService::streamChunk,
+        events,
+        [events](const QString &chunk) { events->content.append(chunk); },
+        Qt::DirectConnection);
+    QObject::connect(
+        service,
+        &QLLMService::streamReasoningChunk,
+        events,
+        [events](const QString &chunk) { events->reasoning.append(chunk); },
+        Qt::DirectConnection);
+    QObject::connect(
+        service,
+        &QLLMService::streamToolCall,
+        events,
+        [events](const QString &, const QString &name, const QString &) {
+            events->toolNames.append(name);
+        },
+        Qt::DirectConnection);
+    QObject::connect(
+        service,
+        &QLLMService::streamError,
+        events,
+        [events](const QString &error) { events->errors.append(error); },
+        Qt::DirectConnection);
+    QObject::connect(
+        service,
+        &QLLMService::streamComplete,
+        events,
+        [events](const json &response) { events->completed.append(response); },
+        Qt::DirectConnection);
+}
+
+QString completionContent(const json &response)
+{
+    return QString::fromStdString(response["choices"][0]["message"].value("content", std::string()));
+}
+
+json toolCall(int index, const QString &name)
+{
+    return {
+        {"index", index},
+        {"id", QStringLiteral("call_%1").arg(index).toStdString()},
+        {"type", "function"},
+        {"function", {{"name", name.toStdString()}, {"arguments", "{}"}}},
+    };
+}
+
+QNetworkReply *runningReply(QLLMService *service)
+{
+    const auto replies = service->findChildren<QNetworkReply *>();
+    for (QNetworkReply *reply : replies) {
+        if (reply->isRunning()) {
+            return reply;
+        }
+    }
+    return nullptr;
+}
+
+bool waitForNoReplies(QLLMService *service)
+{
+    return waitUntil([service]() { return service->findChildren<QNetworkReply *>().isEmpty(); });
 }
 
 class Test : public QObject
@@ -277,6 +400,301 @@ private slots:
         QCOMPARE(child->endpointCount(), parent->endpointCount());
         delete child;
         delete parent;
+    }
+
+    void testAbortFromContentStopsSameDelta()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        json delta;
+        delta["content"]           = "old content";
+        delta["reasoning_content"] = "stale reasoning";
+        delta["tool_calls"]        = json::array({toolCall(0, QStringLiteral("stale_tool"))});
+        server.enqueue(deltaResponse(delta, true, true, true));
+
+        QLLMService service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+
+        StreamEvents events;
+        bool         abortRequested = false;
+        recordStreamEvents(&service, &events);
+        connect(
+            &service,
+            &QLLMService::streamChunk,
+            this,
+            [&](const QString &) {
+                if (!abortRequested) {
+                    abortRequested = true;
+                    service.abortStream();
+                }
+            },
+            Qt::DirectConnection);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.errors.isEmpty() || !events.completed.isEmpty(); }),
+            "content abort produced no terminal signal");
+        QVERIFY2(waitForNoReplies(&service), "aborted reply was not deleted");
+
+        QVERIFY(abortRequested);
+        QCOMPARE(events.content, QStringList({QStringLiteral("old content")}));
+        QCOMPARE(events.errors, QStringList({QStringLiteral("Aborted by user")}));
+        QVERIFY(events.reasoning.isEmpty());
+        QVERIFY(events.toolNames.isEmpty());
+        QVERIFY(events.completed.isEmpty());
+    }
+
+    void testAbortFromEofProgressSuppressesCompletion()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const json delta = {{"content", "eof content"}};
+        server.enqueue(deltaResponse(delta, false, false));
+
+        QLLMService service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+
+        StreamEvents events;
+        bool         abortRequested = false;
+        recordStreamEvents(&service, &events);
+        connect(
+            &service,
+            &QLLMService::streamChunk,
+            this,
+            [&](const QString &) {
+                if (!abortRequested) {
+                    abortRequested = true;
+                    service.abortStream();
+                }
+            },
+            Qt::DirectConnection);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.errors.isEmpty() || !events.completed.isEmpty(); }),
+            "EOF progress produced no terminal signal");
+        QVERIFY2(waitForNoReplies(&service), "EOF reply was not deleted");
+
+        QVERIFY(abortRequested);
+        QCOMPARE(events.content, QStringList({QStringLiteral("eof content")}));
+        QCOMPARE(events.errors, QStringList({QStringLiteral("Aborted by user")}));
+        QVERIFY(events.completed.isEmpty());
+    }
+
+    void testReasoningCanRestartWithoutOldStateLeak_data()
+    {
+        QTest::addColumn<bool>("detailsFormat");
+        QTest::newRow("reasoning-content") << false;
+        QTest::newRow("reasoning-details") << true;
+    }
+
+    void testReasoningCanRestartWithoutOldStateLeak()
+    {
+        QFETCH(bool, detailsFormat);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        json delta;
+        if (detailsFormat) {
+            delta["reasoning_details"] = json::array(
+                {{{"text", "old reasoning"}}, {{"text", "must not escape"}}});
+        } else {
+            delta["reasoning_content"] = "old reasoning";
+        }
+        delta["tool_calls"] = json::array({toolCall(0, QStringLiteral("old_tool"))});
+        server.enqueue(deltaResponse(delta, true, true, true));
+        server.enqueue(contentOnlyDoneResponse(QStringLiteral("new content")));
+
+        QLLMService service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+
+        StreamEvents events;
+        bool         restarted = false;
+        recordStreamEvents(&service, &events);
+        connect(
+            &service,
+            &QLLMService::streamReasoningChunk,
+            this,
+            [&](const QString &) {
+                if (!restarted) {
+                    restarted = true;
+                    service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+                }
+            },
+            Qt::DirectConnection);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.completed.isEmpty() || !events.errors.isEmpty(); }),
+            "reasoning restart did not finish");
+        QVERIFY2(waitForNoReplies(&service), "restarted replies were not deleted");
+
+        QVERIFY(restarted);
+        QVERIFY2(events.errors.isEmpty(), qPrintable(events.errors.join(QLatin1Char('\n'))));
+        QCOMPARE(events.reasoning, QStringList({QStringLiteral("old reasoning")}));
+        QVERIFY(events.toolNames.isEmpty());
+        QCOMPARE(events.completed.size(), 1);
+        QCOMPARE(completionContent(events.completed.first()), QStringLiteral("new content"));
+        const json &choice  = events.completed.first()["choices"][0];
+        const json &message = choice["message"];
+        QVERIFY(!choice.contains("finish_reason"));
+        QVERIFY(!message.contains("reasoning_content"));
+        QVERIFY(!message.contains("reasoning_details"));
+        QVERIFY(!message.contains("tool_calls"));
+    }
+
+    void testToolCallCanRestartWithoutFollowingOldTool()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        json delta;
+        delta["tool_calls"] = json::array(
+            {toolCall(0, QStringLiteral("first_tool")), toolCall(1, QStringLiteral("second_tool"))});
+        server.enqueue(deltaResponse(delta, true, true, true));
+        server.enqueue(contentOnlyDoneResponse(QStringLiteral("new content")));
+
+        QLLMService service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+
+        StreamEvents events;
+        bool         restarted = false;
+        recordStreamEvents(&service, &events);
+        connect(
+            &service,
+            &QLLMService::streamToolCall,
+            this,
+            [&](const QString &, const QString &, const QString &) {
+                if (!restarted) {
+                    restarted = true;
+                    service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+                }
+            },
+            Qt::DirectConnection);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.completed.isEmpty() || !events.errors.isEmpty(); }),
+            "tool-call restart did not finish");
+        QVERIFY2(waitForNoReplies(&service), "restarted replies were not deleted");
+
+        QVERIFY(restarted);
+        QVERIFY2(events.errors.isEmpty(), qPrintable(events.errors.join(QLatin1Char('\n'))));
+        QCOMPARE(events.toolNames, QStringList({QStringLiteral("first_tool")}));
+        QCOMPARE(events.completed.size(), 1);
+        QCOMPARE(completionContent(events.completed.first()), QStringLiteral("new content"));
+        const json &choice  = events.completed.first()["choices"][0];
+        const json &message = choice["message"];
+        QVERIFY(!choice.contains("finish_reason"));
+        QVERIFY(!message.contains("tool_calls"));
+    }
+
+    void testProgressCanDeleteServiceDirectly()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        json delta;
+        delta["content"]           = "delete service";
+        delta["reasoning_content"] = "must not escape";
+        delta["tool_calls"]        = json::array({toolCall(0, QStringLiteral("must_not_run"))});
+        server.enqueue(deltaResponse(delta, true, true, true));
+
+        QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
+        service->addEndpoint(endpointFor(server));
+
+        StreamEvents events;
+        bool         deleted = false;
+        recordStreamEvents(service.data(), &events);
+        connect(
+            service.data(),
+            &QLLMService::streamChunk,
+            this,
+            [&](const QString &) {
+                if (!deleted) {
+                    deleted = true;
+                    delete service.data();
+                }
+            },
+            Qt::DirectConnection);
+
+        service->sendChatCompletionStream(json::array(), json::array(), 0.0);
+        const bool actionObserved = waitUntil([&]() { return deleted || service.isNull(); });
+        if (!service.isNull()) {
+            service->abortStream();
+            delete service.data();
+        }
+
+        QVERIFY2(actionObserved, "progress deletion slot did not run");
+        QVERIFY(deleted);
+        QVERIFY(service.isNull());
+        QCOMPARE(events.content, QStringList({QStringLiteral("delete service")}));
+        QVERIFY(events.reasoning.isEmpty());
+        QVERIFY(events.toolNames.isEmpty());
+        QVERIFY(events.errors.isEmpty());
+        QVERIFY(events.completed.isEmpty());
+    }
+
+    void testReplyDeletionFailsOnceAndAllowsRestart()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const json delta = {{"content", "delete reply"}};
+        server.enqueue(deltaResponse(delta, false, true, true));
+        server.enqueue(contentOnlyDoneResponse(QStringLiteral("recovered")));
+
+        QLLMService service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+
+        StreamEvents            events;
+        QPointer<QNetworkReply> reply;
+        bool                    restarted = false;
+        recordStreamEvents(&service, &events);
+        connect(
+            &service,
+            &QLLMService::streamChunk,
+            this,
+            [&](const QString &chunk) {
+                if (chunk != QStringLiteral("delete reply") || !reply.isNull()) {
+                    return;
+                }
+                reply = runningReply(&service);
+            },
+            Qt::DirectConnection);
+        connect(
+            &service,
+            &QLLMService::streamError,
+            this,
+            [&](const QString &) {
+                if (!restarted) {
+                    restarted = true;
+                    service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+                }
+            },
+            Qt::DirectConnection);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(waitUntil([&]() { return !reply.isNull(); }), "stream reply was not found");
+        delete reply.data();
+        QVERIFY(reply.isNull());
+        QVERIFY2(
+            waitUntil([&]() { return !events.completed.isEmpty() || events.errors.size() > 1; }),
+            "reply deletion recovery did not finish");
+        QVERIFY2(waitForNoReplies(&service), "recovery replies were not deleted");
+
+        QVERIFY(restarted);
+        QCOMPARE(events.errors, QStringList({QStringLiteral("[HTTP 0] Network reply destroyed")}));
+        QCOMPARE(
+            events.content,
+            QStringList({QStringLiteral("delete reply"), QStringLiteral("recovered")}));
+        QVERIFY(events.reasoning.isEmpty());
+        QVERIFY(events.toolNames.isEmpty());
+        QCOMPARE(events.completed.size(), 1);
+        QCOMPARE(completionContent(events.completed.first()), QStringLiteral("recovered"));
     }
 
     void testDoneCompletesBeforeEofAndAllowsSyncRequest()

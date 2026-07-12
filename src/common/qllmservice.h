@@ -6,11 +6,14 @@
 
 #include "common/qsocconfig.h"
 
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QUrl>
 
@@ -117,10 +120,10 @@ public:
      *          shares the same `QSocConfig` (re-parses endpoints +
      *          model registry from it) and is positioned on the
      *          same `currentModelId` as `this`. Streaming state is
-     *          NOT carried over: each clone has its own QNAM,
-     *          its own `currentStreamReply` and stream buffers, so two
-     *          clones can stream concurrently without trampling each
-     *          other's single-flight invariant.
+     *          NOT carried over: each clone has its own QNAM and
+     *          streaming request state, so two clones can stream
+     *          concurrently without trampling each other's
+     *          single-flight invariant.
      */
     QLLMService *clone(QObject *parent = nullptr) const;
 
@@ -326,6 +329,21 @@ signals:
     void streamError(const QString &error);
 
 private:
+    enum class StreamOutcome : std::uint8_t {
+        Active,
+        Completed,
+        Failed,
+        TimedOut,
+        Aborted,
+        Superseded,
+        OwnerDestroyed
+    };
+
+    enum class ParseResult : std::uint8_t { NeedMore, Done, Stopped };
+
+    struct StreamState;
+    using StreamStatePtr = std::shared_ptr<StreamState>;
+
     QNetworkAccessManager        *networkManager = nullptr;
     QSocConfig                   *config         = nullptr;
     QList<LLMEndpoint>            endpoints;
@@ -402,43 +420,17 @@ private:
         double             temperature,
         bool               jsonMode);
 
-    /**
-     * @brief Parse complete SSE lines already buffered for the active stream
-     * @return True when the buffer contains the [DONE] marker
-     */
-    bool processStreamBuffer();
+    bool        claimTerminal(const StreamStatePtr &state, StreamOutcome outcome);
+    static bool isStreamActive(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
+    static void stopStreamReply(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
+    static void drainStreamReply(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
+    static ParseResult processStreamBuffer(
+        const QPointer<QLLMService> &owner, const StreamStatePtr &state);
+    static ParseResult parseStreamLine(
+        const QPointer<QLLMService> &owner, const StreamStatePtr &state, const QString &line);
+    static json buildStreamResponse(const StreamStatePtr &state);
 
-    /**
-     * @brief Parse SSE data line and extract JSON
-     * @param line SSE data line (without "data: " prefix)
-     * @param accumulatedContent Accumulated content for building complete response
-     * @param accumulatedToolCalls Accumulated tool calls (indexed by tool call index)
-     * @return True if the [DONE] marker completes the stream
-     */
-    bool parseStreamLine(
-        const QString &line, QString &accumulatedContent, QMap<int, json> &accumulatedToolCalls);
-
-    /**
-     * @brief Build complete response from accumulated streaming data
-     * @param content Accumulated content
-     * @param toolCalls Accumulated tool calls
-     * @return Complete response in standard format
-     */
-    json buildStreamResponse(const QString &content, const QMap<int, json> &toolCalls) const;
-
-    /* Current streaming state */
-    QNetworkReply  *currentStreamReply = nullptr;
-    QString         streamBuffer;
-    QString         streamAccumulatedContent;
-    QMap<int, json> streamAccumulatedToolCalls;
-    QString         streamAccumulatedReasoning;
-    QString         streamFinishReason;
-    bool            reasoningModeActive = false;
-    /* Token usage reported by the server in the final stream chunk
-     * (when stream_options.include_usage is set). buildStreamResponse
-     * forwards this verbatim so callers can anchor their estimates on
-     * real numbers instead of recomputing the conversation tail. */
-    json streamAccumulatedUsage;
+    StreamStatePtr currentStream;
 };
 
 #endif // QLLMSERVICE_H

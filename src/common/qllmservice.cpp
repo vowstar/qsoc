@@ -13,6 +13,20 @@
 #include <QRegularExpression>
 #include <QTimer>
 
+struct QLLMService::StreamState
+{
+    QPointer<QNetworkReply> reply;
+    QPointer<QTimer>        timer;
+    QString                 buffer;
+    QString                 content;
+    QMap<int, json>         toolCalls;
+    QString                 reasoning;
+    QString                 finishReason;
+    bool                    reasoningMode = false;
+    json                    usage         = json::object();
+    StreamOutcome           outcome       = StreamOutcome::Active;
+};
+
 /* Constructor and Destructor */
 
 QLLMService::QLLMService(QObject *parent, QSocConfig *config)
@@ -26,15 +40,10 @@ QLLMService::QLLMService(QObject *parent, QSocConfig *config)
 
 QLLMService::~QLLMService()
 {
-    /* Tear down any in-flight stream so its slots can't fire on a
-     * partially-destroyed `this`. */
-    if (currentStreamReply != nullptr) {
-        QNetworkReply *reply = currentStreamReply;
-        currentStreamReply   = nullptr;
-        disconnect(reply, nullptr, this, nullptr);
-        if (reply->isRunning()) {
-            reply->abort();
-        }
+    const QPointer<QLLMService> owner(this);
+    const StreamStatePtr        state = currentStream;
+    if (claimTerminal(state, StreamOutcome::OwnerDestroyed)) {
+        stopStreamReply(owner, state);
     }
     /* Best-effort wipe of API-key buffers. detach() forces COW
      * uniqueness so we zero our own copy, not a shared one. */
@@ -616,17 +625,15 @@ LLMResponse QLLMService::sendRequestToEndpoint(
 
 void QLLMService::abortStream()
 {
-    QNetworkReply *reply = currentStreamReply;
-    if (reply == nullptr) {
+    const QPointer<QLLMService> owner(this);
+    const StreamStatePtr        state = currentStream;
+    if (!claimTerminal(state, StreamOutcome::Aborted)) {
         return;
     }
-    currentStreamReply = nullptr;
-    disconnect(reply, nullptr, this, nullptr);
-    if (reply->isRunning()) {
-        reply->abort();
+    stopStreamReply(owner, state);
+    if (!owner.isNull()) {
+        emit owner->streamError(QStringLiteral("Aborted by user"));
     }
-    reply->deleteLater();
-    emit streamError("Aborted by user");
 }
 
 void QLLMService::sendChatCompletionStream(
@@ -637,19 +644,18 @@ void QLLMService::sendChatCompletionStream(
     const QString &modelOverride)
 {
     if (!hasEndpoint()) {
-        emit streamError("No LLM endpoint configured");
+        emit streamError(QStringLiteral("No LLM endpoint configured"));
         return;
     }
 
     /* Abort any existing stream request before starting a new one */
-    if (currentStreamReply) {
-        QNetworkReply *reply = currentStreamReply;
-        currentStreamReply   = nullptr;
-        disconnect(reply, nullptr, this, nullptr);
-        if (reply->isRunning()) {
-            reply->abort();
+    const QPointer<QLLMService> owner(this);
+    const StreamStatePtr        previous = currentStream;
+    if (claimTerminal(previous, StreamOutcome::Superseded)) {
+        stopStreamReply(owner, previous);
+        if (owner.isNull()) {
+            return;
         }
-        reply->deleteLater();
     }
 
     LLMEndpoint     endpoint = selectEndpoint();
@@ -689,76 +695,77 @@ void QLLMService::sendChatCompletionStream(
         payload["max_tokens"] = endpoint.maxOutputTokens;
     }
 
-    /* Track whether reasoning mode is active for buildStreamResponse */
-    reasoningModeActive = !reasoningEffort.isEmpty();
-
-    /* Reset streaming state */
-    streamBuffer.clear();
-    streamAccumulatedContent.clear();
-    streamAccumulatedToolCalls.clear();
-    streamAccumulatedReasoning.clear();
-    streamFinishReason.clear();
-    streamAccumulatedUsage = json::object();
-
     QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
-    currentStreamReply   = reply;
+    auto           state = std::make_shared<StreamState>();
+    state->reply         = reply;
+    state->reasoningMode = !reasoningEffort.isEmpty();
+    currentStream        = state;
 
     /* Set timeout */
     auto *timer = new QTimer(reply);
     timer->setSingleShot(true);
-    connect(timer, &QTimer::timeout, this, [this, reply]() {
-        if (currentStreamReply != reply) {
+    state->timer = timer;
+    connect(timer, &QTimer::timeout, this, [this, state]() {
+        const StreamStatePtr        active = state;
+        const QPointer<QLLMService> owner(this);
+        if (!claimTerminal(active, StreamOutcome::TimedOut)) {
             return;
         }
-        currentStreamReply = nullptr;
-        disconnect(reply, nullptr, this, nullptr);
-        if (reply->isRunning()) {
-            reply->abort();
+        stopStreamReply(owner, active);
+        if (!owner.isNull()) {
+            emit owner->streamError(QStringLiteral("Request timeout"));
         }
-        reply->deleteLater();
-        emit streamError("Request timeout");
     });
     timer->start(endpoint.timeout);
 
     /* Handle incoming data */
-    connect(reply, &QNetworkReply::readyRead, this, [this, reply, timer]() {
-        if (currentStreamReply != reply) {
+    connect(reply, &QNetworkReply::readyRead, this, [this, state]() {
+        const StreamStatePtr        active = state;
+        const QPointer<QLLMService> owner(this);
+        if (!isStreamActive(owner, active)) {
             return;
         }
 
         /* Reset timeout timer on each data received */
-        timer->start();
+        if (!active->timer.isNull()) {
+            active->timer->start();
+        }
 
-        streamBuffer += QString::fromUtf8(reply->readAll());
-        const bool completed = processStreamBuffer();
-        if (currentStreamReply != reply || !completed) {
+        QNetworkReply *reply = active->reply.data();
+        if (reply == nullptr) {
+            return;
+        }
+        active->buffer += QString::fromUtf8(reply->readAll());
+        const ParseResult result = processStreamBuffer(owner, active);
+        if (result != ParseResult::Done || !isStreamActive(owner, active)) {
             return;
         }
 
-        json response = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
-        currentStreamReply = nullptr;
-        timer->stop();
-        disconnect(timer, nullptr, this, nullptr);
-        connect(timer, &QTimer::timeout, reply, [reply]() {
-            if (reply->isRunning()) {
-                reply->abort();
-            }
-            reply->deleteLater();
-        });
-        timer->start();
-        disconnect(reply, &QNetworkReply::readyRead, this, nullptr);
-        emit streamComplete(response);
+        const json response = buildStreamResponse(active);
+        if (!owner->claimTerminal(active, StreamOutcome::Completed)) {
+            return;
+        }
+        drainStreamReply(owner, active);
+        if (!owner.isNull()) {
+            emit owner->streamComplete(response);
+        }
     });
 
     /* Handle completion */
-    connect(reply, &QNetworkReply::finished, this, [this, reply, timer]() {
-        if (currentStreamReply != reply) {
-            reply->deleteLater();
+    connect(reply, &QNetworkReply::finished, this, [this, state]() {
+        const StreamStatePtr        active = state;
+        const QPointer<QLLMService> owner(this);
+        if (!isStreamActive(owner, active)) {
             return;
         }
 
-        timer->stop();
-        currentStreamReply = nullptr;
+        if (!active->timer.isNull()) {
+            active->timer->stop();
+        }
+        QNetworkReply *reply = active->reply.data();
+        if (reply == nullptr) {
+            return;
+        }
 
         if (reply->error() != QNetworkReply::NoError) {
             /* Prefix the HTTP status code so downstream classification can
@@ -772,52 +779,178 @@ void QLLMService::sendChatCompletionStream(
             if (!errorBody.isEmpty()) {
                 errorMsg += "\n" + QString::fromUtf8(errorBody);
             }
-            if (!streamBuffer.isEmpty()) {
-                errorMsg += "\n" + streamBuffer;
+            if (!active->buffer.isEmpty()) {
+                errorMsg += "\n" + active->buffer;
             }
-            reply->deleteLater();
-            emit streamError(errorMsg);
+            if (!owner->claimTerminal(active, StreamOutcome::Failed)) {
+                return;
+            }
+            stopStreamReply(owner, active);
+            if (!owner.isNull()) {
+                emit owner->streamError(errorMsg);
+            }
             return;
         }
 
-        streamBuffer += QString::fromUtf8(reply->readAll());
-        if (!streamBuffer.isEmpty() && !streamBuffer.endsWith(QLatin1Char('\n'))) {
-            streamBuffer += QLatin1Char('\n');
+        active->buffer += QString::fromUtf8(reply->readAll());
+        if (!active->buffer.isEmpty() && !active->buffer.endsWith(QLatin1Char('\n'))) {
+            active->buffer += QLatin1Char('\n');
         }
-        processStreamBuffer();
-        json response = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
-        reply->deleteLater();
-        emit streamComplete(response);
+        const ParseResult result = processStreamBuffer(owner, active);
+        if (result == ParseResult::Stopped || !isStreamActive(owner, active)) {
+            return;
+        }
+
+        const json response = buildStreamResponse(active);
+        if (!owner->claimTerminal(active, StreamOutcome::Completed)) {
+            return;
+        }
+        stopStreamReply(owner, active);
+        if (!owner.isNull()) {
+            emit owner->streamComplete(response);
+        }
+    });
+
+    connect(reply, &QObject::destroyed, this, [this, state]() {
+        const StreamStatePtr        active = state;
+        const QPointer<QLLMService> owner(this);
+        if (!claimTerminal(active, StreamOutcome::Failed)) {
+            return;
+        }
+        active->reply.clear();
+        active->timer.clear();
+        emit owner->streamError(QStringLiteral("[HTTP 0] Network reply destroyed"));
     });
 }
 
-bool QLLMService::processStreamBuffer()
+bool QLLMService::claimTerminal(const StreamStatePtr &state, StreamOutcome outcome)
+{
+    if (!state || currentStream != state || state->outcome != StreamOutcome::Active) {
+        return false;
+    }
+    state->outcome = outcome;
+    currentStream.reset();
+    return true;
+}
+
+bool QLLMService::isStreamActive(const QPointer<QLLMService> &owner, const StreamStatePtr &state)
+{
+    return !owner.isNull() && state && owner->currentStream == state
+           && state->outcome == StreamOutcome::Active && !state->reply.isNull();
+}
+
+void QLLMService::stopStreamReply(const QPointer<QLLMService> &owner, const StreamStatePtr &state)
+{
+    if (!state) {
+        return;
+    }
+
+    QPointer<QTimer>        timer = state->timer;
+    QPointer<QNetworkReply> reply = state->reply;
+    state->timer.clear();
+    state->reply.clear();
+
+    if (!timer.isNull()) {
+        timer->stop();
+        if (!owner.isNull()) {
+            QObject::disconnect(timer.data(), nullptr, owner.data(), nullptr);
+        }
+    }
+    if (reply.isNull()) {
+        return;
+    }
+    if (!owner.isNull()) {
+        QObject::disconnect(reply.data(), nullptr, owner.data(), nullptr);
+    }
+    if (reply->isRunning()) {
+        reply->abort();
+    }
+    if (!reply.isNull()) {
+        reply->deleteLater();
+    }
+}
+
+void QLLMService::drainStreamReply(const QPointer<QLLMService> &owner, const StreamStatePtr &state)
+{
+    if (!state) {
+        return;
+    }
+
+    QPointer<QTimer>        timer = state->timer;
+    QPointer<QNetworkReply> reply = state->reply;
+    state->timer.clear();
+    state->reply.clear();
+
+    if (!timer.isNull()) {
+        timer->stop();
+        if (!owner.isNull()) {
+            QObject::disconnect(timer.data(), nullptr, owner.data(), nullptr);
+        }
+    }
+    if (reply.isNull()) {
+        return;
+    }
+    if (!owner.isNull()) {
+        QObject::disconnect(reply.data(), nullptr, owner.data(), nullptr);
+    }
+    if (!reply->isRunning()) {
+        reply->deleteLater();
+        return;
+    }
+
+    QObject::connect(reply.data(), &QNetworkReply::finished, reply.data(), &QObject::deleteLater);
+    if (!timer.isNull()) {
+        QObject::connect(timer.data(), &QTimer::timeout, reply.data(), [reply]() {
+            if (reply.isNull()) {
+                return;
+            }
+            if (reply->isRunning()) {
+                reply->abort();
+            }
+            if (!reply.isNull()) {
+                reply->deleteLater();
+            }
+        });
+        timer->start();
+    }
+}
+
+QLLMService::ParseResult QLLMService::processStreamBuffer(
+    const QPointer<QLLMService> &owner, const StreamStatePtr &state)
 {
     while (true) {
-        const int lineEnd = streamBuffer.indexOf(QLatin1Char('\n'));
-        if (lineEnd == -1) {
-            return false;
+        if (!isStreamActive(owner, state)) {
+            return ParseResult::Stopped;
         }
 
-        const QString line = streamBuffer.left(lineEnd).trimmed();
-        streamBuffer       = streamBuffer.mid(lineEnd + 1);
+        const int lineEnd = state->buffer.indexOf(QLatin1Char('\n'));
+        if (lineEnd == -1) {
+            return ParseResult::NeedMore;
+        }
+
+        const QString line = state->buffer.left(lineEnd).trimmed();
+        state->buffer      = state->buffer.mid(lineEnd + 1);
         if (!line.startsWith(QStringLiteral("data: "))) {
             continue;
         }
 
-        const QString data = line.mid(6);
-        if (parseStreamLine(data, streamAccumulatedContent, streamAccumulatedToolCalls)) {
-            return true;
+        const ParseResult result = parseStreamLine(owner, state, line.mid(6));
+        if (result != ParseResult::NeedMore) {
+            return result;
         }
     }
 }
 
-bool QLLMService::parseStreamLine(
-    const QString &line, QString &accumulatedContent, QMap<int, json> &accumulatedToolCalls)
+QLLMService::ParseResult QLLMService::parseStreamLine(
+    const QPointer<QLLMService> &owner, const StreamStatePtr &state, const QString &line)
 {
+    if (!isStreamActive(owner, state)) {
+        return ParseResult::Stopped;
+    }
+
     /* Check for stream end */
-    if (line == "[DONE]") {
-        return true;
+    if (line == QStringLiteral("[DONE]")) {
+        return ParseResult::Done;
     }
 
     /* Parse JSON */
@@ -829,11 +962,11 @@ bool QLLMService::parseStreamLine(
          * Capture it before the empty-choices early-return so
          * buildStreamResponse can include the real numbers. */
         if (chunk.contains("usage") && chunk["usage"].is_object()) {
-            streamAccumulatedUsage = chunk["usage"];
+            state->usage = chunk["usage"];
         }
 
         if (!chunk.contains("choices") || chunk["choices"].empty()) {
-            return false;
+            return ParseResult::NeedMore;
         }
 
         auto delta = chunk["choices"][0]["delta"];
@@ -841,16 +974,22 @@ bool QLLMService::parseStreamLine(
         /* Handle content chunks */
         if (delta.contains("content") && delta["content"].is_string()) {
             QString content = QString::fromStdString(delta["content"].get<std::string>());
-            accumulatedContent += content;
-            emit streamChunk(content);
+            state->content += content;
+            emit owner->streamChunk(content);
+            if (!isStreamActive(owner, state)) {
+                return ParseResult::Stopped;
+            }
         }
 
         /* Direct API format: delta.reasoning_content (DeepSeek R1) */
         if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
             QString reasoning = QString::fromStdString(
                 delta["reasoning_content"].get<std::string>());
-            streamAccumulatedReasoning += reasoning;
-            emit streamReasoningChunk(reasoning);
+            state->reasoning += reasoning;
+            emit owner->streamReasoningChunk(reasoning);
+            if (!isStreamActive(owner, state)) {
+                return ParseResult::Stopped;
+            }
         }
 
         /* OpenRouter format: delta.reasoning_details (array) */
@@ -858,8 +997,11 @@ bool QLLMService::parseStreamLine(
             for (const auto &detail : delta["reasoning_details"]) {
                 if (detail.contains("text") && detail["text"].is_string()) {
                     QString reasoning = QString::fromStdString(detail["text"].get<std::string>());
-                    streamAccumulatedReasoning += reasoning;
-                    emit streamReasoningChunk(reasoning);
+                    state->reasoning += reasoning;
+                    emit owner->streamReasoningChunk(reasoning);
+                    if (!isStreamActive(owner, state)) {
+                        return ParseResult::Stopped;
+                    }
                 }
             }
         }
@@ -870,8 +1012,8 @@ bool QLLMService::parseStreamLine(
                 int index = toolCall.value("index", 0);
 
                 /* Initialize tool call entry if needed */
-                if (!accumulatedToolCalls.contains(index)) {
-                    accumulatedToolCalls[index]
+                if (!state->toolCalls.contains(index)) {
+                    state->toolCalls[index]
                         = {{"id", ""},
                            {"type", "function"},
                            {"function", {{"name", ""}, {"arguments", ""}}}};
@@ -881,12 +1023,12 @@ bool QLLMService::parseStreamLine(
                  * emit `"id": null` in continuation chunks; only copy when it
                  * is a real string so accumulated values stay string-typed. */
                 if (toolCall.contains("id") && toolCall["id"].is_string()) {
-                    accumulatedToolCalls[index]["id"] = toolCall["id"];
+                    state->toolCalls[index]["id"] = toolCall["id"];
                 }
 
                 /* Update function info */
                 if (toolCall.contains("function") && toolCall["function"].is_object()) {
-                    auto &accFunc = accumulatedToolCalls[index]["function"];
+                    auto &accFunc = state->toolCalls[index]["function"];
 
                     if (toolCall["function"].contains("name")
                         && toolCall["function"]["name"].is_string()) {
@@ -903,13 +1045,16 @@ bool QLLMService::parseStreamLine(
 
                 /* Emit signal with current state */
                 QString toolId = QString::fromStdString(
-                    accumulatedToolCalls[index]["id"].get<std::string>());
+                    state->toolCalls[index]["id"].get<std::string>());
                 QString funcName = QString::fromStdString(
-                    accumulatedToolCalls[index]["function"]["name"].get<std::string>());
+                    state->toolCalls[index]["function"]["name"].get<std::string>());
                 QString funcArgs = QString::fromStdString(
-                    accumulatedToolCalls[index]["function"]["arguments"].get<std::string>());
+                    state->toolCalls[index]["function"]["arguments"].get<std::string>());
 
-                emit streamToolCall(toolId, funcName, funcArgs);
+                emit owner->streamToolCall(toolId, funcName, funcArgs);
+                if (!isStreamActive(owner, state)) {
+                    return ParseResult::Stopped;
+                }
             }
         }
 
@@ -917,7 +1062,7 @@ bool QLLMService::parseStreamLine(
          * chunk and [DONE] marker that may follow it. */
         if (chunk["choices"][0].contains("finish_reason")
             && chunk["choices"][0]["finish_reason"].is_string()) {
-            streamFinishReason = QString::fromStdString(
+            state->finishReason = QString::fromStdString(
                 chunk["choices"][0]["finish_reason"].get<std::string>());
         }
 
@@ -925,17 +1070,17 @@ bool QLLMService::parseStreamLine(
         QSocConsole::warn() << "Failed to parse stream chunk:" << err.what();
     }
 
-    return false;
+    return ParseResult::NeedMore;
 }
 
-json QLLMService::buildStreamResponse(const QString &content, const QMap<int, json> &toolCalls) const
+json QLLMService::buildStreamResponse(const StreamStatePtr &state)
 {
     json message;
     message["role"] = "assistant";
 
-    if (!content.isEmpty()) {
-        message["content"] = content.toStdString();
-    } else if (!toolCalls.isEmpty()) {
+    if (!state->content.isEmpty()) {
+        message["content"] = state->content.toStdString();
+    } else if (!state->toolCalls.isEmpty()) {
         /* Tool-call-only messages: content must be null, not missing. Some
          * endpoints reject the message when the key is absent entirely. */
         message["content"] = nullptr;
@@ -948,28 +1093,29 @@ json QLLMService::buildStreamResponse(const QString &content, const QMap<int, js
     /* DeepSeek R1 requires reasoning_content in ALL assistant messages when thinking
      * mode is active. Without this, subsequent API calls fail with
      * "Missing reasoning_content field". Always include the field. */
-    if (!streamAccumulatedReasoning.isEmpty()) {
-        message["reasoning_content"] = streamAccumulatedReasoning.toStdString();
-    } else if (reasoningModeActive) {
+    if (!state->reasoning.isEmpty()) {
+        message["reasoning_content"] = state->reasoning.toStdString();
+    } else if (state->reasoningMode) {
         message["reasoning_content"] = "";
     }
 
-    if (!toolCalls.isEmpty()) {
+    if (!state->toolCalls.isEmpty()) {
         json toolCallsArray = json::array();
-        for (auto iter = toolCalls.constBegin(); iter != toolCalls.constEnd(); ++iter) {
+        for (auto iter = state->toolCalls.constBegin(); iter != state->toolCalls.constEnd();
+             ++iter) {
             toolCallsArray.push_back(iter.value());
         }
         message["tool_calls"] = toolCallsArray;
     }
 
     json choice = {{"message", message}};
-    if (!streamFinishReason.isEmpty()) {
-        choice["finish_reason"] = streamFinishReason.toStdString();
+    if (!state->finishReason.isEmpty()) {
+        choice["finish_reason"] = state->finishReason.toStdString();
     }
 
     json response = {{"choices", json::array({choice})}};
-    if (streamAccumulatedUsage.is_object() && !streamAccumulatedUsage.empty()) {
-        response["usage"] = streamAccumulatedUsage;
+    if (state->usage.is_object() && !state->usage.empty()) {
+        response["usage"] = state->usage;
     }
     return response;
 }
