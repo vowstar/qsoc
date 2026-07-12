@@ -144,6 +144,16 @@ void QSocMcpHttpTransport::stop()
 
 void QSocMcpHttpTransport::sendMessage(const nlohmann::json &message)
 {
+    postMessage(message, 0);
+}
+
+void QSocMcpHttpTransport::sendTrackedMessage(const nlohmann::json &message, quint64 token)
+{
+    postMessage(message, token);
+}
+
+void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 sendToken)
+{
     if (state() != State::Running || manager_ == nullptr) {
         emit errorOccurred(QStringLiteral("HTTP transport not running"));
         return;
@@ -171,7 +181,9 @@ void QSocMcpHttpTransport::sendMessage(const nlohmann::json &message)
     const QByteArray body = QByteArray::fromStdString(message.dump());
 
     QNetworkReply *reply = manager_->post(request, body);
-    replies_.insert(reply, ReplyState{});
+    ReplyState     replyState;
+    replyState.sendToken = sendToken;
+    replies_.insert(reply, replyState);
 
     connect(
         reply, &QNetworkReply::metaDataChanged, this, &QSocMcpHttpTransport::onReplyMetaDataChanged);
@@ -240,6 +252,8 @@ void QSocMcpHttpTransport::onReplyFinished()
     }
 
     QList<DeferredSignal> events;
+    quint64               sendToken  = 0;
+    bool                  sendFailed = false;
     {
         auto it = replies_.find(reply);
         if (!it->isSse) {
@@ -251,6 +265,14 @@ void QSocMcpHttpTransport::onReplyFinished()
         } else {
             events = parseJsonBody(reply->readAll());
         }
+        for (const auto &event : std::as_const(events)) {
+            if (!event.error.isEmpty()) {
+                it->sendFailed = true;
+                break;
+            }
+        }
+        sendToken  = it->sendToken;
+        sendFailed = it->sendFailed;
     }
     cleanupReply(reply);
 
@@ -266,6 +288,9 @@ void QSocMcpHttpTransport::onReplyFinished()
             return;
         }
     }
+    if (sendToken != 0 && !sendFailed) {
+        emit messageSent(sendToken);
+    }
 }
 
 void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)
@@ -278,6 +303,12 @@ void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)
         }
         it->sseBuffer += reply->readAll();
         events = parseSseEvents(it->sseBuffer);
+        for (const auto &event : std::as_const(events)) {
+            if (!event.error.isEmpty()) {
+                it->sendFailed = true;
+                break;
+            }
+        }
     }
 
     const quint64                  generation = lifecycleGeneration_;
@@ -297,6 +328,7 @@ void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)
 void QSocMcpHttpTransport::clearReplies()
 {
     lifecycleGeneration_++;
+    sessionId_.clear();
     const QList<QNetworkReply *> replies = replies_.keys();
     replies_.clear();
     for (QNetworkReply *reply : replies) {

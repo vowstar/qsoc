@@ -54,6 +54,16 @@ public:
      */
     virtual void sendMessage(const nlohmann::json &message) = 0;
 
+    /**
+     * @brief Send a message and report transport acceptance by token.
+     * @details The caller owns the opaque nonzero token. Completion may be
+     *          synchronous. A successful send emits messageSent(token)
+     *          exactly once; failure or lifecycle termination must not emit
+     *          it. Synchronous transports use the default implementation;
+     *          asynchronous transports override it.
+     */
+    virtual void sendTrackedMessage(const nlohmann::json &message, quint64 token);
+
 signals:
     /** Connection is up; sendMessage() is valid from now on. */
     void started();
@@ -63,6 +73,8 @@ signals:
     void messageReceived(const nlohmann::json &message);
     /** Transport or message failure; closed() reports lifecycle termination. */
     void errorOccurred(const QString &message);
+    /** A tracked outbound message completed successfully. */
+    void messageSent(quint64 token);
 
 protected:
     void setState(State newState);

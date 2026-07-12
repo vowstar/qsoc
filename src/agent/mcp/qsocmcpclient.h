@@ -37,6 +37,7 @@ public:
         Connecting,
         Initializing,
         Ready,
+        /** The current lifecycle failed and is being torn down. */
         Failed,
     };
     Q_ENUM(State)
@@ -55,12 +56,14 @@ public:
     const nlohmann::json  &serverCapabilities() const;
 
     /**
-     * @brief Start the underlying transport and initiate the handshake.
+     * @brief Start an idle client lifecycle and initiate the handshake.
+     * @details Calls made before the previous closed() signal are ignored.
      */
     void start();
 
     /**
      * @brief Tear down the underlying transport.
+     * @details Repeated calls are ignored; closed() confirms completion.
      */
     void stop();
 
@@ -83,13 +86,14 @@ public:
 
     /**
      * @brief Send a JSON-RPC notification (no response expected).
+     * @details Notifications sent while the client is not Ready are ignored.
      */
     void notify(const QString &method, const nlohmann::json &params = nlohmann::json::object());
 
 signals:
     /** State machine transition. */
     void stateChanged(QSocMcpClient::State newState);
-    /** Initialize handshake completed and the server is Ready. */
+    /** Initialize handshake and initialized delivery completed. */
     void ready();
     /** A response correlated to a previously issued request id. */
     void responseReceived(int id, const nlohmann::json &result);
@@ -97,16 +101,19 @@ signals:
     void requestFailed(int id, int code, const QString &message);
     /** A server-pushed notification (e.g. notifications/tools/list_changed). */
     void notificationReceived(const QString &method, const nlohmann::json &params);
-    /** Transport closed. The client is no longer usable. */
+    /** The current lifecycle ended; start() may begin another one. */
     void closed();
 
 private slots:
     void onTransportStarted();
     void onTransportClosed();
     void onTransportError(const QString &message);
+    void onMessageSent(quint64 token);
     void onMessageReceived(const nlohmann::json &message);
 
 private:
+    enum class Lifecycle : std::uint8_t { Idle, Active, Stopping, Finishing };
+
     struct Pending
     {
         QString          method;
@@ -115,10 +122,14 @@ private:
 
     void setState(State newState);
     void sendInitialize();
-    void sendInitializedNotification();
+    void sendInitializedNotification(int requestId);
+    void clearInitializedSend();
     int  allocateId();
     void writeMessage(const nlohmann::json &message);
-    void cancelAllPending(int code, const QString &message);
+    bool cancelAllPending(int code, const QString &message);
+    bool isCurrentLifecycle(quint64 generation, Lifecycle lifecycle) const;
+    void stopTransportOrFinish(quint64 generation);
+    void finishLifecycle(quint64 generation);
     int  effectiveTimeoutMs(int requested) const;
 
     McpServerConfig     config_;
@@ -128,6 +139,11 @@ private:
     int                 initializeId_ = -1;
     nlohmann::json      serverCapabilities_;
     QHash<int, Pending> pending_;
+    QPointer<QTimer>    initializedSendTimer_;
+    Lifecycle           lifecycle_            = Lifecycle::Idle;
+    quint64             lifecycleGeneration_  = 0;
+    quint64             initializedSendToken_ = 0;
+    int                 initializedRequestId_ = -1;
 };
 
 #endif // QSOCMCPCLIENT_H

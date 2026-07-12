@@ -35,6 +35,7 @@ public:
     void start() override;
     void stop() override;
     void sendMessage(const nlohmann::json &message) override;
+    void sendTrackedMessage(const nlohmann::json &message, quint64 token) override;
 
 private slots:
     void onReplyMetaDataChanged();
@@ -45,9 +46,12 @@ private:
     struct ReplyState
     {
         QByteArray sseBuffer;
-        bool       isSse = false;
+        bool       isSse      = false;
+        bool       sendFailed = false;
+        quint64    sendToken  = 0;
     };
 
+    void           postMessage(const nlohmann::json &message, quint64 sendToken);
     void           handleSseChunk(QNetworkReply *reply);
     void           clearReplies();
     void           cleanupReply(QNetworkReply *reply);

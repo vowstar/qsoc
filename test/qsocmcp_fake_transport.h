@@ -29,17 +29,21 @@ public:
         if (state() == State::Running) {
             return;
         }
+        startCount_++;
         setState(State::Running);
         emit started();
     }
 
     void stop() override
     {
-        if (state() == State::Stopped) {
+        stopCount_++;
+        if (state() == State::Stopping || state() == State::Stopped) {
             return;
         }
-        setState(State::Stopped);
-        emit closed();
+        setState(State::Stopping);
+        if (closeOnStop_) {
+            simulateClosed();
+        }
     }
 
     void sendMessage(const nlohmann::json &message) override
@@ -50,11 +54,23 @@ public:
         }
     }
 
+    void sendTrackedMessage(const nlohmann::json &message, quint64 token) override
+    {
+        if (autoCompleteTrackedMessages_) {
+            QSocMcpTransport::sendTrackedMessage(message, token);
+            return;
+        }
+        sendMessage(message);
+    }
+
     void simulateMessage(const nlohmann::json &message) { emit messageReceived(message); }
+    void simulateError(const QString &message) { emit errorOccurred(message); }
     void setSendHook(std::function<void(const nlohmann::json &)> hook)
     {
         sendHook_ = std::move(hook);
     }
+    void setCloseOnStop(bool enabled) { closeOnStop_ = enabled; }
+    void setAutoCompleteTrackedMessages(bool enabled) { autoCompleteTrackedMessages_ = enabled; }
 
     void simulateClosed()
     {
@@ -65,14 +81,22 @@ public:
         emit closed();
     }
 
+    void simulateDuplicateClosed() { emit closed(); }
+
     int                          firstSentId() const { return sent_.first()["id"].get<int>(); }
     int                          lastSentId() const { return sent_.last()["id"].get<int>(); }
+    int                          startCount() const { return startCount_; }
+    int                          stopCount() const { return stopCount_; }
     qsizetype                    sentCount() const { return sent_.size(); }
     const QList<nlohmann::json> &sent() const { return sent_; }
 
 private:
     QList<nlohmann::json>                       sent_;
     std::function<void(const nlohmann::json &)> sendHook_;
+    bool                                        closeOnStop_                 = true;
+    bool                                        autoCompleteTrackedMessages_ = true;
+    int                                         startCount_                  = 0;
+    int                                         stopCount_                   = 0;
 };
 
 #endif // QSOCMCP_FAKE_TRANSPORT_H
