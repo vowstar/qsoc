@@ -118,10 +118,9 @@ public:
      *          model registry from it) and is positioned on the
      *          same `currentModelId` as `this`. Streaming state is
      *          NOT carried over: each clone has its own QNAM,
-     *          its own `currentStreamReply`, and its own
-     *          `streamCompleted` flag, so two clones can stream
-     *          concurrently without trampling each other's
-     *          single-flight invariant.
+     *          its own `currentStreamReply` and stream buffers, so two
+     *          clones can stream concurrently without trampling each
+     *          other's single-flight invariant.
      */
     QLLMService *clone(QObject *parent = nullptr) const;
 
@@ -404,11 +403,17 @@ private:
         bool               jsonMode);
 
     /**
+     * @brief Parse complete SSE lines already buffered for the active stream
+     * @return True when the buffer contains the [DONE] marker
+     */
+    bool processStreamBuffer();
+
+    /**
      * @brief Parse SSE data line and extract JSON
      * @param line SSE data line (without "data: " prefix)
      * @param accumulatedContent Accumulated content for building complete response
      * @param accumulatedToolCalls Accumulated tool calls (indexed by tool call index)
-     * @return True if stream is complete ([DONE] received)
+     * @return True if the [DONE] marker completes the stream
      */
     bool parseStreamLine(
         const QString &line, QString &accumulatedContent, QMap<int, json> &accumulatedToolCalls);
@@ -426,8 +431,8 @@ private:
     QString         streamBuffer;
     QString         streamAccumulatedContent;
     QMap<int, json> streamAccumulatedToolCalls;
-    bool            streamCompleted = false;
     QString         streamAccumulatedReasoning;
+    QString         streamFinishReason;
     bool            reasoningModeActive = false;
     /* Token usage reported by the server in the final stream chunk
      * (when stream_options.include_usage is set). buildStreamResponse

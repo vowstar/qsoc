@@ -40,7 +40,6 @@ private slots:
     void onReplyMetaDataChanged();
     void onReplyReadyRead();
     void onReplyFinished();
-    void onReplyError();
 
 private:
     struct ReplyState
@@ -50,7 +49,7 @@ private:
     };
 
     void           handleSseChunk(QNetworkReply *reply);
-    void           handleFinalJson(QNetworkReply *reply);
+    void           clearReplies();
     void           cleanupReply(QNetworkReply *reply);
     QNetworkReply *senderReply();
 
@@ -58,6 +57,7 @@ private:
     QNetworkAccessManager             *manager_ = nullptr;
     QHash<QNetworkReply *, ReplyState> replies_;
     QByteArray                         sessionId_;
+    quint64                            lifecycleGeneration_ = 0;
 };
 
 #endif // QSOCMCPHTTP_H

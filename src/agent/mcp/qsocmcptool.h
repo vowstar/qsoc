@@ -8,6 +8,7 @@
 #include "agent/qsoctool.h"
 
 #include <QPointer>
+#include <QSet>
 #include <QString>
 
 class QEventLoop;
@@ -19,7 +20,7 @@ class QSocMcpClient;
  *          forwards execute() to its JSON-RPC tools/call. The synchronous
  *          QSocTool::execute() contract is satisfied via a nested event
  *          loop that waits on the client's response signals; abort()
- *          breaks out of the loop early.
+ *          breaks every active call out of its loop early.
  */
 class QSocMcpTool : public QSocTool
 {
@@ -38,12 +39,17 @@ public:
     const McpToolDescriptor &descriptor() const;
 
 private:
+    struct CallState
+    {
+        QEventLoop *loop    = nullptr;
+        bool        aborted = false;
+    };
+
     QPointer<QSocMcpClient> client_;
     McpToolDescriptor       descriptor_;
     QString                 namespacedName_;
 
-    QEventLoop *currentLoop_ = nullptr;
-    bool        aborted_     = false;
+    QSet<CallState *> activeCalls_;
 };
 
 #endif // QSOCMCPTOOL_H

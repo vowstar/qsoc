@@ -80,8 +80,6 @@ QString QSocMcpTool::execute(const json &arguments)
         return QStringLiteral("[mcp error] server not ready");
     }
 
-    aborted_ = false;
-
     json params;
     params["name"]      = descriptor_.toolName.toStdString();
     params["arguments"] = arguments;
@@ -92,7 +90,8 @@ QString QSocMcpTool::execute(const json &arguments)
     }
 
     QEventLoop loop;
-    currentLoop_ = &loop;
+    CallState  callState{.loop = &loop};
+    activeCalls_.insert(&callState);
     QString result;
     bool    completed = false;
     bool    timedOut  = false;
@@ -152,22 +151,22 @@ QString QSocMcpTool::execute(const json &arguments)
     QObject::disconnect(responseConn);
     QObject::disconnect(failureConn);
     QObject::disconnect(closedConn);
-    currentLoop_ = nullptr;
+    activeCalls_.remove(&callState);
 
     /* Tell the server to drop the in-flight request when we walked
      * away. Without this the server keeps working on output we will
      * never consume. */
-    if ((aborted_ || timedOut) && !completed && !client_.isNull()) {
+    if ((callState.aborted || timedOut) && !completed && !client_.isNull()) {
         json cancelParams;
         cancelParams["requestId"] = requestId;
-        cancelParams["reason"]    = aborted_ ? "user abort" : "wall-clock timeout";
+        cancelParams["reason"]    = callState.aborted ? "user abort" : "wall-clock timeout";
         client_->notify(QStringLiteral("notifications/cancelled"), cancelParams);
     }
 
     if (timedOut) {
         return QStringLiteral("[mcp timeout] no response after 60s; sent cancel notification");
     }
-    if (aborted_) {
+    if (callState.aborted) {
         return QStringLiteral("[mcp aborted]");
     }
     return result;
@@ -175,9 +174,12 @@ QString QSocMcpTool::execute(const json &arguments)
 
 void QSocMcpTool::abort()
 {
-    aborted_ = true;
-    if (currentLoop_ != nullptr) {
-        currentLoop_->quit();
+    const QSet<CallState *> calls = activeCalls_;
+    for (CallState *call : calls) {
+        call->aborted = true;
+        if (call->loop != nullptr) {
+            call->loop->quit();
+        }
     }
 }
 

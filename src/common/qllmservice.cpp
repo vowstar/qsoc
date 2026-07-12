@@ -29,10 +29,12 @@ QLLMService::~QLLMService()
     /* Tear down any in-flight stream so its slots can't fire on a
      * partially-destroyed `this`. */
     if (currentStreamReply != nullptr) {
-        disconnect(currentStreamReply, nullptr, this, nullptr);
-        currentStreamReply->abort();
-        currentStreamReply->deleteLater();
-        currentStreamReply = nullptr;
+        QNetworkReply *reply = currentStreamReply;
+        currentStreamReply   = nullptr;
+        disconnect(reply, nullptr, this, nullptr);
+        if (reply->isRunning()) {
+            reply->abort();
+        }
     }
     /* Best-effort wipe of API-key buffers. detach() forces COW
      * uniqueness so we zero our own copy, not a shared one. */
@@ -221,14 +223,13 @@ void QLLMService::sendRequestAsync(
     QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
 
     /* Set timeout */
-    auto *timer = new QTimer(this);
+    auto *timer = new QTimer(reply);
     timer->setSingleShot(true);
     connect(timer, &QTimer::timeout, reply, &QNetworkReply::abort);
     timer->start(endpoint.timeout);
 
-    connect(reply, &QNetworkReply::finished, [this, reply, callback, timer]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, callback, timer]() {
         timer->stop();
-        timer->deleteLater();
         LLMResponse response = parseResponse(reply);
         reply->deleteLater();
         callback(response);
@@ -615,14 +616,16 @@ LLMResponse QLLMService::sendRequestToEndpoint(
 
 void QLLMService::abortStream()
 {
-    if (!currentStreamReply || streamCompleted) {
+    QNetworkReply *reply = currentStreamReply;
+    if (reply == nullptr) {
         return;
     }
-    streamCompleted = true;
-    disconnect(currentStreamReply, nullptr, this, nullptr);
-    currentStreamReply->abort();
-    currentStreamReply->deleteLater();
     currentStreamReply = nullptr;
+    disconnect(reply, nullptr, this, nullptr);
+    if (reply->isRunning()) {
+        reply->abort();
+    }
+    reply->deleteLater();
     emit streamError("Aborted by user");
 }
 
@@ -640,11 +643,13 @@ void QLLMService::sendChatCompletionStream(
 
     /* Abort any existing stream request before starting a new one */
     if (currentStreamReply) {
-        /* Disconnect all signals first to prevent callbacks during cleanup */
-        disconnect(currentStreamReply, nullptr, this, nullptr);
-        currentStreamReply->abort();
-        currentStreamReply->deleteLater();
-        currentStreamReply = nullptr;
+        QNetworkReply *reply = currentStreamReply;
+        currentStreamReply   = nullptr;
+        disconnect(reply, nullptr, this, nullptr);
+        if (reply->isRunning()) {
+            reply->abort();
+        }
+        reply->deleteLater();
     }
 
     LLMEndpoint     endpoint = selectEndpoint();
@@ -692,145 +697,119 @@ void QLLMService::sendChatCompletionStream(
     streamAccumulatedContent.clear();
     streamAccumulatedToolCalls.clear();
     streamAccumulatedReasoning.clear();
+    streamFinishReason.clear();
     streamAccumulatedUsage = json::object();
-    streamCompleted        = false;
 
-    currentStreamReply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
+    QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
+    currentStreamReply   = reply;
 
     /* Set timeout */
-    auto *timer = new QTimer(this);
+    auto *timer = new QTimer(reply);
     timer->setSingleShot(true);
-    connect(timer, &QTimer::timeout, this, [this, timer]() {
-        timer->deleteLater();
-        if (currentStreamReply) {
-            currentStreamReply->abort();
-            emit streamError("Request timeout");
+    connect(timer, &QTimer::timeout, this, [this, reply]() {
+        if (currentStreamReply != reply) {
+            return;
         }
+        currentStreamReply = nullptr;
+        disconnect(reply, nullptr, this, nullptr);
+        if (reply->isRunning()) {
+            reply->abort();
+        }
+        reply->deleteLater();
+        emit streamError("Request timeout");
     });
     timer->start(endpoint.timeout);
 
     /* Handle incoming data */
-    connect(currentStreamReply, &QNetworkReply::readyRead, this, [this, timer]() {
-        if (!currentStreamReply || streamCompleted) {
+    connect(reply, &QNetworkReply::readyRead, this, [this, reply, timer]() {
+        if (currentStreamReply != reply) {
             return;
         }
 
         /* Reset timeout timer on each data received */
         timer->start();
 
-        streamBuffer += QString::fromUtf8(currentStreamReply->readAll());
-
-        /* Process complete SSE lines */
-        while (true) {
-            int lineEnd = streamBuffer.indexOf('\n');
-            if (lineEnd == -1) {
-                break;
-            }
-
-            QString line = streamBuffer.left(lineEnd).trimmed();
-            streamBuffer = streamBuffer.mid(lineEnd + 1);
-
-            /* Skip empty lines */
-            if (line.isEmpty()) {
-                continue;
-            }
-
-            /* Parse SSE data lines */
-            if (line.startsWith("data: ")) {
-                QString data = line.mid(6);
-
-                bool isDone
-                    = parseStreamLine(data, streamAccumulatedContent, streamAccumulatedToolCalls);
-
-                if (isDone) {
-                    streamCompleted = true;
-
-                    /* Disconnect all signals from reply and timer to prevent
-                     * finished/timeout from firing during nested QEventLoop
-                     * (e.g. bash tool execution). This prevents use-after-free
-                     * when deleteLater processes during nested event loop while
-                     * network thread still has posted events for the reply. */
-                    disconnect(currentStreamReply, nullptr, this, nullptr);
-                    disconnect(timer, nullptr, this, nullptr);
-                    timer->stop();
-                    timer->deleteLater();
-                    currentStreamReply->abort();
-
-                    json response
-                        = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
-                    emit streamComplete(response);
-                    return;
-                }
-            }
-        }
-    });
-
-    /* Handle completion */
-    connect(currentStreamReply, &QNetworkReply::finished, this, [this, timer]() {
-        timer->stop();
-        timer->deleteLater();
-
-        if (!currentStreamReply) {
+        streamBuffer += QString::fromUtf8(reply->readAll());
+        const bool completed = processStreamBuffer();
+        if (currentStreamReply != reply || !completed) {
             return;
         }
 
-        bool hasError = currentStreamReply->error() != QNetworkReply::NoError
-                        && currentStreamReply->error() != QNetworkReply::OperationCanceledError;
+        json response = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
+        currentStreamReply = nullptr;
+        timer->stop();
+        disconnect(timer, nullptr, this, nullptr);
+        connect(timer, &QTimer::timeout, reply, [reply]() {
+            if (reply->isRunning()) {
+                reply->abort();
+            }
+            reply->deleteLater();
+        });
+        timer->start();
+        disconnect(reply, &QNetworkReply::readyRead, this, nullptr);
+        emit streamComplete(response);
+    });
 
-        if (hasError) {
+    /* Handle completion */
+    connect(reply, &QNetworkReply::finished, this, [this, reply, timer]() {
+        if (currentStreamReply != reply) {
+            reply->deleteLater();
+            return;
+        }
+
+        timer->stop();
+        currentStreamReply = nullptr;
+
+        if (reply->error() != QNetworkReply::NoError) {
             /* Prefix the HTTP status code so downstream classification can
              * dispatch on an exact code instead of fuzzy-matching the body.
              * Status 0 means the request never reached the server (DNS,
              * TLS, connection-refused, abort, etc). */
             const int httpStatus
-                = currentStreamReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            QString    errorMsg  = QString("[HTTP %1] ").arg(httpStatus)
-                                   + currentStreamReply->errorString();
-            QByteArray errorBody = currentStreamReply->readAll();
+                = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            QString    errorMsg  = QString("[HTTP %1] ").arg(httpStatus) + reply->errorString();
+            QByteArray errorBody = reply->readAll();
             if (!errorBody.isEmpty()) {
                 errorMsg += "\n" + QString::fromUtf8(errorBody);
             }
             if (!streamBuffer.isEmpty()) {
                 errorMsg += "\n" + streamBuffer;
             }
+            reply->deleteLater();
             emit streamError(errorMsg);
-        } else if (!streamCompleted) {
-            /* Only process remaining data if streamComplete wasn't already emitted.
-             * This prevents double emission when the finished signal fires during
-             * a nested QEventLoop (e.g. bash tool execution). */
-
-            /* Process any remaining data in buffer */
-            QString remaining = streamBuffer.trimmed();
-            if (!remaining.isEmpty() && remaining.startsWith("data: ")) {
-                QString data = remaining.mid(6);
-                bool    isDone
-                    = parseStreamLine(data, streamAccumulatedContent, streamAccumulatedToolCalls);
-                if (isDone) {
-                    streamCompleted = true;
-                    json response
-                        = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
-                    emit streamComplete(response);
-                }
-            }
-
-            /* If we have accumulated content or tool calls but didn't get [DONE],
-               still emit streamComplete to avoid hanging */
-            if (!streamCompleted
-                && (!streamAccumulatedContent.isEmpty() || !streamAccumulatedToolCalls.isEmpty())) {
-                streamCompleted = true;
-                json response
-                    = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
-                emit streamComplete(response);
-            }
+            return;
         }
 
-        /* Disconnect and abort before deleteLater to ensure network thread
-         * has stopped posting events before the reply object is deleted. */
-        disconnect(currentStreamReply, nullptr, this, nullptr);
-        currentStreamReply->abort();
-        currentStreamReply->deleteLater();
-        currentStreamReply = nullptr;
+        streamBuffer += QString::fromUtf8(reply->readAll());
+        if (!streamBuffer.isEmpty() && !streamBuffer.endsWith(QLatin1Char('\n'))) {
+            streamBuffer += QLatin1Char('\n');
+        }
+        processStreamBuffer();
+        json response = buildStreamResponse(streamAccumulatedContent, streamAccumulatedToolCalls);
+        reply->deleteLater();
+        emit streamComplete(response);
     });
+}
+
+bool QLLMService::processStreamBuffer()
+{
+    while (true) {
+        const int lineEnd = streamBuffer.indexOf(QLatin1Char('\n'));
+        if (lineEnd == -1) {
+            return false;
+        }
+
+        const QString line = streamBuffer.left(lineEnd).trimmed();
+        streamBuffer       = streamBuffer.mid(lineEnd + 1);
+        if (!line.startsWith(QStringLiteral("data: "))) {
+            continue;
+        }
+
+        const QString data = line.mid(6);
+        if (parseStreamLine(data, streamAccumulatedContent, streamAccumulatedToolCalls)) {
+            return true;
+        }
+    }
 }
 
 bool QLLMService::parseStreamLine(
@@ -934,10 +913,12 @@ bool QLLMService::parseStreamLine(
             }
         }
 
-        /* Check for finish reason */
+        /* Preserve the finish reason, but keep reading through the usage
+         * chunk and [DONE] marker that may follow it. */
         if (chunk["choices"][0].contains("finish_reason")
-            && !chunk["choices"][0]["finish_reason"].is_null()) {
-            return true;
+            && chunk["choices"][0]["finish_reason"].is_string()) {
+            streamFinishReason = QString::fromStdString(
+                chunk["choices"][0]["finish_reason"].get<std::string>());
         }
 
     } catch (const json::parse_error &err) {
@@ -981,7 +962,12 @@ json QLLMService::buildStreamResponse(const QString &content, const QMap<int, js
         message["tool_calls"] = toolCallsArray;
     }
 
-    json response = {{"choices", json::array({{{"message", message}}})}};
+    json choice = {{"message", message}};
+    if (!streamFinishReason.isEmpty()) {
+        choice["finish_reason"] = streamFinishReason.toStdString();
+    }
+
+    json response = {{"choices", json::array({choice})}};
     if (streamAccumulatedUsage.is_object() && !streamAccumulatedUsage.empty()) {
         response["usage"] = streamAccumulatedUsage;
     }

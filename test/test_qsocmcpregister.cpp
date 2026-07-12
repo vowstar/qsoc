@@ -9,6 +9,7 @@
 #include "agent/qsoctool.h"
 #include "qsoc_test.h"
 
+#include <algorithm>
 #include <nlohmann/json.hpp>
 
 #include <QSignalSpy>
@@ -49,6 +50,34 @@ public:
     int firstSentId() const { return sent_.first()["id"].get<int>(); }
     int lastSentId() const { return sent_.last()["id"].get<int>(); }
 
+    QList<int> requestIdsForMethod(const QString &method) const
+    {
+        QList<int> ids;
+        for (const auto &message : sent_) {
+            if (message.value("method", std::string()) == method.toStdString()
+                && message.contains("id") && message["id"].is_number_integer()) {
+                ids.append(message["id"].get<int>());
+            }
+        }
+        return ids;
+    }
+
+    QList<int> cancelledRequestIds() const
+    {
+        QList<int> ids;
+        for (const auto &message : sent_) {
+            if (message.value("method", std::string()) != "notifications/cancelled"
+                || !message.contains("params")) {
+                continue;
+            }
+            const auto &params = message["params"];
+            if (params.contains("requestId") && params["requestId"].is_number_integer()) {
+                ids.append(params["requestId"].get<int>());
+            }
+        }
+        return ids;
+    }
+
 private:
     QList<nlohmann::json> sent_;
 };
@@ -73,6 +102,16 @@ void replyInitialize(FakeTransport *transport, int id)
     transport->simulateMessage(resp);
 }
 
+void replyToolSuccess(FakeTransport *transport, int id, const QString &text)
+{
+    nlohmann::json resp;
+    resp["jsonrpc"]           = "2.0";
+    resp["id"]                = id;
+    resp["result"]["content"] = nlohmann::json::array(
+        {{{"type", "text"}, {"text", text.toStdString()}}});
+    transport->simulateMessage(resp);
+}
+
 bool driveClientToReady(QSocMcpClient *client, FakeTransport *transport)
 {
     client->start();
@@ -81,21 +120,11 @@ bool driveClientToReady(QSocMcpClient *client, FakeTransport *transport)
         [client]() { return client->state() == QSocMcpClient::State::Ready; }, 1000);
 }
 
-} // namespace
-
 class Test : public QObject
 {
     Q_OBJECT
 
 private slots:
-    void initTestCase()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc_test";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app(argc, argv.data());
-    }
-
     void toolReportsCorrectMetadata()
     {
         auto         *transport = new FakeTransport;
@@ -216,6 +245,46 @@ private slots:
         QVERIFY(output.contains(QStringLiteral("not ready")));
     }
 
+    void abortStopsEveryNestedCall()
+    {
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName  = "svr";
+        desc.toolName    = "wait";
+        desc.inputSchema = {{"type", "object"}};
+
+        QSocMcpTool tool(&client, desc);
+        QString     innerOutput;
+
+        QTimer::singleShot(0, &tool, [&]() {
+            QTimer::singleShot(0, &tool, &QSocMcpTool::abort);
+            innerOutput = tool.execute({{"depth", "inner"}});
+        });
+
+        /* Keep a broken implementation bounded: answer any calls that remain
+         * after abort so the regression fails quickly instead of timing out. */
+        QTimer::singleShot(250, &client, [transport]() {
+            const QList<int> ids = transport->requestIdsForMethod(QStringLiteral("tools/call"));
+            for (int id : ids) {
+                replyToolSuccess(transport, id, QStringLiteral("late"));
+            }
+        });
+
+        const QString outerOutput = tool.execute({{"depth", "outer"}});
+        QCOMPARE(innerOutput, QStringLiteral("[mcp aborted]"));
+        QCOMPARE(outerOutput, QStringLiteral("[mcp aborted]"));
+
+        QList<int> requestIds = transport->requestIdsForMethod(QStringLiteral("tools/call"));
+        QList<int> cancelled  = transport->cancelledRequestIds();
+        std::sort(requestIds.begin(), requestIds.end());
+        std::sort(cancelled.begin(), cancelled.end());
+        QCOMPARE(requestIds.size(), 2);
+        QCOMPARE(cancelled, requestIds);
+    }
+
     void managerCountsZeroToolsBeforeListResponse()
     {
         QSocToolRegistry       registry;
@@ -227,6 +296,8 @@ private slots:
         QVERIFY(manager.toolsForClient("alpha").isEmpty());
     }
 };
+
+} // namespace
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsocmcpregister.moc"

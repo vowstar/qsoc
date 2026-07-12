@@ -563,11 +563,10 @@ QString QSocToolAgent::execute(const json &arguments)
     }
 
     /* Per-child LLMService: clone the live parent's service so the
-     * child has its OWN streaming state (currentStreamReply,
-     * streamCompleted, …). Without this, two concurrent sub-agents
-     * trample each other's single-flight invariant. The clone
-     * shares the same QSocConfig, so model + endpoint selection
-     * stays in sync. */
+     * child has its own streaming reply and buffers. Without this,
+     * concurrent sub-agents trample each other's single-flight
+     * invariant. The clone shares the same QSocConfig, so model and
+     * endpoint selection stay in sync. */
     auto *childLlm = effectiveLlm->clone(nullptr);
     auto *child    = new QSocAgent(nullptr, childLlm, effectiveRegistry, childCfg);
     childLlm->setParent(child); /* tie LLM lifetime to child */

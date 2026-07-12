@@ -11,11 +11,19 @@
 #include <QNetworkRequest>
 #include <QUrl>
 
+#include <utility>
+
 namespace {
 
 constexpr auto kAcceptHeader       = "application/json, text/event-stream";
 constexpr auto kSseContentType     = "text/event-stream";
 constexpr auto kMcpSessionIdHeader = "Mcp-Session-Id";
+
+struct DeferredSignal
+{
+    nlohmann::json message;
+    QString        error;
+};
 
 bool replyIsSse(QNetworkReply *reply)
 {
@@ -24,6 +32,77 @@ bool replyIsSse(QNetworkReply *reply)
     }
     const QByteArray contentType = reply->header(QNetworkRequest::ContentTypeHeader).toByteArray();
     return contentType.contains(kSseContentType);
+}
+
+QList<DeferredSignal> parseSseEvents(QByteArray &buffer)
+{
+    QList<DeferredSignal> events;
+
+    /* SSE delimits events with any of \r\r, \n\n, or \r\n\r\n. Pick the
+     * earliest occurrence so we honour whichever the server emitted. */
+    while (true) {
+        qsizetype  eventEnd   = -1;
+        qsizetype  delimLen   = 0;
+        const auto candidates = {
+            std::make_pair(QByteArrayLiteral("\r\n\r\n"), qsizetype(4)),
+            std::make_pair(QByteArrayLiteral("\n\n"), qsizetype(2)),
+            std::make_pair(QByteArrayLiteral("\r\r"), qsizetype(2)),
+        };
+        for (const auto &[delim, len] : candidates) {
+            const qsizetype idx = buffer.indexOf(delim);
+            if (idx >= 0 && (eventEnd < 0 || idx < eventEnd)) {
+                eventEnd = idx;
+                delimLen = len;
+            }
+        }
+        if (eventEnd < 0) {
+            return events;
+        }
+        const QByteArray eventText = buffer.left(eventEnd);
+        buffer.remove(0, eventEnd + delimLen);
+
+        QByteArray dataPayload;
+        for (const QByteArray &lineRaw : eventText.split('\n')) {
+            QByteArray line = lineRaw;
+            if (line.endsWith('\r')) {
+                line.chop(1);
+            }
+            if (line.startsWith("data:")) {
+                QByteArray value = line.mid(5);
+                if (value.startsWith(' ')) {
+                    value = value.mid(1);
+                }
+                if (!dataPayload.isEmpty()) {
+                    dataPayload.append('\n');
+                }
+                dataPayload.append(value);
+            }
+        }
+        if (dataPayload.isEmpty()) {
+            continue;
+        }
+        try {
+            events.append(DeferredSignal{nlohmann::json::parse(dataPayload.toStdString()), {}});
+        } catch (const std::exception &e) {
+            events.append(
+                DeferredSignal{
+                    {},
+                    QStringLiteral("SSE JSON parse error: %1").arg(QString::fromUtf8(e.what()))});
+        }
+    }
+}
+
+QList<DeferredSignal> parseJsonBody(const QByteArray &body)
+{
+    if (body.trimmed().isEmpty()) {
+        return {}; /* Empty 200 is valid for one-way notifications. */
+    }
+    try {
+        return QList<DeferredSignal>{DeferredSignal{nlohmann::json::parse(body.toStdString()), {}}};
+    } catch (const std::exception &e) {
+        return QList<DeferredSignal>{DeferredSignal{
+            {}, QStringLiteral("JSON parse error: %1").arg(QString::fromUtf8(e.what()))}};
+    }
 }
 
 } // namespace
@@ -35,14 +114,7 @@ QSocMcpHttpTransport::QSocMcpHttpTransport(McpServerConfig config, QObject *pare
 
 QSocMcpHttpTransport::~QSocMcpHttpTransport()
 {
-    for (auto it = replies_.constBegin(); it != replies_.constEnd(); ++it) {
-        QNetworkReply *reply = it.key();
-        if (reply != nullptr) {
-            reply->abort();
-            reply->deleteLater();
-        }
-    }
-    replies_.clear();
+    clearReplies();
 }
 
 void QSocMcpHttpTransport::start()
@@ -65,13 +137,7 @@ void QSocMcpHttpTransport::stop()
         return;
     }
     setState(State::Stopping);
-    for (auto it = replies_.constBegin(); it != replies_.constEnd(); ++it) {
-        QNetworkReply *reply = it.key();
-        if (reply != nullptr) {
-            reply->abort();
-        }
-    }
-    replies_.clear();
+    clearReplies();
     setState(State::Stopped);
     emit closed();
 }
@@ -111,7 +177,6 @@ void QSocMcpHttpTransport::sendMessage(const nlohmann::json &message)
         reply, &QNetworkReply::metaDataChanged, this, &QSocMcpHttpTransport::onReplyMetaDataChanged);
     connect(reply, &QNetworkReply::readyRead, this, &QSocMcpHttpTransport::onReplyReadyRead);
     connect(reply, &QNetworkReply::finished, this, &QSocMcpHttpTransport::onReplyFinished);
-    connect(reply, &QNetworkReply::errorOccurred, this, &QSocMcpHttpTransport::onReplyError);
 }
 
 void QSocMcpHttpTransport::onReplyMetaDataChanged()
@@ -136,11 +201,15 @@ void QSocMcpHttpTransport::onReplyReadyRead()
     if (reply == nullptr || !replies_.contains(reply)) {
         return;
     }
-    auto &meta = replies_[reply];
-    if (!meta.isSse) {
-        meta.isSse = replyIsSse(reply);
+    bool isSse = false;
+    {
+        auto it = replies_.find(reply);
+        if (!it->isSse) {
+            it->isSse = replyIsSse(reply);
+        }
+        isSse = it->isSse;
     }
-    if (meta.isSse) {
+    if (isSse) {
         handleSseChunk(reply);
     }
     /* Non-SSE bodies are read in onReplyFinished where we have the
@@ -155,8 +224,9 @@ void QSocMcpHttpTransport::onReplyFinished()
     }
 
     if (reply->error() != QNetworkReply::NoError) {
-        emit errorOccurred(reply->errorString());
+        const QString error = reply->errorString();
         cleanupReply(reply);
+        emit errorOccurred(error);
         return;
     }
 
@@ -169,93 +239,75 @@ void QSocMcpHttpTransport::onReplyFinished()
         sessionId_ = sessionId;
     }
 
-    auto &meta = replies_[reply];
-    if (meta.isSse) {
-        /* Drain any remaining buffered SSE bytes. */
-        handleSseChunk(reply);
-    } else {
-        handleFinalJson(reply);
+    QList<DeferredSignal> events;
+    {
+        auto it = replies_.find(reply);
+        if (!it->isSse) {
+            it->isSse = replyIsSse(reply);
+        }
+        if (it->isSse) {
+            it->sseBuffer += reply->readAll();
+            events = parseSseEvents(it->sseBuffer);
+        } else {
+            events = parseJsonBody(reply->readAll());
+        }
     }
     cleanupReply(reply);
-}
 
-void QSocMcpHttpTransport::onReplyError()
-{
-    QNetworkReply *reply = senderReply();
-    if (reply == nullptr) {
-        return;
+    const quint64                  generation = lifecycleGeneration_;
+    QPointer<QSocMcpHttpTransport> guard(this);
+    for (const auto &event : std::as_const(events)) {
+        if (event.error.isEmpty()) {
+            emit messageReceived(event.message);
+        } else {
+            emit errorOccurred(event.error);
+        }
+        if (guard.isNull() || lifecycleGeneration_ != generation) {
+            return;
+        }
     }
-    emit errorOccurred(reply->errorString());
 }
 
 void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)
 {
-    auto &meta = replies_[reply];
-    meta.sseBuffer += reply->readAll();
-
-    /* SSE delimits events with any of \r\r, \n\n, or \r\n\r\n. Pick the
-     * earliest occurrence so we honour whichever the server emitted. */
-    while (true) {
-        qsizetype  eventEnd   = -1;
-        qsizetype  delimLen   = 0;
-        const auto candidates = {
-            std::make_pair(QByteArrayLiteral("\r\n\r\n"), qsizetype(4)),
-            std::make_pair(QByteArrayLiteral("\n\n"), qsizetype(2)),
-            std::make_pair(QByteArrayLiteral("\r\r"), qsizetype(2)),
-        };
-        for (const auto &[delim, len] : candidates) {
-            const qsizetype idx = meta.sseBuffer.indexOf(delim);
-            if (idx >= 0 && (eventEnd < 0 || idx < eventEnd)) {
-                eventEnd = idx;
-                delimLen = len;
-            }
-        }
-        if (eventEnd < 0) {
+    QList<DeferredSignal> events;
+    {
+        auto it = replies_.find(reply);
+        if (it == replies_.end()) {
             return;
         }
-        const QByteArray eventText = meta.sseBuffer.left(eventEnd);
-        meta.sseBuffer.remove(0, eventEnd + delimLen);
+        it->sseBuffer += reply->readAll();
+        events = parseSseEvents(it->sseBuffer);
+    }
 
-        QByteArray dataPayload;
-        for (const QByteArray &lineRaw : eventText.split('\n')) {
-            QByteArray line = lineRaw;
-            if (line.endsWith('\r')) {
-                line.chop(1);
-            }
-            if (line.startsWith("data:")) {
-                QByteArray value = line.mid(5);
-                if (value.startsWith(' ')) {
-                    value = value.mid(1);
-                }
-                if (!dataPayload.isEmpty()) {
-                    dataPayload.append('\n');
-                }
-                dataPayload.append(value);
-            }
+    const quint64                  generation = lifecycleGeneration_;
+    QPointer<QSocMcpHttpTransport> guard(this);
+    for (const auto &event : std::as_const(events)) {
+        if (event.error.isEmpty()) {
+            emit messageReceived(event.message);
+        } else {
+            emit errorOccurred(event.error);
         }
-        if (dataPayload.isEmpty()) {
-            continue;
-        }
-        try {
-            auto msg = nlohmann::json::parse(dataPayload.toStdString());
-            emit messageReceived(msg);
-        } catch (const std::exception &e) {
-            emit errorOccurred(QStringLiteral("SSE JSON parse error: %1").arg(e.what()));
+        if (guard.isNull() || lifecycleGeneration_ != generation) {
+            return;
         }
     }
 }
 
-void QSocMcpHttpTransport::handleFinalJson(QNetworkReply *reply)
+void QSocMcpHttpTransport::clearReplies()
 {
-    const QByteArray body = reply->readAll();
-    if (body.trimmed().isEmpty()) {
-        return; /* Empty 200 is valid for one-way notifications. */
-    }
-    try {
-        auto msg = nlohmann::json::parse(body.toStdString());
-        emit messageReceived(msg);
-    } catch (const std::exception &e) {
-        emit errorOccurred(QStringLiteral("JSON parse error: %1").arg(e.what()));
+    lifecycleGeneration_++;
+    const QList<QNetworkReply *> replies = replies_.keys();
+    replies_.clear();
+    for (QNetworkReply *reply : replies) {
+        if (reply == nullptr) {
+            continue;
+        }
+        disconnect(reply, nullptr, this, nullptr);
+        if (reply->isRunning()) {
+            reply->abort();
+        }
+        reply->deleteLater();
     }
 }
 
@@ -265,6 +317,7 @@ void QSocMcpHttpTransport::cleanupReply(QNetworkReply *reply)
         return;
     }
     replies_.remove(reply);
+    disconnect(reply, nullptr, this, nullptr);
     reply->deleteLater();
 }
 
