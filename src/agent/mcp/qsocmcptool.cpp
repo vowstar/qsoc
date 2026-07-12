@@ -126,8 +126,13 @@ QString QSocMcpTool::execute(const json &arguments)
             if (id != requestId || callState.outcome != CallOutcome::Pending) {
                 return;
             }
-            callState.result  = QStringLiteral("[mcp error %1] %2").arg(code).arg(message);
-            callState.outcome = CallOutcome::Completed;
+            if (client_.isNull() || client_->state() == QSocMcpClient::State::Disconnected) {
+                callState.result  = QStringLiteral("[mcp error] server closed during call");
+                callState.outcome = CallOutcome::ClientClosed;
+            } else {
+                callState.result  = QStringLiteral("[mcp error %1] %2").arg(code).arg(message);
+                callState.outcome = CallOutcome::Completed;
+            }
             loop.quit();
         });
 

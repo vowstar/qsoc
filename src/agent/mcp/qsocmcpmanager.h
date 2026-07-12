@@ -53,9 +53,11 @@ public:
     ~QSocMcpManager() override;
 
     /**
-     * @brief Override the transport factory before constructing servers.
-     * @details Must be called before startAll() / before any client is
-     *          built. Used by tests to inject in-process fakes.
+     * @brief Set the transport factory.
+     * @details A non-empty factory cancels pending reconnects, clears failure
+     *          state, and rebuilds stopped clients for the next startAll()
+     *          when transport creation succeeds.
+     *          An empty factory selects the default for future rebuilds.
      */
     void setTransportFactory(TransportFactory factory);
 
@@ -66,12 +68,17 @@ public:
 
     /**
      * @brief Drive every owned client's start() in one shot.
+     * @details Cancels each current client's pending reconnect before start.
      */
     void startAll();
 
-    qsizetype            clientCount() const;
-    QStringList          serverNames() const;
-    QSocMcpClient       *findClient(const QString &name) const;
+    qsizetype   clientCount() const;
+    QStringList serverNames() const;
+    /** Borrowed pointer invalidated by rebuild, drop, or manager destruction.
+     *  Use QPointer when retaining it across events. */
+    QSocMcpClient *findClient(const QString &name) const;
+    /** Borrowed pointers invalidated by refresh, disconnect, or rebuild.
+     *  Use QPointer when retaining them across events. */
     QList<QSocMcpTool *> toolsForClient(const QString &name) const;
     qsizetype            totalToolCount() const;
     int                  reconnectAttempts(const QString &name) const;
@@ -109,11 +116,15 @@ private:
         int                          reconnectAttempts = 0;
         bool                         givenUp           = false;
         QPointer<QTimer>             reconnectTimer;
+        QPointer<QSocMcpClient>      reconnectClient;
+        quint64                      replacementRevision = 0;
         QList<QPointer<QSocMcpTool>> registeredTools;
     };
 
-    void           buildServer(const McpServerConfig &cfg);
-    void           rebuildServer(const QString &name);
+    void           buildServer(const McpServerConfig &cfg, quint64 revision);
+    void           rebuildServer(const QString &name, bool start);
+    void           cancelReconnect(ServerState &state);
+    void           retireClient(ServerState &state);
     void           wireClientSignals(QSocMcpClient *client);
     void           requestToolsList(QSocMcpClient *client);
     void           registerToolsFromResult(QSocMcpClient *client, const nlohmann::json &result);
@@ -127,6 +138,7 @@ private:
     TransportFactory            factory_;
     int                         reconnectInitialDelayMs_ = kReconnectInitialDelayMs;
     int                         reconnectMaxDelayMs_     = kReconnectMaxDelayMs;
+    quint64                     factoryRevision_         = 0;
     QStringList                 order_;
     QHash<QString, ServerState> servers_;
 };

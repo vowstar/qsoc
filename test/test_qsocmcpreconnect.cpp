@@ -29,6 +29,18 @@ McpServerConfig makeConfig(const QString &name)
     return cfg;
 }
 
+QList<QTimer *> activeReconnectTimers(const QSocMcpManager &manager)
+{
+    QList<QTimer *> active;
+    const auto      timers = manager.findChildren<QTimer *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QTimer *timer : timers) {
+        if (timer->isActive()) {
+            active << timer;
+        }
+    }
+    return active;
+}
+
 void replyInitialize(QsocMcpFakeTransport *transport, int messageId)
 {
     nlohmann::json resp;
@@ -561,6 +573,348 @@ private slots:
         QVERIFY(transports.last().data() != firstTransportPtr.data());
     }
 
+    void duplicateCloseSchedulesOneReconnect()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+
+        QSocMcpManager manager(cfgs);
+        manager.setReconnectDelays(5000, 5000);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QSignalSpy scheduleSpy(&manager, &QSocMcpManager::reconnectScheduled);
+
+        manager.startAll();
+        QVERIFY(QTest::qWaitFor([&]() { return !transports.isEmpty(); }, 500));
+        QSocMcpClient *client = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(client != nullptr);
+
+        transports.last()->simulateClosed();
+        QVERIFY(QMetaObject::invokeMethod(client, "closed", Qt::DirectConnection));
+
+        QCOMPARE(scheduleSpy.size(), 1);
+        QCOMPARE(manager.reconnectAttempts(QStringLiteral("svr")), 1);
+        QCOMPARE(activeReconnectTimers(manager).size(), 1);
+    }
+
+    void manualReconnectCancelsEveryPendingTimer()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+
+        QSocMcpManager manager(cfgs);
+        manager.setReconnectDelays(5000, 5000);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        manager.startAll();
+        QVERIFY(QTest::qWaitFor([&]() { return !transports.isEmpty(); }, 500));
+        QSocMcpClient *client = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(client != nullptr);
+
+        transports.last()->simulateClosed();
+        QVERIFY(QMetaObject::invokeMethod(client, "closed", Qt::DirectConnection));
+        const QList<QTimer *> timers = activeReconnectTimers(manager);
+        QCOMPARE(timers.size(), 1);
+        QTimer *pendingTimer = timers.first();
+        QVERIFY(manager.reconnectServer(QStringLiteral("svr")));
+        QCOMPARE(transports.size(), 2);
+        QCOMPARE(activeReconnectTimers(manager).size(), 0);
+
+        QPointer<QSocMcpClient> replacement = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(QMetaObject::invokeMethod(pendingTimer, "timeout", Qt::DirectConnection));
+        QCOMPARE(manager.findClient(QStringLiteral("svr")), replacement.data());
+        QCOMPARE(transports.size(), 2);
+    }
+
+    void factoryReplacementCancelsPendingReconnect()
+    {
+        QSocToolRegistry                      registry;
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+
+        QSocMcpManager manager(cfgs, &registry);
+        manager.setReconnectDelays(5000, 5000);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        manager.startAll();
+        QVERIFY(QTest::qWaitFor([&]() { return !transports.isEmpty(); }, 500));
+
+        transports.last()->simulateClosed();
+        QCOMPARE(manager.reconnectAttempts(QStringLiteral("svr")), 1);
+        QCOMPARE(activeReconnectTimers(manager).size(), 1);
+
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QCOMPARE(activeReconnectTimers(manager).size(), 0);
+        manager.startAll();
+        QCOMPARE(transports.size(), 2);
+
+        QPointer<QSocMcpClient> replacement = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(!replacement.isNull());
+        driveHandshakeAndList(transports.last().data(), {"new"});
+        QVERIFY(QTest::qWaitFor([&]() { return registry.hasTool("mcp__svr__new"); }, 500));
+
+        QCOMPARE(transports.size(), 2);
+        QCOMPARE(manager.findClient(QStringLiteral("svr")), replacement.data());
+        QVERIFY(registry.hasTool(QStringLiteral("mcp__svr__new")));
+    }
+
+    void factoryReplacementClearsFailureState()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+
+        QSocMcpManager manager(cfgs);
+        manager.setReconnectDelays(5000, 5000);
+        manager.setTransportFactory(
+            [](const McpServerConfig &) { return static_cast<QSocMcpTransport *>(nullptr); });
+        QVERIFY(manager.hasGivenUp(QStringLiteral("svr")));
+        QCOMPARE(manager.clientCount(), qsizetype(0));
+
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QVERIFY(!manager.hasGivenUp(QStringLiteral("svr")));
+        QCOMPARE(manager.reconnectAttempts(QStringLiteral("svr")), 0);
+
+        QSignalSpy scheduleSpy(&manager, &QSocMcpManager::reconnectScheduled);
+        manager.startAll();
+        QCOMPARE(transports.size(), 1);
+        transports.last()->simulateClosed();
+        QCOMPARE(scheduleSpy.size(), 1);
+        QCOMPARE(activeReconnectTimers(manager).size(), 1);
+    }
+
+    void factoryReplacementStopsOldTransportBeforeReplacement()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+        QPointer<QsocMcpFakeTransport>        oldTransport;
+        bool                                  stoppedBeforeReplacement = false;
+
+        QSocMcpManager manager(cfgs);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        manager.startAll();
+        QCOMPARE(transports.size(), 1);
+        oldTransport = transports.last();
+
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            stoppedBeforeReplacement = !oldTransport.isNull() && oldTransport->stopCount() == 1;
+            auto *transport          = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+
+        QVERIFY(stoppedBeforeReplacement);
+        QCOMPARE(oldTransport->stopCount(), 1);
+        QCOMPARE(transports.size(), 2);
+        QCOMPARE(transports.last()->startCount(), 0);
+
+        manager.startAll();
+        QCOMPARE(transports.last()->startCount(), 1);
+    }
+
+    void startAllCancelsPendingReconnect()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+
+        QSocMcpManager manager(cfgs);
+        manager.setReconnectDelays(5000, 5000);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        manager.startAll();
+        QCOMPARE(transports.size(), 1);
+
+        QPointer<QSocMcpClient> client = manager.findClient(QStringLiteral("svr"));
+        transports.last()->simulateClosed();
+        QCOMPARE(activeReconnectTimers(manager).size(), 1);
+
+        manager.startAll();
+        QCOMPARE(manager.findClient(QStringLiteral("svr")), client.data());
+        QCOMPARE(client->state(), QSocMcpClient::State::Initializing);
+        QCOMPARE(activeReconnectTimers(manager).size(), 0);
+    }
+
+    void staleReconnectDoesNotReplaceRestartedClient()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+
+        QSocMcpManager manager(cfgs);
+        manager.setReconnectDelays(5000, 5000);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        manager.startAll();
+        QCOMPARE(transports.size(), 1);
+
+        QPointer<QSocMcpClient> client = manager.findClient(QStringLiteral("svr"));
+        transports.last()->simulateClosed();
+        const QList<QTimer *> timers = activeReconnectTimers(manager);
+        QCOMPARE(timers.size(), 1);
+
+        client->start();
+        QCOMPARE(client->state(), QSocMcpClient::State::Initializing);
+        timers.first()->stop();
+        QVERIFY(QMetaObject::invokeMethod(timers.first(), "timeout", Qt::DirectConnection));
+
+        QCOMPARE(manager.findClient(QStringLiteral("svr")), client.data());
+        QCOMPARE(transports.size(), 1);
+    }
+
+    void manualReconnectStopsOldTransportBeforeReplacement()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+        QPointer<QsocMcpFakeTransport>        oldTransport;
+        bool                                  stoppedBeforeReplacement = false;
+
+        QSocMcpManager manager(cfgs);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            if (!oldTransport.isNull()) {
+                stoppedBeforeReplacement = oldTransport->stopCount() == 1;
+            }
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        manager.startAll();
+        QCOMPARE(transports.size(), 1);
+        oldTransport = transports.last();
+
+        QVERIFY(manager.reconnectServer(QStringLiteral("svr")));
+        QVERIFY(stoppedBeforeReplacement);
+        QVERIFY(!oldTransport.isNull());
+        QCOMPARE(oldTransport->stopCount(), 1);
+        QCOMPARE(transports.size(), 2);
+        QCOMPARE(transports.last()->startCount(), 1);
+    }
+
+    void reentrantReconnectDuringStopKeepsLatestClient()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+
+        QSocMcpManager manager(cfgs);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        manager.startAll();
+        QCOMPARE(transports.size(), 1);
+
+        QSocMcpClient *client    = manager.findClient(QStringLiteral("svr"));
+        bool           reentered = false;
+        connect(client, &QSocMcpClient::stateChanged, client, [&](QSocMcpClient::State state) {
+            if (state != QSocMcpClient::State::Disconnected || reentered) {
+                return;
+            }
+            reentered = true;
+            QVERIFY(manager.reconnectServer(QStringLiteral("svr")));
+        });
+
+        QVERIFY(manager.reconnectServer(QStringLiteral("svr")));
+        QVERIFY(reentered);
+        QCOMPARE(transports.size(), 2);
+        QCOMPARE(
+            manager.findClient(QStringLiteral("svr"))->state(), QSocMcpClient::State::Initializing);
+        QCOMPARE(transports.first()->stopCount(), 1);
+        QCOMPARE(transports.last()->startCount(), 1);
+    }
+
+    void deletionDuringStopEndsReplacementSafely()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+
+        QPointer<QSocMcpManager> manager = new QSocMcpManager(cfgs);
+        manager->setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        manager->startAll();
+        QCOMPARE(transports.size(), 1);
+
+        QSocMcpClient *client = manager->findClient(QStringLiteral("svr"));
+        connect(client, &QSocMcpClient::stateChanged, client, [&](QSocMcpClient::State state) {
+            if (state == QSocMcpClient::State::Disconnected) {
+                delete manager.data();
+            }
+        });
+
+        manager->reconnectServer(QStringLiteral("svr"));
+        QVERIFY(manager.isNull());
+    }
+
+    void deletionInsideFactoryEndsReplacementSafely()
+    {
+        QList<McpServerConfig> cfgs{makeConfig("svr")};
+        QObject                observer;
+        int                    destroyedTransports = 0;
+
+        QPointer<QSocMcpManager> manager = new QSocMcpManager(cfgs);
+        manager->setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            connect(transport, &QObject::destroyed, &observer, [&]() { destroyedTransports++; });
+            delete manager.data();
+            return transport;
+        });
+
+        QVERIFY(manager.isNull());
+        QCOMPARE(destroyedTransports, 1);
+    }
+
+    void deletionDuringStartAllStopsIterationSafely()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("first"), makeConfig("second")};
+
+        QPointer<QSocMcpManager> manager = new QSocMcpManager(cfgs);
+        manager->setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QCOMPARE(transports.size(), 2);
+
+        QSocMcpClient *client = manager->findClient(QStringLiteral("first"));
+        QVERIFY(client != nullptr);
+        connect(client, &QSocMcpClient::stateChanged, client, [&](QSocMcpClient::State state) {
+            if (state == QSocMcpClient::State::Connecting) {
+                delete manager.data();
+            }
+        });
+
+        manager->startAll();
+        QVERIFY(manager.isNull());
+    }
+
     void manualReconnectRemovesToolsImmediately()
     {
         QSocToolRegistry                      registry;
@@ -674,6 +1028,17 @@ private slots:
         QVERIFY(QTest::qWaitFor([&]() { return !gaveUpSpy.isEmpty(); }, 1000));
         QCOMPARE(gaveUpSpy.first().at(0).toString(), QStringLiteral("svr"));
         QVERIFY(manager.hasGivenUp("svr"));
+        QCOMPARE(manager.clientCount(), qsizetype(0));
+        QCOMPARE(activeReconnectTimers(manager).size(), 0);
+        QCOMPARE(manager.findChildren<QTimer *>(QString(), Qt::FindDirectChildrenOnly).size(), 1);
+
+        const qsizetype transportCount = transports.size();
+        QVERIFY(manager.reconnectServer(QStringLiteral("svr")));
+        QVERIFY(!manager.hasGivenUp(QStringLiteral("svr")));
+        QCOMPARE(manager.reconnectAttempts(QStringLiteral("svr")), 0);
+        QCOMPARE(manager.clientCount(), qsizetype(1));
+        QCOMPARE(transports.size(), transportCount + 1);
+        QCOMPARE(activeReconnectTimers(manager).size(), 0);
     }
 };
 

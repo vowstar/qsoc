@@ -71,7 +71,8 @@ QSocMcpManager::QSocMcpManager(
         ServerState state;
         state.config = cfg;
         servers_.insert(cfg.name, state);
-        buildServer(cfg);
+        auto &stored = servers_[cfg.name];
+        buildServer(stored.config, ++stored.replacementRevision);
     }
 }
 
@@ -84,33 +85,50 @@ QSocMcpManager::~QSocMcpManager()
 
 void QSocMcpManager::setTransportFactory(TransportFactory factory)
 {
+    const quint64 revision = ++factoryRevision_;
     if (!factory) {
         factory_ = &defaultTransportFactory;
         return;
     }
-    factory_ = std::move(factory);
-    /* Rebuild all servers with the new factory so tests can swap before
-     * driving any traffic. */
+    factory_                = std::move(factory);
     const QStringList names = order_;
     for (const QString &name : names) {
         if (!servers_.contains(name)) {
             continue;
         }
-        auto &state = servers_[name];
-        unregisterToolsFor(name);
-        if (state.client != nullptr) {
-            state.client->deleteLater();
-            state.client = nullptr;
+        auto &state             = servers_[name];
+        state.reconnectAttempts = 0;
+        state.givenUp           = false;
+        QPointer<QSocMcpManager> guard(this);
+        rebuildServer(name, false);
+        if (guard.isNull()) {
+            return;
         }
-        buildServer(state.config);
+        if (factoryRevision_ != revision) {
+            return;
+        }
     }
 }
 
 void QSocMcpManager::startAll()
 {
-    for (const QString &name : order_) {
-        if (servers_.contains(name) && servers_[name].client != nullptr) {
-            servers_[name].client->start();
+    const quint64                  factoryRevision = factoryRevision_;
+    const QStringList              names           = order_;
+    const QPointer<QSocMcpManager> guard(this);
+    for (const QString &name : names) {
+        if (!servers_.contains(name)) {
+            continue;
+        }
+        auto &state = servers_[name];
+        cancelReconnect(state);
+        if (state.client != nullptr) {
+            state.client->start();
+            if (guard.isNull()) {
+                return;
+            }
+            if (factoryRevision_ != factoryRevision) {
+                return;
+            }
         }
     }
 }
@@ -190,10 +208,8 @@ bool QSocMcpManager::reconnectServer(const QString &name)
     auto &state             = servers_[name];
     state.reconnectAttempts = 0;
     state.givenUp           = false;
-    if (!state.reconnectTimer.isNull()) {
-        state.reconnectTimer->stop();
-    }
-    rebuildServer(name);
+    cancelReconnect(state);
+    rebuildServer(name, true);
     return true;
 }
 
@@ -207,7 +223,9 @@ void QSocMcpManager::onClientReady()
     if (name.isEmpty()) {
         return;
     }
-    servers_[name].reconnectAttempts = 0;
+    auto &state             = servers_[name];
+    state.reconnectAttempts = 0;
+    cancelReconnect(state);
     requestToolsList(client);
 }
 
@@ -255,15 +273,28 @@ void QSocMcpManager::onClientClosed()
 
     unregisterToolsFor(name);
 
-    auto &state = servers_[name];
+    auto &state         = servers_[name];
+    state.pendingListId = -1;
     if (state.givenUp) {
         return;
     }
+    if (!state.reconnectTimer.isNull() && state.reconnectTimer->isActive()) {
+        if (state.reconnectClient == client) {
+            return;
+        }
+        cancelReconnect(state);
+    }
     if (state.reconnectAttempts >= kMaxReconnectAttempts) {
         state.givenUp = true;
-        if (state.client != nullptr) {
-            state.client->deleteLater();
-            state.client = nullptr;
+        cancelReconnect(state);
+        const quint64                  revision = ++state.replacementRevision;
+        const QPointer<QSocMcpManager> guard(this);
+        retireClient(state);
+        if (guard.isNull()) {
+            return;
+        }
+        if (servers_[name].replacementRevision != revision) {
+            return;
         }
         emit serverGaveUp(name);
         return;
@@ -272,48 +303,133 @@ void QSocMcpManager::onClientClosed()
     state.reconnectAttempts++;
     const int delay = backoffDelayMs(state.reconnectAttempts);
 
-    auto *timer = new QTimer(this);
-    timer->setSingleShot(true);
-    state.reconnectTimer = timer;
-    connect(timer, &QTimer::timeout, this, [this, name]() { rebuildServer(name); });
-    timer->start(delay);
+    if (state.reconnectTimer.isNull()) {
+        auto *timer = new QTimer(this);
+        timer->setSingleShot(true);
+        connect(timer, &QTimer::timeout, this, [this, name]() {
+            auto server = servers_.find(name);
+            if (server == servers_.end()) {
+                return;
+            }
+            auto                         &state    = server.value();
+            const QPointer<QSocMcpClient> expected = state.reconnectClient;
+            state.reconnectClient                  = nullptr;
+            if (expected.isNull() || state.client != expected.data()
+                || expected->state() != QSocMcpClient::State::Disconnected) {
+                return;
+            }
+            rebuildServer(name, true);
+        });
+        state.reconnectTimer = timer;
+    }
+    state.reconnectClient = client;
+    state.reconnectTimer->start(delay);
 
     emit reconnectScheduled(name, state.reconnectAttempts, delay);
 }
 
-void QSocMcpManager::buildServer(const McpServerConfig &cfg)
+void QSocMcpManager::buildServer(const McpServerConfig &cfg, quint64 revision)
 {
-    if (!servers_.contains(cfg.name)) {
+    const McpServerConfig config = cfg;
+    auto                  server = servers_.find(config.name);
+    if (server == servers_.end() || server->replacementRevision != revision
+        || server->client != nullptr || server->givenUp) {
         return;
     }
-    QSocMcpTransport *transport = factory_(cfg);
+
+    const TransportFactory           factory = factory_;
+    const QPointer<QSocMcpManager>   guard(this);
+    QSocMcpTransport                *transport = factory(config);
+    const QPointer<QSocMcpTransport> transportGuard(transport);
+    if (guard.isNull()) {
+        if (!transportGuard.isNull()) {
+            delete transportGuard.data();
+        }
+        return;
+    }
+
+    server = servers_.find(config.name);
+    if (server == servers_.end() || server->replacementRevision != revision
+        || server->client != nullptr || server->givenUp) {
+        if (!transportGuard.isNull()) {
+            delete transportGuard.data();
+        }
+        return;
+    }
     if (transport == nullptr) {
-        servers_[cfg.name].givenUp = true;
+        server->givenUp = true;
         return;
     }
-    auto *client              = new QSocMcpClient(cfg, transport, this);
-    servers_[cfg.name].client = client;
+    auto *client    = new QSocMcpClient(config, transport, this);
+    server->client  = client;
+    server->givenUp = false;
     wireClientSignals(client);
 }
 
-void QSocMcpManager::rebuildServer(const QString &name)
+void QSocMcpManager::rebuildServer(const QString &name, bool start)
 {
-    if (!servers_.contains(name)) {
+    auto server = servers_.find(name);
+    if (server == servers_.end() || server->givenUp) {
         return;
     }
-    auto &state = servers_[name];
-    if (state.givenUp) {
-        return;
-    }
+    const quint64 revision = ++server->replacementRevision;
+    cancelReconnect(server.value());
+
+    const QPointer<QSocMcpManager> guard(this);
     unregisterToolsFor(name);
-    if (state.client != nullptr) {
-        state.client->disconnect(this);
-        state.client->deleteLater();
-        state.client = nullptr;
+    if (guard.isNull()) {
+        return;
     }
-    buildServer(state.config);
-    if (state.client != nullptr) {
-        state.client->start();
+    server = servers_.find(name);
+    if (server == servers_.end() || server->replacementRevision != revision) {
+        return;
+    }
+
+    retireClient(server.value());
+    if (guard.isNull()) {
+        return;
+    }
+    server = servers_.find(name);
+    if (server == servers_.end() || server->replacementRevision != revision
+        || server->client != nullptr || server->givenUp) {
+        return;
+    }
+
+    const McpServerConfig config = server->config;
+    buildServer(config, revision);
+    if (guard.isNull()) {
+        return;
+    }
+    server = servers_.find(name);
+    if (server == servers_.end() || server->replacementRevision != revision) {
+        return;
+    }
+    QPointer<QSocMcpClient> client = server->client;
+    if (start && !client.isNull()) {
+        client->start();
+    }
+}
+
+void QSocMcpManager::cancelReconnect(ServerState &state)
+{
+    if (!state.reconnectTimer.isNull()) {
+        state.reconnectTimer->stop();
+    }
+    state.reconnectClient = nullptr;
+}
+
+void QSocMcpManager::retireClient(ServerState &state)
+{
+    QPointer<QSocMcpClient> client = state.client;
+    state.client                   = nullptr;
+    state.pendingListId            = -1;
+    if (client.isNull()) {
+        return;
+    }
+    client->disconnect(this);
+    client->stop();
+    if (!client.isNull()) {
+        client->deleteLater();
     }
 }
 

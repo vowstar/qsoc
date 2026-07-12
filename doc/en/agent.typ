@@ -1183,8 +1183,8 @@ Readiness is published only after `notifications/initialized` is accepted;
 
 If startup, initialization, or the connection fails, the manager schedules
 a rebuild on exponential backoff (1 s, 2 s, 4 s, capped at 30 s). After
-three failed attempts the server is marked failed and dropped until the
-next `/mcp reconnect` or agent restart. Its tools are removed while the
+three reconnect attempts fail the server is marked failed and dropped until
+the next `/mcp reconnect` or agent restart. Its tools are removed while the
 server is unavailable and restored after a successful tools/list response.
 A request error on a running connection fails its outstanding requests but
 keeps the connection available for later requests.
