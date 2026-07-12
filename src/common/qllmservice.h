@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <QByteArray>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QObject>
@@ -339,19 +340,34 @@ private:
         OwnerDestroyed
     };
 
-    enum class ParseResult : std::uint8_t { NeedMore, Done, Stopped };
+    enum class ParseResult : std::uint8_t {
+        NeedMore,
+        Done,
+        ProviderError,
+        TransportError,
+        Malformed,
+        Stopped
+    };
+
+    struct EndpointAttempt
+    {
+        LLMEndpoint endpoint;
+        int         index    = 0;
+        quint64     revision = 0;
+    };
 
     struct StreamState;
     using StreamStatePtr = std::shared_ptr<StreamState>;
 
-    QNetworkAccessManager        *networkManager = nullptr;
-    QSocConfig                   *config         = nullptr;
-    QList<LLMEndpoint>            endpoints;
-    int                           currentEndpoint  = 0;
-    LLMFallbackStrategy           fallbackStrategy = LLMFallbackStrategy::Sequential;
-    QMap<QString, LLMModelConfig> modelConfigs;
-    QString                       defaultModelId;
-    QString                       currentModelId;
+    QPointer<QNetworkAccessManager> networkManager;
+    QSocConfig                     *config = nullptr;
+    QList<LLMEndpoint>              endpoints;
+    int                             currentEndpoint  = 0;
+    quint64                         endpointRevision = 0;
+    LLMFallbackStrategy             fallbackStrategy = LLMFallbackStrategy::Sequential;
+    QMap<QString, LLMModelConfig>   modelConfigs;
+    QString                         defaultModelId;
+    QString                         currentModelId;
 
     /**
      * @brief Load configuration settings from config
@@ -364,15 +380,13 @@ private:
     void setupNetworkProxy();
 
     /**
-     * @brief Select an endpoint based on fallback strategy
+     * @brief Select an endpoint and reserve the next round-robin slot
      * @return Selected endpoint, or empty endpoint if none available
      */
     LLMEndpoint selectEndpoint();
 
-    /**
-     * @brief Advance to next endpoint for fallback
-     */
-    void advanceEndpoint();
+    QList<EndpointAttempt> endpointAttempts();
+    void                   commitEndpoint(const EndpointAttempt &attempt);
 
     /**
      * @brief Prepare network request for an endpoint
@@ -422,15 +436,19 @@ private:
 
     bool        claimTerminal(const StreamStatePtr &state, StreamOutcome outcome);
     static bool isStreamActive(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
+    static void consumeStream(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
+    static void failStream(
+        const QPointer<QLLMService> &owner, const StreamStatePtr &state, const QString &error);
     static void stopStreamReply(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
     static void drainStreamReply(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
     static ParseResult processStreamBuffer(
         const QPointer<QLLMService> &owner, const StreamStatePtr &state);
     static ParseResult parseStreamLine(
-        const QPointer<QLLMService> &owner, const StreamStatePtr &state, const QString &line);
+        const QPointer<QLLMService> &owner, const StreamStatePtr &state, const QByteArray &line);
     static json buildStreamResponse(const StreamStatePtr &state);
 
     StreamStatePtr currentStream;
+    quint64        streamGeneration = 0;
 };
 
 #endif // QLLMSERVICE_H
