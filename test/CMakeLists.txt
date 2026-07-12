@@ -70,6 +70,9 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
     )
 endfunction()
 
+add_executable(qsoc_mcp_stdio_peer "${CMAKE_CURRENT_LIST_DIR}/qsoc_mcp_stdio_peer.cpp")
+target_link_libraries(qsoc_mcp_stdio_peer PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+
 # Add SPDX headers to test files if enabled
 if(ENABLE_SPDX_HEADERS)
     include(AddSpdxHeaders)
@@ -140,6 +143,7 @@ qt_add_test_target("test_qsocagenttool")
 qt_add_test_target("test_qsocagenttoolshell")
 qt_add_test_target("test_qsocmcpnaming")
 qt_add_test_target("test_qsocmcpstdio")
+add_dependencies(test_qsocmcpstdio qsoc_mcp_stdio_peer)
 qt_add_test_target("test_qsocmcphttp")
 qt_add_test_target("test_qsocmcpclient")
 qt_add_test_target("test_qsocmcpconfig")

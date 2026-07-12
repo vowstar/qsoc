@@ -17,11 +17,11 @@
  *          subclasses (stdio child process, HTTP/SSE) own the actual
  *          plumbing; the JSON-RPC client treats them all the same way.
  *
- *          Lifecycle: start() moves the transport from Idle to Starting.
- *          When the underlying connection is established the subclass
- *          emits started(); failures emit errorOccurred() and the
- *          transport returns to Idle. sendMessage() is only valid
- *          between started() and stop()/closed().
+ *          Lifecycle: start() moves the transport from Idle or Stopped to
+ *          Starting. Subclasses emit started() when the transport becomes
+ *          available and closed() when its lifecycle ends. errorOccurred()
+ *          reports a transport or message failure, which may be recoverable.
+ *          sendMessage() is only valid between started() and stop()/closed().
  */
 class QSocMcpTransport : public QObject
 {
@@ -48,8 +48,8 @@ public:
 
     /**
      * @brief Send one JSON-RPC message.
-     * @details Subclasses are responsible for the wire encoding (e.g. the
-     *          stdio implementation prepends a Content-Length header).
+     * @details Subclasses are responsible for the transport-specific wire
+     *          encoding.
      * @param message JSON message to send.
      */
     virtual void sendMessage(const nlohmann::json &message) = 0;
@@ -61,7 +61,7 @@ signals:
     void closed();
     /** A complete JSON message has been parsed off the wire. */
     void messageReceived(const nlohmann::json &message);
-    /** Non-recoverable error. The transport is no longer usable. */
+    /** Transport or message failure; closed() reports lifecycle termination. */
     void errorOccurred(const QString &message);
 
 protected:

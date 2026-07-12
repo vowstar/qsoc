@@ -7,6 +7,8 @@
 #include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
 
+#include <cstdint>
+
 #include <QList>
 #include <QMap>
 #include <QString>
@@ -38,6 +40,8 @@ QString buildToolName(const QString &serverName, const QString &toolName);
 
 } // namespace QSocMcp
 
+enum class McpStdioFraming : std::uint8_t { ContentLength, Newline };
+
 /**
  * @brief Configuration of a single MCP server entry from .qsoc.yml.
  */
@@ -48,6 +52,7 @@ struct McpServerConfig
     QString                command; /* stdio: executable path */
     QStringList            args;    /* stdio: argv after command */
     QMap<QString, QString> env;     /* stdio: extra environment variables */
+    McpStdioFraming        stdioFraming = McpStdioFraming::ContentLength;
     QString                url;     /* http: endpoint URL */
     QMap<QString, QString> headers; /* http: extra request headers */
     QString                proxy;   /* http: "none" disables proxy; empty / "system" follows env */

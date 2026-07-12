@@ -26,14 +26,6 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
-    void initTestCase()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc_test";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app(argc, argv.data());
-    }
-
     void parseUndefinedReturnsEmpty()
     {
         const YAML::Node node;
@@ -53,6 +45,7 @@ private slots:
             "  type: stdio\n"
             "  command: /usr/local/bin/mcp-fs\n"
             "  args: [--root, /tmp]\n"
+            "  framing: newline\n"
             "  env:\n"
             "    LOG_LEVEL: info\n");
 
@@ -64,6 +57,7 @@ private slots:
         QCOMPARE(cfg.type, QStringLiteral("stdio"));
         QCOMPARE(cfg.command, QStringLiteral("/usr/local/bin/mcp-fs"));
         QCOMPARE(cfg.args, QStringList({"--root", "/tmp"}));
+        QCOMPARE(cfg.stdioFraming, McpStdioFraming::Newline);
         QCOMPARE(cfg.env.value("LOG_LEVEL"), QStringLiteral("info"));
         QVERIFY(cfg.enabled);
         QVERIFY(cfg.isValid());
@@ -76,7 +70,7 @@ private slots:
             "  type: http\n"
             "  url: http://127.0.0.1:8080/mcp\n"
             "  headers:\n"
-            "    Authorization: Bearer placeholder\n"
+            "    X-Test-Mode: local\n"
             "  request_timeout_ms: 5000\n");
 
         const auto list = McpServerConfig::parseList(node);
@@ -85,7 +79,7 @@ private slots:
         const auto &cfg = list.at(0);
         QCOMPARE(cfg.type, QStringLiteral("http"));
         QCOMPARE(cfg.url, QStringLiteral("http://127.0.0.1:8080/mcp"));
-        QCOMPARE(cfg.headers.value("Authorization"), QStringLiteral("Bearer placeholder"));
+        QCOMPARE(cfg.headers.value("X-Test-Mode"), QStringLiteral("local"));
         QCOMPARE(cfg.requestTimeoutMs, 5000);
         QVERIFY(cfg.isValid());
     }
@@ -99,6 +93,19 @@ private slots:
         const auto list = McpServerConfig::parseList(node);
         QCOMPARE(list.size(), qsizetype(1));
         QCOMPARE(list.at(0).type, QStringLiteral("stdio"));
+        QCOMPARE(list.at(0).stdioFraming, McpStdioFraming::ContentLength);
+    }
+
+    void parsesExplicitLegacyFraming()
+    {
+        const YAML::Node node = loadYaml(
+            "- name: legacy\n"
+            "  command: /bin/echo\n"
+            "  framing: content-length\n");
+
+        const auto list = McpServerConfig::parseList(node);
+        QCOMPARE(list.size(), qsizetype(1));
+        QCOMPARE(list.at(0).stdioFraming, McpStdioFraming::ContentLength);
     }
 
     void invalidEntriesAreSkipped()
@@ -111,6 +118,26 @@ private slots:
             "- name: bad_type\n"
             "  type: websocket\n"
             "  url: ws://127.0.0.1\n"
+            "- name: bad_framing\n"
+            "  type: stdio\n"
+            "  framing: unknown\n"
+            "  command: /bin/echo\n"
+            "- name: malformed_framing\n"
+            "  type: stdio\n"
+            "  framing: []\n"
+            "  command: /bin/echo\n"
+            "- name: empty_framing\n"
+            "  type: stdio\n"
+            "  framing: \"\"\n"
+            "  command: /bin/echo\n"
+            "- name: null_framing\n"
+            "  type: stdio\n"
+            "  framing: null\n"
+            "  command: /bin/echo\n"
+            "- name: map_framing\n"
+            "  type: stdio\n"
+            "  framing: {mode: newline}\n"
+            "  command: /bin/echo\n"
             "- name: ok\n"
             "  type: stdio\n"
             "  command: /bin/echo\n");

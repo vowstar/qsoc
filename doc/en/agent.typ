@@ -1077,6 +1077,7 @@ mcp:
   servers:
     - name: fs
       type: stdio
+      framing: newline
       command: /usr/local/bin/mcp-fs-server
       args: ["--root", "/tmp"]
       env:
@@ -1092,6 +1093,7 @@ mcp:
 
     - name: archived
       type: stdio
+      framing: content-length
       command: /opt/legacy/mcp
       enabled: false
 
@@ -1114,6 +1116,8 @@ mcp:
     [`command`], [stdio: executable to launch.],
     [`args`], [stdio: list of arguments passed to the executable.],
     [`env`], [stdio: extra environment variables for the child process.],
+    [`framing`], [stdio: `newline` uses standard MCP framing.
+       `content-length` is the compatibility default when omitted.],
     [`url`], [http: endpoint URL. Both immediate JSON and Server-Sent
        Events responses are accepted on the same endpoint.],
     [`headers`], [http: extra request headers, e.g. `Authorization`.],
@@ -1132,6 +1136,11 @@ mcp:
   caption: [MCP SERVER FIELDS],
   kind: table,
 )
+
+Use `framing: newline` with standard MCP servers. Omitted or
+`content-length` preserves the framing used by QSoC 1.8.2 and earlier.
+Newline framing exchanges one UTF-8 JSON message per line and rejects
+messages larger than 64 MiB.
 
 === Tool naming
 <agent-mcp-naming>

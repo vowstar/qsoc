@@ -155,6 +155,22 @@ QList<McpServerConfig> McpServerConfig::parseList(const YAML::Node &node)
         if (cfg.type.isEmpty()) {
             cfg.type = QSocMcp::kTransportStdio;
         }
+        if (cfg.type == QSocMcp::kTransportStdio) {
+            const YAML::Node framingNode = entry["framing"];
+            const QString    framing     = yamlScalarToQString(framingNode);
+            if (!framingNode.IsDefined()) {
+                cfg.stdioFraming = McpStdioFraming::ContentLength;
+            } else if (framing == QStringLiteral("newline")) {
+                cfg.stdioFraming = McpStdioFraming::Newline;
+            } else if (framing == QStringLiteral("content-length")) {
+                cfg.stdioFraming = McpStdioFraming::ContentLength;
+            } else {
+                QSocConsole::warn()
+                    << "Skipping MCP stdio entry with invalid framing:"
+                    << (cfg.name.isEmpty() ? QStringLiteral("<unnamed>") : cfg.name);
+                continue;
+            }
+        }
 
         if (!cfg.isValid()) {
             QSocConsole::warn() << "Skipping invalid MCP server entry:"
