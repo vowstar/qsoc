@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 #include <QSignalSpy>
 #include <QTimer>
@@ -43,9 +44,16 @@ public:
         emit closed();
     }
 
-    void sendMessage(const nlohmann::json &message) override { sent_ << message; }
+    void sendMessage(const nlohmann::json &message) override
+    {
+        sent_ << message;
+        if (failToolCallSynchronously_ && message.value("method", std::string()) == "tools/call") {
+            emit errorOccurred(QStringLiteral("synchronous send failure"));
+        }
+    }
 
     void simulateMessage(const nlohmann::json &message) { emit messageReceived(message); }
+    void setFailToolCallSynchronously(bool fail) { failToolCallSynchronously_ = fail; }
 
     int firstSentId() const { return sent_.first()["id"].get<int>(); }
     int lastSentId() const { return sent_.last()["id"].get<int>(); }
@@ -80,6 +88,7 @@ public:
 
 private:
     QList<nlohmann::json> sent_;
+    bool                  failToolCallSynchronously_ = false;
 };
 
 McpServerConfig makeConfig(const QString &name)
@@ -119,6 +128,46 @@ bool driveClientToReady(QSocMcpClient *client, FakeTransport *transport)
     return QTest::qWaitFor(
         [client]() { return client->state() == QSocMcpClient::State::Ready; }, 1000);
 }
+
+class DeleteOnAbortTool : public QSocTool
+{
+public:
+    DeleteOnAbortTool(QString name, QSocTool *target)
+        : name_(std::move(name))
+        , target_(target)
+    {}
+
+    QString getName() const override { return name_; }
+    QString getDescription() const override { return {}; }
+    json    getParametersSchema() const override { return json::object(); }
+    QString execute(const json &) override { return {}; }
+    void    abort() override { delete target_.data(); }
+
+private:
+    QString            name_;
+    QPointer<QSocTool> target_;
+};
+
+class DeleteRegistryTool : public QSocTool
+{
+public:
+    explicit DeleteRegistryTool(QSocToolRegistry *registry)
+        : registry_(registry)
+    {}
+
+    QString getName() const override { return QStringLiteral("delete_registry"); }
+    QString getDescription() const override { return {}; }
+    json    getParametersSchema() const override { return json::object(); }
+
+    QString execute(const json &) override
+    {
+        delete registry_.data();
+        return QStringLiteral("finished");
+    }
+
+private:
+    QPointer<QSocToolRegistry> registry_;
+};
 
 class Test : public QObject
 {
@@ -231,6 +280,35 @@ private slots:
         QVERIFY(output.contains(QStringLiteral("32601")));
     }
 
+    void toolHandlesSynchronousTransportFailure()
+    {
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "echo";
+
+        QSocMcpTool tool(&client, desc);
+        transport->setFailToolCallSynchronously(true);
+
+        bool   fallbackFired = false;
+        QTimer fallback;
+        fallback.setSingleShot(true);
+        connect(&fallback, &QTimer::timeout, &fallback, [&]() {
+            fallbackFired = true;
+            tool.abort();
+        });
+        fallback.start(500);
+
+        const QString output = tool.execute({});
+        fallback.stop();
+
+        QVERIFY(!fallbackFired);
+        QCOMPARE(output, QStringLiteral("[mcp error -32000] synchronous send failure"));
+    }
+
     void toolFailsFastWhenServerNotReady()
     {
         auto         *transport = new FakeTransport;
@@ -294,6 +372,102 @@ private slots:
         QCOMPARE(manager.clientCount(), qsizetype(1));
         QCOMPARE(manager.totalToolCount(), qsizetype(0));
         QVERIFY(manager.toolsForClient("alpha").isEmpty());
+    }
+
+    void registryDropsDestroyedTool()
+    {
+        QSocToolRegistry  registry;
+        McpToolDescriptor desc;
+        desc.serverName = QStringLiteral("svr");
+        desc.toolName   = QStringLiteral("echo");
+
+        auto *tool = new QSocMcpTool(nullptr, desc);
+        registry.registerTool(tool);
+        QCOMPARE(registry.getTool(QStringLiteral("mcp__svr__echo")), tool);
+
+        delete tool;
+
+        QVERIFY(!registry.hasTool(QStringLiteral("mcp__svr__echo")));
+        QCOMPARE(registry.count(), 0);
+        QVERIFY(registry.toolNames().isEmpty());
+        QVERIFY(registry.getToolDefinitions().empty());
+    }
+
+    void destroyedOldToolKeepsReplacement()
+    {
+        QSocToolRegistry  registry;
+        McpToolDescriptor desc;
+        desc.serverName = QStringLiteral("svr");
+        desc.toolName   = QStringLiteral("echo");
+
+        auto *oldTool = new QSocMcpTool(nullptr, desc);
+        auto *newTool = new QSocMcpTool(nullptr, desc);
+        registry.registerTool(oldTool);
+        registry.registerTool(newTool);
+
+        delete oldTool;
+
+        QCOMPARE(registry.getTool(QStringLiteral("mcp__svr__echo")), newTool);
+        QCOMPARE(registry.count(), 1);
+        delete newTool;
+        QCOMPARE(registry.count(), 0);
+    }
+
+    void unregisterIsLocalAndIdentityChecked()
+    {
+        QSocToolRegistry  firstRegistry;
+        QSocToolRegistry  secondRegistry;
+        McpToolDescriptor desc;
+        desc.serverName = QStringLiteral("svr");
+        desc.toolName   = QStringLiteral("echo");
+
+        auto *oldTool = new QSocMcpTool(nullptr, desc);
+        auto *newTool = new QSocMcpTool(nullptr, desc);
+        firstRegistry.registerTool(oldTool);
+        secondRegistry.registerTool(oldTool);
+        firstRegistry.registerTool(newTool);
+
+        QVERIFY(!firstRegistry.unregisterTool(oldTool));
+        QCOMPARE(firstRegistry.getTool(QStringLiteral("mcp__svr__echo")), newTool);
+        QVERIFY(secondRegistry.unregisterTool(oldTool));
+        QVERIFY(!secondRegistry.hasTool(QStringLiteral("mcp__svr__echo")));
+        QCOMPARE(firstRegistry.getTool(QStringLiteral("mcp__svr__echo")), newTool);
+
+        delete oldTool;
+        QVERIFY(firstRegistry.unregisterTool(newTool));
+        delete newTool;
+    }
+
+    void abortAllToleratesSynchronousRemoval()
+    {
+        QSocToolRegistry  registry;
+        McpToolDescriptor desc;
+        desc.serverName = QStringLiteral("svr");
+        desc.toolName   = QStringLiteral("target");
+
+        auto *target  = new QSocMcpTool(nullptr, desc);
+        auto *remover = new DeleteOnAbortTool(QStringLiteral("a_remover"), target);
+        registry.registerTool(remover);
+        registry.registerTool(target);
+
+        registry.abortAll();
+
+        QVERIFY(!registry.hasTool(QStringLiteral("mcp__svr__target")));
+        QCOMPARE(registry.getTool(QStringLiteral("a_remover")), remover);
+        QCOMPARE(registry.count(), 1);
+        delete remover;
+    }
+
+    void executeToleratesRegistryDestruction()
+    {
+        QPointer<QSocToolRegistry> registry = new QSocToolRegistry;
+        DeleteRegistryTool         tool(registry.data());
+        registry->registerTool(&tool);
+
+        const QString output = registry->executeTool(tool.getName(), json::object());
+
+        QCOMPARE(output, QStringLiteral("finished"));
+        QVERIFY(registry.isNull());
     }
 };
 

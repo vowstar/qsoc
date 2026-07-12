@@ -103,13 +103,13 @@ private slots:
 private:
     struct ServerState
     {
-        McpServerConfig      config;
-        QSocMcpClient       *client            = nullptr;
-        int                  pendingListId     = -1;
-        int                  reconnectAttempts = 0;
-        bool                 givenUp           = false;
-        QPointer<QTimer>     reconnectTimer;
-        QList<QSocMcpTool *> registeredTools;
+        McpServerConfig              config;
+        QSocMcpClient               *client            = nullptr;
+        int                          pendingListId     = -1;
+        int                          reconnectAttempts = 0;
+        bool                         givenUp           = false;
+        QPointer<QTimer>             reconnectTimer;
+        QList<QPointer<QSocMcpTool>> registeredTools;
     };
 
     void           buildServer(const McpServerConfig &cfg);
@@ -123,7 +123,7 @@ private:
     int     backoffDelayMs(int attempt) const;
     QString nameForClient(const QSocMcpClient *client) const;
 
-    QSocToolRegistry           *toolRegistry_ = nullptr;
+    QPointer<QSocToolRegistry>  toolRegistry_;
     TransportFactory            factory_;
     int                         reconnectInitialDelayMs_ = kReconnectInitialDelayMs;
     int                         reconnectMaxDelayMs_     = kReconnectMaxDelayMs;

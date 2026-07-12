@@ -13,6 +13,7 @@
 
 class QEventLoop;
 class QSocMcpClient;
+class QSocMcpManager;
 
 /**
  * @brief Adapter that exposes one MCP server tool as a QSocTool.
@@ -39,17 +40,31 @@ public:
     const McpToolDescriptor &descriptor() const;
 
 private:
+    friend class QSocMcpManager;
+
+    enum class CallOutcome {
+        Pending,
+        Completed,
+        Aborted,
+        TimedOut,
+        ClientClosed,
+    };
+
     struct CallState
     {
         QEventLoop *loop    = nullptr;
-        bool        aborted = false;
+        CallOutcome outcome = CallOutcome::Pending;
+        QString     result;
     };
+
+    void retire();
 
     QPointer<QSocMcpClient> client_;
     McpToolDescriptor       descriptor_;
     QString                 namespacedName_;
 
     QSet<CallState *> activeCalls_;
+    bool              retired_ = false;
 };
 
 #endif // QSOCMCPTOOL_H

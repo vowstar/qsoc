@@ -1155,8 +1155,8 @@ expose tools with the same short name without colliding. Examples:
     table.hline(),
     [`/mcp` or `/mcp list`], [List configured MCP servers with state and
        tool count.],
-    [`/mcp reconnect <name>`], [Force a disconnect of the named server;
-       the manager rebuilds it on the standard backoff.],
+    [`/mcp reconnect <name>`], [Immediately rebuild the named server,
+       including one previously marked failed.],
   )],
   caption: [MCP SLASH COMMANDS],
   kind: table,
@@ -1173,7 +1173,12 @@ contribute their tools immediately; tools registered later via
 If a server closes unexpectedly the manager schedules a rebuild on
 exponential backoff (1 s, 2 s, 4 s, capped at 30 s). After three
 failed attempts the server is marked failed and dropped until the
-next agent restart.
+next `/mcp reconnect` or agent restart. Its tools are removed while the
+server is unavailable and restored after a successful tools/list response.
+A tool-list refresh affects new calls only; calls already in flight finish
+against the server version that accepted them. Disconnects and reconnects
+never replay an in-flight call. Canceling stops the local wait and sends a
+best-effort notification; it cannot undo server-side effects.
 
 === Security notes
 <agent-mcp-security>

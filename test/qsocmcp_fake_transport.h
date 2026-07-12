@@ -6,7 +6,9 @@
 
 #include "agent/mcp/qsocmcptransport.h"
 
+#include <functional>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 #include <QList>
 #include <QObject>
@@ -40,9 +42,19 @@ public:
         emit closed();
     }
 
-    void sendMessage(const nlohmann::json &message) override { sent_ << message; }
+    void sendMessage(const nlohmann::json &message) override
+    {
+        sent_ << message;
+        if (sendHook_) {
+            sendHook_(message);
+        }
+    }
 
     void simulateMessage(const nlohmann::json &message) { emit messageReceived(message); }
+    void setSendHook(std::function<void(const nlohmann::json &)> hook)
+    {
+        sendHook_ = std::move(hook);
+    }
 
     void simulateClosed()
     {
@@ -59,7 +71,8 @@ public:
     const QList<nlohmann::json> &sent() const { return sent_; }
 
 private:
-    QList<nlohmann::json> sent_;
+    QList<nlohmann::json>                       sent_;
+    std::function<void(const nlohmann::json &)> sendHook_;
 };
 
 #endif // QSOCMCP_FAKE_TRANSPORT_H

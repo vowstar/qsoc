@@ -92,13 +92,20 @@ void QSocMcpClient::stop()
     setState(State::Disconnected);
 }
 
-int QSocMcpClient::request(const QString &method, const nlohmann::json &params, int timeoutMs)
+int QSocMcpClient::request(
+    const QString &method, const nlohmann::json &params, int timeoutMs, int *assignedId)
 {
+    if (assignedId != nullptr) {
+        *assignedId = -1;
+    }
     if (state_ != State::Ready) {
         return -1;
     }
 
     const int id = allocateId();
+    if (assignedId != nullptr) {
+        *assignedId = id;
+    }
 
     nlohmann::json msg;
     msg["jsonrpc"] = "2.0";

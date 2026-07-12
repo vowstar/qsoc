@@ -7,6 +7,8 @@
 #include <nlohmann/json.hpp>
 #include <QMap>
 #include <QObject>
+#include <QPointer>
+#include <QSet>
 #include <QString>
 
 using json = nlohmann::json;
@@ -84,8 +86,8 @@ public:
 
 /**
  * @brief Registry for managing available tools
- * @details Maintains a collection of tools and provides methods
- *          to register, retrieve, and execute tools by name.
+ * @details Observes a non-owning collection of tools and provides methods
+ *          to register, retrieve, and execute live tools by name.
  */
 class QSocToolRegistry : public QObject
 {
@@ -108,6 +110,13 @@ public:
      * @param tool Pointer to the tool to register
      */
     void registerTool(QSocTool *tool);
+
+    /**
+     * @brief Remove a tool if it is the current entry for its name
+     * @param tool Pointer previously passed to registerTool()
+     * @return true when the matching entry was removed
+     */
+    bool unregisterTool(QSocTool *tool);
 
     /**
      * @brief Get a tool by name
@@ -151,12 +160,18 @@ public:
 
     /**
      * @brief Abort all currently executing tools
-     * @details Calls abort() on every registered tool
+     * @details Calls abort() on every registered or in-flight tool
      */
     void abortAll();
 
 private:
-    QMap<QString, QSocTool *> tools_;
+    struct ActiveCall
+    {
+        QPointer<QSocTool> tool;
+    };
+
+    QMap<QString, QPointer<QSocTool>> tools_;
+    QSet<ActiveCall *>                activeCalls_;
 };
 
 #endif // QSOCTOOL_H

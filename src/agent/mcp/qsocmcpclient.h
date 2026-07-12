@@ -66,18 +66,20 @@ public:
 
     /**
      * @brief Send a JSON-RPC request and return its id.
-     * @details The response (or failure) arrives later via responseReceived
-     *          or requestFailed; the id is the correlation key.
+     * @details The response (or failure) is emitted via responseReceived or
+     *          requestFailed; the id is the correlation key.
      * @param method JSON-RPC method, e.g. "tools/list".
      * @param params Request parameters; defaults to an empty object.
      * @param timeoutMs Per-request timeout. Negative means no timeout
      *                  beyond the server config's default.
+     * @param assignedId Optional destination written before transport send.
      * @return Allocated request id, or -1 if the client is not Ready.
      */
     int request(
         const QString        &method,
-        const nlohmann::json &params    = nlohmann::json::object(),
-        int                   timeoutMs = -1);
+        const nlohmann::json &params     = nlohmann::json::object(),
+        int                   timeoutMs  = -1,
+        int                  *assignedId = nullptr);
 
     /**
      * @brief Send a JSON-RPC notification (no response expected).

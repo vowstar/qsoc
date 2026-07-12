@@ -8,6 +8,7 @@
 
 #include <QEventLoop>
 #include <QObject>
+#include <QScopeGuard>
 
 namespace {
 
@@ -51,7 +52,10 @@ QSocMcpTool::QSocMcpTool(QSocMcpClient *client, McpToolDescriptor descriptor, QO
     , namespacedName_(QSocMcp::buildToolName(descriptor_.serverName, descriptor_.toolName))
 {}
 
-QSocMcpTool::~QSocMcpTool() = default;
+QSocMcpTool::~QSocMcpTool()
+{
+    Q_ASSERT(activeCalls_.isEmpty());
+}
 
 QString QSocMcpTool::getName() const
 {
@@ -73,6 +77,9 @@ json QSocMcpTool::getParametersSchema() const
 
 QString QSocMcpTool::execute(const json &arguments)
 {
+    if (retired_) {
+        return QStringLiteral("[mcp error] tool is no longer available");
+    }
     if (client_.isNull()) {
         return QStringLiteral("[mcp error] server has gone away");
     }
@@ -84,23 +91,74 @@ QString QSocMcpTool::execute(const json &arguments)
     params["name"]      = descriptor_.toolName.toStdString();
     params["arguments"] = arguments;
 
-    const int requestId = client_->request(QStringLiteral("tools/call"), params);
-    if (requestId < 0) {
+    int        requestId = -1;
+    CallState  callState;
+    QEventLoop loop;
+    callState.loop = &loop;
+    activeCalls_.insert(&callState);
+
+    QPointer<QSocMcpTool> self(this);
+    const auto            removeCall = qScopeGuard([self, &callState]() {
+        if (self.isNull()) {
+            return;
+        }
+        self->activeCalls_.remove(&callState);
+        if (self->retired_ && self->activeCalls_.isEmpty()) {
+            self->deleteLater();
+        }
+    });
+
+    QObject::connect(
+        client_.data(), &QSocMcpClient::responseReceived, &loop, [&](int id, const json &resultJson) {
+            if (id != requestId || callState.outcome != CallOutcome::Pending) {
+                return;
+            }
+            callState.result  = formatToolResult(resultJson);
+            callState.outcome = CallOutcome::Completed;
+            loop.quit();
+        });
+
+    QObject::connect(
+        client_.data(),
+        &QSocMcpClient::requestFailed,
+        &loop,
+        [&](int id, int code, const QString &message) {
+            if (id != requestId || callState.outcome != CallOutcome::Pending) {
+                return;
+            }
+            callState.result  = QStringLiteral("[mcp error %1] %2").arg(code).arg(message);
+            callState.outcome = CallOutcome::Completed;
+            loop.quit();
+        });
+
+    QObject::connect(client_.data(), &QSocMcpClient::closed, &loop, [&]() {
+        if (callState.outcome != CallOutcome::Pending) {
+            return;
+        }
+        callState.result  = QStringLiteral("[mcp error] server closed during call");
+        callState.outcome = CallOutcome::ClientClosed;
+        loop.quit();
+    });
+
+    QObject::connect(client_.data(), &QObject::destroyed, &loop, [&]() {
+        if (callState.outcome != CallOutcome::Pending) {
+            return;
+        }
+        callState.result  = QStringLiteral("[mcp error] server closed during call");
+        callState.outcome = CallOutcome::ClientClosed;
+        loop.quit();
+    });
+
+    const int returnedId = client_->request(QStringLiteral("tools/call"), params, -1, &requestId);
+    if (returnedId < 0) {
         return QStringLiteral("[mcp error] could not send request");
     }
-
-    QEventLoop loop;
-    CallState  callState{.loop = &loop};
-    activeCalls_.insert(&callState);
-    QString result;
-    bool    completed = false;
-    bool    timedOut  = false;
 
     /* Watchdog: cap the round trip and surface a timeout instead of
      * hanging forever on a server that never answers. Stall detection
      * is disabled since JSON-RPC has no per-byte progress to feed. */
     QLongTaskMonitor monitor(
-        this,
+        &loop,
         QLongTaskMonitor::Config{
             .tickIntervalMs       = 1000,
             .stallThresholdMs     = 0,
@@ -108,79 +166,72 @@ QString QSocMcpTool::execute(const json &arguments)
             .consecutiveIdleTicks = 2,
         });
     QObject::connect(&monitor, &QLongTaskMonitor::wallClockExceeded, &loop, [&](int) {
-        timedOut = true;
-        loop.quit();
-    });
-    monitor.start();
-
-    const auto responseConn = QObject::connect(
-        client_.data(), &QSocMcpClient::responseReceived, this, [&](int id, const json &resultJson) {
-            if (id != requestId || completed) {
-                return;
-            }
-            result    = formatToolResult(resultJson);
-            completed = true;
-            loop.quit();
-        });
-
-    const auto failureConn = QObject::connect(
-        client_.data(),
-        &QSocMcpClient::requestFailed,
-        this,
-        [&](int id, int code, const QString &message) {
-            if (id != requestId || completed) {
-                return;
-            }
-            result    = QStringLiteral("[mcp error %1] %2").arg(code).arg(message);
-            completed = true;
-            loop.quit();
-        });
-
-    const auto closedConn = QObject::connect(client_.data(), &QSocMcpClient::closed, this, [&]() {
-        if (completed) {
+        if (callState.outcome != CallOutcome::Pending) {
             return;
         }
-        result    = QStringLiteral("[mcp error] server closed during call");
-        completed = true;
+        callState.outcome = CallOutcome::TimedOut;
         loop.quit();
     });
-
-    loop.exec();
-    monitor.finish();
-
-    QObject::disconnect(responseConn);
-    QObject::disconnect(failureConn);
-    QObject::disconnect(closedConn);
-    activeCalls_.remove(&callState);
+    if (callState.outcome == CallOutcome::Pending) {
+        monitor.start();
+        loop.exec();
+        monitor.finish();
+    }
 
     /* Tell the server to drop the in-flight request when we walked
      * away. Without this the server keeps working on output we will
      * never consume. */
-    if ((callState.aborted || timedOut) && !completed && !client_.isNull()) {
+    if ((callState.outcome == CallOutcome::Aborted || callState.outcome == CallOutcome::TimedOut)
+        && !client_.isNull()) {
         json cancelParams;
         cancelParams["requestId"] = requestId;
-        cancelParams["reason"]    = callState.aborted ? "user abort" : "wall-clock timeout";
+        cancelParams["reason"] = callState.outcome == CallOutcome::Aborted ? "user abort"
+                                                                           : "wall-clock timeout";
         client_->notify(QStringLiteral("notifications/cancelled"), cancelParams);
     }
 
-    if (timedOut) {
+    switch (callState.outcome) {
+    case CallOutcome::Completed:
+    case CallOutcome::ClientClosed:
+        return callState.result;
+    case CallOutcome::TimedOut:
         return QStringLiteral("[mcp timeout] no response after 60s; sent cancel notification");
-    }
-    if (callState.aborted) {
+    case CallOutcome::Aborted:
         return QStringLiteral("[mcp aborted]");
+    case CallOutcome::Pending:
+        return QStringLiteral("[mcp error] call ended without a response");
     }
-    return result;
+
+    Q_UNREACHABLE_RETURN(QString());
 }
 
 void QSocMcpTool::abort()
 {
     const QSet<CallState *> calls = activeCalls_;
     for (CallState *call : calls) {
-        call->aborted = true;
+        if (call->outcome != CallOutcome::Pending) {
+            continue;
+        }
+        call->outcome = CallOutcome::Aborted;
         if (call->loop != nullptr) {
             call->loop->quit();
         }
     }
+}
+
+void QSocMcpTool::retire()
+{
+    if (retired_) {
+        return;
+    }
+    retired_ = true;
+
+    if (activeCalls_.isEmpty()) {
+        deleteLater();
+        return;
+    }
+    /* The active call stacks reclaim this wrapper after the final call exits. */
+    setParent(nullptr);
 }
 
 const McpToolDescriptor &QSocMcpTool::descriptor() const

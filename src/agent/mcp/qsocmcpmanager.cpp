@@ -12,6 +12,7 @@
 #include "common/qsocconsole.h"
 
 #include <algorithm>
+#include <utility>
 
 #include <QTimer>
 
@@ -74,7 +75,12 @@ QSocMcpManager::QSocMcpManager(
     }
 }
 
-QSocMcpManager::~QSocMcpManager() = default;
+QSocMcpManager::~QSocMcpManager()
+{
+    for (const QString &name : std::as_const(order_)) {
+        unregisterToolsFor(name);
+    }
+}
 
 void QSocMcpManager::setTransportFactory(TransportFactory factory)
 {
@@ -91,11 +97,11 @@ void QSocMcpManager::setTransportFactory(TransportFactory factory)
             continue;
         }
         auto &state = servers_[name];
+        unregisterToolsFor(name);
         if (state.client != nullptr) {
             state.client->deleteLater();
             state.client = nullptr;
         }
-        unregisterToolsFor(name);
         buildServer(state.config);
     }
 }
@@ -138,14 +144,24 @@ QList<QSocMcpTool *> QSocMcpManager::toolsForClient(const QString &name) const
     if (!servers_.contains(name)) {
         return {};
     }
-    return servers_.value(name).registeredTools;
+    QList<QSocMcpTool *> tools;
+    for (const auto &tool : servers_.value(name).registeredTools) {
+        if (!tool.isNull()) {
+            tools.append(tool.data());
+        }
+    }
+    return tools;
 }
 
 qsizetype QSocMcpManager::totalToolCount() const
 {
     qsizetype total = 0;
     for (const auto &state : servers_) {
-        total += state.registeredTools.size();
+        for (const auto &tool : state.registeredTools) {
+            if (!tool.isNull()) {
+                ++total;
+            }
+        }
     }
     return total;
 }
@@ -289,6 +305,7 @@ void QSocMcpManager::rebuildServer(const QString &name)
     if (state.givenUp) {
         return;
     }
+    unregisterToolsFor(name);
     if (state.client != nullptr) {
         state.client->disconnect(this);
         state.client->deleteLater();
@@ -314,11 +331,12 @@ void QSocMcpManager::requestToolsList(QSocMcpClient *client)
     if (name.isEmpty()) {
         return;
     }
-    const int requestId = client->request(QStringLiteral("tools/list"));
-    if (requestId < 0) {
+    int &pendingListId = servers_[name].pendingListId;
+    if (client->request(QStringLiteral("tools/list"), nlohmann::json::object(), -1, &pendingListId)
+        < 0) {
+        pendingListId = -1;
         return;
     }
-    servers_[name].pendingListId = requestId;
 }
 
 void QSocMcpManager::registerToolsFromResult(QSocMcpClient *client, const nlohmann::json &result)
@@ -360,13 +378,12 @@ void QSocMcpManager::unregisterToolsFor(const QString &name)
         return;
     }
     auto &state = servers_[name];
-    /* QSocToolRegistry has no unregister API today; mark wrappers for
-     * deletion and drop our pointer so callers cannot dispatch to them.
-     * The registry retains a stale entry until a refresh resolves the
-     * same name with a new wrapper. */
-    for (auto *tool : state.registeredTools) {
-        if (tool != nullptr) {
-            tool->deleteLater();
+    for (const auto &tool : state.registeredTools) {
+        if (!tool.isNull()) {
+            if (!toolRegistry_.isNull()) {
+                toolRegistry_->unregisterTool(tool.data());
+            }
+            tool->retire();
         }
     }
     state.registeredTools.clear();
