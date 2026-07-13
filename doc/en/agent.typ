@@ -1146,13 +1146,19 @@ messages larger than 64 MiB.
 === Tool naming
 <agent-mcp-naming>
 Each tool exposed by an MCP server is registered as
-`mcp__<server>__<tool>`, with non-alphanumeric characters in either segment
-replaced by underscore (collapsed and trimmed). Two servers can therefore
-expose tools with the same short name without colliding. Examples:
+`mcp__<server>__<tool>`. Characters other than ASCII alphanumerics, `_`, and
+`-` in either segment become underscores, which are collapsed and trimmed.
+Two servers can therefore expose tools with the same short name without
+colliding. Examples:
 
 - server `fs`, tool `read_file` becomes `mcp__fs__read_file`
 - server `my server`, tool `Create Issue` becomes
   `mcp__my_server__Create_Issue`
+
+Server names that normalize to an empty namespace are ignored. If two valid,
+enabled server names normalize to the same namespace, the first entry is used.
+Exact duplicate tool names keep the first entry; distinct names that normalize
+to the same public name are omitted.
 
 === Slash commands
 <agent-mcp-commands>
@@ -1193,6 +1199,11 @@ server is unavailable and restored after a successful tools/list response.
 An initial tools/list failure follows the same bounded reconnect path. An
 isolated refresh failure keeps the last valid tool catalog and waits for the
 next change notification or an explicit reconnect.
+Invalid descriptor fields are sanitized or ignored without discarding valid
+siblings. A non-empty refresh with no valid, unambiguous descriptors leaves the
+current catalog unchanged; an empty tools array clears it. Catalog replacement
+is atomic, and QSoC emits one aggregate warning per connection when it adjusts
+a catalog.
 An isolated HTTP POST failure affects only requests carried by that POST.
 A 404 for a request carrying an MCP session ID expires the transport; the
 manager rebuilds it with a fresh session.
@@ -1216,6 +1227,8 @@ best-effort notification; it cannot undo server-side effects.
 - `headers` may contain bearer tokens or other secrets. Keep `.qsoc.yml`
   out of version control if it carries credentials, or substitute
   environment variables and reference them from your shell.
+- Tool annotations are untrusted server hints and never bypass plan-mode or
+  other execution gates.
 
 == HOOKS
 <agent-hooks>

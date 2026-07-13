@@ -112,28 +112,30 @@ private:
     struct ServerState
     {
         McpServerConfig              config;
-        QSocMcpClient               *client            = nullptr;
-        int                          pendingListId     = -1;
-        int                          reconnectAttempts = 0;
-        bool                         givenUp           = false;
-        bool                         hasToolCatalog    = false;
-        bool                         toolListDirty     = false;
+        QSocMcpClient               *client                  = nullptr;
+        int                          pendingListId           = -1;
+        int                          reconnectAttempts       = 0;
+        bool                         givenUp                 = false;
+        bool                         hasToolCatalog          = false;
+        bool                         toolListDirty           = false;
+        bool                         toolCatalogWarningShown = false;
         QPointer<QTimer>             reconnectTimer;
         QPointer<QSocMcpClient>      reconnectClient;
         quint64                      replacementRevision = 0;
         QList<QPointer<QSocMcpTool>> registeredTools;
     };
 
-    void           buildServer(const McpServerConfig &cfg, quint64 revision);
-    void           rebuildServer(const QString &name, bool start);
-    void           cancelReconnect(ServerState &state);
-    void           retireClient(ServerState &state);
-    void           wireClientSignals(QSocMcpClient *client);
-    void           requestToolsList(QSocMcpClient *client);
-    void           finishToolsListLater(QSocMcpClient *client, int id, QString failureMessage = {});
-    void           handleToolListFailure(QSocMcpClient *client, int id, const QString &message);
-    void           registerToolsFromResult(QSocMcpClient *client, const nlohmann::json &result);
-    void           unregisterToolsFor(const QString &name);
+    void buildServer(const McpServerConfig &cfg, quint64 revision);
+    void rebuildServer(const QString &name, bool start);
+    void cancelReconnect(ServerState &state);
+    void retireClient(ServerState &state);
+    void wireClientSignals(QSocMcpClient *client);
+    void requestToolsList(QSocMcpClient *client);
+    void finishToolsListLater(
+        QSocMcpClient *client, int id, QString failureMessage = {}, QString catalogWarning = {});
+    void handleToolListFailure(QSocMcpClient *client, int id, const QString &message);
+    void registerTools(QSocMcpClient *client, const QList<McpToolDescriptor> &descriptors);
+    void unregisterToolsFor(const QString &name);
     QSocMcpClient *senderClient();
 
     int     backoffDelayMs(int attempt) const;

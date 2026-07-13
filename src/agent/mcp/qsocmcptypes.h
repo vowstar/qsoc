@@ -90,7 +90,7 @@ struct McpToolDescriptor
     QString        description; /* Human-readable description */
     nlohmann::json inputSchema; /* JSON Schema as returned by the server */
     bool           readOnly    = false;
-    bool           destructive = false;
+    bool           destructive = true;
 };
 
 #endif // QSOCMCPTYPES_H

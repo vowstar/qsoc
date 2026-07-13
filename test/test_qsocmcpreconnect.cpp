@@ -74,6 +74,15 @@ void replyToolsList(QsocMcpFakeTransport *transport, int messageId, const QStrin
     transport->simulateMessage(resp);
 }
 
+void replyToolDescriptors(QsocMcpFakeTransport *transport, int messageId, const nlohmann::json &tools)
+{
+    nlohmann::json resp;
+    resp["jsonrpc"]         = "2.0";
+    resp["id"]              = messageId;
+    resp["result"]["tools"] = tools;
+    transport->simulateMessage(resp);
+}
+
 void replyRequestError(QsocMcpFakeTransport *transport, int messageId)
 {
     nlohmann::json resp;
@@ -245,6 +254,22 @@ ActiveCallResult runActiveCall(
     return result;
 }
 
+class StaticTool : public QSocTool
+{
+public:
+    explicit StaticTool(QString name)
+        : name_(std::move(name))
+    {}
+
+    QString getName() const override { return name_; }
+    QString getDescription() const override { return QStringLiteral("local tool"); }
+    json    getParametersSchema() const override { return {{"type", "object"}}; }
+    QString execute(const json &) override { return QStringLiteral("local result"); }
+
+private:
+    QString name_;
+};
+
 class Test : public QObject
 {
     Q_OBJECT
@@ -252,6 +277,7 @@ class Test : public QObject
 private slots:
     void toolsRegisterAfterListResponse()
     {
+        QSocTestCapture                       capture;
         QSocToolRegistry                      registry;
         QList<QPointer<QsocMcpFakeTransport>> transports;
         QList<McpServerConfig>                cfgs{makeConfig("svr")};
@@ -271,6 +297,381 @@ private slots:
         QVERIFY(registry.hasTool("mcp__svr__echo"));
         QVERIFY(registry.hasTool("mcp__svr__ping"));
         QCOMPARE(manager.totalToolCount(), qsizetype(2));
+        QVERIFY(!capture.text().contains(QStringLiteral("MCP tool catalog")));
+    }
+
+    void invalidToolNamesAreSkipped()
+    {
+        QSocTestCapture  capture;
+        McpServerFixture fixture;
+        QVERIFY(fixture.waitForTransport());
+
+        auto *transport = fixture.transport();
+        replyInitialize(transport, transport->firstSentId());
+        const int  listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+        QSignalSpy toolsSpy(fixture.manager, &QSocMcpManager::toolsRegistered);
+
+        nlohmann::json tools = nlohmann::json::array(
+            {{{"name", "before"}, {"inputSchema", {{"type", "object"}}}},
+             {{"description", "missing name"}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", ""}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", "..."}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", 7}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", nullptr}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", true}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", nlohmann::json::array()}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", nlohmann::json::object()}, {"inputSchema", {{"type", "object"}}}},
+             nullptr,
+             12,
+             nlohmann::json::array(),
+             {{"name", "after"}, {"inputSchema", {{"type", "object"}}}}});
+
+        bool threw = false;
+        try {
+            replyToolDescriptors(transport, listId, tools);
+        } catch (const nlohmann::json::exception &) {
+            threw = true;
+        }
+        QVERIFY(!threw);
+        flushQueuedCalls();
+
+        auto *client = fixture.manager->findClient(QStringLiteral("svr"));
+        QVERIFY(client != nullptr);
+        QCOMPARE(client->state(), QSocMcpClient::State::Ready);
+        QCOMPARE(fixture.registry.count(), 2);
+        QCOMPARE(fixture.manager->totalToolCount(), qsizetype(2));
+        QCOMPARE(fixture.manager->toolsForClient(QStringLiteral("svr")).size(), qsizetype(2));
+        QCOMPARE(toolsSpy.size(), 1);
+        QCOMPARE(toolsSpy.first().at(1).value<qsizetype>(), qsizetype(2));
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__before")));
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__after")));
+        QVERIFY(!fixture.registry.hasTool(QStringLiteral("mcp__svr__")));
+        QCOMPARE(fixture.manager->reconnectAttempts(QStringLiteral("svr")), 0);
+        QVERIFY(capture.text().contains(QStringLiteral("ignored entries 11, sanitized fields 0")));
+    }
+
+    void optionalDescriptorFieldsAreSanitized()
+    {
+        QSocTestCapture  capture;
+        McpServerFixture fixture;
+        QVERIFY(fixture.waitForTransport());
+
+        auto *transport = fixture.transport();
+        replyInitialize(transport, transport->firstSentId());
+        const int listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+
+        nlohmann::json tools = nlohmann::json::array(
+            {{{"name", "bad_description"},
+              {"description", 7},
+              {"inputSchema", nlohmann::json::array()},
+              {"annotations", "invalid"}},
+             {{"name", "bad_hints"},
+              {"inputSchema", {{"type", "object"}}},
+              {"annotations", {{"readOnlyHint", "yes"}, {"destructiveHint", 0}}}},
+             {{"name", "bad_root"}, {"inputSchema", {{"type", "array"}}}},
+             {{"name", "bad_properties"},
+              {"inputSchema", {{"type", "object"}, {"properties", nlohmann::json::array()}}}},
+             {{"name", "bad_required"},
+              {"inputSchema", {{"type", "object"}, {"required", nlohmann::json::array({1})}}}},
+             {{"name", "missing_schema"}},
+             {{"name", "valid"},
+              {"description", "valid description"},
+              {"inputSchema",
+               {{"type", "object"},
+                {"properties", {{"value", {{"type", "string"}}}}},
+                {"required", nlohmann::json::array({"value"})}}},
+              {"annotations", {{"readOnlyHint", true}, {"destructiveHint", false}}}},
+             {{"name", "missing_type"},
+              {"inputSchema", {{"properties", {{"value", {{"type", "integer"}}}}}}}},
+             {{"name", "bad_type_kind"}, {"inputSchema", {{"type", 7}}}}});
+
+        bool threw = false;
+        try {
+            replyToolDescriptors(transport, listId, tools);
+        } catch (const nlohmann::json::exception &) {
+            threw = true;
+        }
+        QVERIFY(!threw);
+        flushQueuedCalls();
+
+        QCOMPARE(fixture.registry.count(), 9);
+        const auto emptySchema = nlohmann::json{{"type", "object"}};
+        for (const QString &name :
+             {QStringLiteral("bad_description"),
+              QStringLiteral("bad_root"),
+              QStringLiteral("bad_properties"),
+              QStringLiteral("bad_required"),
+              QStringLiteral("missing_schema"),
+              QStringLiteral("bad_type_kind")}) {
+            auto *tool = qobject_cast<QSocMcpTool *>(
+                fixture.registry.getTool(QSocMcp::buildToolName(QStringLiteral("svr"), name)));
+            QVERIFY(tool != nullptr);
+            QVERIFY(tool->getParametersSchema() == emptySchema);
+        }
+
+        auto *badDescription = qobject_cast<QSocMcpTool *>(
+            fixture.registry.getTool(QStringLiteral("mcp__svr__bad_description")));
+        auto *badHints = qobject_cast<QSocMcpTool *>(
+            fixture.registry.getTool(QStringLiteral("mcp__svr__bad_hints")));
+        auto *valid = qobject_cast<QSocMcpTool *>(
+            fixture.registry.getTool(QStringLiteral("mcp__svr__valid")));
+        auto *missingSchema = qobject_cast<QSocMcpTool *>(
+            fixture.registry.getTool(QStringLiteral("mcp__svr__missing_schema")));
+        auto *missingType = qobject_cast<QSocMcpTool *>(
+            fixture.registry.getTool(QStringLiteral("mcp__svr__missing_type")));
+        QVERIFY(badDescription != nullptr);
+        QVERIFY(badHints != nullptr);
+        QVERIFY(valid != nullptr);
+        QVERIFY(missingSchema != nullptr);
+        QVERIFY(missingType != nullptr);
+        QVERIFY(badDescription->getDescription().isEmpty());
+        QVERIFY(!badHints->descriptor().readOnly);
+        QVERIFY(badHints->descriptor().destructive);
+        QVERIFY(valid->descriptor().readOnly);
+        QVERIFY(!valid->descriptor().destructive);
+        QVERIFY(!valid->isReadOnly());
+        QVERIFY(valid->getParametersSchema() == tools.at(6).at("inputSchema"));
+        QVERIFY(!missingSchema->descriptor().readOnly);
+        QVERIFY(missingSchema->descriptor().destructive);
+        const auto missingTypeSchema = missingType->getParametersSchema();
+        QCOMPARE(
+            QString::fromStdString(missingTypeSchema.at("type").get<std::string>()),
+            QStringLiteral("object"));
+        QVERIFY(missingTypeSchema.at("properties").contains("value"));
+        QVERIFY(capture.text().contains(QStringLiteral("ignored entries 0, sanitized fields 11")));
+    }
+
+    void duplicateToolNamesKeepFirst()
+    {
+        QSocTestCapture  capture;
+        McpServerFixture fixture;
+        QVERIFY(fixture.waitForTransport());
+
+        auto *transport = fixture.transport();
+        replyInitialize(transport, transport->firstSentId());
+        const int  listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+        QSignalSpy toolsSpy(fixture.manager, &QSocMcpManager::toolsRegistered);
+
+        const nlohmann::json tools = nlohmann::json::array(
+            {{{"name", "same"}, {"description", "first"}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", "same"}, {"description", "second"}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", "safe"}, {"inputSchema", {{"type", "object"}}}}});
+        replyToolDescriptors(transport, listId, tools);
+        flushQueuedCalls();
+
+        auto *same = qobject_cast<QSocMcpTool *>(
+            fixture.registry.getTool(QStringLiteral("mcp__svr__same")));
+        QVERIFY(same != nullptr);
+        QCOMPARE(same->getDescription(), QStringLiteral("first"));
+        QCOMPARE(fixture.registry.count(), 2);
+        QCOMPARE(fixture.manager->totalToolCount(), qsizetype(2));
+        QCOMPARE(fixture.manager->toolsForClient(QStringLiteral("svr")).size(), qsizetype(2));
+        QCOMPARE(toolsSpy.size(), 1);
+        QCOMPARE(toolsSpy.first().at(1).value<qsizetype>(), qsizetype(2));
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool catalog")), 1);
+        QVERIFY(capture.text().contains(QStringLiteral("ignored entries 1, sanitized fields 0")));
+    }
+
+    void normalizedToolCollisionsAreOmitted_data()
+    {
+        QTest::addColumn<bool>("reverse");
+
+        QTest::newRow("forward") << false;
+        QTest::newRow("reverse") << true;
+    }
+
+    void normalizedToolCollisionsAreOmitted()
+    {
+        QFETCH(bool, reverse);
+
+        QSocTestCapture  capture;
+        McpServerFixture fixture;
+        QVERIFY(fixture.waitForTransport());
+
+        auto *transport = fixture.transport();
+        replyInitialize(transport, transport->firstSentId());
+        const int   listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+        QStringList names{QStringLiteral("read file"), QStringLiteral("read.file")};
+        if (reverse) {
+            std::reverse(names.begin(), names.end());
+        }
+
+        nlohmann::json tools = nlohmann::json::array();
+        for (const QString &name : names) {
+            tools.push_back({{"name", name.toStdString()}, {"inputSchema", {{"type", "object"}}}});
+        }
+        tools.push_back({{"name", "safe"}, {"inputSchema", {{"type", "object"}}}});
+        QSignalSpy toolsSpy(fixture.manager, &QSocMcpManager::toolsRegistered);
+        replyToolDescriptors(transport, listId, tools);
+        flushQueuedCalls();
+
+        QVERIFY(!fixture.registry.hasTool(QStringLiteral("mcp__svr__read_file")));
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__safe")));
+        QCOMPARE(fixture.registry.count(), 1);
+        QCOMPARE(fixture.manager->totalToolCount(), qsizetype(1));
+        QCOMPARE(fixture.manager->toolsForClient(QStringLiteral("svr")).size(), qsizetype(1));
+        QCOMPARE(toolsSpy.size(), 1);
+        QCOMPARE(toolsSpy.first().at(1).value<qsizetype>(), qsizetype(1));
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool catalog")), 1);
+        QVERIFY(capture.text().contains(QStringLiteral("ignored entries 2, sanitized fields 0")));
+    }
+
+    void unusableCatalogDoesNotReplaceCurrentTools()
+    {
+        QSocTestCapture  capture;
+        McpServerFixture fixture;
+        QVERIFY(fixture.startWithTool(QStringLiteral("old")));
+        capture.clear();
+
+        auto                *transport = fixture.transport();
+        QPointer<QSocTool>   oldTool   = fixture.registry.getTool(QStringLiteral("mcp__svr__old"));
+        QSignalSpy           toolsSpy(fixture.manager, &QSocMcpManager::toolsRegistered);
+        const nlohmann::json unusable = nlohmann::json::array(
+            {{{"name", "..."}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", "a b"}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", "a.b"}, {"inputSchema", {{"type", "object"}}}}});
+
+        for (int i = 0; i < 64; ++i) {
+            notifyToolsChanged(transport);
+            const int listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+            replyToolDescriptors(transport, listId, unusable);
+            flushQueuedCalls();
+        }
+
+        QCOMPARE(fixture.registry.getTool(QStringLiteral("mcp__svr__old")), oldTool.data());
+        QCOMPARE(fixture.registry.count(), 1);
+        QCOMPARE(fixture.manager->totalToolCount(), qsizetype(1));
+        QCOMPARE(toolsSpy.size(), 0);
+        QCOMPARE(fixture.manager->reconnectAttempts(QStringLiteral("svr")), 0);
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool catalog")), 1);
+        QVERIFY(capture.text().contains(
+            QStringLiteral("ignored entries 3, sanitized fields 0; catalog unchanged")));
+
+        notifyToolsChanged(transport);
+        int listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+        replyToolDescriptors(transport, listId, nlohmann::json::array());
+        flushQueuedCalls();
+        QCOMPARE(fixture.registry.count(), 0);
+        QCOMPARE(fixture.manager->totalToolCount(), qsizetype(0));
+        QCOMPARE(toolsSpy.size(), 1);
+        QCOMPARE(toolsSpy.first().at(1).value<qsizetype>(), qsizetype(0));
+
+        notifyToolsChanged(transport);
+        listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+        replyToolsList(transport, listId, {QStringLiteral("new")});
+        flushQueuedCalls();
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__new")));
+        QCOMPARE(fixture.registry.count(), 1);
+        QCOMPARE(toolsSpy.size(), 2);
+    }
+
+    void unusableInitialCatalogStaysReady()
+    {
+        QSocTestCapture  capture;
+        McpServerFixture fixture;
+        QVERIFY(fixture.waitForTransport());
+
+        auto *transport = fixture.transport();
+        replyInitialize(transport, transport->firstSentId());
+        const int  listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+        QSignalSpy toolsSpy(fixture.manager, &QSocMcpManager::toolsRegistered);
+        const nlohmann::json unusable = nlohmann::json::array(
+            {{{"name", "..."}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", "a b"}, {"inputSchema", {{"type", "object"}}}},
+             {{"name", "a.b"}, {"inputSchema", {{"type", "object"}}}}});
+        replyToolDescriptors(transport, listId, unusable);
+        flushQueuedCalls();
+
+        auto *client = fixture.manager->findClient(QStringLiteral("svr"));
+        QVERIFY(client != nullptr);
+        QCOMPARE(client->state(), QSocMcpClient::State::Ready);
+        QCOMPARE(fixture.registry.count(), 0);
+        QCOMPARE(fixture.manager->totalToolCount(), qsizetype(0));
+        QCOMPARE(fixture.manager->reconnectAttempts(QStringLiteral("svr")), 0);
+        QCOMPARE(fixture.transports.size(), qsizetype(1));
+        QCOMPARE(toolsSpy.size(), 0);
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool catalog")), 1);
+        QVERIFY(capture.text().contains(
+            QStringLiteral("ignored entries 3, sanitized fields 0; catalog unchanged")));
+    }
+
+    void normalizedServerNamespaceKeepsFirstConfig_data()
+    {
+        QTest::addColumn<QString>("first");
+        QTest::addColumn<QString>("second");
+
+        QTest::newRow("space-first") << QStringLiteral("a b") << QStringLiteral("a.b");
+        QTest::newRow("dot-first") << QStringLiteral("a.b") << QStringLiteral("a b");
+    }
+
+    void normalizedServerNamespaceKeepsFirstConfig()
+    {
+        QFETCH(QString, first);
+        QFETCH(QString, second);
+
+        QSocTestCapture  capture;
+        QSocToolRegistry registry;
+        QSocMcpManager   manager(
+            {makeConfig(first), makeConfig(second), makeConfig(QStringLiteral("..."))}, &registry);
+
+        QCOMPARE(manager.serverNames(), QStringList{first});
+        QCOMPARE(manager.clientCount(), qsizetype(1));
+        QCOMPARE(capture.text().count(QStringLiteral("MCP server namespace")), 2);
+        QCOMPARE(capture.text().count(QStringLiteral("namespace collision")), 1);
+        QCOMPARE(capture.text().count(QStringLiteral("namespace is empty")), 1);
+    }
+
+    void foreignRegistryToolIsNotShadowed()
+    {
+        QSocTestCapture  capture;
+        McpServerFixture fixture;
+        StaticTool       local(QStringLiteral("mcp__svr__echo"));
+        fixture.registry.registerTool(&local);
+        QVERIFY(fixture.waitForTransport());
+
+        auto *transport = fixture.transport();
+        replyInitialize(transport, transport->firstSentId());
+        const int listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+        replyToolsList(transport, listId, {QStringLiteral("echo"), QStringLiteral("safe")});
+        flushQueuedCalls();
+
+        QCOMPARE(fixture.registry.getTool(QStringLiteral("mcp__svr__echo")), &local);
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__safe")));
+        QCOMPARE(fixture.registry.count(), 2);
+        QCOMPARE(fixture.manager->totalToolCount(), qsizetype(1));
+        QCOMPARE(fixture.manager->toolsForClient(QStringLiteral("svr")).size(), qsizetype(1));
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool catalog")), 1);
+        QVERIFY(capture.text().contains(QStringLiteral("ignored entries 1, sanitized fields 0")));
+    }
+
+    void foreignConflictClearsHiddenRemoteWrapper()
+    {
+        QSocTestCapture  capture;
+        McpServerFixture fixture;
+        QVERIFY(fixture.startWithTool(QStringLiteral("echo")));
+        QPointer<QSocTool> remote = fixture.registry.getTool(QStringLiteral("mcp__svr__echo"));
+        StaticTool         local(QStringLiteral("mcp__svr__echo"));
+        fixture.registry.registerTool(&local);
+        QCOMPARE(fixture.manager->totalToolCount(), qsizetype(1));
+        QCOMPARE(fixture.registry.getTool(QStringLiteral("mcp__svr__echo")), &local);
+        capture.clear();
+
+        auto *transport = fixture.transport();
+        notifyToolsChanged(transport);
+        const int  listId = requestIdsForMethod(transport, QStringLiteral("tools/list")).last();
+        QSignalSpy toolsSpy(fixture.manager, &QSocMcpManager::toolsRegistered);
+        replyToolsList(transport, listId, {QStringLiteral("echo")});
+        flushQueuedCalls();
+
+        QCOMPARE(fixture.registry.getTool(QStringLiteral("mcp__svr__echo")), &local);
+        QCOMPARE(fixture.registry.count(), 1);
+        QCOMPARE(fixture.manager->totalToolCount(), qsizetype(0));
+        QCOMPARE(fixture.manager->toolsForClient(QStringLiteral("svr")).size(), qsizetype(0));
+        QCOMPARE(toolsSpy.size(), 1);
+        QCOMPARE(toolsSpy.first().at(1).value<qsizetype>(), qsizetype(0));
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool catalog")), 1);
+        QVERIFY(capture.text().contains(QStringLiteral("ignored entries 1, sanitized fields 0")));
+        QVERIFY(QTest::qWaitFor([&]() { return remote.isNull(); }, 500));
     }
 
     void synchronousListResponseRegistersTools()
@@ -434,6 +835,7 @@ private slots:
 
     void notificationsDuringToolsRegisteredAreCoalesced()
     {
+        QSocTestCapture  capture;
         McpServerFixture fixture;
         QVERIFY(fixture.startWithTool(QStringLiteral("base")));
 
@@ -461,7 +863,13 @@ private slots:
         notifyToolsChanged(transport);
         QList<int> listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
         QCOMPARE(listIds.size(), 2);
-        replyToolsList(transport, listIds.last(), {"intermediate"});
+        replyToolDescriptors(
+            transport,
+            listIds.last(),
+            nlohmann::json::array(
+                {{{"name", "intermediate"},
+                  {"description", 7},
+                  {"inputSchema", {{"type", "object"}}}}}));
 
         QVERIFY(callbackSeen);
         QCOMPARE(requestsInCallback, 0);
@@ -469,11 +877,14 @@ private slots:
         QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__intermediate")));
 
         flushQueuedCalls();
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool catalog")), 1);
+        QVERIFY(capture.text().contains(QStringLiteral("ignored entries 0, sanitized fields 1")));
         listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
         QCOMPARE(listIds.size(), 3);
         replyToolsList(transport, listIds.last(), {"final"});
         flushQueuedCalls();
 
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool catalog")), 1);
         QCOMPARE(requestIdsForMethod(transport, QStringLiteral("tools/list")).size(), 3);
         QCOMPARE(fixture.registry.count(), 1);
         QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__final")));
