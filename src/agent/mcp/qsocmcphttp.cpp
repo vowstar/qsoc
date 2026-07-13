@@ -11,6 +11,7 @@
 #include <QNetworkRequest>
 #include <QUrl>
 
+#include <limits>
 #include <utility>
 
 namespace {
@@ -32,6 +33,31 @@ bool replyIsSse(QNetworkReply *reply)
     }
     const QByteArray contentType = reply->header(QNetworkRequest::ContentTypeHeader).toByteArray();
     return contentType.contains(kSseContentType);
+}
+
+int replyHttpStatus(QNetworkReply *reply)
+{
+    if (reply == nullptr) {
+        return 0;
+    }
+    bool      ok     = false;
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(&ok);
+    return ok ? status : 0;
+}
+
+bool httpStatusIsSuccessful(int status)
+{
+    return status >= 200 && status < 300;
+}
+
+QString httpFailureMessage(QNetworkReply *reply, int status)
+{
+    QString reason
+        = reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString().trimmed();
+    if (reason.isEmpty()) {
+        reason = QStringLiteral("Request failed");
+    }
+    return QStringLiteral("[HTTP %1] %2").arg(status).arg(reason);
 }
 
 QList<DeferredSignal> parseSseEvents(QByteArray &buffer)
@@ -105,6 +131,53 @@ QList<DeferredSignal> parseJsonBody(const QByteArray &body)
     }
 }
 
+bool readClientRequestId(const nlohmann::json &message, int *requestId)
+{
+    if (!message.is_object() || !message.contains("method") || !message["method"].is_string()
+        || !message.contains("id")) {
+        return false;
+    }
+
+    const auto &id = message["id"];
+    if (id.is_number_unsigned()) {
+        const auto value = id.get<std::uint64_t>();
+        if (value > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+            return false;
+        }
+        *requestId = static_cast<int>(value);
+        return true;
+    }
+    if (!id.is_number_integer()) {
+        return false;
+    }
+    const auto value = id.get<std::int64_t>();
+    if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    *requestId = static_cast<int>(value);
+    return true;
+}
+
+QList<int> requestIdsForMessage(const nlohmann::json &message)
+{
+    QList<int> requestIds;
+    const auto appendRequestId = [&requestIds](const nlohmann::json &entry) {
+        int requestId = -1;
+        if (readClientRequestId(entry, &requestId) && !requestIds.contains(requestId)) {
+            requestIds.append(requestId);
+        }
+    };
+
+    if (message.is_array()) {
+        for (const auto &entry : message) {
+            appendRequestId(entry);
+        }
+    } else {
+        appendRequestId(message);
+    }
+    return requestIds;
+}
+
 } // namespace
 
 QSocMcpHttpTransport::QSocMcpHttpTransport(McpServerConfig config, QObject *parent)
@@ -154,6 +227,7 @@ void QSocMcpHttpTransport::sendTrackedMessage(const nlohmann::json &message, qui
 
 void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 sendToken)
 {
+    const QList<int> requestIds = requestIdsForMessage(message);
     if (state() != State::Running || manager_ == nullptr) {
         emit errorOccurred(QStringLiteral("HTTP transport not running"));
         return;
@@ -161,7 +235,8 @@ void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 se
 
     const QUrl url(config_.url);
     if (!url.isValid()) {
-        emit errorOccurred(QStringLiteral("Invalid MCP URL: %1").arg(config_.url));
+        emit messageFailed(
+            sendToken, requestIds, QStringLiteral("Invalid MCP URL: %1").arg(config_.url));
         return;
     }
 
@@ -181,8 +256,13 @@ void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 se
     const QByteArray body = QByteArray::fromStdString(message.dump());
 
     QNetworkReply *reply = manager_->post(request, body);
-    ReplyState     replyState;
-    replyState.sendToken = sendToken;
+    if (reply == nullptr) {
+        emit messageFailed(sendToken, requestIds, QStringLiteral("HTTP request could not start"));
+        return;
+    }
+    ReplyState replyState;
+    replyState.requestIds = requestIds;
+    replyState.sendToken  = sendToken;
     replies_.insert(reply, replyState);
 
     connect(
@@ -205,12 +285,27 @@ void QSocMcpHttpTransport::onReplyMetaDataChanged()
     if (!sessionId.isEmpty()) {
         sessionId_ = sessionId;
     }
+    if (reply->bytesAvailable() > 0) {
+        processAvailableReplyData(reply);
+    }
 }
 
 void QSocMcpHttpTransport::onReplyReadyRead()
 {
-    QNetworkReply *reply = senderReply();
+    processAvailableReplyData(senderReply());
+}
+
+void QSocMcpHttpTransport::processAvailableReplyData(QNetworkReply *reply)
+{
     if (reply == nullptr || !replies_.contains(reply)) {
+        return;
+    }
+    const int status = replyHttpStatus(reply);
+    if (status == 0) {
+        return;
+    }
+    if (!httpStatusIsSuccessful(status)) {
+        reply->readAll();
         return;
     }
     bool isSse = false;
@@ -235,10 +330,18 @@ void QSocMcpHttpTransport::onReplyFinished()
         return;
     }
 
+    const int status = replyHttpStatus(reply);
+    if (status != 0 && !httpStatusIsSuccessful(status)) {
+        failReply(reply, httpFailureMessage(reply, status));
+        return;
+    }
     if (reply->error() != QNetworkReply::NoError) {
         const QString error = reply->errorString();
-        cleanupReply(reply);
-        emit errorOccurred(error);
+        failReply(reply, error);
+        return;
+    }
+    if (status == 0) {
+        failReply(reply, QStringLiteral("[HTTP 0] Response status unavailable"));
         return;
     }
 
@@ -252,8 +355,8 @@ void QSocMcpHttpTransport::onReplyFinished()
     }
 
     QList<DeferredSignal> events;
-    quint64               sendToken  = 0;
-    bool                  sendFailed = false;
+    QList<int>            requestIds;
+    quint64               sendToken = 0;
     {
         auto it = replies_.find(reply);
         if (!it->isSse) {
@@ -265,16 +368,10 @@ void QSocMcpHttpTransport::onReplyFinished()
         } else {
             events = parseJsonBody(reply->readAll());
         }
-        for (const auto &event : std::as_const(events)) {
-            if (!event.error.isEmpty()) {
-                it->sendFailed = true;
-                break;
-            }
-        }
+        requestIds = it->requestIds;
         sendToken  = it->sendToken;
-        sendFailed = it->sendFailed;
     }
-    cleanupReply(reply);
+    cleanupReply(reply, false);
 
     const quint64                  generation = lifecycleGeneration_;
     QPointer<QSocMcpHttpTransport> guard(this);
@@ -282,13 +379,14 @@ void QSocMcpHttpTransport::onReplyFinished()
         if (event.error.isEmpty()) {
             emit messageReceived(event.message);
         } else {
-            emit errorOccurred(event.error);
+            emit messageFailed(sendToken, requestIds, event.error);
+            return;
         }
         if (guard.isNull() || lifecycleGeneration_ != generation) {
             return;
         }
     }
-    if (sendToken != 0 && !sendFailed) {
+    if (sendToken != 0) {
         emit messageSent(sendToken);
     }
 }
@@ -296,6 +394,9 @@ void QSocMcpHttpTransport::onReplyFinished()
 void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)
 {
     QList<DeferredSignal> events;
+    QList<int>            requestIds;
+    quint64               sendToken = 0;
+    bool                  failed    = false;
     {
         auto it = replies_.find(reply);
         if (it == replies_.end()) {
@@ -305,10 +406,17 @@ void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)
         events = parseSseEvents(it->sseBuffer);
         for (const auto &event : std::as_const(events)) {
             if (!event.error.isEmpty()) {
-                it->sendFailed = true;
+                failed = true;
                 break;
             }
         }
+        if (failed) {
+            requestIds = it->requestIds;
+            sendToken  = it->sendToken;
+        }
+    }
+    if (failed) {
+        cleanupReply(reply, true);
     }
 
     const quint64                  generation = lifecycleGeneration_;
@@ -317,12 +425,25 @@ void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)
         if (event.error.isEmpty()) {
             emit messageReceived(event.message);
         } else {
-            emit errorOccurred(event.error);
+            emit messageFailed(sendToken, requestIds, event.error);
+            return;
         }
         if (guard.isNull() || lifecycleGeneration_ != generation) {
             return;
         }
     }
+}
+
+void QSocMcpHttpTransport::failReply(QNetworkReply *reply, const QString &message)
+{
+    auto it = replies_.find(reply);
+    if (it == replies_.end()) {
+        return;
+    }
+    const QList<int> requestIds = it->requestIds;
+    const quint64    sendToken  = it->sendToken;
+    cleanupReply(reply, true);
+    emit messageFailed(sendToken, requestIds, message);
 }
 
 void QSocMcpHttpTransport::clearReplies()
@@ -343,13 +464,16 @@ void QSocMcpHttpTransport::clearReplies()
     }
 }
 
-void QSocMcpHttpTransport::cleanupReply(QNetworkReply *reply)
+void QSocMcpHttpTransport::cleanupReply(QNetworkReply *reply, bool abort)
 {
     if (reply == nullptr) {
         return;
     }
     replies_.remove(reply);
     disconnect(reply, nullptr, this, nullptr);
+    if (abort && reply->isRunning()) {
+        reply->abort();
+    }
     reply->deleteLater();
 }
 

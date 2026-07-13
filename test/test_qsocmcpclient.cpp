@@ -936,6 +936,145 @@ private slots:
         QCOMPARE(client.state(), QSocMcpClient::State::Ready);
     }
 
+    void messageFailureOnlyFailsCorrelatedRequest()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        client.start();
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"},
+             {"id", transport->firstSentId()},
+             {"result", {{"capabilities", nlohmann::json::object()}}}});
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int failedId  = client.request(QStringLiteral("fails"));
+        const int successId = client.request(QStringLiteral("succeeds"));
+        transport->simulateMessageFailure(
+            0, {failedId, failedId, successId + 1000}, QStringLiteral("request failed"));
+
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(0).toInt(), failedId);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32000);
+        QCOMPARE(failureSpy.first().at(2).toString(), QStringLiteral("request failed"));
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"}, {"id", failedId}, {"result", {{"late", true}}}});
+        QCOMPARE(responseSpy.size(), qsizetype(0));
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"}, {"id", successId}, {"result", {{"ok", true}}}});
+        QCOMPARE(responseSpy.size(), qsizetype(1));
+        QCOMPARE(responseSpy.first().at(0).toInt(), successId);
+
+        transport->simulateMessageFailure(0, {successId}, QStringLiteral("late failure"));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+    }
+
+    void messageFailureCallbackMayDeleteClient()
+    {
+        auto                      *transport = new QsocMcpFakeTransport;
+        auto                      *client    = new QSocMcpClient(basicConfig(), transport);
+        QPointer<QSocMcpClient>    guard(client);
+        QPointer<QSocMcpTransport> transportGuard(transport);
+        client->start();
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"},
+             {"id", transport->firstSentId()},
+             {"result", {{"capabilities", nlohmann::json::object()}}}});
+        QCOMPARE(client->state(), QSocMcpClient::State::Ready);
+
+        const int firstId  = client->request(QStringLiteral("first"));
+        const int secondId = client->request(QStringLiteral("second"));
+        int       failures = 0;
+        connect(
+            client,
+            &QSocMcpClient::requestFailed,
+            client,
+            [client, &failures](int, int, const QString &) {
+                failures++;
+                delete client;
+            });
+
+        transport->simulateMessageFailure(0, {firstId, secondId}, QStringLiteral("request failed"));
+        QVERIFY(guard.isNull());
+        QVERIFY(transportGuard.isNull());
+        QCOMPARE(failures, 1);
+    }
+
+    void messageFailureCallbackCannotTouchNewLifecycle()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        client.start();
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"},
+             {"id", transport->firstSentId()},
+             {"result", {{"capabilities", nlohmann::json::object()}}}});
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+        readySpy.clear();
+
+        const int failedId       = client.request(QStringLiteral("restart"));
+        const int nextInitialize = failedId + 1;
+        connect(&client, &QSocMcpClient::requestFailed, &client, [&](int id, int, const QString &) {
+            if (id == failedId) {
+                client.stop();
+                client.start();
+            }
+        });
+
+        transport
+            ->simulateMessageFailure(0, {failedId, nextInitialize}, QStringLiteral("request failed"));
+
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+        QCOMPARE(transport->lastSentId(), nextInitialize);
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"},
+             {"id", nextInitialize},
+             {"result", {{"capabilities", nlohmann::json::object()}}}});
+        QCOMPARE(readySpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+    }
+
+    void initializeMessageFailureTerminatesLifecycle()
+    {
+        auto *transport = new QsocMcpFakeTransport;
+        transport->setCloseOnStop(false);
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    closedSpy(&client, &QSocMcpClient::closed);
+        QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        client.start();
+
+        const int initializeId = transport->firstSentId();
+        transport->simulateMessageFailure(0, {initializeId + 1}, QStringLiteral("unrelated failure"));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+
+        transport->simulateMessageFailure(0, {initializeId}, QStringLiteral("initialize failed"));
+
+        QCOMPARE(readySpy.size(), qsizetype(0));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(0).toInt(), initializeId);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32000);
+        QCOMPARE(client.state(), QSocMcpClient::State::Failed);
+        QCOMPARE(transport->stopCount(), 1);
+
+        transport->simulateClosed();
+        QCOMPARE(closedSpy.size(), qsizetype(1));
+        QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
+    }
+
     void readyFatalTransportErrorClosesLifecycle()
     {
         auto *transport = new QsocMcpFakeTransport;
@@ -1079,6 +1218,7 @@ private slots:
         auto         *transport = new QsocMcpFakeTransport;
         QSocMcpClient client(basicConfig(), transport);
         QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
         QSignalSpy    closedSpy(&client, &QSocMcpClient::closed);
         transport->setSendHook([transport](const nlohmann::json &message) {
             if (message.value("method", std::string()) == "notifications/initialized") {
@@ -1087,13 +1227,17 @@ private slots:
         });
         client.start();
 
+        const int      initializeId = transport->firstSentId();
         nlohmann::json initResponse;
         initResponse["jsonrpc"]                = "2.0";
-        initResponse["id"]                     = transport->firstSentId();
+        initResponse["id"]                     = initializeId;
         initResponse["result"]["capabilities"] = nlohmann::json::object();
         transport->simulateMessage(initResponse);
 
         QCOMPARE(readySpy.size(), 0);
+        QCOMPARE(failureSpy.size(), 1);
+        QCOMPARE(failureSpy.first().at(0).toInt(), initializeId);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32000);
         QCOMPARE(closedSpy.size(), 1);
         QCOMPARE(transport->stopCount(), 1);
         QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
@@ -1125,6 +1269,45 @@ private slots:
         QCOMPARE(failureSpy.size(), qsizetype(1));
         QCOMPARE(failureSpy.first().at(0).toInt(), initializeId);
         QCOMPARE(transport->stopCount(), 1);
+        QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
+    }
+
+    void initializedMessageFailureTerminatesLifecycle()
+    {
+        auto *transport = new QsocMcpFakeTransport;
+        transport->setAutoCompleteTrackedMessages(false);
+        transport->setCloseOnStop(false);
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    closedSpy(&client, &QSocMcpClient::closed);
+        client.start();
+
+        const int initializeId = transport->firstSentId();
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"},
+             {"id", initializeId},
+             {"result", {{"capabilities", nlohmann::json::object()}}}});
+        const quint64 token = transport->lastTrackedToken();
+        QVERIFY(token != 0);
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+
+        transport->simulateMessageFailure(token + 1, {}, QStringLiteral("unrelated failure"));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+
+        transport->simulateMessageFailure(token, {}, QStringLiteral("notification failed"));
+
+        QCOMPARE(readySpy.size(), qsizetype(0));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(0).toInt(), initializeId);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32000);
+        QCOMPARE(failureSpy.first().at(2).toString(), QStringLiteral("notification failed"));
+        QCOMPARE(client.state(), QSocMcpClient::State::Failed);
+        QCOMPARE(transport->stopCount(), 1);
+
+        transport->simulateClosed();
+        QCOMPARE(closedSpy.size(), qsizetype(1));
         QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
     }
 

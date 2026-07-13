@@ -1186,8 +1186,9 @@ a rebuild on exponential backoff (1 s, 2 s, 4 s, capped at 30 s). After
 three reconnect attempts fail the server is marked failed and dropped until
 the next `/mcp reconnect` or agent restart. Its tools are removed while the
 server is unavailable and restored after a successful tools/list response.
-A request error on a running connection fails its outstanding requests but
-keeps the connection available for later requests.
+An isolated HTTP POST failure affects only requests carried by that POST.
+A transport-wide error fails all outstanding requests; if the connection
+remains running, later requests are still allowed.
 A tool-list refresh affects new calls only; calls already in flight finish
 against the server version that accepted them. Disconnects and reconnects
 never replay an in-flight call. Canceling stops the local wait and sends a

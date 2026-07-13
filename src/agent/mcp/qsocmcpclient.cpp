@@ -86,6 +86,7 @@ QSocMcpClient::QSocMcpClient(McpServerConfig config, QSocMcpTransport *transport
         connect(transport_, &QSocMcpTransport::closed, this, &QSocMcpClient::onTransportClosed);
         connect(transport_, &QSocMcpTransport::errorOccurred, this, &QSocMcpClient::onTransportError);
         connect(transport_, &QSocMcpTransport::messageSent, this, &QSocMcpClient::onMessageSent);
+        connect(transport_, &QSocMcpTransport::messageFailed, this, &QSocMcpClient::onMessageFailed);
         connect(
             transport_, &QSocMcpTransport::messageReceived, this, &QSocMcpClient::onMessageReceived);
     }
@@ -261,11 +262,18 @@ void QSocMcpClient::onTransportError(const QString &message)
         return;
     }
 
-    lifecycle_ = Lifecycle::Stopping;
+    const int initializedRequestId = initializedRequestId_;
+    lifecycle_                     = Lifecycle::Stopping;
     clearInitializedSend();
     setState(State::Failed);
     if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
         return;
+    }
+    if (initializedRequestId >= 0) {
+        emit requestFailed(initializedRequestId, kClientErrorTransport, message);
+        if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
+            return;
+        }
     }
     if (!cancelAllPending(kClientErrorTransport, message) || guard.isNull()
         || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
@@ -290,6 +298,43 @@ void QSocMcpClient::onMessageSent(quint64 token)
         return;
     }
     emit ready();
+}
+
+void QSocMcpClient::onMessageFailed(
+    quint64 token, const QList<int> &requestIds, const QString &message)
+{
+    if (lifecycle_ != Lifecycle::Active) {
+        return;
+    }
+    if ((state_ == State::Initializing && token != 0 && token == initializedSendToken_)
+        || (state_ == State::Initializing && initializeId_ >= 0 && pending_.contains(initializeId_)
+            && requestIds.contains(initializeId_))) {
+        onTransportError(message);
+        return;
+    }
+    if (state_ != State::Ready) {
+        return;
+    }
+
+    const quint64                 generation = lifecycleGeneration_;
+    const QPointer<QSocMcpClient> guard(this);
+    for (int id : requestIds) {
+        auto pendingIt = pending_.find(id);
+        if (pendingIt == pending_.end()) {
+            continue;
+        }
+        Pending pending = pendingIt.value();
+        pending_.erase(pendingIt);
+        if (!pending.timer.isNull()) {
+            pending.timer->stop();
+            pending.timer->deleteLater();
+        }
+        emit requestFailed(id, kClientErrorTransport, message);
+        if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Active)
+            || state_ != State::Ready) {
+            return;
+        }
+    }
 }
 
 void QSocMcpClient::onMessageReceived(const nlohmann::json &message)

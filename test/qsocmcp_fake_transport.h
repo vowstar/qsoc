@@ -56,6 +56,7 @@ public:
 
     void sendTrackedMessage(const nlohmann::json &message, quint64 token) override
     {
+        lastTrackedToken_ = token;
         if (autoCompleteTrackedMessages_) {
             QSocMcpTransport::sendTrackedMessage(message, token);
             return;
@@ -65,6 +66,10 @@ public:
 
     void simulateMessage(const nlohmann::json &message) { emit messageReceived(message); }
     void simulateError(const QString &message) { emit errorOccurred(message); }
+    void simulateMessageFailure(quint64 token, const QList<int> &requestIds, const QString &message)
+    {
+        emit messageFailed(token, requestIds, message);
+    }
     void setSendHook(std::function<void(const nlohmann::json &)> hook)
     {
         sendHook_ = std::move(hook);
@@ -87,6 +92,7 @@ public:
     int                          lastSentId() const { return sent_.last()["id"].get<int>(); }
     int                          startCount() const { return startCount_; }
     int                          stopCount() const { return stopCount_; }
+    quint64                      lastTrackedToken() const { return lastTrackedToken_; }
     qsizetype                    sentCount() const { return sent_.size(); }
     const QList<nlohmann::json> &sent() const { return sent_; }
 
@@ -97,6 +103,7 @@ private:
     bool                                        autoCompleteTrackedMessages_ = true;
     int                                         startCount_                  = 0;
     int                                         stopCount_                   = 0;
+    quint64                                     lastTrackedToken_            = 0;
 };
 
 #endif // QSOCMCP_FAKE_TRANSPORT_H

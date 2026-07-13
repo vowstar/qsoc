@@ -8,6 +8,7 @@
 
 #include <cstdint>
 
+#include <QList>
 #include <QObject>
 #include <QString>
 
@@ -20,7 +21,8 @@
  *          Lifecycle: start() moves the transport from Idle or Stopped to
  *          Starting. Subclasses emit started() when the transport becomes
  *          available and closed() when its lifecycle ends. errorOccurred()
- *          reports a transport or message failure, which may be recoverable.
+ *          reports a transport-wide failure, which may be recoverable;
+ *          messageFailed() reports one isolated outbound failure.
  *          sendMessage() is only valid between started() and stop()/closed().
  */
 class QSocMcpTransport : public QObject
@@ -59,8 +61,9 @@ public:
      * @details The caller owns the opaque nonzero token. Completion may be
      *          synchronous. A successful send emits messageSent(token)
      *          exactly once; failure or lifecycle termination must not emit
-     *          it. Synchronous transports use the default implementation;
-     *          asynchronous transports override it.
+     *          it. The default handles synchronous, transport-wide failure.
+     *          Transports that emit messageFailed() override this method and
+     *          preserve the token.
      */
     virtual void sendTrackedMessage(const nlohmann::json &message, quint64 token);
 
@@ -71,10 +74,16 @@ signals:
     void closed();
     /** A complete JSON message has been parsed off the wire. */
     void messageReceived(const nlohmann::json &message);
-    /** Transport or message failure; closed() reports lifecycle termination. */
+    /** Transport-wide failure affecting every in-flight request. */
     void errorOccurred(const QString &message);
     /** A tracked outbound message completed successfully. */
     void messageSent(quint64 token);
+    /**
+     * One outbound message failed without terminating the transport.
+     * token is its tracked token, or zero when untracked. requestIds contains
+     * the integer client request IDs carried by this message.
+     */
+    void messageFailed(quint64 token, const QList<int> &requestIds, const QString &message);
 
 protected:
     void setState(State newState);

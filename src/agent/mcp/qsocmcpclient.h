@@ -111,6 +111,7 @@ private slots:
     void onTransportClosed();
     void onTransportError(const QString &message);
     void onMessageSent(quint64 token);
+    void onMessageFailed(quint64 token, const QList<int> &requestIds, const QString &message);
     void onMessageReceived(const nlohmann::json &message);
 
 private:

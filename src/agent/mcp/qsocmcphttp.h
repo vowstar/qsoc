@@ -46,15 +46,17 @@ private:
     struct ReplyState
     {
         QByteArray sseBuffer;
-        bool       isSse      = false;
-        bool       sendFailed = false;
-        quint64    sendToken  = 0;
+        QList<int> requestIds;
+        bool       isSse     = false;
+        quint64    sendToken = 0;
     };
 
     void           postMessage(const nlohmann::json &message, quint64 sendToken);
+    void           processAvailableReplyData(QNetworkReply *reply);
     void           handleSseChunk(QNetworkReply *reply);
+    void           failReply(QNetworkReply *reply, const QString &message);
     void           clearReplies();
-    void           cleanupReply(QNetworkReply *reply);
+    void           cleanupReply(QNetworkReply *reply, bool abort);
     QNetworkReply *senderReply();
 
     McpServerConfig                    config_;
