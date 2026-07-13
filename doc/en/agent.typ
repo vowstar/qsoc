@@ -1213,6 +1213,14 @@ A tool-list refresh affects new calls only; calls already in flight finish
 against the server version that accepted them. Disconnects and reconnects
 never replay an in-flight call. Canceling stops the local wait and sends a
 best-effort notification; it cannot undo server-side effects.
+QSoC validates each tools/call result before returning it to the model. Text
+blocks and embedded text resources retain their order with newline boundaries;
+unsupported binary or future blocks become fixed omission markers instead of
+exposing encoded payloads. Unsupported structured content gets a marker when
+no standard content is visible. Malformed results report that the tool may
+have completed and must not be retried automatically, while `isError: true`
+returns a distinct `[mcp tool error]` result and leaves the connection
+available.
 
 === Security notes
 <agent-mcp-security>

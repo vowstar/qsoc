@@ -10,6 +10,7 @@
 #include "qsoc_test.h"
 
 #include <algorithm>
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <utility>
 
@@ -18,6 +19,8 @@
 #include <QtCore>
 #include <QtTest>
 
+Q_DECLARE_METATYPE(nlohmann::json)
+
 namespace {
 
 class FakeTransport : public QSocMcpTransport
@@ -25,6 +28,8 @@ class FakeTransport : public QSocMcpTransport
     Q_OBJECT
 
 public:
+    using SendHook = std::function<void(const nlohmann::json &)>;
+
     explicit FakeTransport(QObject *parent = nullptr)
         : QSocMcpTransport(parent)
     {}
@@ -47,6 +52,10 @@ public:
     void sendMessage(const nlohmann::json &message) override
     {
         sent_ << message;
+        const SendHook hook = sendHook_;
+        if (hook) {
+            hook(message);
+        }
         if (failToolCallSynchronously_ && message.value("method", std::string()) == "tools/call") {
             emit errorOccurred(QStringLiteral("synchronous send failure"));
         }
@@ -54,6 +63,7 @@ public:
 
     void simulateMessage(const nlohmann::json &message) { emit messageReceived(message); }
     void setFailToolCallSynchronously(bool fail) { failToolCallSynchronously_ = fail; }
+    void setSendHook(SendHook hook) { sendHook_ = std::move(hook); }
 
     int firstSentId() const { return sent_.first()["id"].get<int>(); }
     int lastSentId() const { return sent_.last()["id"].get<int>(); }
@@ -89,7 +99,28 @@ public:
 private:
     QList<nlohmann::json> sent_;
     bool                  failToolCallSynchronously_ = false;
+    SendHook              sendHook_;
 };
+
+struct WireValue
+{
+    const char    *name;
+    nlohmann::json value;
+};
+
+QList<WireValue> allWireValues()
+{
+    return {
+        {"null", nullptr},
+        {"object", nlohmann::json::object()},
+        {"array", nlohmann::json::array()},
+        {"string", "wrong"},
+        {"boolean", true},
+        {"integer", -1},
+        {"unsigned", 1U},
+        {"float", 1.5},
+    };
+}
 
 McpServerConfig makeConfig(const QString &name)
 {
@@ -119,6 +150,39 @@ void replyToolSuccess(FakeTransport *transport, int id, const QString &text)
     resp["result"]["content"] = nlohmann::json::array(
         {{{"type", "text"}, {"text", text.toStdString()}}});
     transport->simulateMessage(resp);
+}
+
+void replyToolResult(FakeTransport *transport, int id, const nlohmann::json &result)
+{
+    nlohmann::json resp;
+    resp["jsonrpc"] = "2.0";
+    resp["id"]      = id;
+    resp["result"]  = result;
+    transport->simulateMessage(resp);
+}
+
+QString executeToolResult(
+    QSocMcpTool *tool, FakeTransport *transport, nlohmann::json result, bool *threw)
+{
+    transport->setSendHook([transport, result = std::move(result)](const nlohmann::json &message) {
+        const auto method = message.find("method");
+        const auto id     = message.find("id");
+        if (method == message.end() || !method->is_string() || *method != "tools/call"
+            || id == message.end() || !id->is_number_integer()) {
+            return;
+        }
+        replyToolResult(transport, id->get<int>(), result);
+    });
+
+    QString output;
+    *threw = false;
+    try {
+        output = tool->execute(nlohmann::json::object());
+    } catch (...) {
+        *threw = true;
+    }
+    transport->setSendHook({});
+    return output;
 }
 
 bool driveClientToReady(QSocMcpClient *client, FakeTransport *transport)
@@ -249,8 +313,316 @@ private slots:
         });
 
         const QString output = tool.execute({});
-        QVERIFY(output.startsWith(QStringLiteral("[mcp tool error]")));
-        QVERIFY(output.contains(QStringLiteral("boom")));
+        QCOMPARE(output, QStringLiteral("[mcp tool error] boom"));
+    }
+
+    void malformedToolResultsAreRejected_data()
+    {
+        QTest::addColumn<nlohmann::json>("result");
+
+        const auto add = [](const QByteArray &name, const nlohmann::json &result) {
+            QTest::newRow(name.constData()) << result;
+        };
+        const QList<WireValue> values = allWireValues();
+
+        for (const WireValue &wire : values) {
+            if (!wire.value.is_object()) {
+                add(QByteArrayLiteral("result-") + wire.name, wire.value);
+            }
+        }
+        add("content-missing", nlohmann::json::object());
+        for (const WireValue &wire : values) {
+            if (!wire.value.is_array()) {
+                add(QByteArrayLiteral("content-") + wire.name, {{"content", wire.value}});
+            }
+            if (!wire.value.is_boolean()) {
+                add(QByteArrayLiteral("is-error-") + wire.name,
+                    {{"content", nlohmann::json::array()}, {"isError", wire.value}});
+            }
+            if (!wire.value.is_object()) {
+                add(QByteArrayLiteral("item-") + wire.name,
+                    {{"content", nlohmann::json::array({wire.value})}});
+            }
+            if (!wire.value.is_string()) {
+                add(QByteArrayLiteral("type-") + wire.name,
+                    {{"content",
+                      nlohmann::json::array(
+                          {{{"type", wire.value}}, {{"type", "text"}, {"text", "unreachable"}}})}});
+                add(QByteArrayLiteral("text-") + wire.name,
+                    {{"content",
+                      nlohmann::json::array(
+                          {{{"type", "text"}, {"text", wire.value}},
+                           {{"type", "text"}, {"text", "unreachable"}}})}});
+            }
+        }
+        add("type-missing", {{"content", nlohmann::json::array({nlohmann::json::object()})}});
+        add("text-missing", {{"content", nlohmann::json::array({{{"type", "text"}}})}});
+        add("image-data-missing",
+            {{"content", nlohmann::json::array({{{"type", "image"}, {"mimeType", "image/test"}}})}});
+        add("image-data-wrong",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "image"}, {"data", false}, {"mimeType", "image/test"}}})}});
+        add("image-mime-missing",
+            {{"content", nlohmann::json::array({{{"type", "image"}, {"data", "payload"}}})}});
+        add("image-mime-wrong",
+            {{"content",
+              nlohmann::json::array({{{"type", "image"}, {"data", "payload"}, {"mimeType", 7}}})}});
+        add("audio-data-missing",
+            {{"content", nlohmann::json::array({{{"type", "audio"}, {"mimeType", "audio/test"}}})}});
+        add("audio-data-wrong",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "audio"}, {"data", false}, {"mimeType", "audio/test"}}})}});
+        add("audio-mime-missing",
+            {{"content", nlohmann::json::array({{{"type", "audio"}, {"data", "payload"}}})}});
+        add("audio-mime-wrong",
+            {{"content",
+              nlohmann::json::array({{{"type", "audio"}, {"data", "payload"}, {"mimeType", 7}}})}});
+        add("resource-missing", {{"content", nlohmann::json::array({{{"type", "resource"}}})}});
+        add("resource-wrong",
+            {{"content", nlohmann::json::array({{{"type", "resource"}, {"resource", false}}})}});
+        add("resource-uri-missing",
+            {{"content",
+              nlohmann::json::array({{{"type", "resource"}, {"resource", {{"text", "body"}}}}})}});
+        add("resource-uri-wrong",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "resource"}, {"resource", {{"uri", false}, {"text", "body"}}}}})}});
+        add("resource-payload-missing",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "resource"}, {"resource", {{"uri", "test:resource"}}}}})}});
+        add("resource-text-wrong",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "resource"},
+                    {"resource", {{"uri", "test:resource"}, {"text", false}}}}})}});
+        add("resource-blob-wrong",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "resource"},
+                    {"resource", {{"uri", "test:resource"}, {"blob", false}}}}})}});
+        add("resource-mime-wrong",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "resource"},
+                    {"resource",
+                     {{"uri", "test:resource"}, {"text", "body"}, {"mimeType", false}}}}})}});
+    }
+
+    void malformedToolResultsAreRejected()
+    {
+        QFETCH(nlohmann::json, result);
+
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "echo";
+        QSocMcpTool tool(&client, desc);
+
+        bool          threw  = false;
+        const QString output = executeToolResult(&tool, transport, result, &threw);
+        QVERIFY(!threw);
+        QCOMPARE(
+            output,
+            QStringLiteral(
+                "[mcp protocol error] invalid tools/call result; tool may have completed, do not "
+                "retry automatically"));
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const QString recovered = executeToolResult(
+            &tool,
+            transport,
+            {{"content", nlohmann::json::array({{{"type", "text"}, {"text", "recovered"}}})}},
+            &threw);
+        QVERIFY(!threw);
+        QCOMPARE(recovered, QStringLiteral("recovered"));
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+    }
+
+    void toolFormatsContentBlocks_data()
+    {
+        QTest::addColumn<nlohmann::json>("result");
+        QTest::addColumn<QString>("expected");
+
+        const auto add = [](const char           *name,
+                            const nlohmann::json &result,
+                            const QString &expected) { QTest::newRow(name) << result << expected; };
+        add("empty-success",
+            {{"content", nlohmann::json::array()}},
+            QStringLiteral("[mcp result] no content"));
+        add("empty-error",
+            {{"content", nlohmann::json::array()}, {"isError", true}},
+            QStringLiteral("[mcp tool error] no details"));
+        add("empty-text",
+            {{"content", nlohmann::json::array({{{"type", "text"}, {"text", ""}}})}},
+            QStringLiteral("[mcp result] no content"));
+        add("blank-text-blocks",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "text"}, {"text", " "}}, {{"type", "text"}, {"text", "\t"}}})}},
+            QStringLiteral("[mcp result] no content"));
+        add("empty-text-error",
+            {{"content", nlohmann::json::array({{{"type", "text"}, {"text", ""}}})},
+             {"isError", true}},
+            QStringLiteral("[mcp tool error] no details"));
+        add("explicit-success",
+            {{"content", nlohmann::json::array({{{"type", "text"}, {"text", "alpha"}}})},
+             {"isError", false}},
+            QStringLiteral("alpha"));
+        add("multiple-text",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "text"}, {"text", "alpha"}}, {{"type", "text"}, {"text", "beta"}}})}},
+            QStringLiteral("alpha\nbeta"));
+        add("image",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "image"}, {"data", "payload"}, {"mimeType", "image/test"}}})}},
+            QStringLiteral("[mcp unsupported content omitted: image]"));
+        add("audio",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "audio"}, {"data", "payload"}, {"mimeType", "audio/test"}}})}},
+            QStringLiteral("[mcp unsupported content omitted: audio]"));
+        add("text-resource",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "resource"},
+                    {"resource", {{"uri", "test:resource"}, {"text", "resource body"}}}}})}},
+            QStringLiteral("resource body"));
+        add("text-resource-with-invalid-blob-extension",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "resource"},
+                    {"resource",
+                     {{"uri", "test:resource"}, {"text", "resource body"}, {"blob", false}}}}})}},
+            QStringLiteral("resource body"));
+        add("blob-resource",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "resource"},
+                    {"resource", {{"uri", "test:resource"}, {"blob", "payload"}}}}})}},
+            QStringLiteral("[mcp unsupported content omitted: resource]"));
+        add("blob-resource-with-invalid-text-extension",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "resource"},
+                    {"resource",
+                     {{"uri", "test:resource"}, {"text", false}, {"blob", "payload"}}}}})}},
+            QStringLiteral("[mcp unsupported content omitted: resource]"));
+        add("unknown",
+            {{"content", nlohmann::json::array({{{"type", "future"}, {"value", 7}}})}},
+            QStringLiteral("[mcp unsupported content omitted: unknown]"));
+        add("structured-only",
+            {{"content", nlohmann::json::array()}, {"structuredContent", {{"answer", 42}}}},
+            QStringLiteral("[mcp unsupported content omitted: structured]"));
+        add("structured-with-text",
+            {{"content", nlohmann::json::array({{{"type", "text"}, {"text", "alpha"}}})},
+             {"structuredContent", {{"answer", 42}}}},
+            QStringLiteral("alpha"));
+        add("structured-with-blank-text",
+            {{"content", nlohmann::json::array({{{"type", "text"}, {"text", " "}}})},
+             {"structuredContent", {{"answer", 42}}}},
+            QStringLiteral("[mcp unsupported content omitted: structured]"));
+        add("mixed-order",
+            {{"content",
+              nlohmann::json::array(
+                  {{{"type", "text"}, {"text", "alpha"}},
+                   {{"type", "image"}, {"data", "payload"}, {"mimeType", "image/test"}},
+                   {{"type", "resource"},
+                    {"resource", {{"uri", "test:resource"}, {"text", "resource body"}}}},
+                   {{"type", "future"}},
+                   {{"type", "text"}, {"text", "omega"}}})}},
+            QStringLiteral(
+                "alpha\n[mcp unsupported content omitted: image]\nresource body\n"
+                "[mcp unsupported content omitted: unknown]\nomega"));
+        add("business-error",
+            {{"content", nlohmann::json::array({{{"type", "text"}, {"text", "boom"}}})},
+             {"isError", true}},
+            QStringLiteral("[mcp tool error] boom"));
+    }
+
+    void toolFormatsContentBlocks()
+    {
+        QFETCH(nlohmann::json, result);
+        QFETCH(QString, expected);
+
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "echo";
+        QSocMcpTool tool(&client, desc);
+
+        bool          threw  = false;
+        const QString output = executeToolResult(&tool, transport, result, &threw);
+        QVERIFY(!threw);
+        QCOMPARE(output, expected);
+    }
+
+    void malformedAsyncToolResultIsRejected()
+    {
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "echo";
+        QSocMcpTool tool(&client, desc);
+
+        QTimer::singleShot(0, &client, [transport]() {
+            replyToolResult(
+                transport,
+                transport->lastSentId(),
+                {{"content", nlohmann::json::array()}, {"isError", "wrong"}});
+        });
+        QCOMPARE(
+            tool.execute(nlohmann::json::object()),
+            QStringLiteral(
+                "[mcp protocol error] invalid tools/call result; tool may have completed, do not "
+                "retry automatically"));
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        QTimer::singleShot(0, &client, [transport]() {
+            replyToolSuccess(transport, transport->lastSentId(), QStringLiteral("recovered"));
+        });
+        QCOMPARE(tool.execute(nlohmann::json::object()), QStringLiteral("recovered"));
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+    }
+
+    void malformedDuplicateResultIsIgnored()
+    {
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "echo";
+        QSocMcpTool tool(&client, desc);
+
+        transport->setSendHook([transport](const nlohmann::json &message) {
+            const auto method = message.find("method");
+            const auto id     = message.find("id");
+            if (method == message.end() || !method->is_string() || *method != "tools/call"
+                || id == message.end() || !id->is_number_integer()) {
+                return;
+            }
+            replyToolSuccess(transport, id->get<int>(), QStringLiteral("first"));
+            replyToolResult(
+                transport, id->get<int>(), {{"content", nlohmann::json::array({{{"type", 7}}})}});
+        });
+        QCOMPARE(tool.execute(nlohmann::json::object()), QStringLiteral("first"));
+        transport->setSendHook({});
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
     }
 
     void toolPropagatesRpcError()

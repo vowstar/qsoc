@@ -6,39 +6,144 @@
 #include "agent/mcp/qsocmcpclient.h"
 #include "common/qlongtaskmonitor.h"
 
+#include <optional>
+
 #include <QEventLoop>
 #include <QObject>
 #include <QScopeGuard>
+#include <QStringList>
 
 namespace {
 
-QString joinTextContent(const nlohmann::json &content)
+QString invalidToolResult()
 {
-    if (!content.is_array()) {
-        return {};
+    return QStringLiteral(
+        "[mcp protocol error] invalid tools/call result; tool may have completed, do not retry "
+        "automatically");
+}
+
+QString jsonString(const nlohmann::json &value)
+{
+    const auto &text = value.get_ref<const nlohmann::json::string_t &>();
+    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+const nlohmann::json *stringMember(const nlohmann::json &object, const char *name)
+{
+    const auto member = object.find(name);
+    if (member == object.end() || !member->is_string()) {
+        return nullptr;
     }
-    QString out;
-    for (const auto &item : content) {
-        if (!item.is_object()) {
-            continue;
-        }
-        const std::string type = item.value("type", std::string());
-        if (type == "text") {
-            out.append(QString::fromStdString(item.value("text", std::string())));
-        }
+    return &*member;
+}
+
+bool optionalStringMemberIsValid(const nlohmann::json &object, const char *name)
+{
+    const auto member = object.find(name);
+    return member == object.end() || member->is_string();
+}
+
+std::optional<QString> formatResourceContent(const nlohmann::json &item)
+{
+    const auto resource = item.find("resource");
+    if (resource == item.end() || !resource->is_object()
+        || stringMember(*resource, "uri") == nullptr
+        || !optionalStringMemberIsValid(*resource, "mimeType")) {
+        return std::nullopt;
     }
-    return out;
+
+    const auto text = resource->find("text");
+    if (text != resource->end() && text->is_string()) {
+        return jsonString(*text);
+    }
+
+    const auto blob = resource->find("blob");
+    if (blob != resource->end() && blob->is_string()) {
+        return QStringLiteral("[mcp unsupported content omitted: resource]");
+    }
+    return std::nullopt;
+}
+
+std::optional<QString> formatContentBlock(const nlohmann::json &item)
+{
+    if (!item.is_object()) {
+        return std::nullopt;
+    }
+    const nlohmann::json *type = stringMember(item, "type");
+    if (type == nullptr) {
+        return std::nullopt;
+    }
+
+    const auto &typeName = type->get_ref<const nlohmann::json::string_t &>();
+    if (typeName == "text") {
+        const nlohmann::json *text = stringMember(item, "text");
+        if (text == nullptr) {
+            return std::nullopt;
+        }
+        return jsonString(*text);
+    }
+    if (typeName == "image") {
+        if (stringMember(item, "data") == nullptr || stringMember(item, "mimeType") == nullptr) {
+            return std::nullopt;
+        }
+        return QStringLiteral("[mcp unsupported content omitted: image]");
+    }
+    if (typeName == "audio") {
+        if (stringMember(item, "data") == nullptr || stringMember(item, "mimeType") == nullptr) {
+            return std::nullopt;
+        }
+        return QStringLiteral("[mcp unsupported content omitted: audio]");
+    }
+    if (typeName == "resource") {
+        return formatResourceContent(item);
+    }
+    return QStringLiteral("[mcp unsupported content omitted: unknown]");
 }
 
 QString formatToolResult(const nlohmann::json &result)
 {
     if (!result.is_object()) {
-        return QStringLiteral("[mcp] empty result");
+        return invalidToolResult();
     }
-    const bool    isError = result.value("isError", false);
-    const QString text    = joinTextContent(result.value("content", nlohmann::json::array()));
+
+    bool       isError     = false;
+    const auto errorMember = result.find("isError");
+    if (errorMember != result.end()) {
+        if (!errorMember->is_boolean()) {
+            return invalidToolResult();
+        }
+        isError = errorMember->get<bool>();
+    }
+
+    const auto content = result.find("content");
+    if (content == result.end() || !content->is_array()) {
+        return invalidToolResult();
+    }
+
+    QStringList parts;
+    parts.reserve(static_cast<qsizetype>(content->size()));
+    for (const auto &item : *content) {
+        std::optional<QString> part = formatContentBlock(item);
+        if (!part.has_value()) {
+            return invalidToolResult();
+        }
+        parts.append(std::move(*part));
+    }
+
+    QString text           = parts.join(QChar('\n'));
+    bool    hasVisibleText = !text.trimmed().isEmpty();
+    if (!hasVisibleText && result.contains("structuredContent")) {
+        text           = QStringLiteral("[mcp unsupported content omitted: structured]");
+        hasVisibleText = true;
+    }
     if (isError) {
+        if (!hasVisibleText) {
+            return QStringLiteral("[mcp tool error] no details");
+        }
         return QStringLiteral("[mcp tool error] ") + text;
+    }
+    if (!hasVisibleText) {
+        return QStringLiteral("[mcp result] no content");
     }
     return text;
 }
