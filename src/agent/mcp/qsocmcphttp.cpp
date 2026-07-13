@@ -50,6 +50,13 @@ bool httpStatusIsSuccessful(int status)
     return status >= 200 && status < 300;
 }
 
+bool isTransportOwnedHeader(const QByteArray &name)
+{
+    return name.compare("Accept", Qt::CaseInsensitive) == 0
+           || name.compare("Content-Type", Qt::CaseInsensitive) == 0
+           || name.compare(kMcpSessionIdHeader, Qt::CaseInsensitive) == 0;
+}
+
 QString httpFailureMessage(QNetworkReply *reply, int status)
 {
     QString reason
@@ -58,6 +65,32 @@ QString httpFailureMessage(QNetworkReply *reply, int status)
         reason = QStringLiteral("Request failed");
     }
     return QStringLiteral("[HTTP %1] %2").arg(status).arg(reason);
+}
+
+bool isInitializeRequest(const nlohmann::json &message)
+{
+    if (!message.is_object() || !message.contains("jsonrpc") || !message["jsonrpc"].is_string()
+        || message["jsonrpc"] != "2.0" || !message.contains("method")
+        || !message["method"].is_string() || message["method"] != "initialize"
+        || !message.contains("id")) {
+        return false;
+    }
+    const auto &id = message["id"];
+    return id.is_string() || id.is_number();
+}
+
+bool isValidSessionId(const QByteArray &sessionId)
+{
+    if (sessionId.isEmpty()) {
+        return false;
+    }
+    for (char character : sessionId) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte < 0x21 || byte > 0x7e) {
+            return false;
+        }
+    }
+    return true;
 }
 
 QList<DeferredSignal> parseSseEvents(QByteArray &buffer)
@@ -192,7 +225,7 @@ QSocMcpHttpTransport::~QSocMcpHttpTransport()
 
 void QSocMcpHttpTransport::start()
 {
-    if (state() == State::Running) {
+    if (state() != State::Idle && state() != State::Stopped) {
         return;
     }
     setState(State::Starting);
@@ -241,6 +274,12 @@ void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 se
     }
 
     QNetworkRequest request(url);
+    for (auto it = config_.headers.constBegin(); it != config_.headers.constEnd(); ++it) {
+        const QByteArray name = it.key().toUtf8();
+        if (!isTransportOwnedHeader(name)) {
+            request.setRawHeader(name, it.value().toUtf8());
+        }
+    }
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Accept", kAcceptHeader);
     /* Streamable HTTP servers issue a session id via Mcp-Session-Id on
@@ -248,9 +287,6 @@ void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 se
      * request. Without it the server answers HTTP 400 / 404. */
     if (!sessionId_.isEmpty()) {
         request.setRawHeader(kMcpSessionIdHeader, sessionId_);
-    }
-    for (auto it = config_.headers.constBegin(); it != config_.headers.constEnd(); ++it) {
-        request.setRawHeader(it.key().toUtf8(), it.value().toUtf8());
     }
 
     const QByteArray body = QByteArray::fromStdString(message.dump());
@@ -261,8 +297,10 @@ void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 se
         return;
     }
     ReplyState replyState;
-    replyState.requestIds = requestIds;
-    replyState.sendToken  = sendToken;
+    replyState.requestIds       = requestIds;
+    replyState.acceptsSessionId = isInitializeRequest(message);
+    replyState.sessionBound     = !request.rawHeader(kMcpSessionIdHeader).isEmpty();
+    replyState.sendToken        = sendToken;
     replies_.insert(reply, replyState);
 
     connect(
@@ -277,13 +315,11 @@ void QSocMcpHttpTransport::onReplyMetaDataChanged()
     if (reply == nullptr) {
         return;
     }
-    /* Capture Mcp-Session-Id as soon as headers are parsed, before any
-     * SSE body triggers a downstream POST. The body handler later on
-     * may immediately send notifications/initialized + tools/list, and
-     * those follow-ups must already carry the session id. */
-    const QByteArray sessionId = reply->rawHeader(kMcpSessionIdHeader);
-    if (!sessionId.isEmpty()) {
-        sessionId_ = sessionId;
+    if (closeExpiredSession(reply)) {
+        return;
+    }
+    if (!captureSessionId(reply)) {
+        return;
     }
     if (reply->bytesAvailable() > 0) {
         processAvailableReplyData(reply);
@@ -304,8 +340,14 @@ void QSocMcpHttpTransport::processAvailableReplyData(QNetworkReply *reply)
     if (status == 0) {
         return;
     }
+    if (closeExpiredSession(reply)) {
+        return;
+    }
     if (!httpStatusIsSuccessful(status)) {
         reply->readAll();
+        return;
+    }
+    if (!captureSessionId(reply)) {
         return;
     }
     bool isSse = false;
@@ -331,6 +373,9 @@ void QSocMcpHttpTransport::onReplyFinished()
     }
 
     const int status = replyHttpStatus(reply);
+    if (closeExpiredSession(reply)) {
+        return;
+    }
     if (status != 0 && !httpStatusIsSuccessful(status)) {
         failReply(reply, httpFailureMessage(reply, status));
         return;
@@ -345,13 +390,8 @@ void QSocMcpHttpTransport::onReplyFinished()
         return;
     }
 
-    /* Late-arriving session id: if headers were not parsed before the
-     * body finished (rare, but possible with very small responses),
-     * pick it up now. The early metaDataChanged hook handles the
-     * common case. */
-    const QByteArray sessionId = reply->rawHeader(kMcpSessionIdHeader);
-    if (!sessionId.isEmpty()) {
-        sessionId_ = sessionId;
+    if (!captureSessionId(reply)) {
+        return;
     }
 
     QList<DeferredSignal> events;
@@ -389,6 +429,51 @@ void QSocMcpHttpTransport::onReplyFinished()
     if (sendToken != 0) {
         emit messageSent(sendToken);
     }
+}
+
+bool QSocMcpHttpTransport::captureSessionId(QNetworkReply *reply)
+{
+    auto it = replies_.find(reply);
+    if (it == replies_.end() || !it->acceptsSessionId
+        || !httpStatusIsSuccessful(replyHttpStatus(reply))) {
+        return true;
+    }
+    if (!reply->hasRawHeader(kMcpSessionIdHeader)) {
+        return true;
+    }
+    const QByteArray sessionId = reply->rawHeader(kMcpSessionIdHeader);
+    if (!isValidSessionId(sessionId)) {
+        failReply(reply, QStringLiteral("Invalid MCP session id"));
+        return false;
+    }
+    if (sessionId_.isEmpty()) {
+        sessionId_ = sessionId;
+    }
+    return true;
+}
+
+bool QSocMcpHttpTransport::closeExpiredSession(QNetworkReply *reply)
+{
+    auto it = replies_.find(reply);
+    if (it == replies_.end() || !it->sessionBound || replyHttpStatus(reply) != 404) {
+        return false;
+    }
+
+    const QString message
+        = QStringLiteral("MCP session expired: %1").arg(httpFailureMessage(reply, 404));
+    setState(State::Stopping);
+    clearReplies();
+
+    const quint64                  generation = lifecycleGeneration_;
+    QPointer<QSocMcpHttpTransport> guard(this);
+    emit                           errorOccurred(message);
+    if (guard.isNull() || lifecycleGeneration_ != generation || state() != State::Stopping) {
+        return true;
+    }
+
+    setState(State::Stopped);
+    emit closed();
+    return true;
 }
 
 void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)

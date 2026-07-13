@@ -1120,7 +1120,8 @@ mcp:
        `content-length` is the compatibility default when omitted.],
     [`url`], [http: endpoint URL. Both immediate JSON and Server-Sent
        Events responses are accepted on the same endpoint.],
-    [`headers`], [http: extra request headers, e.g. `Authorization`.],
+    [`headers`], [http: extra request headers, e.g. `Authorization`; `Accept`,
+     `Content-Type`, and `Mcp-Session-Id` are transport-owned.],
     [`proxy`], [http: per-server proxy override. Accepts the same flat
        string form as the LLM endpoint `proxy:` field (`none` /
        `system` / `http://host:port` / `socks5://host:port`). Empty or
@@ -1187,6 +1188,8 @@ three reconnect attempts fail the server is marked failed and dropped until
 the next `/mcp reconnect` or agent restart. Its tools are removed while the
 server is unavailable and restored after a successful tools/list response.
 An isolated HTTP POST failure affects only requests carried by that POST.
+A 404 for a request carrying an MCP session ID expires the transport; the
+manager rebuilds it with a fresh session.
 A transport-wide error fails all outstanding requests; if the connection
 remains running, later requests are still allowed.
 A tool-list refresh affects new calls only; calls already in flight finish

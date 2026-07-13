@@ -47,12 +47,16 @@ private:
     {
         QByteArray sseBuffer;
         QList<int> requestIds;
-        bool       isSse     = false;
-        quint64    sendToken = 0;
+        bool       acceptsSessionId = false;
+        bool       isSse            = false;
+        bool       sessionBound     = false;
+        quint64    sendToken        = 0;
     };
 
     void           postMessage(const nlohmann::json &message, quint64 sendToken);
     void           processAvailableReplyData(QNetworkReply *reply);
+    bool           captureSessionId(QNetworkReply *reply);
+    bool           closeExpiredSession(QNetworkReply *reply);
     void           handleSseChunk(QNetworkReply *reply);
     void           failReply(QNetworkReply *reply, const QString &message);
     void           clearReplies();

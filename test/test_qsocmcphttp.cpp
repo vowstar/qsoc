@@ -3,6 +3,7 @@
 
 #include "agent/mcp/qsocmcpclient.h"
 #include "agent/mcp/qsocmcphttp.h"
+#include "agent/mcp/qsocmcpmanager.h"
 #include "agent/mcp/qsocmcptransport.h"
 #include "agent/mcp/qsocmcptypes.h"
 #include "qsoc_test.h"
@@ -27,6 +28,7 @@ struct MockResponse
     QByteArray contentType;
     QByteArray body;
     QByteArray sessionId;
+    int        bodyDelayMs          = 0;
     int        delayMs              = 0;
     bool       closeWithoutResponse = false;
     /* Per-event delays in milliseconds. Empty means send the whole body
@@ -63,12 +65,17 @@ public:
 
     QList<QByteArray> requestSessionIds() const { return requestSessionIds_; }
 
+    QList<QMap<QByteArray, QByteArray>> requestHeaders() const { return requestHeaders_; }
+
 private slots:
     void onNewConnection()
     {
         while (server_->hasPendingConnections()) {
             auto *socket = server_->nextPendingConnection();
             connect(socket, &QTcpSocket::readyRead, this, [this, socket]() { onReadyRead(socket); });
+            connect(socket, &QTcpSocket::disconnected, this, [this, socket]() {
+                buffers_.remove(socket);
+            });
             connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
             buffers_.insert(socket, QByteArray());
         }
@@ -84,20 +91,22 @@ private slots:
             return;
         }
 
-        qsizetype  contentLength = 0;
-        QByteArray sessionId;
+        QMap<QByteArray, QByteArray> headers;
         for (const QByteArray &line : buf.left(headerEnd).split('\n')) {
             QByteArray trimmed = line;
             if (trimmed.endsWith('\r')) {
                 trimmed.chop(1);
             }
-            if (trimmed.toLower().startsWith("content-length:")) {
-                contentLength = trimmed.mid(15).trimmed().toLongLong();
-            }
-            if (trimmed.toLower().startsWith("mcp-session-id:")) {
-                sessionId = trimmed.mid(15).trimmed();
+            const qsizetype separator = trimmed.indexOf(':');
+            if (separator > 0) {
+                headers.insert(
+                    trimmed.left(separator).trimmed().toLower(),
+                    trimmed.mid(separator + 1).trimmed());
             }
         }
+
+        const qsizetype  contentLength = headers.value("content-length").toLongLong();
+        const QByteArray sessionId     = headers.value("mcp-session-id");
 
         if (buf.size() < headerEnd + 4 + contentLength) {
             return;
@@ -106,6 +115,7 @@ private slots:
         const QByteArray body = buf.mid(headerEnd + 4, contentLength);
         requestBodies_ << body;
         requestSessionIds_ << sessionId;
+        requestHeaders_ << headers;
         buffers_.remove(socket);
 
         MockResponse response;
@@ -165,8 +175,20 @@ private:
         }
         http += "Content-Length: " + QByteArray::number(response.body.size()) + "\r\n";
         http += "Connection: close\r\n\r\n";
-        http += response.body;
         socket->write(http);
+        socket->flush();
+        if (response.bodyDelayMs > 0) {
+            QTimer::singleShot(response.bodyDelayMs, socket, [socket, body = response.body]() {
+                if (socket->state() != QAbstractSocket::ConnectedState) {
+                    return;
+                }
+                socket->write(body);
+                socket->flush();
+                socket->disconnectFromHost();
+            });
+            return;
+        }
+        socket->write(response.body);
         socket->flush();
         socket->disconnectFromHost();
     }
@@ -209,12 +231,13 @@ private:
         });
     }
 
-    QTcpServer                     *server_ = nullptr;
-    QQueue<MockResponse>            responses_;
-    QHash<int, MockResponse>        responsesByRequestId_;
-    QList<QByteArray>               requestBodies_;
-    QList<QByteArray>               requestSessionIds_;
-    QHash<QTcpSocket *, QByteArray> buffers_;
+    QTcpServer                         *server_ = nullptr;
+    QQueue<MockResponse>                responses_;
+    QHash<int, MockResponse>            responsesByRequestId_;
+    QList<QByteArray>                   requestBodies_;
+    QList<QByteArray>                   requestSessionIds_;
+    QList<QMap<QByteArray, QByteArray>> requestHeaders_;
+    QHash<QTcpSocket *, QByteArray>     buffers_;
 };
 
 McpServerConfig httpConfig(const QString &url)
@@ -252,6 +275,42 @@ bool waitForRequests(const MockHttpServer &server, qsizetype minCount, int timeo
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     }
     return true;
+}
+
+QList<QByteArray> requestSessionsForMethod(const MockHttpServer &server, const QString &method)
+{
+    QList<QByteArray> sessions;
+    const auto        bodies     = server.requestBodies();
+    const auto        sessionIds = server.requestSessionIds();
+    const qsizetype   count      = qMin(bodies.size(), sessionIds.size());
+    for (qsizetype i = 0; i < count; ++i) {
+        try {
+            const auto request = nlohmann::json::parse(bodies.at(i).toStdString());
+            if (request.is_object()
+                && request.value("method", std::string()) == method.toStdString()) {
+                sessions.append(sessionIds.at(i));
+            }
+        } catch (const std::exception &) {
+        }
+    }
+    return sessions;
+}
+
+bool establishSession(
+    MockHttpServer       &server,
+    QSocMcpHttpTransport &transport,
+    QSignalSpy           &messageSpy,
+    const QByteArray     &sessionId)
+{
+    MockResponse initialize;
+    initialize.contentType = "application/json";
+    initialize.body        = R"({"jsonrpc":"2.0","id":1,"result":{}})";
+    initialize.sessionId   = sessionId;
+    server.enqueue(initialize);
+
+    transport.start();
+    transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "initialize"}});
+    return waitForSignal(messageSpy, 1, 3000);
 }
 
 class Test : public QObject
@@ -434,6 +493,95 @@ private slots:
         const QByteArray sent = server.requestBodies().first();
         QVERIFY(sent.contains("\"method\":\"tools/list\""));
         QVERIFY(sent.contains("\"id\":7"));
+    }
+
+    void configuredHeadersCannotOverrideProtocolHeaders()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const QByteArray staleSession = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+        const QByteArray sessionId    = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+        MockResponse     initialize;
+        initialize.contentType = "application/json";
+        initialize.body        = R"({"jsonrpc":"2.0","id":1,"result":{}})";
+        initialize.sessionId   = sessionId;
+        server.enqueue(initialize);
+
+        MockResponse probe;
+        probe.contentType = "application/json";
+        probe.body        = R"({"jsonrpc":"2.0","id":2,"result":{}})";
+        server.enqueue(probe);
+
+        McpServerConfig config = httpConfig(server.url());
+        config.headers.insert(QStringLiteral("aCcEpT"), QStringLiteral("text/plain"));
+        config.headers.insert(QStringLiteral("Content-tYpE"), QStringLiteral("text/plain"));
+        config.headers.insert(QStringLiteral("mCp-SeSsIoN-iD"), QString::fromUtf8(staleSession));
+        config.headers.insert(QStringLiteral("X-Test-Mode"), QStringLiteral("enabled"));
+
+        QSocMcpHttpTransport transport(config);
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        transport.start();
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "initialize"}});
+        QVERIFY(waitForSignal(messageSpy, 1, 3000));
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "ping"}});
+        QVERIFY(waitForSignal(messageSpy, 2, 3000));
+
+        const auto headers = server.requestHeaders();
+        QCOMPARE(headers.size(), qsizetype(2));
+        QCOMPARE(headers.at(0).value("accept"), QByteArray("application/json, text/event-stream"));
+        QCOMPARE(headers.at(0).value("content-type"), QByteArray("application/json"));
+        QVERIFY(!headers.at(0).contains("mcp-session-id"));
+        QCOMPARE(headers.at(0).value("x-test-mode"), QByteArray("enabled"));
+        QCOMPARE(headers.at(1).value("mcp-session-id"), sessionId);
+    }
+
+    void sessionless404RemainsLocalAfterSessionStarts()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse sessionlessFailure;
+        sessionlessFailure.statusLine = "404 Not Found";
+        sessionlessFailure.delayMs    = 500;
+        server.enqueueForRequestId(1, sessionlessFailure);
+
+        const QByteArray sessionId = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+        MockResponse     initialize;
+        initialize.contentType = "application/json";
+        initialize.body        = R"({"jsonrpc":"2.0","id":2,"result":{}})";
+        initialize.sessionId   = sessionId;
+        server.enqueueForRequestId(2, initialize);
+
+        MockResponse probe;
+        probe.contentType = "application/json";
+        probe.body        = R"({"jsonrpc":"2.0","id":3,"result":{}})";
+        server.enqueueForRequestId(3, probe);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy           closedSpy(&transport, &QSocMcpTransport::closed);
+
+        transport.start();
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}});
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "initialize"}});
+
+        QVERIFY(waitForSignal(messageSpy, 1, 3000));
+        QCOMPARE(messageSpy.first().at(0).value<nlohmann::json>()["id"].get<int>(), 2);
+        QVERIFY(waitForSignal(failureSpy, 1, 3000));
+        QCOMPARE(failureSpy.first().at(1).value<QList<int>>(), (QList<int>{1}));
+        QVERIFY(failureSpy.first().at(2).toString().contains(QStringLiteral("HTTP 404")));
+        QCOMPARE(errorSpy.size(), qsizetype(0));
+        QCOMPARE(closedSpy.size(), qsizetype(0));
+        QCOMPARE(transport.state(), QSocMcpTransport::State::Running);
+
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "ping"}});
+        QVERIFY(waitForSignal(messageSpy, 2, 3000));
+        QCOMPARE(
+            requestSessionsForMethod(server, QStringLiteral("ping")),
+            (QList<QByteArray>{QByteArray(), sessionId}));
     }
 
     void sseCallbackCanPostReentrantly()
@@ -639,16 +787,21 @@ private slots:
         QTest::addColumn<QByteArray>("contentType");
         QTest::addColumn<QByteArray>("body");
         QTest::addColumn<bool>("closeWithoutResponse");
+        QTest::addColumn<bool>("seedSession");
 
-        QTest::newRow("network") << QByteArray("200 OK") << QByteArray() << QByteArray() << true;
+        QTest::newRow("network") << QByteArray("200 OK") << QByteArray() << QByteArray() << true
+                                 << false;
         QTest::newRow("http-503") << QByteArray("503 Service Unavailable")
-                                  << QByteArray("text/plain") << QByteArray("unavailable") << false;
-        QTest::newRow("http-404-sse") << QByteArray("404 Not Found")
-                                      << QByteArray("text/event-stream") << QByteArray() << false;
-        QTest::newRow("http-500-sse") << QByteArray("500 Internal Server Error")
-                                      << QByteArray("text/event-stream") << QByteArray() << false;
+                                  << QByteArray("text/plain") << QByteArray("unavailable") << false
+                                  << false;
+        QTest::newRow("http-404-sse")
+            << QByteArray("404 Not Found") << QByteArray("text/event-stream") << QByteArray()
+            << false << false;
+        QTest::newRow("http-500-sse-session")
+            << QByteArray("500 Internal Server Error") << QByteArray("text/event-stream")
+            << QByteArray() << false << true;
         QTest::newRow("malformed-json") << QByteArray("200 OK") << QByteArray("application/json")
-                                        << QByteArray("not json") << false;
+                                        << QByteArray("not json") << false << false;
     }
 
     void requestFailureDoesNotCancelConcurrentRequest()
@@ -657,6 +810,7 @@ private slots:
         QFETCH(QByteArray, contentType);
         QFETCH(QByteArray, body);
         QFETCH(bool, closeWithoutResponse);
+        QFETCH(bool, seedSession);
 
         MockHttpServer server;
         QVERIFY(server.listen());
@@ -664,6 +818,9 @@ private slots:
         MockResponse initialize;
         initialize.contentType = "application/json";
         initialize.body        = R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}})";
+        if (seedSession) {
+            initialize.sessionId = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+        }
         server.enqueue(initialize);
 
         MockResponse initialized;
@@ -678,6 +835,8 @@ private slots:
         QSignalSpy    wireMessageSpy(transport, &QSocMcpTransport::messageReceived);
         QSignalSpy    wireFailureSpy(transport, &QSocMcpTransport::messageFailed);
         QSignalSpy    transportErrorSpy(transport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy    transportClosedSpy(transport, &QSocMcpTransport::closed);
+        QSignalSpy    clientClosedSpy(&client, &QSocMcpClient::closed);
 
         client.start();
         QVERIFY(waitForSignal(readySpy, 1, 3000));
@@ -745,6 +904,288 @@ private slots:
         QCOMPARE(responseSpy.last().at(0).toInt(), nextId);
         QCOMPARE(failureSpy.size(), qsizetype(1));
         QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+        QCOMPARE(transportClosedSpy.size(), qsizetype(0));
+        QCOMPARE(clientClosedSpy.size(), qsizetype(0));
+    }
+
+    void expiredSessionRebuildsWithoutReplay()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const QByteArray sessionA = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+        const QByteArray sessionB = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+
+        MockResponse initializeA;
+        initializeA.contentType = "application/json";
+        initializeA.body        = R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}})";
+        initializeA.sessionId   = sessionA;
+        server.enqueue(initializeA);
+
+        MockResponse initializedA;
+        initializedA.statusLine = "202 Accepted";
+        server.enqueue(initializedA);
+
+        MockResponse toolsA;
+        toolsA.contentType = "application/json";
+        toolsA.body        = R"({"jsonrpc":"2.0","id":2,"result":{"tools":[]}})";
+        server.enqueue(toolsA);
+
+        const McpServerConfig                 config = httpConfig(server.url());
+        QList<QPointer<QSocMcpHttpTransport>> transports;
+        QSocMcpManager                        manager({config});
+        manager.setTransportFactory([&transports](const McpServerConfig &cfg) {
+            auto *transport = new QSocMcpHttpTransport(cfg);
+            transports.append(transport);
+            return transport;
+        });
+        manager.setReconnectDelays(10, 10);
+
+        QCOMPARE(transports.size(), qsizetype(1));
+        auto *oldTransport = transports.first().data();
+        auto *oldClient    = manager.findClient(QStringLiteral("http"));
+        QVERIFY(oldTransport != nullptr);
+        QVERIFY(oldClient != nullptr);
+
+        QSignalSpy oldReadySpy(oldClient, &QSocMcpClient::ready);
+        QSignalSpy oldResponseSpy(oldClient, &QSocMcpClient::responseReceived);
+        QSignalSpy oldFailureSpy(oldClient, &QSocMcpClient::requestFailed);
+        QSignalSpy oldClientClosedSpy(oldClient, &QSocMcpClient::closed);
+        QSignalSpy oldErrorSpy(oldTransport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy oldWireFailureSpy(oldTransport, &QSocMcpTransport::messageFailed);
+        QSignalSpy oldTransportClosedSpy(oldTransport, &QSocMcpTransport::closed);
+        QSignalSpy reconnectSpy(&manager, &QSocMcpManager::reconnectScheduled);
+
+        manager.startAll();
+        QVERIFY(waitForSignal(oldReadySpy, 1, 3000));
+        QVERIFY(waitForSignal(oldResponseSpy, 1, 3000));
+        QVERIFY(waitForRequests(server, 3, 3000));
+
+        const int expiredId = oldClient->request(QStringLiteral("tools/call"));
+        QVERIFY(expiredId > 0);
+        MockResponse expired;
+        expired.statusLine  = "404 Not Found";
+        expired.contentType = "text/plain";
+        expired.body        = "expired";
+        expired.delayMs     = 100;
+        expired.bodyDelayMs = 3000;
+        server.enqueueForRequestId(expiredId, expired);
+
+        const int concurrentId = oldClient->request(QStringLiteral("concurrent"));
+        QVERIFY(concurrentId > 0);
+        MockResponse concurrent;
+        concurrent.contentType = "application/json";
+        concurrent.body        = QByteArray::fromStdString(
+            nlohmann::json{
+                {"jsonrpc", "2.0"},
+                {"id", concurrentId},
+                {"result", {{"late", true}}},
+            }
+                .dump());
+        concurrent.bodyDelayMs = 800;
+        server.enqueueForRequestId(concurrentId, concurrent);
+
+        MockResponse initializeB;
+        initializeB.contentType = "application/json";
+        initializeB.body        = R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}})";
+        initializeB.sessionId   = sessionB;
+        server.enqueue(initializeB);
+
+        MockResponse initializedB;
+        initializedB.statusLine = "202 Accepted";
+        server.enqueue(initializedB);
+
+        MockResponse toolsB;
+        toolsB.contentType = "application/json";
+        toolsB.body        = R"({"jsonrpc":"2.0","id":2,"result":{"tools":[]}})";
+        server.enqueue(toolsB);
+
+        QVERIFY(waitForRequests(server, 5, 3000));
+        QVERIFY(waitForSignal(oldClientClosedSpy, 1, 1500));
+        QVERIFY(waitForSignal(reconnectSpy, 1, 1500));
+        QVERIFY(
+            QTest::qWaitFor(
+                [&]() {
+                    return transports.size() == 2
+                           && manager.findClient(QStringLiteral("http")) != nullptr
+                           && manager.findClient(QStringLiteral("http")) != oldClient;
+                },
+                1000));
+
+        QPointer<QSocMcpClient> newClient = manager.findClient(QStringLiteral("http"));
+        QVERIFY(!newClient.isNull());
+        QVERIFY(
+            QTest::qWaitFor(
+                [&]() {
+                    return !newClient.isNull() && newClient->state() == QSocMcpClient::State::Ready
+                           && server.requestBodies().size() >= 8;
+                },
+                3000));
+
+        QCOMPARE(oldErrorSpy.size(), qsizetype(1));
+        QVERIFY(oldErrorSpy.first().at(0).toString().contains(QStringLiteral("HTTP 404")));
+        QVERIFY(oldErrorSpy.first().at(0).toString().contains(QStringLiteral("session expired")));
+        QCOMPARE(oldWireFailureSpy.size(), qsizetype(0));
+        QCOMPARE(oldTransportClosedSpy.size(), qsizetype(1));
+        QCOMPARE(oldClientClosedSpy.size(), qsizetype(1));
+        QCOMPARE(reconnectSpy.size(), qsizetype(1));
+        QCOMPARE(oldFailureSpy.size(), qsizetype(2));
+
+        QHash<int, int> failureCounts;
+        for (const auto &arguments : oldFailureSpy) {
+            failureCounts[arguments.at(0).toInt()]++;
+            QCOMPARE(arguments.at(1).toInt(), -32000);
+            QVERIFY(arguments.at(2).toString().contains(QStringLiteral("HTTP 404")));
+            QVERIFY(arguments.at(2).toString().contains(QStringLiteral("session expired")));
+        }
+        QCOMPARE(failureCounts.value(expiredId), 1);
+        QCOMPARE(failureCounts.value(concurrentId), 1);
+
+        QCOMPARE(server.requestBodies().size(), qsizetype(8));
+        QCOMPARE(server.requestBodies().size(), server.requestSessionIds().size());
+        QCOMPARE(
+            requestSessionsForMethod(server, QStringLiteral("initialize")),
+            (QList<QByteArray>{QByteArray(), QByteArray()}));
+        QCOMPARE(
+            requestSessionsForMethod(server, QStringLiteral("notifications/initialized")),
+            (QList<QByteArray>{sessionA, sessionB}));
+        QCOMPARE(
+            requestSessionsForMethod(server, QStringLiteral("tools/list")),
+            (QList<QByteArray>{sessionA, sessionB}));
+        QCOMPARE(
+            requestSessionsForMethod(server, QStringLiteral("tools/call")),
+            (QList<QByteArray>{sessionA}));
+        QCOMPARE(
+            requestSessionsForMethod(server, QStringLiteral("concurrent")),
+            (QList<QByteArray>{sessionA}));
+
+        QTest::qWait(900);
+        QCOMPARE(server.requestBodies().size(), qsizetype(8));
+        QCOMPARE(oldFailureSpy.size(), qsizetype(2));
+        QCOMPARE(oldErrorSpy.size(), qsizetype(1));
+        QCOMPARE(oldTransportClosedSpy.size(), qsizetype(1));
+        QCOMPARE(oldClientClosedSpy.size(), qsizetype(1));
+        QCOMPARE(reconnectSpy.size(), qsizetype(1));
+    }
+
+    void sessionNotification404RejectsReentrantStart()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse initialize;
+        initialize.contentType = "application/json";
+        initialize.body        = R"({"jsonrpc":"2.0","id":1,"result":{}})";
+        initialize.sessionId   = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+        server.enqueue(initialize);
+
+        MockResponse expired;
+        expired.statusLine  = "404 Not Found";
+        expired.contentType = "text/plain";
+        expired.body        = "expired";
+        expired.bodyDelayMs = 3000;
+        server.enqueue(expired);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        QSignalSpy           startedSpy(&transport, &QSocMcpTransport::started);
+        QSignalSpy           closedSpy(&transport, &QSocMcpTransport::closed);
+
+        transport.start();
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "initialize"}});
+        QVERIFY(waitForSignal(messageSpy, 1, 3000));
+        messageSpy.clear();
+        connect(&transport, &QSocMcpTransport::errorOccurred, &transport, [&transport]() {
+            transport.start();
+        });
+
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"method", "notifications/progress"}}, 7);
+        QVERIFY(waitForSignal(closedSpy, 1, 1500));
+        QCOMPARE(errorSpy.size(), qsizetype(1));
+        QVERIFY(errorSpy.first().at(0).toString().contains(QStringLiteral("HTTP 404")));
+        QVERIFY(errorSpy.first().at(0).toString().contains(QStringLiteral("session expired")));
+        QCOMPARE(startedSpy.size(), qsizetype(1));
+        QCOMPARE(closedSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(sentSpy.size(), qsizetype(0));
+        QCOMPARE(messageSpy.size(), qsizetype(0));
+        QCOMPARE(transport.state(), QSocMcpTransport::State::Stopped);
+    }
+
+    void concurrentSession404ClosesOnce()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           closedSpy(&transport, &QSocMcpTransport::closed);
+        QVERIFY(establishSession(
+            server, transport, messageSpy, QUuid::createUuid().toByteArray(QUuid::WithoutBraces)));
+        messageSpy.clear();
+
+        MockResponse first;
+        first.statusLine  = "404 Not Found";
+        first.body        = "expired";
+        first.delayMs     = 100;
+        first.bodyDelayMs = 3000;
+        server.enqueueForRequestId(2, first);
+
+        MockResponse second = first;
+        server.enqueueForRequestId(3, second);
+
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "first"}});
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "second"}});
+        QVERIFY(waitForRequests(server, 3, 3000));
+        QVERIFY(waitForSignal(closedSpy, 1, 1500));
+        QTest::qWait(300);
+
+        QCOMPARE(errorSpy.size(), qsizetype(1));
+        QCOMPARE(closedSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(messageSpy.size(), qsizetype(0));
+        QCOMPARE(transport.state(), QSocMcpTransport::State::Stopped);
+        QVERIFY(transport.findChildren<QNetworkReply *>().isEmpty());
+    }
+
+    void deleteFromSessionErrorIsSafe()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        QObject owner;
+        auto   *transport = new QSocMcpHttpTransport(httpConfig(server.url()), &owner);
+        QPointer<QSocMcpHttpTransport> guard(transport);
+        QSignalSpy                     messageSpy(transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy                     errorSpy(transport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy                     failureSpy(transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy                     closedSpy(transport, &QSocMcpTransport::closed);
+        QVERIFY(establishSession(
+            server, *transport, messageSpy, QUuid::createUuid().toByteArray(QUuid::WithoutBraces)));
+        messageSpy.clear();
+
+        MockResponse expired;
+        expired.statusLine  = "404 Not Found";
+        expired.body        = "expired";
+        expired.bodyDelayMs = 500;
+        server.enqueue(expired);
+
+        connect(transport, &QSocMcpTransport::errorOccurred, transport, [&](const QString &) {
+            delete transport;
+            transport = nullptr;
+        });
+        transport->sendMessage({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "delete"}});
+
+        QTRY_VERIFY_WITH_TIMEOUT(guard.isNull(), 3000);
+        QCOMPARE(errorSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(closedSpy.size(), qsizetype(0));
+        QCOMPARE(messageSpy.size(), qsizetype(0));
     }
 
     void sessionIdDoesNotCrossRestart()
@@ -789,6 +1230,236 @@ private slots:
 
         QCOMPARE(server.requestSessionIds().size(), qsizetype(3));
         QVERIFY(server.requestSessionIds().at(2).isEmpty());
+    }
+
+    void sessionIdComesOnlyFromSuccessfulInitialize_data()
+    {
+        QTest::addColumn<bool>("seedSession");
+        QTest::addColumn<QString>("method");
+        QTest::addColumn<QString>("jsonRpcVersion");
+        QTest::addColumn<QByteArray>("statusLine");
+        QTest::addColumn<bool>("validSessionId");
+        QTest::addColumn<bool>("adoptCandidate");
+        QTest::addColumn<bool>("candidateFails");
+
+        QTest::newRow("initialize-created")
+            << false << QStringLiteral("initialize") << QStringLiteral("2.0")
+            << QByteArray("201 Created") << true << true << false;
+        QTest::newRow("initialize-existing")
+            << true << QStringLiteral("initialize") << QStringLiteral("2.0")
+            << QByteArray("201 Created") << true << false << false;
+        QTest::newRow("ordinary-empty") << false << QStringLiteral("ping") << QStringLiteral("2.0")
+                                        << QByteArray("200 OK") << true << false << false;
+        QTest::newRow("ordinary-existing")
+            << true << QStringLiteral("ping") << QStringLiteral("2.0") << QByteArray("200 OK")
+            << true << false << false;
+        QTest::newRow("failed-initialize-empty")
+            << false << QStringLiteral("initialize") << QStringLiteral("2.0")
+            << QByteArray("500 Internal Server Error") << true << false << true;
+        QTest::newRow("failed-initialize-existing")
+            << true << QStringLiteral("initialize") << QStringLiteral("2.0")
+            << QByteArray("500 Internal Server Error") << true << false << true;
+        QTest::newRow("invalid-initialize-empty")
+            << false << QStringLiteral("initialize") << QStringLiteral("2.0")
+            << QByteArray("200 OK") << false << false << true;
+        QTest::newRow("invalid-initialize-existing")
+            << true << QStringLiteral("initialize") << QStringLiteral("2.0") << QByteArray("200 OK")
+            << false << false << true;
+        QTest::newRow("missing-jsonrpc") << false << QStringLiteral("initialize") << QString()
+                                         << QByteArray("200 OK") << true << false << false;
+        QTest::newRow("wrong-jsonrpc")
+            << false << QStringLiteral("initialize") << QStringLiteral("1.0")
+            << QByteArray("200 OK") << true << false << false;
+    }
+
+    void sessionIdComesOnlyFromSuccessfulInitialize()
+    {
+        QFETCH(bool, seedSession);
+        QFETCH(QString, method);
+        QFETCH(QString, jsonRpcVersion);
+        QFETCH(QByteArray, statusLine);
+        QFETCH(bool, validSessionId);
+        QFETCH(bool, adoptCandidate);
+        QFETCH(bool, candidateFails);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const auto makeSessionId = []() {
+            return QByteArrayLiteral("!") + QUuid::createUuid().toByteArray(QUuid::WithoutBraces)
+                   + QByteArrayLiteral("~");
+        };
+        const auto responseBody = [](int id) {
+            return QByteArray::fromStdString(
+                nlohmann::json{{"jsonrpc", "2.0"}, {"id", id}, {"result", {{"ok", true}}}}.dump());
+        };
+
+        const QByteArray seedId      = makeSessionId();
+        QByteArray       candidateId = makeSessionId();
+        if (!validSessionId) {
+            candidateId.insert(candidateId.size() / 2, ' ');
+        }
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           startedSpy(&transport, &QSocMcpTransport::started);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+
+        transport.start();
+        QVERIFY(waitForSignal(startedSpy, 1));
+
+        int nextId       = 1;
+        int messageCount = 0;
+        if (seedSession) {
+            MockResponse seed;
+            seed.contentType = "application/json";
+            seed.body        = responseBody(nextId);
+            seed.sessionId   = seedId;
+            server.enqueueForRequestId(nextId, seed);
+            transport.sendMessage({{"jsonrpc", "2.0"}, {"id", nextId}, {"method", "initialize"}});
+            ++nextId;
+            ++messageCount;
+            QVERIFY(waitForSignal(messageSpy, messageCount, 3000));
+        }
+
+        const int    candidateRequestId = nextId++;
+        MockResponse candidate;
+        candidate.statusLine  = statusLine;
+        candidate.contentType = "application/json";
+        candidate.body        = responseBody(candidateRequestId);
+        candidate.sessionId   = candidateId;
+        server.enqueueForRequestId(candidateRequestId, candidate);
+        nlohmann::json candidateMessage{{"id", candidateRequestId}, {"method", method.toStdString()}};
+        if (!jsonRpcVersion.isNull()) {
+            candidateMessage["jsonrpc"] = jsonRpcVersion.toStdString();
+        }
+        constexpr quint64 candidateToken = 37;
+        transport.sendTrackedMessage(candidateMessage, candidateToken);
+        if (candidateFails) {
+            QVERIFY(waitForSignal(failureSpy, 1, 3000));
+            QCOMPARE(failureSpy.first().at(0).toULongLong(), candidateToken);
+            QCOMPARE(failureSpy.first().at(1).value<QList<int>>(), (QList<int>{candidateRequestId}));
+            const QString failureMessage = failureSpy.first().at(2).toString();
+            QVERIFY(!failureMessage.isEmpty());
+            if (!validSessionId) {
+                QVERIFY(failureMessage.contains(QStringLiteral("session"), Qt::CaseInsensitive));
+                QVERIFY(!failureMessage.contains(QString::fromLatin1(candidateId)));
+            }
+        } else {
+            ++messageCount;
+            QVERIFY(waitForSignal(messageSpy, messageCount, 3000));
+            QVERIFY(waitForSignal(sentSpy, 1, 3000));
+        }
+
+        const int    probeRequestId = nextId;
+        MockResponse probe;
+        probe.contentType = "application/json";
+        probe.body        = responseBody(probeRequestId);
+        server.enqueueForRequestId(probeRequestId, probe);
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", probeRequestId}, {"method", "ping"}});
+        ++messageCount;
+        QVERIFY(waitForSignal(messageSpy, messageCount, 3000));
+        QVERIFY(waitForRequests(server, seedSession ? 3 : 2, 3000));
+
+        const qsizetype candidateIndex = seedSession ? 1 : 0;
+        const qsizetype probeIndex     = candidateIndex + 1;
+        QCOMPARE(server.requestSessionIds().size(), probeIndex + 1);
+        if (seedSession) {
+            QVERIFY(server.requestSessionIds().first().isEmpty());
+            QCOMPARE(server.requestSessionIds().at(candidateIndex), seedId);
+        } else {
+            QVERIFY(server.requestSessionIds().at(candidateIndex).isEmpty());
+        }
+        const QByteArray expectedProbeId = adoptCandidate ? candidateId
+                                                          : (seedSession ? seedId : QByteArray());
+        QCOMPARE(server.requestSessionIds().at(probeIndex), expectedProbeId);
+        QCOMPARE(failureSpy.size(), candidateFails ? qsizetype(1) : qsizetype(0));
+        QCOMPARE(sentSpy.size(), candidateFails ? qsizetype(0) : qsizetype(1));
+        QCOMPARE(errorSpy.size(), qsizetype(0));
+        QCOMPARE(messageSpy.size(), qsizetype(messageCount));
+        QCOMPARE(transport.state(), QSocMcpTransport::State::Running);
+    }
+
+    void sessionIdArrivesBeforeDelayedBody()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const QByteArray sessionId = QByteArrayLiteral("!")
+                                     + QUuid::createUuid().toByteArray(QUuid::WithoutBraces)
+                                     + QByteArrayLiteral("~");
+        MockResponse     initialize;
+        initialize.contentType = "application/json";
+        initialize.body        = R"({"jsonrpc":"2.0","id":1,"result":{}})";
+        initialize.sessionId   = sessionId;
+        initialize.bodyDelayMs = 1000;
+        server.enqueueForRequestId(1, initialize);
+
+        MockResponse probe;
+        probe.contentType = "application/json";
+        probe.body        = R"({"jsonrpc":"2.0","id":2,"result":{}})";
+        server.enqueueForRequestId(2, probe);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+
+        transport.start();
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "initialize"}});
+
+        const auto sessionHeaderArrived = [&transport]() {
+            const auto replies = transport.findChildren<QNetworkReply *>();
+            for (const QNetworkReply *reply : replies) {
+                if (reply->hasRawHeader(QByteArrayLiteral("Mcp-Session-Id"))) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(sessionHeaderArrived(), 500);
+        QCOMPARE(messageSpy.size(), qsizetype(0));
+
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "ping"}});
+        QVERIFY(waitForRequests(server, 2, 1000));
+        QCOMPARE(server.requestSessionIds().at(1), sessionId);
+        QVERIFY(waitForSignal(messageSpy, 2, 3000));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+    }
+
+    void fractionalRequestIdCanEstablishSession()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const QByteArray sessionId = QByteArrayLiteral("!")
+                                     + QUuid::createUuid().toByteArray(QUuid::WithoutBraces)
+                                     + QByteArrayLiteral("~");
+        MockResponse     initialize;
+        initialize.contentType = "application/json";
+        initialize.body        = R"({"jsonrpc":"2.0","id":1.5,"result":{}})";
+        initialize.sessionId   = sessionId;
+        server.enqueue(initialize);
+
+        MockResponse probe;
+        probe.contentType = "application/json";
+        probe.body        = R"({"jsonrpc":"2.0","id":2,"result":{}})";
+        server.enqueue(probe);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+
+        transport.start();
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1.5}, {"method", "initialize"}});
+        QVERIFY(waitForSignal(messageSpy, 1, 3000));
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "ping"}});
+        QVERIFY(waitForSignal(messageSpy, 2, 3000));
+        QVERIFY(waitForRequests(server, 2, 3000));
+        QVERIFY(server.requestSessionIds().first().isEmpty());
+        QCOMPARE(server.requestSessionIds().at(1), sessionId);
+        QCOMPARE(failureSpy.size(), qsizetype(0));
     }
 
     void clientAnswersServerPingFromSse()
