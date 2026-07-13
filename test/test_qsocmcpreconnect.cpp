@@ -9,8 +9,10 @@
 #include "qsoc_test.h"
 #include "qsocmcp_fake_transport.h"
 
+#include <algorithm>
 #include <functional>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 #include <QSignalSpy>
 #include <QtCore>
@@ -50,11 +52,8 @@ void replyInitialize(QsocMcpFakeTransport *transport, int messageId)
     transport->simulateMessage(resp);
 }
 
-void replyToolsList(QsocMcpFakeTransport *transport, int messageId, const QStringList &toolNames)
+nlohmann::json toolsListResult(const QStringList &toolNames)
 {
-    nlohmann::json resp;
-    resp["jsonrpc"]         = "2.0";
-    resp["id"]              = messageId;
     nlohmann::json toolsArr = nlohmann::json::array();
     for (const QString &name : toolNames) {
         nlohmann::json tool;
@@ -63,8 +62,49 @@ void replyToolsList(QsocMcpFakeTransport *transport, int messageId, const QStrin
         tool["inputSchema"] = {{"type", "object"}};
         toolsArr.push_back(tool);
     }
-    resp["result"]["tools"] = toolsArr;
+    return {{"tools", std::move(toolsArr)}};
+}
+
+void replyToolsList(QsocMcpFakeTransport *transport, int messageId, const QStringList &toolNames)
+{
+    nlohmann::json resp;
+    resp["jsonrpc"] = "2.0";
+    resp["id"]      = messageId;
+    resp["result"]  = toolsListResult(toolNames);
     transport->simulateMessage(resp);
+}
+
+void replyRequestError(QsocMcpFakeTransport *transport, int messageId)
+{
+    nlohmann::json resp;
+    resp["jsonrpc"]          = "2.0";
+    resp["id"]               = messageId;
+    resp["error"]["code"]    = -32603;
+    resp["error"]["message"] = "request failed";
+    transport->simulateMessage(resp);
+}
+
+void replyInvalidToolsList(QsocMcpFakeTransport *transport, int messageId)
+{
+    nlohmann::json resp;
+    resp["jsonrpc"]           = "2.0";
+    resp["id"]                = messageId;
+    resp["result"]["invalid"] = true;
+    transport->simulateMessage(resp);
+}
+
+void notifyToolsChanged(QsocMcpFakeTransport *transport)
+{
+    nlohmann::json notification;
+    notification["jsonrpc"] = "2.0";
+    notification["method"]  = "notifications/tools/list_changed";
+    notification["params"]  = nlohmann::json::object();
+    transport->simulateMessage(notification);
+}
+
+void flushQueuedCalls()
+{
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
 }
 
 void replyToolSuccess(QsocMcpFakeTransport *transport, int messageId, const QString &text)
@@ -112,6 +152,7 @@ void driveHandshakeAndList(QsocMcpFakeTransport *transport, const QStringList &t
     replyInitialize(transport, transport->firstSentId());
     const int toolsListId = transport->lastSentId();
     replyToolsList(transport, toolsListId, toolNames);
+    flushQueuedCalls();
 }
 
 bool refreshTools(QsocMcpFakeTransport *transport, const QStringList &toolNames)
@@ -130,6 +171,7 @@ bool refreshTools(QsocMcpFakeTransport *transport, const QStringList &toolNames)
         return false;
     }
     replyToolsList(transport, ids.last(), toolNames);
+    flushQueuedCalls();
     return true;
 }
 
@@ -293,6 +335,275 @@ private slots:
         QVERIFY(!registry.hasTool(QStringLiteral("mcp__svr__old")));
         QVERIFY(registry.executeTool(QStringLiteral("mcp__svr__old"), json::object())
                     .contains(QStringLiteral("not found")));
+    }
+
+    void coalescesToolListChanges_data()
+    {
+        QTest::addColumn<bool>("inlineCompletion");
+        QTest::addColumn<bool>("firstFails");
+
+        QTest::newRow("async-success") << false << false;
+        QTest::newRow("async-failure") << false << true;
+        QTest::newRow("inline-success") << true << false;
+        QTest::newRow("inline-failure") << true << true;
+    }
+
+    void coalescesToolListChanges()
+    {
+        QFETCH(bool, inlineCompletion);
+        QFETCH(bool, firstFails);
+
+        QSocTestCapture  capture;
+        McpServerFixture fixture;
+        QVERIFY(fixture.startWithTool(QStringLiteral("base")));
+
+        auto *transport = fixture.transport();
+        auto *manager   = fixture.manager.data();
+        QVERIFY(transport != nullptr);
+        QVERIFY(manager != nullptr);
+        QSignalSpy toolsSpy(manager, &QSocMcpManager::toolsRegistered);
+
+        int firstRefreshId = -1;
+        int hookDepth      = 0;
+        int maxHookDepth   = 0;
+        transport->setSendHook([&](const nlohmann::json &message) {
+            if (message.value("method", std::string()) != "tools/list" || !message.contains("id")) {
+                return;
+            }
+            hookDepth++;
+            maxHookDepth = std::max(maxHookDepth, hookDepth);
+            if (firstRefreshId < 0) {
+                firstRefreshId = message["id"].get<int>();
+                if (inlineCompletion) {
+                    for (int i = 0; i < 64; ++i) {
+                        notifyToolsChanged(transport);
+                    }
+                    if (firstFails) {
+                        replyRequestError(transport, firstRefreshId);
+                    } else {
+                        replyToolsList(transport, firstRefreshId, {"intermediate"});
+                    }
+                }
+            }
+            hookDepth--;
+        });
+
+        notifyToolsChanged(transport);
+        QVERIFY(firstRefreshId > 0);
+        if (!inlineCompletion) {
+            for (int i = 0; i < 64; ++i) {
+                notifyToolsChanged(transport);
+            }
+            if (firstFails) {
+                replyRequestError(transport, firstRefreshId);
+            } else {
+                replyToolsList(transport, firstRefreshId, {"intermediate"});
+            }
+        }
+
+        QList<int> listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 2);
+        QCOMPARE(maxHookDepth, 1);
+        QCOMPARE(toolsSpy.size(), 0);
+        QCOMPARE(fixture.registry.count(), 1);
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__base")));
+        QVERIFY(!fixture.registry.hasTool(QStringLiteral("mcp__svr__intermediate")));
+        flushQueuedCalls();
+        listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 3);
+        const int trailingId = listIds.last();
+        QVERIFY(trailingId != firstRefreshId);
+
+        auto *client = manager->findClient(QStringLiteral("svr"));
+        QVERIFY(client != nullptr);
+        client->responseReceived(firstRefreshId, toolsListResult({"stale"}));
+        QCOMPARE(fixture.registry.count(), 1);
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__base")));
+
+        replyToolsList(transport, trailingId, {"final"});
+        QCOMPARE(toolsSpy.size(), 1);
+        QCOMPARE(fixture.registry.count(), 1);
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__final")));
+        QVERIFY(!fixture.registry.hasTool(QStringLiteral("mcp__svr__base")));
+        QVERIFY(!fixture.registry.hasTool(QStringLiteral("mcp__svr__stale")));
+
+        flushQueuedCalls();
+        QCOMPARE(requestIdsForMethod(transport, QStringLiteral("tools/list")).size(), 3);
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool refresh failed")), 0);
+    }
+
+    void notificationsDuringToolsRegisteredAreCoalesced()
+    {
+        McpServerFixture fixture;
+        QVERIFY(fixture.startWithTool(QStringLiteral("base")));
+
+        auto *transport = fixture.transport();
+        auto *manager   = fixture.manager.data();
+        QVERIFY(transport != nullptr);
+        QVERIFY(manager != nullptr);
+
+        bool callbackSeen       = false;
+        int  requestsInCallback = -1;
+        connect(manager, &QSocMcpManager::toolsRegistered, manager, [&]() {
+            if (callbackSeen) {
+                return;
+            }
+            callbackSeen = true;
+            const qsizetype before
+                = requestIdsForMethod(transport, QStringLiteral("tools/list")).size();
+            for (int i = 0; i < 64; ++i) {
+                notifyToolsChanged(transport);
+            }
+            requestsInCallback = requestIdsForMethod(transport, QStringLiteral("tools/list")).size()
+                                 - before;
+        });
+
+        notifyToolsChanged(transport);
+        QList<int> listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 2);
+        replyToolsList(transport, listIds.last(), {"intermediate"});
+
+        QVERIFY(callbackSeen);
+        QCOMPARE(requestsInCallback, 0);
+        QCOMPARE(requestIdsForMethod(transport, QStringLiteral("tools/list")).size(), 2);
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__intermediate")));
+
+        flushQueuedCalls();
+        listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 3);
+        replyToolsList(transport, listIds.last(), {"final"});
+        flushQueuedCalls();
+
+        QCOMPARE(requestIdsForMethod(transport, QStringLiteral("tools/list")).size(), 3);
+        QCOMPARE(fixture.registry.count(), 1);
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__final")));
+    }
+
+    void queuedRefreshDiesWithClient_data()
+    {
+        QTest::addColumn<bool>("manualReconnect");
+
+        QTest::newRow("closed-client") << false;
+        QTest::newRow("manual-reconnect") << true;
+    }
+
+    void queuedRefreshDiesWithClient()
+    {
+        QFETCH(bool, manualReconnect);
+
+        McpServerFixture fixture;
+        fixture.manager->setReconnectDelays(1, 1);
+        QVERIFY(fixture.startWithTool(QStringLiteral("base")));
+
+        QPointer<QsocMcpFakeTransport> oldTransport = fixture.transport();
+        QVERIFY(!oldTransport.isNull());
+        notifyToolsChanged(oldTransport.data());
+        const QList<int> listIds
+            = requestIdsForMethod(oldTransport.data(), QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 2);
+        notifyToolsChanged(oldTransport.data());
+        QCOMPARE(requestIdsForMethod(oldTransport.data(), QStringLiteral("tools/list")).size(), 2);
+        replyToolsList(oldTransport.data(), listIds.last(), {"obsolete"});
+
+        if (manualReconnect) {
+            QVERIFY(fixture.manager->reconnectServer(QStringLiteral("svr")));
+        } else {
+            oldTransport->simulateClosed();
+        }
+        flushQueuedCalls();
+        QVERIFY(QTest::qWaitFor([&]() { return fixture.transports.size() == 2; }, 500));
+
+        auto *replacement = fixture.transport();
+        QVERIFY(replacement != nullptr);
+        replyInitialize(replacement, replacement->firstSentId());
+        QList<int> replacementLists = requestIdsForMethod(replacement, QStringLiteral("tools/list"));
+        QCOMPARE(replacementLists.size(), 1);
+        replyToolsList(replacement, replacementLists.first(), {"final"});
+        flushQueuedCalls();
+
+        replacementLists = requestIdsForMethod(replacement, QStringLiteral("tools/list"));
+        QCOMPARE(replacementLists.size(), 1);
+        QCOMPARE(fixture.registry.count(), 1);
+        QVERIFY(fixture.registry.hasTool(QStringLiteral("mcp__svr__final")));
+        QVERIFY(!fixture.registry.hasTool(QStringLiteral("mcp__svr__obsolete")));
+    }
+
+    void toolsRegisteredReentryIsLifetimeSafe_data()
+    {
+        QTest::addColumn<bool>("deleteManager");
+
+        QTest::newRow("delete-manager") << true;
+        QTest::newRow("manual-reconnect") << false;
+    }
+
+    void toolsRegisteredReentryIsLifetimeSafe()
+    {
+        QFETCH(bool, deleteManager);
+
+        QSocToolRegistry                      registry;
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QPointer<QSocMcpManager> manager = new QSocMcpManager({makeConfig("svr")}, &registry);
+        manager->setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        manager->startAll();
+        QVERIFY(QTest::qWaitFor([&]() { return !transports.isEmpty(); }, 500));
+        driveHandshakeAndList(transports.first().data(), {"base"});
+
+        QObject observer;
+        bool    callbackSeen       = false;
+        int     requestsInCallback = -1;
+        connect(manager.data(), &QSocMcpManager::toolsRegistered, &observer, [&]() {
+            if (callbackSeen) {
+                return;
+            }
+            callbackSeen              = true;
+            auto           *transport = transports.first().data();
+            const qsizetype before
+                = requestIdsForMethod(transport, QStringLiteral("tools/list")).size();
+            for (int i = 0; i < 64; ++i) {
+                notifyToolsChanged(transport);
+            }
+            requestsInCallback = requestIdsForMethod(transport, QStringLiteral("tools/list")).size()
+                                 - before;
+            if (deleteManager) {
+                delete manager.data();
+            } else {
+                manager->reconnectServer(QStringLiteral("svr"));
+            }
+        });
+
+        auto *oldTransport = transports.first().data();
+        notifyToolsChanged(oldTransport);
+        const QList<int> listIds = requestIdsForMethod(oldTransport, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 2);
+        replyToolsList(oldTransport, listIds.last(), {"intermediate"});
+
+        QVERIFY(callbackSeen);
+        QCOMPARE(requestsInCallback, 0);
+        flushQueuedCalls();
+        if (deleteManager) {
+            QVERIFY(manager.isNull());
+            QCOMPARE(registry.count(), 0);
+            return;
+        }
+
+        QVERIFY(!manager.isNull());
+        QCOMPARE(transports.size(), 2);
+        auto *replacement = transports.last().data();
+        QVERIFY(replacement != nullptr);
+        replyInitialize(replacement, replacement->firstSentId());
+        const QList<int> replacementLists
+            = requestIdsForMethod(replacement, QStringLiteral("tools/list"));
+        QCOMPARE(replacementLists.size(), 1);
+        replyToolsList(replacement, replacementLists.first(), {"final"});
+        flushQueuedCalls();
+
+        QCOMPARE(registry.count(), 1);
+        QVERIFY(registry.hasTool(QStringLiteral("mcp__svr__final")));
+        delete manager.data();
     }
 
     void sameNameRefreshKeepsNewWrapper()
@@ -968,13 +1279,12 @@ private slots:
         QCOMPARE(registry.count(), 0);
     }
 
-    void reconnectClearsAttemptsAfterReady()
+    void reconnectClearsAttemptsAfterToolsList()
     {
-        QSocToolRegistry                      registry;
         QList<QPointer<QsocMcpFakeTransport>> transports;
         QList<McpServerConfig>                cfgs{makeConfig("svr")};
 
-        QSocMcpManager manager(cfgs, &registry);
+        QSocMcpManager manager(cfgs);
         manager.setReconnectDelays(20, 100);
         manager.setTransportFactory([&](const McpServerConfig &) {
             auto *transport = new QsocMcpFakeTransport;
@@ -985,13 +1295,394 @@ private slots:
         manager.startAll();
         QVERIFY(QTest::qWaitFor([&]() { return !transports.isEmpty(); }, 500));
         driveHandshakeAndList(transports.last().data(), {"a"});
-        QVERIFY(QTest::qWaitFor([&]() { return registry.hasTool("mcp__svr__a"); }, 500));
 
         transports.last().data()->simulateClosed();
         QVERIFY(QTest::qWaitFor([&]() { return transports.size() >= 2; }, 500));
-        driveHandshakeAndList(transports.last().data(), {"a"});
-        QVERIFY(QTest::qWaitFor([&]() { return registry.hasTool("mcp__svr__a"); }, 500));
+
+        auto *replacement = transports.last().data();
+        replyInitialize(replacement, replacement->firstSentId());
+        QCOMPARE(manager.reconnectAttempts("svr"), 1);
+
+        auto *client = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(client != nullptr);
+        const int probeId = client->request(QStringLiteral("ping"));
+        QVERIFY(probeId > 0);
+        replyToolSuccess(replacement, probeId, QStringLiteral("ok"));
+        QCOMPARE(manager.reconnectAttempts("svr"), 1);
+
+        const QList<int> listIds = requestIdsForMethod(replacement, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 1);
+        replyToolsList(replacement, listIds.first(), {"a"});
         QCOMPARE(manager.reconnectAttempts("svr"), 0);
+    }
+
+    void initialListFailureReconnects_data()
+    {
+        QTest::addColumn<QString>("failure");
+
+        QTest::newRow("rpc-error") << QStringLiteral("rpc-error");
+        QTest::newRow("message-failure") << QStringLiteral("message-failure");
+        QTest::newRow("recoverable-error") << QStringLiteral("recoverable-error");
+        QTest::newRow("timeout") << QStringLiteral("timeout");
+        QTest::newRow("invalid-result") << QStringLiteral("invalid-result");
+    }
+
+    void initialListFailureReconnects()
+    {
+        QFETCH(QString, failure);
+
+        QSocToolRegistry                      registry;
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        McpServerConfig                       config = makeConfig("svr");
+        config.requestTimeoutMs                      = 40;
+
+        QSocMcpManager manager({config}, &registry);
+        manager.setReconnectDelays(20, 50);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QSignalSpy scheduleSpy(&manager, &QSocMcpManager::reconnectScheduled);
+        QSignalSpy gaveUpSpy(&manager, &QSocMcpManager::serverGaveUp);
+
+        manager.startAll();
+        QCOMPARE(transports.size(), qsizetype(1));
+        QPointer<QsocMcpFakeTransport> oldTransport = transports.first();
+        QPointer<QSocMcpClient>        oldClient    = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(!oldTransport.isNull());
+        QVERIFY(!oldClient.isNull());
+        QSignalSpy closedSpy(oldClient.data(), &QSocMcpClient::closed);
+        QSignalSpy failureSpy(oldClient.data(), &QSocMcpClient::requestFailed);
+
+        auto *transport = oldTransport.data();
+        replyInitialize(transport, transport->firstSentId());
+        const QList<int> listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 1);
+        const int listId = listIds.first();
+        for (int i = 0; i < 64; ++i) {
+            notifyToolsChanged(transport);
+        }
+        QCOMPARE(requestIdsForMethod(transport, QStringLiteral("tools/list")).size(), 1);
+        bool lateResponseSent = false;
+        connect(&manager, &QSocMcpManager::reconnectScheduled, &manager, [&]() {
+            if (!oldTransport.isNull()) {
+                replyToolsList(oldTransport.data(), listId, {"late"});
+                lateResponseSent = true;
+            }
+        });
+
+        const int probeId = oldClient->request(QStringLiteral("probe"));
+        QVERIFY(probeId > 0);
+        transport->simulateMessageFailure(0, {probeId}, QStringLiteral("probe failed"));
+        QCOMPARE(failureSpy.size(), 1);
+        QCOMPARE(failureSpy.first().at(0).toInt(), probeId);
+        QCOMPARE(oldClient->state(), QSocMcpClient::State::Ready);
+        QCOMPARE(scheduleSpy.size(), 0);
+
+        if (failure == QStringLiteral("rpc-error")) {
+            replyRequestError(transport, listId);
+        } else if (failure == QStringLiteral("message-failure")) {
+            transport->simulateMessageFailure(0, {listId}, QStringLiteral("list failed"));
+        } else if (failure == QStringLiteral("recoverable-error")) {
+            transport->simulateError(QStringLiteral("transport failed"));
+        } else if (failure == QStringLiteral("invalid-result")) {
+            replyInvalidToolsList(transport, listId);
+        } else {
+            QCOMPARE(failure, QStringLiteral("timeout"));
+        }
+
+        QTRY_COMPARE_WITH_TIMEOUT(scheduleSpy.size(), 1, 500);
+        QCOMPARE(closedSpy.size(), 1);
+        QCOMPARE(scheduleSpy.first().at(0).toString(), QStringLiteral("svr"));
+        QCOMPARE(scheduleSpy.first().at(1).toInt(), 1);
+        QCOMPARE(manager.reconnectAttempts(QStringLiteral("svr")), 1);
+        QCOMPARE(gaveUpSpy.size(), 0);
+
+        QVERIFY(lateResponseSent);
+        QVERIFY(!registry.hasTool(QStringLiteral("mcp__svr__late")));
+        QVERIFY(QTest::qWaitFor([&]() { return transports.size() == 2; }, 500));
+        QVERIFY(manager.findClient(QStringLiteral("svr")) != oldClient.data());
+        QCOMPARE(registry.count(), 0);
+    }
+
+    void synchronousInitialListFailureReconnectsOnce()
+    {
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QSocMcpManager                        manager({makeConfig("svr")});
+        manager.setReconnectDelays(20, 50);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QSignalSpy scheduleSpy(&manager, &QSocMcpManager::reconnectScheduled);
+
+        manager.startAll();
+        QCOMPARE(transports.size(), qsizetype(1));
+        auto *transport = transports.first().data();
+        auto *client    = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(transport != nullptr);
+        QVERIFY(client != nullptr);
+        QSignalSpy closedSpy(client, &QSocMcpClient::closed);
+
+        bool handled = false;
+        transport->setSendHook([transport, &handled](const nlohmann::json &message) {
+            if (handled || message.value("method", std::string()) != "tools/list"
+                || !message.contains("id")) {
+                return;
+            }
+            handled = true;
+            for (int i = 0; i < 64; ++i) {
+                notifyToolsChanged(transport);
+            }
+            replyRequestError(transport, message["id"].get<int>());
+        });
+        replyInitialize(transport, transport->firstSentId());
+
+        QCOMPARE(requestIdsForMethod(transport, QStringLiteral("tools/list")).size(), 1);
+        QCOMPARE(closedSpy.size(), 1);
+        QCOMPARE(scheduleSpy.size(), 1);
+        QCOMPARE(scheduleSpy.first().at(1).toInt(), 1);
+        QCOMPARE(manager.reconnectAttempts(QStringLiteral("svr")), 1);
+        QVERIFY(QTest::qWaitFor([&]() { return transports.size() == 2; }, 500));
+    }
+
+    void unownedFailureIsIgnored()
+    {
+        QSocTestCapture                       capture;
+        QSocToolRegistry                      registry;
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QSocMcpManager                        manager({makeConfig("svr")}, &registry);
+        manager.setReconnectDelays(20, 50);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QSignalSpy scheduleSpy(&manager, &QSocMcpManager::reconnectScheduled);
+
+        manager.startAll();
+        QCOMPARE(transports.size(), qsizetype(1));
+        auto *transport = transports.first().data();
+        QVERIFY(transport != nullptr);
+        driveHandshakeAndList(transport, {"old"});
+
+        auto *client = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(client != nullptr);
+        QSignalSpy closedSpy(client, &QSocMcpClient::closed);
+        QSignalSpy failureSpy(client, &QSocMcpClient::requestFailed);
+
+        nlohmann::json malformed;
+        malformed["jsonrpc"] = "2.0";
+        malformed["id"]      = 999;
+        malformed["result"]  = nlohmann::json::object();
+        malformed["error"]   = nlohmann::json::object();
+        transport->simulateMessage(malformed);
+
+        QCOMPARE(failureSpy.size(), 1);
+        QCOMPARE(failureSpy.first().at(0).toInt(), -1);
+        QCOMPARE(closedSpy.size(), 0);
+        QCOMPARE(scheduleSpy.size(), 0);
+        QCOMPARE(client->state(), QSocMcpClient::State::Ready);
+        QCOMPARE(manager.findClient(QStringLiteral("svr")), client);
+        QCOMPARE(registry.count(), 1);
+        QVERIFY(registry.hasTool(QStringLiteral("mcp__svr__old")));
+
+        const QString output = capture.text();
+        QVERIFY(!output.contains(QStringLiteral("MCP tool discovery failed")));
+        QVERIFY(!output.contains(QStringLiteral("MCP tool refresh failed")));
+    }
+
+    void refreshFailurePreservesCatalog_data()
+    {
+        QTest::addColumn<QStringList>("initialTools");
+        QTest::addColumn<bool>("invalidResult");
+
+        QTest::newRow("empty-catalog") << QStringList() << false;
+        QTest::newRow("populated-catalog") << QStringList{QStringLiteral("old")} << false;
+        QTest::newRow("invalid-result") << QStringList{QStringLiteral("old")} << true;
+    }
+
+    void refreshFailurePreservesCatalog()
+    {
+        QFETCH(QStringList, initialTools);
+        QFETCH(bool, invalidResult);
+
+        QSocTestCapture                       capture;
+        QSocToolRegistry                      registry;
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QSocMcpManager                        manager({makeConfig("svr")}, &registry);
+        manager.setReconnectDelays(20, 50);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QSignalSpy scheduleSpy(&manager, &QSocMcpManager::reconnectScheduled);
+        QSignalSpy gaveUpSpy(&manager, &QSocMcpManager::serverGaveUp);
+
+        manager.startAll();
+        QCOMPARE(transports.size(), qsizetype(1));
+        auto *transport = transports.first().data();
+        QVERIFY(transport != nullptr);
+        driveHandshakeAndList(transport, initialTools);
+
+        QSocMcpClient *client = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(client != nullptr);
+        QPointer<QSocTool> oldTool = registry.getTool(QStringLiteral("mcp__svr__old"));
+
+        nlohmann::json notification;
+        notification["jsonrpc"] = "2.0";
+        notification["method"]  = "notifications/tools/list_changed";
+        notification["params"]  = nlohmann::json::object();
+        transport->simulateMessage(notification);
+
+        QList<int> listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 2);
+        const int failedId = listIds.last();
+        if (invalidResult) {
+            replyInvalidToolsList(transport, failedId);
+        } else {
+            transport->simulateMessageFailure(0, {failedId}, QStringLiteral("refresh failed"));
+        }
+        flushQueuedCalls();
+        QCOMPARE(capture.text().count(QStringLiteral("MCP tool refresh failed")), 1);
+
+        QCOMPARE(manager.findClient(QStringLiteral("svr")), client);
+        QCOMPARE(client->state(), QSocMcpClient::State::Ready);
+        QCOMPARE(transports.size(), qsizetype(1));
+        QCOMPARE(scheduleSpy.size(), 0);
+        QCOMPARE(gaveUpSpy.size(), 0);
+        QCOMPARE(manager.reconnectAttempts(QStringLiteral("svr")), 0);
+        QCOMPARE(registry.count(), initialTools.size());
+        if (!oldTool.isNull()) {
+            QCOMPARE(registry.getTool(QStringLiteral("mcp__svr__old")), oldTool.data());
+        }
+
+        replyToolsList(transport, failedId, {"late"});
+        QVERIFY(!registry.hasTool(QStringLiteral("mcp__svr__late")));
+        QCOMPARE(registry.count(), initialTools.size());
+
+        transport->simulateMessage(notification);
+        listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 3);
+        QVERIFY(listIds.last() != failedId);
+        replyToolsList(transport, listIds.last(), {"new"});
+
+        QCOMPARE(registry.count(), 1);
+        QVERIFY(registry.hasTool(QStringLiteral("mcp__svr__new")));
+        QVERIFY(!registry.hasTool(QStringLiteral("mcp__svr__old")));
+        QCOMPARE(manager.findClient(QStringLiteral("svr")), client);
+        QCOMPARE(transports.size(), qsizetype(1));
+    }
+
+    void replacementListFailureIsInitial_data()
+    {
+        QTest::addColumn<bool>("manualReconnect");
+
+        QTest::newRow("closed-client") << false;
+        QTest::newRow("manual-reconnect") << true;
+    }
+
+    void replacementListFailureIsInitial()
+    {
+        QFETCH(bool, manualReconnect);
+
+        QSocToolRegistry                      registry;
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QSocMcpManager                        manager({makeConfig("svr")}, &registry);
+        manager.setReconnectDelays(20, 50);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QSignalSpy scheduleSpy(&manager, &QSocMcpManager::reconnectScheduled);
+
+        manager.startAll();
+        QCOMPARE(transports.size(), qsizetype(1));
+        auto *firstTransport = transports.first().data();
+        QVERIFY(firstTransport != nullptr);
+        driveHandshakeAndList(firstTransport, {"old"});
+        QVERIFY(registry.hasTool(QStringLiteral("mcp__svr__old")));
+
+        const int expectedAttempt = manualReconnect ? 1 : 2;
+        if (manualReconnect) {
+            QVERIFY(manager.reconnectServer(QStringLiteral("svr")));
+        } else {
+            firstTransport->simulateClosed();
+        }
+        QVERIFY(QTest::qWaitFor([&]() { return transports.size() == 2; }, 500));
+        scheduleSpy.clear();
+        QCOMPARE(registry.count(), 0);
+
+        auto *replacement = transports.last().data();
+        QVERIFY(replacement != nullptr);
+        auto *replacementClient = manager.findClient(QStringLiteral("svr"));
+        QVERIFY(replacementClient != nullptr);
+        QSignalSpy closedSpy(replacementClient, &QSocMcpClient::closed);
+
+        replyInitialize(replacement, replacement->firstSentId());
+        const QList<int> listIds = requestIdsForMethod(replacement, QStringLiteral("tools/list"));
+        QCOMPARE(listIds.size(), 1);
+        replacement->simulateMessageFailure(0, {listIds.first()}, QStringLiteral("list failed"));
+
+        QTRY_COMPARE_WITH_TIMEOUT(scheduleSpy.size(), 1, 500);
+        QCOMPARE(scheduleSpy.first().at(1).toInt(), expectedAttempt);
+        QCOMPARE(manager.reconnectAttempts(QStringLiteral("svr")), expectedAttempt);
+        QCOMPARE(closedSpy.size(), 1);
+        QCOMPARE(registry.count(), 0);
+    }
+
+    void givesUpWhenInitialToolsListAlwaysFails()
+    {
+        QSocTestCapture                       capture;
+        QList<QPointer<QsocMcpFakeTransport>> transports;
+        QList<McpServerConfig>                cfgs{makeConfig("svr")};
+
+        QSocMcpManager manager(cfgs);
+        manager.setReconnectDelays(10, 50);
+        manager.setTransportFactory([&](const McpServerConfig &) {
+            auto *transport = new QsocMcpFakeTransport;
+            transports << transport;
+            return transport;
+        });
+        QSignalSpy scheduleSpy(&manager, &QSocMcpManager::reconnectScheduled);
+        QSignalSpy gaveUpSpy(&manager, &QSocMcpManager::serverGaveUp);
+
+        manager.startAll();
+        const int cap          = QSocMcpManager::kMaxReconnectAttempts;
+        int       processedRun = 0;
+        while (gaveUpSpy.isEmpty() && processedRun < cap + 2) {
+            QVERIFY(QTest::qWaitFor([&]() { return transports.size() > processedRun; }, 1000));
+            auto *transport = transports.at(processedRun).data();
+            QVERIFY(transport != nullptr);
+            replyInitialize(transport, transport->firstSentId());
+            const QList<int> listIds = requestIdsForMethod(transport, QStringLiteral("tools/list"));
+            QCOMPARE(listIds.size(), 1);
+            transport->simulateMessageFailure(0, {listIds.first()}, QStringLiteral("list failed"));
+            processedRun++;
+        }
+
+        QVERIFY(QTest::qWaitFor([&]() { return !gaveUpSpy.isEmpty(); }, 1000));
+        QCOMPARE(gaveUpSpy.size(), 1);
+        QCOMPARE(gaveUpSpy.first().at(0).toString(), QStringLiteral("svr"));
+        QCOMPARE(scheduleSpy.size(), cap);
+        for (int attempt = 1; attempt <= cap; ++attempt) {
+            QCOMPARE(scheduleSpy.at(attempt - 1).at(1).toInt(), attempt);
+        }
+        QCOMPARE(processedRun, cap + 1);
+        QCOMPARE(transports.size(), qsizetype(cap + 1));
+        QVERIFY(manager.hasGivenUp(QStringLiteral("svr")));
+        QCOMPARE(manager.reconnectAttempts(QStringLiteral("svr")), cap);
+        QCOMPARE(manager.clientCount(), qsizetype(0));
+        QCOMPARE(activeReconnectTimers(manager).size(), 0);
+
+        const QString output = capture.text();
+        QCOMPARE(output.count(QStringLiteral("; reconnecting")), cap);
+        QCOMPARE(output.count(QStringLiteral("retry limit reached")), 1);
+        QVERIFY(output.contains(QStringLiteral("use /mcp reconnect svr")));
     }
 
     void givesUpAfterMaxAttempts()

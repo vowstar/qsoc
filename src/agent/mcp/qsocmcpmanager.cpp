@@ -51,6 +51,11 @@ McpToolDescriptor descriptorFromJson(const QString &serverName, const nlohmann::
     return desc;
 }
 
+bool isToolListResult(const nlohmann::json &result)
+{
+    return result.is_object() && result.contains("tools") && result["tools"].is_array();
+}
+
 } // namespace
 
 QSocMcpManager::QSocMcpManager(
@@ -223,8 +228,7 @@ void QSocMcpManager::onClientReady()
     if (name.isEmpty()) {
         return;
     }
-    auto &state             = servers_[name];
-    state.reconnectAttempts = 0;
+    auto &state = servers_[name];
     cancelReconnect(state);
     requestToolsList(client);
 }
@@ -240,11 +244,41 @@ void QSocMcpManager::onClientResponse(int id, const nlohmann::json &result)
         return;
     }
     auto &state = servers_[name];
-    if (id != state.pendingListId) {
+    if (state.pendingListId < 0 || id != state.pendingListId) {
         return;
     }
-    state.pendingListId = -1;
+    if (!isToolListResult(result)) {
+        handleToolListFailure(client, id, QStringLiteral("Invalid tools/list response"));
+        return;
+    }
+    if (state.toolListDirty) {
+        finishToolsListLater(client, id);
+        return;
+    }
+    state.reconnectAttempts = 0;
+    state.hasToolCatalog    = true;
+
+    const QPointer<QSocMcpManager> managerGuard(this);
+    const QPointer<QSocMcpClient>  clientGuard(client);
     registerToolsFromResult(client, result);
+    if (managerGuard.isNull() || clientGuard.isNull()) {
+        return;
+    }
+    auto server = servers_.find(name);
+    if (server == servers_.end() || server->client != clientGuard.data()
+        || server->pendingListId != id || clientGuard->state() != QSocMcpClient::State::Ready) {
+        return;
+    }
+    finishToolsListLater(clientGuard.data(), id);
+}
+
+void QSocMcpManager::onClientRequestFailed(int id, int code, const QString &message)
+{
+    auto *client = senderClient();
+    if (client == nullptr) {
+        return;
+    }
+    handleToolListFailure(client, id, QStringLiteral("[%1] %2").arg(code).arg(message));
 }
 
 void QSocMcpManager::onClientNotification(const QString &method, const nlohmann::json &params)
@@ -273,8 +307,10 @@ void QSocMcpManager::onClientClosed()
 
     unregisterToolsFor(name);
 
-    auto &state         = servers_[name];
-    state.pendingListId = -1;
+    auto &state          = servers_[name];
+    state.pendingListId  = -1;
+    state.hasToolCatalog = false;
+    state.toolListDirty  = false;
     if (state.givenUp) {
         return;
     }
@@ -423,6 +459,8 @@ void QSocMcpManager::retireClient(ServerState &state)
     QPointer<QSocMcpClient> client = state.client;
     state.client                   = nullptr;
     state.pendingListId            = -1;
+    state.hasToolCatalog           = false;
+    state.toolListDirty            = false;
     if (client.isNull()) {
         return;
     }
@@ -437,6 +475,7 @@ void QSocMcpManager::wireClientSignals(QSocMcpClient *client)
 {
     connect(client, &QSocMcpClient::ready, this, &QSocMcpManager::onClientReady);
     connect(client, &QSocMcpClient::responseReceived, this, &QSocMcpManager::onClientResponse);
+    connect(client, &QSocMcpClient::requestFailed, this, &QSocMcpManager::onClientRequestFailed);
     connect(client, &QSocMcpClient::notificationReceived, this, &QSocMcpManager::onClientNotification);
     connect(client, &QSocMcpClient::closed, this, &QSocMcpManager::onClientClosed);
 }
@@ -447,12 +486,90 @@ void QSocMcpManager::requestToolsList(QSocMcpClient *client)
     if (name.isEmpty()) {
         return;
     }
-    int &pendingListId = servers_[name].pendingListId;
-    if (client->request(QStringLiteral("tools/list"), nlohmann::json::object(), -1, &pendingListId)
-        < 0) {
-        pendingListId = -1;
+    auto &state = servers_[name];
+    if (state.pendingListId >= 0) {
+        state.toolListDirty = true;
         return;
     }
+    state.toolListDirty = false;
+    client->request(QStringLiteral("tools/list"), nlohmann::json::object(), -1, &state.pendingListId);
+}
+
+void QSocMcpManager::finishToolsListLater(QSocMcpClient *client, int id, QString failureMessage)
+{
+    const QString name = nameForClient(client);
+    if (name.isEmpty()) {
+        return;
+    }
+    const QPointer<QSocMcpClient> expected(client);
+    QMetaObject::invokeMethod(
+        this,
+        [this, name, expected, id, failureMessage = std::move(failureMessage)]() {
+            auto server = servers_.find(name);
+            if (expected.isNull() || server == servers_.end() || server->client != expected.data()
+                || server->pendingListId != id
+                || expected->state() != QSocMcpClient::State::Ready) {
+                return;
+            }
+
+            auto &state         = server.value();
+            state.pendingListId = -1;
+            if (state.toolListDirty) {
+                requestToolsList(expected.data());
+                return;
+            }
+            if (!failureMessage.isEmpty()) {
+                QSocConsole::warn()
+                    << QStringLiteral("MCP tool refresh failed for '%1': %2; keeping current tools")
+                           .arg(name, failureMessage);
+            }
+        },
+        Qt::QueuedConnection);
+}
+
+void QSocMcpManager::handleToolListFailure(QSocMcpClient *client, int id, const QString &message)
+{
+    const QString name = nameForClient(client);
+    if (name.isEmpty()) {
+        return;
+    }
+    auto &state = servers_[name];
+    if (state.pendingListId < 0 || id != state.pendingListId) {
+        return;
+    }
+    if (client->state() != QSocMcpClient::State::Ready) {
+        return;
+    }
+
+    if (state.hasToolCatalog) {
+        finishToolsListLater(client, id, message);
+        return;
+    }
+
+    const bool retryLimitReached = state.reconnectAttempts >= kMaxReconnectAttempts;
+    const QPointer<QSocMcpManager> managerGuard(this);
+    const QPointer<QSocMcpClient>  clientGuard(client);
+    if (retryLimitReached) {
+        QSocConsole::warn()
+            << QStringLiteral(
+                   "MCP tool discovery failed for '%1': %2; retry limit reached, use /mcp "
+                   "reconnect %1")
+                   .arg(name, message);
+    } else {
+        QSocConsole::warn() << QStringLiteral("MCP tool discovery failed for '%1': %2; reconnecting")
+                                   .arg(name, message);
+    }
+    if (managerGuard.isNull() || clientGuard.isNull()) {
+        return;
+    }
+    auto server = servers_.find(name);
+    if (server == servers_.end() || server->client != clientGuard.data()
+        || server->pendingListId != id || clientGuard->state() != QSocMcpClient::State::Ready) {
+        return;
+    }
+    server->pendingListId = -1;
+    server->toolListDirty = false;
+    clientGuard->stop();
 }
 
 void QSocMcpManager::registerToolsFromResult(QSocMcpClient *client, const nlohmann::json &result)
@@ -461,12 +578,12 @@ void QSocMcpManager::registerToolsFromResult(QSocMcpClient *client, const nlohma
     if (name.isEmpty()) {
         return;
     }
+    if (!isToolListResult(result)) {
+        return;
+    }
     unregisterToolsFor(name);
 
     if (toolRegistry_ == nullptr) {
-        return;
-    }
-    if (!result.is_object() || !result.contains("tools") || !result["tools"].is_array()) {
         return;
     }
 

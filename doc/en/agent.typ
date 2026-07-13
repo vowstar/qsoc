@@ -1179,14 +1179,20 @@ At startup the agent gives every configured server a short window
 initialize / capabilities handshake. Servers that respond on time
 contribute their tools immediately; tools registered later via
 `notifications/tools/list_changed` are picked up at runtime.
+Overlapping tool-list changes are coalesced, and the current catalog remains
+active until the latest refresh succeeds.
 Readiness is published only after `notifications/initialized` is accepted;
 `request_timeout_ms` bounds each handshake send.
 
 If startup, initialization, or the connection fails, the manager schedules
-a rebuild on exponential backoff (1 s, 2 s, 4 s, capped at 30 s). After
-three reconnect attempts fail the server is marked failed and dropped until
-the next `/mcp reconnect` or agent restart. Its tools are removed while the
+a rebuild on exponential backoff (1 s, 2 s, 4 s, capped at 30 s). A
+successful tools/list response resets the retry budget. After three reconnect
+attempts fail the server is marked failed and dropped until the next
+`/mcp reconnect <name>` or agent restart. Its tools are removed while the
 server is unavailable and restored after a successful tools/list response.
+An initial tools/list failure follows the same bounded reconnect path. An
+isolated refresh failure keeps the last valid tool catalog and waits for the
+next change notification or an explicit reconnect.
 An isolated HTTP POST failure affects only requests carried by that POST.
 A 404 for a request carrying an MCP session ID expires the transport; the
 manager rebuilds it with a fresh session.

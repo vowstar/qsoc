@@ -32,8 +32,8 @@ class QTimer;
  *          When a client closes unexpectedly, the manager rebuilds the
  *          client (fresh transport + fresh client object) on an
  *          exponential backoff schedule, capped at kMaxReconnectAttempts.
- *          tools/list_changed notifications trigger an immediate refresh
- *          of the registered tools.
+ *          tools/list_changed notifications refresh the registered tools,
+ *          coalescing changes while a request is active.
  */
 class QSocMcpManager : public QObject
 {
@@ -104,6 +104,7 @@ signals:
 private slots:
     void onClientReady();
     void onClientResponse(int id, const nlohmann::json &result);
+    void onClientRequestFailed(int id, int code, const QString &message);
     void onClientNotification(const QString &method, const nlohmann::json &params);
     void onClientClosed();
 
@@ -115,6 +116,8 @@ private:
         int                          pendingListId     = -1;
         int                          reconnectAttempts = 0;
         bool                         givenUp           = false;
+        bool                         hasToolCatalog    = false;
+        bool                         toolListDirty     = false;
         QPointer<QTimer>             reconnectTimer;
         QPointer<QSocMcpClient>      reconnectClient;
         quint64                      replacementRevision = 0;
@@ -127,6 +130,8 @@ private:
     void           retireClient(ServerState &state);
     void           wireClientSignals(QSocMcpClient *client);
     void           requestToolsList(QSocMcpClient *client);
+    void           finishToolsListLater(QSocMcpClient *client, int id, QString failureMessage = {});
+    void           handleToolListFailure(QSocMcpClient *client, int id, const QString &message);
     void           registerToolsFromResult(QSocMcpClient *client, const nlohmann::json &result);
     void           unregisterToolsFor(const QString &name);
     QSocMcpClient *senderClient();
