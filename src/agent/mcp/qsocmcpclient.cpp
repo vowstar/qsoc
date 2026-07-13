@@ -5,6 +5,8 @@
 
 #include "agent/mcp/qsocmcptransport.h"
 
+#include <limits>
+
 #include <QTimer>
 
 namespace {
@@ -15,20 +17,60 @@ constexpr auto kClientVersion   = "0.1.0";
 
 constexpr int kJsonRpcParseError     = -32700;
 constexpr int kJsonRpcInvalidRequest = -32600;
-constexpr int kJsonRpcInternalError  = -32603;
+constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kClientErrorTransport  = -32000;
 constexpr int kClientErrorTimeout    = -32001;
 constexpr int kClientErrorNotReady   = -32002;
 
-bool isJsonRpcResponse(const nlohmann::json &message)
+bool hasJsonRpcVersion(const nlohmann::json &message)
 {
-    return message.is_object() && message.contains("id")
-           && (message.contains("result") || message.contains("error"));
+    return message.is_object() && message.contains("jsonrpc") && message["jsonrpc"].is_string()
+           && message["jsonrpc"] == "2.0";
 }
 
-bool isJsonRpcNotification(const nlohmann::json &message)
+bool readInteger(const nlohmann::json &value, int *result)
 {
-    return message.is_object() && message.contains("method") && !message.contains("id");
+    if (value.is_number_unsigned()) {
+        const auto number = value.get<std::uint64_t>();
+        if (number > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+            return false;
+        }
+        *result = static_cast<int>(number);
+        return true;
+    }
+    if (!value.is_number_integer()) {
+        return false;
+    }
+    const auto number = value.get<std::int64_t>();
+    if (number < std::numeric_limits<int>::min() || number > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    *result = static_cast<int>(number);
+    return true;
+}
+
+bool readJsonRpcError(const nlohmann::json &error, int *code, QString *message)
+{
+    if (!error.is_object() || !error.contains("code") || !error.contains("message")
+        || !error["message"].is_string() || !readInteger(error["code"], code)) {
+        return false;
+    }
+    *message = QString::fromStdString(error["message"].get<std::string>());
+    return true;
+}
+
+bool isRequestId(const nlohmann::json &value)
+{
+    return value.is_string() || value.is_number();
+}
+
+nlohmann::json jsonRpcErrorResponse(const nlohmann::json &id, int code, const char *message)
+{
+    return {
+        {"jsonrpc", "2.0"},
+        {"id", id},
+        {"error", {{"code", code}, {"message", message}}},
+    };
 }
 
 } // namespace
@@ -258,14 +300,98 @@ void QSocMcpClient::onMessageReceived(const nlohmann::json &message)
     }
     const quint64 generation = lifecycleGeneration_;
 
-    if (isJsonRpcResponse(message)) {
-        if (!message.contains("id") || !message["id"].is_number_integer()) {
+    if (!message.is_array()) {
+        const QPointer<QSocMcpClient> guard(this);
+        const auto                    response = handleMessage(message, generation, nullptr);
+        if (!response.has_value() || guard.isNull()
+            || !isCurrentLifecycle(generation, Lifecycle::Active)
+            || (state_ != State::Initializing && state_ != State::Ready)) {
             return;
         }
-        const int id = message["id"].get<int>();
+        writeMessage(*response);
+        return;
+    }
+    if (message.empty()) {
+        writeMessage(jsonRpcErrorResponse(nullptr, kJsonRpcInvalidRequest, "Invalid Request"));
+        return;
+    }
 
-        if (!pending_.contains(id)) {
+    QSet<int> eligiblePendingIds;
+    eligiblePendingIds.reserve(pending_.size());
+    for (auto it = pending_.cbegin(); it != pending_.cend(); ++it) {
+        eligiblePendingIds.insert(it.key());
+    }
+    const QPointer<QSocMcpClient> guard(this);
+    nlohmann::json                responses = nlohmann::json::array();
+    for (const auto &entry : message) {
+        if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Active)
+            || (state_ != State::Initializing && state_ != State::Ready)) {
             return;
+        }
+        if (!entry.is_object()) {
+            responses.push_back(
+                jsonRpcErrorResponse(nullptr, kJsonRpcInvalidRequest, "Invalid Request"));
+            continue;
+        }
+        const auto response = handleMessage(entry, generation, &eligiblePendingIds);
+        if (response.has_value()) {
+            responses.push_back(*response);
+        }
+    }
+    if (responses.empty() || guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Active)
+        || (state_ != State::Initializing && state_ != State::Ready)) {
+        return;
+    }
+    writeMessage(responses);
+}
+
+std::optional<nlohmann::json> QSocMcpClient::handleMessage(
+    const nlohmann::json &message, quint64 generation, const QSet<int> *eligiblePendingIds)
+{
+    if (!message.is_object()) {
+        return jsonRpcErrorResponse(nullptr, kJsonRpcInvalidRequest, "Invalid Request");
+    }
+
+    if (message.contains("id") && message.contains("method")) {
+        const nlohmann::json id = isRequestId(message["id"]) ? message["id"]
+                                                             : nlohmann::json(nullptr);
+        if (!hasJsonRpcVersion(message) || !isRequestId(message["id"])
+            || !message["method"].is_string() || message.contains("result")
+            || message.contains("error")
+            || (message.contains("params") && !message["params"].is_object()
+                && !message["params"].is_array())) {
+            return jsonRpcErrorResponse(id, kJsonRpcInvalidRequest, "Invalid Request");
+        }
+
+        const std::string method = message["method"].get<std::string>();
+        if (method == "ping") {
+            return nlohmann::json{
+                {"jsonrpc", "2.0"}, {"id", id}, {"result", nlohmann::json::object()}};
+        }
+        return jsonRpcErrorResponse(id, kJsonRpcMethodNotFound, "Method not found");
+    }
+
+    const bool hasId             = message.contains("id");
+    const bool hasMethod         = message.contains("method");
+    const bool hasResult         = message.contains("result");
+    const bool hasError          = message.contains("error");
+    const bool responseCandidate = !hasMethod && (hasId || hasResult || hasError);
+
+    if (responseCandidate && hasJsonRpcVersion(message) && hasId && hasResult != hasError) {
+        int     errorCode = 0;
+        QString errorMessage;
+        if (hasError && !readJsonRpcError(message["error"], &errorCode, &errorMessage)) {
+            emit requestFailed(-1, kJsonRpcInvalidRequest, QStringLiteral("Unrecognized message"));
+            return std::nullopt;
+        }
+        int id = -1;
+        if (!readInteger(message["id"], &id)) {
+            return std::nullopt;
+        }
+
+        if ((eligiblePendingIds != nullptr && !eligiblePendingIds->contains(id))
+            || !pending_.contains(id)) {
+            return std::nullopt;
         }
         Pending pending = pending_.take(id);
         if (!pending.timer.isNull()) {
@@ -280,17 +406,14 @@ void QSocMcpClient::onMessageReceived(const nlohmann::json &message)
                 const QPointer<QSocMcpClient> guard(this);
                 setState(State::Failed);
                 if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
-                    return;
+                    return std::nullopt;
                 }
-                const auto &err  = message["error"];
-                const int   code = err.value("code", kJsonRpcInternalError);
-                emit        requestFailed(
-                    id, code, QString::fromStdString(err.value("message", "Initialize failed")));
+                emit requestFailed(id, errorCode, errorMessage);
                 if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
-                    return;
+                    return std::nullopt;
                 }
                 stopTransportOrFinish(generation);
-                return;
+                return std::nullopt;
             }
             const auto &result = message["result"];
             if (result.is_object() && result.contains("capabilities")) {
@@ -299,29 +422,36 @@ void QSocMcpClient::onMessageReceived(const nlohmann::json &message)
                 serverCapabilities_ = nlohmann::json::object();
             }
             sendInitializedNotification(id);
-            return;
+            return std::nullopt;
         }
 
-        if (message.contains("error")) {
-            const auto &err  = message["error"];
-            const int   code = err.value("code", kJsonRpcInternalError);
-            emit        requestFailed(
-                id, code, QString::fromStdString(err.value("message", "Unknown RPC error")));
-            return;
+        if (hasError) {
+            emit requestFailed(id, errorCode, errorMessage);
+            return std::nullopt;
         }
         emit responseReceived(id, message["result"]);
-        return;
+        return std::nullopt;
     }
 
-    if (isJsonRpcNotification(message)) {
+    if (responseCandidate) {
+        emit requestFailed(-1, kJsonRpcInvalidRequest, QStringLiteral("Unrecognized message"));
+        return std::nullopt;
+    }
+
+    if (hasMethod && !hasId && !hasResult && !hasError) {
+        if (!hasJsonRpcVersion(message) || !message["method"].is_string()
+            || (message.contains("params") && !message["params"].is_object()
+                && !message["params"].is_array())) {
+            return jsonRpcErrorResponse(nullptr, kJsonRpcInvalidRequest, "Invalid Request");
+        }
         const QString  method = QString::fromStdString(message["method"].get<std::string>());
         nlohmann::json params = message.contains("params") ? message["params"]
                                                            : nlohmann::json::object();
         emit           notificationReceived(method, params);
-        return;
+        return std::nullopt;
     }
 
-    emit requestFailed(-1, kJsonRpcInvalidRequest, QStringLiteral("Unrecognized message"));
+    return jsonRpcErrorResponse(nullptr, kJsonRpcInvalidRequest, "Invalid Request");
 }
 
 void QSocMcpClient::setState(State newState)

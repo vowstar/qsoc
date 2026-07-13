@@ -23,6 +23,7 @@ namespace {
 
 struct MockResponse
 {
+    QByteArray statusLine = "200 OK";
     QByteArray contentType;
     QByteArray body;
     QByteArray sessionId;
@@ -134,8 +135,10 @@ private:
 
     void sendOneShot(QTcpSocket *socket, const MockResponse &response)
     {
-        QByteArray http = "HTTP/1.1 200 OK\r\n";
-        http += "Content-Type: " + response.contentType + "\r\n";
+        QByteArray http = "HTTP/1.1 " + response.statusLine + "\r\n";
+        if (!response.contentType.isEmpty()) {
+            http += "Content-Type: " + response.contentType + "\r\n";
+        }
         if (!response.sessionId.isEmpty()) {
             http += "Mcp-Session-Id: " + response.sessionId + "\r\n";
         }
@@ -261,6 +264,40 @@ private slots:
         const auto msg = messageSpy.first().first().value<nlohmann::json>();
         QCOMPARE(msg["id"].get<int>(), 1);
         QVERIFY(msg["result"]["ok"].get<bool>());
+    }
+
+    void parsesJsonBatchResponse()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType = "application/json";
+        response.body
+            = R"([{"jsonrpc":"2.0","id":1,"result":{"ok":true}},{"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"Method not found"}}])";
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           startedSpy(&transport, &QSocMcpTransport::started);
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+
+        transport.start();
+        QVERIFY(waitForSignal(startedSpy, 1));
+
+        const nlohmann::json request = nlohmann::json::array({
+            {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}},
+            {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/list"}},
+        });
+        transport.sendMessage(request);
+
+        QVERIFY(waitForSignal(messageSpy, 1, 3000));
+        const auto message = messageSpy.first().first().value<nlohmann::json>();
+        QVERIFY(message.is_array());
+        QCOMPARE(message.size(), std::size_t(2));
+        QVERIFY(message.at(0)["result"].value("ok", false));
+        QCOMPARE(message.at(1)["error"]["code"].get<int>(), -32601);
+        QVERIFY(waitForRequests(server, 1));
+        QCOMPARE(nlohmann::json::parse(server.requestBodies().first().toStdString()), request);
     }
 
     void parsesSseStreamResponse()
@@ -527,6 +564,56 @@ private slots:
 
         QCOMPARE(server.requestSessionIds().size(), qsizetype(3));
         QVERIFY(server.requestSessionIds().at(2).isEmpty());
+    }
+
+    void clientAnswersServerPingFromSse()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const QByteArray sessionId = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+        MockResponse     initialize;
+        initialize.contentType = "text/event-stream";
+        initialize.sessionId   = sessionId;
+        initialize.body
+            = "data: {\"jsonrpc\":\"2.0\",\"id\":\"server-ping\",\"method\":\"ping\"}\n\n"
+              "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{}}}\n\n";
+        server.enqueue(initialize);
+
+        MockResponse pingResponse;
+        pingResponse.statusLine = "202 Accepted";
+        server.enqueue(pingResponse);
+
+        MockResponse initialized;
+        initialized.statusLine = "202 Accepted";
+        server.enqueue(initialized);
+
+        auto         *transport = new QSocMcpHttpTransport(httpConfig(server.url()));
+        QSocMcpClient client(httpConfig(server.url()), transport);
+        QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+
+        client.start();
+        QVERIFY(waitForSignal(readySpy, 1, 3000));
+        QVERIFY(waitForRequests(server, 3, 3000));
+
+        bool sawPingResponse = false;
+        bool sawInitialized  = false;
+        for (qsizetype i = 1; i < server.requestBodies().size(); ++i) {
+            const auto message = nlohmann::json::parse(server.requestBodies().at(i).toStdString());
+            if (message.value("id", std::string()) == "server-ping") {
+                sawPingResponse = message["result"].is_object() && message["result"].empty();
+            }
+            if (message.value("method", std::string()) == "notifications/initialized") {
+                sawInitialized = true;
+            }
+        }
+        QVERIFY(sawPingResponse);
+        QVERIFY(sawInitialized);
+        QCOMPARE(failureSpy.size(), 0);
+        QCOMPARE(server.requestSessionIds().size(), qsizetype(3));
+        QCOMPARE(server.requestSessionIds().at(1), sessionId);
+        QCOMPARE(server.requestSessionIds().at(2), sessionId);
     }
 
     void clientWaitsForInitializedDelivery()

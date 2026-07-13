@@ -9,10 +9,12 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <optional>
 
 #include <QHash>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 
 class QSocMcpTransport;
@@ -120,10 +122,12 @@ private:
         QPointer<QTimer> timer;
     };
 
-    void setState(State newState);
-    void sendInitialize();
-    void sendInitializedNotification(int requestId);
-    void clearInitializedSend();
+    void                          setState(State newState);
+    void                          sendInitialize();
+    void                          sendInitializedNotification(int requestId);
+    void                          clearInitializedSend();
+    std::optional<nlohmann::json> handleMessage(
+        const nlohmann::json &message, quint64 generation, const QSet<int> *eligiblePendingIds);
     int  allocateId();
     void writeMessage(const nlohmann::json &message);
     bool cancelAllPending(int code, const QString &message);

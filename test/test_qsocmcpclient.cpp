@@ -9,6 +9,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
+#include <limits>
+
 #include <QSignalSpy>
 #include <QtCore>
 #include <QtTest>
@@ -211,6 +214,501 @@ private slots:
         QVERIFY(waitForSignal(notifSpy, 1));
         QCOMPARE(
             notifSpy.first().at(0).toString(), QStringLiteral("notifications/tools/list_changed"));
+    }
+
+    void batchRoutesEveryMessage()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    notificationSpy(&client, &QSocMcpClient::notificationReceived);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int            successId       = client.request(QStringLiteral("success"));
+        const int            failureId       = client.request(QStringLiteral("failure"));
+        const qsizetype      sentBeforeBatch = transport->sentCount();
+        const nlohmann::json batch           = nlohmann::json::array({
+            {{"jsonrpc", "2.0"}, {"id", successId}, {"result", {{"ok", true}}}},
+            {{"jsonrpc", "2.0"}, {"method", 7}},
+            {{"jsonrpc", "2.0"},
+             {"method", "notifications/tools/list_changed"},
+             {"params", nlohmann::json::object()}},
+            {{"jsonrpc", "2.0"},
+             {"id", failureId},
+             {"error", {{"code", -32601}, {"message", "Method not found"}}}},
+        });
+        transport->simulateMessage(batch);
+
+        QCOMPARE(responseSpy.size(), 1);
+        QCOMPARE(responseSpy.first().at(0).toInt(), successId);
+        QCOMPARE(failureSpy.size(), 1);
+        QCOMPARE(failureSpy.at(0).at(0).toInt(), failureId);
+        QCOMPARE(failureSpy.at(0).at(1).toInt(), -32601);
+        QCOMPARE(transport->sentCount(), sentBeforeBatch + 1);
+        const auto &batchResponse = transport->sent().last();
+        QVERIFY(batchResponse.is_array());
+        QCOMPARE(batchResponse.size(), std::size_t(1));
+        QVERIFY(batchResponse.at(0)["id"].is_null());
+        QCOMPARE(batchResponse.at(0)["error"]["code"], -32600);
+        QCOMPARE(notificationSpy.size(), 1);
+        QCOMPARE(
+            notificationSpy.first().at(0).toString(),
+            QStringLiteral("notifications/tools/list_changed"));
+    }
+
+    void batchStopsAtNewLifecycle()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QSignalSpy    notificationSpy(&client, &QSocMcpClient::notificationReceived);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int requestId  = client.request(QStringLiteral("restart"));
+        const int nextInitId = requestId + 1;
+        bool      restarted  = false;
+        connect(
+            &client, &QSocMcpClient::responseReceived, &client, [&](int id, const nlohmann::json &) {
+                if (id != requestId || restarted) {
+                    return;
+                }
+                restarted = true;
+                client.stop();
+                client.start();
+            });
+
+        const nlohmann::json batch = nlohmann::json::array({
+            {{"jsonrpc", "2.0"}, {"id", requestId}, {"result", nlohmann::json::object()}},
+            {{"jsonrpc", "2.0"}, {"method", "notifications/stale"}},
+        });
+        transport->simulateMessage(batch);
+
+        QVERIFY(restarted);
+        QCOMPARE(responseSpy.size(), 1);
+        QCOMPARE(notificationSpy.size(), 0);
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+        QVERIFY(client.serverCapabilities().empty());
+        QCOMPARE(transport->lastSentId(), nextInitId);
+    }
+
+    void batchCannotCompleteRequestCreatedByCallback()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int firstId           = client.request(QStringLiteral("first"));
+        int       callbackRequestId = -1;
+        connect(
+            &client, &QSocMcpClient::responseReceived, &client, [&](int id, const nlohmann::json &) {
+                if (id == firstId) {
+                    callbackRequestId = client.request(QStringLiteral("callback"));
+                }
+            });
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", firstId}, {"result", nlohmann::json::object()}},
+                {{"jsonrpc", "2.0"}, {"id", firstId + 1}, {"result", {{"stale", true}}}},
+            }));
+
+        QCOMPARE(callbackRequestId, firstId + 1);
+        QCOMPARE(responseSpy.size(), 1);
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"}, {"id", callbackRequestId}, {"result", {{"ok", true}}}});
+        QCOMPARE(responseSpy.size(), 2);
+        QCOMPARE(responseSpy.last().at(0).toInt(), callbackRequestId);
+    }
+
+    void batchCallbackMayDeleteClient()
+    {
+        auto                      *transport = new QsocMcpFakeTransport;
+        auto                      *client    = new QSocMcpClient(basicConfig(), transport);
+        QPointer<QSocMcpClient>    clientGuard(client);
+        QPointer<QSocMcpTransport> transportGuard(transport);
+        client->start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client->state(), QSocMcpClient::State::Ready);
+
+        const int requestId = client->request(QStringLiteral("delete"));
+        connect(
+            client,
+            &QSocMcpClient::responseReceived,
+            client,
+            [client, requestId](int id, const nlohmann::json &) {
+                if (id == requestId) {
+                    delete client;
+                }
+            });
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", requestId}, {"result", nlohmann::json::object()}},
+                {{"jsonrpc", "2.0"}, {"method", "notifications/tools/list_changed"}},
+            }));
+
+        QVERIFY(clientGuard.isNull());
+        QVERIFY(transportGuard.isNull());
+    }
+
+    void malformedMessagesDoNotEscape()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int  requestId           = client.request(QStringLiteral("malformed"));
+        const auto sentBeforeMalformed = transport->sentCount();
+        bool       threw               = false;
+        try {
+            transport->simulateMessage({{"jsonrpc", "2.0"}, {"method", 7}});
+            transport->simulateMessage({{"jsonrpc", "2.0"}, {"id", requestId}, {"error", "broken"}});
+            transport->simulateMessage(
+                {{"jsonrpc", "1.0"}, {"id", requestId}, {"result", nlohmann::json::object()}});
+            transport->simulateMessage(
+                {{"jsonrpc", "2.0"},
+                 {"id", requestId},
+                 {"result", nlohmann::json::object()},
+                 {"error", {{"code", -32603}, {"message", "broken"}}}});
+            transport->simulateMessage(
+                {{"jsonrpc", "2.0"},
+                 {"id", std::numeric_limits<std::uint64_t>::max()},
+                 {"result", nlohmann::json::object()}});
+        } catch (const std::exception &) {
+            threw = true;
+        }
+
+        QVERIFY(!threw);
+        QCOMPARE(transport->sentCount(), sentBeforeMalformed + 1);
+        const auto &invalidNotification = transport->sent().last();
+        QVERIFY(invalidNotification["id"].is_null());
+        QCOMPARE(invalidNotification["error"]["code"], -32600);
+        QCOMPARE(failureSpy.size(), 3);
+        for (const auto &failure : failureSpy) {
+            QCOMPARE(failure.at(0).toInt(), -1);
+            QCOMPARE(failure.at(1).toInt(), -32600);
+        }
+
+        QSignalSpy responseSpy(&client, &QSocMcpClient::responseReceived);
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"}, {"id", requestId}, {"result", {{"ok", true}}}});
+        QCOMPARE(responseSpy.size(), 1);
+        QCOMPARE(responseSpy.first().at(0).toInt(), requestId);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+    }
+
+    void emptyAndNestedBatchesAreInvalid()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+
+        QCOMPARE(transport->sentCount(), qsizetype(2));
+        transport->simulateMessage(nlohmann::json::array());
+        QCOMPARE(transport->sentCount(), qsizetype(3));
+        const auto &emptyBatchError = transport->sent().last();
+        QVERIFY(emptyBatchError["id"].is_null());
+        QCOMPARE(emptyBatchError["error"]["code"], -32600);
+
+        transport->simulateMessage(
+            nlohmann::json::array(
+                {nlohmann::json::array({{{"jsonrpc", "2.0"}, {"method", "notifications/x"}}})}));
+        QCOMPARE(transport->sentCount(), qsizetype(4));
+        const auto &nestedBatchError = transport->sent().last();
+        QVERIFY(nestedBatchError.is_array());
+        QCOMPARE(nestedBatchError.size(), std::size_t(1));
+        QVERIFY(nestedBatchError.at(0)["id"].is_null());
+        QCOMPARE(nestedBatchError.at(0)["error"]["code"], -32600);
+        QCOMPARE(failureSpy.size(), 0);
+    }
+
+    void serverPingIsAnsweredDuringInitialization()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+        QCOMPARE(transport->sentCount(), qsizetype(1));
+        const int initializeId = transport->firstSentId();
+        transport->simulateMessage({{"jsonrpc", "2.0"}, {"id", initializeId}, {"method", "ping"}});
+
+        QCOMPARE(transport->sentCount(), qsizetype(2));
+        const auto &response = transport->sent().last();
+        QCOMPARE(response["jsonrpc"], "2.0");
+        QCOMPARE(response["id"], initializeId);
+        QVERIFY(response["result"].is_object());
+        QVERIFY(response["result"].empty());
+        QVERIFY(!response.contains("method"));
+        QCOMPARE(failureSpy.size(), 0);
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"},
+             {"id", initializeId},
+             {"result", {{"capabilities", nlohmann::json::object()}}}});
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+    }
+
+    void serverRequestIdsStayOpaque()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+        QCOMPARE(transport->sentCount(), qsizetype(2));
+
+        const auto requestId = std::numeric_limits<std::uint64_t>::max();
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"}, {"id", requestId}, {"method", "roots/list"}});
+
+        QCOMPARE(transport->sentCount(), qsizetype(3));
+        const auto &response = transport->sent().last();
+        QCOMPARE(response["jsonrpc"], "2.0");
+        QCOMPARE(response["id"], requestId);
+        QCOMPARE(response["error"]["code"], -32601);
+        QCOMPARE(response["error"]["message"], "Method not found");
+        QVERIFY(!response.contains("result"));
+
+        const double fractionalId = 1.5;
+        transport->simulateMessage({{"jsonrpc", "2.0"}, {"id", fractionalId}, {"method", "ping"}});
+
+        QCOMPARE(transport->sentCount(), qsizetype(4));
+        const auto &pingResponse = transport->sent().last();
+        QCOMPARE(pingResponse["id"], fractionalId);
+        QVERIFY(pingResponse["result"].is_object());
+        QVERIFY(pingResponse["result"].empty());
+        QCOMPARE(failureSpy.size(), 0);
+    }
+
+    void malformedServerRequestsGetInvalidRequest()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        transport->simulateMessage({{"jsonrpc", "2.0"}, {"id", true}, {"method", "ping"}});
+        const auto invalidId = transport->sent().last();
+        QVERIFY(invalidId["id"].is_null());
+        QCOMPARE(invalidId["error"]["code"], -32600);
+
+        transport->simulateMessage(
+            {{"jsonrpc", "1.0"}, {"id", "wrong-version"}, {"method", "ping"}});
+        const auto wrongVersion = transport->sent().last();
+        QCOMPARE(wrongVersion["id"], "wrong-version");
+        QCOMPARE(wrongVersion["error"]["code"], -32600);
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"}, {"id", -9}, {"method", 7}, {"params", "bad"}});
+        const auto invalidMethod = transport->sent().last();
+        QCOMPARE(invalidMethod["id"], -9);
+        QCOMPARE(invalidMethod["error"]["code"], -32600);
+
+        transport->simulateMessage(nlohmann::json::object());
+        const auto emptyObject = transport->sent().last();
+        QVERIFY(emptyObject["id"].is_null());
+        QCOMPARE(emptyObject["error"]["code"], -32600);
+
+        const qsizetype sentBeforeUnrelated = transport->sentCount();
+        transport->simulateMessage({{"foo", "boo"}});
+        QCOMPARE(transport->sentCount(), sentBeforeUnrelated + 1);
+        const auto unrelatedObject = transport->sent().last();
+        QVERIFY(unrelatedObject["id"].is_null());
+        QCOMPARE(unrelatedObject["error"]["code"], -32600);
+
+        const qsizetype sentBeforeScalar = transport->sentCount();
+        transport->simulateMessage(7);
+        QCOMPARE(transport->sentCount(), sentBeforeScalar + 1);
+        const auto scalarMessage = transport->sent().last();
+        QVERIFY(scalarMessage["id"].is_null());
+        QCOMPARE(scalarMessage["error"]["code"], -32600);
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", "valid-ping"}, {"method", "ping"}},
+                {{"foo", "boo"}},
+            }));
+        const auto malformedBatch = transport->sent().last();
+        QVERIFY(malformedBatch.is_array());
+        QCOMPARE(malformedBatch.size(), std::size_t(2));
+        QCOMPARE(malformedBatch.at(0)["id"], "valid-ping");
+        QVERIFY(malformedBatch.at(1)["id"].is_null());
+        QCOMPARE(malformedBatch.at(1)["error"]["code"], -32600);
+        QCOMPARE(failureSpy.size(), 0);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+    }
+
+    void serverRequestBatchGetsOneReplyBatch()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    notificationSpy(&client, &QSocMcpClient::notificationReceived);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+        const int localRequestId = client.request(QStringLiteral("echo"));
+        QCOMPARE(transport->sentCount(), qsizetype(3));
+        QSignalSpy responseSpy(&client, &QSocMcpClient::responseReceived);
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", localRequestId}, {"result", nlohmann::json::object()}},
+                {{"jsonrpc", "2.0"}, {"id", localRequestId}, {"method", "ping"}},
+                {{"jsonrpc", "2.0"}, {"method", "notifications/tools/list_changed"}},
+                {{"jsonrpc", "2.0"}, {"id", 77}, {"method", "sampling/createMessage"}},
+            }));
+
+        QCOMPARE(transport->sentCount(), qsizetype(4));
+        const auto &responses = transport->sent().last();
+        QVERIFY(responses.is_array());
+        QCOMPARE(responses.size(), std::size_t(2));
+        QCOMPARE(responses.at(0)["id"], localRequestId);
+        QVERIFY(responses.at(0)["result"].is_object());
+        QCOMPARE(responses.at(1)["id"], 77);
+        QCOMPARE(responses.at(1)["error"]["code"], -32601);
+        QCOMPARE(responseSpy.size(), 1);
+        QCOMPARE(responseSpy.first().at(0).toInt(), localRequestId);
+        QCOMPARE(notificationSpy.size(), 1);
+        QCOMPARE(failureSpy.size(), 0);
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"method", "notifications/one"}},
+                {{"jsonrpc", "2.0"}, {"method", "notifications/two"}},
+            }));
+        QCOMPARE(transport->sentCount(), qsizetype(4));
+        QCOMPARE(notificationSpy.size(), 3);
+        QCOMPARE(failureSpy.size(), 0);
+    }
+
+    void serverRequestReplyMayDeleteClient()
+    {
+        auto                      *transport = new QsocMcpFakeTransport;
+        auto                      *client    = new QSocMcpClient(basicConfig(), transport);
+        QPointer<QSocMcpClient>    clientGuard(client);
+        QPointer<QSocMcpTransport> transportGuard(transport);
+        client->start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client->state(), QSocMcpClient::State::Ready);
+
+        transport->setSendHook([client](const nlohmann::json &message) {
+            if (message.value("id", std::string()) == "delete-client") {
+                delete client;
+            }
+        });
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"}, {"id", "delete-client"}, {"method", "ping"}});
+
+        QVERIFY(clientGuard.isNull());
+        QVERIFY(transportGuard.isNull());
+    }
+
+    void batchDropsServerRepliesAtNewLifecycle()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int requestId = client.request(QStringLiteral("restart"));
+        bool      restarted = false;
+        connect(
+            &client, &QSocMcpClient::responseReceived, &client, [&](int id, const nlohmann::json &) {
+                if (id != requestId || restarted) {
+                    return;
+                }
+                restarted = true;
+                client.stop();
+                client.start();
+            });
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", "stale-ping"}, {"method", "ping"}},
+                {{"jsonrpc", "2.0"}, {"id", requestId}, {"result", nlohmann::json::object()}},
+            }));
+
+        QVERIFY(restarted);
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+        QCOMPARE(transport->sentCount(), qsizetype(4));
+        QCOMPARE(transport->sent().last().value("method", std::string()), "initialize");
     }
 
     void timeoutFiresRequestFailed()
