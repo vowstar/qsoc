@@ -53,6 +53,8 @@ public:
 
     void enqueue(const MockResponse &response) { responses_.enqueue(response); }
 
+    int requestCount() const { return requestCount_; }
+
     bool eofSent(int responseIndex) const
     {
         return responseIndex >= 0 && responseIndex < eofSent_.size() && eofSent_.at(responseIndex);
@@ -117,6 +119,7 @@ private:
         }
 
         buffers_.remove(socket);
+        ++requestCount_;
         if (responses_.isEmpty()) {
             socket->disconnectFromHost();
             return;
@@ -225,6 +228,7 @@ private:
     QPointer<QTcpSocket>            splitSocket_;
     QByteArray                      splitRemainder_;
     int                             splitResponseIndex_ = -1;
+    int                             requestCount_       = 0;
 };
 
 MockResponse streamResponse(const QString &content, bool includeDone, int eofDelayMs = 0)
@@ -387,6 +391,25 @@ json toolCall(int index, const QString &name)
         {"id", QStringLiteral("call_%1").arg(index).toStdString()},
         {"type", "function"},
         {"function", {{"name", name.toStdString()}, {"arguments", "{}"}}},
+    };
+}
+
+json assistantResponse(const json &message)
+{
+    return {{"choices", json::array({{{"message", message}}})}};
+}
+
+QByteArray encodedJson(const json &value)
+{
+    return QByteArray::fromStdString(value.dump());
+}
+
+json assistantToolCall(const QString &id = QStringLiteral("call_0"))
+{
+    return {
+        {"id", id.toStdString()},
+        {"type", "function"},
+        {"function", {{"name", "runtime_tool"}, {"arguments", "{}"}}},
     };
 }
 
@@ -952,6 +975,10 @@ private slots:
         badToolCall["choices"][0]["delta"]["tool_calls"] = json::array({{{"index", "invalid"}}});
         QTest::newRow("tool-index") << dataLine(badToolCall);
 
+        badToolCall["choices"][0]["delta"]["tool_calls"] = json::array(
+            {{{"index", 0}, {"type", "command"}}});
+        QTest::newRow("tool-type") << dataLine(badToolCall);
+
         QByteArray invalidUtf8 = QByteArrayLiteral("data: {\"choices\":[{\"delta\":{\"content\":\"");
         invalidUtf8.append(char(0xff));
         invalidUtf8 += QByteArrayLiteral("\"}}]}\n\n");
@@ -985,6 +1012,145 @@ private slots:
         QVERIFY(events.content.isEmpty());
         QVERIFY(events.reasoning.isEmpty());
         QVERIFY(events.toolNames.isEmpty());
+        QVERIFY(events.completed.isEmpty());
+    }
+
+    void testConflictingStreamToolIdentityFails_data()
+    {
+        QTest::addColumn<QByteArray>("secondCallBody");
+
+        json call  = toolCall(0, QStringLiteral("runtime_tool"));
+        call["id"] = "different_id";
+        QTest::newRow("id") << encodedJson(call);
+
+        call                     = toolCall(0, QStringLiteral("runtime_tool"));
+        call["function"]["name"] = "different_tool";
+        QTest::newRow("name") << encodedJson(call);
+    }
+
+    void testConflictingStreamToolIdentityFails()
+    {
+        QFETCH(QByteArray, secondCallBody);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        const auto chunk = [](const json &call) {
+            return json{
+                {"choices", json::array({{{"delta", {{"tool_calls", json::array({call})}}}}})},
+            };
+        };
+        const json secondCall = json::parse(secondCallBody.constBegin(), secondCallBody.constEnd());
+        QByteArray body       = dataLine(chunk(toolCall(0, QStringLiteral("runtime_tool"))));
+        body += dataLine(chunk(secondCall));
+        body += QByteArrayLiteral("data: [DONE]\n\n");
+        server.enqueue({QByteArrayLiteral("text/event-stream"), body});
+
+        StreamEvents events;
+        QLLMService  service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+        recordStreamEvents(&service, &events);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.errors.isEmpty() || !events.completed.isEmpty(); }),
+            "conflicting tool identity produced no terminal signal");
+        QVERIFY2(waitForNoReplies(&service), "conflicting stream reply was not deleted");
+
+        QCOMPARE(
+            events.errors, QStringList({QStringLiteral("Malformed streaming response from LLM")}));
+        QCOMPARE(events.toolNames, QStringList({QStringLiteral("runtime_tool")}));
+        QVERIFY(events.completed.isEmpty());
+    }
+
+    void testNonSseSuccessBodyFails()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        server.enqueue(jsonResponse(QStringLiteral("must not become an empty reply")));
+
+        StreamEvents events;
+        QLLMService  service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+        recordStreamEvents(&service, &events);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.errors.isEmpty() || !events.completed.isEmpty(); }),
+            "non-SSE response produced no terminal signal");
+        QVERIFY2(waitForNoReplies(&service), "non-SSE stream reply was not deleted");
+
+        QCOMPARE(
+            events.errors, QStringList({QStringLiteral("Malformed streaming response from LLM")}));
+        QVERIFY(events.content.isEmpty());
+        QVERIFY(events.completed.isEmpty());
+    }
+
+    void testSseControlFieldsAreIgnored()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        MockResponse response = contentOnlyDoneResponse(QStringLiteral("complete"));
+        response.body.prepend(QByteArrayLiteral(
+            ": keepalive\n"
+            "event\n"
+            "id\n"
+            "retry\n"
+            "data\n"
+            "vendor-control: value\n\n"));
+        server.enqueue(response);
+
+        StreamEvents events;
+        QLLMService  service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+        recordStreamEvents(&service, &events);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.errors.isEmpty() || !events.completed.isEmpty(); }),
+            "SSE control fields produced no terminal signal");
+        QVERIFY2(waitForNoReplies(&service), "SSE control reply was not deleted");
+
+        QVERIFY(events.errors.isEmpty());
+        QCOMPARE(events.completed.size(), 1);
+        QCOMPARE(completionContent(events.completed.first()), QStringLiteral("complete"));
+    }
+
+    void testStreamWithoutAssistantChoiceFails_data()
+    {
+        QTest::addColumn<QByteArray>("body");
+
+        QTest::newRow("empty") << QByteArray();
+        QTest::newRow("control-only")
+            << QByteArrayLiteral(": keepalive\nevent: ping\nvendor-control: value\n\n");
+        QTest::newRow("usage-only")
+            << dataLine(
+                   {{"choices", json::array()},
+                    {"usage", {{"prompt_tokens", 1}, {"completion_tokens", 0}}}})
+                   + QByteArrayLiteral("data: [DONE]\n\n");
+        QTest::newRow("done-only") << QByteArrayLiteral("data: [DONE]\n\n");
+    }
+
+    void testStreamWithoutAssistantChoiceFails()
+    {
+        QFETCH(QByteArray, body);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        server.enqueue({QByteArrayLiteral("text/event-stream"), body});
+
+        StreamEvents events;
+        QLLMService  service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+        recordStreamEvents(&service, &events);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.errors.isEmpty() || !events.completed.isEmpty(); }),
+            "stream without assistant choice produced no terminal signal");
+        QVERIFY2(waitForNoReplies(&service), "empty stream reply was not deleted");
+
+        QCOMPARE(
+            events.errors, QStringList({QStringLiteral("Malformed streaming response from LLM")}));
         QVERIFY(events.completed.isEmpty());
     }
 
@@ -1279,6 +1445,190 @@ private slots:
         QCOMPARE(completionContent(events.completed.first()), QStringLiteral("onetwo"));
     }
 
+    void testAssistantMessageValidation_data()
+    {
+        QTest::addColumn<QByteArray>("responseBody");
+        QTest::addColumn<bool>("valid");
+        QTest::addColumn<QString>("expectedError");
+
+        const auto add = [](const char    *name,
+                            const json    &response,
+                            bool           valid,
+                            const QString &error = QString()) {
+            QTest::newRow(name) << encodedJson(response) << valid << error;
+        };
+
+        add("root-array", json::array(), false, QStringLiteral("Invalid response from LLM"));
+        add("provider-string",
+            {{"error", "service unavailable"}},
+            false,
+            QStringLiteral("service unavailable"));
+        add("provider-object",
+            {{"error", {{"message", "quota exhausted"}}}},
+            false,
+            QStringLiteral("quota exhausted"));
+        add("provider-generic",
+            {{"error", 7}},
+            false,
+            QStringLiteral("LLM provider returned an error"));
+        add("choices-missing", json::object(), false, QStringLiteral("Invalid response from LLM"));
+        add("choices-type",
+            {{"choices", json::object()}},
+            false,
+            QStringLiteral("Invalid response from LLM"));
+        add("choices-empty",
+            {{"choices", json::array()}},
+            false,
+            QStringLiteral("Invalid response from LLM"));
+        add("choice-type",
+            {{"choices", json::array({7})}},
+            false,
+            QStringLiteral("Invalid response from LLM"));
+        add("message-missing",
+            {{"choices", json::array({json::object()})}},
+            false,
+            QStringLiteral("Invalid response from LLM"));
+        add("message-type",
+            {{"choices", json::array({{{"message", 7}}})}},
+            false,
+            QStringLiteral("Invalid response from LLM"));
+        add("content-type",
+            assistantResponse({{"content", 7}}),
+            false,
+            QStringLiteral("Invalid response from LLM"));
+        add("content-missing",
+            assistantResponse(json::object()),
+            false,
+            QStringLiteral("Invalid response from LLM"));
+        add("content-null",
+            assistantResponse({{"content", nullptr}}),
+            false,
+            QStringLiteral("Invalid response from LLM"));
+        add("tool-calls-type",
+            assistantResponse({{"content", nullptr}, {"tool_calls", json::object()}}),
+            false,
+            QStringLiteral("Invalid tool call from LLM"));
+        add("tool-call-type",
+            assistantResponse({{"content", nullptr}, {"tool_calls", json::array({7})}}),
+            false,
+            QStringLiteral("Invalid tool call from LLM"));
+
+        json call  = assistantToolCall();
+        call["id"] = "";
+        add("tool-id-empty",
+            assistantResponse({{"content", nullptr}, {"tool_calls", json::array({call})}}),
+            false,
+            QStringLiteral("Invalid tool call from LLM"));
+
+        call       = assistantToolCall();
+        call["id"] = 7;
+        add("tool-id-type",
+            assistantResponse({{"content", nullptr}, {"tool_calls", json::array({call})}}),
+            false,
+            QStringLiteral("Invalid tool call from LLM"));
+
+        call         = assistantToolCall();
+        call["type"] = "command";
+        add("tool-type",
+            assistantResponse({{"content", nullptr}, {"tool_calls", json::array({call})}}),
+            false,
+            QStringLiteral("Invalid tool call from LLM"));
+
+        call             = assistantToolCall();
+        call["function"] = 7;
+        add("tool-function-type",
+            assistantResponse({{"content", nullptr}, {"tool_calls", json::array({call})}}),
+            false,
+            QStringLiteral("Invalid tool call from LLM"));
+
+        call                     = assistantToolCall();
+        call["function"]["name"] = "";
+        add("tool-name-empty",
+            assistantResponse({{"content", nullptr}, {"tool_calls", json::array({call})}}),
+            false,
+            QStringLiteral("Invalid tool call from LLM"));
+
+        call                          = assistantToolCall();
+        call["function"]["arguments"] = json::object();
+        add("tool-arguments-type",
+            assistantResponse({{"content", nullptr}, {"tool_calls", json::array({call})}}),
+            false,
+            QStringLiteral("Invalid tool call from LLM"));
+
+        const json duplicate = assistantToolCall(QStringLiteral("call_0"));
+        add("tool-id-duplicate",
+            assistantResponse(
+                {{"content", nullptr}, {"tool_calls", json::array({duplicate, duplicate})}}),
+            false,
+            QStringLiteral("Invalid tool call from LLM"));
+
+        add("content-valid", assistantResponse({{"content", "ready"}}), true);
+        add("tool-call-valid",
+            assistantResponse(
+                {{"content", nullptr}, {"tool_calls", json::array({assistantToolCall()})}}),
+            true);
+    }
+
+    void testAssistantMessageValidation()
+    {
+        QFETCH(QByteArray, responseBody);
+        QFETCH(bool, valid);
+        QFETCH(QString, expectedError);
+
+        const json response = json::parse(responseBody.constBegin(), responseBody.constEnd());
+        json       message;
+        QString    error;
+
+        QCOMPARE(QLLMService::extractAssistantMessage(response, &message, &error), valid);
+        QCOMPARE(error, expectedError);
+        if (valid) {
+            QVERIFY(message == response.at("choices").front().at("message"));
+        }
+    }
+
+    void testInvalidCompletedStreamFails_data()
+    {
+        QTest::addColumn<QByteArray>("toolCallsBody");
+
+        json call  = toolCall(0, QStringLiteral("runtime_tool"));
+        call["id"] = "";
+        QTest::newRow("empty-id") << encodedJson(json::array({call}));
+
+        call                     = toolCall(0, QStringLiteral("runtime_tool"));
+        call["function"]["name"] = "";
+        QTest::newRow("empty-name") << encodedJson(json::array({call}));
+
+        call             = toolCall(0, QStringLiteral("first_tool"));
+        json secondCall  = toolCall(1, QStringLiteral("second_tool"));
+        secondCall["id"] = call["id"];
+        QTest::newRow("duplicate-id") << encodedJson(json::array({call, secondCall}));
+    }
+
+    void testInvalidCompletedStreamFails()
+    {
+        QFETCH(QByteArray, toolCallsBody);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const json toolCalls = json::parse(toolCallsBody.constBegin(), toolCallsBody.constEnd());
+        server.enqueue(deltaResponse({{"tool_calls", toolCalls}}));
+
+        StreamEvents events;
+        QLLMService  service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+        recordStreamEvents(&service, &events);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.errors.isEmpty() || !events.completed.isEmpty(); }),
+            "invalid completed stream produced no terminal signal");
+        QVERIFY2(waitForNoReplies(&service), "invalid stream reply was not deleted");
+
+        QCOMPARE(events.errors, QStringList({QStringLiteral("Invalid tool call from LLM")}));
+        QVERIFY(events.completed.isEmpty());
+    }
+
     void testMalformedSyncResponseFallsBack_data()
     {
         QTest::addColumn<bool>("chatCompletion");
@@ -1295,6 +1645,13 @@ private slots:
         QTest::newRow("request-range") << false << QByteArrayLiteral("1e10000");
         QTest::newRow("chat-syntax") << true << QByteArrayLiteral("{");
         QTest::newRow("chat-range") << true << QByteArrayLiteral("1e10000");
+
+        json invalidToolCall  = assistantToolCall();
+        invalidToolCall["id"] = "";
+        QTest::newRow("chat-invalid-tool-call")
+            << true
+            << encodedJson(assistantResponse(
+                   {{"content", nullptr}, {"tool_calls", json::array({invalidToolCall})}}));
     }
 
     void testMalformedSyncResponseFallsBack()
@@ -1315,6 +1672,7 @@ private slots:
         QVERIFY2(waitForNoReplies(&service), "fallback replies were not deleted");
         QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
         QCOMPARE(result.content, QStringLiteral("recovered"));
+        QCOMPARE(server.requestCount(), 2);
     }
 
     void testSyncToolCallWithNullContentSucceeds()

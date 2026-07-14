@@ -263,6 +263,16 @@ public slots:
     static QMap<QString, QString> extractMappingsFromResponse(const LLMResponse &response);
 
     /**
+     * @brief Validate and extract one assistant message from a chat response.
+     * @param response Provider response envelope.
+     * @param message Receives the validated message when non-null.
+     * @param errorMessage Receives a stable, user-facing failure reason when non-null.
+     * @return True only when the envelope and every tool call are valid.
+     */
+    static bool extractAssistantMessage(
+        const json &response, json *message, QString *errorMessage = nullptr);
+
+    /**
      * @brief Send chat completion with tool definitions (Agent mode)
      * @details Sends a request using the OpenAI Chat Completions format with
      *          tool/function calling support. Returns the full JSON response
@@ -270,7 +280,7 @@ public slots:
      * @param messages Conversation history in OpenAI format
      * @param tools Tool definitions in OpenAI format (optional)
      * @param temperature Temperature parameter (0.0-1.0)
-     * @return Full JSON response from the LLM (may contain tool_calls)
+     * @return Validated response, or an error object after all endpoints fail
      */
     json sendChatCompletion(
         const json &messages, const json &tools = json::array(), double temperature = 0.2);

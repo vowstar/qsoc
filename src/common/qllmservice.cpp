@@ -12,6 +12,7 @@
 #include <QNetworkRequest>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QSet>
 #include <QTimer>
 
 struct QLLMService::StreamState
@@ -24,14 +25,15 @@ struct QLLMService::StreamState
     QString                 reasoning;
     QString                 finishReason;
     QString                 terminalError;
-    quint64                 generation       = 0;
-    bool                    reasoningMode    = false;
-    bool                    consumeScheduled = false;
-    bool                    processing       = false;
-    bool                    replyFinished    = false;
-    bool                    transportFailed  = false;
-    json                    usage            = json::object();
-    StreamOutcome           outcome          = StreamOutcome::Active;
+    quint64                 generation         = 0;
+    bool                    reasoningMode      = false;
+    bool                    consumeScheduled   = false;
+    bool                    processing         = false;
+    bool                    replyFinished      = false;
+    bool                    transportFailed    = false;
+    bool                    sawAssistantChoice = false;
+    json                    usage              = json::object();
+    StreamOutcome           outcome            = StreamOutcome::Active;
 };
 
 namespace {
@@ -128,6 +130,12 @@ QString validateStreamChunk(const json &chunk)
         }
         if (!isNullableString(toolCall, "id") || !isNullableString(toolCall, "type")) {
             return QStringLiteral("tool call identifier is invalid");
+        }
+        if (toolCall.contains("type") && toolCall["type"].is_string()) {
+            const std::string &type = toolCall["type"].get_ref<const std::string &>();
+            if (!type.empty() && type != "function") {
+                return QStringLiteral("tool call type is unsupported");
+            }
         }
         if (toolCall.contains("index") && !toolCall["index"].is_null()) {
             const json &index = toolCall["index"];
@@ -1178,9 +1186,18 @@ void QLLMService::consumeStream(const QPointer<QLLMService> &owner, const Stream
     if (result == ParseResult::Stopped || (result != ParseResult::Done && !state->replyFinished)) {
         return;
     }
+    if (!state->sawAssistantChoice) {
+        failStream(owner, state, QStringLiteral("Malformed streaming response from LLM"));
+        return;
+    }
 
     const bool replyFinished = state->replyFinished;
     const json response      = buildStreamResponse(state);
+    QString    validationError;
+    if (!extractAssistantMessage(response, nullptr, &validationError)) {
+        failStream(owner, state, validationError);
+        return;
+    }
     if (!owner->claimTerminal(state, StreamOutcome::Completed)) {
         return;
     }
@@ -1294,17 +1311,25 @@ QLLMService::ParseResult QLLMService::processStreamBuffer(
             return state->transportFailed ? ParseResult::TransportError : ParseResult::NeedMore;
         }
 
-        const QByteArray rawLine = state->buffer.left(lineEnd);
-        const QByteArray line    = rawLine.trimmed();
-        state->buffer            = state->buffer.mid(lineEnd + 1);
-        if (!line.startsWith("data:")) {
-            if (state->transportFailed && !line.isEmpty()) {
+        QByteArray rawLine = state->buffer.left(lineEnd);
+        state->buffer      = state->buffer.mid(lineEnd + 1);
+        if (rawLine.endsWith('\r')) {
+            rawLine.chop(1);
+        }
+        if (rawLine.isEmpty() || rawLine.startsWith(':')) {
+            continue;
+        }
+
+        const qsizetype  separator = rawLine.indexOf(':');
+        const QByteArray field     = separator < 0 ? rawLine : rawLine.left(separator);
+        if (field != QByteArrayLiteral("data")) {
+            if (state->transportFailed) {
                 state->terminalError += "\n" + QString::fromUtf8(rawLine);
             }
             continue;
         }
 
-        QByteArray data = line.mid(sizeof("data:") - 1);
+        QByteArray data = separator < 0 ? QByteArray() : rawLine.mid(separator + 1);
         if (data.startsWith(' ')) {
             data.remove(0, 1);
         }
@@ -1347,6 +1372,9 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
     if (!validationError.isEmpty()) {
         QSocConsole::warn() << "Malformed stream chunk:" << validationError;
         return ParseResult::Malformed;
+    }
+    if (chunk.contains("choices") && chunk["choices"].is_array() && !chunk["choices"].empty()) {
+        state->sawAssistantChoice = true;
     }
 
     /* Some servers (and the final include_usage chunk) carry
@@ -1418,11 +1446,26 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
                        {"function", {{"name", ""}, {"arguments", ""}}}};
             }
 
+            const auto mergeStableString = [](json &target, const json &fragment) {
+                const std::string incoming = fragment.get<std::string>();
+                if (incoming.empty()) {
+                    return true;
+                }
+                const std::string current = target.get<std::string>();
+                if (!current.empty() && current != incoming) {
+                    return false;
+                }
+                target = incoming;
+                return true;
+            };
+
             /* Update ID if present. Some endpoints (e.g. Qwen3 streaming)
              * emit `"id": null` in continuation chunks; only copy when it
              * is a real string so accumulated values stay string-typed. */
             if (toolCall.contains("id") && toolCall["id"].is_string()) {
-                state->toolCalls[index]["id"] = toolCall["id"];
+                if (!mergeStableString(state->toolCalls[index]["id"], toolCall["id"])) {
+                    return ParseResult::Malformed;
+                }
             }
 
             /* Update function info */
@@ -1431,7 +1474,9 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
 
                 if (toolCall["function"].contains("name")
                     && toolCall["function"]["name"].is_string()) {
-                    accFunc["name"] = toolCall["function"]["name"];
+                    if (!mergeStableString(accFunc["name"], toolCall["function"]["name"])) {
+                        return ParseResult::Malformed;
+                    }
                 }
 
                 if (toolCall["function"].contains("arguments")
@@ -1513,6 +1558,94 @@ json QLLMService::buildStreamResponse(const StreamStatePtr &state)
     return response;
 }
 
+bool QLLMService::extractAssistantMessage(const json &response, json *message, QString *errorMessage)
+{
+    const auto fail = [errorMessage](const QString &error) {
+        if (errorMessage != nullptr) {
+            *errorMessage = error;
+        }
+        return false;
+    };
+    if (!response.is_object()) {
+        return fail(QStringLiteral("Invalid response from LLM"));
+    }
+
+    const auto providerError = response.find("error");
+    if (providerError != response.end() && !providerError->is_null()) {
+        if (providerError->is_string() && !providerError->get<std::string>().empty()) {
+            return fail(QString::fromStdString(providerError->get<std::string>()));
+        }
+        if (providerError->is_object()) {
+            const auto detail = providerError->find("message");
+            if (detail != providerError->end() && detail->is_string()
+                && !detail->get<std::string>().empty()) {
+                return fail(QString::fromStdString(detail->get<std::string>()));
+            }
+        }
+        return fail(QStringLiteral("LLM provider returned an error"));
+    }
+
+    const auto choices = response.find("choices");
+    if (choices == response.end() || !choices->is_array() || choices->empty()
+        || !choices->front().is_object()) {
+        return fail(QStringLiteral("Invalid response from LLM"));
+    }
+    const auto assistant = choices->front().find("message");
+    if (assistant == choices->front().end() || !assistant->is_object()) {
+        return fail(QStringLiteral("Invalid response from LLM"));
+    }
+
+    const auto content = assistant->find("content");
+    if (content != assistant->end() && !content->is_null() && !content->is_string()) {
+        return fail(QStringLiteral("Invalid response from LLM"));
+    }
+
+    bool       hasToolCalls = false;
+    const auto toolCalls    = assistant->find("tool_calls");
+    if (toolCalls != assistant->end() && !toolCalls->is_null()) {
+        if (!toolCalls->is_array()) {
+            return fail(QStringLiteral("Invalid tool call from LLM"));
+        }
+        QSet<QString> ids;
+        for (const auto &call : *toolCalls) {
+            if (!call.is_object()) {
+                return fail(QStringLiteral("Invalid tool call from LLM"));
+            }
+            const auto id       = call.find("id");
+            const auto type     = call.find("type");
+            const auto function = call.find("function");
+            if (id == call.end() || !id->is_string() || id->get<std::string>().empty()
+                || type == call.end() || !type->is_string()
+                || type->get<std::string>() != "function" || function == call.end()
+                || !function->is_object()) {
+                return fail(QStringLiteral("Invalid tool call from LLM"));
+            }
+            const QString callId = QString::fromStdString(id->get<std::string>());
+            if (ids.contains(callId)) {
+                return fail(QStringLiteral("Invalid tool call from LLM"));
+            }
+            ids.insert(callId);
+            const auto name      = function->find("name");
+            const auto arguments = function->find("arguments");
+            if (name == function->end() || !name->is_string() || name->get<std::string>().empty()
+                || arguments == function->end() || !arguments->is_string()) {
+                return fail(QStringLiteral("Invalid tool call from LLM"));
+            }
+            hasToolCalls = true;
+        }
+    }
+    if (!hasToolCalls && (content == assistant->end() || content->is_null())) {
+        return fail(QStringLiteral("Invalid response from LLM"));
+    }
+    if (message != nullptr) {
+        *message = *assistant;
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
 json QLLMService::sendChatCompletion(const json &messages, const json &tools, double temperature)
 {
     if (!hasEndpoint()) {
@@ -1521,7 +1654,8 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
 
     const QPointer<QLLMService> owner(this);
 
-    const QList<EndpointAttempt> attempts = endpointAttempts();
+    QString                      lastError = QStringLiteral("All LLM endpoints failed");
+    const QList<EndpointAttempt> attempts  = endpointAttempts();
     for (const EndpointAttempt &attempt : attempts) {
         const LLMEndpoint &endpoint = attempt.endpoint;
         QNetworkRequest    request  = owner->prepareRequest(endpoint);
@@ -1574,7 +1708,14 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
         reply->deleteLater();
 
         try {
-            json response = json::parse(responseData.toStdString());
+            json    response = json::parse(responseData.toStdString());
+            QString validationError;
+            if (!extractAssistantMessage(response, nullptr, &validationError)) {
+                lastError = validationError;
+                QSocConsole::warn()
+                    << "Endpoint" << endpoint.name << "returned an invalid chat response";
+                continue;
+            }
             owner->commitEndpoint(attempt);
             return response;
         } catch (const json::exception &e) {
@@ -1583,5 +1724,5 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
         }
     }
 
-    return {{"error", "All LLM endpoints failed"}};
+    return {{"error", lastError.toStdString()}};
 }
