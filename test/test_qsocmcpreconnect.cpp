@@ -1133,7 +1133,11 @@ private slots:
 
         QVERIFY(!call.fallbackFired);
         QVERIFY(refreshComplete);
-        QCOMPARE(call.output, QStringLiteral("[mcp aborted]"));
+        QCOMPARE(
+            call.output,
+            QStringLiteral(
+                "[mcp aborted] local wait ended; remote completion is unknown, do not retry "
+                "automatically"));
         QCOMPARE(cancelledRequestIds(transport), QList<int>{callId});
         QCOMPARE(registry.getTool(QStringLiteral("mcp__svr__echo")), replacement.data());
         QVERIFY(QTest::qWaitFor([&]() { return oldTool.isNull(); }, 500));
@@ -1167,7 +1171,11 @@ private slots:
         QVERIFY(!call.fallbackFired);
         QVERIFY(managerDeleted);
         QVERIFY(callId > 0);
-        QCOMPARE(call.output, QStringLiteral("[mcp error] server closed during call"));
+        QCOMPARE(
+            call.output,
+            QStringLiteral(
+                "[mcp error] server closed during call; remote completion is unknown, do not "
+                "retry automatically"));
         QCOMPARE(registry.count(), 0);
         QVERIFY(QTest::qWaitFor([&]() { return oldTool.isNull(); }, 500));
     }
@@ -1196,13 +1204,68 @@ private slots:
         QVERIFY(!call.fallbackFired);
         QVERIFY(reconnectStarted);
         QVERIFY(callId > 0);
-        QCOMPARE(call.output, QStringLiteral("[mcp error] server closed during call"));
+        QCOMPARE(
+            call.output,
+            QStringLiteral(
+                "[mcp error -32000] Client stopping; remote completion is unknown, do not retry "
+                "automatically"));
         QVERIFY(QTest::qWaitFor([&]() { return oldTool.isNull(); }, 500));
         QVERIFY(fixture.transports.size() >= 2);
 
         driveHandshakeAndList(fixture.transport(), {"echo"});
         QVERIFY(QTest::qWaitFor([&]() { return registry.hasTool("mcp__svr__echo"); }, 500));
         QCOMPARE(fixture.manager->totalToolCount(), qsizetype(1));
+    }
+
+    void manualReconnectPreservesClaimedBatchError()
+    {
+        McpServerFixture fixture;
+        QVERIFY(fixture.startWithTool(QStringLiteral("echo")));
+
+        auto             *transport = fixture.transport();
+        QSocToolRegistry &registry  = fixture.registry;
+        QSocMcpClient    *client    = fixture.manager->findClient(QStringLiteral("svr"));
+        QVERIFY(client != nullptr);
+
+        QPointer<QSocTool>     oldTool   = registry.getTool(QStringLiteral("mcp__svr__echo"));
+        const int              triggerId = client->request(QStringLiteral("trigger"));
+        int                    callId    = -1;
+        bool                   reconnectStarted = false;
+        const ActiveCallResult call
+            = runActiveCall(registry, QStringLiteral("mcp__svr__echo"), oldTool.data(), [&]() {
+                  const QList<int> callIds
+                      = requestIdsForMethod(transport, QStringLiteral("tools/call"));
+                  if (!callIds.isEmpty()) {
+                      callId = callIds.last();
+                  }
+                  connect(
+                      client,
+                      &QSocMcpClient::responseReceived,
+                      client,
+                      [&](int id, const nlohmann::json &) {
+                          if (id == triggerId) {
+                              reconnectStarted = fixture.manager->reconnectServer(
+                                  QStringLiteral("svr"));
+                          }
+                      });
+                  transport->simulateMessage(
+                      nlohmann::json::array({
+                          {{"jsonrpc", "2.0"},
+                           {"id", triggerId},
+                           {"result", nlohmann::json::object()}},
+                          {{"jsonrpc", "2.0"},
+                           {"id", callId},
+                           {"error", {{"code", -32601}, {"message", "batch failure"}}}},
+                      }));
+              });
+
+        QVERIFY(!call.fallbackFired);
+        QVERIFY(reconnectStarted);
+        QVERIFY(callId > 0);
+        QCOMPARE(call.output, QStringLiteral("[mcp error -32601] batch failure"));
+        QVERIFY(cancelledRequestIds(transport).isEmpty());
+        QVERIFY(QTest::qWaitFor([&]() { return oldTool.isNull(); }, 500));
+        QVERIFY(fixture.transports.size() >= 2);
     }
 
     void nestedCallsFinishAfterRefresh()

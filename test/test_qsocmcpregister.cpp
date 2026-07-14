@@ -133,6 +133,13 @@ McpServerConfig makeConfig(const QString &name)
     return cfg;
 }
 
+QString abortedToolResult()
+{
+    return QStringLiteral(
+        "[mcp aborted] local wait ended; remote completion is unknown, do not retry "
+        "automatically");
+}
+
 void replyInitialize(FakeTransport *transport, int id)
 {
     nlohmann::json resp;
@@ -286,6 +293,8 @@ private slots:
 
         const QString output = tool.execute({{"text", "hello"}});
         QCOMPARE(output, QStringLiteral("echoed: hello"));
+        tool.abort();
+        QVERIFY(transport->cancelledRequestIds().isEmpty());
     }
 
     void toolReportsBusinessError()
@@ -314,6 +323,131 @@ private slots:
 
         const QString output = tool.execute({});
         QCOMPARE(output, QStringLiteral("[mcp tool error] boom"));
+    }
+
+    void responseWinnerCannotBeOverwrittenByAbort()
+    {
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "echo";
+
+        QSocMcpTool tool(&client, desc);
+        connect(&client, &QSocMcpClient::responseReceived, &tool, [&tool](int, const nlohmann::json &) {
+            tool.abort();
+        });
+        transport->setSendHook([transport](const nlohmann::json &message) {
+            if (message.value("method", std::string()) == "tools/call") {
+                replyToolSuccess(transport, message["id"].get<int>(), QStringLiteral("first"));
+            }
+        });
+
+        QCOMPARE(tool.execute({}), QStringLiteral("first"));
+        QVERIFY(transport->cancelledRequestIds().isEmpty());
+    }
+
+    void batchResponseClaimWinsOverAbort()
+    {
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "echo";
+
+        QSocMcpTool tool(&client, desc);
+        const int   triggerId = client.request(QStringLiteral("trigger"));
+        connect(
+            &client,
+            &QSocMcpClient::responseReceived,
+            &tool,
+            [&tool, triggerId](int id, const nlohmann::json &) {
+                if (id == triggerId) {
+                    tool.abort();
+                }
+            });
+        QTimer::singleShot(0, &client, [transport, triggerId]() {
+            const int callId = transport->lastSentId();
+            transport->simulateMessage(
+                nlohmann::json::array({
+                    {{"jsonrpc", "2.0"}, {"id", triggerId}, {"result", nlohmann::json::object()}},
+                    {{"jsonrpc", "2.0"},
+                     {"id", callId},
+                     {"result",
+                      {{"content", nlohmann::json::array({{{"type", "text"}, {"text", "batch"}}})}}}},
+                }));
+        });
+
+        QCOMPARE(tool.execute({}), QStringLiteral("batch"));
+        QVERIFY(transport->cancelledRequestIds().isEmpty());
+    }
+
+    void batchClaimSurvivesClientRestart_data()
+    {
+        QTest::addColumn<nlohmann::json>("terminal");
+        QTest::addColumn<QString>("expected");
+        QTest::addColumn<bool>("restart");
+
+        const nlohmann::json result{
+            {"result",
+             {{"content", nlohmann::json::array({{{"type", "text"}, {"text", "batch"}}})}}}};
+        const nlohmann::json error{{"error", {{"code", -32601}, {"message", "batch failure"}}}};
+
+        QTest::newRow("result-restart") << result << QStringLiteral("batch") << true;
+        QTest::newRow("error-restart")
+            << error << QStringLiteral("[mcp error -32601] batch failure") << true;
+        QTest::newRow("result-stop") << result << QStringLiteral("batch") << false;
+        QTest::newRow("error-stop")
+            << error << QStringLiteral("[mcp error -32601] batch failure") << false;
+    }
+
+    void batchClaimSurvivesClientRestart()
+    {
+        QFETCH(nlohmann::json, terminal);
+        QFETCH(QString, expected);
+        QFETCH(bool, restart);
+
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "echo";
+
+        QSocMcpTool tool(&client, desc);
+        const int   triggerId = client.request(QStringLiteral("trigger"));
+        connect(
+            &client,
+            &QSocMcpClient::responseReceived,
+            &tool,
+            [&client, triggerId, restart](int id, const nlohmann::json &) {
+                if (id == triggerId) {
+                    client.stop();
+                    if (restart) {
+                        client.start();
+                    }
+                }
+            });
+        QTimer::singleShot(0, &client, [transport, triggerId, terminal]() mutable {
+            terminal["jsonrpc"] = "2.0";
+            terminal["id"]      = transport->lastSentId();
+            transport->simulateMessage(
+                nlohmann::json::array({
+                    {{"jsonrpc", "2.0"}, {"id", triggerId}, {"result", nlohmann::json::object()}},
+                    terminal,
+                }));
+        });
+
+        QCOMPARE(tool.execute({}), expected);
+        QCOMPARE(
+            client.state(),
+            restart ? QSocMcpClient::State::Initializing : QSocMcpClient::State::Disconnected);
+        QVERIFY(transport->cancelledRequestIds().isEmpty());
     }
 
     void malformedToolResultsAreRejected_data()
@@ -652,6 +786,28 @@ private slots:
         QVERIFY(output.contains(QStringLiteral("32601")));
     }
 
+    void serverErrorCodeDoesNotMasqueradeAsLocalTimeout()
+    {
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "wait";
+
+        QSocMcpTool tool(&client, desc);
+        QTimer::singleShot(0, &client, [transport]() {
+            transport->simulateMessage(
+                {{"jsonrpc", "2.0"},
+                 {"id", transport->lastSentId()},
+                 {"error", {{"code", -32001}, {"message", "server-specific failure"}}}});
+        });
+
+        QCOMPARE(tool.execute({}), QStringLiteral("[mcp error -32001] server-specific failure"));
+        QVERIFY(transport->cancelledRequestIds().isEmpty());
+    }
+
     void toolHandlesSynchronousTransportFailure()
     {
         auto         *transport = new FakeTransport;
@@ -678,7 +834,11 @@ private slots:
         fallback.stop();
 
         QVERIFY(!fallbackFired);
-        QCOMPARE(output, QStringLiteral("[mcp error -32000] synchronous send failure"));
+        QCOMPARE(
+            output,
+            QStringLiteral(
+                "[mcp error -32000] synchronous send failure; remote completion is unknown, do "
+                "not retry automatically"));
     }
 
     void toolFailsFastWhenServerNotReady()
@@ -697,8 +857,13 @@ private slots:
 
     void abortStopsEveryNestedCall()
     {
+        McpServerConfig config  = makeConfig("svr");
+        config.requestTimeoutMs = 40;
+
         auto         *transport = new FakeTransport;
-        QSocMcpClient client(makeConfig("svr"), transport);
+        QSocMcpClient client(config, transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
         QVERIFY(driveClientToReady(&client, transport));
 
         McpToolDescriptor desc;
@@ -709,23 +874,24 @@ private slots:
         QSocMcpTool tool(&client, desc);
         QString     innerOutput;
 
-        QTimer::singleShot(0, &tool, [&]() {
-            QTimer::singleShot(0, &tool, &QSocMcpTool::abort);
-            innerOutput = tool.execute({{"depth", "inner"}});
-        });
-
-        /* Keep a broken implementation bounded: answer any calls that remain
-         * after abort so the regression fails quickly instead of timing out. */
-        QTimer::singleShot(250, &client, [transport]() {
+        transport->setSendHook([transport](const nlohmann::json &message) {
+            if (message.value("method", std::string()) != "notifications/cancelled") {
+                return;
+            }
             const QList<int> ids = transport->requestIdsForMethod(QStringLiteral("tools/call"));
             for (int id : ids) {
                 replyToolSuccess(transport, id, QStringLiteral("late"));
             }
         });
 
+        QTimer::singleShot(0, &tool, [&]() {
+            QTimer::singleShot(0, &tool, &QSocMcpTool::abort);
+            innerOutput = tool.execute({{"depth", "inner"}});
+        });
+
         const QString outerOutput = tool.execute({{"depth", "outer"}});
-        QCOMPARE(innerOutput, QStringLiteral("[mcp aborted]"));
-        QCOMPARE(outerOutput, QStringLiteral("[mcp aborted]"));
+        QCOMPARE(innerOutput, abortedToolResult());
+        QCOMPARE(outerOutput, abortedToolResult());
 
         QList<int> requestIds = transport->requestIdsForMethod(QStringLiteral("tools/call"));
         QList<int> cancelled  = transport->cancelledRequestIds();
@@ -733,6 +899,162 @@ private slots:
         std::sort(cancelled.begin(), cancelled.end());
         QCOMPARE(requestIds.size(), 2);
         QCOMPARE(cancelled, requestIds);
+
+        QTest::qWait(100);
+        QCOMPARE(failureSpy.size(), 0);
+        for (int id : requestIds) {
+            replyToolSuccess(transport, id, QStringLiteral("late"));
+        }
+        QCOMPARE(responseSpy.size(), 0);
+    }
+
+    void abortWithDisabledTimeoutDisownsRequest()
+    {
+        McpServerConfig config  = makeConfig("svr");
+        config.requestTimeoutMs = 0;
+
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(config, transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "wait";
+
+        QSocMcpTool tool(&client, desc);
+        QTimer::singleShot(0, &tool, [&tool]() {
+            tool.abort();
+            tool.abort();
+        });
+        QCOMPARE(tool.execute({}), abortedToolResult());
+
+        const QList<int> requestIds = transport->requestIdsForMethod(QStringLiteral("tools/call"));
+        QCOMPARE(requestIds.size(), 1);
+        QCOMPARE(transport->cancelledRequestIds(), requestIds);
+
+        replyToolSuccess(transport, requestIds.first(), QStringLiteral("late"));
+        QCOMPARE(responseSpy.size(), 0);
+        QCOMPARE(failureSpy.size(), 0);
+
+        QTimer::singleShot(0, &client, [transport]() {
+            replyToolSuccess(transport, transport->lastSentId(), QStringLiteral("recovered"));
+        });
+        QCOMPARE(tool.execute({}), QStringLiteral("recovered"));
+        QCOMPARE(transport->cancelledRequestIds(), requestIds);
+    }
+
+    void abortIgnoresSynchronousLateResponses()
+    {
+        McpServerConfig config  = makeConfig("svr");
+        config.requestTimeoutMs = 0;
+
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(config, transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "wait";
+
+        QSocMcpTool tool(&client, desc);
+        transport->setSendHook([transport](const nlohmann::json &message) {
+            if (message.value("method", std::string()) != "notifications/cancelled") {
+                return;
+            }
+            const int id = message["params"]["requestId"].get<int>();
+            replyToolSuccess(transport, id, QStringLiteral("late"));
+            transport->simulateMessage(
+                {{"jsonrpc", "2.0"},
+                 {"id", id},
+                 {"error", {{"code", -32000}, {"message", "also late"}}}});
+        });
+
+        QTimer::singleShot(0, &tool, &QSocMcpTool::abort);
+        QCOMPARE(tool.execute({}), abortedToolResult());
+        QCOMPARE(transport->cancelledRequestIds().size(), 1);
+        QCOMPARE(responseSpy.size(), 0);
+        QCOMPARE(failureSpy.size(), 0);
+    }
+
+    void disabledTimeoutWaitsForResponse()
+    {
+        McpServerConfig config  = makeConfig("svr");
+        config.requestTimeoutMs = 0;
+
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(config, transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "wait";
+
+        QSocMcpTool tool(&client, desc);
+        QTimer::singleShot(80, &client, [transport]() {
+            replyToolSuccess(transport, transport->lastSentId(), QStringLiteral("finished"));
+        });
+        QElapsedTimer elapsed;
+        elapsed.start();
+
+        QCOMPARE(tool.execute({}), QStringLiteral("finished"));
+        QVERIFY(elapsed.elapsed() >= 50);
+        QCOMPARE(failureSpy.size(), 0);
+        QVERIFY(transport->cancelledRequestIds().isEmpty());
+    }
+
+    void toolTimeoutCancelsServer()
+    {
+        McpServerConfig config  = makeConfig("svr");
+        config.requestTimeoutMs = 40;
+
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(config, transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName = "svr";
+        desc.toolName   = "wait";
+
+        QSocMcpTool tool(&client, desc);
+        connect(&client, &QSocMcpClient::requestFailed, &tool, [&tool](int, int, const QString &) {
+            tool.abort();
+        });
+        transport->setSendHook([transport](const nlohmann::json &message) {
+            if (message.value("method", std::string()) != "notifications/cancelled") {
+                return;
+            }
+            replyToolSuccess(
+                transport, message["params"]["requestId"].get<int>(), QStringLiteral("late"));
+        });
+        const QString output = tool.execute({});
+        QCOMPARE(
+            output,
+            QStringLiteral(
+                "[mcp error -32001] Request timed out: tools/call; remote completion is unknown, "
+                "do not retry automatically"));
+        QCOMPARE(failureSpy.size(), 1);
+
+        const QList<int> requestIds = transport->requestIdsForMethod(QStringLiteral("tools/call"));
+        QCOMPARE(requestIds.size(), 1);
+        QCOMPARE(transport->cancelledRequestIds(), requestIds);
+
+        replyToolSuccess(transport, requestIds.first(), QStringLiteral("late"));
+        QCOMPARE(responseSpy.size(), 0);
+        QTest::qWait(100);
+        QCOMPARE(failureSpy.size(), 1);
+
+        QTimer::singleShot(0, &client, [transport]() {
+            replyToolSuccess(transport, transport->lastSentId(), QStringLiteral("recovered"));
+        });
+        QCOMPARE(tool.execute({}), QStringLiteral("recovered"));
+        QCOMPARE(transport->cancelledRequestIds(), requestIds);
     }
 
     void managerCountsZeroToolsBeforeListResponse()

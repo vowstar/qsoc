@@ -1130,7 +1130,7 @@ mcp:
     [`connect_timeout_ms`], [Connection timeout in milliseconds.
        Default 30000.],
     [`request_timeout_ms`], [Per-request timeout in milliseconds.
-       Default 60000.],
+       Default 60000; non-positive values disable request deadlines.],
     [`enabled`], [Set to `false` to keep the entry in the config but skip
        it at startup.],
   )],
@@ -1187,8 +1187,13 @@ contribute their tools immediately; tools registered later via
 `notifications/tools/list_changed` are picked up at runtime.
 Overlapping tool-list changes are coalesced, and the current catalog remains
 active until the latest refresh succeeds.
-Readiness is published only after `notifications/initialized` is accepted;
-`request_timeout_ms` bounds each handshake send.
+Readiness is published only after `notifications/initialized` is accepted.
+`request_timeout_ms` bounds each handshake send and request. Timed-out and
+user-aborted tool calls discard local request state before a best-effort
+cancellation, so late responses are ignored; cancellation does not confirm
+remote termination. Connection loss during a call reports the same uncertainty.
+Once ready, JSON-RPC batches claim all pending response IDs before delivering
+callbacks, so one callback cannot replace another batch result.
 
 If startup, initialization, or the connection fails, the manager schedules
 a rebuild on exponential backoff (1 s, 2 s, 4 s, capped at 30 s). A

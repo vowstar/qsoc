@@ -64,6 +64,34 @@ bool isRequestId(const nlohmann::json &value)
     return value.is_string() || value.is_number();
 }
 
+std::optional<int> claimableResponseId(const nlohmann::json &message)
+{
+    if (!message.is_object() || message.contains("method") || !hasJsonRpcVersion(message)
+        || !message.contains("id") || message.contains("result") == message.contains("error")) {
+        return std::nullopt;
+    }
+    if (message.contains("error")) {
+        int     code = 0;
+        QString text;
+        if (!readJsonRpcError(message["error"], &code, &text)) {
+            return std::nullopt;
+        }
+    }
+    int id = -1;
+    if (!readInteger(message["id"], &id)) {
+        return std::nullopt;
+    }
+    return id;
+}
+
+QString requestFailureMessage(const QString &method, const QString &message)
+{
+    if (method != QStringLiteral("tools/call")) {
+        return message;
+    }
+    return message + QStringLiteral("; remote completion is unknown, do not retry automatically");
+}
+
 nlohmann::json jsonRpcErrorResponse(const nlohmann::json &id, int code, const char *message)
 {
     return {
@@ -191,14 +219,19 @@ int QSocMcpClient::request(
             if (!isCurrentLifecycle(generation, Lifecycle::Active) || !pending_.contains(id)) {
                 return;
             }
-            Pending pending = pending_.take(id);
-            if (!pending.timer.isNull()) {
-                pending.timer->deleteLater();
+            std::optional<Pending> pending = takePending(id);
+            if (!pending.has_value()) {
+                return;
             }
-            emit requestFailed(
-                id,
-                kClientErrorTimeout,
-                QStringLiteral("Request timed out: %1").arg(pending.method));
+            const QString timeoutMessage = requestFailureMessage(
+                pending->method, QStringLiteral("Request timed out: %1").arg(pending->method));
+            const QPointer<QSocMcpClient> guard(this);
+            emit                          requestFailed(id, kClientErrorTimeout, timeoutMessage);
+            if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Active)
+                || state_ != State::Ready) {
+                return;
+            }
+            notifyRequestCancelled(id, QStringLiteral("request timeout"));
         });
         timer->start(effective);
         pending.timer = timer;
@@ -316,22 +349,23 @@ void QSocMcpClient::onMessageFailed(
         return;
     }
 
-    const quint64                 generation = lifecycleGeneration_;
+    struct Failure
+    {
+        int     id;
+        QString message;
+    };
     const QPointer<QSocMcpClient> guard(this);
+    QList<Failure>                failures;
+    failures.reserve(requestIds.size());
     for (int id : requestIds) {
-        auto pendingIt = pending_.find(id);
-        if (pendingIt == pending_.end()) {
-            continue;
+        std::optional<Pending> pending = takePending(id);
+        if (pending.has_value()) {
+            failures.append(Failure{id, requestFailureMessage(pending->method, message)});
         }
-        Pending pending = pendingIt.value();
-        pending_.erase(pendingIt);
-        if (!pending.timer.isNull()) {
-            pending.timer->stop();
-            pending.timer->deleteLater();
-        }
-        emit requestFailed(id, kClientErrorTransport, message);
-        if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Active)
-            || state_ != State::Ready) {
+    }
+    for (const Failure &failure : failures) {
+        emit requestFailed(failure.id, kClientErrorTransport, failure.message);
+        if (guard.isNull()) {
             return;
         }
     }
@@ -347,7 +381,7 @@ void QSocMcpClient::onMessageReceived(const nlohmann::json &message)
 
     if (!message.is_array()) {
         const QPointer<QSocMcpClient> guard(this);
-        const auto                    response = handleMessage(message, generation, nullptr);
+        const auto                    response = handleMessage(message, generation, nullptr, false);
         if (!response.has_value() || guard.isNull()
             || !isCurrentLifecycle(generation, Lifecycle::Active)
             || (state_ != State::Initializing && state_ != State::Ready)) {
@@ -367,18 +401,37 @@ void QSocMcpClient::onMessageReceived(const nlohmann::json &message)
         eligiblePendingIds.insert(it.key());
     }
     const QPointer<QSocMcpClient> guard(this);
-    nlohmann::json                responses = nlohmann::json::array();
+    QSet<const nlohmann::json *>  claimedResponses;
+    if (state_ == State::Ready) {
+        for (const auto &entry : message) {
+            const std::optional<int> id = claimableResponseId(entry);
+            if (!id.has_value() || !eligiblePendingIds.contains(*id)) {
+                continue;
+            }
+            if (takePending(*id).has_value()) {
+                claimedResponses.insert(&entry);
+            }
+        }
+    }
+
+    nlohmann::json responses = nlohmann::json::array();
     for (const auto &entry : message) {
-        if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Active)
-            || (state_ != State::Initializing && state_ != State::Ready)) {
+        if (guard.isNull()) {
             return;
+        }
+        const bool responseAlreadyClaimed = claimedResponses.contains(&entry);
+        const bool current = isCurrentLifecycle(generation, Lifecycle::Active)
+                             && (state_ == State::Initializing || state_ == State::Ready);
+        if (!current && !responseAlreadyClaimed) {
+            continue;
         }
         if (!entry.is_object()) {
             responses.push_back(
                 jsonRpcErrorResponse(nullptr, kJsonRpcInvalidRequest, "Invalid Request"));
             continue;
         }
-        const auto response = handleMessage(entry, generation, &eligiblePendingIds);
+        const auto response
+            = handleMessage(entry, generation, &eligiblePendingIds, responseAlreadyClaimed);
         if (response.has_value()) {
             responses.push_back(*response);
         }
@@ -391,7 +444,10 @@ void QSocMcpClient::onMessageReceived(const nlohmann::json &message)
 }
 
 std::optional<nlohmann::json> QSocMcpClient::handleMessage(
-    const nlohmann::json &message, quint64 generation, const QSet<int> *eligiblePendingIds)
+    const nlohmann::json &message,
+    quint64               generation,
+    const QSet<int>      *eligiblePendingIds,
+    bool                  responseAlreadyClaimed)
 {
     if (!message.is_object()) {
         return jsonRpcErrorResponse(nullptr, kJsonRpcInvalidRequest, "Invalid Request");
@@ -434,14 +490,11 @@ std::optional<nlohmann::json> QSocMcpClient::handleMessage(
             return std::nullopt;
         }
 
-        if ((eligiblePendingIds != nullptr && !eligiblePendingIds->contains(id))
-            || !pending_.contains(id)) {
-            return std::nullopt;
-        }
-        Pending pending = pending_.take(id);
-        if (!pending.timer.isNull()) {
-            pending.timer->stop();
-            pending.timer->deleteLater();
+        if (!responseAlreadyClaimed) {
+            if ((eligiblePendingIds != nullptr && !eligiblePendingIds->contains(id))
+                || !pending_.contains(id) || !takePending(id).has_value()) {
+                return std::nullopt;
+            }
         }
 
         if (id == initializeId_) {
@@ -538,9 +591,9 @@ void QSocMcpClient::sendInitialize()
                 || !pending_.contains(id)) {
                 return;
             }
-            Pending pending = pending_.take(id);
-            if (!pending.timer.isNull()) {
-                pending.timer->deleteLater();
+            std::optional<Pending> pending = takePending(id);
+            if (!pending.has_value()) {
+                return;
             }
             initializeId_ = -1;
             lifecycle_    = Lifecycle::Stopping;
@@ -633,6 +686,39 @@ void QSocMcpClient::writeMessage(const nlohmann::json &message)
     Q_UNUSED(kClientErrorNotReady);
 }
 
+std::optional<QSocMcpClient::Pending> QSocMcpClient::takePending(int id)
+{
+    auto pendingIt = pending_.find(id);
+    if (pendingIt == pending_.end()) {
+        return std::nullopt;
+    }
+
+    Pending pending = pendingIt.value();
+    pending_.erase(pendingIt);
+    if (!pending.timer.isNull()) {
+        pending.timer->stop();
+        pending.timer->deleteLater();
+    }
+    return pending;
+}
+
+bool QSocMcpClient::cancelRequest(int id)
+{
+    const auto pendingIt = pending_.constFind(id);
+    if (pendingIt == pending_.constEnd() || pendingIt->method == QStringLiteral("initialize")) {
+        return false;
+    }
+    return takePending(id).has_value();
+}
+
+void QSocMcpClient::notifyRequestCancelled(int id, const QString &reason)
+{
+    nlohmann::json params;
+    params["requestId"] = id;
+    params["reason"]    = reason.toStdString();
+    notify(QStringLiteral("notifications/cancelled"), params);
+}
+
 bool QSocMcpClient::cancelAllPending(int code, const QString &message)
 {
     QHash<int, Pending> pending;
@@ -650,7 +736,7 @@ bool QSocMcpClient::cancelAllPending(int code, const QString &message)
 
     const QPointer<QSocMcpClient> guard(this);
     for (int id : ids) {
-        emit requestFailed(id, code, message);
+        emit requestFailed(id, code, requestFailureMessage(pending[id].method, message));
         if (guard.isNull()) {
             return false;
         }

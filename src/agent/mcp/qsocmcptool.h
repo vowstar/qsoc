@@ -46,14 +46,14 @@ private:
         Pending,
         Completed,
         Aborted,
-        TimedOut,
         ClientClosed,
     };
 
     struct CallState
     {
-        QEventLoop *loop    = nullptr;
-        CallOutcome outcome = CallOutcome::Pending;
+        QEventLoop *loop      = nullptr;
+        CallOutcome outcome   = CallOutcome::Pending;
+        int         requestId = -1;
         QString     result;
     };
 

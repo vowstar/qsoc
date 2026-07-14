@@ -18,6 +18,7 @@
 #include <QString>
 
 class QSocMcpTransport;
+class QSocMcpTool;
 class QTimer;
 
 /**
@@ -115,6 +116,8 @@ private slots:
     void onMessageReceived(const nlohmann::json &message);
 
 private:
+    friend class QSocMcpTool;
+
     enum class Lifecycle : std::uint8_t { Idle, Active, Stopping, Finishing };
 
     struct Pending
@@ -128,14 +131,20 @@ private:
     void                          sendInitializedNotification(int requestId);
     void                          clearInitializedSend();
     std::optional<nlohmann::json> handleMessage(
-        const nlohmann::json &message, quint64 generation, const QSet<int> *eligiblePendingIds);
-    int  allocateId();
-    void writeMessage(const nlohmann::json &message);
-    bool cancelAllPending(int code, const QString &message);
-    bool isCurrentLifecycle(quint64 generation, Lifecycle lifecycle) const;
-    void stopTransportOrFinish(quint64 generation);
-    void finishLifecycle(quint64 generation);
-    int  effectiveTimeoutMs(int requested) const;
+        const nlohmann::json &message,
+        quint64               generation,
+        const QSet<int>      *eligiblePendingIds,
+        bool                  responseAlreadyClaimed);
+    int                    allocateId();
+    void                   writeMessage(const nlohmann::json &message);
+    std::optional<Pending> takePending(int id);
+    bool                   cancelRequest(int id);
+    void                   notifyRequestCancelled(int id, const QString &reason);
+    bool                   cancelAllPending(int code, const QString &message);
+    bool                   isCurrentLifecycle(quint64 generation, Lifecycle lifecycle) const;
+    void                   stopTransportOrFinish(quint64 generation);
+    void                   finishLifecycle(quint64 generation);
+    int                    effectiveTimeoutMs(int requested) const;
 
     McpServerConfig     config_;
     QSocMcpTransport   *transport_    = nullptr;

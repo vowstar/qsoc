@@ -4,7 +4,6 @@
 #include "agent/mcp/qsocmcptool.h"
 
 #include "agent/mcp/qsocmcpclient.h"
-#include "common/qlongtaskmonitor.h"
 
 #include <optional>
 
@@ -19,6 +18,13 @@ QString invalidToolResult()
 {
     return QStringLiteral(
         "[mcp protocol error] invalid tools/call result; tool may have completed, do not retry "
+        "automatically");
+}
+
+QString serverClosedToolResult()
+{
+    return QStringLiteral(
+        "[mcp error] server closed during call; remote completion is unknown, do not retry "
         "automatically");
 }
 
@@ -196,7 +202,6 @@ QString QSocMcpTool::execute(const json &arguments)
     params["name"]      = descriptor_.toolName.toStdString();
     params["arguments"] = arguments;
 
-    int        requestId = -1;
     CallState  callState;
     QEventLoop loop;
     callState.loop = &loop;
@@ -215,7 +220,7 @@ QString QSocMcpTool::execute(const json &arguments)
 
     QObject::connect(
         client_.data(), &QSocMcpClient::responseReceived, &loop, [&](int id, const json &resultJson) {
-            if (id != requestId || callState.outcome != CallOutcome::Pending) {
+            if (id != callState.requestId || callState.outcome != CallOutcome::Pending) {
                 return;
             }
             callState.result  = formatToolResult(resultJson);
@@ -228,86 +233,41 @@ QString QSocMcpTool::execute(const json &arguments)
         &QSocMcpClient::requestFailed,
         &loop,
         [&](int id, int code, const QString &message) {
-            if (id != requestId || callState.outcome != CallOutcome::Pending) {
+            if (id != callState.requestId || callState.outcome != CallOutcome::Pending) {
                 return;
             }
-            if (client_.isNull() || client_->state() == QSocMcpClient::State::Disconnected) {
-                callState.result  = QStringLiteral("[mcp error] server closed during call");
-                callState.outcome = CallOutcome::ClientClosed;
-            } else {
-                callState.result  = QStringLiteral("[mcp error %1] %2").arg(code).arg(message);
-                callState.outcome = CallOutcome::Completed;
-            }
+            callState.result  = QStringLiteral("[mcp error %1] %2").arg(code).arg(message);
+            callState.outcome = CallOutcome::Completed;
             loop.quit();
         });
-
-    QObject::connect(client_.data(), &QSocMcpClient::closed, &loop, [&]() {
-        if (callState.outcome != CallOutcome::Pending) {
-            return;
-        }
-        callState.result  = QStringLiteral("[mcp error] server closed during call");
-        callState.outcome = CallOutcome::ClientClosed;
-        loop.quit();
-    });
 
     QObject::connect(client_.data(), &QObject::destroyed, &loop, [&]() {
         if (callState.outcome != CallOutcome::Pending) {
             return;
         }
-        callState.result  = QStringLiteral("[mcp error] server closed during call");
+        callState.result  = serverClosedToolResult();
         callState.outcome = CallOutcome::ClientClosed;
         loop.quit();
     });
 
-    const int returnedId = client_->request(QStringLiteral("tools/call"), params, -1, &requestId);
+    const int returnedId
+        = client_->request(QStringLiteral("tools/call"), params, -1, &callState.requestId);
     if (returnedId < 0) {
         return QStringLiteral("[mcp error] could not send request");
     }
 
-    /* Watchdog: cap the round trip and surface a timeout instead of
-     * hanging forever on a server that never answers. Stall detection
-     * is disabled since JSON-RPC has no per-byte progress to feed. */
-    QLongTaskMonitor monitor(
-        &loop,
-        QLongTaskMonitor::Config{
-            .tickIntervalMs       = 1000,
-            .stallThresholdMs     = 0,
-            .wallClockMs          = 60000,
-            .consecutiveIdleTicks = 2,
-        });
-    QObject::connect(&monitor, &QLongTaskMonitor::wallClockExceeded, &loop, [&](int) {
-        if (callState.outcome != CallOutcome::Pending) {
-            return;
-        }
-        callState.outcome = CallOutcome::TimedOut;
-        loop.quit();
-    });
     if (callState.outcome == CallOutcome::Pending) {
-        monitor.start();
         loop.exec();
-        monitor.finish();
-    }
-
-    /* Tell the server to drop the in-flight request when we walked
-     * away. Without this the server keeps working on output we will
-     * never consume. */
-    if ((callState.outcome == CallOutcome::Aborted || callState.outcome == CallOutcome::TimedOut)
-        && !client_.isNull()) {
-        json cancelParams;
-        cancelParams["requestId"] = requestId;
-        cancelParams["reason"] = callState.outcome == CallOutcome::Aborted ? "user abort"
-                                                                           : "wall-clock timeout";
-        client_->notify(QStringLiteral("notifications/cancelled"), cancelParams);
     }
 
     switch (callState.outcome) {
     case CallOutcome::Completed:
     case CallOutcome::ClientClosed:
         return callState.result;
-    case CallOutcome::TimedOut:
-        return QStringLiteral("[mcp timeout] no response after 60s; sent cancel notification");
     case CallOutcome::Aborted:
-        return QStringLiteral("[mcp aborted]");
+        return QStringLiteral(
+            "[mcp aborted] local wait ended; remote completion is unknown, do not retry "
+            "automatically");
     case CallOutcome::Pending:
         return QStringLiteral("[mcp error] call ended without a response");
     }
@@ -318,14 +278,24 @@ QString QSocMcpTool::execute(const json &arguments)
 void QSocMcpTool::abort()
 {
     const QSet<CallState *> calls = activeCalls_;
+    QList<CallState *>      cancelledCalls;
+    cancelledCalls.reserve(calls.size());
     for (CallState *call : calls) {
-        if (call->outcome != CallOutcome::Pending) {
+        if (call->outcome != CallOutcome::Pending || client_.isNull()
+            || !client_->cancelRequest(call->requestId)) {
             continue;
         }
         call->outcome = CallOutcome::Aborted;
+        cancelledCalls.append(call);
         if (call->loop != nullptr) {
             call->loop->quit();
         }
+    }
+    for (CallState *call : cancelledCalls) {
+        if (client_.isNull()) {
+            return;
+        }
+        client_->notifyRequestCancelled(call->requestId, QStringLiteral("user abort"));
     }
 }
 

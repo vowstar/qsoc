@@ -264,6 +264,241 @@ private slots:
             QStringLiteral("notifications/tools/list_changed"));
     }
 
+    void batchClaimsResponsesBeforeCallbacks()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int firstId  = client.request(QStringLiteral("first"));
+        const int secondId = client.request(QStringLiteral("second"));
+        const int thirdId  = client.request(QStringLiteral("third"));
+        connect(
+            &client,
+            &QSocMcpClient::responseReceived,
+            &client,
+            [transport, firstId, secondId, thirdId](int id, const nlohmann::json &) {
+                if (id != firstId) {
+                    return;
+                }
+                transport->simulateMessage(
+                    {{"jsonrpc", "2.0"}, {"id", secondId}, {"result", {{"source", "reentrant"}}}});
+                transport->simulateMessage(
+                    {{"jsonrpc", "2.0"},
+                     {"id", thirdId},
+                     {"error", {{"code", -32000}, {"message", "reentrant"}}}});
+            });
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", firstId}, {"result", {{"source", "first"}}}},
+                {{"jsonrpc", "2.0"}, {"id", secondId}, {"result", {{"source", "batch"}}}},
+                {{"jsonrpc", "2.0"},
+                 {"id", thirdId},
+                 {"error", {{"code", -32601}, {"message", "batch"}}}},
+            }));
+
+        QCOMPARE(responseSpy.size(), 2);
+        QCOMPARE(responseSpy.at(0).at(0).toInt(), firstId);
+        QCOMPARE(responseSpy.at(1).at(0).toInt(), secondId);
+        QCOMPARE(
+            responseSpy.at(1).at(1).value<nlohmann::json>().value("source", std::string()), "batch");
+        QCOMPARE(failureSpy.size(), 1);
+        QCOMPARE(failureSpy.first().at(0).toInt(), thirdId);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32601);
+        QCOMPARE(failureSpy.first().at(2).toString(), QStringLiteral("batch"));
+    }
+
+    void batchFailureCallbackCannotStealLaterResponse()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int firstId  = client.request(QStringLiteral("first"));
+        const int secondId = client.request(QStringLiteral("second"));
+        connect(
+            &client,
+            &QSocMcpClient::requestFailed,
+            &client,
+            [transport, firstId, secondId](int id, int, const QString &) {
+                if (id == firstId) {
+                    transport->simulateMessage(
+                        {{"jsonrpc", "2.0"},
+                         {"id", secondId},
+                         {"result", {{"source", "reentrant"}}}});
+                }
+            });
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"},
+                 {"id", firstId},
+                 {"error", {{"code", -32601}, {"message", "first"}}}},
+                {{"jsonrpc", "2.0"}, {"id", secondId}, {"result", {{"source", "batch"}}}},
+            }));
+
+        QCOMPARE(failureSpy.size(), 1);
+        QCOMPARE(failureSpy.first().at(0).toInt(), firstId);
+        QCOMPARE(responseSpy.size(), 1);
+        QCOMPARE(responseSpy.first().at(0).toInt(), secondId);
+        QCOMPARE(
+            responseSpy.first().at(1).value<nlohmann::json>().value("source", std::string()),
+            "batch");
+    }
+
+    void batchClaimsSurviveCallbackRestart()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int firstId  = client.request(QStringLiteral("first"));
+        const int secondId = client.request(QStringLiteral("second"));
+        const int thirdId  = client.request(QStringLiteral("third"));
+        connect(
+            &client,
+            &QSocMcpClient::responseReceived,
+            &client,
+            [&client, firstId](int id, const nlohmann::json &) {
+                if (id == firstId) {
+                    client.stop();
+                    client.start();
+                }
+            });
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", firstId}, {"result", {{"source", "first"}}}},
+                {{"jsonrpc", "2.0"}, {"id", secondId}, {"result", {{"source", "second"}}}},
+                {{"jsonrpc", "2.0"},
+                 {"id", thirdId},
+                 {"error", {{"code", -32601}, {"message", "batch"}}}},
+            }));
+
+        QCOMPARE(responseSpy.size(), 2);
+        QCOMPARE(responseSpy.at(0).at(0).toInt(), firstId);
+        QCOMPARE(responseSpy.at(1).at(0).toInt(), secondId);
+        QCOMPARE(failureSpy.size(), 1);
+        QCOMPARE(failureSpy.first().at(0).toInt(), thirdId);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32601);
+        QCOMPARE(failureSpy.first().at(2).toString(), QStringLiteral("batch"));
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+        QCOMPARE(transport->lastSentId(), thirdId + 1);
+    }
+
+    void batchClaimBeatsReentrantMessageFailure()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int firstId  = client.request(QStringLiteral("first"));
+        const int secondId = client.request(QStringLiteral("second"));
+        connect(
+            &client,
+            &QSocMcpClient::responseReceived,
+            &client,
+            [transport, firstId, secondId](int id, const nlohmann::json &) {
+                if (id == firstId) {
+                    transport
+                        ->simulateMessageFailure(0, {secondId}, QStringLiteral("reentrant failure"));
+                }
+            });
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", firstId}, {"result", {{"source", "first"}}}},
+                {{"jsonrpc", "2.0"}, {"id", secondId}, {"result", {{"source", "second"}}}},
+            }));
+
+        QCOMPARE(responseSpy.size(), 2);
+        QCOMPARE(responseSpy.at(0).at(0).toInt(), firstId);
+        QCOMPARE(responseSpy.at(1).at(0).toInt(), secondId);
+        QCOMPARE(failureSpy.size(), 0);
+    }
+
+    void batchClaimStopsLaterTimeout()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        nlohmann::json initialize;
+        initialize["jsonrpc"]                = "2.0";
+        initialize["id"]                     = transport->firstSentId();
+        initialize["result"]["capabilities"] = nlohmann::json::object();
+        transport->simulateMessage(initialize);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int firstId  = client.request(QStringLiteral("first"), nlohmann::json::object(), 200);
+        const int secondId = client.request(QStringLiteral("second"), nlohmann::json::object(), 20);
+        connect(
+            &client,
+            &QSocMcpClient::responseReceived,
+            &client,
+            [firstId](int id, const nlohmann::json &) {
+                if (id != firstId) {
+                    return;
+                }
+                QEventLoop wait;
+                QTimer::singleShot(60, &wait, &QEventLoop::quit);
+                wait.exec();
+            });
+
+        transport->simulateMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", firstId}, {"result", {{"source", "first"}}}},
+                {{"jsonrpc", "2.0"}, {"id", secondId}, {"result", {{"source", "second"}}}},
+            }));
+
+        QCOMPARE(responseSpy.size(), 2);
+        QCOMPARE(responseSpy.at(0).at(0).toInt(), firstId);
+        QCOMPARE(responseSpy.at(1).at(0).toInt(), secondId);
+        QCOMPARE(failureSpy.size(), 0);
+        for (const auto &sent : transport->sent()) {
+            QVERIFY(sent.value("method", std::string()) != "notifications/cancelled");
+        }
+    }
+
     void batchStopsAtNewLifecycle()
     {
         auto         *transport = new QsocMcpFakeTransport;
@@ -360,6 +595,7 @@ private slots:
         QCOMPARE(client->state(), QSocMcpClient::State::Ready);
 
         const int requestId = client->request(QStringLiteral("delete"));
+        const int laterId   = client->request(QStringLiteral("later"));
         connect(
             client,
             &QSocMcpClient::responseReceived,
@@ -373,6 +609,7 @@ private slots:
         transport->simulateMessage(
             nlohmann::json::array({
                 {{"jsonrpc", "2.0"}, {"id", requestId}, {"result", nlohmann::json::object()}},
+                {{"jsonrpc", "2.0"}, {"id", laterId}, {"result", nlohmann::json::object()}},
                 {{"jsonrpc", "2.0"}, {"method", "notifications/tools/list_changed"}},
             }));
 
@@ -719,6 +956,7 @@ private slots:
         auto         *transport = new QsocMcpFakeTransport;
         QSocMcpClient client(cfg, transport);
         QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
         client.start();
 
         nlohmann::json initResp;
@@ -732,6 +970,16 @@ private slots:
         QVERIFY(requestId > 0);
         QVERIFY(waitForSignal(failureSpy, 1, 1000));
         QCOMPARE(failureSpy.first().at(0).toInt(), requestId);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32001);
+        QCOMPARE(failureSpy.first().at(2).toString(), QStringLiteral("Request timed out: tools/list"));
+
+        const nlohmann::json cancellation = transport->sent().last();
+        QCOMPARE(cancellation.value("method", std::string()), "notifications/cancelled");
+        QCOMPARE(cancellation["params"].value("requestId", -1), requestId);
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"}, {"id", requestId}, {"result", {{"late", true}}}});
+        QCOMPARE(responseSpy.size(), 0);
     }
 
     void transportClosedFailsPending()
@@ -972,6 +1220,76 @@ private slots:
         transport->simulateMessageFailure(0, {successId}, QStringLiteral("late failure"));
         QCOMPARE(failureSpy.size(), qsizetype(1));
         QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+    }
+
+    void messageFailureClaimsEveryIdBeforeCallbacks()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        client.start();
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"},
+             {"id", transport->firstSentId()},
+             {"result", {{"capabilities", nlohmann::json::object()}}}});
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int firstId  = client.request(QStringLiteral("first"));
+        const int secondId = client.request(QStringLiteral("second"));
+        connect(
+            &client,
+            &QSocMcpClient::requestFailed,
+            &client,
+            [transport, firstId, secondId](int id, int, const QString &) {
+                if (id == firstId) {
+                    transport->simulateMessage(
+                        {{"jsonrpc", "2.0"}, {"id", secondId}, {"result", {{"tooLate", true}}}});
+                }
+            });
+
+        transport->simulateMessageFailure(0, {firstId, secondId}, QStringLiteral("request failed"));
+
+        QCOMPARE(failureSpy.size(), 2);
+        QCOMPARE(failureSpy.at(0).at(0).toInt(), firstId);
+        QCOMPARE(failureSpy.at(1).at(0).toInt(), secondId);
+        QCOMPARE(responseSpy.size(), 0);
+    }
+
+    void messageFailureCompletesEveryClaimAcrossRestart()
+    {
+        auto         *transport = new QsocMcpFakeTransport;
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        client.start();
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"},
+             {"id", transport->firstSentId()},
+             {"result", {{"capabilities", nlohmann::json::object()}}}});
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+
+        const int firstId  = client.request(QStringLiteral("first"));
+        const int secondId = client.request(QStringLiteral("second"));
+        connect(
+            &client,
+            &QSocMcpClient::requestFailed,
+            &client,
+            [&client, firstId](int id, int, const QString &) {
+                if (id == firstId) {
+                    client.stop();
+                    client.start();
+                }
+            });
+
+        transport->simulateMessageFailure(0, {firstId, secondId}, QStringLiteral("request failed"));
+
+        QCOMPARE(failureSpy.size(), 2);
+        QCOMPARE(failureSpy.at(0).at(0).toInt(), firstId);
+        QCOMPARE(failureSpy.at(1).at(0).toInt(), secondId);
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+        QCOMPARE(transport->lastSentId(), secondId + 1);
     }
 
     void messageFailureCallbackMayDeleteClient()
