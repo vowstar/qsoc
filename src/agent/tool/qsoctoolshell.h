@@ -30,6 +30,9 @@ struct QSocBashProcessInfo
     QString killReason;            /* set by watchdog when it kills the process */
     QString stuckReason;           /* set when stuck detector first matches */
     bool    stuckNotified = false; /* one-shot signal latch */
+    /* Cleanup waits until the blocking bash_manage call returns. */
+    int  activeWaiters  = 0;
+    bool removeWhenIdle = false;
 };
 
 class QSocToolBashManage;
@@ -55,11 +58,11 @@ public:
     void setProjectManager(QSocProjectManager *projectManager);
 
     /**
-     * @brief Kill every background process tracked by bash_manage.
-     * @details Iterates activeProcesses, sends kill + deletes QProcess objects,
-     *          removes their capture files, and clears the map. Called on
-     *          project switch so orphaned processes from the old project
-     *          don't surface in the new session's bash_manage list.
+     * @brief Stop background processes tracked by bash_manage.
+     * @details Force-stops tracked QProcess objects and removes confirmed
+     *          stopped entries. A process that does not stop remains tracked;
+     *          entries observed by bash_manage remain valid until their active
+     *          wait unwinds.
      */
     static void killAllActive();
 
@@ -77,7 +80,7 @@ public:
      *          should not retain QProcess pointers because they belong
      *          to bashTool's static map and may be deleted on exit.
      *          Returns a list of {id, command, startedAtMs, outputPath,
-     *          isStuck} tuples — minimal projection so callers do not
+     *          isStuck} tuples: a minimal projection so callers do not
      *          accidentally pin internal state.
      */
     struct BackgroundSnapshot
@@ -152,10 +155,18 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    void    abort() override;
 
 private:
-    static void    cleanupProcess(int processId);
-    static QString collectOutput(int processId, int exitCode);
+    struct WaitContext
+    {
+        QEventLoop *loop    = nullptr;
+        bool        aborted = false;
+    };
+
+    static QString collectOutput(const QSocBashProcessInfo &info, int exitCode);
+
+    QSet<WaitContext *> activeWaits_;
 };
 
 #endif // QSOCTOOLSHELL_H

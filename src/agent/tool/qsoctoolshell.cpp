@@ -8,21 +8,109 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QPointer>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QTimer>
 
+#include <limits>
+
 namespace {
 
 constexpr qint64 kDefaultMaxOutputBytes = qint64{5} * 1024 * 1024; /* 5 MB */
 constexpr qint64 kStuckThresholdMs      = qint64{45} * 1000;
 constexpr int    kWatchdogTickMs        = 2000;
+constexpr int    kTerminateGraceMs      = 5000;
+constexpr int    kActiveTerminateMs     = 2000;
+constexpr int    kForceStopMs           = 1000;
+constexpr auto   kBlockingWaitBusy
+    = "Error: Another bash_manage wait or terminate is already active.";
 /* How many bytes from the tail to test against the interactive-prompt
  * regex. 4 KB is enough to catch a multi-line confirmation block while
  * staying tiny relative to the overall capture file. */
 constexpr qint64 kStuckTailBytes = 4096;
+
+void destroyProcessInfo(QSocBashProcessInfo &info)
+{
+    QProcess *process = info.process;
+    info.process      = nullptr;
+    delete process;
+
+    if (!info.outputPath.isEmpty()) {
+        QDir(QFileInfo(info.outputPath).absolutePath()).removeRecursively();
+        info.outputPath.clear();
+    }
+}
+
+void requestProcessCleanup(QMap<int, QSocBashProcessInfo> &processes, const int processId)
+{
+    auto it = processes.find(processId);
+    if (it == processes.end()) {
+        return;
+    }
+    if (it->process != nullptr && it->process->state() != QProcess::NotRunning) {
+        return;
+    }
+
+    it->removeWhenIdle = true;
+    if (it->activeWaiters != 0) {
+        return;
+    }
+
+    QSocBashProcessInfo info = processes.take(processId);
+    destroyProcessInfo(info);
+}
+
+void releaseProcessWaiter(
+    QMap<int, QSocBashProcessInfo> &processes, const int processId, const bool remove)
+{
+    auto it = processes.find(processId);
+    if (it == processes.end()) {
+        return;
+    }
+
+    Q_ASSERT(it->activeWaiters > 0);
+    if (it->activeWaiters == 0) {
+        return;
+    }
+
+    --it->activeWaiters;
+    if (remove || (it->activeWaiters == 0 && it->removeWhenIdle)) {
+        requestProcessCleanup(processes, processId);
+    }
+}
+
+bool hasActiveProcessWait(const QMap<int, QSocBashProcessInfo> &processes)
+{
+    for (const auto &info : processes) {
+        if (info.activeWaiters != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool waitForProcessStopped(const QPointer<QProcess> &process, const int timeoutMs)
+{
+    if (process.isNull() || process->state() == QProcess::NotRunning) {
+        return true;
+    }
+
+    return process->waitForFinished(timeoutMs) || process.isNull()
+           || process->state() == QProcess::NotRunning;
+}
+
+bool forceStopProcess(const QPointer<QProcess> &process)
+{
+    if (process.isNull() || process->state() == QProcess::NotRunning) {
+        return true;
+    }
+
+    process->kill();
+    return waitForProcessStopped(process, kForceStopMs);
+}
 
 } /* namespace */
 
@@ -52,15 +140,24 @@ QSocToolShellBash::~QSocToolShellBash()
 
 void QSocToolShellBash::killAllActive()
 {
-    for (auto &info : activeProcesses) {
-        if (info.process) {
-            info.process->kill();
-            info.process->waitForFinished(1000);
-            delete info.process;
+    const QList<int> processIds = activeProcesses.keys();
+    for (const int processId : processIds) {
+        auto it = activeProcesses.find(processId);
+        if (it == activeProcesses.end()) {
+            continue;
         }
-        QDir(QFileInfo(info.outputPath).absolutePath()).removeRecursively();
+
+        QPointer<QProcess> process = it->process;
+        if (!forceStopProcess(process)) {
+            continue;
+        }
+
+        it = activeProcesses.find(processId);
+        if (it == activeProcesses.end() || (!process.isNull() && it->process != process.data())) {
+            continue;
+        }
+        requestProcessCleanup(activeProcesses, processId);
     }
-    activeProcesses.clear();
 }
 
 QList<QSocToolShellBash::BackgroundSnapshot> QSocToolShellBash::snapshotActive()
@@ -93,18 +190,28 @@ bool QSocToolShellBash::killActive(int processId)
     auto it = activeProcesses.find(processId);
     if (it == activeProcesses.end())
         return false;
-    QSocBashProcessInfo &info = it.value();
-    if (info.process != nullptr) {
-        info.process->terminate();
-        if (!info.process->waitForFinished(2000)) {
-            info.process->kill();
-            info.process->waitForFinished(1000);
+    QPointer<QProcess> process = it->process;
+    bool               stopped = true;
+    if (!process.isNull() && process->state() != QProcess::NotRunning) {
+        process->terminate();
+        stopped = waitForProcessStopped(process, kActiveTerminateMs);
+        if (!stopped) {
+            stopped = forceStopProcess(process);
         }
-        delete info.process;
-        info.process = nullptr;
     }
-    QDir(QFileInfo(info.outputPath).absolutePath()).removeRecursively();
-    activeProcesses.erase(it);
+
+    it = activeProcesses.find(processId);
+    if (it == activeProcesses.end()) {
+        return true;
+    }
+    if (process.isNull() || it->process != process.data()) {
+        return false;
+    }
+    if (!stopped) {
+        return false;
+    }
+
+    requestProcessCleanup(activeProcesses, processId);
     return true;
 }
 
@@ -240,7 +347,9 @@ void QSocToolShellBash::tickWatchdog()
         const auto it = activeProcesses.find(id);
         if (it == activeProcesses.end())
             continue;
-        emit processStuckDetected(id, it->stuckReason, readLastLines(it->outputPath, 5));
+        const QString reason = it->stuckReason;
+        const QString tail   = readLastLines(it->outputPath, 5);
+        emit          processStuckDetected(id, reason, tail);
     }
 }
 
@@ -360,7 +469,8 @@ QString QSocToolShellBash::execute(const json &arguments)
             this,
             [this, processId, command](int exitCode, QProcess::ExitStatus) {
                 emit backgroundProcessFinished(processId, exitCode, command);
-            });
+            },
+            Qt::QueuedConnection);
         return QString(
                    "Started in background.\n"
                    "Process ID: %1\n"
@@ -440,7 +550,8 @@ QString QSocToolShellBash::execute(const json &arguments)
         this,
         [this, processId, command](int exitCode, QProcess::ExitStatus) {
             emit backgroundProcessFinished(processId, exitCode, command);
-        });
+        },
+        Qt::QueuedConnection);
 
     /* Read last lines for immediate feedback */
     QString lastOutput = readLastLines(outputPath, 50);
@@ -479,13 +590,24 @@ void QSocToolShellBash::setProjectManager(QSocProjectManager *projectManager)
     this->projectManager = projectManager;
 }
 
-/* ========== QSocToolBashManage ========== */
+/* QSocToolBashManage */
 
 QSocToolBashManage::QSocToolBashManage(QObject *parent)
     : QSocTool(parent)
 {}
 
-QSocToolBashManage::~QSocToolBashManage() = default;
+QSocToolBashManage::~QSocToolBashManage()
+{
+    abort();
+}
+
+void QSocToolBashManage::abort()
+{
+    for (WaitContext *wait : std::as_const(activeWaits_)) {
+        wait->aborted = true;
+        wait->loop->quit();
+    }
+}
 
 QString QSocToolBashManage::getName() const
 {
@@ -495,7 +617,12 @@ QString QSocToolBashManage::getName() const
 QString QSocToolBashManage::getDescription() const
 {
     return "Manage a timed-out bash process: check status, wait more, read output, kill, "
-           "or terminate. Use process_id from bash tool timeout response.";
+           "or terminate. Terminate requests graceful exit, then force-kills after 5 seconds. "
+           "Use process_id from bash tool timeout response. A terminal status, wait, kill, "
+           "or terminate returns final output and releases the process record after the active "
+           "wait finishes. Aborting a wait leaves a running process tracked. Only one wait or "
+           "terminate action can block at a time; another is rejected immediately. A process "
+           "that does not stop remains tracked.";
 }
 
 json QSocToolBashManage::getParametersSchema() const
@@ -510,33 +637,19 @@ json QSocToolBashManage::getParametersSchema() const
             {"enum", json::array({"status", "wait", "output", "kill", "terminate"})},
             {"description",
              "Action: status (check state), wait (wait more time), "
-             "output (read last 200 lines), kill (force kill), terminate (graceful stop)"}}},
+             "output (read last 200 lines), kill (force kill), "
+             "terminate (graceful stop, then force kill after 5s)"}}},
           {"timeout",
            {{"type", "integer"},
-            {"description", "Additional wait time in ms for 'wait' action (default: 60000)"}}}}},
+            {"minimum", 1},
+            {"maximum", std::numeric_limits<int>::max()},
+            {"description",
+             "Positive additional wait time in ms for 'wait' action (default: 60000)"}}}}},
         {"required", json::array({"process_id", "action"})}};
 }
 
-void QSocToolBashManage::cleanupProcess(int processId)
+QString QSocToolBashManage::collectOutput(const QSocBashProcessInfo &info, int exitCode)
 {
-    if (!QSocToolShellBash::activeProcesses.contains(processId)) {
-        return;
-    }
-
-    auto &info = QSocToolShellBash::activeProcesses[processId];
-    delete info.process;
-    QDir(QFileInfo(info.outputPath).absolutePath()).removeRecursively();
-    QSocToolShellBash::activeProcesses.remove(processId);
-}
-
-QString QSocToolBashManage::collectOutput(int processId, int exitCode)
-{
-    if (!QSocToolShellBash::activeProcesses.contains(processId)) {
-        return {};
-    }
-
-    auto &info = QSocToolShellBash::activeProcesses[processId];
-
     /* No buffered remainder to flush: the process redirects stdout+stderr
      * straight to info.outputPath via setStandardOutputFile, so the file
      * already contains everything that was emitted up to exit. */
@@ -581,9 +694,9 @@ QString QSocToolBashManage::execute(const json &arguments)
             .arg(processId);
     }
 
-    auto &info = QSocToolShellBash::activeProcesses[processId];
-
     if (action == "status") {
+        auto    it        = QSocToolShellBash::activeProcesses.find(processId);
+        auto   &info      = it.value();
         bool    running   = (info.process->state() != QProcess::NotRunning);
         qint64  elapsed   = QDateTime::currentMSecsSinceEpoch() - info.startTime;
         QString lastLines = QSocToolShellBash::readLastLines(info.outputPath, 10);
@@ -614,40 +727,57 @@ QString QSocToolBashManage::execute(const json &arguments)
 
         if (!running) {
             int     exitCode = info.process->exitCode();
-            QString output   = collectOutput(processId, exitCode);
-            cleanupProcess(processId);
+            QString output   = collectOutput(info, exitCode);
             result
                 += QString("\n\nProcess has finished (exit code %1):\n%2").arg(exitCode).arg(output);
+            requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
         }
 
         return result;
     }
 
     if (action == "wait") {
-        if (info.process->state() == QProcess::NotRunning) {
-            int     exitCode = info.process->exitCode();
-            QString output   = collectOutput(processId, exitCode);
-            cleanupProcess(processId);
-            return QString("Process already finished (exit code %1):\n%2").arg(exitCode).arg(output);
+        auto  it          = QSocToolShellBash::activeProcesses.find(processId);
+        auto &info        = it.value();
+        int   waitTimeout = 60000;
+        if (arguments.contains("timeout")) {
+            const auto &timeout = arguments["timeout"];
+            if (!timeout.is_number_integer()) {
+                return "Error: timeout must be a positive integer";
+            }
+            if (timeout.is_number_unsigned()
+                && timeout.get<quint64>() > static_cast<quint64>(std::numeric_limits<int>::max())) {
+                return "Error: timeout must be a positive integer";
+            }
+            const auto value = timeout.get<qint64>();
+            if (value <= 0 || value > std::numeric_limits<int>::max()) {
+                return "Error: timeout must be a positive integer";
+            }
+            waitTimeout = static_cast<int>(value);
         }
 
-        int waitTimeout = 60000;
-        if (arguments.contains("timeout") && arguments["timeout"].is_number_integer()) {
-            waitTimeout = arguments["timeout"].get<int>();
-            if (waitTimeout <= 0) {
-                waitTimeout = 60000;
-            }
+        if (info.process->state() == QProcess::NotRunning) {
+            int     exitCode = info.process->exitCode();
+            QString output   = collectOutput(info, exitCode);
+            requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
+            return QString("Process already finished (exit code %1):\n%2").arg(exitCode).arg(output);
+        }
+        if (hasActiveProcessWait(QSocToolShellBash::activeProcesses)) {
+            return kBlockingWaitBusy;
         }
 
         /* Process stdout is already redirected to info.outputPath at the
          * OS level by setStandardOutputFile, so the file grows on its own
-         * while we wait. We just spin an event loop until either the
-         * process finishes or the wait timeout fires. */
-        QEventLoop loop;
-        bool       finished = false;
+         * while we wait. */
+        QEventLoop                   loop;
+        bool                         finished = false;
+        QPointer<QProcess>           process  = info.process;
+        QPointer<QSocToolBashManage> guard(this);
+        WaitContext                  wait{&loop};
+        ++info.activeWaiters;
 
         auto connFinish = QObject::connect(
-            info.process,
+            process.data(),
             QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             &loop,
             [&finished, &loop](int, QProcess::ExitStatus) {
@@ -657,28 +787,48 @@ QString QSocToolBashManage::execute(const json &arguments)
 
         QTimer::singleShot(waitTimeout, &loop, [&loop]() { loop.quit(); });
 
+        activeWaits_.insert(&wait);
         loop.exec();
+        if (!guard.isNull()) {
+            guard->activeWaits_.remove(&wait);
+        }
 
         QObject::disconnect(connFinish);
 
-        if (finished) {
-            int     exitCode = info.process->exitCode();
-            QString output   = collectOutput(processId, exitCode);
-            cleanupProcess(processId);
-            return QString("Process completed (exit code %1):\n%2").arg(exitCode).arg(output);
+        it = QSocToolShellBash::activeProcesses.find(processId);
+        if (it == QSocToolShellBash::activeProcesses.end() || process.isNull()
+            || it->process != process.data()) {
+            return QString("Error: Process %1 was removed while waiting.").arg(processId);
         }
 
-        QString lastOutput = QSocToolShellBash::readLastLines(info.outputPath, 50);
-        return QString(
-                   "Process still running after additional %1ms wait.\n"
-                   "Last output:\n%2")
-            .arg(waitTimeout)
-            .arg(lastOutput);
+        if (finished || process->state() == QProcess::NotRunning) {
+            const int     exitCode = process->exitCode();
+            const QString output   = collectOutput(it.value(), exitCode);
+            const QString result
+                = QString("Process completed (exit code %1):\n%2").arg(exitCode).arg(output);
+            releaseProcessWaiter(QSocToolShellBash::activeProcesses, processId, true);
+            return result;
+        }
+
+        if (wait.aborted) {
+            releaseProcessWaiter(QSocToolShellBash::activeProcesses, processId, false);
+            return "Wait aborted; process is still running.";
+        }
+
+        const QString lastOutput = QSocToolShellBash::readLastLines(it->outputPath, 50);
+        const QString result     = QString(
+                                       "Process still running after additional %1ms wait.\n"
+                                       "Last output:\n%2")
+                                       .arg(waitTimeout)
+                                       .arg(lastOutput);
+        releaseProcessWaiter(QSocToolShellBash::activeProcesses, processId, false);
+        return result;
     }
 
     if (action == "output") {
-        QString lastOutput = QSocToolShellBash::readLastLines(info.outputPath, 200);
-        bool    running    = (info.process->state() != QProcess::NotRunning);
+        const auto &info       = QSocToolShellBash::activeProcesses[processId];
+        QString     lastOutput = QSocToolShellBash::readLastLines(info.outputPath, 200);
+        bool        running    = (info.process->state() != QProcess::NotRunning);
         return QString("Process %1 (%2):\n%3")
             .arg(processId)
             .arg(running ? "RUNNING" : "FINISHED")
@@ -686,23 +836,59 @@ QString QSocToolBashManage::execute(const json &arguments)
     }
 
     if (action == "kill") {
-        info.process->kill();
-        info.process->waitForFinished(1000);
-        int     exitCode = info.process->exitCode();
-        QString output   = collectOutput(processId, exitCode);
-        cleanupProcess(processId);
-        return QString("Process killed (exit code %1):\n%2").arg(exitCode).arg(output);
+        auto &info = QSocToolShellBash::activeProcesses[processId];
+        if (info.process->state() == QProcess::NotRunning) {
+            const int     exitCode = info.process->exitCode();
+            const QString output   = collectOutput(info, exitCode);
+            requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
+            return QString("Process already finished (exit code %1):\n%2").arg(exitCode).arg(output);
+        }
+
+        QPointer<QProcess> process = info.process;
+        const bool         stopped = forceStopProcess(process);
+        auto               it      = QSocToolShellBash::activeProcesses.find(processId);
+        if (it == QSocToolShellBash::activeProcesses.end() || process.isNull()
+            || it->process != process.data()) {
+            return QString("Error: Process %1 was removed while killing.").arg(processId);
+        }
+        if (!stopped) {
+            const QString lastOutput = QSocToolShellBash::readLastLines(it->outputPath, 50);
+            return QString("Kill requested, but process is still running.\nLast output:\n%1")
+                .arg(lastOutput);
+        }
+
+        const int     exitCode = process->exitCode();
+        const QString output   = collectOutput(it.value(), exitCode);
+        const QString result
+            = QString("Process killed (exit code %1):\n%2").arg(exitCode).arg(output);
+        requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
+        return result;
     }
 
     if (action == "terminate") {
-        info.process->terminate();
+        auto &info = QSocToolShellBash::activeProcesses[processId];
+        if (info.process->state() == QProcess::NotRunning) {
+            const int     exitCode = info.process->exitCode();
+            const QString output   = collectOutput(info, exitCode);
+            requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
+            return QString("Process already finished (exit code %1):\n%2").arg(exitCode).arg(output);
+        }
+        if (hasActiveProcessWait(QSocToolShellBash::activeProcesses)) {
+            return kBlockingWaitBusy;
+        }
+
+        QPointer<QProcess>           process = info.process;
+        QPointer<QSocToolBashManage> guard(this);
+        ++info.activeWaiters;
+        process->terminate();
 
         /* Wait up to 5s for graceful exit */
-        QEventLoop loop;
-        bool       finished = false;
+        QEventLoop  loop;
+        bool        finished = false;
+        WaitContext wait{&loop};
 
         auto connFinish = QObject::connect(
-            info.process,
+            process.data(),
             QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             &loop,
             [&finished, &loop](int, QProcess::ExitStatus) {
@@ -710,21 +896,55 @@ QString QSocToolBashManage::execute(const json &arguments)
                 loop.quit();
             });
 
-        QTimer::singleShot(5000, &loop, [&loop]() { loop.quit(); });
+        QTimer::singleShot(kTerminateGraceMs, &loop, [&loop]() { loop.quit(); });
 
+        activeWaits_.insert(&wait);
         loop.exec();
+        if (!guard.isNull()) {
+            guard->activeWaits_.remove(&wait);
+        }
 
         QObject::disconnect(connFinish);
 
-        if (!finished) {
-            info.process->kill();
-            info.process->waitForFinished(1000);
+        auto it = QSocToolShellBash::activeProcesses.find(processId);
+        if (it == QSocToolShellBash::activeProcesses.end() || process.isNull()
+            || it->process != process.data()) {
+            return QString("Error: Process %1 was removed while terminating.").arg(processId);
         }
 
-        int     exitCode = info.process->exitCode();
-        QString output   = collectOutput(processId, exitCode);
-        cleanupProcess(processId);
-        return QString("Process terminated (exit code %1):\n%2").arg(exitCode).arg(output);
+        if (finished || process->state() == QProcess::NotRunning) {
+            const int     exitCode = process->exitCode();
+            const QString output   = collectOutput(it.value(), exitCode);
+            const QString result
+                = QString("Process terminated (exit code %1):\n%2").arg(exitCode).arg(output);
+            releaseProcessWaiter(QSocToolShellBash::activeProcesses, processId, true);
+            return result;
+        }
+
+        if (wait.aborted) {
+            releaseProcessWaiter(QSocToolShellBash::activeProcesses, processId, false);
+            return "Terminate requested; wait aborted; process is still running.";
+        }
+
+        const bool stopped = forceStopProcess(process);
+        if (!stopped) {
+            const QString lastOutput = QSocToolShellBash::readLastLines(it->outputPath, 50);
+            releaseProcessWaiter(QSocToolShellBash::activeProcesses, processId, false);
+            return QString(
+                       "Terminate timed out and force kill was requested, but the process "
+                       "is still running.\nLast output:\n%1")
+                .arg(lastOutput);
+        }
+
+        const int     exitCode = process->exitCode();
+        const QString output   = collectOutput(it.value(), exitCode);
+        const QString result   = QString(
+                                     "Process force-killed after terminate timeout "
+                                     "(exit code %1):\n%2")
+                                     .arg(exitCode)
+                                     .arg(output);
+        releaseProcessWaiter(QSocToolShellBash::activeProcesses, processId, true);
+        return result;
     }
 
     return QString("Error: Unknown action '%1'. Use: status, wait, output, kill, terminate")

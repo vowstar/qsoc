@@ -468,7 +468,13 @@ The agent provides the following tools through natural language:
   `write_file` require the file to have been read first and reject a file
   changed on disk since that read (local and remote)
 - *Shell*: `bash` (synchronous, or `background=true` for detached jobs),
-  `bash_manage` to inspect, tail, or kill backgrounded jobs
+  `bash_manage` to inspect, tail, wait for, or stop backgrounded jobs. A
+  terminal status, wait, or stop returns final output and removes the local
+  job record after the active wait finishes; cancelling a wait leaves a
+  running job tracked. Only one local wait or terminate action blocks at a
+  time; another returns an error immediately. Terminate requests a graceful
+  stop and force-kills after five seconds; a process that does not stop remains
+  tracked
 - *Monitors*: `monitor` starts a line-oriented watcher whose output wakes
   the agent; `monitor_stop` terminates a watcher
 - *Sub-agents*: `agent` to spawn a child run, `agent_status` to poll a
