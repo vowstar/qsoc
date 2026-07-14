@@ -8,12 +8,50 @@
 #include <QtTest>
 
 #ifdef Q_OS_UNIX
+#include <cerrno>
 #include <signal.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
 
 namespace {
+
+#ifdef Q_OS_UNIX
+bool processExists(const qint64 processId)
+{
+    if (processId <= 0) {
+        return false;
+    }
+    errno = 0;
+    return ::kill(static_cast<pid_t>(processId), 0) == 0 || errno == EPERM;
+}
+#endif
+
+class IsolatedTestProcess final : public QProcess
+{
+#if defined(Q_OS_UNIX) && QT_VERSION < 0x060000
+protected:
+    void setupChildProcess() override
+    {
+        if (::setpgid(0, 0) != 0) {
+            ::_exit(127);
+        }
+    }
+#endif
+};
+
+void prepareIsolatedTestProcess(QProcess *process)
+{
+#if defined(Q_OS_UNIX) && QT_VERSION >= 0x060000
+    process->setChildProcessModifier([]() {
+        if (::setpgid(0, 0) != 0) {
+            ::_exit(127);
+        }
+    });
+#else
+    Q_UNUSED(process);
+#endif
+}
 
 class Test : public QObject
 {
@@ -77,14 +115,12 @@ private slots:
             QTemporaryDir scratch;
             QVERIFY(scratch.isValid());
 
-            QProcess child;
-            auto     environment = QProcessEnvironment::systemEnvironment();
+            IsolatedTestProcess child;
+            auto                environment = QProcessEnvironment::systemEnvironment();
             environment.insert(QStringLiteral("QSOC_TEST_SHELL_MANAGE_CHILD"), QStringLiteral("1"));
             environment.insert(QStringLiteral("TMPDIR"), scratch.path());
             child.setProcessEnvironment(environment);
-#ifdef Q_OS_UNIX
-            child.setChildProcessModifier([]() { ::setpgid(0, 0); });
-#endif
+            prepareIsolatedTestProcess(&child);
             child.start(
                 QCoreApplication::applicationFilePath(),
                 {QStringLiteral("managementWaits_areSafeAndAbortable")});
@@ -113,8 +149,10 @@ private slots:
         QSocToolBashManage manage;
         QSignalSpy         finishedSpy(&bash, &QSocToolShellBash::backgroundProcessFinished);
         QVERIFY(finishedSpy.isValid());
-        const QString startResult = bash.execute(
-            {{"command", "exec sleep 30"}, {"background", true}});
+        const std::string longCommand = "(sleep 8; kill -KILL 0) & exec sleep 30";
+        const std::string stubbornCommand
+            = "(trap '' TERM; sleep 8; kill -KILL 0) & trap '' TERM; printf ready; exec sleep 30";
+        const QString startResult = bash.execute({{"command", longCommand}, {"background", true}});
         QVERIFY2(!startResult.startsWith("Error:"), qPrintable(startResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
         const int processId = QSocToolShellBash::snapshotActive().constFirst().id;
@@ -140,7 +178,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 1, 1000);
 
         const QString secondStartResult = bash.execute(
-            {{"command", "exec sleep 30"}, {"background", true}});
+            {{"command", longCommand}, {"background", true}});
         QVERIFY2(!secondStartResult.startsWith("Error:"), qPrintable(secondStartResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
         const int secondProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
@@ -164,7 +202,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 2, 1000);
 
         const QString thirdStartResult = bash.execute(
-            {{"command", "exec sleep 30"}, {"background", true}});
+            {{"command", longCommand}, {"background", true}});
         QVERIFY2(!thirdStartResult.startsWith("Error:"), qPrintable(thirdStartResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
         const int thirdProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
@@ -205,7 +243,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 3, 1000);
 
         const QString fourthStartResult = bash.execute(
-            {{"command", "trap '' TERM; printf ready; exec sleep 30"}, {"background", true}});
+            {{"command", stubbornCommand}, {"background", true}});
         QVERIFY2(!fourthStartResult.startsWith("Error:"), qPrintable(fourthStartResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
         const int fourthProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
@@ -240,7 +278,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 5, 1000);
 
         const QString sixthStartResult = bash.execute(
-            {{"command", "exec sleep 30"}, {"background", true}});
+            {{"command", longCommand}, {"background", true}});
         QVERIFY2(!sixthStartResult.startsWith("Error:"), qPrintable(sixthStartResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
         const int sixthProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
@@ -260,7 +298,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 6, 1000);
 
         const QString seventhStartResult = bash.execute(
-            {{"command", "trap '' TERM; printf ready; exec sleep 30"}, {"background", true}});
+            {{"command", stubbornCommand}, {"background", true}});
         QVERIFY2(!seventhStartResult.startsWith("Error:"), qPrintable(seventhStartResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
         const int seventhProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
@@ -283,32 +321,259 @@ private slots:
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 7, 1000);
 
+        const std::string childIgnoresTerm
+            = "(trap '' TERM; sleep 8; kill -KILL 0) & "
+              "(trap '' TERM; exec sleep 30) & child=$!; "
+              "printf 'ready child=%s\\n' \"$child\"; wait \"$child\"";
         const QString eighthStartResult = bash.execute(
-            {{"command", "trap '' TERM; printf ready; exec sleep 30"}, {"background", true}});
+            {{"command", childIgnoresTerm}, {"background", true}});
         QVERIFY2(!eighthStartResult.startsWith("Error:"), qPrintable(eighthStartResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
         const int eighthProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
         QTRY_VERIFY_WITH_TIMEOUT(
             QSocToolShellBash::tailActive(eighthProcessId, 64).contains("ready"), 1000);
+        const QRegularExpression childPattern(QStringLiteral("child=(\\d+)"));
+        const auto               childMatch = childPattern.match(
+            QSocToolShellBash::tailActive(eighthProcessId, 128));
+        QVERIFY(childMatch.hasMatch());
+        const qint64 stubbornChildPid = childMatch.captured(1).toLongLong();
+        QVERIFY(processExists(stubbornChildPid));
 
+        bool graceProbeRan        = false;
+        bool notificationWasEarly = false;
+        QTimer::singleShot(100, &bash, [&]() {
+            graceProbeRan        = true;
+            notificationWasEarly = finishedSpy.size() != 7;
+        });
         const QString forceKillResult = manage.execute(
             {{"process_id", eighthProcessId}, {"action", "terminate"}});
+        QVERIFY(graceProbeRan);
+        QVERIFY(!notificationWasEarly);
         QVERIFY2(
             forceKillResult.startsWith("Process force-killed after terminate timeout (exit code "),
             qPrintable(forceKillResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
+        QTRY_VERIFY_WITH_TIMEOUT(!processExists(stubbornChildPid), 1000);
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 8, 1000);
 
-        const QString ninthStartResult = bash.execute(
-            {{"command", "exec sleep 30"}, {"background", true}});
-        QVERIFY2(!ninthStartResult.startsWith("Error:"), qPrintable(ninthStartResult));
+        const QString terminalLatchStartResult = bash.execute(
+            {{"command", "(trap '' TERM; exec sleep 1) & child=$!; printf ready; wait \"$child\""},
+             {"background", true}});
+        QVERIFY2(!terminalLatchStartResult.startsWith("Error:"), qPrintable(terminalLatchStartResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
-        const int     ninthProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
+        const int terminalLatchProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            QSocToolShellBash::tailActive(terminalLatchProcessId, 64).contains("ready"), 1000);
+
+        QTimer::singleShot(20, &manage, &QSocToolBashManage::abort);
+        const QString terminalLatchAbortResult = manage.execute(
+            {{"process_id", terminalLatchProcessId}, {"action", "terminate"}});
+        QCOMPARE(
+            terminalLatchAbortResult,
+            QString("Terminate requested; wait aborted; process is still running."));
+        QCOMPARE(finishedSpy.size(), 8);
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            manage.execute({{"process_id", terminalLatchProcessId}, {"action", "output"}})
+                .contains("(FINISHED)"),
+            2000);
+        QTest::qWait(100);
+        QVERIFY(manage.execute({{"process_id", terminalLatchProcessId}, {"action", "output"}})
+                    .contains("(FINISHED)"));
+        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 9, 1000);
+        const QString terminalLatchStatus = manage.execute(
+            {{"process_id", terminalLatchProcessId}, {"action", "status"}});
+        QVERIFY2(terminalLatchStatus.contains("Status: FINISHED"), qPrintable(terminalLatchStatus));
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
+
+        const QString tenthStartResult = bash.execute(
+            {{"command", longCommand}, {"background", true}});
+        QVERIFY2(!tenthStartResult.startsWith("Error:"), qPrintable(tenthStartResult));
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
+        const int     tenthProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
         const QString killResult     = manage.execute(
-            {{"process_id", ninthProcessId}, {"action", "kill"}});
+            {{"process_id", tenthProcessId}, {"action", "kill"}});
         QVERIFY2(killResult.startsWith("Process killed (exit code "), qPrintable(killResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
-        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 9, 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 10, 1000);
+#endif
+    }
+
+    void foregroundWaits_areSafeAndIsolated()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("The bash tool is unavailable on Windows");
+#else
+        if (!qEnvironmentVariableIsSet("QSOC_TEST_SHELL_FOREGROUND_CHILD")) {
+            QTemporaryDir scratch;
+            QVERIFY(scratch.isValid());
+
+            IsolatedTestProcess child;
+            auto                environment = QProcessEnvironment::systemEnvironment();
+            environment
+                .insert(QStringLiteral("QSOC_TEST_SHELL_FOREGROUND_CHILD"), QStringLiteral("1"));
+            environment.insert(QStringLiteral("TMPDIR"), scratch.path());
+            child.setProcessEnvironment(environment);
+            prepareIsolatedTestProcess(&child);
+            child.start(
+                QCoreApplication::applicationFilePath(),
+                {QStringLiteral("foregroundWaits_areSafeAndIsolated")});
+            QVERIFY(child.waitForStarted(5000));
+            const qint64 childPid  = child.processId();
+            const bool   stopped   = child.waitForFinished(12000);
+            const bool   cleanExit = stopped && child.exitStatus() == QProcess::NormalExit
+                                     && child.exitCode() == 0;
+            if (!cleanExit && childPid > 0) {
+                ::kill(-static_cast<pid_t>(childPid), SIGKILL);
+            }
+            if (!stopped) {
+                child.waitForFinished(1000);
+            }
+            const QByteArray childOutput = child.readAllStandardOutput()
+                                           + child.readAllStandardError();
+            QVERIFY2(stopped, "foreground bash lifecycle scenario hung");
+            QVERIFY2(child.exitStatus() == QProcess::NormalExit, childOutput.constData());
+            QVERIFY2(child.exitCode() == 0, childOutput.constData());
+            return;
+        }
+
+        const QString workDir      = QDir::tempPath();
+        const QString nestedMarker = QDir(workDir).filePath(QStringLiteral("nested-marker"));
+        QFile::remove(nestedMarker);
+
+        QSocToolShellBash bash;
+        QSocToolShellBash other;
+        const std::string longCommand = "(sleep 8; kill -KILL 0) & exec sleep 30";
+
+        QString nestedResult;
+        QString nestedBackgroundResult;
+        QTimer::singleShot(0, &other, [&]() {
+            nestedResult = other.execute(
+                {{"command", "touch nested-marker"}, {"working_directory", workDir.toStdString()}});
+            nestedBackgroundResult = other.execute(
+                {{"command", longCommand},
+                 {"working_directory", workDir.toStdString()},
+                 {"background", true}});
+        });
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const QString timeoutResult = bash.execute(
+            {{"command", longCommand},
+             {"working_directory", workDir.toStdString()},
+             {"timeout", 20}});
+        QVERIFY2(timeoutResult.contains("timed out after 20ms"), qPrintable(timeoutResult));
+        QCOMPARE(
+            nestedResult,
+            QString(
+                "Error: Command was not started because another foreground bash command is active "
+                "in this session. Use background=true for concurrent commands."));
+        QVERIFY2(
+            nestedBackgroundResult.startsWith("Started in background."),
+            qPrintable(nestedBackgroundResult));
+        QVERIFY2(elapsed.elapsed() < 500, "nested foreground command delayed the outer deadline");
+        QVERIFY(!QFileInfo::exists(nestedMarker));
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 2);
+        QSocToolShellBash::killAllActive();
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
+
+        const QString descendantFile = QDir(workDir).filePath(QStringLiteral("descendant.pid"));
+        QFile::remove(descendantFile);
+        qint64     descendantPid     = -1;
+        const auto cleanupDescendant = qScopeGuard([&descendantPid]() {
+            if (processExists(descendantPid)) {
+                ::kill(static_cast<pid_t>(descendantPid), SIGKILL);
+            }
+        });
+        QTimer     abortWhenReady;
+        abortWhenReady.setInterval(5);
+        QObject::connect(&abortWhenReady, &QTimer::timeout, &bash, [&]() {
+            if (QFileInfo::exists(descendantFile)) {
+                abortWhenReady.stop();
+                bash.abort();
+            }
+        });
+        abortWhenReady.start();
+        const QString abortResult = bash.execute(
+            {{"command",
+              "(sleep 8; kill -KILL 0) & sleep 30 & "
+              "printf '%s' $! > descendant.pid; wait"},
+             {"working_directory", workDir.toStdString()},
+             {"timeout", 1000}});
+        abortWhenReady.stop();
+        QCOMPARE(abortResult, QString("Command aborted."));
+        QFile pidFile(descendantFile);
+        QVERIFY(pidFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        descendantPid = QString::fromLatin1(pidFile.readAll()).trimmed().toLongLong();
+        pidFile.close();
+        QVERIFY(descendantPid > 0);
+        QTRY_VERIFY_WITH_TIMEOUT(!processExists(descendantPid), 1000);
+        descendantPid = -1;
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
+
+        QCOMPARE(
+            bash.execute(
+                {{"command", "printf ready"}, {"working_directory", workDir.toStdString()}}),
+            QString("ready"));
+
+        const QString selfBackgroundedFile = QDir(workDir).filePath(
+            QStringLiteral("self-backgrounded.pid"));
+        QFile::remove(selfBackgroundedFile);
+        qint64     selfBackgroundedPid     = -1;
+        const auto cleanupSelfBackgrounded = qScopeGuard([&selfBackgroundedPid]() {
+            if (processExists(selfBackgroundedPid)) {
+                ::kill(static_cast<pid_t>(selfBackgroundedPid), SIGKILL);
+            }
+        });
+        QCOMPARE(
+            bash.execute(
+                {{"command", "sleep 2 & printf '%s' $! > self-backgrounded.pid"},
+                 {"working_directory", workDir.toStdString()}}),
+            QString("(no output)"));
+        QFile selfBackgroundedPidFile(selfBackgroundedFile);
+        QVERIFY(selfBackgroundedPidFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        selfBackgroundedPid
+            = QString::fromLatin1(selfBackgroundedPidFile.readAll()).trimmed().toLongLong();
+        selfBackgroundedPidFile.close();
+        QVERIFY(processExists(selfBackgroundedPid));
+        ::kill(static_cast<pid_t>(selfBackgroundedPid), SIGKILL);
+        QTRY_VERIFY_WITH_TIMEOUT(!processExists(selfBackgroundedPid), 1000);
+        selfBackgroundedPid = -1;
+
+        auto                       *deleted = new QSocToolShellBash;
+        QPointer<QSocToolShellBash> deletedGuard(deleted);
+        QTimer::singleShot(10, QCoreApplication::instance(), [deleted]() { delete deleted; });
+        QCOMPARE(
+            deleted->execute(
+                {{"command", longCommand},
+                 {"working_directory", workDir.toStdString()},
+                 {"timeout", 1000}}),
+            QString("Command aborted."));
+        QVERIFY(deletedGuard.isNull());
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
+        QCOMPARE(
+            other.execute(
+                {{"command", "printf after-delete"}, {"working_directory", workDir.toStdString()}}),
+            QString("after-delete"));
+
+        auto         *ownerA      = new QSocToolShellBash;
+        auto         *ownerB      = new QSocToolShellBash;
+        const QString backgroundA = ownerA->execute(
+            {{"command", longCommand},
+             {"working_directory", workDir.toStdString()},
+             {"background", true}});
+        const QString backgroundB = ownerB->execute(
+            {{"command", longCommand},
+             {"working_directory", workDir.toStdString()},
+             {"background", true}});
+        QVERIFY2(backgroundA.startsWith("Started in background."), qPrintable(backgroundA));
+        QVERIFY2(backgroundB.startsWith("Started in background."), qPrintable(backgroundB));
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 2);
+        delete ownerA;
+        const auto snapshots = QSocToolShellBash::snapshotActive();
+        QCOMPARE(snapshots.size(), 1);
+        QVERIFY(snapshots.constFirst().isRunning);
+        delete ownerB;
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
 #endif
     }
 };

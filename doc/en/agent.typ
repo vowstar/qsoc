@@ -467,14 +467,16 @@ The agent provides the following tools through natural language:
   reports and adjusts allowed write directories. `edit_file` and overwriting
   `write_file` require the file to have been read first and reject a file
   changed on disk since that read (local and remote)
-- *Shell*: `bash` (synchronous, or `background=true` for detached jobs),
+- *Shell*: `bash` (synchronous, or `background=true` for background jobs),
   `bash_manage` to inspect, tail, wait for, or stop backgrounded jobs. A
+  second foreground call in the session is not started while one is waiting;
+  use `background=true` when commands must run concurrently. A
   terminal status, wait, or stop returns final output and removes the local
   job record after the active wait finishes; cancelling a wait leaves a
-  running job tracked. Only one local wait or terminate action blocks at a
-  time; another returns an error immediately. Terminate requests a graceful
-  stop and force-kills after five seconds; a process that does not stop remains
-  tracked
+  running job tracked. Stopping a managed job stops its process group. Only
+  one local wait or terminate action blocks at a time; another returns an error
+  immediately. Terminate requests a graceful stop and force-kills after five
+  seconds; a process that does not stop remains tracked
 - *Monitors*: `monitor` starts a line-oriented watcher whose output wakes
   the agent; `monitor_stop` terminates a watcher
 - *Sub-agents*: `agent` to spawn a child run, `agent_status` to poll a

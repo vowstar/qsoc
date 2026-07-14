@@ -5,17 +5,26 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QPointer>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTextStream>
+#include <QThread>
 #include <QTimer>
 
 #include <limits>
+
+#ifdef Q_OS_UNIX
+#include <cerrno>
+#include <csignal>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -27,10 +36,18 @@ constexpr int    kActiveTerminateMs     = 2000;
 constexpr int    kForceStopMs           = 1000;
 constexpr auto   kBlockingWaitBusy
     = "Error: Another bash_manage wait or terminate is already active.";
+constexpr auto kForegroundWaitBusy
+    = "Error: Command was not started because another foreground bash command is active in this "
+      "session. Use background=true for concurrent commands.";
+thread_local bool foregroundWaitActive = false;
 /* How many bytes from the tail to test against the interactive-prompt
  * regex. 4 KB is enough to catch a multi-line confirmation block while
  * staying tiny relative to the overall capture file. */
 constexpr qint64 kStuckTailBytes = 4096;
+
+bool processTreeRunning(
+    const QPointer<QProcess> &process, qint64 processGroupId, bool trackProcessGroup);
+bool trackedProcessRunning(QSocBashProcessInfo &info);
 
 void destroyProcessInfo(QSocBashProcessInfo &info)
 {
@@ -50,7 +67,7 @@ void requestProcessCleanup(QMap<int, QSocBashProcessInfo> &processes, const int 
     if (it == processes.end()) {
         return;
     }
-    if (it->process != nullptr && it->process->state() != QProcess::NotRunning) {
+    if (trackedProcessRunning(it.value())) {
         return;
     }
 
@@ -92,24 +109,145 @@ bool hasActiveProcessWait(const QMap<int, QSocBashProcessInfo> &processes)
     return false;
 }
 
-bool waitForProcessStopped(const QPointer<QProcess> &process, const int timeoutMs)
+class QSocBashProcess final : public QProcess
 {
-    if (process.isNull() || process->state() == QProcess::NotRunning) {
-        return true;
+public:
+    QSocBashProcess()
+    {
+#ifdef Q_OS_UNIX
+        connect(this, &QProcess::started, this, [this]() { processGroupId_ = processId(); });
+#endif
     }
 
-    return process->waitForFinished(timeoutMs) || process.isNull()
-           || process->state() == QProcess::NotRunning;
+    qint64 processGroupId() const { return processGroupId_; }
+
+#if defined(Q_OS_UNIX) && QT_VERSION < 0x060000
+protected:
+    void setupChildProcess() override
+    {
+        if (::setpgid(0, 0) != 0) {
+            ::_exit(127);
+        }
+    }
+#endif
+
+private:
+    qint64 processGroupId_ = 0;
+};
+
+bool processGroupRunning(const qint64 processGroupId)
+{
+#ifdef Q_OS_UNIX
+    if (processGroupId <= 0) {
+        return false;
+    }
+    errno = 0;
+    return ::kill(-static_cast<pid_t>(processGroupId), 0) == 0 || errno == EPERM;
+#else
+    Q_UNUSED(processGroupId);
+    return false;
+#endif
 }
 
-bool forceStopProcess(const QPointer<QProcess> &process)
+bool processTreeRunning(
+    const QPointer<QProcess> &process, const qint64 processGroupId, const bool trackProcessGroup)
 {
-    if (process.isNull() || process->state() == QProcess::NotRunning) {
+    return (!process.isNull() && process->state() != QProcess::NotRunning)
+           || (trackProcessGroup && processGroupRunning(processGroupId));
+}
+
+bool trackedProcessRunning(QSocBashProcessInfo &info)
+{
+    using GroupStopState = QSocBashProcessInfo::GroupStopState;
+
+    if (info.groupStopState == GroupStopState::Stopped) {
+        return false;
+    }
+
+    const QPointer<QProcess> process = info.process;
+    const bool leaderRunning = !process.isNull() && process->state() != QProcess::NotRunning;
+    if (info.groupStopState == GroupStopState::NotRequested) {
+        return leaderRunning;
+    }
+    if (leaderRunning || processGroupRunning(info.processGroupId)) {
         return true;
     }
 
-    process->kill();
-    return waitForProcessStopped(process, kForceStopMs);
+    info.groupStopState = GroupStopState::Stopped;
+    info.processGroupId = 0;
+    return false;
+}
+
+void prepareProcessTree(QProcess *process)
+{
+#if defined(Q_OS_UNIX) && QT_VERSION >= 0x060000
+    process->setChildProcessModifier([]() {
+        if (::setpgid(0, 0) != 0) {
+            ::_exit(127);
+        }
+    });
+#else
+    Q_UNUSED(process);
+#endif
+}
+
+void terminateProcessTree(const QPointer<QProcess> &process, const qint64 processGroupId)
+{
+#ifdef Q_OS_UNIX
+    if (processGroupId > 0 && ::kill(-static_cast<pid_t>(processGroupId), SIGTERM) == 0) {
+        return;
+    }
+#endif
+    if (!process.isNull() && process->state() != QProcess::NotRunning) {
+        process->terminate();
+    }
+}
+
+void killProcessTree(const QPointer<QProcess> &process, const qint64 processGroupId)
+{
+#ifdef Q_OS_UNIX
+    if (processGroupId > 0 && ::kill(-static_cast<pid_t>(processGroupId), SIGKILL) == 0) {
+        return;
+    }
+#endif
+    if (!process.isNull() && process->state() != QProcess::NotRunning) {
+        process->kill();
+    }
+}
+
+bool waitForProcessTreeStopped(
+    const QPointer<QProcess> &process,
+    const qint64              processGroupId,
+    const bool                trackProcessGroup,
+    const int                 timeoutMs)
+{
+    QElapsedTimer elapsed;
+    elapsed.start();
+
+    while (processTreeRunning(process, processGroupId, trackProcessGroup)) {
+        const int remaining = timeoutMs - static_cast<int>(elapsed.elapsed());
+        if (remaining <= 0) {
+            return false;
+        }
+        const int slice = qMin(remaining, 20);
+        if (!process.isNull() && process->state() != QProcess::NotRunning) {
+            process->waitForFinished(slice);
+        } else {
+            QThread::msleep(static_cast<unsigned long>(slice));
+        }
+    }
+    return true;
+}
+
+bool forceStopProcess(
+    const QPointer<QProcess> &process, const qint64 processGroupId, const bool trackProcessGroup)
+{
+    if (!processTreeRunning(process, processGroupId, trackProcessGroup)) {
+        return true;
+    }
+
+    killProcessTree(process, processGroupId);
+    return waitForProcessTreeStopped(process, processGroupId, trackProcessGroup, kForceStopMs);
 }
 
 } /* namespace */
@@ -117,8 +255,6 @@ bool forceStopProcess(const QPointer<QProcess> &process)
 /* Static members */
 QMap<int, QSocBashProcessInfo> QSocToolShellBash::activeProcesses;
 int                            QSocToolShellBash::nextProcessId = 1;
-QSet<QProcess *>               QSocToolShellBash::inFlightProcs_;
-QSet<QEventLoop *>             QSocToolShellBash::inFlightLoops_;
 
 QSocToolShellBash::QSocToolShellBash(QObject *parent, QSocProjectManager *projectManager)
     : QSocTool(parent)
@@ -135,10 +271,66 @@ QSocToolShellBash::QSocToolShellBash(QObject *parent, QSocProjectManager *projec
 
 QSocToolShellBash::~QSocToolShellBash()
 {
-    killAllActive();
+    abort();
+    killTracked(this);
 }
 
 void QSocToolShellBash::killAllActive()
+{
+    killTracked(nullptr);
+}
+
+void QSocToolShellBash::markTrackedStopped(
+    const int processId, const QPointer<QProcess> &expectedProcess)
+{
+    auto it = activeProcesses.find(processId);
+    if (it == activeProcesses.end() || expectedProcess.isNull()
+        || it->process != expectedProcess.data()
+        || it->groupStopState == QSocBashProcessInfo::GroupStopState::NotRequested) {
+        return;
+    }
+
+    it->groupStopState  = QSocBashProcessInfo::GroupStopState::Stopped;
+    it->processGroupId  = 0;
+    it->groupPollActive = false;
+}
+
+void QSocToolShellBash::requestTrackedStop(const int processId)
+{
+    auto it = activeProcesses.find(processId);
+    if (it == activeProcesses.end()
+        || it->groupStopState == QSocBashProcessInfo::GroupStopState::Stopped) {
+        return;
+    }
+
+    it->groupStopState = QSocBashProcessInfo::GroupStopState::Requested;
+    if (it->groupPollActive) {
+        return;
+    }
+
+    it->groupPollActive = true;
+    pollTrackedStop(processId, it->process);
+}
+
+void QSocToolShellBash::pollTrackedStop(
+    const int processId, const QPointer<QProcess> &expectedProcess)
+{
+    auto it = activeProcesses.find(processId);
+    if (it == activeProcesses.end() || expectedProcess.isNull()
+        || it->process != expectedProcess.data()) {
+        return;
+    }
+    if (!trackedProcessRunning(it.value())) {
+        it->groupPollActive = false;
+        return;
+    }
+
+    QTimer::singleShot(20, expectedProcess.data(), [processId, expectedProcess]() {
+        pollTrackedStop(processId, expectedProcess);
+    });
+}
+
+void QSocToolShellBash::killTracked(const QSocToolShellBash *owner)
 {
     const QList<int> processIds = activeProcesses.keys();
     for (const int processId : processIds) {
@@ -146,10 +338,21 @@ void QSocToolShellBash::killAllActive()
         if (it == activeProcesses.end()) {
             continue;
         }
+        if (owner != nullptr && it->owner.data() != owner) {
+            continue;
+        }
 
         QPointer<QProcess> process = it->process;
-        if (!forceStopProcess(process)) {
+        if (trackedProcessRunning(it.value())) {
+            requestTrackedStop(processId);
+        }
+        const bool groupStopRequested = it->groupStopState
+                                        == QSocBashProcessInfo::GroupStopState::Requested;
+        if (!forceStopProcess(process, it->processGroupId, groupStopRequested)) {
             continue;
+        }
+        if (groupStopRequested) {
+            markTrackedStopped(processId, process);
         }
 
         it = activeProcesses.find(processId);
@@ -163,15 +366,15 @@ void QSocToolShellBash::killAllActive()
 QList<QSocToolShellBash::BackgroundSnapshot> QSocToolShellBash::snapshotActive()
 {
     QList<BackgroundSnapshot> out;
-    for (auto it = activeProcesses.constBegin(); it != activeProcesses.constEnd(); ++it) {
-        const auto        &info = it.value();
+    for (auto it = activeProcesses.begin(); it != activeProcesses.end(); ++it) {
+        auto              &info = it.value();
         BackgroundSnapshot snap;
         snap.id          = it.key();
         snap.command     = info.command;
         snap.startedAtMs = info.startTime;
         snap.outputPath  = info.outputPath;
         snap.isStuck     = !info.stuckReason.isEmpty();
-        snap.isRunning = (info.process != nullptr && info.process->state() != QProcess::NotRunning);
+        snap.isRunning   = trackedProcessRunning(info);
         out.append(snap);
     }
     std::sort(out.begin(), out.end(), [](const BackgroundSnapshot &a, const BackgroundSnapshot &b) {
@@ -190,14 +393,20 @@ bool QSocToolShellBash::killActive(int processId)
     auto it = activeProcesses.find(processId);
     if (it == activeProcesses.end())
         return false;
-    QPointer<QProcess> process = it->process;
-    bool               stopped = true;
-    if (!process.isNull() && process->state() != QProcess::NotRunning) {
-        process->terminate();
-        stopped = waitForProcessStopped(process, kActiveTerminateMs);
+    QPointer<QProcess> process        = it->process;
+    const qint64       processGroupId = it->processGroupId;
+    bool               stopped        = true;
+    if (trackedProcessRunning(it.value())) {
+        requestTrackedStop(processId);
+        terminateProcessTree(process, processGroupId);
+        stopped = waitForProcessTreeStopped(process, processGroupId, true, kActiveTerminateMs);
         if (!stopped) {
-            stopped = forceStopProcess(process);
+            stopped = forceStopProcess(process, processGroupId, true);
         }
+    }
+
+    if (stopped) {
+        markTrackedStopped(processId, process);
     }
 
     it = activeProcesses.find(processId);
@@ -241,6 +450,7 @@ QString QSocToolShellBash::getDescription() const
 {
     return "Execute a bash command in the project directory. "
            "Returns stdout and stderr. Set timeout as needed (no upper limit). "
+           "Only one foreground command can wait per session; use background=true for concurrency. "
            "If command times out, process keeps running and can be managed via bash_manage tool. "
            "Each call starts a fresh process in the project directory; cwd does not persist "
            "across calls. Use absolute paths or chain with && (e.g. 'cd build && make').";
@@ -308,7 +518,10 @@ void QSocToolShellBash::tickWatchdog()
 
     for (auto it = activeProcesses.begin(); it != activeProcesses.end(); ++it) {
         auto &info = it.value();
-        if (info.process == nullptr || info.process->state() == QProcess::NotRunning)
+        if (info.owner.data() != this) {
+            continue;
+        }
+        if (!trackedProcessRunning(info))
             continue;
 
         const qint64 cap  = info.maxOutputBytes > 0 ? info.maxOutputBytes : kDefaultMaxOutputBytes;
@@ -326,7 +539,8 @@ void QSocToolShellBash::tickWatchdog()
 
         if (size > cap && info.killReason.isEmpty()) {
             info.killReason = QStringLiteral("output exceeded %1 bytes").arg(cap);
-            info.process->kill();
+            requestTrackedStop(it.key());
+            killProcessTree(info.process, info.processGroupId);
             continue;
         }
 
@@ -399,6 +613,19 @@ QString QSocToolShellBash::execute(const json &arguments)
         background = arguments["background"].get<bool>();
     }
 
+    const bool ownsForegroundWait = !background && !foregroundWaitActive;
+    if (!background && !ownsForegroundWait) {
+        return QString::fromLatin1(kForegroundWaitBusy);
+    }
+    if (ownsForegroundWait) {
+        foregroundWaitActive = true;
+    }
+    const auto releaseForegroundWait = qScopeGuard([ownsForegroundWait]() {
+        if (ownsForegroundWait) {
+            foregroundWaitActive = false;
+        }
+    });
+
     /* Per-call output cap. 0 means "use built-in default". */
     qint64 maxOutputBytes = 0;
     if (arguments.contains("max_output") && arguments["max_output"].is_number_integer()) {
@@ -438,7 +665,8 @@ QString QSocToolShellBash::execute(const json &arguments)
     /* Create process on heap (survives timeout). Redirect merged stdout/stderr
      * straight to the capture file so we don't need a readyRead lambda
      * keeping a stack QFile alive past execute(). */
-    auto *process = new QProcess();
+    auto *process = new QSocBashProcess();
+    prepareProcessTree(process);
     process->setWorkingDirectory(workingDir);
     process->setProcessChannelMode(QProcess::MergedChannels);
     process->setStandardOutputFile(outputPath, QIODevice::Append);
@@ -452,14 +680,17 @@ QString QSocToolShellBash::execute(const json &arguments)
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
         return error;
     }
+    const qint64 processGroup = process->processGroupId();
 
     /* Background mode: register and return immediately, no event loop. */
     if (background) {
         const int           processId = nextProcessId++;
         QSocBashProcessInfo info;
         info.process        = process;
+        info.owner          = this;
         info.outputPath     = outputPath;
         info.command        = command;
+        info.processGroupId = processGroup;
         info.startTime      = QDateTime::currentMSecsSinceEpoch();
         info.maxOutputBytes = maxOutputBytes;
         activeProcesses.insert(processId, info);
@@ -468,7 +699,7 @@ QString QSocToolShellBash::execute(const json &arguments)
             QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this,
             [this, processId, command](int exitCode, QProcess::ExitStatus) {
-                emit backgroundProcessFinished(processId, exitCode, command);
+                notifyBackgroundFinished(processId, exitCode, command);
             },
             Qt::QueuedConnection);
         return QString(
@@ -481,9 +712,11 @@ QString QSocToolShellBash::execute(const json &arguments)
             .arg(outputPath);
     }
 
-    /* Use local event loop + timer instead of waitForFinished */
-    QEventLoop loop;
-    bool       finished = false;
+    QPointer<QSocToolShellBash> owner(this);
+    QPointer<QProcess>          processGuard(process);
+    QEventLoop                  loop;
+    bool                        finished = false;
+    ForegroundWaitContext       wait{processGuard, &loop, processGroup, false};
 
     QObject::connect(
         process,
@@ -496,17 +729,21 @@ QString QSocToolShellBash::execute(const json &arguments)
 
     QTimer::singleShot(timeout, &loop, [&loop]() { loop.quit(); });
 
-    /* Register this wait so abort() can reach it, even when several
-     * sub-agents run a foreground bash concurrently. Removed as soon as
-     * exec() returns; no event dispatch happens between, so the set
-     * stays balanced and never holds a returned (destroyed) loop. */
-    inFlightProcs_.insert(process);
-    inFlightLoops_.insert(&loop);
+    foregroundWaits_.insert(&wait);
     loop.exec();
-    inFlightLoops_.remove(&loop);
-    inFlightProcs_.remove(process);
+    const bool aborted = wait.aborted;
+    if (!owner.isNull()) {
+        owner->foregroundWaits_.remove(&wait);
+    }
 
-    if (finished) {
+    if (aborted && forceStopProcess(processGuard, processGroup, wait.stopRequested)) {
+        delete processGuard.data();
+        QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
+        return QStringLiteral("Command aborted.");
+    }
+
+    if (!aborted
+        && (finished || (!processGuard.isNull() && processGuard->state() == QProcess::NotRunning))) {
         /* Process completed within timeout. Output is already on disk
          * because setStandardOutputFile redirected stdout+stderr there
          * before start; just read the capture file. */
@@ -517,8 +754,8 @@ QString QSocToolShellBash::execute(const json &arguments)
             readFile.close();
         }
 
-        int exitCode = process->exitCode();
-        delete process;
+        const int exitCode = processGuard->exitCode();
+        delete processGuard.data();
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
 
         /* Truncate output if too large */
@@ -538,23 +775,47 @@ QString QSocToolShellBash::execute(const json &arguments)
     int processId = nextProcessId++;
 
     QSocBashProcessInfo info;
-    info.process        = process;
+    info.process        = processGuard.data();
+    info.owner          = owner;
     info.outputPath     = outputPath;
     info.command        = command;
+    info.processGroupId = processGroup;
+    if (wait.stopRequested) {
+        info.groupStopState = QSocBashProcessInfo::GroupStopState::Requested;
+    }
     info.startTime      = QDateTime::currentMSecsSinceEpoch();
     info.maxOutputBytes = maxOutputBytes;
     activeProcesses.insert(processId, info);
-    QObject::connect(
-        process,
-        QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-        this,
-        [this, processId, command](int exitCode, QProcess::ExitStatus) {
-            emit backgroundProcessFinished(processId, exitCode, command);
-        },
-        Qt::QueuedConnection);
+    if (wait.stopRequested) {
+        requestTrackedStop(processId);
+    }
+    if (!owner.isNull()) {
+        QObject::connect(
+            processGuard.data(),
+            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            owner.data(),
+            [owner, processId, command](int exitCode, QProcess::ExitStatus) {
+                if (!owner.isNull()) {
+                    owner->notifyBackgroundFinished(processId, exitCode, command);
+                }
+            },
+            Qt::QueuedConnection);
+    }
 
     /* Read last lines for immediate feedback */
     QString lastOutput = readLastLines(outputPath, 50);
+
+    if (aborted) {
+        return QString(
+                   "Abort requested but the command is STILL RUNNING.\n"
+                   "Process ID: %1\n"
+                   "Output file: %2\n"
+                   "Last output:\n%3\n\n"
+                   "Use bash_manage tool with process_id=%1 to stop it.")
+            .arg(processId)
+            .arg(outputPath)
+            .arg(lastOutput);
+    }
 
     return QString(
                "Command timed out after %1ms but is STILL RUNNING.\n"
@@ -571,16 +832,14 @@ QString QSocToolShellBash::execute(const json &arguments)
 
 void QSocToolShellBash::abort()
 {
-    /* Cancel every in-flight foreground wait, not just the most recent
-     * one: concurrent sub-agents may each be blocked in their own bash. */
-    for (QProcess *proc : std::as_const(inFlightProcs_)) {
-        if (proc != nullptr && proc->state() != QProcess::NotRunning) {
-            proc->kill();
+    for (ForegroundWaitContext *wait : std::as_const(foregroundWaits_)) {
+        wait->aborted = true;
+        if (!wait->process.isNull() && wait->process->state() != QProcess::NotRunning) {
+            wait->stopRequested = true;
+            killProcessTree(wait->process, wait->processGroupId);
         }
-    }
-    for (QEventLoop *loop : std::as_const(inFlightLoops_)) {
-        if (loop != nullptr && loop->isRunning()) {
-            loop->quit();
+        if (wait->loop != nullptr && wait->loop->isRunning()) {
+            wait->loop->quit();
         }
     }
 }
@@ -588,6 +847,19 @@ void QSocToolShellBash::abort()
 void QSocToolShellBash::setProjectManager(QSocProjectManager *projectManager)
 {
     this->projectManager = projectManager;
+}
+
+void QSocToolShellBash::notifyBackgroundFinished(
+    const int processId, const int exitCode, const QString &command)
+{
+    auto it = activeProcesses.find(processId);
+    if (it != activeProcesses.end() && trackedProcessRunning(it.value())) {
+        QTimer::singleShot(20, this, [this, processId, exitCode, command]() {
+            notifyBackgroundFinished(processId, exitCode, command);
+        });
+        return;
+    }
+    emit backgroundProcessFinished(processId, exitCode, command);
 }
 
 /* QSocToolBashManage */
@@ -697,7 +969,7 @@ QString QSocToolBashManage::execute(const json &arguments)
     if (action == "status") {
         auto    it        = QSocToolShellBash::activeProcesses.find(processId);
         auto   &info      = it.value();
-        bool    running   = (info.process->state() != QProcess::NotRunning);
+        bool    running   = trackedProcessRunning(info);
         qint64  elapsed   = QDateTime::currentMSecsSinceEpoch() - info.startTime;
         QString lastLines = QSocToolShellBash::readLastLines(info.outputPath, 10);
 
@@ -756,7 +1028,7 @@ QString QSocToolBashManage::execute(const json &arguments)
             waitTimeout = static_cast<int>(value);
         }
 
-        if (info.process->state() == QProcess::NotRunning) {
+        if (!trackedProcessRunning(info)) {
             int     exitCode = info.process->exitCode();
             QString output   = collectOutput(info, exitCode);
             requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
@@ -770,21 +1042,35 @@ QString QSocToolBashManage::execute(const json &arguments)
          * OS level by setStandardOutputFile, so the file grows on its own
          * while we wait. */
         QEventLoop                   loop;
-        bool                         finished = false;
-        QPointer<QProcess>           process  = info.process;
+        QPointer<QProcess>           process = info.process;
         QPointer<QSocToolBashManage> guard(this);
         WaitContext                  wait{&loop};
         ++info.activeWaiters;
+
+        const auto processStopped = [processId, process]() {
+            auto it = QSocToolShellBash::activeProcesses.find(processId);
+            return it == QSocToolShellBash::activeProcesses.end() || process.isNull()
+                   || it->process != process.data() || !trackedProcessRunning(it.value());
+        };
 
         auto connFinish = QObject::connect(
             process.data(),
             QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             &loop,
-            [&finished, &loop](int, QProcess::ExitStatus) {
-                finished = true;
-                loop.quit();
+            [&loop, &processStopped](int, QProcess::ExitStatus) {
+                if (processStopped()) {
+                    loop.quit();
+                }
             });
 
+        QTimer treePoll;
+        treePoll.setInterval(20);
+        QObject::connect(&treePoll, &QTimer::timeout, &loop, [&loop, &processStopped]() {
+            if (processStopped()) {
+                loop.quit();
+            }
+        });
+        treePoll.start();
         QTimer::singleShot(waitTimeout, &loop, [&loop]() { loop.quit(); });
 
         activeWaits_.insert(&wait);
@@ -801,7 +1087,7 @@ QString QSocToolBashManage::execute(const json &arguments)
             return QString("Error: Process %1 was removed while waiting.").arg(processId);
         }
 
-        if (finished || process->state() == QProcess::NotRunning) {
+        if (!trackedProcessRunning(it.value())) {
             const int     exitCode = process->exitCode();
             const QString output   = collectOutput(it.value(), exitCode);
             const QString result
@@ -826,9 +1112,9 @@ QString QSocToolBashManage::execute(const json &arguments)
     }
 
     if (action == "output") {
-        const auto &info       = QSocToolShellBash::activeProcesses[processId];
-        QString     lastOutput = QSocToolShellBash::readLastLines(info.outputPath, 200);
-        bool        running    = (info.process->state() != QProcess::NotRunning);
+        auto   &info       = QSocToolShellBash::activeProcesses[processId];
+        QString lastOutput = QSocToolShellBash::readLastLines(info.outputPath, 200);
+        bool    running    = trackedProcessRunning(info);
         return QString("Process %1 (%2):\n%3")
             .arg(processId)
             .arg(running ? "RUNNING" : "FINISHED")
@@ -837,16 +1123,21 @@ QString QSocToolBashManage::execute(const json &arguments)
 
     if (action == "kill") {
         auto &info = QSocToolShellBash::activeProcesses[processId];
-        if (info.process->state() == QProcess::NotRunning) {
+        if (!trackedProcessRunning(info)) {
             const int     exitCode = info.process->exitCode();
             const QString output   = collectOutput(info, exitCode);
             requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
             return QString("Process already finished (exit code %1):\n%2").arg(exitCode).arg(output);
         }
 
-        QPointer<QProcess> process = info.process;
-        const bool         stopped = forceStopProcess(process);
-        auto               it      = QSocToolShellBash::activeProcesses.find(processId);
+        QPointer<QProcess> process        = info.process;
+        const qint64       processGroupId = info.processGroupId;
+        QSocToolShellBash::requestTrackedStop(processId);
+        const bool stopped = forceStopProcess(process, processGroupId, true);
+        if (stopped) {
+            QSocToolShellBash::markTrackedStopped(processId, process);
+        }
+        auto it = QSocToolShellBash::activeProcesses.find(processId);
         if (it == QSocToolShellBash::activeProcesses.end() || process.isNull()
             || it->process != process.data()) {
             return QString("Error: Process %1 was removed while killing.").arg(processId);
@@ -867,7 +1158,7 @@ QString QSocToolBashManage::execute(const json &arguments)
 
     if (action == "terminate") {
         auto &info = QSocToolShellBash::activeProcesses[processId];
-        if (info.process->state() == QProcess::NotRunning) {
+        if (!trackedProcessRunning(info)) {
             const int     exitCode = info.process->exitCode();
             const QString output   = collectOutput(info, exitCode);
             requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
@@ -877,25 +1168,41 @@ QString QSocToolBashManage::execute(const json &arguments)
             return kBlockingWaitBusy;
         }
 
-        QPointer<QProcess>           process = info.process;
+        QPointer<QProcess>           process        = info.process;
+        const qint64                 processGroupId = info.processGroupId;
         QPointer<QSocToolBashManage> guard(this);
         ++info.activeWaiters;
-        process->terminate();
+        QSocToolShellBash::requestTrackedStop(processId);
+        terminateProcessTree(process, processGroupId);
 
         /* Wait up to 5s for graceful exit */
         QEventLoop  loop;
-        bool        finished = false;
         WaitContext wait{&loop};
+
+        const auto processStopped = [processId, process]() {
+            auto it = QSocToolShellBash::activeProcesses.find(processId);
+            return it == QSocToolShellBash::activeProcesses.end() || process.isNull()
+                   || it->process != process.data() || !trackedProcessRunning(it.value());
+        };
 
         auto connFinish = QObject::connect(
             process.data(),
             QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             &loop,
-            [&finished, &loop](int, QProcess::ExitStatus) {
-                finished = true;
-                loop.quit();
+            [&loop, &processStopped](int, QProcess::ExitStatus) {
+                if (processStopped()) {
+                    loop.quit();
+                }
             });
 
+        QTimer treePoll;
+        treePoll.setInterval(20);
+        QObject::connect(&treePoll, &QTimer::timeout, &loop, [&loop, &processStopped]() {
+            if (processStopped()) {
+                loop.quit();
+            }
+        });
+        treePoll.start();
         QTimer::singleShot(kTerminateGraceMs, &loop, [&loop]() { loop.quit(); });
 
         activeWaits_.insert(&wait);
@@ -912,7 +1219,7 @@ QString QSocToolBashManage::execute(const json &arguments)
             return QString("Error: Process %1 was removed while terminating.").arg(processId);
         }
 
-        if (finished || process->state() == QProcess::NotRunning) {
+        if (!trackedProcessRunning(it.value())) {
             const int     exitCode = process->exitCode();
             const QString output   = collectOutput(it.value(), exitCode);
             const QString result
@@ -926,7 +1233,7 @@ QString QSocToolBashManage::execute(const json &arguments)
             return "Terminate requested; wait aborted; process is still running.";
         }
 
-        const bool stopped = forceStopProcess(process);
+        const bool stopped = forceStopProcess(process, processGroupId, true);
         if (!stopped) {
             const QString lastOutput = QSocToolShellBash::readLastLines(it->outputPath, 50);
             releaseProcessWaiter(QSocToolShellBash::activeProcesses, processId, false);
@@ -935,6 +1242,7 @@ QString QSocToolBashManage::execute(const json &arguments)
                        "is still running.\nLast output:\n%1")
                 .arg(lastOutput);
         }
+        QSocToolShellBash::markTrackedStopped(processId, process);
 
         const int     exitCode = process->exitCode();
         const QString output   = collectOutput(it.value(), exitCode);

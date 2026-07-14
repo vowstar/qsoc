@@ -9,20 +9,33 @@
 
 #include <QEventLoop>
 #include <QMap>
+#include <QPointer>
 #include <QProcess>
 #include <QSet>
 #include <QTimer>
+
+class QSocToolShellBash;
 
 /**
  * @brief Info for a background bash process that timed out but is still running
  */
 struct QSocBashProcessInfo
 {
-    QProcess *process = nullptr;
-    QString   outputPath;
-    QString   command;
-    qint64    startTime      = 0;
-    qint64    maxOutputBytes = 0; /* 0 means "use default cap" */
+    enum class GroupStopState {
+        NotRequested,
+        Requested,
+        Stopped,
+    };
+
+    QProcess                   *process = nullptr;
+    QPointer<QSocToolShellBash> owner;
+    QString                     outputPath;
+    QString                     command;
+    qint64                      processGroupId  = 0;
+    GroupStopState              groupStopState  = GroupStopState::NotRequested;
+    bool                        groupPollActive = false;
+    qint64                      startTime       = 0;
+    qint64                      maxOutputBytes  = 0; /* 0 means "use default cap" */
     /* Watchdog state. lastKnownSize/lastSizeChangeAt feed both the
      * output-size kill rule and the no-progress stuck detector. */
     qint64  lastKnownSize    = 0;
@@ -117,20 +130,26 @@ signals:
     void processStuckDetected(int processId, const QString &reason, const QString &tailHint);
 
 private:
-    QSocProjectManager *projectManager = nullptr;
+    struct ForegroundWaitContext
+    {
+        QPointer<QProcess> process;
+        QEventLoop        *loop           = nullptr;
+        qint64             processGroupId = 0;
+        bool               aborted        = false;
+        bool               stopRequested  = false;
+    };
 
-    /* In-flight synchronous waits. A single shared slot would be
-     * trampled when concurrent sub-agents each run a foreground bash
-     * (one nested inside another's event loop), so abort() must reach
-     * every live wait, not just the last one registered. Single-thread,
-     * so a plain set is safe; entries are added before loop.exec() and
-     * removed right after it returns (no event dispatch in between). */
-    static QSet<QProcess *>   inFlightProcs_;
-    static QSet<QEventLoop *> inFlightLoops_;
+    QSocProjectManager           *projectManager = nullptr;
+    QSet<ForegroundWaitContext *> foregroundWaits_;
 
     static QMap<int, QSocBashProcessInfo> activeProcesses;
     static int                            nextProcessId;
     static QString                        readLastLines(const QString &path, int count);
+    static void                           killTracked(const QSocToolShellBash *owner);
+    static void markTrackedStopped(int processId, const QPointer<QProcess> &expectedProcess);
+    static void requestTrackedStop(int processId);
+    static void pollTrackedStop(int processId, const QPointer<QProcess> &expectedProcess);
+    void        notifyBackgroundFinished(int processId, int exitCode, const QString &command);
 
     QTimer *watchdogTimer_ = nullptr;
 
