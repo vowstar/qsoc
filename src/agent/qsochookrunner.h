@@ -8,8 +8,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <QMetaType>
 #include <QObject>
 #include <QString>
+
+#include <optional>
 
 class QProcess;
 class QTimer;
@@ -56,21 +59,25 @@ public:
     /**
      * @brief Run the hook synchronously.
      * @details Internally drives a local event loop until the child
-     *          finishes or times out.
+     *          finishes or times out. Returns `StartFailed` if the runner
+     *          is busy or is destroyed before publishing a result.
      */
     Result run(const HookCommandConfig &cfg, const nlohmann::json &payload);
 
     /**
      * @brief Start the hook asynchronously.
-     * @details Caller must connect `finished()` before this returns
-     *          relevant state. After `finished()` fires, `result()`
-     *          carries the outcome. Calling start while an earlier run
-     *          is in flight is a programming error.
+     * @details `resultReady()` carries a stable outcome for direct and
+     *          queued connections. A start requested from a synchronous
+     *          completion handler begins on the next event-loop turn.
+     *          Calling start while a run or another start is pending is
+     *          a programming error.
      */
     void start(const HookCommandConfig &cfg, const nlohmann::json &payload);
 
     /**
-     * @brief Latest async outcome. Only meaningful after `finished()`.
+     * @brief Latest async outcome.
+     * @details Read this from same-thread direct `finished()` handlers.
+     *          Queued handlers must use the `resultReady()` argument.
      */
     const Result &result() const { return m_result; }
 
@@ -81,25 +88,45 @@ public:
 
 signals:
     /**
-     * @brief Emitted exactly once per `start()` call.
+     * @brief Publish a stable result snapshot once per `start()` call.
+     */
+    void resultReady(Result result);
+
+    /**
+     * @brief Compatibility notification emitted once per `start()` call.
      */
     void finished();
 
 private slots:
     void handleProcessFinished();
     void handleTimeout();
+    void startPending();
 
 private:
-    void   reset();
-    void   captureStreams();
+    struct PendingStart
+    {
+        HookCommandConfig config;
+        nlohmann::json    payload;
+    };
+
+    Q_SIGNAL void resultPublished(const Result &result);
+
+    bool canStartNow() const { return !m_running && !m_publishing && !m_pendingStart.has_value(); }
+    void reset();
+    void publishResult();
+    void captureStreams();
     Result interpretExit() const;
 
-    QProcess *m_process = nullptr;
-    QTimer   *m_timer   = nullptr;
-    Result    m_result;
-    int       m_timeoutMs = 0;
-    bool      m_running   = false;
-    bool      m_finalized = false;
+    QProcess                   *m_process = nullptr;
+    QTimer                     *m_timer   = nullptr;
+    Result                      m_result;
+    int                         m_timeoutMs       = 0;
+    bool                        m_running         = false;
+    bool                        m_terminalClaimed = false;
+    bool                        m_publishing      = false;
+    std::optional<PendingStart> m_pendingStart;
 };
+
+Q_DECLARE_METATYPE(QSocHookRunner::Result)
 
 #endif // QSOCHOOKRUNNER_H

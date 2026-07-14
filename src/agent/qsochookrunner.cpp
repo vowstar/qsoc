@@ -4,19 +4,36 @@
 #include "agent/qsochookrunner.h"
 
 #include <QEventLoop>
+#include <QPointer>
 #include <QProcess>
 #include <QStringList>
 #include <QTimer>
 
+#include <utility>
+
 QSocHookRunner::QSocHookRunner(QObject *parent)
     : QObject(parent)
-{}
+{
+    qRegisterMetaType<Result>();
+}
 
-QSocHookRunner::~QSocHookRunner() = default;
+QSocHookRunner::~QSocHookRunner()
+{
+    if (m_timer != nullptr) {
+        m_timer->stop();
+    }
+    if (m_process == nullptr || m_process->state() == QProcess::NotRunning) {
+        return;
+    }
+    QObject::disconnect(m_process, nullptr, this, nullptr);
+    m_process->kill();
+    m_process->waitForFinished(1000);
+}
 
 void QSocHookRunner::reset()
 {
     if (m_process != nullptr) {
+        QObject::disconnect(m_process, nullptr, this, nullptr);
         m_process->deleteLater();
         m_process = nullptr;
     }
@@ -24,23 +41,36 @@ void QSocHookRunner::reset()
         m_timer->deleteLater();
         m_timer = nullptr;
     }
-    m_result    = Result{};
-    m_running   = false;
-    m_finalized = false;
+    m_result          = Result{};
+    m_running         = false;
+    m_terminalClaimed = false;
+    m_publishing      = false;
+    m_pendingStart.reset();
     m_timeoutMs = 0;
 }
 
 void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &payload)
 {
-    Q_ASSERT(!m_running);
+    if (m_publishing) {
+        Q_ASSERT(!m_running && !m_pendingStart.has_value());
+        if (m_running || m_pendingStart.has_value()) {
+            return;
+        }
+        m_pendingStart.emplace(PendingStart{cfg, payload});
+        return;
+    }
+    Q_ASSERT(canStartNow());
+    if (!canStartNow()) {
+        return;
+    }
     reset();
 
     if (!cfg.isValid()) {
         m_result.status       = Status::StartFailed;
         m_result.errorMessage = QStringLiteral("invalid hook command configuration");
         m_running             = true;
-        m_finalized           = true;
-        QTimer::singleShot(0, this, &QSocHookRunner::finished);
+        m_terminalClaimed     = true;
+        QTimer::singleShot(0, this, &QSocHookRunner::publishResult);
         return;
     }
 
@@ -58,11 +88,20 @@ void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &p
     m_process
         ->start(QStringLiteral("/bin/bash"), QStringList() << QStringLiteral("-c") << cfg.command);
 
-    if (!m_process->waitForStarted(5000)) {
+    QPointer<QSocHookRunner> guard(this);
+    QProcess *const          process = m_process;
+    const bool               started = process->waitForStarted(5000);
+    if (!guard) {
+        return;
+    }
+    if (process != m_process || m_terminalClaimed) {
+        return;
+    }
+    if (!started) {
         m_result.status       = Status::StartFailed;
         m_result.errorMessage = m_process->errorString();
-        m_finalized           = true;
-        QTimer::singleShot(0, this, &QSocHookRunner::finished);
+        m_terminalClaimed     = true;
+        QTimer::singleShot(0, this, &QSocHookRunner::publishResult);
         return;
     }
 
@@ -81,33 +120,74 @@ void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &p
 
 void QSocHookRunner::handleProcessFinished()
 {
-    if (m_finalized) {
+    if (sender() != m_process || m_terminalClaimed) {
         return;
     }
+    m_terminalClaimed = true;
     if (m_timer != nullptr) {
         m_timer->stop();
     }
     captureStreams();
     m_result          = interpretExit();
     m_result.exitCode = m_process->exitCode();
-    m_finalized       = true;
-    emit finished();
+    publishResult();
 }
 
 void QSocHookRunner::handleTimeout()
 {
-    if (m_finalized) {
+    if (m_terminalClaimed) {
         return;
     }
+    m_terminalClaimed = true;
     if (m_process != nullptr) {
+        QObject::disconnect(m_process, nullptr, this, nullptr);
         m_process->kill();
-        m_process->waitForFinished(1000);
+        const bool stopped = m_process->waitForFinished(1000);
         captureStreams();
+        if (!stopped) {
+            m_process->close();
+        }
     }
     m_result.status       = Status::Timeout;
     m_result.errorMessage = QStringLiteral("hook timed out after %1ms").arg(m_timeoutMs);
-    m_finalized           = true;
+    publishResult();
+}
+
+void QSocHookRunner::publishResult()
+{
+    if (!m_running || !m_terminalClaimed) {
+        return;
+    }
+    QPointer<QSocHookRunner> guard(this);
+    m_running    = false;
+    m_publishing = true;
+    emit resultPublished(m_result);
+    if (!guard) {
+        return;
+    }
+    emit resultReady(m_result);
+    if (!guard) {
+        return;
+    }
     emit finished();
+    if (!guard) {
+        return;
+    }
+    m_publishing = false;
+    if (m_pendingStart.has_value()) {
+        QMetaObject::invokeMethod(this, &QSocHookRunner::startPending, Qt::QueuedConnection);
+    }
+}
+
+void QSocHookRunner::startPending()
+{
+    Q_ASSERT(!m_running && !m_publishing && m_pendingStart.has_value());
+    if (m_running || m_publishing || !m_pendingStart.has_value()) {
+        return;
+    }
+    PendingStart pending = std::move(m_pendingStart.value());
+    m_pendingStart.reset();
+    start(pending.config, pending.payload);
 }
 
 void QSocHookRunner::captureStreams()
@@ -167,13 +247,36 @@ QSocHookRunner::Result QSocHookRunner::interpretExit() const
 QSocHookRunner::Result QSocHookRunner::run(
     const HookCommandConfig &cfg, const nlohmann::json &payload)
 {
-    QEventLoop loop;
-    connect(this, &QSocHookRunner::finished, &loop, &QEventLoop::quit);
+    if (!canStartNow()) {
+        Result result;
+        result.status       = Status::StartFailed;
+        result.errorMessage = QStringLiteral("hook runner is busy");
+        return result;
+    }
+    QEventLoop                     loop;
+    Result                         captured;
+    bool                           published = false;
+    const QPointer<QSocHookRunner> owner(this);
+    connect(this, &QSocHookRunner::resultPublished, &loop, [&](const Result &result) {
+        if (published) {
+            return;
+        }
+        captured  = result;
+        published = true;
+        loop.quit();
+    });
+    connect(this, &QObject::destroyed, &loop, [&]() {
+        if (published) {
+            return;
+        }
+        captured.status       = Status::StartFailed;
+        captured.errorMessage = QStringLiteral("hook runner destroyed during run");
+        published             = true;
+        loop.quit();
+    });
     start(cfg, payload);
-    if (m_running && !m_finalized) {
+    if (!owner.isNull() && !published) {
         loop.exec();
     }
-    Result captured = m_result;
-    m_running       = false;
     return captured;
 }

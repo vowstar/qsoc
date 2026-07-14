@@ -62,12 +62,10 @@ private slots:
 #ifdef Q_OS_WIN
         QSKIP("requires a POSIX shell (/bin/bash); not supported on Windows");
 #endif
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc_test";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app(argc, argv.data());
         QVERIFY(scratchDir.isValid());
     }
+
+    void cleanupTestCase() { QVERIFY(scratchDir.remove()); }
 
     /* Matcher behavior */
 
@@ -222,6 +220,177 @@ private slots:
                 QStringLiteral("expected parallel execution under 1.8s, got %1ms").arg(elapsedMs)));
     }
 
+    void timeoutDoesNotBypassParallelBlock()
+    {
+        const QString timeoutScript = writeScript(scratchDir, "timeout.sh", "exec sleep 30\n");
+        const QString blockScript = writeScript(scratchDir, "delayed_block.sh", "sleep 2\nexit 2\n");
+        HookCommandConfig timeoutCommand;
+        timeoutCommand.command    = timeoutScript;
+        timeoutCommand.timeoutSec = 1;
+        HookCommandConfig blockCommand;
+        blockCommand.command    = blockScript;
+        blockCommand.timeoutSec = 5;
+        HookMatcherConfig group;
+        group.commands = {timeoutCommand, blockCommand};
+        QSocHookConfig cfg;
+        cfg.byEvent.insert(QSocHookEvent::PreToolUse, {group});
+
+        QSocHookManager manager;
+        manager.setConfig(cfg);
+        const auto outcome = manager.fire(
+            QSocHookEvent::PreToolUse, QStringLiteral("shell"), nlohmann::json::object());
+
+        QVERIFY(outcome.blocked);
+        QCOMPARE(outcome.rawResults.size(), qsizetype(2));
+        QCOMPARE(outcome.rawResults.at(0).status, QSocHookRunner::Status::Timeout);
+        QCOMPARE(outcome.rawResults.at(1).status, QSocHookRunner::Status::Block);
+    }
+
+    void managerDeletionDuringResultPublicationDoesNotHang()
+    {
+        const QString fastScript
+            = writeScript(scratchDir, "delete_manager_fast.sh", "sleep 0.2\nexit 0\n");
+        const QString slowScript
+            = writeScript(scratchDir, "delete_manager_slow.sh", "exec sleep 30\n");
+        HookCommandConfig fastCommand;
+        fastCommand.command    = fastScript;
+        fastCommand.timeoutSec = 5;
+        HookCommandConfig slowCommand;
+        slowCommand.command    = slowScript;
+        slowCommand.timeoutSec = 5;
+        HookMatcherConfig group;
+        group.commands = {fastCommand, slowCommand};
+        QSocHookConfig config;
+        config.byEvent.insert(QSocHookEvent::PreToolUse, {group});
+
+        auto *manager = new QSocHookManager;
+        manager->setConfig(config);
+        QPointer<QSocHookManager> guard(manager);
+        int                       connected = 0;
+        QTimer::singleShot(0, [guard, &connected]() mutable {
+            if (guard.isNull()) {
+                return;
+            }
+            const auto runners = guard->findChildren<QSocHookRunner *>();
+            for (QSocHookRunner *runner : runners) {
+                QObject::connect(
+                    runner,
+                    &QSocHookRunner::resultReady,
+                    [guard](const QSocHookRunner::Result &) mutable {
+                        if (!guard.isNull()) {
+                            delete guard.data();
+                        }
+                    });
+                ++connected;
+            }
+        });
+
+        QTimer watchdog;
+        watchdog.setSingleShot(true);
+        connect(&watchdog, &QTimer::timeout, []() { qFatal("hook manager deletion hung fire"); });
+        watchdog.start(3000);
+        QElapsedTimer   timer;
+        QSocTestCapture capture;
+        timer.start();
+        const auto outcome = manager->fire(
+            QSocHookEvent::PreToolUse, QStringLiteral("shell"), nlohmann::json::object());
+        const qint64 elapsedMs = timer.elapsed();
+        watchdog.stop();
+        const QString capturedText = capture.text();
+
+        QCOMPARE(connected, 2);
+        QVERIFY(guard.isNull());
+        QVERIFY(outcome.blocked);
+        QCOMPARE(outcome.blockReason, QStringLiteral("hook dispatch interrupted"));
+        QCOMPARE(outcome.rawResults.size(), qsizetype(2));
+        QCOMPARE(outcome.rawResults.at(0).status, QSocHookRunner::Status::Success);
+        QCOMPARE(outcome.rawResults.at(1).status, QSocHookRunner::Status::StartFailed);
+        QVERIFY2(elapsedMs < 2000, "manager deletion did not release fire promptly");
+        QVERIFY2(
+            !capturedText.contains(QStringLiteral("QProcess: Destroyed while process")),
+            qPrintable(capturedText));
+    }
+
+    void runnerDeletionWhileActiveDoesNotHang()
+    {
+        const QString   script = writeScript(scratchDir, "delete_runner.sh", "exec sleep 30\n");
+        QSocHookManager manager;
+        manager.setConfig(configWithSinglePreToolUse(QStringLiteral("shell"), script));
+        bool runnerDeleted = false;
+        QTimer::singleShot(50, [&]() {
+            QSocHookRunner *runner = manager.findChild<QSocHookRunner *>();
+            if (runner != nullptr) {
+                runnerDeleted = true;
+                delete runner;
+            }
+        });
+
+        QTimer watchdog;
+        watchdog.setSingleShot(true);
+        connect(&watchdog, &QTimer::timeout, []() { qFatal("hook runner deletion hung fire"); });
+        watchdog.start(3000);
+        QElapsedTimer   timer;
+        QSocTestCapture capture;
+        timer.start();
+        const auto outcome = manager.fire(
+            QSocHookEvent::PreToolUse, QStringLiteral("shell"), nlohmann::json::object());
+        const qint64 elapsedMs = timer.elapsed();
+        watchdog.stop();
+        const QString capturedText = capture.text();
+
+        QVERIFY(runnerDeleted);
+        QVERIFY(outcome.blocked);
+        QCOMPARE(outcome.blockReason, QStringLiteral("hook dispatch interrupted"));
+        QCOMPARE(outcome.rawResults.size(), qsizetype(1));
+        QCOMPARE(outcome.rawResults.first().status, QSocHookRunner::Status::StartFailed);
+        QCOMPARE(
+            outcome.rawResults.first().errorMessage,
+            QStringLiteral("hook runner destroyed during dispatch"));
+        QVERIFY2(elapsedMs < 2000, "runner deletion did not release fire promptly");
+        QVERIFY2(
+            !capturedText.contains(QStringLiteral("QProcess: Destroyed while process")),
+            qPrintable(capturedText));
+    }
+
+    void runnerDeletionDuringResultPublicationKeepsBlock()
+    {
+        const QString script = writeScript(
+            scratchDir, "delete_block_runner.sh", "sleep 0.2\necho 'policy denied' >&2\nexit 2\n");
+        QSocHookManager manager;
+        manager.setConfig(configWithSinglePreToolUse(QStringLiteral("shell"), script));
+        bool connected = false;
+        QTimer::singleShot(0, [&]() {
+            QSocHookRunner *runner = manager.findChild<QSocHookRunner *>();
+            if (runner == nullptr) {
+                return;
+            }
+            connected = true;
+            QObject::connect(
+                runner, &QSocHookRunner::resultReady, [runner](const QSocHookRunner::Result &) {
+                    delete runner;
+                });
+        });
+
+        QTimer watchdog;
+        watchdog.setSingleShot(true);
+        connect(&watchdog, &QTimer::timeout, []() { qFatal("result observer deletion hung fire"); });
+        watchdog.start(3000);
+        QSocTestCapture capture;
+        const auto      outcome = manager.fire(
+            QSocHookEvent::PreToolUse, QStringLiteral("shell"), nlohmann::json::object());
+        watchdog.stop();
+        const QString capturedText = capture.text();
+
+        QVERIFY(connected);
+        QVERIFY(outcome.blocked);
+        QCOMPARE(outcome.blockReason, QStringLiteral("policy denied"));
+        QCOMPARE(outcome.rawResults.size(), qsizetype(1));
+        QCOMPARE(outcome.rawResults.first().status, QSocHookRunner::Status::Block);
+        QVERIFY2(
+            !capturedText.contains(QStringLiteral("QProcess: Destroyed while process")),
+            qPrintable(capturedText));
+    }
+
     void payloadReachesHookViaStdin()
     {
         const QString script = writeScript(
@@ -242,5 +411,5 @@ private slots:
     }
 };
 
-QTEST_APPLESS_MAIN(Test)
+QSOC_TEST_MAIN(Test)
 #include "test_qsochookmanager.moc"

@@ -6,7 +6,11 @@
 #include "common/qsocconsole.h"
 
 #include <QEventLoop>
+#include <QPointer>
 #include <QRegularExpression>
+
+#include <optional>
+#include <utility>
 
 namespace {
 
@@ -40,6 +44,21 @@ QString blockReasonFor(const QSocHookRunner::Result &res)
         return trimmed;
     }
     return QStringLiteral("hook blocked execution");
+}
+
+void mergeResult(QSocHookManager::Outcome &out, const QSocHookRunner::Result &res)
+{
+    out.rawResults.append(res);
+    if (res.status == QSocHookRunner::Status::Block) {
+        out.blocked = true;
+        if (out.blockReason.isEmpty()) {
+            out.blockReason = blockReasonFor(res);
+        }
+    }
+    if (res.hasResponse && res.response.is_object()) {
+        out.mergedResponse    = res.response;
+        out.hasMergedResponse = true;
+    }
 }
 
 } // namespace
@@ -102,39 +121,78 @@ QSocHookManager::Outcome QSocHookManager::fire(
         return out;
     }
 
-    QEventLoop              loop;
-    QList<QSocHookRunner *> runners;
+    QEventLoop                                   loop;
+    const QPointer<QSocHookManager>              owner(this);
+    QList<QPointer<QSocHookRunner>>              runners;
+    QList<std::optional<QSocHookRunner::Result>> results(matched.size());
+    int                                          pending     = 0;
+    bool                                         interrupted = false;
     runners.reserve(matched.size());
-    int pending = static_cast<int>(matched.size());
 
-    for (const auto &cmd : matched) {
-        auto *runner = new QSocHookRunner(this);
+    const auto settle = [&](qsizetype index, QSocHookRunner::Result result) {
+        if (results.at(index).has_value()) {
+            return;
+        }
+        results[index] = std::move(result);
+        if (--pending == 0) {
+            loop.quit();
+        }
+    };
+    connect(owner.data(), &QObject::destroyed, &loop, [&]() {
+        interrupted = true;
+        loop.quit();
+    });
+
+    for (qsizetype index = 0; index < matched.size() && !owner.isNull(); ++index) {
+        auto *runner = new QSocHookRunner(owner.data());
         runners.append(runner);
-        connect(runner, &QSocHookRunner::finished, &loop, [&pending, &loop]() {
-            if (--pending == 0) {
-                loop.quit();
+        ++pending;
+        connect(
+            runner,
+            &QSocHookRunner::resultReady,
+            &loop,
+            [&, index](const QSocHookRunner::Result &result) { settle(index, result); });
+        connect(runner, &QObject::destroyed, &loop, [&, index]() {
+            if (results.at(index).has_value()) {
+                return;
             }
+            QSocHookRunner::Result result;
+            result.status       = QSocHookRunner::Status::StartFailed;
+            result.errorMessage = QStringLiteral("hook runner destroyed during dispatch");
+            interrupted         = true;
+            settle(index, std::move(result));
         });
-        runner->start(cmd, payload);
+        runner->start(matched.at(index), payload);
     }
     if (pending > 0) {
         loop.exec();
     }
 
-    for (auto *runner : runners) {
-        const auto &res = runner->result();
-        out.rawResults.append(res);
-        if (res.status == QSocHookRunner::Status::Block) {
-            out.blocked = true;
-            if (out.blockReason.isEmpty()) {
-                out.blockReason = blockReasonFor(res);
+    if (interrupted) {
+        for (auto &result : results) {
+            if (!result.has_value()) {
+                QSocHookRunner::Result failure;
+                failure.status       = QSocHookRunner::Status::StartFailed;
+                failure.errorMessage = QStringLiteral("hook dispatch interrupted before start");
+                result.emplace(std::move(failure));
             }
         }
-        if (res.hasResponse && res.response.is_object()) {
-            out.mergedResponse    = res.response;
-            out.hasMergedResponse = true;
+    }
+    for (const auto &result : results) {
+        if (result.has_value()) {
+            mergeResult(out, result.value());
         }
-        runner->deleteLater();
+    }
+    if (interrupted) {
+        out.blocked = true;
+        if (out.blockReason.isEmpty()) {
+            out.blockReason = QStringLiteral("hook dispatch interrupted");
+        }
+    }
+    for (const auto &runner : runners) {
+        if (!runner.isNull()) {
+            runner->deleteLater();
+        }
     }
     return out;
 }

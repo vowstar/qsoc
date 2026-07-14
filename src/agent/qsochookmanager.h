@@ -58,6 +58,7 @@ public:
      *                     (tool name for tool-related events; the event
      *                     key for events without a natural subject).
      * @param payload JSON sent on each hook's stdin.
+     * @return Aggregated outcome; an interrupted dispatch is blocked.
      */
     Outcome fire(QSocHookEvent event, const QString &matchSubject, const nlohmann::json &payload);
 
