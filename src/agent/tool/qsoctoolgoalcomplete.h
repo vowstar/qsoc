@@ -18,9 +18,8 @@ class QSocGoalCatalog;
  *          status change so a fresh /goal can be set without an
  *          extra /goal clear step.
  *
- *          Sub-agent dispatch leaves the catalog pointer unset so a
- *          child run cannot end the parent's goal; the parent must
- *          decide completion based on its own context.
+ *          The agent gate excludes this shared tool from sub-agent
+ *          runs; a child returns completion evidence to the parent.
  */
 class QSocToolGoalComplete : public QSocTool
 {

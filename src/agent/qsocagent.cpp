@@ -39,6 +39,13 @@ const char *const kPlanModeReminder
       "intent is pinned, call exit_plan_mode to present it for approval. "
       "End every turn with either ask_user or exit_plan_mode.";
 
+const char *const kSubAgentPlanModeReminder
+    = "Plan mode is active. Use only read-only inspection and make no changes. "
+      "Do not call ask_user or exit_plan_mode; those tools are unavailable to "
+      "sub-agents. End with one concise final answer to the parent containing "
+      "findings, minimal supporting evidence, any unresolved ambiguities, and a "
+      "proposed plan.";
+
 /* Injected each turn while the terminal is unfocused (user not watching).
  * Steers away from blocking ask_user prompts so an unattended run keeps
  * moving. Never persisted. */
@@ -93,6 +100,15 @@ QString QSocAgent::toolDenyReason(const QString &name) const
     if (agentConfig.isSubAgent && name == QStringLiteral("agent")) {
         return QStringLiteral("sub-agents cannot spawn further sub-agents");
     }
+    if (agentConfig.isSubAgent && name == QStringLiteral("ask_user")) {
+        return QStringLiteral(
+            "sub-agents cannot ask the user directly; return the question to the parent agent");
+    }
+    if (agentConfig.isSubAgent && name == QStringLiteral("goal_complete")) {
+        return QStringLiteral(
+            "sub-agents cannot complete the parent goal; return completion evidence to the "
+            "parent agent");
+    }
     /* Plan mode is owned by the main agent only: a child (which shares
      * the registry and its callbacks) must not enter or approve/exit
      * plan mode on the parent's behalf. */
@@ -129,6 +145,10 @@ QString QSocAgent::toolDenyReason(const QString &name) const
         const bool      spawnOk = (name == QStringLiteral("agent"));
         const QSocTool *tool    = toolRegistry != nullptr ? toolRegistry->getTool(name) : nullptr;
         if (!shellJudged && !spawnOk && (tool == nullptr || !tool->isReadOnly())) {
+            if (agentConfig.isSubAgent) {
+                return QStringLiteral(
+                    "plan mode is read-only; report the blocked operation to the parent agent");
+            }
             return QStringLiteral(
                 "plan mode is read-only; call exit_plan_mode to get approval first");
         }
@@ -151,12 +171,6 @@ nlohmann::json QSocAgent::getEffectiveToolDefinitions() const
 
 nlohmann::json QSocAgent::filterAllowedTools(const nlohmann::json &defs) const
 {
-    /* Fast path only when no gate applies: no allowlist, not a sub-agent,
-     * and not in plan mode. Plan mode must run the per-tool loop so
-     * mutating tools are dropped from the sent list. */
-    if (agentConfig.toolsAllow.isEmpty() && !agentConfig.isSubAgent && !agentConfig.planMode) {
-        return defs;
-    }
     json filtered = json::array();
     for (const auto &def : defs) {
         if (!def.contains("function") || !def["function"].contains("name")) {
@@ -1098,8 +1112,7 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
         /* Plan-mode shell safety: bash / remote_shell_bash are judged
          * per command by the injected LLM classifier (semantic, not a
          * hardcoded allowlist). Fail-closed when no judge is installed.
-         * Read-only commands proceed; mutating ones are surfaced to the
-         * model as a denial so it can adjust or exit plan mode. */
+         * Read-only commands proceed; mutating ones become tool denials. */
         if (agentConfig.planMode
             && (functionName == QStringLiteral("bash")
                 || functionName == QStringLiteral("remote_shell_bash"))) {
@@ -1115,11 +1128,14 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
                 const QString reason = verdict.reason.isEmpty()
                                            ? QStringLiteral("not classified as read-only")
                                            : verdict.reason;
-                const QString denied
-                    = QStringLiteral(
-                          "Plan mode: command blocked, it may modify state (%1). Use "
-                          "read-only inspection, or call exit_plan_mode to get approval.")
-                          .arg(reason);
+                const QString nextStep
+                    = agentConfig.isSubAgent
+                          ? QStringLiteral("Report the blocked operation to the parent agent.")
+                          : QStringLiteral("Call exit_plan_mode to get approval.");
+                const QString denied = QStringLiteral(
+                                           "Plan mode: command blocked, it may modify state (%1). "
+                                           "Use read-only inspection. %2")
+                                           .arg(reason, nextStep);
                 addToolMessage(toolCallId, denied);
                 emit toolResult(functionName, denied);
                 continue;
@@ -1333,11 +1349,14 @@ void QSocAgent::injectPerTurnReminders(json &wire) const
         appendTurnReminder(wire, agentConfig.criticalReminder);
     }
     if (agentConfig.planMode) {
-        appendTurnReminder(wire, QString::fromUtf8(kPlanModeReminder));
+        appendTurnReminder(
+            wire,
+            QString::fromUtf8(
+                agentConfig.isSubAgent ? kSubAgentPlanModeReminder : kPlanModeReminder));
     }
     /* Focus-aware: when the user is not watching, steer away from blocking
      * ask_user prompts. Tracks live focus, never persisted. */
-    if (userWatchingProbe_ && !userWatchingProbe_()) {
+    if (!agentConfig.isSubAgent && userWatchingProbe_ && !userWatchingProbe_()) {
         appendTurnReminder(wire, QString::fromUtf8(kNotWatchingReminder));
     }
     /* Approved plan handoff: re-injected each turn so the executing model

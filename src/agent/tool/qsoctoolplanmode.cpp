@@ -38,9 +38,11 @@ json QSocToolEnterPlanMode::getParametersSchema() const
 
 QString QSocToolEnterPlanMode::execute(const json & /*arguments*/)
 {
-    if (onEnter_) {
-        onEnter_();
+    if (!onEnter_) {
+        return QStringLiteral(
+            R"({"status":"error","error":"enter_plan_mode is unavailable in this context"})");
     }
+    onEnter_();
     return QStringLiteral(
         "Entered plan mode. You are now read-only: explore the code, use "
         "ask_user to clarify anything ambiguous, then call exit_plan_mode "

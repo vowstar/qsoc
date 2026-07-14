@@ -82,7 +82,7 @@ QString QSocToolAskUser::execute(const json &arguments)
 {
     if (!callback_) {
         return QStringLiteral(
-            R"({"status":"error","error":"ask_user is unavailable in sub-agent context; resolve ambiguity in the parent before dispatching"})");
+            R"({"status":"error","error":"ask_user is unavailable in this context"})");
     }
     const QString question = jsonString(arguments, "question");
     if (question.isEmpty()) {

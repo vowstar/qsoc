@@ -61,7 +61,7 @@ private slots:
         QSocToolAskUser tool(nullptr, nullptr);
         const QString   out = tool.execute(
             {{"question", "q?"}, {"options", json::array({{{"label", "a"}}, {{"label", "b"}}})}});
-        QVERIFY(out.contains(QStringLiteral("sub-agent context")));
+        QVERIFY(out.contains(QStringLiteral("unavailable in this context")));
     }
 
     void testPicksOption()

@@ -31,11 +31,12 @@ private:
 private slots:
     void isReadOnlyClassification();
     void planGateBlocksWritesAllowsReads();
-    void effectiveDefsHideWritesInPlanMode();
+    void effectiveDefsFollowPlanMode();
     void approvedPlanRoundTrips();
     void exitToolNullCallbackErrors();
     void exitToolRequiresPlanText();
     void exitToolApproveAndReject();
+    void enterToolNullCallbackErrors();
     void enterToolFiresCallback();
     void subAgentInheritsPlanModeGate();
 };
@@ -96,7 +97,7 @@ void Test::planGateBlocksWritesAllowsReads()
     QVERIFY(!agent.isToolAllowed(QStringLiteral("exit_plan_mode"))); /* hidden off-plan */
 }
 
-void Test::effectiveDefsHideWritesInPlanMode()
+void Test::effectiveDefsFollowPlanMode()
 {
     QObject           owner;
     QSocToolRegistry *reg = makeRegistry(&owner);
@@ -106,28 +107,28 @@ void Test::effectiveDefsHideWritesInPlanMode()
             wr = n;
         }
     }
-    QSocAgent       agent(&owner, nullptr, reg, QSocAgentConfig{});
+    const auto definitionNames = [](const json &definitions) {
+        QSet<QString> names;
+        for (const auto &definition : definitions) {
+            names.insert(
+                QString::fromStdString(definition.at("function").at("name").get<std::string>()));
+        }
+        return names;
+    };
+
+    QSocAgent           agent(&owner, nullptr, reg, QSocAgentConfig{});
+    const QSet<QString> offPlan = definitionNames(agent.getEffectiveToolDefinitions());
+    QVERIFY(offPlan.contains(wr));
+    QVERIFY(offPlan.contains(QStringLiteral("enter_plan_mode")));
+    QVERIFY(!offPlan.contains(QStringLiteral("exit_plan_mode")));
+
     QSocAgentConfig cfg;
     cfg.planMode = true;
     agent.setConfig(cfg);
-
-    const json defs     = agent.getEffectiveToolDefinitions();
-    bool       sawWrite = false;
-    bool       sawExit  = false;
-    for (const auto &def : defs) {
-        if (!def.contains("function") || !def["function"].contains("name")) {
-            continue;
-        }
-        const QString name = QString::fromStdString(def["function"]["name"].get<std::string>());
-        if (name == wr) {
-            sawWrite = true;
-        }
-        if (name == QStringLiteral("exit_plan_mode")) {
-            sawExit = true;
-        }
-    }
-    QVERIFY(!sawWrite); /* mutating tool hidden from the sent list */
-    QVERIFY(sawExit);   /* exit tool offered */
+    const QSet<QString> inPlan = definitionNames(agent.getEffectiveToolDefinitions());
+    QVERIFY(!inPlan.contains(wr));
+    QVERIFY(!inPlan.contains(QStringLiteral("enter_plan_mode")));
+    QVERIFY(inPlan.contains(QStringLiteral("exit_plan_mode")));
 }
 
 void Test::approvedPlanRoundTrips()
@@ -177,6 +178,14 @@ void Test::exitToolApproveAndReject()
     const QString rejected = exit.execute(json{{"plan", "step 1"}});
     QVERIFY(rejected.contains(QStringLiteral("did not approve")));
     QVERIFY(rejected.contains(QStringLiteral("narrow the scope")));
+}
+
+void Test::enterToolNullCallbackErrors()
+{
+    QSocToolEnterPlanMode enter;
+    const QString         out = enter.execute(json::object());
+    QVERIFY(out.contains(QStringLiteral("error")));
+    QVERIFY(out.contains(QStringLiteral("unavailable")));
 }
 
 void Test::enterToolFiresCallback()

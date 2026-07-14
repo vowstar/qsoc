@@ -376,8 +376,8 @@ public:
 
     /**
      * @brief Why a tool name is rejected under the current agent config.
-     * @details Single source of truth for the tool gates: sub-agent
-     *          recursion guard, plan-mode tool visibility, allowlist,
+     * @details Single source of truth for the tool gates: fixed sub-agent
+     *          ownership boundaries, plan-mode tool visibility, allowlist,
      *          denylist, and the plan-mode read-only gate. Returns a
      *          human/LLM-readable reason, or an empty string when the
      *          tool is allowed.
@@ -392,8 +392,7 @@ public:
 
     /**
      * @brief Tool definitions the LLM will actually see this turn:
-     *        the registry's full list filtered by the sub-agent
-     *        allowlist + recursion guard.
+     *        the registry's full list filtered by all current gates.
      */
     nlohmann::json getEffectiveToolDefinitions() const;
 
@@ -656,7 +655,7 @@ private:
 
     /**
      * @brief Drop tool definitions that are not allowed for the current
-     *        agent (subagent allowlist, recursion guard).
+     *        agent.
      */
     nlohmann::json filterAllowedTools(const nlohmann::json &defs) const;
 

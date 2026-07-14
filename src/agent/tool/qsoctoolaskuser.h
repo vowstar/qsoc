@@ -32,9 +32,8 @@ struct QSocAskUserResult
  *        with an automatic "Other..." escape hatch for custom text.
  * @details The tool guarantees a free-form path even when the model
  *          could not enumerate it.
- *          The CLI layer installs a callback that drives the TUI; the
- *          sub-agent dispatch path leaves the callback unset so a
- *          mid-LLM-turn child cannot block waiting on user input.
+ *          The CLI layer installs a callback that drives the TUI. The
+ *          agent gate excludes this tool from sub-agent runs.
  */
 class QSocToolAskUser : public QSocTool
 {
@@ -48,9 +47,7 @@ public:
 
     /**
      * @brief Install or replace the TUI-driving callback. Used by the
-     *        REPL once the compositor and input monitor exist; left
-     *        unset on the sub-agent dispatch path so a child cannot
-     *        block mid-LLM-turn waiting on user input.
+     *        REPL once the compositor and input monitor exist.
      */
     void setCallback(Callback callback);
 

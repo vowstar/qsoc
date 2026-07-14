@@ -171,13 +171,13 @@ struct QSocAgentConfig
 
     /* Tool name allowlist. When non-empty only these tools are exposed
      * to the LLM and accepted at dispatch; out-of-list calls return a
-     * structured error string. Empty list = inherit the parent
-     * registry's full tool set. The `agent` spawn tool is always
-     * filtered out when isSubAgent is true, regardless of this list. */
+     * structured error string. Empty list inherits the parent registry
+     * subject to fixed child gates. `agent`, `ask_user`, `goal_complete`, and
+     * both plan-mode control tools are always filtered when isSubAgent is true. */
     QStringList toolsAllow;
 
     /* Tool name denylist. Applied AFTER `toolsAllow` (deny wins).
-     * Empty = no extra denies on top of allowlist + recursion guard. */
+     * Empty = no extra denies on top of allowlist and fixed child gates. */
     QStringList toolsDeny;
 
     /* Per-agent iteration cap. 0 = inherit `maxIterations`. When > 0
@@ -212,10 +212,10 @@ struct QSocAgentConfig
     /* Plan mode. When true the agent may only run read-only tools (plus
      * the shell, whose per-command safety is LLM-judged, and the spawn
      * tool, whose children inherit this flag); all mutating tools are
-     * hidden from the model and rejected at dispatch. The model explores
+     * hidden from the model and rejected at dispatch. The main agent explores
      * and then calls exit_plan_mode to present a plan for user approval.
-     * Propagated into spawned sub-agents so read-only exploration runs
-     * under the same gate. */
+     * Spawned sub-agents inherit the gate and return their findings and plan to
+     * the parent. */
     bool planMode = false;
 };
 

@@ -32,7 +32,7 @@ private slots:
     {
         QSocToolGoalComplete tool(nullptr, nullptr);
         const QString        out = tool.execute({{"status", "complete"}});
-        QVERIFY2(out.contains(QStringLiteral("sub-agent context")), qPrintable(out));
+        QVERIFY2(out.contains(QStringLiteral("no project goal catalog")), qPrintable(out));
     }
 
     void rejectsWhenNoActiveGoal()

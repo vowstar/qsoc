@@ -240,9 +240,8 @@ prompt cache stays warm.
 Goal completion is *LLM-driven*. The agent exposes a single tool,
 `goal_complete`, whose schema enum restricts the status payload to
 `"complete"`. The LLM calls it only when its completion audit proves
-the objective has been met. Sub-agent dispatch deliberately leaves the
-catalog pointer unset so a child run cannot declare the parent's goal
-done; the parent must judge from its own context.
+the objective has been met. The agent gate hides and rejects this shared
+tool for sub-agents, so only the parent can declare the goal complete.
 
 The status-line chip surfaces the live state at all times:
 
@@ -338,20 +337,23 @@ LSP, run read-only shell, and spawn read-only sub-agents. File writes,
 mutating shell, commits, and config changes are rejected, and the status
 line shows a `⏸ PLAN` chip.
 
+Plan-mode sub-agents return findings, supporting evidence, unresolved
+ambiguities, and a proposed plan to the parent agent.
+
 Shell commands are not gated by a fixed allowlist; each one is judged by
 a separate LLM safety classifier and blocked (with a reason) if it could
-change state. The agent explores, clarifies with `ask_user` across as
-many rounds as needed, then calls `exit_plan_mode` to present a plan. You
-approve it or keep planning. On approval the agent leaves plan mode, the
-plan is saved to `<project>/.qsoc/plans/<session>.md`, and a budget-capped
+change state. The parent agent explores and clarifies with `ask_user`
+across as many rounds as needed, then calls `exit_plan_mode` to present a
+plan. You approve it or keep planning. On approval the agent leaves plan
+mode, the plan is saved to `<project>/.qsoc/plans/<session>.md`, and a budget-capped
 copy rides every subsequent turn so the executing agent keeps following
 it across context compaction. A newer approved plan replaces the old one.
 
-If a model ends a plan-mode turn by writing prose instead of calling
+If the parent model ends a plan-mode turn by writing prose instead of calling
 `exit_plan_mode` or `ask_user` (some models call tools less reliably),
 qsoc first sends it one automatic reminder to route the text through
 the proper tool, so a ready plan arrives via the normal approval prompt
-and a question via the normal `ask_user` flow. If the model still ends
+and a question via the normal `ask_user` flow. If the parent model still ends
 in prose, the final text is treated as the proposed plan and the same
 approval prompt is shown, so you are never left in plan mode with no
 way to approve. On approval qsoc leaves plan mode and immediately
@@ -677,6 +679,8 @@ agent:
 A sub-agent is a child run with its own message history, its own tool
 allowlist, and its own system prompt. The parent dispatches through the
 `agent` tool; the child's final output is returned as the tool result.
+Sub-agents cannot prompt the user, control plan mode, or complete the parent
+goal; they return questions, findings, and proposed plans to the parent.
 
 === Spawning
 <agent-subagents-spawn>

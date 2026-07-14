@@ -81,6 +81,56 @@ private slots:
         }
     }
 
+    void testSubAgentCannotAskUser()
+    {
+        QObject owner;
+        auto   *reg = new QSocToolRegistry(&owner);
+        reg->registerTool(new FakeTool(QStringLiteral("ask_user"), reg));
+
+        QSocAgentConfig parentCfg;
+        QSocAgent       parent(&owner, nullptr, reg, parentCfg);
+        QVERIFY(parent.isToolAllowed(QStringLiteral("ask_user")));
+
+        QSocAgentConfig childCfg;
+        childCfg.isSubAgent = true;
+        QSocAgent child(&owner, nullptr, reg, childCfg);
+        QVERIFY(!child.isToolAllowed(QStringLiteral("ask_user")));
+        QVERIFY(child.getEffectiveToolDefinitions().empty());
+
+        childCfg.toolsAllow = {QStringLiteral("ask_user")};
+        child.setConfig(childCfg);
+        QVERIFY(!child.isToolAllowed(QStringLiteral("ask_user")));
+    }
+
+    void testSubAgentCannotCompleteParentGoal()
+    {
+        QObject owner;
+        auto   *reg = new QSocToolRegistry(&owner);
+        reg->registerTool(new FakeTool(QStringLiteral("file_read"), reg));
+        reg->registerTool(new FakeTool(QStringLiteral("goal_complete"), reg));
+
+        QSocAgentConfig parentCfg;
+        QSocAgent       parent(&owner, nullptr, reg, parentCfg);
+        QVERIFY(parent.isToolAllowed(QStringLiteral("goal_complete")));
+        QCOMPARE(parent.getEffectiveToolDefinitions().size(), size_t{2});
+
+        QSocAgentConfig childCfg;
+        childCfg.isSubAgent = true;
+        QSocAgent child(&owner, nullptr, reg, childCfg);
+        QVERIFY(child.isToolAllowed(QStringLiteral("file_read")));
+        QVERIFY(!child.isToolAllowed(QStringLiteral("goal_complete")));
+        json definitions = child.getEffectiveToolDefinitions();
+        QCOMPARE(definitions.size(), size_t{1});
+        QCOMPARE(
+            QString::fromStdString(definitions.at(0).at("function").at("name").get<std::string>()),
+            QStringLiteral("file_read"));
+
+        childCfg.toolsAllow = {QStringLiteral("file_read"), QStringLiteral("goal_complete")};
+        child.setConfig(childCfg);
+        QVERIFY(!child.isToolAllowed(QStringLiteral("goal_complete")));
+        QCOMPARE(child.getEffectiveToolDefinitions().size(), size_t{1});
+    }
+
     /* Sub-agent with explicit allowlist: only listed tools, never "agent". */
     void testSubAgentAllowlistFilters()
     {
@@ -106,6 +156,13 @@ private slots:
         QVERIFY(agent->isToolAllowed(QStringLiteral("file_read")));
         QVERIFY(!agent->isToolAllowed(QStringLiteral("bash_run")));
         QVERIFY(agent->isToolAllowed(QStringLiteral("agent")));
+        const json definitions = agent->getEffectiveToolDefinitions();
+        QCOMPARE(definitions.size(), size_t{2});
+        for (const auto &definition : definitions) {
+            QVERIFY(
+                QString::fromStdString(definition["function"]["name"].get<std::string>())
+                != QStringLiteral("bash_run"));
+        }
     }
 
     /* Denylist takes precedence over allowlist when they intersect:

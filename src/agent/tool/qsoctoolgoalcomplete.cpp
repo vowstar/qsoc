@@ -45,7 +45,7 @@ QString QSocToolGoalComplete::execute(const json &arguments)
 {
     if (catalog_ == nullptr) {
         return QStringLiteral(
-            R"j({"status":"error","error":"goal_complete unavailable: this run has no project goal catalog [sub-agent context, or the parent never set a goal]"})j");
+            R"j({"status":"error","error":"goal_complete unavailable: this run has no project goal catalog"})j");
     }
     if (!arguments.contains("status") || !arguments["status"].is_string()) {
         return QStringLiteral(R"j({"status":"error","error":"status is required"})j");
