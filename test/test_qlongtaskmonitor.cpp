@@ -178,6 +178,33 @@ private slots:
             QVERIFY(monitor.isCancelled());
         }
     }
+
+    void cancelledObserverMayDeleteMonitor()
+    {
+        QPointer<QLongTaskMonitor> monitor = new QLongTaskMonitor(this, fastConfig());
+        connect(monitor, &QLongTaskMonitor::cancelled, this, [monitor]() { delete monitor.data(); });
+        monitor->start();
+
+        monitor->cancel(QStringLiteral("delete monitor"));
+
+        QVERIFY(monitor.isNull());
+    }
+
+    void wallClockObserverMayDeleteMonitor()
+    {
+        QLongTaskMonitor::Config cfg           = fastConfig(/*wallClockMs=*/50);
+        cfg.stallThresholdMs                   = 0;
+        QPointer<QLongTaskMonitor> monitor     = new QLongTaskMonitor(this, cfg);
+        int                        signalCount = 0;
+        connect(monitor, &QLongTaskMonitor::wallClockExceeded, this, [monitor, &signalCount]() {
+            ++signalCount;
+            delete monitor.data();
+        });
+        monitor->start();
+
+        QTRY_VERIFY(monitor.isNull());
+        QCOMPARE(signalCount, 1);
+    }
 };
 
 } // namespace

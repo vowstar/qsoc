@@ -32,10 +32,8 @@ class QTimer;
  * Threading: the monitor must live on a thread with a Qt event loop
  * (the timer needs one). start() asserts thread affinity.
  *
- * Reentrancy: stalled() / wallClockExceeded() / cancelled() are
- * emitted from inside a slot. Consumers whose slots can re-enter the
- * monitor (call cancel(), drop the parent, etc.) should connect with
- * Qt::QueuedConnection.
+ * Signal handlers may destroy the monitor. cancel() tears down before emitting,
+ * and timer callbacks access no members after emitting a signal.
  */
 class QLongTaskMonitor : public QObject
 {

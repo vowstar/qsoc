@@ -57,8 +57,8 @@ void QLongTaskMonitor::cancel(const QString &reason)
         return;
     }
     cancelled_.storeRelaxed(1);
-    emit cancelled(reason);
     teardown();
+    emit cancelled(reason);
 }
 
 bool QLongTaskMonitor::isCancelled() const noexcept
@@ -90,6 +90,7 @@ void QLongTaskMonitor::onTick()
     if (cfg_.wallClockMs > 0 && elapsed >= cfg_.wallClockMs
         && wallClockFired_.testAndSetOrdered(0, 1)) {
         emit wallClockExceeded(static_cast<int>(elapsed));
+        return;
     }
 
     if (cfg_.stallThresholdMs <= 0) {
