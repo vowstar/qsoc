@@ -99,6 +99,7 @@
 #include <QMap>
 #include <QPair>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTextStream>
 
@@ -1514,15 +1515,19 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
              * alt-screen entry, no timer, no live painting; only the
              * markdown -> styled-blocks -> ANSI pipeline is exercised. */
             auto headlessCompositor = std::make_shared<QTuiCompositor>();
-            connect(agent, &QSocAgent::contentChunk, [headlessCompositor](const QString &chunk) {
+            connect(agent, &QSocAgent::contentChunk, &loop, [headlessCompositor](const QString &chunk) {
                 headlessCompositor->appendAssistantChunk(chunk);
             });
-            connect(agent, &QSocAgent::reasoningChunk, [headlessCompositor](const QString &chunk) {
-                headlessCompositor->appendReasoningChunk(chunk);
-            });
+            connect(
+                agent, &QSocAgent::reasoningChunk, &loop, [headlessCompositor](const QString &chunk) {
+                    headlessCompositor->appendReasoningChunk(chunk);
+                });
 
             connect(
-                agent, &QSocAgent::runComplete, [&qout, &loop, headlessCompositor](const QString &) {
+                agent,
+                &QSocAgent::runComplete,
+                &loop,
+                [&qout, &loop, headlessCompositor](const QString &) {
                     headlessCompositor->finishStream();
                     /* Leave one cell of right margin so the terminal's
                      * auto-wrap never fires before our explicit newline;
@@ -1548,7 +1553,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                     loop.quit();
                 });
 
-            connect(agent, &QSocAgent::runError, [this, &loop](const QString &error) {
+            connect(agent, &QSocAgent::runError, &loop, [this, &loop](const QString &error) {
                 showError(1, error);
                 loop.quit();
             });
@@ -1804,7 +1809,7 @@ bool QSocCliWorker::runAgentLoop(
         compositor.invalidate();
     };
     if (goalCatalog != nullptr) {
-        QObject::connect(goalCatalog, &QSocGoalCatalog::goalChanged, refreshGoalChip);
+        QObject::connect(goalCatalog, &QSocGoalCatalog::goalChanged, &compositor, refreshGoalChip);
         refreshGoalChip();
     }
 
@@ -1958,8 +1963,9 @@ bool QSocCliWorker::runAgentLoop(
      * exist. The callback pops a QTuiMenu with the caller's 2-4
      * options plus an automatically appended Other... entry that
      * opens a free-form QTuiLineInput. */
-    if (auto *askTool = dynamic_cast<QSocToolAskUser *>(
-            agent->getToolRegistry()->getTool(QStringLiteral("ask_user")))) {
+    auto *askTool = dynamic_cast<QSocToolAskUser *>(
+        localRegistry->getTool(QStringLiteral("ask_user")));
+    if (askTool != nullptr) {
         askTool->setCallback(
             [&compositor, &inputMonitor](
                 const QString                  &question,
@@ -3293,9 +3299,10 @@ bool QSocCliWorker::runAgentLoop(
     /* Plan-mode callbacks (main agent only; sub-agent dispatch is gated
      * off in QSocAgent). Installed after the session exists so the exit
      * callback can persist the approved plan. */
-    if (auto *enterTool = dynamic_cast<QSocToolEnterPlanMode *>(
-            agent->getToolRegistry()->getTool(QStringLiteral("enter_plan_mode")))) {
-        enterTool->setCallback([agent, &statusBarWidget, &compositor]() {
+    auto *enterPlanTool = dynamic_cast<QSocToolEnterPlanMode *>(
+        localRegistry->getTool(QStringLiteral("enter_plan_mode")));
+    if (enterPlanTool != nullptr) {
+        enterPlanTool->setCallback([agent, &statusBarWidget, &compositor]() {
             auto cfg     = agent->getConfig();
             cfg.planMode = true;
             agent->setConfig(cfg);
@@ -3373,15 +3380,31 @@ bool QSocCliWorker::runAgentLoop(
         approval.approved = true;
         return approval;
     };
-    if (auto *exitTool = dynamic_cast<QSocToolExitPlanMode *>(
-            agent->getToolRegistry()->getTool(QStringLiteral("exit_plan_mode")))) {
-        exitTool->setCallback([&presentPlanForApproval](const QString &plan) -> QSocPlanApproval {
-            return presentPlanForApproval(plan, /*echoPlan=*/true);
-        });
+    auto *exitPlanTool = dynamic_cast<QSocToolExitPlanMode *>(
+        localRegistry->getTool(QStringLiteral("exit_plan_mode")));
+    if (exitPlanTool != nullptr) {
+        exitPlanTool->setCallback(
+            [&presentPlanForApproval](const QString &plan) -> QSocPlanApproval {
+                return presentPlanForApproval(plan, /*echoPlan=*/true);
+            });
     }
     /* Focus probe: the agent reads this each turn to decide whether to
      * steer away from blocking ask_user (user not watching). */
     agent->setUserWatchingProbe([&userWatching]() { return userWatching; });
+    const auto clearReplCallbacks = qScopeGuard([agent, askTool, enterPlanTool, exitPlanTool]() {
+        agent->setContextRestoreProvider({});
+        agent->setUserWatchingProbe({});
+        agent->setBashSafetyJudge({});
+        if (askTool != nullptr) {
+            askTool->setCallback({});
+        }
+        if (enterPlanTool != nullptr) {
+            enterPlanTool->setCallback({});
+        }
+        if (exitPlanTool != nullptr) {
+            exitPlanTool->setCallback({});
+        }
+    });
 
     /* Plan-mode shell safety judge: an isolated, fail-closed LLM
      * classifier (no hardcoded allowlist). */
@@ -3926,12 +3949,13 @@ bool QSocCliWorker::runAgentLoop(
         }
     }
     QEventLoop *idlePromptLoop = nullptr;
+    QObject     replConnectionScope;
 
     if (taskEventQueue != nullptr) {
         connect(
             taskEventQueue,
             &QSocTaskEventQueue::taskNotificationReady,
-            agent,
+            &replConnectionScope,
             [agent,
              &pendingAutoInputs,
              &idlePromptLoop](const QString &message, const QString &agentId) {
@@ -4005,6 +4029,7 @@ bool QSocCliWorker::runAgentLoop(
     auto connLoopFire = connect(
         &loopScheduler,
         &QSocLoopScheduler::promptDue,
+        &replConnectionScope,
         [&compositor,
          &pendingAutoInputs,
          &idlePromptLoop,
@@ -7185,9 +7210,10 @@ bool QSocCliWorker::runAgentLoop(
                 });
 
             /* Use existing inputMonitor for ESC/Ctrl+C during execution */
-            auto &escMonitor  = inputMonitor;
-            auto  connEscExec = QObject::connect(
-                &escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            auto &escMonitor = inputMonitor;
+            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, &loop, [agent]() {
+                agent->abort();
+            });
             auto connCtrlC = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
@@ -7840,9 +7866,10 @@ bool QSocCliWorker::runAgentLoop(
                 });
 
             /* Use existing inputMonitor for ESC/Ctrl+C during execution */
-            auto &escMonitor  = inputMonitor;
-            auto  connEscExec = QObject::connect(
-                &escMonitor, &QAgentInputMonitor::escPressed, agent, &QSocAgent::abort);
+            auto &escMonitor = inputMonitor;
+            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, &loop, [agent]() {
+                agent->abort();
+            });
             auto connCtrlC = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,

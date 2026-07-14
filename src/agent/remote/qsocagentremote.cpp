@@ -225,6 +225,7 @@ bool connectAgentSshSession(
         QSocSshSession::ConnectStatus status
             = (currentParent != nullptr) ? session->connectToVia(cfg, currentParent, errOut)
                                          : session->connectTo(cfg, errOut);
+        session->setSecretCallback({});
         if (status != QSocSshSession::ConnectStatus::Ok) {
             delete session;
             return nullptr;

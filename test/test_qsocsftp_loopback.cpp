@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshhostconfig.h"
 #include "agent/remote/qsocsshsession.h"
@@ -10,11 +11,14 @@
 #include <QFile>
 #include <QHostAddress>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QtTest>
+
+#include <memory>
 
 #ifndef Q_OS_WIN
 #include <pwd.h>
@@ -109,6 +113,7 @@ class Test : public QObject
 private slots:
     void initTestCase();
     void cleanupTestCase();
+    void releasesAuthenticationCallbackAfterConnect();
     void overwriteExistingFileRepeatedly();
 
 private:
@@ -222,6 +227,70 @@ void Test::cleanupTestCase()
             m_sshd.waitForFinished(2000);
         }
     }
+}
+
+void Test::releasesAuthenticationCallbackAfterConnect()
+{
+    if (!m_ready) {
+        QSKIP("loopback sshd unavailable in this environment");
+    }
+
+    const QString homeDir = m_dir.path() + QStringLiteral("/client_home");
+    QVERIFY(QDir().mkpath(homeDir + QStringLiteral("/.ssh")));
+    QFile config(homeDir + QStringLiteral("/.ssh/config"));
+    QVERIFY(config.open(QIODevice::WriteOnly | QIODevice::Text));
+    config.write(QStringLiteral(
+                     "Host callback-release\n"
+                     "  HostName 127.0.0.1\n"
+                     "  Port %1\n"
+                     "  User %2\n"
+                     "  IdentityFile %3\n"
+                     "  IdentitiesOnly yes\n")
+                     .arg(m_port)
+                     .arg(m_user, m_keyPath)
+                     .toUtf8());
+    config.close();
+
+    const bool       hadHome     = qEnvironmentVariableIsSet("HOME");
+    const QByteArray oldHome     = qgetenv("HOME");
+    const auto       restoreHome = qScopeGuard([hadHome, oldHome]() {
+        if (hadHome) {
+            qputenv("HOME", oldHome);
+        } else {
+            qunsetenv("HOME");
+        }
+    });
+    QVERIFY(qputenv("HOME", homeDir.toUtf8()));
+    QCOMPARE(QDir::homePath(), homeDir);
+
+    QObject          parent;
+    AgentRemoteState state;
+    const auto       cleanupState = qScopeGuard([&state]() {
+        if (state.sftp != nullptr) {
+            state.sftp->close();
+            delete state.sftp;
+        }
+        if (state.session != nullptr) {
+            state.session->disconnectFromHost();
+            delete state.session;
+        }
+        for (auto it = state.jumps.rbegin(); it != state.jumps.rend(); ++it) {
+            (*it)->disconnectFromHost();
+            delete *it;
+        }
+    });
+
+    auto                           token = std::make_shared<int>(1);
+    const std::weak_ptr<int>       weakToken(token);
+    QSocSshSession::SecretCallback callback = [token](const QString &) { return QString(); };
+    token.reset();
+
+    QString error;
+    QVERIFY2(
+        connectAgentSshSession(QStringLiteral("callback-release"), &parent, &state, &error, callback),
+        qPrintable(error));
+    callback = {};
+    QVERIFY(weakToken.expired());
 }
 
 void Test::overwriteExistingFileRepeatedly()

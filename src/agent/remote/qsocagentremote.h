@@ -54,6 +54,7 @@ struct AgentRemoteState
  * @param parent QObject parent for newly created sessions.
  * @param state Output struct receiving session/sftp/jumps/targetKey.
  * @param errorMessage Optional sink for a UI-safe error string.
+ * @param secretCallback Optional synchronous authentication prompt; not retained.
  * @return True on success, false on any connect or SFTP failure.
  */
 bool connectAgentSshSession(
