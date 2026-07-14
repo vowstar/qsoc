@@ -31,6 +31,7 @@ struct MockResponse
     int        bodyDelayMs          = 0;
     int        delayMs              = 0;
     bool       closeWithoutResponse = false;
+    bool       finishSse            = true;
     /* Per-event delays in milliseconds. Empty means send the whole body
      * in one shot. Used to drive SSE chunking from the server side. */
     QList<int> sseChunkDelaysMs;
@@ -217,6 +218,9 @@ private:
                 socket->flush();
             });
         }
+        if (!response.finishSse) {
+            return;
+        }
         const int closeDelay
             = (response.sseChunkDelaysMs.isEmpty()
                    ? 0
@@ -277,6 +281,17 @@ bool waitForRequests(const MockHttpServer &server, qsizetype minCount, int timeo
     return true;
 }
 
+qsizetype runningReplyCount(const QSocMcpHttpTransport *transport)
+{
+    qsizetype count = 0;
+    for (QNetworkReply *reply : transport->findChildren<QNetworkReply *>()) {
+        if (reply->isRunning()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 QList<QByteArray> requestSessionsForMethod(const MockHttpServer &server, const QString &method)
 {
     QList<QByteArray> sessions;
@@ -331,6 +346,7 @@ private slots:
         QSocMcpHttpTransport transport(httpConfig(server.url()));
         QSignalSpy           startedSpy(&transport, &QSocMcpTransport::started);
         QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
 
         transport.start();
         QVERIFY(waitForSignal(startedSpy, 1));
@@ -345,6 +361,8 @@ private slots:
         const auto msg = messageSpy.first().first().value<nlohmann::json>();
         QCOMPARE(msg["id"].get<int>(), 1);
         QVERIFY(msg["result"]["ok"].get<bool>());
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 3000);
+        QCOMPARE(failureSpy.size(), qsizetype(0));
     }
 
     void parsesJsonBatchResponse()
@@ -361,6 +379,7 @@ private slots:
         QSocMcpHttpTransport transport(httpConfig(server.url()));
         QSignalSpy           startedSpy(&transport, &QSocMcpTransport::started);
         QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
 
         transport.start();
         QVERIFY(waitForSignal(startedSpy, 1));
@@ -377,6 +396,8 @@ private slots:
         QCOMPARE(message.size(), std::size_t(2));
         QVERIFY(message.at(0)["result"].value("ok", false));
         QCOMPARE(message.at(1)["error"]["code"].get<int>(), -32601);
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 3000);
+        QCOMPARE(failureSpy.size(), qsizetype(0));
         QVERIFY(waitForRequests(server, 1));
         QCOMPARE(nlohmann::json::parse(server.requestBodies().first().toStdString()), request);
     }
@@ -387,8 +408,8 @@ private slots:
         QVERIFY(server.listen());
 
         QByteArray sseBody;
-        sseBody += "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
         sseBody += "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}\n\n";
+        sseBody += "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
 
         MockResponse response;
         response.contentType = "text/event-stream";
@@ -397,6 +418,7 @@ private slots:
 
         QSocMcpHttpTransport transport(httpConfig(server.url()));
         QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
 
         transport.start();
 
@@ -407,36 +429,832 @@ private slots:
         transport.sendMessage(req);
 
         QVERIFY(waitForSignal(messageSpy, 2, 3000));
-        QCOMPARE(messageSpy.at(0).first().value<nlohmann::json>()["id"].get<int>(), 1);
         QCOMPARE(
             QString::fromStdString(
-                messageSpy.at(1).first().value<nlohmann::json>()["method"].get<std::string>()),
+                messageSpy.at(0).first().value<nlohmann::json>()["method"].get<std::string>()),
             QStringLiteral("notifications/x"));
+        QCOMPARE(messageSpy.at(1).first().value<nlohmann::json>()["id"].get<int>(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 3000);
+        QCOMPARE(failureSpy.size(), qsizetype(0));
     }
 
-    void emptyJsonBodyIsTolerated()
+    void completedSseRequestClosesStreamWithoutEof()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType      = "text/event-stream";
+        response.body             = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}\n\n"
+                                    "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
+        response.sseChunkDelaysMs = {0};
+        response.finishSse        = false;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        transport.start();
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools/list"}}, 41);
+
+        QVERIFY(waitForSignal(messageSpy, 2));
+        QCOMPARE(
+            messageSpy.at(0).first().value<nlohmann::json>()["method"].get<std::string>(),
+            std::string("notifications/x"));
+        QCOMPARE(messageSpy.at(1).first().value<nlohmann::json>()["id"].get<int>(), 1);
+        QVERIFY(waitForSignal(sentSpy, 1));
+        QCOMPARE(sentSpy.first().first().toULongLong(), quint64(41));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(errorSpy.size(), qsizetype(0));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+        QCOMPARE(sentSpy.size(), qsizetype(1));
+    }
+
+    void batchSseStreamWaitsForEveryResponse()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType      = "text/event-stream";
+        response.body             = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n|"
+                                    "data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\n\n";
+        response.sseChunkDelaysMs = {0, 200};
+        response.finishSse        = false;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        transport.start();
+        transport.sendMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}},
+                {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/list"}},
+            }));
+
+        QVERIFY(waitForSignal(messageSpy, 1));
+        QVERIFY(!transport.findChildren<QNetworkReply *>().isEmpty());
+        QVERIFY(waitForSignal(messageSpy, 2));
+        QCOMPARE(messageSpy.at(0).first().value<nlohmann::json>()["id"].get<int>(), 1);
+        QCOMPARE(messageSpy.at(1).first().value<nlohmann::json>()["id"].get<int>(), 2);
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
+    void abandonedBatchReplyClosesAfterLastRequest()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType      = "text/event-stream";
+        response.body             = ": hold\n\n";
+        response.sseChunkDelaysMs = {0};
+        response.finishSse        = false;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        transport.start();
+        transport.sendTrackedMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}},
+                {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/list"}},
+            }),
+            51);
+
+        QVERIFY(waitForRequests(server, 1));
+        QCOMPARE(transport.findChildren<QNetworkReply *>().size(), qsizetype(1));
+        transport.abandonRequest(1);
+        QCOMPARE(transport.findChildren<QNetworkReply *>().size(), qsizetype(1));
+        transport.abandonRequest(2);
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+        QCOMPARE(messageSpy.size(), qsizetype(0));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(sentSpy.size(), qsizetype(0));
+        QCOMPARE(errorSpy.size(), qsizetype(0));
+    }
+
+    void abandonedBatchRequestKeepsSiblingAlive()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType      = "text/event-stream";
+        response.body             = ": hold\n\n|"
+                                    "data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\n\n";
+        response.sseChunkDelaysMs = {0, 200};
+        response.finishSse        = false;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        transport.start();
+        transport.sendTrackedMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}},
+                {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/list"}},
+            }),
+            53);
+
+        QVERIFY(waitForRequests(server, 1));
+        transport.abandonRequest(1);
+        QCOMPARE(transport.findChildren<QNetworkReply *>().size(), qsizetype(1));
+        QVERIFY(waitForSignal(messageSpy, 1));
+        QCOMPARE(messageSpy.first().first().value<nlohmann::json>()["id"].get<int>(), 2);
+        QVERIFY(waitForSignal(sentSpy, 1));
+        QCOMPARE(sentSpy.first().first().toULongLong(), quint64(53));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(errorSpy.size(), qsizetype(0));
+    }
+
+    void abandonedBatchFailureReportsOnlySibling()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.statusLine  = "503 Service Unavailable";
+        response.contentType = "text/plain";
+        response.body        = "unavailable";
+        response.delayMs     = 200;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        transport.start();
+        transport.sendTrackedMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}},
+                {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/list"}},
+            }),
+            52);
+
+        QVERIFY(waitForRequests(server, 1));
+        transport.abandonRequest(1);
+        QVERIFY(waitForSignal(failureSpy, 1));
+        QCOMPARE(failureSpy.first().at(0).toULongLong(), quint64(52));
+        QCOMPARE(failureSpy.first().at(1).value<QList<int>>(), QList<int>{2});
+        QCOMPARE(messageSpy.size(), qsizetype(0));
+        QCOMPARE(sentSpy.size(), qsizetype(0));
+        QCOMPARE(errorSpy.size(), qsizetype(0));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
+    void abandonedTrackedTokenPreservesRequestOwner()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse notification;
+        notification.contentType      = "text/event-stream";
+        notification.body             = ": hold\n\n";
+        notification.sseChunkDelaysMs = {0};
+        notification.finishSse        = false;
+        server.enqueue(notification);
+
+        MockResponse request;
+        request.contentType = "application/json";
+        request.body        = R"({"jsonrpc":"2.0","id":1,"result":{"ok":true}})";
+        request.bodyDelayMs = 300;
+        server.enqueueForRequestId(1, request);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        transport.start();
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"method", "notifications/progress"}}, 61);
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools/list"}}, 62);
+
+        QVERIFY(waitForRequests(server, 2));
+        QTRY_COMPARE_WITH_TIMEOUT(runningReplyCount(&transport), qsizetype(2), 1000);
+        transport.abandonTrackedMessage(60);
+        QCOMPARE(runningReplyCount(&transport), qsizetype(2));
+        transport.abandonTrackedMessage(61);
+        QCOMPARE(runningReplyCount(&transport), qsizetype(1));
+        transport.abandonTrackedMessage(62);
+        QCOMPARE(runningReplyCount(&transport), qsizetype(1));
+
+        QVERIFY(waitForSignal(messageSpy, 1));
+        QCOMPARE(messageSpy.first().first().value<nlohmann::json>()["id"].get<int>(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+        transport.abandonTrackedMessage(61);
+        transport.abandonTrackedMessage(62);
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(sentSpy.size(), qsizetype(0));
+        QCOMPARE(errorSpy.size(), qsizetype(0));
+    }
+
+    void zeroTrackedTokenDoesNotReleaseReply()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse notification;
+        notification.contentType      = "text/event-stream";
+        notification.body             = ": hold\n\n";
+        notification.sseChunkDelaysMs = {0};
+        notification.finishSse        = false;
+        server.enqueue(notification);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        transport.start();
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"method", "notifications/progress"}}, 0);
+
+        QVERIFY(waitForRequests(server, 1));
+        QTRY_COMPARE_WITH_TIMEOUT(runningReplyCount(&transport), qsizetype(1), 1000);
+        transport.abandonTrackedMessage(0);
+        QCOMPARE(runningReplyCount(&transport), qsizetype(1));
+        transport.stop();
+
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(sentSpy.size(), qsizetype(0));
+        QCOMPARE(errorSpy.size(), qsizetype(0));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
+    void abandonedTrackedTokenClearsLateFailureToken()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.statusLine = "503 Service Unavailable";
+        response.delayMs    = 300;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        transport.start();
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/list"}}, 63);
+
+        QVERIFY(waitForRequests(server, 1));
+        QCOMPARE(runningReplyCount(&transport), qsizetype(1));
+        transport.abandonTrackedMessage(63);
+        QCOMPARE(runningReplyCount(&transport), qsizetype(1));
+
+        QVERIFY(waitForSignal(failureSpy, 1));
+        QCOMPARE(failureSpy.first().at(0).toULongLong(), quint64(0));
+        QCOMPARE(failureSpy.first().at(1).value<QList<int>>(), QList<int>{2});
+        QCOMPARE(sentSpy.size(), qsizetype(0));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
+    void responseBeforeParseErrorCompletesSse_data()
+    {
+        QTest::addColumn<QByteArray>("body");
+        QTest::addColumn<QList<int>>("delays");
+
+        QTest::newRow("same-chunk") << QByteArray(
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n"
+            "data: not-json\n\n") << QList<int>{0};
+        QTest::newRow("later-chunk") << QByteArray(
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n|"
+            "data: not-json\n\n") << QList<int>{0, 50};
+    }
+
+    void responseBeforeParseErrorCompletesSse()
+    {
+        QFETCH(QByteArray, body);
+        QFETCH(QList<int>, delays);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType      = "text/event-stream";
+        response.body             = body;
+        response.sseChunkDelaysMs = delays;
+        response.finishSse        = false;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        transport.start();
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools/list"}}, 42);
+
+        QVERIFY(waitForSignal(sentSpy, 1));
+        QCOMPARE(messageSpy.size(), qsizetype(1));
+        QCOMPARE(messageSpy.first().first().value<nlohmann::json>()["id"].get<int>(), 1);
+        QCOMPARE(sentSpy.first().first().toULongLong(), quint64(42));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
+    void parseErrorBeforeResponseFailsSse_data()
+    {
+        QTest::addColumn<QByteArray>("body");
+        QTest::addColumn<QList<int>>("delays");
+
+        QTest::newRow("same-chunk") << QByteArray(
+            "data: not-json\n\n"
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n")
+                                    << QList<int>{0};
+        QTest::newRow("later-chunk") << QByteArray(
+            "data: not-json\n\n|"
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n")
+                                     << QList<int>{0, 50};
+    }
+
+    void parseErrorBeforeResponseFailsSse()
+    {
+        QFETCH(QByteArray, body);
+        QFETCH(QList<int>, delays);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType      = "text/event-stream";
+        response.body             = body;
+        response.sseChunkDelaysMs = delays;
+        response.finishSse        = false;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        transport.start();
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools/list"}}, 43);
+
+        QVERIFY(waitForSignal(failureSpy, 1));
+        QCOMPARE(messageSpy.size(), qsizetype(0));
+        QCOMPARE(failureSpy.first().at(0).toULongLong(), quint64(43));
+        QCOMPARE(failureSpy.first().at(1).value<QList<int>>(), QList<int>{1});
+        QVERIFY(failureSpy.first().at(2).toString().contains(QStringLiteral("parse error")));
+        QCOMPARE(sentSpy.size(), qsizetype(0));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
+    void sseEofFallbackUsesFirstTerminalEvent_data()
+    {
+        QTest::addColumn<QByteArray>("body");
+        QTest::addColumn<bool>("succeeds");
+
+        QTest::newRow("response-before-error") << QByteArray(
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n"
+            "data: not-json\n\n") << true;
+        QTest::newRow("error-before-response") << QByteArray(
+            "data: not-json\n\n"
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n")
+                                               << false;
+    }
+
+    void sseEofFallbackUsesFirstTerminalEvent()
+    {
+        QFETCH(QByteArray, body);
+        QFETCH(bool, succeeds);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType = "text/event-stream";
+        response.body        = body;
+        response.bodyDelayMs = 100;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        transport.start();
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools/list"}}, 44);
+
+        const auto replies = transport.findChildren<QNetworkReply *>();
+        QCOMPARE(replies.size(), qsizetype(1));
+        QObject::disconnect(replies.first(), nullptr, &transport, nullptr);
+        QVERIFY(
+            QObject::connect(
+                replies.first(), SIGNAL(finished()), &transport, SLOT(onReplyFinished())));
+
+        if (succeeds) {
+            QVERIFY(waitForSignal(sentSpy, 1));
+            QCOMPARE(messageSpy.size(), qsizetype(1));
+            QCOMPARE(messageSpy.first().first().value<nlohmann::json>()["id"].get<int>(), 1);
+            QCOMPARE(failureSpy.size(), qsizetype(0));
+        } else {
+            QVERIFY(waitForSignal(failureSpy, 1));
+            QCOMPARE(messageSpy.size(), qsizetype(0));
+            QCOMPARE(sentSpy.size(), qsizetype(0));
+            QVERIFY(failureSpy.first().at(2).toString().contains(QStringLiteral("parse error")));
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
+    void postWithoutJsonRpcRequestsAcceptsEmptyBody_data()
+    {
+        QTest::addColumn<QByteArray>("statusLine");
+        QTest::addColumn<QByteArray>("outboundBody");
+
+        QTest::newRow("notification-compat-200")
+            << QByteArray("200 OK")
+            << QByteArray(R"({"jsonrpc":"2.0","method":"notifications/x"})");
+        QTest::newRow("notification-batch-202")
+            << QByteArray("202 Accepted")
+            << QByteArray(
+                   R"([{"jsonrpc":"2.0","method":"notifications/x"},{"jsonrpc":"2.0","method":"notifications/y"}])");
+        QTest::newRow("response-batch-202")
+            << QByteArray("202 Accepted")
+            << QByteArray(
+                   R"([{"jsonrpc":"2.0","id":7,"result":{}},{"jsonrpc":"2.0","id":8,"error":{"code":-32601,"message":"Method not found"}}])");
+    }
+
+    void postWithoutJsonRpcRequestsAcceptsEmptyBody()
+    {
+        QFETCH(QByteArray, statusLine);
+        QFETCH(QByteArray, outboundBody);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.statusLine  = statusLine;
+        response.contentType = "application/json";
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+
+        transport.start();
+        transport.sendTrackedMessage(nlohmann::json::parse(outboundBody.toStdString()), quint64(11));
+
+        QVERIFY(waitForSignal(sentSpy, 1, 3000));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 3000);
+        QCOMPARE(messageSpy.size(), qsizetype(0));
+        QCOMPARE(errorSpy.size(), qsizetype(0));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(sentSpy.size(), qsizetype(1));
+        QCOMPARE(sentSpy.first().at(0).toULongLong(), quint64(11));
+    }
+
+    void requestWithoutResponseFailsAtEof_data()
+    {
+        QTest::addColumn<QByteArray>("contentType");
+        QTest::addColumn<QByteArray>("body");
+        QTest::addColumn<int>("messageCount");
+        QTest::addColumn<QString>("errorText");
+
+        QTest::newRow("empty-json") << QByteArray("application/json") << QByteArray() << 0
+                                    << QStringLiteral("HTTP response ended before all");
+        QTest::newRow("whitespace-json") << QByteArray("application/json") << QByteArray(" \r\n\t")
+                                         << 0 << QStringLiteral("HTTP response ended before all");
+        QTest::newRow("notification-only-json")
+            << QByteArray("application/json")
+            << QByteArray(R"({"jsonrpc":"2.0","method":"notifications/x"})") << 1
+            << QStringLiteral("HTTP response ended before all");
+        QTest::newRow("wrong-id-json") << QByteArray("application/json")
+                                       << QByteArray(R"({"jsonrpc":"2.0","id":99,"result":{}})")
+                                       << 1 << QStringLiteral("HTTP response ended before all");
+        QTest::newRow("invalid-version-json")
+            << QByteArray("application/json")
+            << QByteArray(R"({"jsonrpc":"1.0","id":1,"result":{}})") << 1
+            << QStringLiteral("HTTP response ended before all");
+        QTest::newRow("invalid-error-json")
+            << QByteArray("application/json")
+            << QByteArray(R"({"jsonrpc":"2.0","id":1,"error":{"code":"bad","message":"x"}})") << 1
+            << QStringLiteral("HTTP response ended before all");
+        QTest::newRow("empty-array-json") << QByteArray("application/json") << QByteArray("[]") << 1
+                                          << QStringLiteral("HTTP response ended before all");
+        QTest::newRow("empty-sse") << QByteArray("text/event-stream") << QByteArray() << 0
+                                   << QStringLiteral("SSE stream ended before all");
+        QTest::newRow("comment-only-sse")
+            << QByteArray("text/event-stream") << QByteArray(": keepalive\n") << 0
+            << QStringLiteral("SSE stream ended before all");
+        QTest::newRow("incomplete-sse")
+            << QByteArray("text/event-stream")
+            << QByteArray("data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n") << 0
+            << QStringLiteral("SSE stream ended with an incomplete event");
+        QTest::newRow("notification-only-sse")
+            << QByteArray("text/event-stream")
+            << QByteArray("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}\n\n") << 1
+            << QStringLiteral("SSE stream ended before all");
+    }
+
+    void requestWithoutResponseFailsAtEof()
+    {
+        QFETCH(QByteArray, contentType);
+        QFETCH(QByteArray, body);
+        QFETCH(int, messageCount);
+        QFETCH(QString, errorText);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType = contentType;
+        response.body        = body;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+
+        transport.start();
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}});
+
+        QVERIFY(waitForSignal(failureSpy, 1, 3000));
+        QCOMPARE(messageSpy.size(), qsizetype(messageCount));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(0).toULongLong(), quint64(0));
+        QCOMPARE(failureSpy.first().at(1).value<QList<int>>(), QList<int>{1});
+        QVERIFY(failureSpy.first().at(2).toString().contains(errorText));
+    }
+
+    void partialBatchFailsOnlyUnansweredIds_data()
+    {
+        QTest::addColumn<QByteArray>("contentType");
+        QTest::addColumn<QByteArray>("body");
+
+        const QByteArray response = R"([{"jsonrpc":"2.0","id":1,"result":{"ok":true}}])";
+        QTest::newRow("json") << QByteArray("application/json") << response;
+        QTest::newRow("sse") << QByteArray("text/event-stream")
+                             << QByteArray("data: ") + response + "\n\n";
+        QTest::newRow("sse-incomplete-tail")
+            << QByteArray("text/event-stream")
+            << QByteArray("data: ") + response
+                   + "\n\ndata: [{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}]\n";
+    }
+
+    void partialBatchFailsOnlyUnansweredIds()
+    {
+        QFETCH(QByteArray, contentType);
+        QFETCH(QByteArray, body);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType = contentType;
+        response.body        = body;
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+
+        transport.start();
+        transport.sendMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "first"}},
+                {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "second"}},
+            }));
+
+        QVERIFY(waitForSignal(messageSpy, 1, 3000));
+        QVERIFY(waitForSignal(failureSpy, 1, 3000));
+        QCOMPARE(messageSpy.size(), qsizetype(1));
+        const auto message = messageSpy.first().first().value<nlohmann::json>();
+        QVERIFY(message.is_array());
+        QCOMPARE(message.size(), std::size_t(1));
+        QCOMPARE(message.at(0)["id"].get<int>(), 1);
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(1).value<QList<int>>(), QList<int>{2});
+    }
+
+    void incompleteSseFailsTrackedNotification()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType = "text/event-stream";
+        response.body        = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}\n";
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+
+        transport.start();
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"method", "notifications/current"}}, 31);
+
+        QVERIFY(waitForSignal(failureSpy, 1, 3000));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(0).toULongLong(), quint64(31));
+        QVERIFY(failureSpy.first().at(1).value<QList<int>>().isEmpty());
+        QVERIFY(failureSpy.first().at(2).toString().contains(QStringLiteral("incomplete event")));
+        QCOMPARE(messageSpy.size(), qsizetype(0));
+        QCOMPARE(sentSpy.size(), qsizetype(0));
+    }
+
+    void eofFailureCallbackCanStop()
     {
         MockHttpServer server;
         QVERIFY(server.listen());
 
         MockResponse response;
         response.contentType = "application/json";
-        response.body        = "";
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
+        QSignalSpy           closedSpy(&transport, &QSocMcpTransport::closed);
+        connect(&transport, &QSocMcpTransport::messageFailed, &transport, [&transport]() {
+            transport.stop();
+        });
+
+        transport.start();
+        transport.sendTrackedMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}}, 17);
+
+        QVERIFY(waitForSignal(closedSpy, 1, 3000));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(sentSpy.size(), qsizetype(0));
+        QCOMPARE(closedSpy.size(), qsizetype(1));
+        QCOMPARE(transport.state(), QSocMcpTransport::State::Stopped);
+    }
+
+    void eofFailureCallbackCanDeleteTransport()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType = "application/json";
+        server.enqueue(response);
+
+        QPointer<QSocMcpHttpTransport> transport = new QSocMcpHttpTransport(
+            httpConfig(server.url()));
+        int failureCount = 0;
+        int sentCount    = 0;
+        connect(transport, &QSocMcpTransport::messageFailed, &server, [&transport, &failureCount]() {
+            failureCount++;
+            delete transport.data();
+        });
+        connect(transport, &QSocMcpTransport::messageSent, &server, [&sentCount]() { sentCount++; });
+
+        transport->start();
+        transport->sendTrackedMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}}, 19);
+
+        QTRY_VERIFY_WITH_TIMEOUT(transport.isNull(), 3000);
+        QCOMPARE(failureCount, 1);
+        QCOMPARE(sentCount, 0);
+    }
+
+    void eofFailureCallbackCanPostReentrantly()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse missing;
+        missing.contentType = "application/json";
+        server.enqueue(missing);
+
+        MockResponse followup;
+        followup.contentType = "application/json";
+        followup.body        = R"({"jsonrpc":"2.0","id":2,"result":{"ok":true}})";
+        server.enqueue(followup);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
+        bool                 posted = false;
+        connect(&transport, &QSocMcpTransport::messageFailed, &transport, [&transport, &posted]() {
+            if (posted) {
+                return;
+            }
+            posted = true;
+            transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/list"}});
+        });
+
+        transport.start();
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}});
+
+        QVERIFY(waitForSignal(messageSpy, 1, 3000));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(1).value<QList<int>>(), QList<int>{1});
+        QCOMPARE(messageSpy.size(), qsizetype(1));
+        QCOMPARE(messageSpy.first().first().value<nlohmann::json>()["id"].get<int>(), 2);
+    }
+
+    void stopDuringSseNotificationSuppressesEofFailure()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType = "text/event-stream";
+        response.body        = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}\n\n";
         server.enqueue(response);
 
         QSocMcpHttpTransport transport(httpConfig(server.url()));
         QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
-        QSignalSpy           errorSpy(&transport, &QSocMcpTransport::errorOccurred);
+        QSignalSpy           failureSpy(&transport, &QSocMcpTransport::messageFailed);
+        QSignalSpy           closedSpy(&transport, &QSocMcpTransport::closed);
+        connect(
+            &transport,
+            &QSocMcpTransport::messageReceived,
+            &transport,
+            [&transport](const nlohmann::json &) { transport.stop(); });
 
         transport.start();
-        nlohmann::json notif;
-        notif["jsonrpc"] = "2.0";
-        notif["method"]  = "ping";
-        transport.sendMessage(notif);
+        transport.sendMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "first"}},
+                {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "second"}},
+            }));
 
-        QTest::qWait(300);
-        QCOMPARE(messageSpy.size(), qsizetype(0));
-        QCOMPARE(errorSpy.size(), qsizetype(0));
+        QVERIFY(waitForSignal(closedSpy, 1, 3000));
+        QCOMPARE(messageSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(closedSpy.size(), qsizetype(1));
+    }
+
+    void clientFailsEmptyResponseWithDeadlineDisabled()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse initialize;
+        initialize.contentType = "application/json";
+        initialize.body        = R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}})";
+        server.enqueue(initialize);
+
+        MockResponse initialized;
+        initialized.statusLine = "202 Accepted";
+        server.enqueue(initialized);
+
+        MockResponse missing;
+        missing.contentType = "application/json";
+        server.enqueue(missing);
+
+        McpServerConfig cfg     = httpConfig(server.url());
+        cfg.requestTimeoutMs    = 0;
+        auto         *transport = new QSocMcpHttpTransport(cfg);
+        QSocMcpClient client(cfg, transport);
+        QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+
+        client.start();
+        QVERIFY(waitForSignal(readySpy, 1, 3000));
+        const int requestId = client.request(QStringLiteral("tools/list"));
+        QVERIFY(requestId > 0);
+
+        QVERIFY(waitForSignal(failureSpy, 1, 3000));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(0).toInt(), requestId);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32000);
+        QVERIFY(failureSpy.first().at(2).toString().contains(
+            QStringLiteral("before all JSON-RPC responses arrived")));
+        QCOMPARE(responseSpy.size(), qsizetype(0));
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
+    }
+
+    void clientRejectsEmptyInitializeResponseWithDeadlineDisabled()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse missing;
+        missing.contentType = "application/json";
+        server.enqueue(missing);
+
+        McpServerConfig cfg     = httpConfig(server.url());
+        cfg.requestTimeoutMs    = 0;
+        auto         *transport = new QSocMcpHttpTransport(cfg);
+        QSocMcpClient client(cfg, transport);
+        QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    closedSpy(&client, &QSocMcpClient::closed);
+
+        client.start();
+
+        QVERIFY(waitForSignal(closedSpy, 1, 3000));
+        QCOMPARE(readySpy.size(), qsizetype(0));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(0).toInt(), 1);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32000);
+        QVERIFY(failureSpy.first().at(2).toString().contains(
+            QStringLiteral("before all JSON-RPC responses arrived")));
+        QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
     }
 
     void invalidJsonFailsMessage()
@@ -591,8 +1409,8 @@ private slots:
 
         MockResponse streamResponse;
         streamResponse.contentType = "text/event-stream";
-        streamResponse.body        = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n"
-                                     "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}\n\n";
+        streamResponse.body = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}\n\n"
+                              "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
         server.enqueue(streamResponse);
 
         MockResponse followupResponse;
@@ -671,6 +1489,51 @@ private slots:
         QVERIFY(transport.findChildren<QNetworkReply *>().isEmpty());
     }
 
+    void replyFinishedReentrantStopClosesOnce()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse hanging;
+        hanging.contentType      = "text/event-stream";
+        hanging.body             = ": hold\n\n";
+        hanging.sseChunkDelaysMs = {0};
+        hanging.finishSse        = false;
+        server.enqueue(hanging);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        QSignalSpy           closedSpy(&transport, &QSocMcpTransport::closed);
+
+        transport.start();
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}});
+        QVERIFY(waitForRequests(server, 1));
+
+        const QList<QNetworkReply *> replies = transport.findChildren<QNetworkReply *>();
+        QCOMPARE(replies.size(), qsizetype(1));
+        QVERIFY(replies.first()->isRunning());
+        int  reentrantStops       = 0;
+        bool reenteredBeforeClose = false;
+        connect(
+            replies.first(),
+            &QNetworkReply::finished,
+            this,
+            [&]() {
+                reentrantStops++;
+                reenteredBeforeClose = transport.state() == QSocMcpTransport::State::Stopping
+                                       && closedSpy.isEmpty();
+                transport.stop();
+            },
+            Qt::DirectConnection);
+
+        transport.stop();
+
+        QCOMPARE(reentrantStops, 1);
+        QVERIFY(reenteredBeforeClose);
+        QCOMPARE(closedSpy.size(), qsizetype(1));
+        QCOMPARE(transport.state(), QSocMcpTransport::State::Stopped);
+        QTRY_VERIFY_WITH_TIMEOUT(transport.findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
     void stopDuringSseCallbackDropsRemainingEvents()
     {
         MockHttpServer server;
@@ -685,6 +1548,7 @@ private slots:
         QSocMcpHttpTransport transport(httpConfig(server.url()));
         QSignalSpy           messageSpy(&transport, &QSocMcpTransport::messageReceived);
         QSignalSpy           closedSpy(&transport, &QSocMcpTransport::closed);
+        QSignalSpy           sentSpy(&transport, &QSocMcpTransport::messageSent);
         connect(
             &transport,
             &QSocMcpTransport::messageReceived,
@@ -692,11 +1556,17 @@ private slots:
             [&transport](const nlohmann::json &) { transport.stop(); });
 
         transport.start();
-        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "initialize"}});
+        transport.sendTrackedMessage(
+            nlohmann::json::array({
+                {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}},
+                {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/list"}},
+            }),
+            44);
 
         QVERIFY(waitForSignal(closedSpy, 1, 3000));
         QTest::qWait(100);
         QCOMPARE(messageSpy.size(), qsizetype(1));
+        QCOMPARE(sentSpy.size(), qsizetype(0));
     }
 
     void networkErrorFailsMessageOnce()
@@ -1592,6 +2462,153 @@ private slots:
         QVERIFY(waitForSignal(closedSpy, 1, 3000));
         QCOMPARE(readySpy.size(), qsizetype(0));
         QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
+    }
+
+    void clientTimeoutReleasesInitializedReplyBeforeCallbacks()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse initialize;
+        initialize.contentType = "application/json";
+        initialize.body        = R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}})";
+        server.enqueue(initialize);
+
+        MockResponse initialized;
+        initialized.contentType      = "text/event-stream";
+        initialized.body             = ": hold\n\n";
+        initialized.sseChunkDelaysMs = {0};
+        initialized.finishSse        = false;
+        server.enqueue(initialized);
+
+        McpServerConfig cfg     = httpConfig(server.url());
+        cfg.requestTimeoutMs    = 1000;
+        auto         *transport = new QSocMcpHttpTransport(cfg);
+        QSocMcpClient client(cfg, transport);
+        QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    closedSpy(&client, &QSocMcpClient::closed);
+        bool          stoppedBeforeCallback = false;
+        connect(&client, &QSocMcpClient::stateChanged, &client, [&](QSocMcpClient::State state) {
+            if (state != QSocMcpClient::State::Failed) {
+                return;
+            }
+            stoppedBeforeCallback = runningReplyCount(transport) == 0;
+        });
+
+        client.start();
+
+        QVERIFY(waitForRequests(server, 2, 3000));
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+        QTRY_COMPARE_WITH_TIMEOUT(runningReplyCount(transport), qsizetype(1), 500);
+        QVERIFY(waitForSignal(closedSpy, 1, 3000));
+        QVERIFY(stoppedBeforeCallback);
+        QCOMPARE(readySpy.size(), qsizetype(0));
+        QCOMPARE(failureSpy.size(), qsizetype(1));
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32001);
+        QCOMPARE(
+            failureSpy.first().at(2).toString(),
+            QStringLiteral("Initialized notification timed out"));
+        QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
+        QTRY_VERIFY_WITH_TIMEOUT(transport->findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
+    void clientStopReleasesInitializedReplyBeforeCallbacks()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse initialize;
+        initialize.contentType = "application/json";
+        initialize.body        = R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}})";
+        server.enqueue(initialize);
+
+        MockResponse initialized;
+        initialized.contentType      = "text/event-stream";
+        initialized.body             = ": hold\n\n";
+        initialized.sseChunkDelaysMs = {0};
+        initialized.finishSse        = false;
+        server.enqueue(initialized);
+
+        McpServerConfig cfg       = httpConfig(server.url());
+        auto           *transport = new QSocMcpHttpTransport(cfg);
+        QSocMcpClient   client(cfg, transport);
+        QSignalSpy      readySpy(&client, &QSocMcpClient::ready);
+        QSignalSpy      failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy      closedSpy(&client, &QSocMcpClient::closed);
+
+        client.start();
+        QVERIFY(waitForRequests(server, 2, 3000));
+        QTRY_COMPARE_WITH_TIMEOUT(runningReplyCount(transport), qsizetype(1), 1000);
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+
+        bool stoppedBeforeCallback = false;
+        connect(&client, &QSocMcpClient::stateChanged, &client, [&](QSocMcpClient::State state) {
+            if (state != QSocMcpClient::State::Disconnected) {
+                return;
+            }
+            stoppedBeforeCallback = runningReplyCount(transport) == 0;
+        });
+
+        client.stop();
+
+        QVERIFY(stoppedBeforeCallback);
+        QCOMPARE(readySpy.size(), qsizetype(0));
+        QCOMPARE(failureSpy.size(), qsizetype(0));
+        QCOMPARE(closedSpy.size(), qsizetype(1));
+        QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
+        QTRY_VERIFY_WITH_TIMEOUT(transport->findChildren<QNetworkReply *>().isEmpty(), 1000);
+    }
+
+    void timedOutRequestReleasesHttpReply()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse initialize;
+        initialize.contentType = "application/json";
+        initialize.body        = R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}})";
+        server.enqueue(initialize);
+
+        MockResponse initialized;
+        initialized.statusLine = "202 Accepted";
+        server.enqueue(initialized);
+
+        McpServerConfig cfg     = httpConfig(server.url());
+        cfg.requestTimeoutMs    = 150;
+        auto         *transport = new QSocMcpHttpTransport(cfg);
+        QSocMcpClient client(cfg, transport);
+        QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
+        QSignalSpy    responseSpy(&client, &QSocMcpClient::responseReceived);
+
+        client.start();
+        QVERIFY(waitForSignal(readySpy, 1, 10000));
+
+        const int requestId = client.request(QStringLiteral("slow"));
+        QVERIFY(requestId > 0);
+
+        MockResponse hanging;
+        hanging.contentType      = "text/event-stream";
+        hanging.body             = ": hold\n\n";
+        hanging.sseChunkDelaysMs = {0};
+        hanging.finishSse        = false;
+        server.enqueueForRequestId(requestId, hanging);
+
+        MockResponse cancelled;
+        cancelled.statusLine = "202 Accepted";
+        server.enqueue(cancelled);
+
+        QVERIFY(waitForSignal(failureSpy, 1, 10000));
+        QCOMPARE(failureSpy.first().at(0).toInt(), requestId);
+        QCOMPARE(failureSpy.first().at(1).toInt(), -32001);
+        QCOMPARE(responseSpy.size(), qsizetype(0));
+        QVERIFY(waitForRequests(server, 4, 10000));
+        const auto cancellation = nlohmann::json::parse(server.requestBodies().last().toStdString());
+        QCOMPARE(cancellation.value("method", std::string()), "notifications/cancelled");
+        QCOMPARE(cancellation["params"].value("requestId", -1), requestId);
+        QTRY_VERIFY_WITH_TIMEOUT(transport->findChildren<QNetworkReply *>().isEmpty(), 1000);
+        QCOMPARE(client.state(), QSocMcpClient::State::Ready);
     }
 
     void requestOverrideOutlivesTransportDefault()

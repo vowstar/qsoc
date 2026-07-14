@@ -138,9 +138,9 @@ private:
     int                    allocateId();
     void                   writeMessage(const nlohmann::json &message);
     std::optional<Pending> takePending(int id);
-    bool                   cancelRequest(int id);
+    bool                   abandonRequest(int id);
     void                   notifyRequestCancelled(int id, const QString &reason);
-    bool                   cancelAllPending(int code, const QString &message);
+    bool                   failAllPending(int code, const QString &message);
     bool                   isCurrentLifecycle(quint64 generation, Lifecycle lifecycle) const;
     void                   stopTransportOrFinish(quint64 generation);
     void                   finishLifecycle(quint64 generation);

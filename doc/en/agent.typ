@@ -1188,10 +1188,11 @@ contribute their tools immediately; tools registered later via
 Overlapping tool-list changes are coalesced, and the current catalog remains
 active until the latest refresh succeeds.
 Readiness is published only after `notifications/initialized` is accepted.
-`request_timeout_ms` bounds each handshake send and request. Timed-out and
-user-aborted tool calls discard local request state before a best-effort
-cancellation, so late responses are ignored; cancellation does not confirm
-remote termination. Connection loss during a call reports the same uncertainty.
+When positive, `request_timeout_ms` bounds each handshake send and request.
+Timed-out and user-aborted tool calls discard local request state before a
+best-effort cancellation, so late responses are ignored; cancellation does
+not confirm remote termination. Connection loss during a call reports the
+same uncertainty.
 Once ready, JSON-RPC batches claim all pending response IDs before delivering
 callbacks, so one callback cannot replace another batch result.
 
@@ -1210,6 +1211,13 @@ current catalog unchanged; an empty tools array clears it. Catalog replacement
 is atomic, and QSoC emits one aggregate warning per connection when it adjusts
 a catalog.
 An isolated HTTP POST failure affects only requests carried by that POST.
+A successful HTTP reply retains unanswered JSON-RPC IDs until EOF. An empty
+body completes a POST containing no JSON-RPC requests; JSON or SSE EOF fails
+only IDs without a valid response.
+After valid responses arrive for every request in an SSE POST, QSoC closes
+that response stream without waiting for server EOF.
+Timeout and local cancellation release abandoned HTTP responses without
+interrupting requests that remain active.
 A 404 for a request carrying an MCP session ID expires the transport; the
 manager rebuilds it with a fresh session.
 A transport-wide error fails all outstanding requests; if the connection

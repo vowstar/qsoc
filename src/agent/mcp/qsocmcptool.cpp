@@ -282,7 +282,7 @@ void QSocMcpTool::abort()
     cancelledCalls.reserve(calls.size());
     for (CallState *call : calls) {
         if (call->outcome != CallOutcome::Pending || client_.isNull()
-            || !client_->cancelRequest(call->requestId)) {
+            || !client_->abandonRequest(call->requestId)) {
             continue;
         }
         call->outcome = CallOutcome::Aborted;

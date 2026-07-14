@@ -948,8 +948,18 @@ private slots:
         QCOMPARE(transport->sent().last().value("method", std::string()), "initialize");
     }
 
+    void timeoutFiresRequestFailed_data()
+    {
+        QTest::addColumn<QString>("method");
+
+        QTest::newRow("ordinary") << QStringLiteral("tools/list");
+        QTest::newRow("method-named-initialize") << QStringLiteral("initialize");
+    }
+
     void timeoutFiresRequestFailed()
     {
+        QFETCH(QString, method);
+
         McpServerConfig cfg  = basicConfig();
         cfg.requestTimeoutMs = 80;
 
@@ -966,12 +976,26 @@ private slots:
         transport->simulateMessage(initResp);
         QVERIFY(waitForState(&client, QSocMcpClient::State::Ready));
 
-        const int requestId = client.request("tools/list");
+        const int requestId = client.request(method);
         QVERIFY(requestId > 0);
+        bool abandonedBeforeFailure = false;
+        connect(
+            &client,
+            &QSocMcpClient::requestFailed,
+            &client,
+            [transport, requestId, &abandonedBeforeFailure](int id, int, const QString &) {
+                if (id == requestId) {
+                    abandonedBeforeFailure = transport->abandonedRequestIds().contains(id);
+                }
+            });
         QVERIFY(waitForSignal(failureSpy, 1, 1000));
         QCOMPARE(failureSpy.first().at(0).toInt(), requestId);
         QCOMPARE(failureSpy.first().at(1).toInt(), -32001);
-        QCOMPARE(failureSpy.first().at(2).toString(), QStringLiteral("Request timed out: tools/list"));
+        QCOMPARE(
+            failureSpy.first().at(2).toString(),
+            QStringLiteral("Request timed out: %1").arg(method));
+        QVERIFY(abandonedBeforeFailure);
+        QCOMPARE(transport->abandonedRequestIds(), QList<int>{requestId});
 
         const nlohmann::json cancellation = transport->sent().last();
         QCOMPARE(cancellation.value("method", std::string()), "notifications/cancelled");
@@ -1135,11 +1159,35 @@ private slots:
         QSocMcpClient client(cfg, transport);
         QSignalSpy    failureSpy(&client, &QSocMcpClient::requestFailed);
         QSignalSpy    closedSpy(&client, &QSocMcpClient::closed);
+        bool          abandonedBeforeFailedState = false;
+        bool          abandonedBeforeFailure     = false;
+        connect(
+            &client,
+            &QSocMcpClient::stateChanged,
+            &client,
+            [transport, &abandonedBeforeFailedState](QSocMcpClient::State state) {
+                if (state == QSocMcpClient::State::Failed) {
+                    abandonedBeforeFailedState = !transport->abandonedRequestIds().isEmpty();
+                }
+            });
+        connect(
+            &client,
+            &QSocMcpClient::requestFailed,
+            &client,
+            [transport, &abandonedBeforeFailure](int id, int, const QString &) {
+                abandonedBeforeFailure = transport->abandonedRequestIds().contains(id);
+            });
 
         client.start();
+        const int initializeId = transport->firstSentId();
         QVERIFY(waitForSignal(failureSpy, 1, 2000));
 
         QCOMPARE(failureSpy.size(), 1);
+        QCOMPARE(failureSpy.first().at(0).toInt(), initializeId);
+        QVERIFY(abandonedBeforeFailedState);
+        QVERIFY(abandonedBeforeFailure);
+        QCOMPARE(transport->abandonedRequestIds(), QList<int>{initializeId});
+        QCOMPARE(transport->sentCount(), qsizetype(1));
         QCOMPARE(client.state(), QSocMcpClient::State::Failed);
         QCOMPARE(transport->stopCount(), 1);
         QCOMPARE(closedSpy.size(), 0);
@@ -1165,22 +1213,41 @@ private slots:
         transport->simulateMessage(initResponse);
         QCOMPARE(client.state(), QSocMcpClient::State::Ready);
 
-        const int failedId = client.request(QStringLiteral("first"));
+        const int       firstId                      = client.request(QStringLiteral("first"));
+        const int       secondId                     = client.request(QStringLiteral("second"));
+        const qsizetype sentBeforeError              = transport->sentCount();
+        bool            sawFailureBeforeAllAbandoned = false;
+        connect(
+            &client,
+            &QSocMcpClient::requestFailed,
+            &client,
+            [transport, firstId, secondId, &sawFailureBeforeAllAbandoned](int, int, const QString &) {
+                const QList<int> &abandoned = transport->abandonedRequestIds();
+                sawFailureBeforeAllAbandoned |= !abandoned.contains(firstId)
+                                                || !abandoned.contains(secondId);
+            });
         transport->simulateError(QStringLiteral("request failed"));
-        QCOMPARE(failureSpy.size(), 1);
-        QCOMPARE(failureSpy.first().at(0).toInt(), failedId);
+        QCOMPARE(failureSpy.size(), 2);
+        const QList<int> failedIds{failureSpy.first().at(0).toInt(), failureSpy.last().at(0).toInt()};
+        QVERIFY(failedIds.contains(firstId));
+        QVERIFY(failedIds.contains(secondId));
+        QVERIFY(!sawFailureBeforeAllAbandoned);
+        QCOMPARE(transport->abandonedRequestIds().size(), qsizetype(2));
+        QVERIFY(transport->abandonedRequestIds().contains(firstId));
+        QVERIFY(transport->abandonedRequestIds().contains(secondId));
+        QCOMPARE(transport->sentCount(), sentBeforeError);
         QCOMPARE(client.state(), QSocMcpClient::State::Ready);
         QCOMPARE(closedSpy.size(), 0);
 
-        const int secondId = client.request(QStringLiteral("second"));
-        QVERIFY(secondId > failedId);
+        const int recoveredId = client.request(QStringLiteral("recovered"));
+        QVERIFY(recoveredId > secondId);
         nlohmann::json response;
         response["jsonrpc"] = "2.0";
-        response["id"]      = secondId;
+        response["id"]      = recoveredId;
         response["result"]  = {"ok"};
         transport->simulateMessage(response);
         QCOMPARE(responseSpy.size(), 1);
-        QCOMPARE(responseSpy.first().at(0).toInt(), secondId);
+        QCOMPARE(responseSpy.first().at(0).toInt(), recoveredId);
         QCOMPARE(client.state(), QSocMcpClient::State::Ready);
     }
 
@@ -1574,19 +1641,65 @@ private slots:
         transport->setAutoCompleteTrackedMessages(false);
         client.start();
 
-        const int      initializeId = transport->firstSentId();
+        const int initializeId           = transport->firstSentId();
+        bool      abandonedBeforeFailure = false;
+        connect(&client, &QSocMcpClient::requestFailed, &client, [&](int id, int, const QString &) {
+            if (id == initializeId) {
+                abandonedBeforeFailure = transport->abandonTrackedCalls()
+                                         == QList<quint64>{transport->lastTrackedToken()};
+            }
+        });
         nlohmann::json initResponse;
         initResponse["jsonrpc"]                = "2.0";
         initResponse["id"]                     = initializeId;
         initResponse["result"]["capabilities"] = nlohmann::json::object();
         transport->simulateMessage(initResponse);
+        const quint64 token = transport->lastTrackedToken();
+        QVERIFY(token != 0);
 
         QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
         QVERIFY(waitForSignal(closedSpy, 1, 1000));
+        QVERIFY(abandonedBeforeFailure);
+        QCOMPARE(transport->abandonTrackedCalls(), QList<quint64>{token});
         QCOMPARE(readySpy.size(), qsizetype(0));
         QCOMPARE(failureSpy.size(), qsizetype(1));
         QCOMPARE(failureSpy.first().at(0).toInt(), initializeId);
         QCOMPARE(transport->stopCount(), 1);
+        QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
+    }
+
+    void stopAbandonsInitializedDeliveryBeforeStateChange()
+    {
+        auto *transport = new QsocMcpFakeTransport;
+        transport->setAutoCompleteTrackedMessages(false);
+        QSocMcpClient client(basicConfig(), transport);
+        QSignalSpy    readySpy(&client, &QSocMcpClient::ready);
+        QSignalSpy    closedSpy(&client, &QSocMcpClient::closed);
+        client.start();
+
+        transport->simulateMessage(
+            {{"jsonrpc", "2.0"},
+             {"id", transport->firstSentId()},
+             {"result", {{"capabilities", nlohmann::json::object()}}}});
+        const quint64 token = transport->lastTrackedToken();
+        QVERIFY(token != 0);
+        QCOMPARE(client.state(), QSocMcpClient::State::Initializing);
+
+        bool abandonedBeforeStateChange = false;
+        connect(&client, &QSocMcpClient::stateChanged, &client, [&](QSocMcpClient::State state) {
+            if (state == QSocMcpClient::State::Disconnected) {
+                abandonedBeforeStateChange = transport->abandonTrackedCalls()
+                                             == QList<quint64>{token};
+            }
+        });
+
+        client.stop();
+
+        QVERIFY(abandonedBeforeStateChange);
+        QCOMPARE(transport->abandonTrackedCalls(), QList<quint64>{token});
+        QCOMPARE(transport->stopCount(), 1);
+        QCOMPARE(readySpy.size(), qsizetype(0));
+        QCOMPARE(closedSpy.size(), qsizetype(1));
         QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
     }
 
@@ -1764,12 +1877,17 @@ private slots:
         transport->simulateMessage(initResponse);
         QCOMPARE(client.state(), QSocMcpClient::State::Ready);
 
-        const int       firstId  = client.request(QStringLiteral("first"));
-        const int       secondId = client.request(QStringLiteral("second"));
+        const int       firstId        = client.request(QStringLiteral("first"));
+        const int       secondId       = client.request(QStringLiteral("second"));
+        const qsizetype sentBeforeStop = transport->sentCount();
         QHash<int, int> failures;
-        bool            reentered = false;
+        bool            reentered                    = false;
+        bool            sawFailureBeforeAllAbandoned = false;
         connect(&client, &QSocMcpClient::requestFailed, &client, [&](int id, int, const QString &) {
             failures[id]++;
+            const QList<int> &abandoned = transport->abandonedRequestIds();
+            sawFailureBeforeAllAbandoned |= !abandoned.contains(firstId)
+                                            || !abandoned.contains(secondId);
             if (!reentered) {
                 reentered = true;
                 client.stop();
@@ -1781,6 +1899,11 @@ private slots:
         QCOMPARE(failures.value(firstId), 1);
         QCOMPARE(failures.value(secondId), 1);
         QCOMPARE(failures.size(), 2);
+        QVERIFY(!sawFailureBeforeAllAbandoned);
+        QCOMPARE(transport->abandonedRequestIds().size(), qsizetype(2));
+        QVERIFY(transport->abandonedRequestIds().contains(firstId));
+        QVERIFY(transport->abandonedRequestIds().contains(secondId));
+        QCOMPARE(transport->sentCount(), sentBeforeStop);
         QCOMPARE(transport->stopCount(), 1);
         QCOMPARE(client.state(), QSocMcpClient::State::Disconnected);
     }

@@ -3,6 +3,7 @@
 
 #include "agent/mcp/qsocmcphttp.h"
 
+#include "agent/mcp/qsocmcpjson_p.h"
 #include "common/qsocconsole.h"
 #include "common/qsocproxy.h"
 
@@ -11,7 +12,6 @@
 #include <QNetworkRequest>
 #include <QUrl>
 
-#include <limits>
 #include <utility>
 
 namespace {
@@ -24,6 +24,12 @@ struct DeferredSignal
 {
     nlohmann::json message;
     QString        error;
+};
+
+enum class SseTerminal {
+    None,
+    Completed,
+    Failed,
 };
 
 bool replyIsSse(QNetworkReply *reply)
@@ -154,7 +160,7 @@ QList<DeferredSignal> parseSseEvents(QByteArray &buffer)
 QList<DeferredSignal> parseJsonBody(const QByteArray &body)
 {
     if (body.trimmed().isEmpty()) {
-        return {}; /* Empty 200 is valid for one-way notifications. */
+        return {}; /* Successful one-way posts may have an empty body. */
     }
     try {
         return QList<DeferredSignal>{DeferredSignal{nlohmann::json::parse(body.toStdString()), {}}};
@@ -166,29 +172,8 @@ QList<DeferredSignal> parseJsonBody(const QByteArray &body)
 
 bool readClientRequestId(const nlohmann::json &message, int *requestId)
 {
-    if (!message.is_object() || !message.contains("method") || !message["method"].is_string()
-        || !message.contains("id")) {
-        return false;
-    }
-
-    const auto &id = message["id"];
-    if (id.is_number_unsigned()) {
-        const auto value = id.get<std::uint64_t>();
-        if (value > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
-            return false;
-        }
-        *requestId = static_cast<int>(value);
-        return true;
-    }
-    if (!id.is_number_integer()) {
-        return false;
-    }
-    const auto value = id.get<std::int64_t>();
-    if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max()) {
-        return false;
-    }
-    *requestId = static_cast<int>(value);
-    return true;
+    return message.is_object() && message.contains("method") && message["method"].is_string()
+           && message.contains("id") && QSocMcpJson::readInteger(message["id"], requestId);
 }
 
 QList<int> requestIdsForMessage(const nlohmann::json &message)
@@ -209,6 +194,56 @@ QList<int> requestIdsForMessage(const nlohmann::json &message)
         appendRequestId(message);
     }
     return requestIds;
+}
+
+void claimResponseIds(QList<int> &requestIds, const nlohmann::json &message)
+{
+    const auto claim = [&requestIds](const nlohmann::json &entry) {
+        const std::optional<int> requestId = QSocMcpJson::claimableResponseId(entry);
+        if (requestId.has_value()) {
+            requestIds.removeAll(*requestId);
+        }
+    };
+
+    if (message.is_array()) {
+        for (const auto &entry : message) {
+            claim(entry);
+        }
+    } else {
+        claim(message);
+    }
+}
+
+SseTerminal resolveSseEvents(
+    QList<int> &pendingRequestIds, bool requestBearing, QList<DeferredSignal> &events)
+{
+    for (qsizetype index = 0; index < events.size(); ++index) {
+        if (!events.at(index).error.isEmpty()) {
+            events.resize(index + 1);
+            return SseTerminal::Failed;
+        }
+        claimResponseIds(pendingRequestIds, events.at(index).message);
+        if (requestBearing && pendingRequestIds.isEmpty()) {
+            events.resize(index + 1);
+            return SseTerminal::Completed;
+        }
+    }
+    return SseTerminal::None;
+}
+
+bool hasIncompleteSseData(const QByteArray &buffer)
+{
+    QByteArray normalized = buffer;
+    normalized.replace("\r\n", "\n");
+    normalized.replace('\r', '\n');
+    for (const QByteArray &line : normalized.split('\n')) {
+        const qsizetype  separator = line.indexOf(':');
+        const QByteArray field     = separator < 0 ? line : line.left(separator);
+        if (field == "data") {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -239,7 +274,7 @@ void QSocMcpHttpTransport::start()
 
 void QSocMcpHttpTransport::stop()
 {
-    if (state() == State::Stopped) {
+    if (state() == State::Stopping || state() == State::Stopped) {
         return;
     }
     setState(State::Stopping);
@@ -256,6 +291,40 @@ void QSocMcpHttpTransport::sendMessage(const nlohmann::json &message)
 void QSocMcpHttpTransport::sendTrackedMessage(const nlohmann::json &message, quint64 token)
 {
     postMessage(message, token);
+}
+
+void QSocMcpHttpTransport::abandonTrackedMessage(quint64 token)
+{
+    if (token == 0) {
+        return;
+    }
+
+    QList<QNetworkReply *> unownedReplies;
+    for (auto it = replies_.begin(); it != replies_.end(); ++it) {
+        if (it->sendToken != token) {
+            continue;
+        }
+        it->sendToken = 0;
+        if (it->pendingRequestIds.isEmpty()) {
+            unownedReplies.append(it.key());
+        }
+    }
+    for (QNetworkReply *reply : std::as_const(unownedReplies)) {
+        cleanupReply(reply, true);
+    }
+}
+
+void QSocMcpHttpTransport::abandonRequest(int requestId)
+{
+    QList<QNetworkReply *> exhaustedReplies;
+    for (auto it = replies_.begin(); it != replies_.end(); ++it) {
+        if (it->pendingRequestIds.removeAll(requestId) > 0 && it->pendingRequestIds.isEmpty()) {
+            exhaustedReplies.append(it.key());
+        }
+    }
+    for (QNetworkReply *reply : std::as_const(exhaustedReplies)) {
+        cleanupReply(reply, true);
+    }
 }
 
 void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 sendToken)
@@ -297,10 +366,11 @@ void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 se
         return;
     }
     ReplyState replyState;
-    replyState.requestIds       = requestIds;
-    replyState.acceptsSessionId = isInitializeRequest(message);
-    replyState.sessionBound     = !request.rawHeader(kMcpSessionIdHeader).isEmpty();
-    replyState.sendToken        = sendToken;
+    replyState.pendingRequestIds = requestIds;
+    replyState.acceptsSessionId  = isInitializeRequest(message);
+    replyState.requestBearing    = !requestIds.isEmpty();
+    replyState.sessionBound      = !request.rawHeader(kMcpSessionIdHeader).isEmpty();
+    replyState.sendToken         = sendToken;
     replies_.insert(reply, replyState);
 
     connect(
@@ -395,21 +465,37 @@ void QSocMcpHttpTransport::onReplyFinished()
     }
 
     QList<DeferredSignal> events;
-    QList<int>            requestIds;
+    QList<int>            pendingRequestIds;
     quint64               sendToken = 0;
+    bool                  isSse     = false;
     {
         auto it = replies_.find(reply);
         if (!it->isSse) {
             it->isSse = replyIsSse(reply);
         }
-        if (it->isSse) {
+        isSse = it->isSse;
+        if (isSse) {
             it->sseBuffer += reply->readAll();
             events = parseSseEvents(it->sseBuffer);
+            if (hasIncompleteSseData(it->sseBuffer)) {
+                events.append(
+                    DeferredSignal{{}, QStringLiteral("SSE stream ended with an incomplete event")});
+            }
         } else {
             events = parseJsonBody(reply->readAll());
         }
-        requestIds = it->requestIds;
-        sendToken  = it->sendToken;
+        if (isSse) {
+            resolveSseEvents(it->pendingRequestIds, it->requestBearing, events);
+        } else {
+            for (const auto &event : std::as_const(events)) {
+                if (!event.error.isEmpty()) {
+                    break;
+                }
+                claimResponseIds(it->pendingRequestIds, event.message);
+            }
+        }
+        pendingRequestIds = it->pendingRequestIds;
+        sendToken         = it->sendToken;
     }
     cleanupReply(reply, false);
 
@@ -419,12 +505,19 @@ void QSocMcpHttpTransport::onReplyFinished()
         if (event.error.isEmpty()) {
             emit messageReceived(event.message);
         } else {
-            emit messageFailed(sendToken, requestIds, event.error);
+            emit messageFailed(sendToken, pendingRequestIds, event.error);
             return;
         }
         if (guard.isNull() || lifecycleGeneration_ != generation) {
             return;
         }
+    }
+    if (!pendingRequestIds.isEmpty()) {
+        const QString message
+            = isSse ? QStringLiteral("SSE stream ended before all JSON-RPC responses arrived")
+                    : QStringLiteral("HTTP response ended before all JSON-RPC responses arrived");
+        emit messageFailed(sendToken, pendingRequestIds, message);
+        return;
     }
     if (sendToken != 0) {
         emit messageSent(sendToken);
@@ -479,28 +572,23 @@ bool QSocMcpHttpTransport::closeExpiredSession(QNetworkReply *reply)
 void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)
 {
     QList<DeferredSignal> events;
-    QList<int>            requestIds;
+    QList<int>            pendingRequestIds;
     quint64               sendToken = 0;
-    bool                  failed    = false;
+    SseTerminal           terminal  = SseTerminal::None;
     {
         auto it = replies_.find(reply);
         if (it == replies_.end()) {
             return;
         }
         it->sseBuffer += reply->readAll();
-        events = parseSseEvents(it->sseBuffer);
-        for (const auto &event : std::as_const(events)) {
-            if (!event.error.isEmpty()) {
-                failed = true;
-                break;
-            }
-        }
-        if (failed) {
-            requestIds = it->requestIds;
-            sendToken  = it->sendToken;
+        events   = parseSseEvents(it->sseBuffer);
+        terminal = resolveSseEvents(it->pendingRequestIds, it->requestBearing, events);
+        if (terminal != SseTerminal::None) {
+            pendingRequestIds = it->pendingRequestIds;
+            sendToken         = it->sendToken;
         }
     }
-    if (failed) {
+    if (terminal != SseTerminal::None) {
         cleanupReply(reply, true);
     }
 
@@ -510,12 +598,15 @@ void QSocMcpHttpTransport::handleSseChunk(QNetworkReply *reply)
         if (event.error.isEmpty()) {
             emit messageReceived(event.message);
         } else {
-            emit messageFailed(sendToken, requestIds, event.error);
+            emit messageFailed(sendToken, pendingRequestIds, event.error);
             return;
         }
         if (guard.isNull() || lifecycleGeneration_ != generation) {
             return;
         }
+    }
+    if (terminal == SseTerminal::Completed && sendToken != 0) {
+        emit messageSent(sendToken);
     }
 }
 
@@ -525,7 +616,7 @@ void QSocMcpHttpTransport::failReply(QNetworkReply *reply, const QString &messag
     if (it == replies_.end()) {
         return;
     }
-    const QList<int> requestIds = it->requestIds;
+    const QList<int> requestIds = it->pendingRequestIds;
     const quint64    sendToken  = it->sendToken;
     cleanupReply(reply, true);
     emit messageFailed(sendToken, requestIds, message);

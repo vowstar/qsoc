@@ -57,15 +57,32 @@ public:
     virtual void sendMessage(const nlohmann::json &message) = 0;
 
     /**
-     * @brief Send a message and report transport acceptance by token.
-     * @details The caller owns the opaque nonzero token. Completion may be
-     *          synchronous. A successful send emits messageSent(token)
-     *          exactly once; failure or lifecycle termination must not emit
-     *          it. The default handles synchronous, transport-wide failure.
-     *          Transports that emit messageFailed() override this method and
-     *          preserve the token.
+     * @brief Send a message and report transport completion by token.
+     * @details The caller owns the opaque nonzero token and must not reuse it
+     *          until it settles or is abandoned. Completion may be synchronous.
+     *          A successful transport exchange emits
+     *          messageSent(token) exactly once; failure or lifecycle
+     *          termination must not emit it. The default handles synchronous,
+     *          transport-wide failure. Transports that emit messageFailed()
+     *          override this method and preserve the token.
      */
     virtual void sendTrackedMessage(const nlohmann::json &message, quint64 token);
+
+    /**
+     * @brief Stop tracking completion for one outbound message.
+     * @details This is local bookkeeping only; it sends no protocol message
+     *          or result signal. Zero, unknown, and settled tokens are no-ops.
+     *          Request IDs sharing the transport exchange remain active.
+     */
+    virtual void abandonTrackedMessage(quint64 token);
+
+    /**
+     * @brief Release transport resources retained for an abandoned request.
+     * @details This is local bookkeeping only; it sends no protocol message
+     *          or transport result signal. Shared transports may keep their
+     *          underlying connection open.
+     */
+    virtual void abandonRequest(int requestId);
 
 signals:
     /** Connection is up; sendMessage() is valid from now on. */
@@ -81,7 +98,7 @@ signals:
     /**
      * One outbound message failed without terminating the transport.
      * token is its tracked token, or zero when untracked. requestIds contains
-     * the integer client request IDs carried by this message.
+     * the integer client request IDs that remain unanswered.
      */
     void messageFailed(quint64 token, const QList<int> &requestIds, const QString &message);
 

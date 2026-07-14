@@ -61,6 +61,8 @@ public:
         }
     }
 
+    void abandonRequest(int requestId) override { abandonedRequestIds_ << requestId; }
+
     void simulateMessage(const nlohmann::json &message) { emit messageReceived(message); }
     void setFailToolCallSynchronously(bool fail) { failToolCallSynchronously_ = fail; }
     void setSendHook(SendHook hook) { sendHook_ = std::move(hook); }
@@ -96,8 +98,11 @@ public:
         return ids;
     }
 
+    QList<int> abandonedRequestIds() const { return abandonedRequestIds_; }
+
 private:
     QList<nlohmann::json> sent_;
+    QList<int>            abandonedRequestIds_;
     bool                  failToolCallSynchronously_ = false;
     SendHook              sendHook_;
 };
@@ -932,6 +937,7 @@ private slots:
 
         const QList<int> requestIds = transport->requestIdsForMethod(QStringLiteral("tools/call"));
         QCOMPARE(requestIds.size(), 1);
+        QCOMPARE(transport->abandonedRequestIds(), requestIds);
         QCOMPARE(transport->cancelledRequestIds(), requestIds);
 
         replyToolSuccess(transport, requestIds.first(), QStringLiteral("late"));
@@ -942,6 +948,7 @@ private slots:
             replyToolSuccess(transport, transport->lastSentId(), QStringLiteral("recovered"));
         });
         QCOMPARE(tool.execute({}), QStringLiteral("recovered"));
+        QCOMPARE(transport->abandonedRequestIds(), requestIds);
         QCOMPARE(transport->cancelledRequestIds(), requestIds);
     }
 

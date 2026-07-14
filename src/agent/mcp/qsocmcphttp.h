@@ -18,11 +18,10 @@ class QNetworkReply;
 /**
  * @brief Streamable HTTP transport for an MCP server.
  * @details Each outbound message is POSTed to the server URL. The
- *          response is either an `application/json` document with the
- *          single matching response, or an `text/event-stream` of SSE
- *          events (each event payload is one JSON-RPC message). Both
- *          shapes are supported on the same endpoint per the MCP
- *          Streamable HTTP transport spec.
+ *          successful response may be empty when the POST contains no
+ *          JSON-RPC request. Otherwise it is an `application/json`
+ *          document or `text/event-stream`. Each JSON document or SSE
+ *          data event carries one JSON-RPC message or batch.
  */
 class QSocMcpHttpTransport : public QSocMcpTransport
 {
@@ -36,6 +35,8 @@ public:
     void stop() override;
     void sendMessage(const nlohmann::json &message) override;
     void sendTrackedMessage(const nlohmann::json &message, quint64 token) override;
+    void abandonTrackedMessage(quint64 token) override;
+    void abandonRequest(int requestId) override;
 
 private slots:
     void onReplyMetaDataChanged();
@@ -46,9 +47,10 @@ private:
     struct ReplyState
     {
         QByteArray sseBuffer;
-        QList<int> requestIds;
+        QList<int> pendingRequestIds;
         bool       acceptsSessionId = false;
         bool       isSse            = false;
+        bool       requestBearing   = false;
         bool       sessionBound     = false;
         quint64    sendToken        = 0;
     };

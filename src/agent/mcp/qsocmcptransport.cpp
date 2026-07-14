@@ -49,6 +49,16 @@ void QSocMcpTransport::sendTrackedMessage(const nlohmann::json &message, quint64
     emit messageSent(token);
 }
 
+void QSocMcpTransport::abandonTrackedMessage(quint64 token)
+{
+    Q_UNUSED(token);
+}
+
+void QSocMcpTransport::abandonRequest(int requestId)
+{
+    Q_UNUSED(requestId);
+}
+
 void QSocMcpTransport::setState(State newState)
 {
     state_ = newState;

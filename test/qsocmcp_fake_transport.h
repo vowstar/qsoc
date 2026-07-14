@@ -64,6 +64,15 @@ public:
         sendMessage(message);
     }
 
+    void abandonTrackedMessage(quint64 token) override
+    {
+        if (token != 0) {
+            abandonTrackedCalls_ << token;
+        }
+    }
+
+    void abandonRequest(int requestId) override { abandonedRequestIds_ << requestId; }
+
     void simulateMessage(const nlohmann::json &message) { emit messageReceived(message); }
     void simulateError(const QString &message) { emit errorOccurred(message); }
     void simulateMessageFailure(quint64 token, const QList<int> &requestIds, const QString &message)
@@ -95,9 +104,13 @@ public:
     quint64                      lastTrackedToken() const { return lastTrackedToken_; }
     qsizetype                    sentCount() const { return sent_.size(); }
     const QList<nlohmann::json> &sent() const { return sent_; }
+    const QList<int>            &abandonedRequestIds() const { return abandonedRequestIds_; }
+    const QList<quint64>        &abandonTrackedCalls() const { return abandonTrackedCalls_; }
 
 private:
     QList<nlohmann::json>                       sent_;
+    QList<int>                                  abandonedRequestIds_;
+    QList<quint64>                              abandonTrackedCalls_;
     std::function<void(const nlohmann::json &)> sendHook_;
     bool                                        closeOnStop_                 = true;
     bool                                        autoCompleteTrackedMessages_ = true;

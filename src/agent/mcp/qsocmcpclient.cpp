@@ -3,9 +3,8 @@
 
 #include "agent/mcp/qsocmcpclient.h"
 
+#include "agent/mcp/qsocmcpjson_p.h"
 #include "agent/mcp/qsocmcptransport.h"
-
-#include <limits>
 
 #include <QTimer>
 
@@ -22,66 +21,9 @@ constexpr int kClientErrorTransport  = -32000;
 constexpr int kClientErrorTimeout    = -32001;
 constexpr int kClientErrorNotReady   = -32002;
 
-bool hasJsonRpcVersion(const nlohmann::json &message)
-{
-    return message.is_object() && message.contains("jsonrpc") && message["jsonrpc"].is_string()
-           && message["jsonrpc"] == "2.0";
-}
-
-bool readInteger(const nlohmann::json &value, int *result)
-{
-    if (value.is_number_unsigned()) {
-        const auto number = value.get<std::uint64_t>();
-        if (number > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
-            return false;
-        }
-        *result = static_cast<int>(number);
-        return true;
-    }
-    if (!value.is_number_integer()) {
-        return false;
-    }
-    const auto number = value.get<std::int64_t>();
-    if (number < std::numeric_limits<int>::min() || number > std::numeric_limits<int>::max()) {
-        return false;
-    }
-    *result = static_cast<int>(number);
-    return true;
-}
-
-bool readJsonRpcError(const nlohmann::json &error, int *code, QString *message)
-{
-    if (!error.is_object() || !error.contains("code") || !error.contains("message")
-        || !error["message"].is_string() || !readInteger(error["code"], code)) {
-        return false;
-    }
-    *message = QString::fromStdString(error["message"].get<std::string>());
-    return true;
-}
-
 bool isRequestId(const nlohmann::json &value)
 {
     return value.is_string() || value.is_number();
-}
-
-std::optional<int> claimableResponseId(const nlohmann::json &message)
-{
-    if (!message.is_object() || message.contains("method") || !hasJsonRpcVersion(message)
-        || !message.contains("id") || message.contains("result") == message.contains("error")) {
-        return std::nullopt;
-    }
-    if (message.contains("error")) {
-        int     code = 0;
-        QString text;
-        if (!readJsonRpcError(message["error"], &code, &text)) {
-            return std::nullopt;
-        }
-    }
-    int id = -1;
-    if (!readInteger(message["id"], &id)) {
-        return std::nullopt;
-    }
-    return id;
 }
 
 QString requestFailureMessage(const QString &method, const QString &message)
@@ -179,8 +121,8 @@ void QSocMcpClient::stop()
     if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
         return;
     }
-    if (!cancelAllPending(kClientErrorTransport, QStringLiteral("Client stopping"))
-        || guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
+    if (!failAllPending(kClientErrorTransport, QStringLiteral("Client stopping")) || guard.isNull()
+        || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
         return;
     }
     stopTransportOrFinish(generation);
@@ -219,12 +161,12 @@ int QSocMcpClient::request(
             if (!isCurrentLifecycle(generation, Lifecycle::Active) || !pending_.contains(id)) {
                 return;
             }
-            std::optional<Pending> pending = takePending(id);
-            if (!pending.has_value()) {
+            const QString method = pending_.value(id).method;
+            if (!abandonRequest(id)) {
                 return;
             }
-            const QString timeoutMessage = requestFailureMessage(
-                pending->method, QStringLiteral("Request timed out: %1").arg(pending->method));
+            const QString timeoutMessage
+                = requestFailureMessage(method, QStringLiteral("Request timed out: %1").arg(method));
             const QPointer<QSocMcpClient> guard(this);
             emit                          requestFailed(id, kClientErrorTimeout, timeoutMessage);
             if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Active)
@@ -291,7 +233,7 @@ void QSocMcpClient::onTransportError(const QString &message)
     const quint64 generation  = lifecycleGeneration_;
     const QPointer<QSocMcpClient> guard(this);
     if (recoverable) {
-        cancelAllPending(kClientErrorTransport, message);
+        failAllPending(kClientErrorTransport, message);
         return;
     }
 
@@ -308,7 +250,7 @@ void QSocMcpClient::onTransportError(const QString &message)
             return;
         }
     }
-    if (!cancelAllPending(kClientErrorTransport, message) || guard.isNull()
+    if (!failAllPending(kClientErrorTransport, message) || guard.isNull()
         || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
         return;
     }
@@ -404,7 +346,7 @@ void QSocMcpClient::onMessageReceived(const nlohmann::json &message)
     QSet<const nlohmann::json *>  claimedResponses;
     if (state_ == State::Ready) {
         for (const auto &entry : message) {
-            const std::optional<int> id = claimableResponseId(entry);
+            const std::optional<int> id = QSocMcpJson::claimableResponseId(entry);
             if (!id.has_value() || !eligiblePendingIds.contains(*id)) {
                 continue;
             }
@@ -456,7 +398,7 @@ std::optional<nlohmann::json> QSocMcpClient::handleMessage(
     if (message.contains("id") && message.contains("method")) {
         const nlohmann::json id = isRequestId(message["id"]) ? message["id"]
                                                              : nlohmann::json(nullptr);
-        if (!hasJsonRpcVersion(message) || !isRequestId(message["id"])
+        if (!QSocMcpJson::hasVersion(message) || !isRequestId(message["id"])
             || !message["method"].is_string() || message.contains("result")
             || message.contains("error")
             || (message.contains("params") && !message["params"].is_object()
@@ -478,15 +420,15 @@ std::optional<nlohmann::json> QSocMcpClient::handleMessage(
     const bool hasError          = message.contains("error");
     const bool responseCandidate = !hasMethod && (hasId || hasResult || hasError);
 
-    if (responseCandidate && hasJsonRpcVersion(message) && hasId && hasResult != hasError) {
+    if (responseCandidate && QSocMcpJson::hasVersion(message) && hasId && hasResult != hasError) {
         int     errorCode = 0;
         QString errorMessage;
-        if (hasError && !readJsonRpcError(message["error"], &errorCode, &errorMessage)) {
+        if (hasError && !QSocMcpJson::readError(message["error"], &errorCode, &errorMessage)) {
             emit requestFailed(-1, kJsonRpcInvalidRequest, QStringLiteral("Unrecognized message"));
             return std::nullopt;
         }
         int id = -1;
-        if (!readInteger(message["id"], &id)) {
+        if (!QSocMcpJson::readInteger(message["id"], &id)) {
             return std::nullopt;
         }
 
@@ -537,7 +479,7 @@ std::optional<nlohmann::json> QSocMcpClient::handleMessage(
     }
 
     if (hasMethod && !hasId && !hasResult && !hasError) {
-        if (!hasJsonRpcVersion(message) || !message["method"].is_string()
+        if (!QSocMcpJson::hasVersion(message) || !message["method"].is_string()
             || (message.contains("params") && !message["params"].is_object()
                 && !message["params"].is_array())) {
             return jsonRpcErrorResponse(nullptr, kJsonRpcInvalidRequest, "Invalid Request");
@@ -591,12 +533,10 @@ void QSocMcpClient::sendInitialize()
                 || !pending_.contains(id)) {
                 return;
             }
-            std::optional<Pending> pending = takePending(id);
-            if (!pending.has_value()) {
+            if (!abandonRequest(id)) {
                 return;
             }
-            initializeId_ = -1;
-            lifecycle_    = Lifecycle::Stopping;
+            lifecycle_ = Lifecycle::Stopping;
             const QPointer<QSocMcpClient> guard(this);
             setState(State::Failed);
             if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Stopping)) {
@@ -661,6 +601,7 @@ void QSocMcpClient::sendInitializedNotification(int requestId)
 
 void QSocMcpClient::clearInitializedSend()
 {
+    const quint64 token   = initializedSendToken_;
     initializedSendToken_ = 0;
     initializedRequestId_ = -1;
     QTimer *timer         = initializedSendTimer_.data();
@@ -668,6 +609,9 @@ void QSocMcpClient::clearInitializedSend()
     if (timer != nullptr) {
         timer->stop();
         timer->deleteLater();
+    }
+    if (transport_ != nullptr) {
+        transport_->abandonTrackedMessage(token);
     }
 }
 
@@ -702,13 +646,18 @@ std::optional<QSocMcpClient::Pending> QSocMcpClient::takePending(int id)
     return pending;
 }
 
-bool QSocMcpClient::cancelRequest(int id)
+bool QSocMcpClient::abandonRequest(int id)
 {
-    const auto pendingIt = pending_.constFind(id);
-    if (pendingIt == pending_.constEnd() || pendingIt->method == QStringLiteral("initialize")) {
+    if (!takePending(id).has_value()) {
         return false;
     }
-    return takePending(id).has_value();
+    if (id == initializeId_) {
+        initializeId_ = -1;
+    }
+    if (transport_ != nullptr) {
+        transport_->abandonRequest(id);
+    }
+    return true;
 }
 
 void QSocMcpClient::notifyRequestCancelled(int id, const QString &reason)
@@ -719,7 +668,7 @@ void QSocMcpClient::notifyRequestCancelled(int id, const QString &reason)
     notify(QStringLiteral("notifications/cancelled"), params);
 }
 
-bool QSocMcpClient::cancelAllPending(int code, const QString &message)
+bool QSocMcpClient::failAllPending(int code, const QString &message)
 {
     QHash<int, Pending> pending;
     pending.swap(pending_);
@@ -731,6 +680,11 @@ bool QSocMcpClient::cancelAllPending(int code, const QString &message)
         if (!entry.timer.isNull()) {
             entry.timer->stop();
             entry.timer->deleteLater();
+        }
+    }
+    if (transport_ != nullptr) {
+        for (int id : ids) {
+            transport_->abandonRequest(id);
         }
     }
 
@@ -777,8 +731,8 @@ void QSocMcpClient::finishLifecycle(quint64 generation)
     if (guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Finishing)) {
         return;
     }
-    if (!cancelAllPending(kClientErrorTransport, QStringLiteral("Transport closed"))
-        || guard.isNull() || !isCurrentLifecycle(generation, Lifecycle::Finishing)) {
+    if (!failAllPending(kClientErrorTransport, QStringLiteral("Transport closed")) || guard.isNull()
+        || !isCurrentLifecycle(generation, Lifecycle::Finishing)) {
         return;
     }
     lifecycle_ = Lifecycle::Idle;
