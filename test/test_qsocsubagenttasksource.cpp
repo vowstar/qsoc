@@ -5,6 +5,7 @@
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctasksource.h"
+#include "agent/qsoctool.h"
 #include "qsoc_test.h"
 
 #include <QDir>
@@ -17,6 +18,77 @@
 #include <QtTest>
 
 namespace {
+
+class ScopedWaitTool final : public QSocTool
+{
+public:
+    explicit ScopedWaitTool(QObject *parent = nullptr)
+        : QSocTool(parent)
+    {}
+
+    QString getName() const override { return QStringLiteral("scoped_wait"); }
+    QString getDescription() const override { return QStringLiteral("Wait for a test timer"); }
+    json    getParametersSchema() const override
+    {
+        return {{"type", "object"}, {"properties", json::object()}};
+    }
+
+    QString execute(const json &arguments) override
+    {
+        QPointer<QSocToolCallContext> callContext(currentCallContext());
+        const QString label = QString::fromStdString(arguments.value("label", std::string()));
+        const int     delay = arguments.value("delay", 50);
+
+        QEventLoop loop;
+        WaitState  wait{&loop, false};
+        const auto cancel = [&wait]() {
+            wait.cancelled = true;
+            if (wait.loop->isRunning()) {
+                wait.loop->quit();
+            }
+        };
+        if (!callContext.isNull()) {
+            QObject::connect(
+                callContext.data(), &QSocToolCallContext::cancellationRequested, &loop, cancel);
+            if (callContext->isCancellationRequested()) {
+                cancel();
+            }
+        }
+
+        activeWaits_.insert(&wait);
+        QTimer::singleShot(delay, &loop, &QEventLoop::quit);
+        if (!wait.cancelled) {
+            loop.exec();
+        }
+        activeWaits_.remove(&wait);
+
+        return (wait.cancelled ? QStringLiteral("aborted:") : QStringLiteral("completed:")) + label;
+    }
+
+    void abort() override
+    {
+        ++globalAbortCount_;
+        const QSet<WaitState *> waits = activeWaits_;
+        for (WaitState *wait : waits) {
+            wait->cancelled = true;
+            if (wait->loop->isRunning()) {
+                wait->loop->quit();
+            }
+        }
+    }
+
+    int globalAbortCount() const { return globalAbortCount_; }
+
+private:
+    struct WaitState
+    {
+        QEventLoop *loop;
+        bool        cancelled;
+    };
+
+    QSet<WaitState *> activeWaits_;
+    int               globalAbortCount_ = 0;
+};
 
 class Test : public QObject
 {
@@ -128,6 +200,217 @@ private slots:
         src.markCompleted(id, QStringLiteral("ok"));
         QVERIFY(!src.killTask(id));
         QVERIFY(!src.killTask(QStringLiteral("nonexistent")));
+    }
+
+    void testKillRunningAbortsOnlySelectedAgentCall()
+    {
+        QSocToolRegistry registry;
+        ScopedWaitTool   tool(&registry);
+        registry.registerTool(&tool);
+
+        QSocAgentConfig childConfig;
+        childConfig.isSubAgent = true;
+        auto *childA           = new QSocAgent(nullptr, nullptr, &registry, childConfig);
+        auto *childB           = new QSocAgent(nullptr, nullptr, &registry, childConfig);
+
+        QSocSubAgentTaskSource src;
+        const QString idA = src.registerRun(QStringLiteral("a"), QStringLiteral("test"), childA);
+        const QString idB = src.registerRun(QStringLiteral("b"), QStringLiteral("test"), childB);
+        src.start(idA, []() {});
+        src.start(idB, []() {});
+
+        bool    killed   = false;
+        bool    timedOut = false;
+        QString resultB;
+        QTimer::singleShot(0, &registry, [&]() {
+            QTimer::singleShot(20, &registry, [&]() { killed = src.killTask(idA); });
+            resultB = registry.executeTool(
+                QStringLiteral("scoped_wait"), json{{"label", "b"}, {"delay", 100}}, childB);
+        });
+        QTimer::singleShot(2000, &registry, [&]() {
+            timedOut = true;
+            registry.abortAll();
+        });
+
+        const QString resultA = registry.executeTool(
+            QStringLiteral("scoped_wait"), json{{"label", "a"}, {"delay", 1000}}, childA);
+
+        QVERIFY(!timedOut);
+        QVERIFY(killed);
+        QCOMPARE(resultA, QStringLiteral("aborted:a"));
+        QCOMPARE(resultB, QStringLiteral("completed:b"));
+        QCOMPARE(tool.globalAbortCount(), 0);
+    }
+
+    void testRootAbortStillCancelsEveryAgentCall()
+    {
+        QSocToolRegistry registry;
+        ScopedWaitTool   tool(&registry);
+        registry.registerTool(&tool);
+
+        QSocAgentConfig childConfig;
+        childConfig.isSubAgent = true;
+        QSocAgent root(nullptr, nullptr, &registry, QSocAgentConfig());
+        QSocAgent child(nullptr, nullptr, &registry, childConfig);
+
+        bool    timedOut = false;
+        QString childResult;
+        QTimer::singleShot(0, &registry, [&]() {
+            QTimer::singleShot(20, &registry, [&]() { root.abort(); });
+            childResult = registry.executeTool(
+                QStringLiteral("scoped_wait"), json{{"label", "child"}, {"delay", 1000}}, &child);
+        });
+        QTimer::singleShot(2000, &registry, [&]() {
+            timedOut = true;
+            registry.abortAll();
+        });
+
+        const QString rootResult = registry.executeTool(
+            QStringLiteral("scoped_wait"), json{{"label", "root"}, {"delay", 1000}}, &root);
+
+        QVERIFY(!timedOut);
+        QCOMPARE(rootResult, QStringLiteral("aborted:root"));
+        QCOMPARE(childResult, QStringLiteral("aborted:child"));
+        QCOMPARE(tool.globalAbortCount(), 1);
+    }
+
+    void testPumpQueueSkipsPendingRunWithoutLauncher()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        src.setMaxConcurrent(1);
+
+        const QString waiting
+            = src.registerRun(QStringLiteral("waiting"), QStringLiteral("test"), makeAgent());
+        const QString ready
+            = src.registerRun(QStringLiteral("ready"), QStringLiteral("test"), makeAgent());
+        int launchCount = 0;
+        src.start(ready, [&]() { ++launchCount; });
+
+        QSocTask::Row waitingRow;
+        QSocTask::Row readyRow;
+        QVERIFY(src.findRow(waiting, &waitingRow));
+        QVERIFY(src.findRow(ready, &readyRow));
+        QCOMPARE(waitingRow.status, QSocTask::Status::Pending);
+        QCOMPARE(readyRow.status, QSocTask::Status::Running);
+        QCOMPARE(launchCount, 1);
+    }
+
+    void testPumpQueueSurvivesTasksChangedRegistration()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        src.setMaxConcurrent(1);
+
+        const QString first
+            = src.registerRun(QStringLiteral("first"), QStringLiteral("test"), makeAgent());
+        QString second;
+        bool    injected = false;
+        connect(&src, &QSocSubAgentTaskSource::tasksChanged, &src, [&]() {
+            QSocTask::Row row;
+            if (injected || !src.findRow(first, &row) || row.status != QSocTask::Status::Running) {
+                return;
+            }
+            injected = true;
+            second = src.registerRun(QStringLiteral("second"), QStringLiteral("test"), makeAgent());
+            src.start(second, [&]() { src.markCompleted(second, QStringLiteral("done")); });
+        });
+
+        int firstLaunches = 0;
+        src.start(first, [&]() {
+            ++firstLaunches;
+            src.markCompleted(first, QStringLiteral("done"));
+        });
+
+        QSocTask::Row secondRow;
+        QVERIFY(injected);
+        QCOMPARE(firstLaunches, 1);
+        QVERIFY(src.findRow(second, &secondRow));
+        QCOMPARE(secondRow.status, QSocTask::Status::Completed);
+        QCOMPARE(src.countRunning(), 0);
+    }
+
+    void testPumpQueueSurvivesLauncherRegistration()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        src.setMaxConcurrent(1);
+
+        QStringList   started;
+        const QString first
+            = src.registerRun(QStringLiteral("first"), QStringLiteral("test"), makeAgent());
+        QString second;
+        src.start(first, [&]() {
+            started.append(first);
+            src.markCompleted(first, QStringLiteral("done"));
+            second = src.registerRun(QStringLiteral("second"), QStringLiteral("test"), makeAgent());
+            src.start(second, [&]() {
+                started.append(second);
+                src.markCompleted(second, QStringLiteral("done"));
+            });
+        });
+
+        QCOMPARE(started, QStringList({first, second}));
+        QCOMPARE(src.countRunning(), 0);
+    }
+
+    void testPumpQueueDropsLauncherKilledByTasksChanged()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+
+        const QString id = src.registerRun(
+            QStringLiteral("kill-before-launch"), QStringLiteral("test"), makeAgent());
+        bool killed = false;
+        connect(&src, &QSocSubAgentTaskSource::tasksChanged, &src, [&]() {
+            QSocTask::Row row;
+            if (killed || !src.findRow(id, &row) || row.status != QSocTask::Status::Running) {
+                return;
+            }
+            killed = true;
+            QVERIFY(src.killTask(id));
+        });
+
+        int launchCount = 0;
+        src.start(id, [&]() { ++launchCount; });
+
+        QSocTask::Row row;
+        QVERIFY(killed);
+        QVERIFY(src.findRow(id, &row));
+        QCOMPARE(row.status, QSocTask::Status::Failed);
+        QCOMPARE(launchCount, 0);
+    }
+
+    void testPumpQueueKeepsFirstPendingLauncher()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        src.setMaxConcurrent(1);
+
+        const QString blocker
+            = src.registerRun(QStringLiteral("blocker"), QStringLiteral("test"), makeAgent());
+        src.start(blocker, []() {});
+        const QString pending
+            = src.registerRun(QStringLiteral("pending"), QStringLiteral("test"), makeAgent());
+
+        int firstLaunches  = 0;
+        int secondLaunches = 0;
+        src.start(pending, [&]() { ++firstLaunches; });
+        src.start(pending, [&]() { ++secondLaunches; });
+        src.markCompleted(blocker, QStringLiteral("done"));
+
+        QCOMPARE(firstLaunches, 1);
+        QCOMPARE(secondLaunches, 0);
     }
 
     void testCompletedRunStaysWithinTtl()

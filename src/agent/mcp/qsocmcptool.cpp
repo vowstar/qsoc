@@ -188,6 +188,8 @@ json QSocMcpTool::getParametersSchema() const
 
 QString QSocMcpTool::execute(const json &arguments)
 {
+    QPointer<QSocToolCallContext> callContext(currentCallContext());
+
     if (retired_) {
         return QStringLiteral("[mcp error] tool is no longer available");
     }
@@ -250,10 +252,22 @@ QString QSocMcpTool::execute(const json &arguments)
         loop.quit();
     });
 
+    if (!callContext.isNull()) {
+        QObject::connect(
+            callContext.data(),
+            &QSocToolCallContext::cancellationRequested,
+            &loop,
+            [this, &callState]() { cancelCalls(QSet<CallState *>{&callState}); });
+    }
+
     const int returnedId
         = client_->request(QStringLiteral("tools/call"), params, -1, &callState.requestId);
     if (returnedId < 0) {
         return QStringLiteral("[mcp error] could not send request");
+    }
+
+    if (!callContext.isNull() && callContext->isCancellationRequested()) {
+        cancelCalls(QSet<CallState *>{&callState});
     }
 
     if (callState.outcome == CallOutcome::Pending) {
@@ -278,7 +292,12 @@ QString QSocMcpTool::execute(const json &arguments)
 void QSocMcpTool::abort()
 {
     const QSet<CallState *> calls = activeCalls_;
-    QList<CallState *>      cancelledCalls;
+    cancelCalls(calls);
+}
+
+void QSocMcpTool::cancelCalls(const QSet<CallState *> &calls)
+{
+    QList<CallState *> cancelledCalls;
     cancelledCalls.reserve(calls.size());
     for (CallState *call : calls) {
         if (call->outcome != CallOutcome::Pending || client_.isNull()

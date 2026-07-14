@@ -866,6 +866,7 @@ tail on the right.
 
 `x` sends `SIGTERM` to bash jobs, calls `abort()` on streaming
 sub-agents, stops monitors, and removes a `/loop` job from the schedule.
+Aborting a sub-agent leaves other sub-agents running.
 Completed rows linger for a short window so their tail can still be
 inspected before being evicted.
 

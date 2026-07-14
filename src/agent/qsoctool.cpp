@@ -7,6 +7,26 @@
 
 #include <QScopeGuard>
 
+/* QSocToolCallContext Implementation */
+
+QSocToolCallContext::QSocToolCallContext(QObject *owner)
+    : owner_(owner)
+{}
+
+bool QSocToolCallContext::isCancellationRequested() const
+{
+    return cancellationRequested_;
+}
+
+void QSocToolCallContext::requestCancellation()
+{
+    if (cancellationRequested_) {
+        return;
+    }
+    cancellationRequested_ = true;
+    emit cancellationRequested();
+}
+
 /* QSocTool Implementation */
 
 QSocTool::QSocTool(QObject *parent)
@@ -16,6 +36,11 @@ QSocTool::QSocTool(QObject *parent)
 QSocTool::~QSocTool() = default;
 
 void QSocTool::abort() {}
+
+QSocToolCallContext *QSocTool::currentCallContext() const
+{
+    return callContexts_.isEmpty() ? nullptr : callContexts_.constLast().data();
+}
 
 json QSocTool::getDefinition() const
 {
@@ -91,17 +116,21 @@ json QSocToolRegistry::getToolDefinitions() const
     return definitions;
 }
 
-QString QSocToolRegistry::executeTool(const QString &name, const json &arguments)
+QString QSocToolRegistry::executeTool(const QString &name, const json &arguments, QObject *owner)
 {
     QPointer<QSocTool> tool = getTool(name);
     if (tool.isNull()) {
         return QString("Error: Tool '%1' not found").arg(name);
     }
 
-    ActiveCall call{tool};
+    ActiveCall call(tool, owner);
     activeCalls_.insert(&call);
+    tool->callContexts_.append(&call.context);
     QPointer<QSocToolRegistry> registry(this);
-    const auto                 removeCall = qScopeGuard([registry, &call]() {
+    const auto                 removeCall = qScopeGuard([registry, tool, &call]() {
+        if (!tool.isNull()) {
+            tool->callContexts_.removeOne(&call.context);
+        }
         if (!registry.isNull()) {
             registry->activeCalls_.remove(&call);
         }
@@ -133,9 +162,17 @@ QStringList QSocToolRegistry::toolNames() const
 
 void QSocToolRegistry::abortAll()
 {
-    QList<QPointer<QSocTool>> tools = tools_.values();
-    for (const ActiveCall *call : std::as_const(activeCalls_)) {
+    QList<QPointer<QSocTool>>            tools = tools_.values();
+    QList<QPointer<QSocToolCallContext>> contexts;
+    for (ActiveCall *call : std::as_const(activeCalls_)) {
         tools.append(call->tool);
+        contexts.append(&call->context);
+    }
+
+    for (const auto &context : contexts) {
+        if (!context.isNull()) {
+            context->requestCancellation();
+        }
     }
 
     QSet<QSocTool *> seen;
@@ -146,5 +183,24 @@ void QSocToolRegistry::abortAll()
         }
         seen.insert(current);
         current->abort();
+    }
+}
+
+void QSocToolRegistry::abortCalls(QObject *owner)
+{
+    if (owner == nullptr) {
+        return;
+    }
+
+    QList<QPointer<QSocToolCallContext>> contexts;
+    for (ActiveCall *call : std::as_const(activeCalls_)) {
+        if (call->context.owner_.data() == owner) {
+            contexts.append(&call->context);
+        }
+    }
+    for (const auto &context : contexts) {
+        if (!context.isNull()) {
+            context->requestCancellation();
+        }
     }
 }

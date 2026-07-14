@@ -14,6 +14,30 @@
 using json = nlohmann::json;
 
 /**
+ * @brief Cancellation state for one tool invocation
+ */
+class QSocToolCallContext : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit QSocToolCallContext(QObject *owner = nullptr);
+
+    bool isCancellationRequested() const;
+
+signals:
+    void cancellationRequested();
+
+private:
+    void requestCancellation();
+
+    QPointer<QObject> owner_;
+    bool              cancellationRequested_ = false;
+
+    friend class QSocToolRegistry;
+};
+
+/**
  * @brief Base class for all agent tools
  * @details Abstract base class that defines the interface for tools
  *          that can be called by the QSocAgent during LLM interactions.
@@ -82,6 +106,20 @@ public:
      * @return JSON object in OpenAI tool format
      */
     json getDefinition() const;
+
+protected:
+    /**
+     * @brief Get the cancellation state for this invocation
+     * @details Capture this at execute() entry. A shared tool can be
+     *          re-entered while a nested event loop is running.
+     * @return Current call context, or nullptr outside registry dispatch
+     */
+    QSocToolCallContext *currentCallContext() const;
+
+private:
+    QList<QPointer<QSocToolCallContext>> callContexts_;
+
+    friend class QSocToolRegistry;
 };
 
 /**
@@ -144,7 +182,7 @@ public:
      * @param arguments JSON object containing tool arguments
      * @return Result of the tool execution
      */
-    QString executeTool(const QString &name, const json &arguments);
+    QString executeTool(const QString &name, const json &arguments, QObject *owner = nullptr);
 
     /**
      * @brief Get the number of registered tools
@@ -164,10 +202,22 @@ public:
      */
     void abortAll();
 
+    /**
+     * @brief Cancel active calls belonging to one execution owner
+     * @param owner Owner passed to executeTool()
+     */
+    void abortCalls(QObject *owner);
+
 private:
     struct ActiveCall
     {
-        QPointer<QSocTool> tool;
+        ActiveCall(QSocTool *tool, QObject *owner)
+            : tool(tool)
+            , context(owner)
+        {}
+
+        QPointer<QSocTool>  tool;
+        QSocToolCallContext context;
     };
 
     QMap<QString, QPointer<QSocTool>> tools_;

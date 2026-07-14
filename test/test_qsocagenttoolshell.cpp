@@ -399,6 +399,39 @@ private slots:
 #endif
     }
 
+    void scopedAbort_matchesForegroundOwner()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("The bash tool is unavailable on Windows");
+#else
+        QSocToolRegistry  registry;
+        QSocToolShellBash bash(&registry);
+        QObject           ownerA;
+        QObject           ownerB;
+        registry.registerTool(&bash);
+
+        bool timedOut = false;
+        QTimer::singleShot(20, &registry, [&]() { registry.abortCalls(&ownerB); });
+        QTimer::singleShot(120, &registry, [&]() { registry.abortCalls(&ownerA); });
+        QTimer::singleShot(1000, &registry, [&]() {
+            timedOut = true;
+            registry.abortAll();
+        });
+
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const QString result = registry.executeTool(
+            QStringLiteral("bash"),
+            {{"command", "sleep 5"}, {"working_directory", QDir::tempPath().toStdString()}},
+            &ownerA);
+
+        QVERIFY(!timedOut);
+        QVERIFY2(elapsed.elapsed() >= 80, "wrong owner cancelled the foreground command");
+        QVERIFY2(elapsed.elapsed() < 1000, "matching owner did not cancel the foreground command");
+        QCOMPARE(result, QStringLiteral("Command aborted."));
+#endif
+    }
+
     void foregroundWaits_areSafeAndIsolated()
     {
 #ifdef Q_OS_WIN

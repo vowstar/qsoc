@@ -228,7 +228,6 @@ private:
         QString               isolation;   /* "none" | "worktree" */
         QString               worktreePath;
         std::function<void()> launcher; /* set by start(); fired by pumpQueue */
-        bool                  launched = false;
     };
 
     /* Promote Pending runs to Running (firing their launcher) while a
@@ -256,7 +255,6 @@ private:
     int                  nextSerial_      = 1;
     int                  maxConcurrent_   = 0;                 /* sliding-window cap; 0=unbounded */
     bool                 pumping_         = false;             /* pumpQueue re-entry guard */
-    bool                 aborting_        = false;             /* abortAll re-entry guard */
     qint64               completionTtlMs_ = qint64{60} * 1000; /* 60 s lingering window */
     int                  transcriptCap_   = 64 * 1024;
     QString              transcriptDir_; /* empty = compute from QStandardPaths */

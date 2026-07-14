@@ -57,6 +57,7 @@ private:
         QString     result;
     };
 
+    void cancelCalls(const QSet<CallState *> &calls);
     void retire();
 
     QPointer<QSocMcpClient> client_;

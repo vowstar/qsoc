@@ -1152,7 +1152,7 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
         }
 
         /* Execute tool */
-        const QString rawResult = toolRegistry->executeTool(functionName, arguments);
+        const QString rawResult = toolRegistry->executeTool(functionName, arguments, this);
 
         /* Strip image-attachment markers up front so every consumer
          * (verbose log, scrollview, hooks, message history) sees the
@@ -1992,7 +1992,11 @@ void QSocAgent::abort()
 
     /* Cascade to running tools */
     if (toolRegistry) {
-        toolRegistry->abortAll();
+        if (agentConfig.isSubAgent) {
+            toolRegistry->abortCalls(this);
+        } else {
+            toolRegistry->abortAll();
+        }
     }
 }
 

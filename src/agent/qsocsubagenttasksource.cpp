@@ -10,7 +10,10 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <QStandardPaths>
+
+#include <utility>
 
 QSocSubAgentTaskSource::QSocSubAgentTaskSource(QObject *parent)
     : QSocTaskSource(parent)
@@ -169,7 +172,9 @@ void QSocSubAgentTaskSource::start(const QString &id, std::function<void()> laun
         if (run.id != id) {
             continue;
         }
-        run.launcher = std::move(launcher);
+        if (run.status == QSocTask::Status::Pending && !run.launcher) {
+            run.launcher = std::move(launcher);
+        }
         break;
     }
     pumpQueue();
@@ -177,43 +182,60 @@ void QSocSubAgentTaskSource::start(const QString &id, std::function<void()> laun
 
 void QSocSubAgentTaskSource::pumpQueue()
 {
-    /* Re-entry guard: a launcher that fails synchronously routes back
-     * through markFailed() -> pumpQueue(). The outer loop already
-     * re-checks countRunning() each pass, so the nested call can
-     * safely no-op. runs_ is never structurally mutated here (only
-     * status fields), so the iterator stays valid across the launcher
-     * call. */
+    /* Listeners and launchers may re-enter and append runs. The outer
+     * pump owns admission; nested calls leave work for its next pass. */
     if (pumping_) {
         return;
     }
-    pumping_ = true;
-    /* Promote Pending runs to Running in FIFO order while a slot is
-     * free. Flip status before firing the launcher so countRunning()
-     * accounts for the run even if the launcher re-enters. The
-     * launcher fires at most once. */
-    for (RunState &run : runs_) {
+    pumping_        = true;
+    const auto done = qScopeGuard([this]() { pumping_ = false; });
+
+    /* Re-select after every external call because signals and launchers
+     * may append runs and invalidate QList references. */
+    while (true) {
         if (maxConcurrent_ > 0 && countRunning() >= maxConcurrent_) {
             break;
         }
-        if (run.status != QSocTask::Status::Pending || run.launched) {
-            continue;
+
+        qsizetype candidate = -1;
+        for (qsizetype i = 0; i < runs_.size(); ++i) {
+            if (runs_[i].status == QSocTask::Status::Pending && runs_[i].launcher) {
+                candidate = i;
+                break;
+            }
         }
-        run.launched       = true;
-        run.status         = QSocTask::Status::Running;
-        run.startedAtMs    = QDateTime::currentMSecsSinceEpoch();
-        run.lastActivityMs = run.startedAtMs;
-        appendDiskEvent(
-            run.id,
-            QStringLiteral("start"),
-            QStringLiteral("run %1 (%2): %3").arg(run.id, run.subagentType, run.label));
-        writeMeta(run);
+        if (candidate < 0) {
+            break;
+        }
+
+        QString               runId;
+        std::function<void()> launcher;
+        {
+            RunState &run      = runs_[candidate];
+            runId              = run.id;
+            launcher           = std::move(run.launcher);
+            run.status         = QSocTask::Status::Running;
+            run.startedAtMs    = QDateTime::currentMSecsSinceEpoch();
+            run.lastActivityMs = run.startedAtMs;
+            appendDiskEvent(
+                run.id,
+                QStringLiteral("start"),
+                QStringLiteral("run %1 (%2): %3").arg(run.id, run.subagentType, run.label));
+            writeMeta(run);
+        }
         emit tasksChanged();
-        if (run.launcher) {
-            auto launcher = run.launcher;
+
+        bool stillRunning = false;
+        for (const RunState &run : std::as_const(runs_)) {
+            if (run.id == runId) {
+                stillRunning = (run.status == QSocTask::Status::Running);
+                break;
+            }
+        }
+        if (stillRunning) {
             launcher();
         }
     }
-    pumping_ = false;
 }
 
 void QSocSubAgentTaskSource::appendTranscript(const QString &id, const QString &chunk)
@@ -305,18 +327,6 @@ int QSocSubAgentTaskSource::runCount() const
 
 void QSocSubAgentTaskSource::abortAll()
 {
-    /* Re-entry guard. A child sub-agent shares the parent's tool
-     * registry, so child->abort() cascades back through
-     * QSocToolRegistry::abortAll() into the spawn tool and here again.
-     * Without this guard that recursion is unbounded (one full descent
-     * per running child, re-triggering itself) and overflows the stack.
-     * Children still get their in-flight tools aborted on the first
-     * pass via the registry; the nested re-entry simply no-ops. */
-    if (aborting_) {
-        return;
-    }
-    aborting_ = true;
-
     /* Cancel queued (never-started) runs outright so a freed slot does
      * not revive them, then abort the live ones. */
     for (RunState &run : runs_) {
@@ -332,7 +342,6 @@ void QSocSubAgentTaskSource::abortAll()
             run.agent->abort();
         }
     }
-    aborting_ = false;
 }
 
 bool QSocSubAgentTaskSource::queueRequestFor(const QString &id, const QString &message)

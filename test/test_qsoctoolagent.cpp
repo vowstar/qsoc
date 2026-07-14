@@ -304,14 +304,26 @@ private slots:
     void testAbortPropagatesToTaskSource()
     {
         QSocSubAgentTaskSource *src  = nullptr;
-        auto                   *tool = makeTool(nullptr, &src, nullptr);
-        auto         *dummyAgent     = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
-        const QString runId          = src->registerRun(
+        QSocToolRegistry       *reg  = nullptr;
+        auto                   *tool = makeTool(nullptr, &src, &reg);
+        reg->registerTool(tool);
+        auto         *dummyAgent = new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig());
+        const QString runId      = src->registerRun(
             QStringLiteral("running"), QStringLiteral("general-purpose"), dummyAgent);
         src->start(runId, []() {});
+        const QString pendingId = src->registerRun(
+            QStringLiteral("pending"),
+            QStringLiteral("general-purpose"),
+            new QSocAgent(nullptr, nullptr, nullptr, QSocAgentConfig()));
         QVERIFY(src->hasActiveRun());
-        tool->abort();
-        QVERIFY(src->runCount() >= 1);
+
+        QSocAgent root(nullptr, nullptr, reg, QSocAgentConfig());
+        root.abort();
+
+        QSocTask::Row pending;
+        QVERIFY(src->findRow(pendingId, &pending));
+        QCOMPARE(pending.status, QSocTask::Status::Failed);
+        QVERIFY(!pending.canKill);
     }
 
     /* Verify the dynamic-resolution behavior: when a parent agent is

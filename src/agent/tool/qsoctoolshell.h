@@ -139,6 +139,8 @@ private:
         bool               stopRequested  = false;
     };
 
+    static void cancelForegroundWait(ForegroundWaitContext *wait);
+
     QSocProjectManager           *projectManager = nullptr;
     QSet<ForegroundWaitContext *> foregroundWaits_;
 
@@ -183,6 +185,7 @@ private:
         bool        aborted = false;
     };
 
+    static void    cancelWait(WaitContext *wait);
     static QString collectOutput(const QSocBashProcessInfo &info, int exitCode);
 
     QSet<WaitContext *> activeWaits_;

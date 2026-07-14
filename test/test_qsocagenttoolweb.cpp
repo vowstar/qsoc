@@ -5,6 +5,9 @@
 #include "common/qsocconfig.h"
 #include "qsoc_test.h"
 
+#include <QHostAddress>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QtCore>
 #include <QtTest>
 
@@ -503,6 +506,73 @@ private slots:
         /* Should not crash when no request is in flight */
         searchTool.abort();
         fetchTool.abort();
+    }
+
+    void testScopedAbortStopsOnlyMatchingFetch()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+
+        QSocToolRegistry registry;
+        QSocToolWebFetch tool(&registry);
+        QObject          ownerA;
+        QObject          ownerB;
+        registry.registerTool(&tool);
+
+        bool    innerStarted = false;
+        bool    timedOut     = false;
+        QString innerOutput;
+        connect(&server, &QTcpServer::newConnection, &server, [&]() {
+            while (QTcpSocket *socket = server.nextPendingConnection()) {
+                socket->setParent(&server);
+                connect(socket, &QTcpSocket::readyRead, socket, [&, socket]() {
+                    QByteArray request = socket->property("request").toByteArray();
+                    request += socket->readAll();
+                    socket->setProperty("request", request);
+                    if (!request.contains("\r\n\r\n") || socket->property("handled").toBool()) {
+                        return;
+                    }
+                    socket->setProperty("handled", true);
+                    if (request.contains("GET /outer ") && !innerStarted) {
+                        innerStarted = true;
+                        QTimer::singleShot(0, &server, [&]() {
+                            innerOutput = registry.executeTool(
+                                QStringLiteral("web_fetch"),
+                                {{"url",
+                                  QStringLiteral("http://127.0.0.1:%1/inner")
+                                      .arg(server.serverPort())
+                                      .toStdString()}},
+                                &ownerB);
+                        });
+                        return;
+                    }
+                    if (!request.contains("GET /inner ")) {
+                        return;
+                    }
+                    registry.abortCalls(&ownerA);
+                    const QByteArray body = "inner-ok";
+                    socket->write(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: "
+                        + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                    socket->disconnectFromHost();
+                });
+            }
+        });
+        QTimer::singleShot(2000, &server, [&]() {
+            timedOut = true;
+            registry.abortAll();
+        });
+
+        const QString outerOutput = registry.executeTool(
+            QStringLiteral("web_fetch"),
+            {{"url",
+              QStringLiteral("http://127.0.0.1:%1/outer").arg(server.serverPort()).toStdString()}},
+            &ownerA);
+
+        QVERIFY(!timedOut);
+        QVERIFY(innerStarted);
+        QCOMPARE(outerOutput, QStringLiteral("Error: request aborted"));
+        QCOMPARE(innerOutput, QStringLiteral("inner-ok"));
     }
 
     void testWebSearchEmptyQuery()

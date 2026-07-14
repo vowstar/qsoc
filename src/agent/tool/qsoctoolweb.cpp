@@ -25,6 +25,27 @@ static constexpr int kFetchTimeout  = 30000;
 static constexpr int kMaxBytes      = 1048576;
 static constexpr int kMaxTextSize   = 100000;
 
+static void bindNetworkCancellation(
+    QSocToolCallContext *call, QNetworkReply *reply, QEventLoop *loop, bool *cancelled)
+{
+    if (call == nullptr) {
+        return;
+    }
+    const auto cancelRequest = [reply, loop, cancelled]() {
+        *cancelled = true;
+        if (reply->isRunning()) {
+            reply->abort();
+        }
+        if (loop->isRunning()) {
+            loop->quit();
+        }
+    };
+    QObject::connect(call, &QSocToolCallContext::cancellationRequested, loop, cancelRequest);
+    if (call->isCancellationRequested()) {
+        cancelRequest();
+    }
+}
+
 /* ========== QSocToolWebSearch ========== */
 
 QSocToolWebSearch::QSocToolWebSearch(QObject *parent, QSocConfig *config)
@@ -65,6 +86,8 @@ void QSocToolWebSearch::setupProxy()
 
 QString QSocToolWebSearch::execute(const json &arguments)
 {
+    QPointer<QSocToolCallContext> call(currentCallContext());
+
     if (!arguments.contains("query") || !arguments["query"].is_string()) {
         return "Error: query is required";
     }
@@ -120,11 +143,13 @@ QString QSocToolWebSearch::execute(const json &arguments)
     inFlightReplies_.insert(reply);
     inFlightLoops_.insert(&loop);
 
-    bool finished = false;
+    bool finished  = false;
+    bool cancelled = false;
     QObject::connect(reply, &QNetworkReply::finished, &loop, [&finished, &loop]() {
         finished = true;
         loop.quit();
     });
+    bindNetworkCancellation(call.data(), reply, &loop, &cancelled);
 
     /* Wall-clock cap via QLongTaskMonitor: stall is meaningless for a
      * search response (no per-byte progress events to feed), so only
@@ -142,10 +167,17 @@ QString QSocToolWebSearch::execute(const json &arguments)
     });
     monitor.start();
 
-    loop.exec();
+    if (!cancelled) {
+        loop.exec();
+    }
     monitor.finish();
     inFlightLoops_.remove(&loop);
     inFlightReplies_.remove(reply);
+
+    if (cancelled) {
+        reply->deleteLater();
+        return QStringLiteral("Error: request aborted");
+    }
 
     if (!finished) {
         reply->abort();
@@ -813,6 +845,8 @@ QString QSocToolWebFetch::htmlToMarkdown(const QString &html)
 
 QString QSocToolWebFetch::execute(const json &arguments)
 {
+    QPointer<QSocToolCallContext> call(currentCallContext());
+
     if (!arguments.contains("url") || !arguments["url"].is_string()) {
         return "Error: url is required";
     }
@@ -882,16 +916,25 @@ QString QSocToolWebFetch::execute(const json &arguments)
     inFlightReplies_.insert(reply);
     inFlightLoops_.insert(&loop);
 
-    bool finished = false;
+    bool finished  = false;
+    bool cancelled = false;
     QObject::connect(reply, &QNetworkReply::finished, &loop, [&finished, &loop]() {
         finished = true;
         loop.quit();
     });
+    bindNetworkCancellation(call.data(), reply, &loop, &cancelled);
 
-    loop.exec();
+    if (!cancelled) {
+        loop.exec();
+    }
     monitor.finish();
     inFlightLoops_.remove(&loop);
     inFlightReplies_.remove(reply);
+
+    if (cancelled) {
+        reply->deleteLater();
+        return QStringLiteral("Error: request aborted");
+    }
 
     if (stalled) {
         reply->deleteLater();

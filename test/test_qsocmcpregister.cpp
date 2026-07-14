@@ -913,6 +913,54 @@ private slots:
         QCOMPARE(responseSpy.size(), 0);
     }
 
+    void scopedAbortStopsOnlyMatchingNestedCall()
+    {
+        auto         *transport = new FakeTransport;
+        QSocMcpClient client(makeConfig("svr"), transport);
+        QVERIFY(driveClientToReady(&client, transport));
+
+        McpToolDescriptor desc;
+        desc.serverName  = "svr";
+        desc.toolName    = "wait";
+        desc.inputSchema = {{"type", "object"}};
+
+        QSocToolRegistry registry;
+        QSocMcpTool      tool(&client, desc);
+        QObject          ownerA;
+        QObject          ownerB;
+        registry.registerTool(&tool);
+
+        bool    timedOut = false;
+        QString innerOutput;
+        QTimer::singleShot(0, &tool, [&]() {
+            QTimer::singleShot(0, &tool, [&]() {
+                registry.abortCalls(&ownerA);
+                const QList<int> ids = transport->requestIdsForMethod(QStringLiteral("tools/call"));
+                if (ids.size() == 2) {
+                    replyToolSuccess(transport, ids.last(), QStringLiteral("inner-ok"));
+                }
+            });
+            innerOutput
+                = registry.executeTool(tool.getName(), nlohmann::json{{"depth", "inner"}}, &ownerB);
+        });
+        QTimer::singleShot(1000, &tool, [&]() {
+            timedOut = true;
+            registry.abortAll();
+        });
+
+        const QString outerOutput
+            = registry.executeTool(tool.getName(), nlohmann::json{{"depth", "outer"}}, &ownerA);
+
+        QVERIFY(!timedOut);
+        QCOMPARE(outerOutput, abortedToolResult());
+        QCOMPARE(innerOutput, QStringLiteral("inner-ok"));
+
+        const QList<int> requestIds = transport->requestIdsForMethod(QStringLiteral("tools/call"));
+        QCOMPARE(requestIds.size(), 2);
+        QCOMPARE(transport->cancelledRequestIds(), QList<int>{requestIds.first()});
+        QCOMPARE(transport->abandonedRequestIds(), QList<int>{requestIds.first()});
+    }
+
     void abortWithDisabledTimeoutDisownsRequest()
     {
         McpServerConfig config  = makeConfig("svr");

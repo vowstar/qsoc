@@ -586,6 +586,8 @@ QString QSocToolShellBash::readLastLines(const QString &path, int count)
 
 QString QSocToolShellBash::execute(const json &arguments)
 {
+    QPointer<QSocToolCallContext> callContext(currentCallContext());
+
     if (!arguments.contains("command") || !arguments["command"].is_string()) {
         return "Error: command is required";
     }
@@ -729,8 +731,19 @@ QString QSocToolShellBash::execute(const json &arguments)
 
     QTimer::singleShot(timeout, &loop, [&loop]() { loop.quit(); });
 
+    const auto cancelWait = [&wait]() { cancelForegroundWait(&wait); };
+    if (!callContext.isNull()) {
+        QObject::connect(
+            callContext.data(), &QSocToolCallContext::cancellationRequested, &loop, cancelWait);
+        if (callContext->isCancellationRequested()) {
+            cancelWait();
+        }
+    }
+
     foregroundWaits_.insert(&wait);
-    loop.exec();
+    if (!wait.aborted) {
+        loop.exec();
+    }
     const bool aborted = wait.aborted;
     if (!owner.isNull()) {
         owner->foregroundWaits_.remove(&wait);
@@ -833,14 +846,19 @@ QString QSocToolShellBash::execute(const json &arguments)
 void QSocToolShellBash::abort()
 {
     for (ForegroundWaitContext *wait : std::as_const(foregroundWaits_)) {
-        wait->aborted = true;
-        if (!wait->process.isNull() && wait->process->state() != QProcess::NotRunning) {
-            wait->stopRequested = true;
-            killProcessTree(wait->process, wait->processGroupId);
-        }
-        if (wait->loop != nullptr && wait->loop->isRunning()) {
-            wait->loop->quit();
-        }
+        cancelForegroundWait(wait);
+    }
+}
+
+void QSocToolShellBash::cancelForegroundWait(ForegroundWaitContext *wait)
+{
+    wait->aborted = true;
+    if (!wait->process.isNull() && wait->process->state() != QProcess::NotRunning) {
+        wait->stopRequested = true;
+        killProcessTree(wait->process, wait->processGroupId);
+    }
+    if (wait->loop != nullptr && wait->loop->isRunning()) {
+        wait->loop->quit();
     }
 }
 
@@ -876,7 +894,14 @@ QSocToolBashManage::~QSocToolBashManage()
 void QSocToolBashManage::abort()
 {
     for (WaitContext *wait : std::as_const(activeWaits_)) {
-        wait->aborted = true;
+        cancelWait(wait);
+    }
+}
+
+void QSocToolBashManage::cancelWait(WaitContext *wait)
+{
+    wait->aborted = true;
+    if (wait->loop->isRunning()) {
         wait->loop->quit();
     }
 }
@@ -949,6 +974,20 @@ QString QSocToolBashManage::collectOutput(const QSocBashProcessInfo &info, int e
 
 QString QSocToolBashManage::execute(const json &arguments)
 {
+    QPointer<QSocToolCallContext> callContext(currentCallContext());
+    const auto                    bindCancellation = [callContext](WaitContext *wait) {
+        if (callContext.isNull()) {
+            return;
+        }
+        QObject::connect(
+            callContext.data(), &QSocToolCallContext::cancellationRequested, wait->loop, [wait]() {
+                cancelWait(wait);
+            });
+        if (callContext->isCancellationRequested()) {
+            cancelWait(wait);
+        }
+    };
+
     if (!arguments.contains("process_id") || !arguments["process_id"].is_number_integer()) {
         return "Error: process_id is required";
     }
@@ -1073,8 +1112,12 @@ QString QSocToolBashManage::execute(const json &arguments)
         treePoll.start();
         QTimer::singleShot(waitTimeout, &loop, [&loop]() { loop.quit(); });
 
+        bindCancellation(&wait);
+
         activeWaits_.insert(&wait);
-        loop.exec();
+        if (!wait.aborted) {
+            loop.exec();
+        }
         if (!guard.isNull()) {
             guard->activeWaits_.remove(&wait);
         }
@@ -1205,8 +1248,12 @@ QString QSocToolBashManage::execute(const json &arguments)
         treePoll.start();
         QTimer::singleShot(kTerminateGraceMs, &loop, [&loop]() { loop.quit(); });
 
+        bindCancellation(&wait);
+
         activeWaits_.insert(&wait);
-        loop.exec();
+        if (!wait.aborted) {
+            loop.exec();
+        }
         if (!guard.isNull()) {
             guard->activeWaits_.remove(&wait);
         }
