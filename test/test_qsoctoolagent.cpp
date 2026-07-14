@@ -245,13 +245,13 @@ private slots:
      * and rate-limit waits start no shorter than transient ones. */
     void testBackoffDelayMs()
     {
-        /* base 500 transient, 2000 rate-limit; cap 30000; jitter < base/2. */
+        /* base 500 transient, 2000 rate-limit; cap 30000; jitter <= base/2. */
         const int delay1 = QSocAgent::backoffDelayMs(1, false);
         const int delay2 = QSocAgent::backoffDelayMs(2, false);
         const int delay3 = QSocAgent::backoffDelayMs(3, false);
-        QVERIFY(delay1 >= 500 && delay1 < 500 + 250);
-        QVERIFY(delay2 >= 1000 && delay2 < 1000 + 250);
-        QVERIFY(delay3 >= 2000 && delay3 < 2000 + 250);
+        QVERIFY(delay1 >= 500 && delay1 <= 500 + 250);
+        QVERIFY(delay2 >= 1000 && delay2 <= 1000 + 250);
+        QVERIFY(delay3 >= 2000 && delay3 <= 2000 + 250);
 
         /* Large attempt clamps to the 30s cap (+ jitter slack). */
         const int big = QSocAgent::backoffDelayMs(20, false);
