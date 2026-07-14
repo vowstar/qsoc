@@ -22,9 +22,10 @@ struct MockResponse
 {
     QByteArray contentType;
     QByteArray body;
-    int        eofDelayMs = 0;
-    bool       holdOpen   = false;
-    qsizetype  splitAt    = 0;
+    int        eofDelayMs        = 0;
+    bool       holdOpen          = false;
+    qsizetype  splitAt           = 0;
+    bool       truncateTransport = false;
 };
 
 class MockHttpServer : public QObject
@@ -126,6 +127,8 @@ private:
         eofSent_.append(false);
         if (response.splitAt > 0) {
             sendSplit(socket, response, responseIndex);
+        } else if (response.truncateTransport) {
+            sendTruncatedChunked(socket, response, responseIndex);
         } else if (response.holdOpen) {
             sendHeldOpen(socket, response, responseIndex);
         } else if (response.eofDelayMs > 0) {
@@ -171,6 +174,21 @@ private:
         emit responseSent(responseIndex);
     }
 
+    void sendTruncatedChunked(QTcpSocket *socket, const MockResponse &response, int responseIndex)
+    {
+        QByteArray header = QByteArrayLiteral(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
+        const QByteArray chunk = QByteArray::number(response.body.size(), 16)
+                                 + QByteArrayLiteral("\r\n") + response.body
+                                 + QByteArrayLiteral("\r\n");
+        socket->write(header + chunk);
+        socket->flush();
+        eofSent_[responseIndex] = true;
+        socket->disconnectFromHost();
+        emit responseSent(responseIndex);
+    }
+
     void sendHeldOpen(QTcpSocket *socket, const MockResponse &response, int responseIndex)
     {
         QByteArray header = QByteArrayLiteral(
@@ -190,7 +208,7 @@ private:
         QByteArray      header  = QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: ");
         header += response.contentType;
         header += QByteArrayLiteral("\r\nContent-Length: ");
-        header += QByteArray::number(response.body.size());
+        header += QByteArray::number(response.body.size() + (response.truncateTransport ? 1 : 0));
         header += QByteArrayLiteral("\r\nConnection: close\r\n\r\n");
         socket->write(header + response.body.left(splitAt));
         socket->flush();
@@ -718,6 +736,69 @@ private slots:
         QVERIFY(events.completed.isEmpty());
     }
 
+    void testTerminalCanDeleteServiceDirectly_data()
+    {
+        QTest::addColumn<bool>("fail");
+        QTest::newRow("complete") << false;
+        QTest::newRow("provider-error") << true;
+    }
+
+    void testTerminalCanDeleteServiceDirectly()
+    {
+        QFETCH(bool, fail);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        if (fail) {
+            server.enqueue(
+                {QByteArrayLiteral("text/event-stream"), dataLine({{"error", "provider failed"}})});
+        } else {
+            server.enqueue(contentOnlyDoneResponse(QStringLiteral("complete")));
+        }
+
+        QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
+        service->addEndpoint(endpointFor(server));
+
+        int     completionCount = 0;
+        int     errorCount      = 0;
+        QString content;
+        QString error;
+        connect(
+            service.data(),
+            &QLLMService::streamComplete,
+            this,
+            [&](const json &response) {
+                completionCount++;
+                content = completionContent(response);
+                delete service.data();
+            },
+            Qt::DirectConnection);
+        connect(
+            service.data(),
+            &QLLMService::streamError,
+            this,
+            [&](const QString &message) {
+                errorCount++;
+                error = message;
+                delete service.data();
+            },
+            Qt::DirectConnection);
+
+        service->sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return service.isNull(); }), "terminal slot did not delete service");
+
+        if (fail) {
+            QCOMPARE(error, QStringLiteral("provider failed"));
+            QCOMPARE(errorCount, 1);
+            QCOMPARE(completionCount, 0);
+        } else {
+            QCOMPARE(content, QStringLiteral("complete"));
+            QCOMPARE(completionCount, 1);
+            QCOMPARE(errorCount, 0);
+        }
+    }
+
     void testReplyDeletionFailsOnceAndAllowsRestart()
     {
         MockHttpServer server;
@@ -973,6 +1054,88 @@ private slots:
         QCOMPARE(events.errors.size(), 1);
         QVERIFY(events.errors.first().startsWith(QStringLiteral("[HTTP 0] ")));
         QVERIFY(events.completed.isEmpty());
+    }
+
+    void testBufferedChunkPrecedesTransportError_data()
+    {
+        QTest::addColumn<bool>("split");
+        QTest::newRow("single-read") << false;
+        QTest::newRow("split-read") << true;
+    }
+
+    void testBufferedChunkPrecedesTransportError()
+    {
+        QFETCH(bool, split);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        const json   chunk = {{"choices", json::array({{{"delta", {{"content", "received"}}}}})}};
+        MockResponse response      = {QByteArrayLiteral("text/event-stream"), dataLine(chunk)};
+        response.truncateTransport = true;
+        if (split) {
+            const qsizetype contentStart = response.body.indexOf("received");
+            QVERIFY(contentStart >= 0);
+            response.splitAt = contentStart + 3;
+        }
+        server.enqueue(response);
+
+        StreamEvents events;
+        QLLMService  service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+        recordStreamEvents(&service, &events);
+
+        QObject                 callbacks;
+        QPointer<QNetworkReply> splitReply;
+        bool                    firstSegmentConsumed = !split;
+        bool                    remainderReleased    = !split;
+        connect(
+            &server,
+            &MockHttpServer::responseSent,
+            &callbacks,
+            [&](int responseIndex) {
+                if (!split || responseIndex != 0 || !splitReply.isNull()) {
+                    return;
+                }
+                splitReply = runningReply(&service);
+                if (splitReply.isNull()) {
+                    return;
+                }
+                connect(
+                    splitReply.data(),
+                    &QNetworkReply::readyRead,
+                    &callbacks,
+                    [&]() {
+                        if (remainderReleased) {
+                            return;
+                        }
+                        firstSegmentConsumed = splitReply->bytesAvailable() == 0;
+                        remainderReleased    = server.releaseSplit();
+                    },
+                    Qt::DirectConnection);
+            },
+            Qt::DirectConnection);
+
+        QStringList order;
+        connect(&service, &QLLMService::streamChunk, this, [&](const QString &) {
+            order.append(QStringLiteral("content"));
+        });
+        connect(&service, &QLLMService::streamError, this, [&](const QString &) {
+            order.append(QStringLiteral("error"));
+        });
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(
+            waitUntil([&]() { return !events.errors.isEmpty() || !events.completed.isEmpty(); }),
+            "truncated stream produced no terminal signal");
+        QVERIFY2(waitForNoReplies(&service), "truncated stream reply was not deleted");
+
+        QCOMPARE(events.content, QStringList({QStringLiteral("received")}));
+        QCOMPARE(order, QStringList({QStringLiteral("content"), QStringLiteral("error")}));
+        QCOMPARE(events.errors.size(), 1);
+        QVERIFY(events.completed.isEmpty());
+        QVERIFY(firstSegmentConsumed);
+        QVERIFY(remainderReleased);
     }
 
     void testSplitUtf8AndCompactDataFieldComplete()
@@ -1951,6 +2114,140 @@ private slots:
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
         QVERIFY2(
             !capture.text().contains(QStringLiteral("device not open")), qPrintable(capture.text()));
+    }
+
+    void testCompletionNestedLoopIsSafe()
+    {
+        QSocTestCapture capture;
+        MockHttpServer  server;
+        QVERIFY(server.listen());
+        server.enqueue(contentOnlyDoneResponse(QStringLiteral("complete")));
+
+        {
+            QLLMService service(nullptr, nullptr);
+            service.addEndpoint(endpointFor(server));
+
+            int     completionCount = 0;
+            int     errorCount      = 0;
+            QString content;
+            connect(
+                &service,
+                &QLLMService::streamComplete,
+                this,
+                [&](const json &response) {
+                    completionCount++;
+                    content = completionContent(response);
+                    QEventLoop loop;
+                    QTimer::singleShot(100, &loop, &QEventLoop::quit);
+                    loop.exec();
+                },
+                Qt::DirectConnection);
+            connect(&service, &QLLMService::streamError, this, [&](const QString &) {
+                errorCount++;
+            });
+
+            service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+            QVERIFY2(waitUntil([&]() { return completionCount == 1; }), "stream did not complete");
+            QCOMPARE(content, QStringLiteral("complete"));
+            QCOMPARE(errorCount, 0);
+            QVERIFY2(waitForNoReplies(&service), "retired network reply was not deleted");
+        }
+
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QVERIFY2(
+            !capture.text().contains(QStringLiteral("device not open")), qPrintable(capture.text()));
+    }
+
+    void testAbortNestedLoopIsSafe()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        server.enqueue(deltaResponse({{"content", "pending"}}, false, true, true));
+
+        QLLMService service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(server));
+
+        int completionCount = 0;
+        int errorCount      = 0;
+        connect(&service, &QLLMService::streamComplete, this, [&](const json &) {
+            completionCount++;
+        });
+        connect(
+            &service,
+            &QLLMService::streamError,
+            this,
+            [&](const QString &error) {
+                QCOMPARE(error, QStringLiteral("Aborted by user"));
+                errorCount++;
+                QEventLoop loop;
+                QTimer::singleShot(20, &loop, &QEventLoop::quit);
+                loop.exec();
+            },
+            Qt::DirectConnection);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(waitUntil([&]() { return runningReply(&service) != nullptr; }), "no active reply");
+        service.abortStream();
+
+        QCOMPARE(errorCount, 1);
+        QCOMPARE(completionCount, 0);
+        QVERIFY2(waitForNoReplies(&service), "aborted network reply was not deleted");
+    }
+
+    void testFailureNestedLoopIsSafe_data()
+    {
+        QTest::addColumn<bool>("timeout");
+        QTest::addColumn<QString>("expectedError");
+        QTest::newRow("provider") << false << QStringLiteral("provider failed");
+        QTest::newRow("timeout") << true << QStringLiteral("Request timeout");
+    }
+
+    void testFailureNestedLoopIsSafe()
+    {
+        QFETCH(bool, timeout);
+        QFETCH(QString, expectedError);
+
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        if (timeout) {
+            server.enqueue(deltaResponse({{"content", "pending"}}, false, true, true));
+        } else {
+            server.enqueue(
+                {QByteArrayLiteral("text/event-stream"),
+                 dataLine({{"error", expectedError.toStdString()}})});
+        }
+
+        QLLMService service(nullptr, nullptr);
+        LLMEndpoint endpoint = endpointFor(server);
+        endpoint.timeout     = timeout ? 20 : 3000;
+        service.addEndpoint(endpoint);
+
+        int     completionCount = 0;
+        int     errorCount      = 0;
+        QString actualError;
+        connect(&service, &QLLMService::streamComplete, this, [&](const json &) {
+            completionCount++;
+        });
+        connect(
+            &service,
+            &QLLMService::streamError,
+            this,
+            [&](const QString &error) {
+                errorCount++;
+                actualError = error;
+                QEventLoop loop;
+                QTimer::singleShot(20, &loop, &QEventLoop::quit);
+                loop.exec();
+            },
+            Qt::DirectConnection);
+
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY2(waitUntil([&]() { return errorCount == 1; }), "stream did not fail");
+
+        QCOMPARE(actualError, expectedError);
+        QCOMPARE(errorCount, 1);
+        QCOMPARE(completionCount, 0);
+        QVERIFY2(waitForNoReplies(&service), "failed network reply was not deleted");
     }
 
     void testEofCompletionCanStartNextStreamDirectly()

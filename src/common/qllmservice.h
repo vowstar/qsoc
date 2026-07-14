@@ -436,6 +436,8 @@ private:
 
     bool        claimTerminal(const StreamStatePtr &state, StreamOutcome outcome);
     static bool isStreamActive(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
+    static void scheduleStreamConsumption(
+        const QPointer<QLLMService> &owner, const StreamStatePtr &state);
     static void consumeStream(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
     static void failStream(
         const QPointer<QLLMService> &owner, const StreamStatePtr &state, const QString &error);

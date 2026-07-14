@@ -24,13 +24,14 @@ struct QLLMService::StreamState
     QString                 reasoning;
     QString                 finishReason;
     QString                 terminalError;
-    quint64                 generation      = 0;
-    bool                    reasoningMode   = false;
-    bool                    processing      = false;
-    bool                    replyFinished   = false;
-    bool                    transportFailed = false;
-    json                    usage           = json::object();
-    StreamOutcome           outcome         = StreamOutcome::Active;
+    quint64                 generation       = 0;
+    bool                    reasoningMode    = false;
+    bool                    consumeScheduled = false;
+    bool                    processing       = false;
+    bool                    replyFinished    = false;
+    bool                    transportFailed  = false;
+    json                    usage            = json::object();
+    StreamOutcome           outcome          = StreamOutcome::Active;
 };
 
 namespace {
@@ -1061,7 +1062,7 @@ void QLLMService::sendChatCompletionStream(
             return;
         }
         active->buffer += reply->readAll();
-        consumeStream(owner, active);
+        scheduleStreamConsumption(owner, active);
     });
 
     /* Handle completion */
@@ -1088,17 +1089,10 @@ void QLLMService::sendChatCompletionStream(
              * TLS, connection-refused, abort, etc). */
             const int httpStatus
                 = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            QString    errorMsg  = QString("[HTTP %1] ").arg(httpStatus) + reply->errorString();
-            QByteArray errorBody = reply->readAll();
-            if (!errorBody.isEmpty()) {
-                errorMsg += "\n" + QString::fromUtf8(errorBody);
-            }
-            if (!active->buffer.isEmpty()) {
-                errorMsg += "\n" + QString::fromUtf8(active->buffer);
-            }
-            active->terminalError   = errorMsg;
+            active->terminalError = QString("[HTTP %1] ").arg(httpStatus) + reply->errorString();
+            active->buffer += reply->readAll();
             active->transportFailed = true;
-            consumeStream(owner, active);
+            scheduleStreamConsumption(owner, active);
             return;
         }
 
@@ -1106,7 +1100,7 @@ void QLLMService::sendChatCompletionStream(
         if (!active->buffer.isEmpty() && !active->buffer.endsWith('\n')) {
             active->buffer += '\n';
         }
-        consumeStream(owner, active);
+        scheduleStreamConsumption(owner, active);
     });
 
     connect(reply, &QObject::destroyed, this, [this, state]() {
@@ -1143,6 +1137,19 @@ bool QLLMService::isStreamActive(const QPointer<QLLMService> &owner, const Strea
            && state->outcome == StreamOutcome::Active && !state->reply.isNull();
 }
 
+void QLLMService::scheduleStreamConsumption(
+    const QPointer<QLLMService> &owner, const StreamStatePtr &state)
+{
+    if (!isStreamActive(owner, state) || state->consumeScheduled) {
+        return;
+    }
+    state->consumeScheduled = true;
+    QTimer::singleShot(0, [owner, state]() {
+        state->consumeScheduled = false;
+        consumeStream(owner, state);
+    });
+}
+
 void QLLMService::consumeStream(const QPointer<QLLMService> &owner, const StreamStatePtr &state)
 {
     if (!isStreamActive(owner, state) || state->processing) {
@@ -1155,6 +1162,10 @@ void QLLMService::consumeStream(const QPointer<QLLMService> &owner, const Stream
 
     if (!isStreamActive(owner, state)) {
         return;
+    }
+    if (result == ParseResult::TransportError && !state->buffer.isEmpty()) {
+        state->terminalError += "\n" + QString::fromUtf8(state->buffer);
+        state->buffer.clear();
     }
     if (result == ParseResult::ProviderError || result == ParseResult::TransportError) {
         failStream(owner, state, state->terminalError);
@@ -1278,18 +1289,18 @@ QLLMService::ParseResult QLLMService::processStreamBuffer(
         if (!isStreamActive(owner, state)) {
             return ParseResult::Stopped;
         }
-        if (state->transportFailed) {
-            return ParseResult::TransportError;
-        }
-
         const qsizetype lineEnd = state->buffer.indexOf('\n');
         if (lineEnd == -1) {
-            return ParseResult::NeedMore;
+            return state->transportFailed ? ParseResult::TransportError : ParseResult::NeedMore;
         }
 
-        const QByteArray line = state->buffer.left(lineEnd).trimmed();
-        state->buffer         = state->buffer.mid(lineEnd + 1);
+        const QByteArray rawLine = state->buffer.left(lineEnd);
+        const QByteArray line    = rawLine.trimmed();
+        state->buffer            = state->buffer.mid(lineEnd + 1);
         if (!line.startsWith("data:")) {
+            if (state->transportFailed && !line.isEmpty()) {
+                state->terminalError += "\n" + QString::fromUtf8(rawLine);
+            }
             continue;
         }
 
@@ -1314,10 +1325,6 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
     if (!isStreamActive(owner, state)) {
         return ParseResult::Stopped;
     }
-    if (state->transportFailed) {
-        return ParseResult::TransportError;
-    }
-
     /* Check for stream end */
     if (line == QByteArrayLiteral("[DONE]")) {
         return ParseResult::Done;
@@ -1367,9 +1374,6 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
         if (!isStreamActive(owner, state)) {
             return ParseResult::Stopped;
         }
-        if (state->transportFailed) {
-            return ParseResult::TransportError;
-        }
     }
 
     /* Direct API format: delta.reasoning_content (DeepSeek R1) */
@@ -1379,9 +1383,6 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
         emit owner->streamReasoningChunk(reasoning);
         if (!isStreamActive(owner, state)) {
             return ParseResult::Stopped;
-        }
-        if (state->transportFailed) {
-            return ParseResult::TransportError;
         }
     }
 
@@ -1394,9 +1395,6 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
                 emit owner->streamReasoningChunk(reasoning);
                 if (!isStreamActive(owner, state)) {
                     return ParseResult::Stopped;
-                }
-                if (state->transportFailed) {
-                    return ParseResult::TransportError;
                 }
             }
         }
@@ -1455,9 +1453,6 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
             emit owner->streamToolCall(toolId, funcName, funcArgs);
             if (!isStreamActive(owner, state)) {
                 return ParseResult::Stopped;
-            }
-            if (state->transportFailed) {
-                return ParseResult::TransportError;
             }
         }
     }
