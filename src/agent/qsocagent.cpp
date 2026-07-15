@@ -73,6 +73,7 @@ QSocAgent::QSocAgent(
     , agentConfig(std::move(config))
     , messages(json::array())
     , heartbeatTimer(new QTimer(this))
+    , retryTimer(new QTimer(this))
 {
     /* UI keepalive: every 5 s while streaming, emit heartbeat +
      * token usage so the status line can tick. Stall detection lives
@@ -84,6 +85,20 @@ QSocAgent::QSocAgent(
             emit heartbeat(streamIteration, elapsed);
             emit tokenUsage(totalInputTokens.load(), totalOutputTokens.load());
         }
+    });
+
+    retryTimer->setSingleShot(true);
+    connect(retryTimer, &QTimer::timeout, this, [this]() {
+        const quint64 epoch = retryEpoch_;
+        retryEpoch_         = 0;
+        if (!isStreaming || streamEpoch_ != epoch) {
+            return;
+        }
+        if (abortRequested) {
+            handleStreamError(QStringLiteral("Aborted by user"));
+            return;
+        }
+        processStreamIteration();
     });
 }
 
@@ -293,6 +308,8 @@ void QSocAgent::runStream(const QString &userQuery)
     addMessage("user", prompt);
 
     /* Setup streaming */
+    retryTimer->stop();
+    retryEpoch_ = 0;
     isStreaming = true;
     ++streamEpoch_; /* invalidate any deferred retry from a prior run */
     streamIteration           = 0;
@@ -431,20 +448,41 @@ int QSocAgent::backoffDelayMs(int attempt, bool rateLimit)
 
 void QSocAgent::handleStreamError(const QString &error)
 {
-    /* Check if this error was caused by user abort */
-    if (abortRequested) {
-        if (hasPendingRequests()) {
+    const QPointer<QSocAgent> owner(this);
+    const quint64             epoch     = streamEpoch_;
+    const auto                isCurrent = [owner, epoch]() {
+        return !owner.isNull() && owner->isStreaming && owner->streamEpoch_ == epoch;
+    };
+    const auto finishAbort = [owner, epoch, isCurrent]() {
+        if (!isCurrent()) {
+            return true;
+        }
+        if (!owner->abortRequested) {
+            return false;
+        }
+        owner->retryTimer->stop();
+        owner->retryEpoch_ = 0;
+        if (owner->hasPendingRequests()) {
             /* ESC with input queued: drop this iteration's reply and
              * continue the run with the queued message. */
-            abortRequested = false;
-            processStreamIteration();
-            return;
+            owner->abortRequested = false;
+            owner->processStreamIteration();
+            return true;
         }
-        isStreaming = false;
-        heartbeatTimer->stop();
-        teardownStreamMonitor(QStringLiteral("user abort"));
-        abortRequested = false;
-        emit runAborted(streamFinalContent);
+        const QString finalContent = owner->streamFinalContent;
+        owner->isStreaming         = false;
+        owner->heartbeatTimer->stop();
+        owner->abortRequested = false;
+        owner->teardownStreamMonitor(QStringLiteral("user abort"));
+        if (owner.isNull() || owner->streamEpoch_ != epoch) {
+            return true;
+        }
+        emit owner->runAborted(finalContent);
+        return true;
+    };
+
+    /* Check if this error was caused by user abort */
+    if (finishAbort()) {
         return;
     }
 
@@ -466,17 +504,29 @@ void QSocAgent::handleStreamError(const QString &error)
     const bool isHttp400         = error.startsWith("[HTTP 400]");
     const bool isContextOverflow = isHttp413 || (isHttp400 && hasContextPhrase)
                                    || (hasContextPhrase && !error.startsWith("[HTTP "));
-    if (isContextOverflow && contextOverflowRetryCount < maxCompactRetries) {
-        contextOverflowRetryCount++;
-        if (agentConfig.verbose) {
+    if (isContextOverflow && owner->contextOverflowRetryCount < maxCompactRetries) {
+        owner->contextOverflowRetryCount++;
+        if (owner->agentConfig.verbose) {
             emit verboseOutput(QString("[Context overflow %1/%2 — forcing compact and retrying]")
-                                   .arg(contextOverflowRetryCount)
+                                   .arg(owner->contextOverflowRetryCount)
                                    .arg(maxCompactRetries));
+            if (finishAbort()) {
+                return;
+            }
         }
-        emit compacting(2, estimateMessagesTokens(), 0);
-        compact();
-        emit compacting(2, 0, estimateMessagesTokens());
-        processStreamIteration();
+        emit owner->compacting(2, owner->estimateMessagesTokens(), 0);
+        if (finishAbort()) {
+            return;
+        }
+        owner->compact();
+        if (finishAbort()) {
+            return;
+        }
+        emit owner->compacting(2, 0, owner->estimateMessagesTokens());
+        if (finishAbort()) {
+            return;
+        }
+        owner->processStreamIteration();
         return;
     }
 
@@ -487,69 +537,51 @@ void QSocAgent::handleStreamError(const QString &error)
      * unbounded. */
     const RetryKind kind = classifyRetry(error);
 
-    if (kind != RetryKind::None && currentRetryCount < agentConfig.maxRetries) {
-        currentRetryCount++;
+    if (kind != RetryKind::None && owner->currentRetryCount < owner->agentConfig.maxRetries) {
+        owner->currentRetryCount++;
         const bool rateLimited = (kind == RetryKind::RateLimited);
-        const int  delayMs     = backoffDelayMs(currentRetryCount, rateLimited);
+        const int  delayMs     = backoffDelayMs(owner->currentRetryCount, rateLimited);
 
         /* Always emit retrying signal for UI feedback */
-        emit retrying(currentRetryCount, agentConfig.maxRetries, error);
+        emit owner->retrying(owner->currentRetryCount, owner->agentConfig.maxRetries, error);
+        if (finishAbort()) {
+            return;
+        }
 
-        if (agentConfig.verbose) {
+        if (owner->agentConfig.verbose) {
             emit verboseOutput(QString("[Retry %1/%2 in %3ms: %4]")
-                                   .arg(currentRetryCount)
-                                   .arg(agentConfig.maxRetries)
+                                   .arg(owner->currentRetryCount)
+                                   .arg(owner->agentConfig.maxRetries)
                                    .arg(delayMs)
                                    .arg(error));
+            if (finishAbort()) {
+                return;
+            }
         }
 
         /* Tear down the failed iteration's watchdog now so its stall /
          * wall-clock timers do not fire a spurious "stuck" during the
          * backoff wait; processStreamIteration() arms a fresh one. */
-        teardownStreamMonitor(QString());
+        owner->teardownStreamMonitor(QString());
+        if (!isCurrent()) {
+            return;
+        }
 
-        /* Defer the retry on the event loop: never sleep the single Qt
-         * thread (it would freeze the UI, heartbeat, abort, and every
-         * sibling sub-agent). The run may be aborted during the wait. If
-         * so, finalize it as aborted here, because no network callback
-         * is in flight to do it: otherwise the run would hang in
-         * isStreaming forever (a background sub-agent would never reach
-         * a terminal state, leak, and never notify its parent). */
-        const quint64 epoch = streamEpoch_;
-        QTimer::singleShot(delayMs, this, [this, epoch]() {
-            /* Drop the retry if the run it belonged to is gone: either
-             * streaming stopped, or it was aborted and a new run started
-             * (epoch bumped) - retrying then would double-drive the new
-             * run's stream loop. */
-            if (!isStreaming || streamEpoch_ != epoch) {
-                return;
-            }
-            if (abortRequested) {
-                if (hasPendingRequests()) {
-                    abortRequested = false;
-                    processStreamIteration();
-                    return;
-                }
-                isStreaming = false;
-                heartbeatTimer->stop();
-                teardownStreamMonitor(QStringLiteral("user abort"));
-                abortRequested = false;
-                emit runAborted(streamFinalContent);
-                return;
-            }
-            processStreamIteration();
-        });
+        owner->retryEpoch_ = epoch;
+        owner->retryTimer->start(delayMs);
         return;
     }
 
     /* No more retries or non-retryable error */
-    isStreaming = false;
-    heartbeatTimer->stop();
-    teardownStreamMonitor(QString());
-    currentRetryCount         = 0;
-    contextOverflowRetryCount = 0;
-    emptyResponseRetryCount   = 0;
-    emit runError(error);
+    owner->retryTimer->stop();
+    owner->retryEpoch_ = 0;
+    owner->isStreaming = false;
+    owner->heartbeatTimer->stop();
+    owner->teardownStreamMonitor(QString());
+    owner->currentRetryCount         = 0;
+    owner->contextOverflowRetryCount = 0;
+    owner->emptyResponseRetryCount   = 0;
+    emit owner->runError(error);
 }
 
 void QSocAgent::computeRecallForTurn(const QString &query)
@@ -1996,25 +2028,41 @@ void QSocAgent::addExternalTokenUsage(qint64 inputTokens, qint64 outputTokens)
 
 void QSocAgent::abort()
 {
-    abortRequested = true;
+    const QPointer<QSocAgent>        owner(this);
+    const quint64                    epoch = streamEpoch_;
+    const QPointer<QLongTaskMonitor> monitor(streamMonitor);
+    const QPointer<QLLMService>      service(llmService);
+    const QPointer<QSocToolRegistry> registry(toolRegistry);
+    const bool                       subAgent = agentConfig.isSubAgent;
+    abortRequested                            = true;
+
+    if (retryTimer->isActive() && retryEpoch_ == streamEpoch_) {
+        retryTimer->start(0);
+    }
 
     /* Latch the watchdog first so its tick handler sees the cancel
      * before the network reply tears down. */
-    if (streamMonitor != nullptr) {
-        streamMonitor->cancel(QStringLiteral("user abort"));
+    if (!monitor.isNull()) {
+        monitor->cancel(QStringLiteral("user abort"));
+    }
+    if (owner.isNull() || owner->streamEpoch_ != epoch) {
+        return;
     }
 
     /* Cascade to LLM stream */
-    if (llmService) {
-        llmService->abortStream();
+    if (!service.isNull()) {
+        service->abortStream();
+    }
+    if (owner.isNull() || owner->streamEpoch_ != epoch) {
+        return;
     }
 
     /* Cascade to running tools */
-    if (toolRegistry) {
-        if (agentConfig.isSubAgent) {
-            toolRegistry->abortCalls(this);
+    if (!registry.isNull()) {
+        if (subAgent) {
+            registry->abortCalls(owner.data());
         } else {
-            toolRegistry->abortAll();
+            registry->abortAll();
         }
     }
 }

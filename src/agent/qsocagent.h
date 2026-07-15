@@ -595,6 +595,7 @@ private:
 
     /* Timing state */
     QTimer       *heartbeatTimer = nullptr;
+    QTimer       *retryTimer     = nullptr;
     QElapsedTimer runElapsedTimer;
 
     /* Per-iteration stall + wall-clock watchdog. Reborn at every
@@ -619,9 +620,10 @@ private:
     std::atomic<qint64> totalOutputTokens{0};
 
     /* Retry tracking */
-    int currentRetryCount         = 0;
-    int contextOverflowRetryCount = 0;
-    int emptyResponseRetryCount   = 0;
+    int     currentRetryCount         = 0;
+    int     contextOverflowRetryCount = 0;
+    int     emptyResponseRetryCount   = 0;
+    quint64 retryEpoch_               = 0;
 
     /**
      * @brief Fire user_prompt_submit and react to its outcome.
