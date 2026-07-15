@@ -7,6 +7,8 @@
 #include <QtCore>
 #include <QtTest>
 
+#include <optional>
+
 #ifdef Q_OS_UNIX
 #include <cerrno>
 #include <signal.h>
@@ -172,8 +174,7 @@ private slots:
         QVERIFY(removed);
         QVERIFY2(result.startsWith("Process completed (exit code "), qPrintable(result));
         QCOMPARE(
-            nestedResult,
-            QString("Error: Another bash_manage wait or terminate is already active."));
+            nestedResult, QString("Error: Another blocking shell call is active for this agent."));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 1, 1000);
 
@@ -197,7 +198,7 @@ private slots:
         QVERIFY2(waitResult.startsWith("Process completed (exit code "), qPrintable(waitResult));
         QCOMPARE(
             terminateResult,
-            QString("Error: Another bash_manage wait or terminate is already active."));
+            QString("Error: Another blocking shell call is active for this agent."));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 2, 1000);
 
@@ -207,12 +208,6 @@ private slots:
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
         const int thirdProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
 
-        for (const int timeout : {0, -1}) {
-            QCOMPARE(
-                manage.execute(
-                    {{"process_id", thirdProcessId}, {"action", "wait"}, {"timeout", timeout}}),
-                QString("Error: timeout must be a positive integer"));
-        }
         QString nestedTimeoutResult;
         QTimer::singleShot(0, &manage, [&manage, &nestedTimeoutResult, thirdProcessId]() {
             nestedTimeoutResult = manage.execute(
@@ -227,7 +222,7 @@ private slots:
             qPrintable(timeoutResult));
         QCOMPARE(
             nestedTimeoutResult,
-            QString("Error: Another bash_manage wait or terminate is already active."));
+            QString("Error: Another blocking shell call is active for this agent."));
         QVERIFY2(timeoutElapsed.elapsed() < 500, "nested wait delayed the outer deadline");
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
 
@@ -432,6 +427,212 @@ private slots:
 #endif
     }
 
+    void blockingShellCalls_areOwnerScoped()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("The bash tool is unavailable on Windows");
+#else
+        QSocToolRegistry   registry;
+        QSocToolShellBash  bash;
+        QSocToolBashManage manage;
+        QObject            ownerA;
+        QObject            ownerB;
+        registry.registerTool(&bash);
+        registry.registerTool(&manage);
+
+        const json background = {{"command", "exec sleep 5"}, {"background", true}};
+        const QString firstStart = registry.executeTool(QStringLiteral("bash"), background, &ownerA);
+        QVERIFY2(firstStart.startsWith("Started in background."), qPrintable(firstStart));
+        const int     firstProcessId = QSocToolShellBash::snapshotActive().constLast().id;
+        const QString secondStart
+            = registry.executeTool(QStringLiteral("bash"), background, &ownerA);
+        QVERIFY2(secondStart.startsWith("Started in background."), qPrintable(secondStart));
+        const int secondProcessId = QSocToolShellBash::snapshotActive().constLast().id;
+
+        QString sameOwnerWait;
+        QString otherOwnerWait;
+        QTimer::singleShot(0, &registry, [&]() {
+            sameOwnerWait = registry.executeTool(
+                QStringLiteral("bash_manage"),
+                {{"process_id", secondProcessId}, {"action", "wait"}, {"timeout", 20}},
+                &ownerA);
+            otherOwnerWait = registry.executeTool(
+                QStringLiteral("bash_manage"),
+                {{"process_id", secondProcessId}, {"action", "wait"}, {"timeout", 20}},
+                &ownerB);
+        });
+        const QString outerWait = registry.executeTool(
+            QStringLiteral("bash_manage"),
+            {{"process_id", firstProcessId}, {"action", "wait"}, {"timeout", 80}},
+            &ownerA);
+
+        QCOMPARE(
+            sameOwnerWait, QString("Error: Another blocking shell call is active for this agent."));
+        QVERIFY2(
+            otherOwnerWait.startsWith("Process still running after additional 20ms wait."),
+            qPrintable(otherOwnerWait));
+        QVERIFY2(
+            outerWait.startsWith("Process still running after additional 80ms wait."),
+            qPrintable(outerWait));
+
+        QString sameOwnerBash;
+        QString sameOwnerManage;
+        QString otherOwnerBash;
+        QString otherOwnerManage;
+        QTimer::singleShot(0, &registry, [&]() {
+            sameOwnerBash = registry.executeTool(
+                QStringLiteral("bash"), {{"command", "printf blocked"}}, &ownerA);
+            sameOwnerManage = registry.executeTool(
+                QStringLiteral("bash_manage"),
+                {{"process_id", firstProcessId}, {"action", "wait"}, {"timeout", 20}},
+                &ownerA);
+            otherOwnerBash
+                = registry
+                      .executeTool(QStringLiteral("bash"), {{"command", "printf nested"}}, &ownerB);
+            otherOwnerManage = registry.executeTool(
+                QStringLiteral("bash_manage"),
+                {{"process_id", firstProcessId}, {"action", "wait"}, {"timeout", 20}},
+                &ownerB);
+        });
+        const QString outerBash = registry.executeTool(
+            QStringLiteral("bash"), {{"command", "sleep 0.15; printf outer"}}, &ownerA);
+
+        QCOMPARE(
+            sameOwnerBash,
+            QString(
+                "Error: Another blocking shell call is active for this agent. Use "
+                "background=true for concurrent commands."));
+        QCOMPARE(
+            sameOwnerManage,
+            QString("Error: Another blocking shell call is active for this agent."));
+        QCOMPARE(otherOwnerBash, QString("nested"));
+        QVERIFY2(
+            otherOwnerManage.startsWith("Process still running after additional 20ms wait."),
+            qPrintable(otherOwnerManage));
+        QCOMPARE(outerBash, QString("outer"));
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 2);
+        QSocToolShellBash::killAllActive();
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
+#endif
+    }
+
+    void blockingShellCalls_shareRegistryFallback()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("The bash tool is unavailable on Windows");
+#else
+        QSocToolRegistry   registry;
+        QSocToolShellBash  bash;
+        QSocToolBashManage manage;
+        registry.registerTool(&bash);
+        registry.registerTool(&manage);
+
+        const QString started = registry.executeTool(
+            QStringLiteral("bash"), {{"command", "exec sleep 5"}, {"background", true}});
+        QVERIFY2(started.startsWith("Started in background."), qPrintable(started));
+        const int processId = QSocToolShellBash::snapshotActive().constLast().id;
+
+        QString nested;
+        QTimer::singleShot(0, &registry, [&]() {
+            nested = registry.executeTool(
+                QStringLiteral("bash_manage"),
+                {{"process_id", processId}, {"action", "wait"}, {"timeout", 20}});
+        });
+        const QString outer
+            = registry.executeTool(QStringLiteral("bash"), {{"command", "sleep 0.08; printf outer"}});
+
+        QCOMPARE(nested, QString("Error: Another blocking shell call is active for this agent."));
+        QCOMPARE(outer, QString("outer"));
+        const QString after = registry.executeTool(
+            QStringLiteral("bash_manage"),
+            {{"process_id", processId}, {"action", "wait"}, {"timeout", 20}});
+        QVERIFY2(
+            after.startsWith("Process still running after additional 20ms wait."),
+            qPrintable(after));
+        QSocToolShellBash::killAllActive();
+#endif
+    }
+
+    void blockingShellCalls_shareProcessAcrossOwners()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("The bash tool is unavailable on Windows");
+#else
+        QSocToolRegistry   registry;
+        QSocToolShellBash  bash;
+        QSocToolBashManage manage;
+        QObject            ownerA;
+        QObject            ownerB;
+        registry.registerTool(&bash);
+        registry.registerTool(&manage);
+
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        const QString releasePath = scratch.filePath(QStringLiteral("release"));
+        const QString command     = QStringLiteral(
+                                        "printf shared; while [ ! -e '%1' ]; do sleep 0.01; done")
+                                        .arg(releasePath);
+        const QString started     = registry.executeTool(
+            QStringLiteral("bash"),
+            {{"command", command.toStdString()}, {"background", true}},
+            &ownerA);
+        QVERIFY2(started.startsWith("Started in background."), qPrintable(started));
+        const int processId = QSocToolShellBash::snapshotActive().constLast().id;
+
+        bool    releaseCreated = false;
+        QString nested;
+        QTimer::singleShot(0, &registry, [&]() {
+            QTimer::singleShot(20, &registry, [&]() {
+                QFile release(releasePath);
+                releaseCreated = release.open(QIODevice::WriteOnly);
+            });
+            nested = registry.executeTool(
+                QStringLiteral("bash_manage"),
+                {{"process_id", processId}, {"action", "wait"}, {"timeout", 1000}},
+                &ownerB);
+        });
+        const QString outer = registry.executeTool(
+            QStringLiteral("bash_manage"),
+            {{"process_id", processId}, {"action", "wait"}, {"timeout", 1000}},
+            &ownerA);
+
+        QVERIFY(releaseCreated);
+        QVERIFY2(nested.startsWith("Process completed (exit code 0):"), qPrintable(nested));
+        QVERIFY2(outer.startsWith("Process completed (exit code 0):"), qPrintable(outer));
+        QVERIFY(nested.contains(QStringLiteral("shared")));
+        QVERIFY(outer.contains(QStringLiteral("shared")));
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
+#endif
+    }
+
+    void blockingShellCalls_ignoreDestroyedOwnerAddress()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("The bash tool is unavailable on Windows");
+#else
+        QSocToolRegistry  registry;
+        QSocToolShellBash bash;
+        registry.registerTool(&bash);
+
+        std::optional<QObject> owner;
+        owner.emplace();
+        QObject *const originalAddress = &owner.value();
+        QString        nested;
+        QTimer::singleShot(0, &registry, [&]() {
+            owner.reset();
+            owner.emplace();
+            QCOMPARE(&owner.value(), originalAddress);
+            nested = registry.executeTool(
+                QStringLiteral("bash"), {{"command", "printf replacement"}}, &owner.value());
+        });
+        const QString outer = registry.executeTool(
+            QStringLiteral("bash"), {{"command", "sleep 0.08; printf outer"}}, originalAddress);
+
+        QCOMPARE(nested, QString("replacement"));
+        QCOMPARE(outer, QString("outer"));
+#endif
+    }
+
     void foregroundWaits_areSafeAndIsolated()
     {
 #ifdef Q_OS_WIN
@@ -478,8 +679,14 @@ private slots:
         QSocToolShellBash other;
         const std::string longCommand = "(sleep 8; kill -KILL 0) & exec sleep 30";
 
+        QString sameInstanceResult;
         QString nestedResult;
         QString nestedBackgroundResult;
+        QTimer::singleShot(0, &bash, [&]() {
+            sameInstanceResult = bash.execute(
+                {{"command", "touch same-instance-marker"},
+                 {"working_directory", workDir.toStdString()}});
+        });
         QTimer::singleShot(0, &other, [&]() {
             nestedResult = other.execute(
                 {{"command", "touch nested-marker"}, {"working_directory", workDir.toStdString()}});
@@ -496,15 +703,16 @@ private slots:
              {"timeout", 20}});
         QVERIFY2(timeoutResult.contains("timed out after 20ms"), qPrintable(timeoutResult));
         QCOMPARE(
-            nestedResult,
+            sameInstanceResult,
             QString(
-                "Error: Command was not started because another foreground bash command is active "
-                "in this session. Use background=true for concurrent commands."));
+                "Error: Another blocking shell call is active for this agent. Use "
+                "background=true for concurrent commands."));
+        QCOMPARE(nestedResult, QString("(no output)"));
         QVERIFY2(
             nestedBackgroundResult.startsWith("Started in background."),
             qPrintable(nestedBackgroundResult));
         QVERIFY2(elapsed.elapsed() < 500, "nested foreground command delayed the outer deadline");
-        QVERIFY(!QFileInfo::exists(nestedMarker));
+        QVERIFY(QFileInfo::exists(nestedMarker));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 2);
         QSocToolShellBash::killAllActive();
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);

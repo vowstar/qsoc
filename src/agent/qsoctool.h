@@ -24,14 +24,18 @@ public:
     explicit QSocToolCallContext(QObject *owner = nullptr);
 
     bool isCancellationRequested() const;
+    /** @brief Scope shared by tool calls from the same execution owner. */
+    QObject *executionScope() const { return scope_.data(); }
 
 signals:
     void cancellationRequested();
 
 private:
+    QSocToolCallContext(QObject *owner, QObject *fallbackScope);
     void requestCancellation();
 
     QPointer<QObject> owner_;
+    QPointer<QObject> scope_;
     bool              cancellationRequested_ = false;
 
     friend class QSocToolRegistry;
@@ -211,9 +215,9 @@ public:
 private:
     struct ActiveCall
     {
-        ActiveCall(QSocTool *tool, QObject *owner)
+        ActiveCall(QSocTool *tool, QObject *owner, QObject *fallbackScope)
             : tool(tool)
-            , context(owner)
+            , context(owner, fallbackScope)
         {}
 
         QPointer<QSocTool>  tool;

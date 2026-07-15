@@ -10,7 +10,12 @@
 /* QSocToolCallContext Implementation */
 
 QSocToolCallContext::QSocToolCallContext(QObject *owner)
+    : QSocToolCallContext(owner, nullptr)
+{}
+
+QSocToolCallContext::QSocToolCallContext(QObject *owner, QObject *fallbackScope)
     : owner_(owner)
+    , scope_(owner != nullptr ? owner : fallbackScope)
 {}
 
 bool QSocToolCallContext::isCancellationRequested() const
@@ -146,7 +151,7 @@ QString QSocToolRegistry::executeTool(const QString &name, const json &arguments
         return QString("Error: Tool '%1' not found").arg(name);
     }
 
-    ActiveCall call(tool, owner);
+    ActiveCall call(tool, owner, this);
     activeCalls_.insert(&call);
     tool->callContexts_.append(&call.context);
     QPointer<QSocToolRegistry> registry(this);

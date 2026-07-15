@@ -18,6 +18,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
 #include <limits>
 
 #ifdef Q_OS_UNIX
@@ -34,16 +35,57 @@ constexpr int    kWatchdogTickMs        = 2000;
 constexpr int    kTerminateGraceMs      = 5000;
 constexpr int    kActiveTerminateMs     = 2000;
 constexpr int    kForceStopMs           = 1000;
-constexpr auto   kBlockingWaitBusy
-    = "Error: Another bash_manage wait or terminate is already active.";
-constexpr auto kForegroundWaitBusy
-    = "Error: Command was not started because another foreground bash command is active in this "
-      "session. Use background=true for concurrent commands.";
-thread_local bool foregroundWaitActive = false;
+constexpr auto   kBlockingWaitBusy = "Error: Another blocking shell call is active for this agent.";
+constexpr auto   kForegroundWaitBusy
+    = "Error: Another blocking shell call is active for this agent. Use background=true for "
+      "concurrent commands.";
 /* How many bytes from the tail to test against the interactive-prompt
  * regex. 4 KB is enough to catch a multi-line confirmation block while
  * staying tiny relative to the overall capture file. */
 constexpr qint64 kStuckTailBytes = 4096;
+
+class BlockingShellGuard;
+thread_local QList<BlockingShellGuard *> blockingShellGuards;
+
+QObject *blockingShellKey(QSocTool *tool, const QSocToolCallContext *context)
+{
+    if (context != nullptr && context->executionScope() != nullptr) {
+        return context->executionScope();
+    }
+    return tool;
+}
+
+class BlockingShellGuard final
+{
+public:
+    BlockingShellGuard(QSocTool *tool, const QSocToolCallContext *context, const bool enabled = true)
+        : key_(enabled ? blockingShellKey(tool, context) : nullptr)
+        , acquired_(key_.isNull())
+    {
+        if (!key_.isNull()) {
+            acquired_ = std::none_of(
+                blockingShellGuards.cbegin(),
+                blockingShellGuards.cend(),
+                [this](const BlockingShellGuard *guard) {
+                    return guard != nullptr && guard->key() == key_.data();
+                });
+        }
+        if (!key_.isNull() && acquired_) {
+            blockingShellGuards.append(this);
+        }
+    }
+
+    ~BlockingShellGuard() { blockingShellGuards.removeOne(this); }
+
+    Q_DISABLE_COPY_MOVE(BlockingShellGuard)
+
+    bool     acquired() const { return acquired_; }
+    QObject *key() const { return key_.data(); }
+
+private:
+    QPointer<QObject> key_;
+    bool              acquired_ = false;
+};
 
 bool processTreeRunning(
     const QPointer<QProcess> &process, qint64 processGroupId, bool trackProcessGroup);
@@ -97,16 +139,6 @@ void releaseProcessWaiter(
     if (remove || (it->activeWaiters == 0 && it->removeWhenIdle)) {
         requestProcessCleanup(processes, processId);
     }
-}
-
-bool hasActiveProcessWait(const QMap<int, QSocBashProcessInfo> &processes)
-{
-    for (const auto &info : processes) {
-        if (info.activeWaiters != 0) {
-            return true;
-        }
-    }
-    return false;
 }
 
 class QSocBashProcess final : public QProcess
@@ -450,7 +482,7 @@ QString QSocToolShellBash::getDescription() const
 {
     return "Execute a bash command in the project directory. "
            "Returns stdout and stderr. Set timeout as needed (no upper limit). "
-           "Only one foreground command can wait per session; use background=true for concurrency. "
+           "Only one blocking shell call can run per agent; use background=true for concurrency. "
            "If command times out, process keeps running and can be managed via bash_manage tool. "
            "Each call starts a fresh process in the project directory; cwd does not persist "
            "across calls. Use absolute paths or chain with && (e.g. 'cd build && make').";
@@ -615,18 +647,10 @@ QString QSocToolShellBash::execute(const json &arguments)
         background = arguments["background"].get<bool>();
     }
 
-    const bool ownsForegroundWait = !background && !foregroundWaitActive;
-    if (!background && !ownsForegroundWait) {
+    const BlockingShellGuard blockingGuard(this, callContext.data(), !background);
+    if (!background && !blockingGuard.acquired()) {
         return QString::fromLatin1(kForegroundWaitBusy);
     }
-    if (ownsForegroundWait) {
-        foregroundWaitActive = true;
-    }
-    const auto releaseForegroundWait = qScopeGuard([ownsForegroundWait]() {
-        if (ownsForegroundWait) {
-            foregroundWaitActive = false;
-        }
-    });
 
     /* Per-call output cap. 0 means "use built-in default". */
     qint64 maxOutputBytes = 0;
@@ -917,9 +941,8 @@ QString QSocToolBashManage::getDescription() const
            "or terminate. Terminate requests graceful exit, then force-kills after 5 seconds. "
            "Use process_id from bash tool timeout response. A terminal status, wait, kill, "
            "or terminate returns final output and releases the process record after the active "
-           "wait finishes. Aborting a wait leaves a running process tracked. Only one wait or "
-           "terminate action can block at a time; another is rejected immediately. A process "
-           "that does not stop remains tracked.";
+           "wait finishes. Aborting a wait leaves a running process tracked. Only one blocking "
+           "shell call can run per agent. A process that does not stop remains tracked.";
 }
 
 json QSocToolBashManage::getParametersSchema() const
@@ -1073,7 +1096,8 @@ QString QSocToolBashManage::execute(const json &arguments)
             requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
             return QString("Process already finished (exit code %1):\n%2").arg(exitCode).arg(output);
         }
-        if (hasActiveProcessWait(QSocToolShellBash::activeProcesses)) {
+        const BlockingShellGuard blockingGuard(this, callContext.data());
+        if (!blockingGuard.acquired()) {
             return kBlockingWaitBusy;
         }
 
@@ -1207,7 +1231,8 @@ QString QSocToolBashManage::execute(const json &arguments)
             requestProcessCleanup(QSocToolShellBash::activeProcesses, processId);
             return QString("Process already finished (exit code %1):\n%2").arg(exitCode).arg(output);
         }
-        if (hasActiveProcessWait(QSocToolShellBash::activeProcesses)) {
+        const BlockingShellGuard blockingGuard(this, callContext.data());
+        if (!blockingGuard.acquired()) {
             return kBlockingWaitBusy;
         }
 
