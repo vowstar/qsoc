@@ -343,6 +343,8 @@ void QSocMcpHttpTransport::postMessage(const nlohmann::json &message, quint64 se
     }
 
     QNetworkRequest request(url);
+    /* Active SSE replies may retire before transport EOF. */
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     for (auto it = config_.headers.constBegin(); it != config_.headers.constEnd(); ++it) {
         const QByteArray name = it.key().toUtf8();
         if (!isTransportOwnedHeader(name)) {

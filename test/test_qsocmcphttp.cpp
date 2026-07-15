@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include <QByteArray>
+#include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QSignalSpy>
 #include <QTcpServer>
@@ -333,6 +334,35 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void requestsStayOffHttp2()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+
+        MockResponse response;
+        response.contentType = "application/json";
+        response.body        = R"({"jsonrpc":"2.0","id":1,"result":{}})";
+        server.enqueue(response);
+
+        QSocMcpHttpTransport transport(httpConfig(server.url()));
+        transport.start();
+
+        auto *manager = transport.findChild<QNetworkAccessManager *>();
+        QVERIFY(manager != nullptr);
+
+        bool requestObserved = false;
+        bool http2Allowed    = true;
+        connect(manager, &QNetworkAccessManager::finished, this, [&](QNetworkReply *reply) {
+            requestObserved = true;
+            http2Allowed
+                = reply->request().attribute(QNetworkRequest::Http2AllowedAttribute, true).toBool();
+        });
+
+        transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}});
+        QTRY_VERIFY_WITH_TIMEOUT(requestObserved, 3000);
+        QVERIFY(!http2Allowed);
+    }
+
     void parsesJsonResponse()
     {
         MockHttpServer server;
