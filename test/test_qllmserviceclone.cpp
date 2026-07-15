@@ -2474,6 +2474,85 @@ private slots:
             !capture.text().contains(QStringLiteral("device not open")), qPrintable(capture.text()));
     }
 
+    void testDoneRetirementKeepsStreamingOffHttp2()
+    {
+        QSocTestCapture capture;
+        MockHttpServer  server;
+        QVERIFY(server.listen());
+        MockResponse stream = streamResponse(QStringLiteral("stream complete"), true);
+        stream.holdOpen     = true;
+        server.enqueue(stream);
+        server.enqueue(jsonResponse(QStringLiteral("recap complete")));
+
+        {
+            QLLMService service(nullptr, nullptr);
+            LLMEndpoint endpoint = endpointFor(server);
+            endpoint.timeout     = 2000;
+            service.addEndpoint(endpoint);
+
+            QPointer<QNetworkReply> retiredReply;
+            SyncResult              recapResult;
+            int                     completionCount    = 0;
+            int                     errorCount         = 0;
+            bool                    retiredWasRunning  = false;
+            bool                    streamHttp2Allowed = true;
+            bool                    recapHttp2Allowed  = true;
+            bool                    recapReplyObserved = false;
+            QNetworkAccessManager  *manager = service.findChild<QNetworkAccessManager *>();
+            QVERIFY(manager != nullptr);
+            connect(manager, &QNetworkAccessManager::finished, this, [&](QNetworkReply *reply) {
+                if (reply == retiredReply) {
+                    return;
+                }
+                recapReplyObserved = true;
+                recapHttp2Allowed  = reply->request()
+                                         .attribute(QNetworkRequest::Http2AllowedAttribute, true)
+                                         .toBool();
+            });
+            connect(
+                &service,
+                &QLLMService::streamComplete,
+                this,
+                [&](const json &) {
+                    completionCount++;
+                    retiredReply = runningReply(&service);
+                    if (!retiredReply.isNull()) {
+                        retiredWasRunning = retiredReply->isRunning();
+                        streamHttp2Allowed
+                            = retiredReply->request()
+                                  .attribute(QNetworkRequest::Http2AllowedAttribute, true)
+                                  .toBool();
+                    }
+                    recapResult = sendSyncRequest(&service, true);
+                },
+                Qt::DirectConnection);
+            connect(&service, &QLLMService::streamError, this, [&](const QString &) {
+                errorCount++;
+            });
+
+            service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+            QVERIFY2(
+                waitUntil([&]() { return completionCount == 1 || errorCount > 0; }, 8000),
+                "stream did not settle");
+            QCOMPARE(errorCount, 0);
+            QVERIFY(retiredWasRunning);
+            QVERIFY(!streamHttp2Allowed);
+            QVERIFY(recapReplyObserved);
+            QVERIFY(recapHttp2Allowed);
+            QVERIFY2(recapResult.error.isEmpty(), qPrintable(recapResult.error));
+            QCOMPARE(recapResult.content, QStringLiteral("recap complete"));
+            QCOMPARE(server.requestCount(), 2);
+            QVERIFY2(
+                waitUntil([&]() { return retiredReply.isNull(); }, 4000),
+                "retired stream reply was not deleted");
+            QCOMPARE(completionCount, 1);
+        }
+
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QVERIFY2(
+            !capture.text().contains(QStringLiteral("device not open")), qPrintable(capture.text()));
+    }
+
     void testCompletionNestedLoopIsSafe()
     {
         QSocTestCapture capture;

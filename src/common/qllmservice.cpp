@@ -985,6 +985,8 @@ void QLLMService::sendChatCompletionStream(
 
     LLMEndpoint     endpoint = selectEndpoint();
     QNetworkRequest request  = prepareRequest(endpoint);
+    /* Qt can dispatch an HTTP/2 read after a retired stream closes its TLS socket. */
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 
     /* Build payload with streaming enabled */
     json payload;
