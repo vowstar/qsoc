@@ -475,9 +475,10 @@ The agent provides the following tools through natural language:
   sub-agents can block independently. Use `background=true` for background
   concurrency. A terminal status, wait, or stop returns final output and
   removes the local job record after the active wait finishes; cancelling a
-  wait leaves a running job tracked. Stopping a managed job stops its process
-  group. Terminate requests a graceful stop and force-kills after five
-  seconds; a process that does not stop remains tracked
+  wait leaves a running job tracked. A non-positive wait timeout selects the
+  60-second default. Stopping a managed job stops its process group.
+  Terminate requests a graceful stop and force-kills after five seconds; a
+  process that does not stop remains tracked
 - *Monitors*: `monitor` starts a line-oriented watcher whose output wakes
   the agent; `monitor_stop` terminates a watcher
 - *Sub-agents*: `agent` to spawn a child run, `agent_status` to poll a

@@ -961,10 +961,9 @@ json QSocToolBashManage::getParametersSchema() const
              "terminate (graceful stop, then force kill after 5s)"}}},
           {"timeout",
            {{"type", "integer"},
-            {"minimum", 1},
             {"maximum", std::numeric_limits<int>::max()},
             {"description",
-             "Positive additional wait time in ms for 'wait' action (default: 60000)"}}}}},
+             "Additional wait time in ms for 'wait'; non-positive values use 60000"}}}}},
         {"required", json::array({"process_id", "action"})}};
 }
 
@@ -1077,17 +1076,19 @@ QString QSocToolBashManage::execute(const json &arguments)
         if (arguments.contains("timeout")) {
             const auto &timeout = arguments["timeout"];
             if (!timeout.is_number_integer()) {
-                return "Error: timeout must be a positive integer";
+                return "Error: timeout must be an integer";
             }
             if (timeout.is_number_unsigned()
                 && timeout.get<quint64>() > static_cast<quint64>(std::numeric_limits<int>::max())) {
-                return "Error: timeout must be a positive integer";
+                return "Error: timeout exceeds the supported range";
             }
             const auto value = timeout.get<qint64>();
-            if (value <= 0 || value > std::numeric_limits<int>::max()) {
-                return "Error: timeout must be a positive integer";
+            if (value > std::numeric_limits<int>::max()) {
+                return "Error: timeout exceeds the supported range";
             }
-            waitTimeout = static_cast<int>(value);
+            if (value > 0) {
+                waitTimeout = static_cast<int>(value);
+            }
         }
 
         if (!trackedProcessRunning(info)) {

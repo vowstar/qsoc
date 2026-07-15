@@ -208,6 +208,15 @@ private slots:
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);
         const int thirdProcessId = QSocToolShellBash::snapshotActive().constFirst().id;
 
+        const auto timeoutSchema = manage.getParametersSchema()["properties"]["timeout"];
+        QVERIFY(!timeoutSchema.contains("minimum"));
+        for (const int timeout : {0, -1}) {
+            QTimer::singleShot(10, &manage, &QSocToolBashManage::abort);
+            QCOMPARE(
+                manage.execute(
+                    {{"process_id", thirdProcessId}, {"action", "wait"}, {"timeout", timeout}}),
+                QString("Wait aborted; process is still running."));
+        }
         QString nestedTimeoutResult;
         QTimer::singleShot(0, &manage, [&manage, &nestedTimeoutResult, thirdProcessId]() {
             nestedTimeoutResult = manage.execute(
