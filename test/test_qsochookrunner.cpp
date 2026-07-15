@@ -12,7 +12,6 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QTemporaryDir>
-#include <QThread>
 #include <QtCore>
 #include <QtTest>
 
@@ -60,7 +59,7 @@ private slots:
         QSocHookRunner    runner;
         HookCommandConfig cfg;
         QSignalSpy        finishedSpy(&runner, &QSocHookRunner::finished);
-        bool              runningAtFinish     = true;
+        bool              runningAtFinish     = false;
         bool              resultReadyAtFinish = false;
         connect(&runner, &QSocHookRunner::finished, &runner, [&]() {
             runningAtFinish     = runner.isRunning();
@@ -69,7 +68,7 @@ private slots:
         const auto result = runner.run(cfg, nlohmann::json::object());
         QCOMPARE(result.status, QSocHookRunner::Status::StartFailed);
         QCOMPARE(finishedSpy.size(), 1);
-        QVERIFY(!runningAtFinish);
+        QVERIFY(runningAtFinish);
         QVERIFY(resultReadyAtFinish);
         QVERIFY(!runner.isRunning());
     }
@@ -81,7 +80,7 @@ private slots:
         cfg.command = path;
         QSocHookRunner runner;
         QSignalSpy     finishedSpy(&runner, &QSocHookRunner::finished);
-        bool           runningAtFinish     = true;
+        bool           runningAtFinish     = false;
         bool           resultReadyAtFinish = false;
         connect(&runner, &QSocHookRunner::finished, &runner, [&]() {
             runningAtFinish     = runner.isRunning();
@@ -92,7 +91,7 @@ private slots:
         QCOMPARE(result.exitCode, 0);
         QVERIFY(!result.hasResponse);
         QCOMPARE(finishedSpy.size(), 1);
-        QVERIFY(!runningAtFinish);
+        QVERIFY(runningAtFinish);
         QVERIFY(resultReadyAtFinish);
         QVERIFY(!runner.isRunning());
     }
@@ -120,75 +119,7 @@ private slots:
         QCOMPARE(result.exitCode, 7);
     }
 
-    void finishedCallbackCanQueueNextRun()
-    {
-        const QString     blockPath = writeScript(scratchDir, "reentrant_block.sh", "exit 2\n");
-        const QString     nextPath  = writeScript(scratchDir, "reentrant_next.sh", "exit 0\n");
-        HookCommandConfig blockConfig;
-        blockConfig.command = blockPath;
-        HookCommandConfig nextConfig;
-        nextConfig.command = nextPath;
-        QSocHookRunner runner;
-        QSignalSpy     finishedSpy(&runner, &QSocHookRunner::finished);
-        bool           startNext  = true;
-        QEventLoop    *nestedLoop = nullptr;
-        connect(&runner, &QSocHookRunner::finished, &runner, [&]() {
-            if (!startNext) {
-                return;
-            }
-            startNext = false;
-            QMetaObject::invokeMethod(
-                &runner,
-                [&runner, nextConfig]() { runner.start(nextConfig, nlohmann::json::object()); },
-                Qt::QueuedConnection);
-            QMetaObject::invokeMethod(
-                &runner,
-                [&]() {
-                    if (nestedLoop != nullptr) {
-                        nestedLoop->quit();
-                    }
-                },
-                Qt::QueuedConnection);
-        });
-        QList<QSocHookRunner::Status> observedStatuses;
-        connect(&runner, &QSocHookRunner::finished, &runner, [&]() {
-            observedStatuses.append(runner.result().status);
-        });
-        QList<QSocHookRunner::Status> queuedStatuses;
-        connect(
-            &runner,
-            &QSocHookRunner::finished,
-            &runner,
-            [&]() { queuedStatuses.append(runner.result().status); },
-            Qt::QueuedConnection);
-        bool enterNestedLoop = true;
-        connect(&runner, &QSocHookRunner::finished, &runner, [&]() {
-            if (!enterNestedLoop) {
-                return;
-            }
-            enterNestedLoop = false;
-            QEventLoop loop;
-            nestedLoop = &loop;
-            loop.exec();
-            nestedLoop = nullptr;
-        });
-
-        const auto firstResult = runner.run(blockConfig, nlohmann::json::object());
-
-        QCOMPARE(firstResult.status, QSocHookRunner::Status::Block);
-        QVERIFY(!observedStatuses.isEmpty());
-        QCOMPARE(observedStatuses.first(), QSocHookRunner::Status::Block);
-        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 2, 5000);
-        const QList<QSocHookRunner::Status>
-            expectedStatuses{QSocHookRunner::Status::Block, QSocHookRunner::Status::Success};
-        QCOMPARE(observedStatuses, expectedStatuses);
-        QTRY_COMPARE_WITH_TIMEOUT(queuedStatuses.size(), 2, 5000);
-        QCOMPARE(queuedStatuses, expectedStatuses);
-        QCOMPARE(runner.result().status, QSocHookRunner::Status::Success);
-        QVERIFY(!runner.isRunning());
-    }
-
-    void queuedResultSnapshotsSurviveNextRun()
+    void queuedResultSnapshotsSurviveSequentialRuns()
     {
         const QString     blockPath = writeScript(scratchDir, "snapshot_block.sh", "exit 2\n");
         const QString     nextPath  = writeScript(scratchDir, "snapshot_next.sh", "exit 0\n");
@@ -196,82 +127,24 @@ private slots:
         blockConfig.command = blockPath;
         HookCommandConfig nextConfig;
         nextConfig.command = nextPath;
-        QSocHookRunner runner;
-        QThread        receiverThread;
-        auto          *receiver = new QObject;
-        receiver->moveToThread(&receiverThread);
-        connect(&receiverThread, &QThread::finished, receiver, &QObject::deleteLater);
+        QSocHookRunner                runner;
         QList<QSocHookRunner::Status> snapshots;
         connect(
             &runner,
             &QSocHookRunner::resultReady,
-            receiver,
-            [&](QSocHookRunner::Result result) {
-                snapshots.append(result.status);
-                if (snapshots.size() == 2) {
-                    receiverThread.quit();
-                }
-            },
+            &runner,
+            [&](QSocHookRunner::Result result) { snapshots.append(result.status); },
             Qt::QueuedConnection);
-        bool startNext = true;
-        connect(&runner, &QSocHookRunner::finished, &runner, [&]() {
-            if (!startNext) {
-                return;
-            }
-            startNext = false;
-            runner.start(nextConfig, nlohmann::json::object());
-        });
-        QSignalSpy finishedSpy(&runner, &QSocHookRunner::finished);
 
-        runner.start(blockConfig, nlohmann::json::object());
-        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 2, 5000);
-        receiverThread.start();
-        const bool stopped = receiverThread.wait(5000);
-        if (!stopped) {
-            receiverThread.quit();
-            receiverThread.wait();
-        }
+        const auto firstResult = runner.run(blockConfig, nlohmann::json::object());
+        const auto nextResult  = runner.run(nextConfig, nlohmann::json::object());
 
-        QVERIFY(stopped);
+        QCOMPARE(firstResult.status, QSocHookRunner::Status::Block);
+        QCOMPARE(nextResult.status, QSocHookRunner::Status::Success);
+        QTRY_COMPARE_WITH_TIMEOUT(snapshots.size(), 2, 5000);
         const QList<QSocHookRunner::Status>
             expectedSnapshots{QSocHookRunner::Status::Block, QSocHookRunner::Status::Success};
         QCOMPARE(snapshots, expectedSnapshots);
-        QVERIFY(!runner.isRunning());
-    }
-
-    void queuedFinishedSeesResultBeforeRestart()
-    {
-        const QString     blockPath = writeScript(scratchDir, "queued_block.sh", "exit 2\n");
-        const QString     nextPath  = writeScript(scratchDir, "queued_next.sh", "exit 0\n");
-        HookCommandConfig blockConfig;
-        blockConfig.command = blockPath;
-        HookCommandConfig nextConfig;
-        nextConfig.command = nextPath;
-        QSocHookRunner runner;
-        bool           startNext = true;
-        connect(&runner, &QSocHookRunner::finished, &runner, [&]() {
-            if (!startNext) {
-                return;
-            }
-            startNext = false;
-            runner.start(nextConfig, nlohmann::json::object());
-        });
-        QList<QSocHookRunner::Status> queuedStatuses;
-        connect(
-            &runner,
-            &QSocHookRunner::finished,
-            &runner,
-            [&]() { queuedStatuses.append(runner.result().status); },
-            Qt::QueuedConnection);
-        QSignalSpy finishedSpy(&runner, &QSocHookRunner::finished);
-
-        runner.start(blockConfig, nlohmann::json::object());
-
-        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 2, 5000);
-        QTRY_COMPARE_WITH_TIMEOUT(queuedStatuses.size(), 2, 5000);
-        const QList<QSocHookRunner::Status>
-            expectedStatuses{QSocHookRunner::Status::Block, QSocHookRunner::Status::Success};
-        QCOMPARE(queuedStatuses, expectedStatuses);
         QVERIFY(!runner.isRunning());
     }
 
@@ -353,7 +226,8 @@ private slots:
             if (!runNested) {
                 return;
             }
-            runNested      = false;
+            runNested = false;
+            QVERIFY(runner.isRunning());
             nestedResult   = runner.run(cfg, nlohmann::json::object());
             nestedReturned = true;
         });
@@ -455,7 +329,7 @@ private slots:
         cfg.timeoutSec = 1;
         QSocHookRunner runner;
         QSignalSpy     finishedSpy(&runner, &QSocHookRunner::finished);
-        bool           runningAtFinish     = true;
+        bool           runningAtFinish     = false;
         bool           resultReadyAtFinish = false;
         connect(&runner, &QSocHookRunner::finished, &runner, [&]() {
             runningAtFinish     = runner.isRunning();
@@ -470,7 +344,7 @@ private slots:
         QCOMPARE(result.status, QSocHookRunner::Status::Timeout);
         QCOMPARE(result.stdoutText, QStringLiteral("timeout-marker\n"));
         QCOMPARE(finishedSpy.size(), 1);
-        QVERIFY(!runningAtFinish);
+        QVERIFY(runningAtFinish);
         QVERIFY(resultReadyAtFinish);
         QVERIFY(!runner.isRunning());
         QVERIFY2(

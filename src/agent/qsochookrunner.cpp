@@ -9,8 +9,6 @@
 #include <QStringList>
 #include <QTimer>
 
-#include <utility>
-
 QSocHookRunner::QSocHookRunner(QObject *parent)
     : QObject(parent)
 {
@@ -41,24 +39,13 @@ void QSocHookRunner::reset()
         m_timer->deleteLater();
         m_timer = nullptr;
     }
-    m_result          = Result{};
-    m_running         = false;
-    m_terminalClaimed = false;
-    m_publishing      = false;
-    m_pendingStart.reset();
+    m_result    = Result{};
+    m_phase     = Phase::Idle;
     m_timeoutMs = 0;
 }
 
 void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &payload)
 {
-    if (m_publishing) {
-        Q_ASSERT(!m_running && !m_pendingStart.has_value());
-        if (m_running || m_pendingStart.has_value()) {
-            return;
-        }
-        m_pendingStart.emplace(PendingStart{cfg, payload});
-        return;
-    }
     Q_ASSERT(canStartNow());
     if (!canStartNow()) {
         return;
@@ -68,13 +55,13 @@ void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &p
     if (!cfg.isValid()) {
         m_result.status       = Status::StartFailed;
         m_result.errorMessage = QStringLiteral("invalid hook command configuration");
-        m_running             = true;
-        m_terminalClaimed     = true;
+        m_phase               = Phase::Running;
+        claimTerminal();
         QTimer::singleShot(0, this, &QSocHookRunner::publishResult);
         return;
     }
 
-    m_running   = true;
+    m_phase     = Phase::Running;
     m_timeoutMs = cfg.timeoutSec > 0 ? cfg.timeoutSec * 1000 : 10000;
 
     m_process = new QProcess(this);
@@ -94,13 +81,13 @@ void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &p
     if (!guard) {
         return;
     }
-    if (process != m_process || m_terminalClaimed) {
+    if (process != m_process || m_phase != Phase::Running) {
         return;
     }
     if (!started) {
         m_result.status       = Status::StartFailed;
         m_result.errorMessage = m_process->errorString();
-        m_terminalClaimed     = true;
+        claimTerminal();
         QTimer::singleShot(0, this, &QSocHookRunner::publishResult);
         return;
     }
@@ -120,10 +107,9 @@ void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &p
 
 void QSocHookRunner::handleProcessFinished()
 {
-    if (sender() != m_process || m_terminalClaimed) {
+    if (sender() != m_process || !claimTerminal()) {
         return;
     }
-    m_terminalClaimed = true;
     if (m_timer != nullptr) {
         m_timer->stop();
     }
@@ -135,10 +121,9 @@ void QSocHookRunner::handleProcessFinished()
 
 void QSocHookRunner::handleTimeout()
 {
-    if (m_terminalClaimed) {
+    if (!claimTerminal()) {
         return;
     }
-    m_terminalClaimed = true;
     if (m_process != nullptr) {
         QObject::disconnect(m_process, nullptr, this, nullptr);
         m_process->kill();
@@ -153,14 +138,22 @@ void QSocHookRunner::handleTimeout()
     publishResult();
 }
 
+bool QSocHookRunner::claimTerminal()
+{
+    if (m_phase != Phase::Running) {
+        return false;
+    }
+    m_phase = Phase::Settled;
+    return true;
+}
+
 void QSocHookRunner::publishResult()
 {
-    if (!m_running || !m_terminalClaimed) {
+    if (m_phase != Phase::Settled) {
         return;
     }
     QPointer<QSocHookRunner> guard(this);
-    m_running    = false;
-    m_publishing = true;
+    m_phase = Phase::Publishing;
     emit resultPublished(m_result);
     if (!guard) {
         return;
@@ -173,21 +166,7 @@ void QSocHookRunner::publishResult()
     if (!guard) {
         return;
     }
-    m_publishing = false;
-    if (m_pendingStart.has_value()) {
-        QMetaObject::invokeMethod(this, &QSocHookRunner::startPending, Qt::QueuedConnection);
-    }
-}
-
-void QSocHookRunner::startPending()
-{
-    Q_ASSERT(!m_running && !m_publishing && m_pendingStart.has_value());
-    if (m_running || m_publishing || !m_pendingStart.has_value()) {
-        return;
-    }
-    PendingStart pending = std::move(m_pendingStart.value());
-    m_pendingStart.reset();
-    start(pending.config, pending.payload);
+    m_phase = Phase::Idle;
 }
 
 void QSocHookRunner::captureStreams()

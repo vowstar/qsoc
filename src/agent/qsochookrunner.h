@@ -12,8 +12,6 @@
 #include <QObject>
 #include <QString>
 
-#include <optional>
-
 class QProcess;
 class QTimer;
 
@@ -67,10 +65,8 @@ public:
     /**
      * @brief Start the hook asynchronously.
      * @details `resultReady()` carries a stable outcome for direct and
-     *          queued connections. A start requested from a synchronous
-     *          completion handler begins on the next event-loop turn.
-     *          Calling start while a run or another start is pending is
-     *          a programming error.
+     *          queued connections. Calling start while a run or result
+     *          publication is active is a programming error.
      */
     void start(const HookCommandConfig &cfg, const nlohmann::json &payload);
 
@@ -82,9 +78,9 @@ public:
     const Result &result() const { return m_result; }
 
     /**
-     * @brief True between `start()` and `finished()`.
+     * @brief True from `start()` until the result is fully published.
      */
-    bool isRunning() const { return m_running; }
+    bool isRunning() const { return m_phase != Phase::Idle; }
 
 signals:
     /**
@@ -100,31 +96,29 @@ signals:
 private slots:
     void handleProcessFinished();
     void handleTimeout();
-    void startPending();
 
 private:
-    struct PendingStart
-    {
-        HookCommandConfig config;
-        nlohmann::json    payload;
+    enum class Phase {
+        Idle,
+        Running,
+        Settled,
+        Publishing,
     };
 
     Q_SIGNAL void resultPublished(const Result &result);
 
-    bool canStartNow() const { return !m_running && !m_publishing && !m_pendingStart.has_value(); }
-    void reset();
-    void publishResult();
-    void captureStreams();
+    bool   canStartNow() const { return m_phase == Phase::Idle; }
+    bool   claimTerminal();
+    void   reset();
+    void   publishResult();
+    void   captureStreams();
     Result interpretExit() const;
 
-    QProcess                   *m_process = nullptr;
-    QTimer                     *m_timer   = nullptr;
-    Result                      m_result;
-    int                         m_timeoutMs       = 0;
-    bool                        m_running         = false;
-    bool                        m_terminalClaimed = false;
-    bool                        m_publishing      = false;
-    std::optional<PendingStart> m_pendingStart;
+    QProcess *m_process = nullptr;
+    QTimer   *m_timer   = nullptr;
+    Result    m_result;
+    int       m_timeoutMs = 0;
+    Phase     m_phase     = Phase::Idle;
 };
 
 Q_DECLARE_METATYPE(QSocHookRunner::Result)
