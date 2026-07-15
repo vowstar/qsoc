@@ -164,26 +164,65 @@ QString validateStreamChunk(const json &chunk)
     return {};
 }
 
-QPointer<QNetworkReply> waitForNetworkReply(QNetworkReply *reply, int timeout)
+struct NetworkWaitResult
+{
+    QPointer<QNetworkReply> reply;
+    bool                    cancelled = false;
+};
+
+void drainNetworkReply(QNetworkReply *reply)
+{
+    if (reply == nullptr) {
+        return;
+    }
+    const QPointer<QNetworkReply> guardedReply(reply);
+    const auto                    drain = [guardedReply]() {
+        if (!guardedReply.isNull()) {
+            guardedReply->readAll();
+        }
+    };
+    QObject::connect(reply, &QNetworkReply::readyRead, reply, drain);
+    QObject::connect(reply, &QNetworkReply::finished, reply, [guardedReply, drain]() {
+        drain();
+        if (!guardedReply.isNull()) {
+            guardedReply->deleteLater();
+        }
+    });
+    drain();
+    if (!guardedReply.isNull() && guardedReply->isFinished()) {
+        guardedReply->deleteLater();
+    }
+}
+
+NetworkWaitResult waitForNetworkReply(
+    QNetworkReply *reply, int timeout, std::stop_token stopToken = {})
 {
     if (reply == nullptr) {
         return {};
     }
     QPointer<QNetworkReply> guardedReply(reply);
     QEventLoop              loop;
-    QTimer                  timer;
-    timer.setSingleShot(true);
+    auto                   *timer = new QTimer(reply);
+    timer->setSingleShot(true);
 
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     QObject::connect(reply, &QObject::destroyed, &loop, &QEventLoop::quit);
-    QObject::connect(&timer, &QTimer::timeout, reply, &QNetworkReply::abort);
-    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    QObject::connect(reply, &QNetworkReply::finished, timer, &QTimer::stop);
+    QObject::connect(timer, &QTimer::timeout, reply, &QNetworkReply::abort);
+    QObject::connect(timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    const std::stop_callback stopCallback(stopToken, [&loop]() {
+        QMetaObject::invokeMethod(&loop, &QEventLoop::quit, Qt::QueuedConnection);
+    });
 
-    if (!guardedReply->isFinished()) {
-        timer.start(timeout);
+    timer->start(timeout);
+    if (!guardedReply->isFinished() && !stopToken.stop_requested()) {
         loop.exec();
     }
-    return guardedReply;
+    const bool cancelled = stopToken.stop_requested();
+    if (!cancelled && !guardedReply.isNull()) {
+        timer->stop();
+    }
+    return {guardedReply, cancelled};
 }
 
 } // namespace
@@ -920,7 +959,7 @@ LLMResponse QLLMService::sendRequestToEndpoint(
     }
     QNetworkReply *networkReply
         = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
-    QPointer<QNetworkReply> reply = waitForNetworkReply(networkReply, endpoint.timeout);
+    QPointer<QNetworkReply> reply = waitForNetworkReply(networkReply, endpoint.timeout).reply;
 
     if (owner.isNull()) {
         LLMResponse response;
@@ -1650,6 +1689,15 @@ bool QLLMService::extractAssistantMessage(const json &response, json *message, Q
 
 json QLLMService::sendChatCompletion(const json &messages, const json &tools, double temperature)
 {
+    return sendChatCompletion(messages, tools, temperature, {});
+}
+
+json QLLMService::sendChatCompletion(
+    const json &messages, const json &tools, double temperature, std::stop_token stopToken)
+{
+    if (stopToken.stop_requested()) {
+        return {{"error", "Request cancelled"}};
+    }
     if (!hasEndpoint()) {
         return {{"error", "No LLM endpoint configured"}};
     }
@@ -1659,6 +1707,9 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
     QString                      lastError = QStringLiteral("All LLM endpoints failed");
     const QList<EndpointAttempt> attempts  = endpointAttempts();
     for (const EndpointAttempt &attempt : attempts) {
+        if (stopToken.stop_requested()) {
+            return {{"error", "Request cancelled"}};
+        }
         const LLMEndpoint &endpoint = attempt.endpoint;
         QNetworkRequest    request  = owner->prepareRequest(endpoint);
 
@@ -1685,9 +1736,19 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
         if (owner->networkManager.isNull()) {
             return {{"error", "Network manager destroyed"}};
         }
+        if (stopToken.stop_requested()) {
+            return {{"error", "Request cancelled"}};
+        }
         QNetworkReply *networkReply
             = owner->networkManager->post(request, QByteArray::fromStdString(payload.dump()));
-        QPointer<QNetworkReply> reply = waitForNetworkReply(networkReply, endpoint.timeout);
+        const NetworkWaitResult wait
+            = waitForNetworkReply(networkReply, endpoint.timeout, stopToken);
+        QPointer<QNetworkReply> reply = wait.reply;
+
+        if (wait.cancelled || stopToken.stop_requested()) {
+            drainNetworkReply(reply.data());
+            return {{"error", "Request cancelled"}};
+        }
 
         if (owner.isNull()) {
             return {{"error", "LLM service destroyed"}};
@@ -1703,6 +1764,9 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
         if (reply->error() != QNetworkReply::NoError) {
             QSocConsole::warn() << "Endpoint" << endpoint.name << "failed:" << reply->errorString();
             reply->deleteLater();
+            if (stopToken.stop_requested()) {
+                return {{"error", "Request cancelled"}};
+            }
             continue;
         }
 
@@ -1716,12 +1780,21 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
                 lastError = validationError;
                 QSocConsole::warn()
                     << "Endpoint" << endpoint.name << "returned an invalid chat response";
+                if (stopToken.stop_requested()) {
+                    return {{"error", "Request cancelled"}};
+                }
                 continue;
+            }
+            if (stopToken.stop_requested()) {
+                return {{"error", "Request cancelled"}};
             }
             owner->commitEndpoint(attempt);
             return response;
         } catch (const json::exception &e) {
             QSocConsole::warn() << "JSON parse error:" << e.what();
+            if (stopToken.stop_requested()) {
+                return {{"error", "Request cancelled"}};
+            }
             continue;
         }
     }

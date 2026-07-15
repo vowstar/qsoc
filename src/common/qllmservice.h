@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <stop_token>
 #include <QByteArray>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -127,6 +128,17 @@ public:
      *          single-flight invariant.
      */
     QLLMService *clone(QObject *parent = nullptr) const;
+
+    /**
+     * @brief Send a cancellable chat completion request
+     * @param messages Conversation history
+     * @param tools Tool definitions
+     * @param temperature Temperature parameter (0.0-1.0)
+     * @param stopToken Cancellation scoped to the calling operation
+     * @return Validated response, or an error object
+     */
+    json sendChatCompletion(
+        const json &messages, const json &tools, double temperature, std::stop_token stopToken);
 
 public slots:
     /* Configuration */

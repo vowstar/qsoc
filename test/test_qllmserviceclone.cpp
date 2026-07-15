@@ -2410,6 +2410,65 @@ private slots:
         }
     }
 
+    void testSyncCancellationIsRequestScoped()
+    {
+        QSocTestCapture capture;
+        MockHttpServer  primary;
+        MockHttpServer  fallback;
+        QVERIFY(primary.listen());
+        QVERIFY(fallback.listen());
+
+        QLLMService service(nullptr, nullptr);
+        service.addEndpoint(endpointFor(primary));
+        service.addEndpoint(endpointFor(fallback));
+
+        std::stop_source stopped;
+        stopped.request_stop();
+        const json preStopped
+            = service.sendChatCompletion(json::array(), json::array(), 0.0, stopped.get_token());
+        QCOMPARE(
+            QString::fromStdString(preStopped.value("error", std::string())),
+            QStringLiteral("Request cancelled"));
+        QCOMPARE(primary.requestCount(), 0);
+        QCOMPARE(fallback.requestCount(), 0);
+
+        MockResponse held = jsonResponse(QStringLiteral("cancelled response"));
+        held.splitAt      = held.body.size() / 2;
+        primary.enqueue(held);
+        fallback.enqueue(jsonResponse(QStringLiteral("must not run")));
+
+        std::stop_source active;
+        const auto       connection = connect(
+            &primary,
+            &MockHttpServer::responseSent,
+            this,
+            [&](int) { active.request_stop(); },
+            Qt::DirectConnection);
+        const json cancelled
+            = service.sendChatCompletion(json::array(), json::array(), 0.0, active.get_token());
+        disconnect(connection);
+
+        QCOMPARE(
+            QString::fromStdString(cancelled.value("error", std::string())),
+            QStringLiteral("Request cancelled"));
+        QCOMPARE(primary.requestCount(), 1);
+        QCOMPARE(fallback.requestCount(), 0);
+        QVERIFY(runningReply(&service) != nullptr);
+        QVERIFY2(primary.releaseSplit(), "cancelled transport was closed instead of drained");
+        QVERIFY2(waitForNoReplies(&service), "cancelled reply was not deleted after drain");
+
+        primary.enqueue(jsonResponse(QStringLiteral("fresh response")));
+        std::stop_source fresh;
+        const json       response
+            = service.sendChatCompletion(json::array(), json::array(), 0.0, fresh.get_token());
+        QCOMPARE(completionContent(response), QStringLiteral("fresh response"));
+        QCOMPARE(primary.requestCount(), 2);
+        QCOMPARE(fallback.requestCount(), 0);
+        QVERIFY2(waitForNoReplies(&service), "fresh reply was not deleted");
+        QVERIFY2(
+            !capture.text().contains(QStringLiteral("device not open")), qPrintable(capture.text()));
+    }
+
     void testDoneCompletesBeforeEofAndAllowsSyncRequest()
     {
         QSocTestCapture capture;
