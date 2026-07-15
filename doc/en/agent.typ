@@ -498,6 +498,11 @@ The agent provides the following tools through natural language:
 - *LSP*: `lsp` for language server diagnostics and symbol lookup
 - *Web*: `web_fetch` for URL content, `web_search` via SearXNG (when configured)
 
+LLM token streams, MCP HTTP requests, and web requests are pinned to
+HTTP/1.1; only non-streaming LLM requests may negotiate HTTP/2. An
+HTTP/2-only endpoint therefore serves synchronous completions but not
+streaming, MCP, or web traffic.
+
 == SKILLS
 <agent-skills>
 A skill is a `SKILL.md` markdown file with a YAML frontmatter block. Skills

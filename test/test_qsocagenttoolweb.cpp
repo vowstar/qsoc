@@ -6,6 +6,7 @@
 #include "qsoc_test.h"
 
 #include <QHostAddress>
+#include <QNetworkReply>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QtCore>
@@ -573,6 +574,65 @@ private slots:
         QVERIFY(innerStarted);
         QCOMPARE(outerOutput, QStringLiteral("Error: request aborted"));
         QCOMPARE(innerOutput, QStringLiteral("inner-ok"));
+    }
+
+    void testWebRequestsStayOffHttp2()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+
+        QSocConfig config(this);
+        config.setValue(
+            "web.search_api_url", QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort()));
+        QSocToolWebFetch  fetchTool(this);
+        QSocToolWebSearch searchTool(this, &config);
+
+        bool fetchHttp2Allowed  = true;
+        bool searchHttp2Allowed = true;
+        connect(&server, &QTcpServer::newConnection, &server, [&]() {
+            while (QTcpSocket *socket = server.nextPendingConnection()) {
+                socket->setParent(&server);
+                connect(socket, &QTcpSocket::readyRead, socket, [&, socket]() {
+                    QByteArray request = socket->property("request").toByteArray();
+                    request += socket->readAll();
+                    socket->setProperty("request", request);
+                    if (!request.contains("\r\n\r\n") || socket->property("handled").toBool()) {
+                        return;
+                    }
+                    socket->setProperty("handled", true);
+                    const bool search  = request.contains("GET /search");
+                    QObject   *tool    = search ? static_cast<QObject *>(&searchTool)
+                                                : static_cast<QObject *>(&fetchTool);
+                    const auto replies = tool->findChildren<QNetworkReply *>();
+                    if (!replies.isEmpty()) {
+                        const bool allowed
+                            = replies.constFirst()
+                                  ->request()
+                                  .attribute(QNetworkRequest::Http2AllowedAttribute, true)
+                                  .toBool();
+                        (search ? searchHttp2Allowed : fetchHttp2Allowed) = allowed;
+                    }
+                    const QByteArray body = search ? QByteArrayLiteral("{\"results\":[]}")
+                                                   : QByteArrayLiteral("plain-ok");
+                    const QByteArray type = search ? QByteArrayLiteral("application/json")
+                                                   : QByteArrayLiteral("text/plain");
+                    socket->write(
+                        "HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\nContent-Length: "
+                        + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                    socket->disconnectFromHost();
+                });
+            }
+        });
+
+        const QString fetchOutput = fetchTool.execute(
+            {{"url",
+              QStringLiteral("http://127.0.0.1:%1/page").arg(server.serverPort()).toStdString()}});
+        QVERIFY2(!fetchOutput.startsWith("Error:"), qPrintable(fetchOutput));
+        QVERIFY(!fetchHttp2Allowed);
+
+        const QString searchOutput = searchTool.execute({{"query", "qsoc"}});
+        QVERIFY2(!searchOutput.startsWith("Error:"), qPrintable(searchOutput));
+        QVERIFY(!searchHttp2Allowed);
     }
 
     void testWebSearchEmptyQuery()

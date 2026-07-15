@@ -125,6 +125,8 @@ QString QSocToolWebSearch::execute(const json &arguments)
 
     /* Build request */
     QNetworkRequest request(url);
+    /* Timeout and cancel aborts retire live replies before EOF. */
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     request.setHeader(QNetworkRequest::UserAgentHeader, kUserAgent);
     request.setRawHeader("Accept", "application/json");
 
@@ -872,6 +874,8 @@ QString QSocToolWebFetch::execute(const json &arguments)
 
     /* Build request */
     QNetworkRequest request(url);
+    /* Size, stall, timeout, and cancel aborts retire live replies before EOF. */
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     request.setHeader(QNetworkRequest::UserAgentHeader, kUserAgent);
     request.setMaximumRedirectsAllowed(10);
     request.setAttribute(
