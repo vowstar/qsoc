@@ -13,6 +13,8 @@
 #include <QSaveFile>
 #include <QUuid>
 
+#include <limits>
+
 namespace {
 
 constexpr auto kProjectRelativeYamlPath = ".qsoc/goal.yml";
@@ -38,6 +40,18 @@ QByteArray emitYaml(const YAML::Node &node)
         payload.append('\n');
     }
     return payload;
+}
+
+QSocGoal makeGoal(const QString &objective, int tokenBudget)
+{
+    QSocGoal goal;
+    goal.id          = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    goal.objective   = objective;
+    goal.status      = QSocGoalStatus::Active;
+    goal.tokenBudget = tokenBudget > 0 ? tokenBudget : 0;
+    goal.createdAt   = QDateTime::currentDateTime();
+    goal.updatedAt   = goal.createdAt;
+    return goal;
 }
 
 } // namespace
@@ -120,13 +134,13 @@ void QSocGoalCatalog::load(const QString &projectDir)
         const auto status = qSocGoalStatusFromString(stds(node["status"].as<std::string>("active")));
         goal.status = status.value_or(QSocGoalStatus::Active);
         if (node["token_budget"]) {
-            goal.tokenBudget = node["token_budget"].as<int>(0);
+            goal.tokenBudget = qMax(0, node["token_budget"].as<int>(0));
         }
         if (node["tokens_used"]) {
-            goal.tokensUsed = node["tokens_used"].as<int>(0);
+            goal.tokensUsed = qMax(0, node["tokens_used"].as<int>(0));
         }
         if (node["seconds_used"]) {
-            goal.secondsUsed = node["seconds_used"].as<qint64>(0);
+            goal.secondsUsed = qMax<qint64>(0, node["seconds_used"].as<qint64>(0));
         }
         if (node["created_at"]) {
             goal.createdAt
@@ -206,7 +220,8 @@ bool QSocGoalCatalog::writeYaml(QString *errorMessage)
     return true;
 }
 
-void QSocGoalCatalog::appendLog(const QString &event, const QString &extraJsonFields)
+void QSocGoalCatalog::appendLog(
+    const QString &goalId, const QString &event, const QString &extraJsonFields)
 {
     const QString path = logFilePath();
     if (path.isEmpty()) {
@@ -219,7 +234,7 @@ void QSocGoalCatalog::appendLog(const QString &event, const QString &extraJsonFi
     }
     nlohmann::json payload = nlohmann::json::object();
     payload["ts"]          = asStd(QDateTime::currentDateTime().toString(Qt::ISODate));
-    payload["goal_id"]     = asStd(current_.has_value() ? current_->id : QString());
+    payload["goal_id"]     = asStd(goalId);
     payload["event"]       = asStd(event);
     if (!extraJsonFields.isEmpty()) {
         try {
@@ -259,20 +274,15 @@ bool QSocGoalCatalog::create(const QString &objective, int tokenBudget, QString 
         return false;
     }
 
-    QSocGoal goal;
-    goal.id          = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    goal.objective   = trimmed;
-    goal.status      = QSocGoalStatus::Active;
-    goal.tokenBudget = tokenBudget > 0 ? tokenBudget : 0;
-    goal.createdAt   = QDateTime::currentDateTime();
-    goal.updatedAt   = goal.createdAt;
-    current_         = goal;
+    const QSocGoal goal = makeGoal(trimmed, tokenBudget);
+    current_            = goal;
 
     if (!writeYaml(errorMessage)) {
         current_.reset();
         return false;
     }
     appendLog(
+        goal.id,
         QStringLiteral("created"),
         QString::fromStdString(
             nlohmann::json{{"objective", asStd(trimmed)}, {"token_budget", goal.tokenBudget}}
@@ -283,15 +293,38 @@ bool QSocGoalCatalog::create(const QString &objective, int tokenBudget, QString 
 
 bool QSocGoalCatalog::replace(const QString &newObjective, int tokenBudget, QString *errorMessage)
 {
-    if (current_.has_value()) {
-        const QString oldId = current_->id;
-        appendLog(
-            QStringLiteral("discarded"),
-            QString::fromStdString(nlohmann::json{{"reason", "replaced"}}.dump()));
-        current_.reset();
-        Q_UNUSED(oldId);
+    if (!current_.has_value()) {
+        return create(newObjective, tokenBudget, errorMessage);
     }
-    return create(newObjective, tokenBudget, errorMessage);
+    const QString trimmed = newObjective.trimmed();
+    if (trimmed.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("objective is empty");
+        }
+        return false;
+    }
+
+    const QSocGoal previous    = *current_;
+    const QSocGoal replacement = makeGoal(trimmed, tokenBudget);
+    current_                   = replacement;
+    if (!writeYaml(errorMessage)) {
+        current_ = previous;
+        return false;
+    }
+    appendLog(
+        previous.id,
+        QStringLiteral("discarded"),
+        QString::fromStdString(nlohmann::json{{"reason", "replaced"}}.dump()));
+    appendLog(
+        replacement.id,
+        QStringLiteral("created"),
+        QString::fromStdString(
+            nlohmann::json{
+                {"objective", asStd(replacement.objective)},
+                {"token_budget", replacement.tokenBudget}}
+                .dump()));
+    emit goalChanged();
+    return true;
 }
 
 bool QSocGoalCatalog::clear(QString *errorMessage)
@@ -299,11 +332,13 @@ bool QSocGoalCatalog::clear(QString *errorMessage)
     if (!current_.has_value()) {
         return true;
     }
-    appendLog(QStringLiteral("cleared"));
+    const QSocGoal previous = *current_;
     current_.reset();
     if (!writeYaml(errorMessage)) {
+        current_ = previous;
         return false;
     }
+    appendLog(previous.id, QStringLiteral("cleared"));
     emit goalChanged();
     return true;
 }
@@ -316,34 +351,34 @@ bool QSocGoalCatalog::setStatus(QSocGoalStatus newStatus, QString *errorMessage)
         }
         return false;
     }
-    if (current_->status == newStatus) {
+    if (current_->status == newStatus && newStatus != QSocGoalStatus::Complete) {
         return true;
     }
-    const QSocGoalStatus from = current_->status;
-    current_->status          = newStatus;
-    current_->updatedAt       = QDateTime::currentDateTime();
-    if (!writeYaml(errorMessage)) {
-        current_->status = from;
-        return false;
-    }
-    appendLog(
-        QStringLiteral("status_changed"),
-        QString::fromStdString(
-            nlohmann::json{
-                {"from", asStd(qSocGoalStatusToString(from))},
-                {"to", asStd(qSocGoalStatusToString(newStatus))}}
-                .dump()));
-    emit goalChanged();
-    /* Complete is terminal: drop the goal so a fresh one can be set
-     * without a manual /goal clear, mirroring codex's delete-on-
-     * complete behavior. The event log retains the trail. */
+
+    const QSocGoal previous = *current_;
+    QSocGoal       updated  = previous;
+    updated.status          = newStatus;
+    updated.updatedAt       = QDateTime::currentDateTime();
     if (newStatus == QSocGoalStatus::Complete) {
         current_.reset();
-        if (!writeYaml(errorMessage)) {
-            return false;
-        }
-        emit goalChanged();
+    } else {
+        current_ = updated;
     }
+    if (!writeYaml(errorMessage)) {
+        current_ = previous;
+        return false;
+    }
+    if (previous.status != newStatus) {
+        appendLog(
+            previous.id,
+            QStringLiteral("status_changed"),
+            QString::fromStdString(
+                nlohmann::json{
+                    {"from", asStd(qSocGoalStatusToString(previous.status))},
+                    {"to", asStd(qSocGoalStatusToString(newStatus))}}
+                    .dump()));
+    }
+    emit goalChanged();
     return true;
 }
 
@@ -365,14 +400,15 @@ bool QSocGoalCatalog::updateObjective(const QString &newObjective, QString *erro
     if (trimmed == current_->objective) {
         return true;
     }
-    const QString from  = current_->objective;
-    current_->objective = trimmed;
-    current_->updatedAt = QDateTime::currentDateTime();
+    const QSocGoal previous = *current_;
+    current_->objective     = trimmed;
+    current_->updatedAt     = QDateTime::currentDateTime();
     if (!writeYaml(errorMessage)) {
-        current_->objective = from;
+        current_ = previous;
         return false;
     }
     appendLog(
+        current_->id,
         QStringLiteral("objective_updated"),
         QString::fromStdString(nlohmann::json{{"objective", asStd(trimmed)}}.dump()));
     emit goalChanged();
@@ -390,38 +426,53 @@ bool QSocGoalCatalog::accountUsage(int tokensDelta, qint64 secondsDelta, QString
     if (secondsDelta < 0) {
         secondsDelta = 0;
     }
-    current_->tokensUsed += tokensDelta;
-    current_->secondsUsed += secondsDelta;
-    current_->updatedAt = QDateTime::currentDateTime();
+    const QSocGoal previous = *current_;
+    const qint64   tokenSum = static_cast<qint64>(current_->tokensUsed) + tokensDelta;
+    current_->tokensUsed    = static_cast<int>(
+        qMin<qint64>(tokenSum, static_cast<qint64>(std::numeric_limits<int>::max())));
+    if (secondsDelta > std::numeric_limits<qint64>::max() - current_->secondsUsed) {
+        current_->secondsUsed = std::numeric_limits<qint64>::max();
+    } else {
+        current_->secondsUsed += secondsDelta;
+    }
+    current_->updatedAt            = QDateTime::currentDateTime();
+    const bool becameBudgetLimited = current_->tokenBudget > 0
+                                     && current_->tokensUsed >= current_->tokenBudget
+                                     && current_->status == QSocGoalStatus::Active;
+    if (becameBudgetLimited) {
+        current_->status = QSocGoalStatus::BudgetLimited;
+    }
     if (!writeYaml(errorMessage)) {
-        current_->tokensUsed -= tokensDelta;
-        current_->secondsUsed -= secondsDelta;
+        current_ = previous;
         return false;
     }
     appendLog(
+        current_->id,
         QStringLiteral("usage_accounted"),
         QString::fromStdString(
             nlohmann::json{
                 {"tokens_used", current_->tokensUsed},
                 {"seconds_used", static_cast<long long>(current_->secondsUsed)}}
                 .dump()));
-    emit goalChanged();
-
-    if (current_->tokenBudget > 0 && current_->tokensUsed >= current_->tokenBudget
-        && current_->status == QSocGoalStatus::Active) {
-        /* Use setStatus so the transition itself goes through the
-         * regular log + write + signal path. */
-        QString innerErr;
-        if (!setStatus(QSocGoalStatus::BudgetLimited, &innerErr)) {
-            qInfo() << "goal: BudgetLimited transition write failed:" << innerErr;
-        }
+    if (becameBudgetLimited) {
+        appendLog(
+            current_->id,
+            QStringLiteral("status_changed"),
+            QString::fromStdString(
+                nlohmann::json{
+                    {"from", asStd(qSocGoalStatusToString(previous.status))},
+                    {"to", asStd(qSocGoalStatusToString(current_->status))}}
+                    .dump()));
     }
+    emit goalChanged();
     return true;
 }
 
 void QSocGoalCatalog::noteContinuation(const QString &reason)
 {
+    const QString goalId = current_.has_value() ? current_->id : QString();
     appendLog(
+        goalId,
         QStringLiteral("continued"),
         QString::fromStdString(nlohmann::json{{"reason", asStd(reason)}}.dump()));
 }
@@ -437,14 +488,16 @@ bool QSocGoalCatalog::setTokenBudget(int newBudget, QString *errorMessage)
     if (newBudget < 0) {
         newBudget = 0;
     }
-    const int from        = current_->tokenBudget;
-    current_->tokenBudget = newBudget;
-    current_->updatedAt   = QDateTime::currentDateTime();
+    const QSocGoal previous = *current_;
+    const int      from     = current_->tokenBudget;
+    current_->tokenBudget   = newBudget;
+    current_->updatedAt     = QDateTime::currentDateTime();
     if (!writeYaml(errorMessage)) {
-        current_->tokenBudget = from;
+        current_ = previous;
         return false;
     }
     appendLog(
+        current_->id,
         QStringLiteral("budget_updated"),
         QString::fromStdString(nlohmann::json{{"from", from}, {"to", newBudget}}.dump()));
     emit goalChanged();

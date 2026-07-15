@@ -13,10 +13,8 @@
 
 /**
  * @brief Lifecycle state of a project goal.
- * @details Mirrors the codex thread-goal state machine. Active is the
- *          working state; Paused stops auto-continuation until the user
- *          flips back; BudgetLimited is reached automatically when the
- *          token budget is exhausted and asks the LLM to wrap up;
+ * @details Active is the working state; Paused stops auto-continuation;
+ *          BudgetLimited is reached when the token budget is exhausted;
  *          Complete is the terminal success state and clears the goal.
  */
 enum class QSocGoalStatus : std::uint8_t {
@@ -162,7 +160,8 @@ signals:
 
 private:
     bool writeYaml(QString *errorMessage);
-    void appendLog(const QString &event, const QString &extraJsonFields = QString());
+    void appendLog(
+        const QString &goalId, const QString &event, const QString &extraJsonFields = QString());
 
     std::optional<QSocGoal> current_;
     QString                 projectDir_;

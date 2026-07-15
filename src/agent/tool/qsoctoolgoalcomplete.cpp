@@ -5,6 +5,22 @@
 
 #include "agent/qsocgoal.h"
 
+namespace {
+
+QString errorResult(const QString &message)
+{
+    return QString::fromStdString(
+        json{{"status", "error"}, {"error", message.toStdString()}}.dump());
+}
+
+QString successResult(const QString &objective)
+{
+    return QString::fromStdString(
+        json{{"status", "ok"}, {"completed_goal", objective.toStdString()}}.dump());
+}
+
+} // namespace
+
 QSocToolGoalComplete::QSocToolGoalComplete(QObject *parent, QSocGoalCatalog *catalog)
     : QSocTool(parent)
     , catalog_(catalog)
@@ -43,32 +59,33 @@ json QSocToolGoalComplete::getParametersSchema() const
 
 QString QSocToolGoalComplete::execute(const json &arguments)
 {
-    if (catalog_ == nullptr) {
-        return QStringLiteral(
-            R"j({"status":"error","error":"goal_complete unavailable: this run has no project goal catalog"})j");
+    const QPointer<QSocGoalCatalog> catalog = catalog_;
+    if (catalog.isNull()) {
+        return errorResult(
+            QStringLiteral("goal_complete unavailable: this run has no project goal catalog"));
     }
     if (!arguments.contains("status") || !arguments["status"].is_string()) {
-        return QStringLiteral(R"j({"status":"error","error":"status is required"})j");
+        return errorResult(QStringLiteral("status is required"));
     }
     const QString status = QString::fromStdString(arguments["status"].get<std::string>());
     if (status != QStringLiteral("complete")) {
-        return QStringLiteral(
-            R"j({"status":"error","error":"goal_complete only accepts status=complete; pause/resume/budget changes go through user commands"})j");
+        return errorResult(QStringLiteral(
+            "goal_complete only accepts status=complete; pause/resume/budget changes go through "
+            "user commands"));
     }
-    const auto current = catalog_->current();
+    const auto current = catalog->current();
     if (!current.has_value()) {
-        return QStringLiteral(R"j({"status":"error","error":"no active goal to complete"})j");
+        return errorResult(QStringLiteral("no active goal to complete"));
     }
     const QString completed = current->objective;
     QString       err;
-    if (!catalog_->setStatus(QSocGoalStatus::Complete, &err)) {
-        return QStringLiteral(R"j({"status":"error","error":"%1"})j").arg(err);
+    if (!catalog->setStatus(QSocGoalStatus::Complete, &err)) {
+        return errorResult(err);
     }
     QString summary = completed;
     if (summary.size() > 140) {
         summary = summary.left(137) + QStringLiteral("...");
     }
-    summary.replace(QLatin1Char('"'), QStringLiteral("\\\""));
     summary.replace(QLatin1Char('\n'), QLatin1Char(' '));
-    return QStringLiteral(R"j({"status":"ok","completed_goal":"%1"})j").arg(summary);
+    return successResult(summary);
 }

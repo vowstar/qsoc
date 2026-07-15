@@ -6,16 +6,17 @@
 
 #include "agent/qsoctool.h"
 
+#include <QPointer>
+
 class QSocGoalCatalog;
 
 /**
  * @brief LLM-facing tool that marks the active project goal complete.
  * @details Schema-restricted to a single status value (@c complete);
  *          pause / resume / budget-limited transitions are not
- *          reachable through this tool. Following codex's contract,
- *          the LLM must verify the objective is actually met before
- *          calling. The catalog drops the goal after recording the
- *          status change so a fresh /goal can be set without an
+ *          reachable through this tool. The objective must be achieved
+ *          before calling. The catalog drops the goal after recording
+ *          the status change so a fresh /goal can be set without an
  *          extra /goal clear step.
  *
  *          The agent gate excludes this shared tool from sub-agent
@@ -34,7 +35,7 @@ public:
     QString execute(const json &arguments) override;
 
 private:
-    QSocGoalCatalog *catalog_ = nullptr;
+    QPointer<QSocGoalCatalog> catalog_;
 };
 
 #endif // QSOCTOOLGOALCOMPLETE_H
