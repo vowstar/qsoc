@@ -150,9 +150,9 @@ public:
     void registerTool(QSocTool *tool);
 
     /**
-     * @brief Remove a tool if it is the current entry for its name
+     * @brief Remove every current entry referring to a tool
      * @param tool Pointer previously passed to registerTool()
-     * @return true when the matching entry was removed
+     * @return true when at least one matching entry was removed
      */
     bool unregisterTool(QSocTool *tool);
 

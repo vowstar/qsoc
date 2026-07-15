@@ -66,16 +66,35 @@ void QSocToolRegistry::registerTool(QSocTool *tool)
         return;
     }
 
-    const QString name = tool->getName();
-    if (tools_.value(name).data() == tool) {
+    const QPointer<QSocToolRegistry> registry(this);
+    const QPointer<QSocTool>         candidate(tool);
+    QPointer<QSocTool>               previousTool;
+    QString                          name;
+    {
+        const auto previousTools = tools_;
+        name                     = candidate->getName();
+        if (registry.isNull() || candidate.isNull()) {
+            return;
+        }
+        previousTool = previousTools.value(name);
+    }
+    if (registry->tools_.value(name).data() != previousTool.data()) {
         return;
     }
-    tools_[name] = tool;
-    connect(tool, &QObject::destroyed, this, [this, name, tool]() {
-        auto it = tools_.find(name);
+    if (registry->tools_.value(name).data() == candidate.data()) {
+        return;
+    }
+    registry->tools_[name] = candidate;
+    connect(candidate, &QObject::destroyed, registry, [registry, candidate, name]() {
+        if (registry.isNull()) {
+            return;
+        }
+        auto it = registry->tools_.find(name);
         /* The current guard may already be null when destroyed is delivered. */
-        if (it != tools_.end() && (it.value().isNull() || it.value().data() == tool)) {
-            tools_.erase(it);
+        if (it != registry->tools_.end()
+            && (it.value().isNull()
+                || (!candidate.isNull() && it.value().data() == candidate.data()))) {
+            registry->tools_.erase(it);
         }
     });
 }
@@ -86,12 +105,16 @@ bool QSocToolRegistry::unregisterTool(QSocTool *tool)
         return false;
     }
 
-    auto it = tools_.find(tool->getName());
-    if (it == tools_.end() || it.value().data() != tool) {
-        return false;
+    bool removed = false;
+    for (auto it = tools_.begin(); it != tools_.end();) {
+        if (it.value().data() == tool) {
+            it      = tools_.erase(it);
+            removed = true;
+        } else {
+            ++it;
+        }
     }
-    tools_.erase(it);
-    return true;
+    return removed;
 }
 
 QSocTool *QSocToolRegistry::getTool(const QString &name) const
