@@ -17,7 +17,9 @@ class QSocLoopScheduler;
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <QElapsedTimer>
 #include <QList>
 #include <QMutex>
@@ -107,16 +109,19 @@ public:
      *          iteration checkpoint. If not running, it will be processed
      *          when run() or runStream() is called.
      * @param request The user request to queue
+     * @return True when queued; false after a hard stop until the next run
      */
-    void queueRequest(const QString &request);
+    bool queueRequest(const QString &request);
 
     /**
      * @brief Queue a model-visible background task notification.
      * @details Unlike queueRequest(), this bypasses user_prompt_submit hooks
      *          when drained during a running turn because it is system
      *          generated, not human-authored input.
+     * @param notification The task notification to queue
+     * @return True when queued; false after a hard stop until the next run
      */
-    void queueTaskNotification(const QString &notification);
+    bool queueTaskNotification(const QString &notification);
 
     /**
      * @brief Check if there are pending requests in the queue
@@ -136,8 +141,14 @@ public:
     void clearPendingRequests();
 
     /**
+     * @brief Stop the current run and discard queued input
+     * @details Later queue additions are rejected until a new run starts.
+     */
+    void abortAndDiscardPendingRequests();
+
+    /**
      * @brief Abort the current operation
-     * @details Stops the agent at the next checkpoint and emits runAborted signal
+     * @details Requests a soft stop for the current run
      */
     void abort();
 
@@ -268,7 +279,7 @@ public:
      *        an auto-continuation prompt after each turn when a goal
      *        is Active and the request queue is empty.
      */
-    void setGoalCatalog(class QSocGoalCatalog *catalog) { goalCatalog = catalog; }
+    void setGoalCatalog(class QSocGoalCatalog *catalog);
 
     /**
      * @brief Set the hook manager for lifecycle event dispatch.
@@ -539,6 +550,35 @@ signals:
     void reasoningChunk(const QString &chunk);
 
 private:
+    enum class RunMode : std::uint8_t { Synchronous, Streaming };
+
+    enum class StopMode : std::uint8_t { None, Soft, Hard };
+
+    enum class RunOutcome : std::uint8_t { Complete, Error, Aborted };
+
+    enum class RunPhase : std::uint8_t { Active, Finishing, Terminal };
+
+    enum class CheckpointAction : std::uint8_t { Continue, Restart, Terminal };
+
+    enum class IterationResult : std::uint8_t { Continue, Complete, RestartPreparation, Stopped };
+
+    struct ActiveRun
+    {
+        quint64                        epoch = 0;
+        RunMode                        mode  = RunMode::Synchronous;
+        std::atomic<StopMode>          stop{StopMode::None};
+        std::stop_source               stopSource;
+        QPointer<QLLMService>          llm;
+        QPointer<QSocToolRegistry>     tools;
+        QMetaObject::Connection        llmDestroyedConnection;
+        std::optional<json::size_type> toolBatchStart;
+        std::optional<QString>         executingToolCallId;
+        json                           toolBatchAttachments = json::array();
+        RunPhase                       phase                = RunPhase::Active;
+    };
+
+    using ActiveRunPtr = std::shared_ptr<ActiveRun>;
+
     /* Approved plan carried into the execution phase (plan mode). Single
      * slot: pinned into the message history exactly once. */
     QString approvedPlan_;
@@ -549,20 +589,20 @@ private:
      * prefix stays byte-stable and the provider cache survives.
      * recallLlm_ is a lazily-cloned service pinned to the recall model
      * when one is configured; nullptr means use the primary llmService. */
-    QString      recallBlock_;
-    QLLMService *recallLlm_ = nullptr;
+    QString               recallBlock_;
+    QPointer<QLLMService> recallLlm_;
     /* Plan-mode shell safety judge (empty = fail-closed). */
     QSocBashSafetyJudge bashSafetyJudge_;
     /* Terminal-focus probe (empty = assume the user is watching). */
     QSocUserWatchingProbe userWatchingProbe_;
 
-    QLLMService           *llmService    = nullptr;
-    QSocToolRegistry      *toolRegistry  = nullptr;
-    QSocMemoryManager     *memoryManager = nullptr;
-    QSocHookManager       *hookManager   = nullptr;
-    QSocLoopScheduler     *loopScheduler = nullptr;
-    class QSocHostCatalog *hostCatalog   = nullptr;
-    class QSocGoalCatalog *goalCatalog   = nullptr;
+    QPointer<QLLMService>           llmService;
+    QPointer<QSocToolRegistry>      toolRegistry;
+    QSocMemoryManager              *memoryManager = nullptr;
+    QSocHookManager                *hookManager   = nullptr;
+    QSocLoopScheduler              *loopScheduler = nullptr;
+    class QSocHostCatalog          *hostCatalog   = nullptr;
+    QPointer<class QSocGoalCatalog> goalCatalog;
     /* Re-entry guard for the goal-continuation hook. Atomic so the
      * sync run() and async runStream() paths cannot race. Mirrors
      * codex's continuation_lock semaphore. */
@@ -576,6 +616,9 @@ private:
     QSocAgentConfig agentConfig;
     json            messages;
 
+    ActiveRunPtr activeRun_;
+    quint64      nextRunEpoch_ = 0;
+
     /* Post-compaction context restore. contextRestoreProvider_ is a lazy
      * builder installed by the CLI and invoked inside compactWithLLM;
      * lastApplied_ keeps the produced payload for the synchronous /compact
@@ -587,12 +630,6 @@ private:
     bool    isStreaming     = false;
     int     streamIteration = 0;
     QString streamFinalContent;
-    /* Monotonic run id. Bumped at every runStream() so a deferred
-     * backoff retry scheduled in run N is dropped if it fires after the
-     * run was aborted and a new run N+1 started (no double-driving the
-     * stream loop across turns). */
-    quint64 streamEpoch_ = 0;
-
     /* Timing state */
     QTimer       *heartbeatTimer = nullptr;
     QTimer       *retryTimer     = nullptr;
@@ -613,7 +650,7 @@ private:
     /* Request queue for dynamic input during execution */
     QList<QueuedRequest> requestQueue;
     mutable QMutex       queueMutex;
-    std::atomic<bool>    abortRequested{false};
+    bool                 rejectQueuedRequests_ = false; /* guarded by queueMutex */
 
     /* Token tracking */
     std::atomic<qint64> totalInputTokens{0};
@@ -659,7 +696,10 @@ private:
      * @brief Drop tool definitions that are not allowed for the current
      *        agent.
      */
-    nlohmann::json filterAllowedTools(const nlohmann::json &defs) const;
+    nlohmann::json filterAllowedTools(
+        const nlohmann::json &defs, const QSocToolRegistry *registry) const;
+
+    QString toolDenyReasonForRegistry(const QString &name, const QSocToolRegistry *registry) const;
 
     /**
      * @brief Append the dynamic prompt sections (environment, remote
@@ -697,7 +737,7 @@ private:
      *        false otherwise. Atomic re-entry guard prevents two
      *        continuations from racing.
      */
-    bool maybeQueueGoalContinuation();
+    bool maybeQueueGoalContinuation(const ActiveRunPtr &run);
 
     /**
      * @brief When a plan-mode turn is about to end with prose instead
@@ -729,13 +769,13 @@ private:
      * @brief Process a single iteration of the agent loop
      * @return true if the agent completed (no more tool calls), false otherwise
      */
-    bool processIteration();
+    IterationResult processIteration(const ActiveRunPtr &run);
 
     /**
      * @brief Handle tool calls from the LLM response
      * @param toolCalls JSON array of tool calls
      */
-    void handleToolCalls(const json &toolCalls);
+    bool handleToolCalls(const json &toolCalls, const ActiveRunPtr &run);
 
     /**
      * @brief Add a message to the conversation history
@@ -779,17 +819,13 @@ private:
      * @brief Add a tool result message to the conversation history
      * @param toolCallId  The ID of the tool call
      * @param content     Stripped tool result content (no markers)
-     * @param attachments Image attachments to lift into a content array
      */
-    void addToolMessage(
-        const QString               &toolCallId,
-        const QString               &content,
-        const QList<AttachmentSpec> &attachments = {});
+    void addToolMessage(const QString &toolCallId, const QString &content);
 
     /**
      * @brief Compress history if needed based on token count
      */
-    void compressHistoryIfNeeded();
+    void compressHistoryIfNeeded(const ActiveRunPtr &run);
 
     /**
      * @brief Rank topic-file headers against the turn query and fill
@@ -800,7 +836,18 @@ private:
      *        and a fast path that skips the selector when candidates are
      *        few enough to inject wholesale.
      */
-    void computeRecallForTurn(const QString &query);
+    void computeRecallForTurn(const QString &query, const ActiveRunPtr &run);
+
+    ActiveRunPtr     beginRun(RunMode mode);
+    bool             isCurrentRun(const ActiveRunPtr &run) const;
+    CheckpointAction checkpointRun(const ActiveRunPtr &run);
+    int  estimateTotalTokensFromSnapshot(const QString &systemPrompt, const json &tools) const;
+    void finishToolBatch(const ActiveRunPtr &run);
+    void finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, const QString &payload);
+    void finishSynchronousRun(const ActiveRunPtr &run);
+    void requestStop(StopMode mode);
+    bool hasPendingUserRequests() const;
+    bool drainQueuedRequests(const ActiveRunPtr &run);
 
     /**
      * @brief Process streaming iteration

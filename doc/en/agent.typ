@@ -423,6 +423,9 @@ calls; conversation history is preserved. With a queued message waiting, *ESC*
 cuts only the current step and the agent continues directly with your queued
 message; with nothing queued it stops the whole run.
 
+An interrupted tool batch keeps completed results, records that the active call
+may already have changed external state, and marks untouched calls as not executed.
+
 == DECISION FLOW
 <agent-decision-flow>
 The agent follows a four-tier decision flow for every request:

@@ -179,16 +179,21 @@ private slots:
         QVERIFY(src.tailFor(id, 1024).contains(QStringLiteral("LLM timeout")));
     }
 
-    void testKillRunningMarksFailedAndEmits()
+    void testKillRunningWaitsForTerminal()
     {
         QSocSubAgentTaskSource src;
         const QString          id
             = src.registerRun(QStringLiteral("hung"), QStringLiteral("general-purpose"), makeAgent());
+        src.start(id, []() {});
         QSignalSpy spy(&src, &QSocSubAgentTaskSource::tasksChanged);
         QVERIFY(src.killTask(id));
+        QCOMPARE(spy.count(), 0);
+        QCOMPARE(src.listTasks()[0].status, QSocTask::Status::Running);
+        QVERIFY(src.hasActiveRun());
+
+        src.markFailed(id, QStringLiteral("aborted"));
         QCOMPARE(spy.count(), 1);
-        const auto rows = src.listTasks();
-        QCOMPARE(rows[0].status, QSocTask::Status::Failed);
+        QCOMPARE(src.listTasks()[0].status, QSocTask::Status::Failed);
         QVERIFY(!src.hasActiveRun());
     }
 
@@ -242,7 +247,7 @@ private slots:
         QCOMPARE(tool.globalAbortCount(), 0);
     }
 
-    void testRootAbortStillCancelsEveryAgentCall()
+    void testRootAbortCancelsOnlyRootAgentCall()
     {
         QSocToolRegistry registry;
         ScopedWaitTool   tool(&registry);
@@ -270,8 +275,21 @@ private slots:
 
         QVERIFY(!timedOut);
         QCOMPARE(rootResult, QStringLiteral("aborted:root"));
-        QCOMPARE(childResult, QStringLiteral("aborted:child"));
-        QCOMPARE(tool.globalAbortCount(), 1);
+        QCOMPARE(childResult, QStringLiteral("completed:child"));
+        QCOMPARE(tool.globalAbortCount(), 0);
+    }
+
+    void testQueueRequestForPropagatesHardStopRejection()
+    {
+        QSocSubAgentTaskSource src;
+        auto                  *child = makeAgent();
+        const QString          id
+            = src.registerRun(QStringLiteral("stopping"), QStringLiteral("test"), child);
+        src.start(id, []() {});
+        child->abortAndDiscardPendingRequests();
+
+        QVERIFY(!src.queueRequestFor(id, QStringLiteral("must not queue")));
+        QCOMPARE(child->pendingRequestCount(), 0);
     }
 
     void testPumpQueueSkipsPendingRunWithoutLauncher()
@@ -332,6 +350,25 @@ private slots:
         QVERIFY(src.findRow(second, &secondRow));
         QCOMPARE(secondRow.status, QSocTask::Status::Completed);
         QCOMPARE(src.countRunning(), 0);
+    }
+
+    void testPumpQueueObserverMayDeleteSource()
+    {
+        auto                            *src = new QSocSubAgentTaskSource;
+        QPointer<QSocSubAgentTaskSource> owner(src);
+        const QString                    id
+            = src->registerRun(QStringLiteral("delete source"), QStringLiteral("test"), makeAgent());
+        int launchCount = 0;
+        connect(src, &QSocSubAgentTaskSource::tasksChanged, this, [src, id]() {
+            QSocTask::Row row;
+            if (src->findRow(id, &row) && row.status == QSocTask::Status::Running) {
+                delete src;
+            }
+        });
+
+        src->start(id, [&]() { ++launchCount; });
+        QVERIFY(owner.isNull());
+        QCOMPARE(launchCount, 0);
     }
 
     void testPumpQueueSurvivesLauncherRegistration()

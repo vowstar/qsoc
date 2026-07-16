@@ -104,7 +104,9 @@ QString QSocSubAgentTaskSource::tailFor(const QString &id, int maxBytes) const
 
 bool QSocSubAgentTaskSource::killTask(const QString &id)
 {
-    bool killed = false;
+    const QPointer<QSocSubAgentTaskSource> owner(this);
+    QPointer<QSocAgent>                    runningAgent;
+    bool                                   finishNow = false;
     for (RunState &run : runs_) {
         if (run.id != id) {
             continue;
@@ -114,24 +116,34 @@ bool QSocSubAgentTaskSource::killTask(const QString &id)
         if (!isRunning && !isPending) {
             return false;
         }
-        /* Running: abort the live child. Pending: it never started, so
-         * drop its launcher and fail it without abort. */
-        if (isRunning && run.agent != nullptr) {
-            run.agent->abort();
+        if (isRunning && run.launcherStarted && !run.agent.isNull()) {
+            runningAgent = run.agent;
+            break;
         }
+
+        /* Pending and admitted-but-not-started runs have no live work. */
         run.launcher       = {};
         run.status         = QSocTask::Status::Failed;
         run.errorText      = QStringLiteral("aborted by user");
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-        emit tasksChanged();
-        killed = true;
+        finishNow          = true;
         break;
     }
-    /* Cancelling a run frees a slot; admit the next queued one. */
-    if (killed) {
-        pumpQueue();
+
+    if (finishNow) {
+        emit tasksChanged();
+        if (!owner.isNull()) {
+            owner->pumpQueue();
+        }
+        return true;
     }
-    return killed;
+    if (runningAgent.isNull()) {
+        return false;
+    }
+
+    /* The child's terminal callback owns the status change and slot. */
+    runningAgent->abortAndDiscardPendingRequests();
+    return true;
 }
 
 QString QSocSubAgentTaskSource::registerRun(
@@ -187,8 +199,13 @@ void QSocSubAgentTaskSource::pumpQueue()
     if (pumping_) {
         return;
     }
+    const QPointer<QSocSubAgentTaskSource> owner(this);
     pumping_        = true;
-    const auto done = qScopeGuard([this]() { pumping_ = false; });
+    const auto done = qScopeGuard([owner]() {
+        if (!owner.isNull()) {
+            owner->pumping_ = false;
+        }
+    });
 
     /* Re-select after every external call because signals and launchers
      * may append runs and invalidate QList references. */
@@ -224,16 +241,25 @@ void QSocSubAgentTaskSource::pumpQueue()
             writeMeta(run);
         }
         emit tasksChanged();
+        if (owner.isNull()) {
+            return;
+        }
 
         bool stillRunning = false;
-        for (const RunState &run : std::as_const(runs_)) {
+        for (RunState &run : owner->runs_) {
             if (run.id == runId) {
                 stillRunning = (run.status == QSocTask::Status::Running);
+                if (stillRunning) {
+                    run.launcherStarted = true;
+                }
                 break;
             }
         }
         if (stillRunning) {
             launcher();
+            if (owner.isNull()) {
+                return;
+            }
         }
     }
 }
@@ -256,6 +282,7 @@ void QSocSubAgentTaskSource::appendTranscript(const QString &id, const QString &
 
 void QSocSubAgentTaskSource::markCompleted(const QString &id, const QString &finalResult)
 {
+    const QPointer<QSocSubAgentTaskSource> owner(this);
     for (RunState &run : runs_) {
         if (run.id != id) {
             continue;
@@ -266,14 +293,18 @@ void QSocSubAgentTaskSource::markCompleted(const QString &id, const QString &fin
         appendDiskEvent(id, QStringLiteral("final"), finalResult);
         writeMeta(run);
         emit tasksChanged();
+        if (owner.isNull()) {
+            return;
+        }
         break;
     }
     /* A finished run frees a slot; admit the next queued one. */
-    pumpQueue();
+    owner->pumpQueue();
 }
 
 void QSocSubAgentTaskSource::markFailed(const QString &id, const QString &errorText)
 {
+    const QPointer<QSocSubAgentTaskSource> owner(this);
     for (RunState &run : runs_) {
         if (run.id != id) {
             continue;
@@ -284,10 +315,13 @@ void QSocSubAgentTaskSource::markFailed(const QString &id, const QString &errorT
         appendDiskEvent(id, QStringLiteral("error"), errorText);
         writeMeta(run);
         emit tasksChanged();
+        if (owner.isNull()) {
+            return;
+        }
         break;
     }
     /* A finished run frees a slot; admit the next queued one. */
-    pumpQueue();
+    owner->pumpQueue();
 }
 
 void QSocSubAgentTaskSource::setIsolationMetadata(
@@ -327,19 +361,28 @@ int QSocSubAgentTaskSource::runCount() const
 
 void QSocSubAgentTaskSource::abortAll()
 {
-    /* Cancel queued (never-started) runs outright so a freed slot does
-     * not revive them, then abort the live ones. */
+    QList<QPointer<QSocAgent>> runningAgents;
+    bool                       changed = false;
     for (RunState &run : runs_) {
-        if (run.status == QSocTask::Status::Pending) {
+        const bool neverStarted = run.status == QSocTask::Status::Pending
+                                  || (run.status == QSocTask::Status::Running
+                                      && !run.launcherStarted);
+        if (neverStarted) {
             run.launcher       = {};
             run.status         = QSocTask::Status::Failed;
             run.errorText      = QStringLiteral("aborted by user");
             run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+            changed            = true;
+        } else if (run.status == QSocTask::Status::Running && !run.agent.isNull()) {
+            runningAgents.append(run.agent);
         }
     }
-    for (RunState &run : runs_) {
-        if (run.status == QSocTask::Status::Running && run.agent != nullptr) {
-            run.agent->abort();
+    if (changed) {
+        emit tasksChanged();
+    }
+    for (const QPointer<QSocAgent> &agent : std::as_const(runningAgents)) {
+        if (!agent.isNull()) {
+            agent->abortAndDiscardPendingRequests();
         }
     }
 }
@@ -353,7 +396,9 @@ bool QSocSubAgentTaskSource::queueRequestFor(const QString &id, const QString &m
         if (run.status != QSocTask::Status::Running || run.agent == nullptr) {
             return false;
         }
-        run.agent->queueRequest(message);
+        if (!run.agent->queueRequest(message)) {
+            return false;
+        }
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
         return true;
     }

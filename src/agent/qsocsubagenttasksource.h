@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <QList>
+#include <QPointer>
 #include <QString>
 
 class QSocAgent;
@@ -217,7 +218,7 @@ private:
         QString               id;
         QString               label;
         QString               subagentType;
-        QSocAgent            *agent          = nullptr;
+        QPointer<QSocAgent>   agent;
         QSocTask::Status      status         = QSocTask::Status::Pending;
         qint64                queuedAtMs     = 0;
         qint64                startedAtMs    = 0;
@@ -228,6 +229,7 @@ private:
         QString               isolation;   /* "none" | "worktree" */
         QString               worktreePath;
         std::function<void()> launcher; /* set by start(); fired by pumpQueue */
+        bool                  launcherStarted = false;
     };
 
     /* Promote Pending runs to Running (firing their launcher) while a

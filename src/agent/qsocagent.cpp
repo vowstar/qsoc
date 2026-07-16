@@ -12,6 +12,8 @@
 #include "common/qlongtaskmonitor.h"
 #include "common/qsocconsole.h"
 
+#include <utility>
+
 #include <QElapsedTimer>
 
 #include <QDateTime>
@@ -63,6 +65,29 @@ std::string wrapSystemReminder(const QString &content)
     return "<system-reminder>\n" + content.toStdString() + "\n</system-reminder>";
 }
 
+std::optional<json> buildToolAttachmentMessage(const QList<QSocAgent::AttachmentSpec> &attachments)
+{
+    if (attachments.isEmpty()) {
+        return std::nullopt;
+    }
+
+    json content     = json::array();
+    int  imageTokens = 0;
+    content.push_back({{"type", "text"}, {"text", std::string("Tool attachment payload:")}});
+    for (const auto &attachment : attachments) {
+        const QString dataUrl
+            = QStringLiteral("data:%1;base64,%2").arg(attachment.mime, attachment.dataB64);
+        content.push_back({{"type", "image_url"}, {"image_url", {{"url", dataUrl.toStdString()}}}});
+        imageTokens += attachment.estTokens;
+    }
+
+    json message = {{"role", "user"}, {"content", content}};
+    if (imageTokens > 0) {
+        message["_img_tokens"] = imageTokens;
+    }
+    return message;
+}
+
 } // namespace
 
 QSocAgent::QSocAgent(
@@ -89,13 +114,13 @@ QSocAgent::QSocAgent(
 
     retryTimer->setSingleShot(true);
     connect(retryTimer, &QTimer::timeout, this, [this]() {
-        const quint64 epoch = retryEpoch_;
-        retryEpoch_         = 0;
-        if (!isStreaming || streamEpoch_ != epoch) {
+        const quint64 epoch    = retryEpoch_;
+        retryEpoch_            = 0;
+        const ActiveRunPtr run = activeRun_;
+        if (!isCurrentRun(run) || run->mode != RunMode::Streaming || run->epoch != epoch) {
             return;
         }
-        if (abortRequested) {
-            handleStreamError(QStringLiteral("Aborted by user"));
+        if (run->stop.load() != StopMode::None && checkpointRun(run) == CheckpointAction::Terminal) {
             return;
         }
         processStreamIteration();
@@ -104,11 +129,262 @@ QSocAgent::QSocAgent(
 
 QSocAgent::~QSocAgent()
 {
+    if (activeRun_) {
+        activeRun_->stopSource.request_stop();
+    }
     /* Qt automatically disconnects signals when either sender or receiver is destroyed */
     /* No manual disconnect needed - doing so can cause crashes if llmService is already destroyed */
 }
 
+QSocAgent::ActiveRunPtr QSocAgent::beginRun(RunMode mode)
+{
+    auto run   = std::make_shared<ActiveRun>();
+    run->epoch = ++nextRunEpoch_;
+    run->mode  = mode;
+    run->llm   = llmService;
+    run->tools = toolRegistry;
+    activeRun_ = run;
+    if (mode == RunMode::Streaming && !run->llm.isNull()) {
+        run->llmDestroyedConnection
+            = connect(run->llm.data(), &QObject::destroyed, this, [this, run]() {
+                  finishStreamRun(run, RunOutcome::Error, QStringLiteral("LLM service destroyed"));
+              });
+    }
+
+    isStreaming = mode == RunMode::Streaming;
+    {
+        QMutexLocker locker(&queueMutex);
+        rejectQueuedRequests_ = false;
+    }
+    return run;
+}
+
+bool QSocAgent::isCurrentRun(const ActiveRunPtr &run) const
+{
+    return run && activeRun_ == run && run->phase == RunPhase::Active;
+}
+
+void QSocAgent::finishToolBatch(const ActiveRunPtr &run)
+{
+    if (!run || !run->toolBatchStart.has_value()) {
+        return;
+    }
+    const json::size_type        start = *run->toolBatchStart;
+    const std::optional<QString> executingToolCallId
+        = std::exchange(run->executingToolCallId, std::nullopt);
+    const json attachments = std::exchange(run->toolBatchAttachments, json::array());
+    run->toolBatchStart.reset();
+    if (activeRun_ != run || !messages.is_array() || messages.size() <= start) {
+        return;
+    }
+
+    const json assistant = messages.at(start);
+    if (!assistant.is_object() || assistant.value("role", std::string()) != "assistant"
+        || !assistant.contains("tool_calls") || !assistant["tool_calls"].is_array()) {
+        return;
+    }
+
+    QSet<QString> completedIds;
+    for (json::size_type index = start + 1; index < messages.size(); ++index) {
+        const json &message = messages.at(index);
+        if (message.value("role", std::string()) == "tool" && message.contains("tool_call_id")
+            && message["tool_call_id"].is_string()) {
+            completedIds.insert(QString::fromStdString(message["tool_call_id"].get<std::string>()));
+        }
+    }
+
+    for (const json &toolCall : assistant["tool_calls"]) {
+        if (!toolCall.is_object() || !toolCall.contains("id") || !toolCall["id"].is_string()) {
+            continue;
+        }
+        const QString id = QString::fromStdString(toolCall["id"].get<std::string>());
+        if (completedIds.contains(id)) {
+            continue;
+        }
+        const QString result
+            = executingToolCallId.has_value() && id == *executingToolCallId
+                  ? QStringLiteral(
+                        "A stop was requested while this tool was running. Completion is "
+                        "uncertain, and side effects may have occurred. "
+                        "Verify current state before retrying.")
+                  : QStringLiteral("Not executed because the tool batch was interrupted.");
+        addToolMessage(id, result);
+        completedIds.insert(id);
+    }
+    for (const json &attachment : attachments) {
+        messages.push_back(attachment);
+    }
+}
+
+void QSocAgent::finishSynchronousRun(const ActiveRunPtr &run)
+{
+    if (!isCurrentRun(run)) {
+        return;
+    }
+    finishToolBatch(run);
+    run->phase = RunPhase::Terminal;
+    activeRun_.reset();
+}
+
+void QSocAgent::finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, const QString &payload)
+{
+    if (!isCurrentRun(run) || run->mode != RunMode::Streaming) {
+        return;
+    }
+    QObject::disconnect(run->llmDestroyedConnection);
+    run->llmDestroyedConnection = {};
+    finishToolBatch(run);
+    run->phase = RunPhase::Finishing;
+
+    const QPointer<QSocAgent> owner(this);
+    if (outcome == RunOutcome::Complete) {
+        fireStopHook(payload);
+        if (owner.isNull() || owner->activeRun_ != run || run->phase != RunPhase::Finishing) {
+            return;
+        }
+        if (run->stop.load() != StopMode::None) {
+            outcome = RunOutcome::Aborted;
+        }
+    }
+
+    run->phase = RunPhase::Terminal;
+    owner->activeRun_.reset();
+    owner->isStreaming = false;
+    owner->heartbeatTimer->stop();
+    owner->retryTimer->stop();
+    owner->retryEpoch_ = 0;
+    owner->teardownStreamMonitor(
+        outcome == RunOutcome::Aborted ? QStringLiteral("user abort") : QString());
+    if (owner.isNull()) {
+        return;
+    }
+
+    if (outcome == RunOutcome::Complete) {
+        emit owner->runComplete(payload);
+    } else if (outcome == RunOutcome::Error) {
+        emit owner->runError(payload);
+    } else {
+        emit owner->runAborted(payload);
+    }
+}
+
+void QSocAgent::requestStop(StopMode mode)
+{
+    const ActiveRunPtr run = activeRun_;
+    if (!run) {
+        return;
+    }
+    if (mode == StopMode::Hard) {
+        run->stop.store(StopMode::Hard);
+    } else {
+        StopMode expected = StopMode::None;
+        run->stop.compare_exchange_strong(expected, StopMode::Soft);
+    }
+    run->stopSource.request_stop();
+}
+
+bool QSocAgent::hasPendingUserRequests() const
+{
+    QMutexLocker locker(&queueMutex);
+    for (const QueuedRequest &item : requestQueue) {
+        if (!item.taskNotification) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QSocAgent::CheckpointAction QSocAgent::checkpointRun(const ActiveRunPtr &run)
+{
+    if (!isCurrentRun(run)) {
+        return CheckpointAction::Terminal;
+    }
+
+    switch (run->stop.load()) {
+    case StopMode::None:
+        return CheckpointAction::Continue;
+    case StopMode::Soft:
+        if (hasPendingUserRequests()) {
+            StopMode expected = StopMode::Soft;
+            if (run->stop.compare_exchange_strong(expected, StopMode::None)) {
+                run->stopSource = std::stop_source();
+                return CheckpointAction::Restart;
+            }
+            if (expected == StopMode::None) {
+                return CheckpointAction::Continue;
+            }
+        }
+        break;
+    case StopMode::Hard:
+        break;
+    }
+
+    if (run->mode == RunMode::Streaming) {
+        finishStreamRun(run, RunOutcome::Aborted, streamFinalContent);
+    } else {
+        finishSynchronousRun(run);
+    }
+    return CheckpointAction::Terminal;
+}
+
+bool QSocAgent::drainQueuedRequests(const ActiveRunPtr &run)
+{
+    while (isCurrentRun(run)) {
+        QueuedRequest item;
+        int           remaining = 0;
+        {
+            QMutexLocker locker(&queueMutex);
+            if (requestQueue.isEmpty()) {
+                return true;
+            }
+            item      = requestQueue.takeFirst();
+            remaining = requestQueue.size();
+        }
+
+        const QPointer<QSocAgent> owner(this);
+        const auto                canContinue = [owner, run]() {
+            return !owner.isNull() && owner->checkpointRun(run) != CheckpointAction::Terminal;
+        };
+        if (item.taskNotification) {
+            emit processingQueuedRequest(QStringLiteral("[task notification]"), remaining);
+            if (!canContinue()) {
+                return false;
+            }
+            owner->addMessage("user", item.text);
+            continue;
+        }
+
+        QString    request = item.text;
+        QString    blockReason;
+        const bool allowed = firePromptSubmitHook(&request, &blockReason);
+        if (!canContinue()) {
+            return false;
+        }
+        if (!allowed) {
+            emit processingQueuedRequest(
+                QStringLiteral("[blocked by user_prompt_submit: %1]").arg(blockReason), remaining);
+            if (!canContinue()) {
+                return false;
+            }
+            continue;
+        }
+
+        emit processingQueuedRequest(request, remaining);
+        if (!canContinue()) {
+            return false;
+        }
+        owner->addMessage("user", request);
+    }
+    return false;
+}
+
 QString QSocAgent::toolDenyReason(const QString &name) const
+{
+    return toolDenyReasonForRegistry(name, toolRegistry.data());
+}
+
+QString QSocAgent::toolDenyReasonForRegistry(
+    const QString &name, const QSocToolRegistry *registry) const
 {
     /* Sub-agents must never spawn further sub-agents: closes the
      * recursion door regardless of allowlist. */
@@ -158,7 +434,7 @@ QString QSocAgent::toolDenyReason(const QString &name) const
         const bool shellJudged
             = (name == QStringLiteral("bash") || name == QStringLiteral("remote_shell_bash"));
         const bool      spawnOk = (name == QStringLiteral("agent"));
-        const QSocTool *tool    = toolRegistry != nullptr ? toolRegistry->getTool(name) : nullptr;
+        const QSocTool *tool    = registry != nullptr ? registry->getTool(name) : nullptr;
         if (!shellJudged && !spawnOk && (tool == nullptr || !tool->isReadOnly())) {
             if (agentConfig.isSubAgent) {
                 return QStringLiteral(
@@ -181,10 +457,11 @@ nlohmann::json QSocAgent::getEffectiveToolDefinitions() const
     if (toolRegistry == nullptr) {
         return json::array();
     }
-    return filterAllowedTools(toolRegistry->getToolDefinitions());
+    return filterAllowedTools(toolRegistry->getToolDefinitions(), toolRegistry.data());
 }
 
-nlohmann::json QSocAgent::filterAllowedTools(const nlohmann::json &defs) const
+nlohmann::json QSocAgent::filterAllowedTools(
+    const nlohmann::json &defs, const QSocToolRegistry *registry) const
 {
     json filtered = json::array();
     for (const auto &def : defs) {
@@ -193,7 +470,7 @@ nlohmann::json QSocAgent::filterAllowedTools(const nlohmann::json &defs) const
             continue;
         }
         const QString name = QString::fromStdString(def["function"]["name"].get<std::string>());
-        if (isToolAllowed(name)) {
+        if (toolDenyReasonForRegistry(name, registry).isEmpty()) {
             filtered.push_back(def);
         }
     }
@@ -202,60 +479,133 @@ nlohmann::json QSocAgent::filterAllowedTools(const nlohmann::json &defs) const
 
 QString QSocAgent::run(const QString &userQuery)
 {
-    QString prompt = userQuery;
-    QString blockReason;
-    if (!firePromptSubmitHook(&prompt, &blockReason)) {
+    if (activeRun_) {
+        return QStringLiteral("[Agent already running]");
+    }
+    const ActiveRunPtr        run = beginRun(RunMode::Synchronous);
+    const QPointer<QSocAgent> owner(this);
+    const auto                checkpoint = [owner, run]() {
+        return owner.isNull() ? CheckpointAction::Terminal : owner->checkpointRun(run);
+    };
+
+    QString    prompt = userQuery;
+    QString    blockReason;
+    const bool promptAllowed = firePromptSubmitHook(&prompt, &blockReason);
+    if (checkpoint() == CheckpointAction::Terminal) {
+        return QStringLiteral("[Agent aborted]");
+    }
+    if (!promptAllowed) {
+        owner->finishSynchronousRun(run);
         return QStringLiteral("[user_prompt_submit hook blocked: %1]").arg(blockReason);
     }
 
     /* Add user message to history */
-    addMessage("user", prompt);
+    owner->addMessage("user", prompt);
 
-    planNudgeUsed = false;
+    owner->planNudgeUsed = false;
 
     /* Rank relevant memories for this turn (synchronous, before the
      * loop). Filled into recallBlock_ and injected as a non-persisted
      * reminder each iteration. */
-    computeRecallForTurn(prompt);
+    owner->computeRecallForTurn(prompt, run);
+    if (checkpoint() == CheckpointAction::Terminal) {
+        return QStringLiteral("[Agent aborted]");
+    }
 
     /* Agent loop */
     int       iteration = 0;
-    const int turnCap   = agentConfig.maxTurnsOverride > 0 ? agentConfig.maxTurnsOverride
-                                                           : agentConfig.maxIterations;
+    const int turnCap   = owner->agentConfig.maxTurnsOverride > 0
+                              ? owner->agentConfig.maxTurnsOverride
+                              : owner->agentConfig.maxIterations;
 
     /* Snapshot the rolling token estimate so each iteration's
      * delta can be charged against the active goal's budget. */
-    int           prevTokensEstimate = estimateMessagesTokens();
+    int           prevTokensEstimate = owner->estimateMessagesTokens();
     QElapsedTimer iterationTimer;
     iterationTimer.start();
 
     while (iteration < turnCap) {
-        iteration++;
+        if (checkpoint() == CheckpointAction::Terminal) {
+            return QStringLiteral("[Agent aborted]");
+        }
+        if (!owner->drainQueuedRequests(run)) {
+            return QStringLiteral("[Agent aborted]");
+        }
 
         /* Check and compress history if needed */
-        compressHistoryIfNeeded();
+        owner->compressHistoryIfNeeded(run);
+        CheckpointAction action = checkpoint();
+        if (action == CheckpointAction::Restart) {
+            continue;
+        }
+        if (action == CheckpointAction::Terminal) {
+            return QStringLiteral("[Agent aborted]");
+        }
 
-        int currentTokens = estimateMessagesTokens();
+        int currentTokens = owner->estimateMessagesTokens();
 
-        if (agentConfig.verbose) {
-            QString info = QString("[Iteration %1 | Tokens: %2/%3 (%4%) | Messages: %5]")
-                               .arg(iteration)
-                               .arg(currentTokens)
-                               .arg(agentConfig.maxContextTokens)
-                               .arg(100.0 * currentTokens / agentConfig.maxContextTokens, 0, 'f', 1)
-                               .arg(messages.size());
-            emit    verboseOutput(info);
+        if (owner->agentConfig.verbose) {
+            QString info
+                = QString("[Iteration %1 | Tokens: %2/%3 (%4%) | Messages: %5]")
+                      .arg(iteration + 1)
+                      .arg(currentTokens)
+                      .arg(owner->agentConfig.maxContextTokens)
+                      .arg(100.0 * currentTokens / owner->agentConfig.maxContextTokens, 0, 'f', 1)
+                      .arg(owner->messages.size());
+            emit owner->verboseOutput(info);
+            action = checkpoint();
+            if (action == CheckpointAction::Restart) {
+                continue;
+            }
+            if (action == CheckpointAction::Terminal) {
+                return QStringLiteral("[Agent aborted]");
+            }
         }
 
         /* Process one iteration */
-        bool isComplete = processIteration();
+        iteration++;
+        const IterationResult result = owner->processIteration(run);
+        if (owner.isNull()) {
+            return QStringLiteral("[Agent aborted]");
+        }
 
-        accountGoalUsageForIteration(prevTokensEstimate, iterationTimer);
+        if (result == IterationResult::RestartPreparation) {
+            iteration--;
+            continue;
+        }
+        if (result == IterationResult::Stopped) {
+            action = checkpoint();
+            if (action == CheckpointAction::Restart) {
+                iteration--;
+                continue;
+            }
+            if (action == CheckpointAction::Terminal) {
+                return QStringLiteral("[Agent aborted]");
+            }
+            owner->finishSynchronousRun(run);
+            return QStringLiteral("[Agent aborted]");
+        }
+        action = checkpoint();
+        if (action == CheckpointAction::Restart) {
+            continue;
+        }
+        if (action == CheckpointAction::Terminal) {
+            return QStringLiteral("[Agent aborted]");
+        }
 
-        if (isComplete) {
+        owner->accountGoalUsageForIteration(prevTokensEstimate, iterationTimer);
+        action = checkpoint();
+        if (action == CheckpointAction::Restart) {
+            continue;
+        }
+        if (action == CheckpointAction::Terminal) {
+            return QStringLiteral("[Agent aborted]");
+        }
+
+        if (result == IterationResult::Complete) {
             QString finalText;
-            if (!messages.empty()) {
-                auto lastMessage = messages.back();
+            if (!owner->messages.empty()) {
+                auto lastMessage = owner->messages.back();
                 if (lastMessage["role"] == "assistant" && lastMessage.contains("content")
                     && lastMessage["content"].is_string()) {
                     finalText = QString::fromStdString(lastMessage["content"].get<std::string>());
@@ -265,16 +615,36 @@ QString QSocAgent::run(const QString &userQuery)
             } else {
                 finalText = QStringLiteral("[Agent completed without final message]");
             }
-            if (maybeQueueGoalContinuation()) {
+            const bool goalQueued = owner->maybeQueueGoalContinuation(run);
+            action                = checkpoint();
+            if (action == CheckpointAction::Restart) {
+                continue;
+            }
+            if (action == CheckpointAction::Terminal) {
+                return QStringLiteral("[Agent aborted]");
+            }
+            if (goalQueued) {
                 /* The continuation prompt was appended as a user
                  * message; loop back so processIteration handles
                  * the next turn. Token budget enforcement caps the
                  * total spend; turnCap caps the iteration count. */
                 continue;
             }
-            if (maybeQueuePlanModeNudge()) {
+            const bool planQueued = owner->maybeQueuePlanModeNudge();
+            action                = checkpoint();
+            if (action == CheckpointAction::Restart) {
                 continue;
             }
+            if (action == CheckpointAction::Terminal) {
+                return QStringLiteral("[Agent aborted]");
+            }
+            if (planQueued) {
+                continue;
+            }
+            if (owner->hasPendingRequests()) {
+                continue;
+            }
+            owner->finishSynchronousRun(run);
             return finalText;
         }
     }
@@ -282,50 +652,69 @@ QString QSocAgent::run(const QString &userQuery)
     /* Cap source decides the wording: per-agent override gets the
      * "max turns limit" message; the default safety cap retains the
      * legacy phrasing so existing logs still match. */
-    if (agentConfig.maxTurnsOverride > 0) {
+    if (owner->agentConfig.maxTurnsOverride > 0) {
+        owner->finishSynchronousRun(run);
         return QString("Reached max turns limit (%1)").arg(turnCap);
     }
+    owner->finishSynchronousRun(run);
     return QString("[Agent safety limit reached (%1 iterations)]").arg(turnCap);
 }
 
 void QSocAgent::runStream(const QString &userQuery)
 {
+    if (activeRun_) {
+        if (activeRun_->mode == RunMode::Streaming && queueRequest(userQuery)) {
+            abort();
+        }
+        return;
+    }
     if (!llmService || !toolRegistry) {
         emit runError("LLM service or tool registry not configured");
         return;
     }
 
-    fireSessionStartHookOnce();
-
-    QString prompt = userQuery;
-    QString blockReason;
-    if (!firePromptSubmitHook(&prompt, &blockReason)) {
-        emit runError(QStringLiteral("user_prompt_submit hook blocked: %1").arg(blockReason));
-        return;
-    }
-
-    /* Add user message to history */
-    addMessage("user", prompt);
-
-    /* Setup streaming */
+    const ActiveRunPtr        run = beginRun(RunMode::Streaming);
+    const QPointer<QSocAgent> owner(this);
     retryTimer->stop();
-    retryEpoch_ = 0;
-    isStreaming = true;
-    ++streamEpoch_; /* invalidate any deferred retry from a prior run */
+    retryEpoch_               = 0;
     streamIteration           = 0;
     currentRetryCount         = 0;
     contextOverflowRetryCount = 0;
     emptyResponseRetryCount   = 0;
     planNudgeUsed             = false;
     streamFinalContent.clear();
-    abortRequested = false;
 
-    /* Rank relevant memories for this turn. Runs after streamEpoch_ is
-     * bumped and abortRequested cleared, so the synchronous selector's
-     * nested event loop cannot dispatch a stale deferred retry from a
-     * prior run. Fills recallBlock_, injected as a non-persisted reminder
-     * each iteration. */
-    computeRecallForTurn(prompt);
+    fireSessionStartHookOnce();
+    if (owner.isNull() || owner->checkpointRun(run) == CheckpointAction::Terminal) {
+        return;
+    }
+
+    QString    prompt = userQuery;
+    QString    blockReason;
+    const bool promptAllowed = firePromptSubmitHook(&prompt, &blockReason);
+    if (owner.isNull() || owner->checkpointRun(run) == CheckpointAction::Terminal) {
+        return;
+    }
+    if (!promptAllowed) {
+        owner->finishStreamRun(
+            run,
+            RunOutcome::Error,
+            QStringLiteral("user_prompt_submit hook blocked: %1").arg(blockReason));
+        return;
+    }
+
+    /* Add user message to history */
+    addMessage("user", prompt);
+
+    /* Rank relevant memories for this turn. */
+    computeRecallForTurn(prompt, run);
+    if (owner.isNull() || owner->checkpointRun(run) == CheckpointAction::Terminal) {
+        return;
+    }
+    if (run->llm.isNull() || run->tools.isNull()) {
+        owner->finishStreamRun(run, RunOutcome::Error, QStringLiteral("Agent dependency destroyed"));
+        return;
+    }
 
     /* Reset token counters for this run */
     totalInputTokens  = 0;
@@ -343,28 +732,28 @@ void QSocAgent::runStream(const QString &userQuery)
 
     /* Connect to LLM streaming signals (use member functions for UniqueConnection) */
     connect(
-        llmService,
+        run->llm.data(),
         &QLLMService::streamChunk,
         this,
         &QSocAgent::handleStreamChunk,
         Qt::UniqueConnection);
 
     connect(
-        llmService,
+        run->llm.data(),
         &QLLMService::streamComplete,
         this,
         &QSocAgent::handleStreamComplete,
         Qt::UniqueConnection);
 
     connect(
-        llmService,
+        run->llm.data(),
         &QLLMService::streamError,
         this,
         &QSocAgent::handleStreamError,
         Qt::UniqueConnection);
 
     connect(
-        llmService,
+        run->llm.data(),
         &QLLMService::streamReasoningChunk,
         this,
         &QSocAgent::handleReasoningChunk,
@@ -376,6 +765,11 @@ void QSocAgent::runStream(const QString &userQuery)
 
 void QSocAgent::handleStreamChunk(const QString &chunk)
 {
+    const ActiveRunPtr run = activeRun_;
+    if (!isCurrentRun(run) || run->mode != RunMode::Streaming || run->llm.isNull()
+        || sender() != run->llm.data()) {
+        return;
+    }
     if (streamMonitor != nullptr) {
         streamMonitor->notifyProgress();
     }
@@ -383,12 +777,18 @@ void QSocAgent::handleStreamChunk(const QString &chunk)
     /* Estimate output tokens from this chunk */
     int chunkTokens = estimateTokens(chunk);
     totalOutputTokens.fetch_add(chunkTokens);
+    streamFinalContent += chunk;
 
     emit contentChunk(chunk);
 }
 
 void QSocAgent::handleReasoningChunk(const QString &chunk)
 {
+    const ActiveRunPtr run = activeRun_;
+    if (!isCurrentRun(run) || run->mode != RunMode::Streaming || run->llm.isNull()
+        || sender() != run->llm.data()) {
+        return;
+    }
     if (streamMonitor != nullptr) {
         streamMonitor->notifyProgress();
     }
@@ -449,35 +849,33 @@ int QSocAgent::backoffDelayMs(int attempt, bool rateLimit)
 void QSocAgent::handleStreamError(const QString &error)
 {
     const QPointer<QSocAgent> owner(this);
-    const quint64             epoch     = streamEpoch_;
-    const auto                isCurrent = [owner, epoch]() {
-        return !owner.isNull() && owner->isStreaming && owner->streamEpoch_ == epoch;
+    const ActiveRunPtr        run = activeRun_;
+    if (!isCurrentRun(run) || run->mode != RunMode::Streaming || run->llm.isNull()
+        || sender() != run->llm.data()) {
+        return;
+    }
+    const quint64 epoch     = run ? run->epoch : 0;
+    const auto    isCurrent = [owner, run]() {
+        return !owner.isNull() && owner->isCurrentRun(run) && run->mode == RunMode::Streaming;
     };
-    const auto finishAbort = [owner, epoch, isCurrent]() {
+    const auto finishAbort = [owner, run, isCurrent]() {
         if (!isCurrent()) {
             return true;
         }
-        if (!owner->abortRequested) {
+        if (run->stop.load() == StopMode::None) {
             return false;
         }
         owner->retryTimer->stop();
         owner->retryEpoch_ = 0;
-        if (owner->hasPendingRequests()) {
-            /* ESC with input queued: drop this iteration's reply and
-             * continue the run with the queued message. */
-            owner->abortRequested = false;
+        switch (owner->checkpointRun(run)) {
+        case CheckpointAction::Continue:
+            return false;
+        case CheckpointAction::Restart:
             owner->processStreamIteration();
             return true;
-        }
-        const QString finalContent = owner->streamFinalContent;
-        owner->isStreaming         = false;
-        owner->heartbeatTimer->stop();
-        owner->abortRequested = false;
-        owner->teardownStreamMonitor(QStringLiteral("user abort"));
-        if (owner.isNull() || owner->streamEpoch_ != epoch) {
+        case CheckpointAction::Terminal:
             return true;
         }
-        emit owner->runAborted(finalContent);
         return true;
     };
 
@@ -573,19 +971,17 @@ void QSocAgent::handleStreamError(const QString &error)
     }
 
     /* No more retries or non-retryable error */
-    owner->retryTimer->stop();
-    owner->retryEpoch_ = 0;
-    owner->isStreaming = false;
-    owner->heartbeatTimer->stop();
-    owner->teardownStreamMonitor(QString());
     owner->currentRetryCount         = 0;
     owner->contextOverflowRetryCount = 0;
     owner->emptyResponseRetryCount   = 0;
-    emit owner->runError(error);
+    owner->finishStreamRun(run, RunOutcome::Error, error);
 }
 
-void QSocAgent::computeRecallForTurn(const QString &query)
+void QSocAgent::computeRecallForTurn(const QString &query, const ActiveRunPtr &run)
 {
+    if (!isCurrentRun(run)) {
+        return;
+    }
     recallBlock_.clear();
 
     /* Recall is a parent/interactive concern: disabled, sub-agent, or no
@@ -624,10 +1020,13 @@ void QSocAgent::computeRecallForTurn(const QString &query)
     /* Selection path: ask a cheap model to rank headers by relevance.
      * Lazily clone the service onto the recall model; fall back to the
      * primary service when no model is set or the id is unknown. */
-    QLLMService *selector = llmService;
+    QLLMService *selector = run->llm.data();
+    if (selector == nullptr) {
+        return;
+    }
     if (!agentConfig.memoryRecallModel.isEmpty()) {
         if (!recallLlm_) {
-            recallLlm_ = llmService->clone(this);
+            recallLlm_ = selector->clone(this);
             if (!recallLlm_->setCurrentModel(agentConfig.memoryRecallModel)) {
                 recallLlm_->deleteLater();
                 recallLlm_ = nullptr;
@@ -648,7 +1047,12 @@ void QSocAgent::computeRecallForTurn(const QString &query)
     bool        selectorOk = false;
     try {
         /* Synchronous: safe here because no stream is in flight yet. */
-        const json resp = selector->sendChatCompletion(selMessages, json::array(), 0.1);
+        const QPointer<QSocAgent> owner(this);
+        const json                resp = selector->sendChatCompletion(
+            selMessages, json::array(), 0.1, run->stopSource.get_token());
+        if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
+            return;
+        }
         if (resp.contains("choices") && resp["choices"].is_array() && !resp["choices"].empty()) {
             /* Got a response; guard every nested key (const operator[] on a
              * missing key is UB, not an exception). */
@@ -668,12 +1072,19 @@ void QSocAgent::computeRecallForTurn(const QString &query)
      * so memory still surfaces under a flaky cheap model. A successful but
      * empty selection is respected (the model judged nothing relevant). */
     if (!selectorOk) {
+        const QPointer<QSocAgent> owner(this);
         if (agentConfig.verbose) {
             emit verboseOutput(
                 QStringLiteral("[memory recall: selector unavailable, using recent topics]"));
+            if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
+                return;
+            }
         }
-        recallBlock_
-            = recall.assembleBlock(headers.mid(0, agentConfig.memoryRecallMaxFiles), reader);
+        if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
+            return;
+        }
+        owner->recallBlock_
+            = recall.assembleBlock(headers.mid(0, owner->agentConfig.memoryRecallMaxFiles), reader);
         return;
     }
 
@@ -692,168 +1103,204 @@ void QSocAgent::computeRecallForTurn(const QString &query)
         }
     }
 
-    recallBlock_ = recall.assembleBlock(selected, reader);
+    if (isCurrentRun(run) && !run->stopSource.stop_requested()) {
+        recallBlock_ = recall.assembleBlock(selected, reader);
+    }
 }
 
 void QSocAgent::processStreamIteration()
 {
-    if (!isStreaming) {
+    const ActiveRunPtr        run = activeRun_;
+    const QPointer<QSocAgent> owner(this);
+    if (!isCurrentRun(run) || run->mode != RunMode::Streaming) {
+        return;
+    }
+    const auto checkpoint = [owner, run]() {
+        return owner.isNull() ? CheckpointAction::Terminal : owner->checkpointRun(run);
+    };
+    if (checkpoint() == CheckpointAction::Terminal) {
         return;
     }
 
-    /* Check for abort request. With input queued, ESC cuts only the
-     * current iteration: the queue drain below feeds the model the new
-     * message and the run continues (the whole run ends only when
-     * nothing is queued). */
-    if (abortRequested) {
-        if (hasPendingRequests()) {
-            abortRequested = false;
-        } else {
-            isStreaming = false;
-            heartbeatTimer->stop();
-            abortRequested = false;
-            teardownStreamMonitor(QStringLiteral("user abort"));
-            emit runAborted(streamFinalContent);
+    bool countIteration = true;
+    while (!owner.isNull() && owner->isCurrentRun(run)) {
+        /* Each preparation attempt owns its watchdog. */
+        owner->teardownStreamMonitor(QString());
+        owner->armStreamMonitor();
+
+        if (!owner->drainQueuedRequests(run)) {
             return;
         }
-    }
 
-    /* Each iteration owns its watchdog: discard the previous one (so
-     * its timer stops) and build a fresh one scoped to this round. */
-    teardownStreamMonitor(QString());
-    armStreamMonitor();
-
-    /* Check for pending requests - inject them into conversation */
-    {
-        QMutexLocker locker(&queueMutex);
-        while (!requestQueue.isEmpty()) {
-            QueuedRequest item       = requestQueue.takeFirst();
-            QString       newRequest = item.text;
-            int           remaining  = requestQueue.size();
-            locker.unlock();
-
-            if (item.taskNotification) {
-                emit processingQueuedRequest(QStringLiteral("[task notification]"), remaining);
-                addMessage("user", newRequest);
-                locker.relock();
-                continue;
+        if (countIteration) {
+            owner->streamIteration++;
+            countIteration      = false;
+            const int streamCap = owner->agentConfig.maxTurnsOverride > 0
+                                      ? owner->agentConfig.maxTurnsOverride
+                                      : owner->agentConfig.maxIterations;
+            if (owner->streamIteration > streamCap) {
+                const QString msg
+                    = owner->agentConfig.maxTurnsOverride > 0
+                          ? QString("Reached max turns limit (%1)").arg(streamCap)
+                          : QString("[Agent safety limit reached (%1 iterations)]").arg(streamCap);
+                owner->finishStreamRun(run, RunOutcome::Error, msg);
+                return;
             }
-
-            QString blockReason;
-            if (!firePromptSubmitHook(&newRequest, &blockReason)) {
-                emit processingQueuedRequest(
-                    QStringLiteral("[blocked by user_prompt_submit: %1]").arg(blockReason),
-                    remaining);
-                locker.relock();
-                continue;
-            }
-
-            emit processingQueuedRequest(newRequest, remaining);
-
-            /* Add new user message - this will cause LLM to reconsider */
-            addMessage("user", newRequest);
-
-            locker.relock();
         }
-    }
 
-    streamIteration++;
+        /* Check and compress history if needed */
+        owner->compressHistoryIfNeeded(run);
+        CheckpointAction action = checkpoint();
+        if (action == CheckpointAction::Restart) {
+            continue;
+        }
+        if (action == CheckpointAction::Terminal) {
+            return;
+        }
 
-    const int streamCap = agentConfig.maxTurnsOverride > 0 ? agentConfig.maxTurnsOverride
-                                                           : agentConfig.maxIterations;
-    if (streamIteration > streamCap) {
-        isStreaming = false;
-        heartbeatTimer->stop();
-        teardownStreamMonitor(QString());
-        const QString msg
-            = agentConfig.maxTurnsOverride > 0
-                  ? QString("Reached max turns limit (%1)").arg(streamCap)
-                  : QString("[Agent safety limit reached (%1 iterations)]").arg(streamCap);
-        emit runError(msg);
+        if (owner->agentConfig.verbose) {
+            int     currentTokens = owner->estimateTotalTokens();
+            QString info
+                = QString("[Iteration %1 | Tokens: %2/%3 (%4%) | Messages: %5]")
+                      .arg(owner->streamIteration)
+                      .arg(currentTokens)
+                      .arg(owner->agentConfig.maxContextTokens)
+                      .arg(100.0 * currentTokens / owner->agentConfig.maxContextTokens, 0, 'f', 1)
+                      .arg(owner->messages.size());
+            emit owner->verboseOutput(info);
+            action = checkpoint();
+            if (action == CheckpointAction::Restart) {
+                continue;
+            }
+            if (action == CheckpointAction::Terminal) {
+                return;
+            }
+        }
+
+        /* Build messages with system prompt (includes auto-injected memory) */
+        json messagesWithSystem = json::array();
+
+        QString fullSystemPrompt = owner->buildSystemPromptWithMemory();
+        if (!fullSystemPrompt.isEmpty()) {
+            messagesWithSystem.push_back(
+                {{"role", "system"}, {"content", fullSystemPrompt.toStdString()}});
+        }
+
+        for (const auto &msg : owner->messages) {
+            json sanitized = msg;
+            /* The internal `_usage` annotation is for our token estimator
+             * only; OpenAI / DeepSeek reject unknown top-level fields on
+             * messages, so strip it before the wire. */
+            sanitized.erase("_usage");
+            sanitized.erase("_img_tokens");
+            messagesWithSystem.push_back(sanitized);
+        }
+
+        /* Per-turn ephemeral reminders (critical reminder, plan mode, focus,
+         * approved plan, memory recall): appended to the wire payload as
+         * trailing <system-reminder> user-turn content. Not persisted into
+         * `messages`; keeps the cached system prefix stable and avoids a
+         * role:"system" message after the history that strict chat templates
+         * reject. */
+        owner->injectPerTurnReminders(messagesWithSystem);
+        action = checkpoint();
+        if (action == CheckpointAction::Restart) {
+            continue;
+        }
+        if (action == CheckpointAction::Terminal) {
+            return;
+        }
+
+        /* Get tool definitions, filtered by sub-agent allowlist when set. */
+        if (run->tools.isNull()) {
+            owner->finishStreamRun(run, RunOutcome::Error, QStringLiteral("Tool registry destroyed"));
+            return;
+        }
+        const json definitions = run->tools->getToolDefinitions();
+        action                 = checkpoint();
+        if (action == CheckpointAction::Restart) {
+            continue;
+        }
+        if (action == CheckpointAction::Terminal) {
+            return;
+        }
+        json tools = owner->filterAllowedTools(definitions, run->tools.data());
+        action     = checkpoint();
+        if (action == CheckpointAction::Restart) {
+            continue;
+        }
+        if (action == CheckpointAction::Terminal) {
+            return;
+        }
+
+        /* Determine model override for reasoning */
+        const double  temperature = owner->agentConfig.temperature;
+        const QString effortLevel = owner->agentConfig.effortLevel;
+        QString       modelOverride;
+        if (!effortLevel.isEmpty() && !owner->agentConfig.reasoningModel.isEmpty()) {
+            modelOverride = owner->agentConfig.reasoningModel;
+        }
+
+        if (run->llm.isNull() || run->tools.isNull()) {
+            owner->finishStreamRun(
+                run, RunOutcome::Error, QStringLiteral("Agent dependency destroyed"));
+            return;
+        }
+        const int inputTokens = owner->estimateTotalTokensFromSnapshot(fullSystemPrompt, tools);
+
+        /* Send streaming request */
+        action = checkpoint();
+        if (action == CheckpointAction::Restart) {
+            continue;
+        }
+        if (action == CheckpointAction::Terminal) {
+            return;
+        }
+
+        owner->totalInputTokens.fetch_add(inputTokens);
+        run->llm->sendChatCompletionStream(
+            messagesWithSystem, tools, temperature, effortLevel, modelOverride);
         return;
     }
-
-    /* Check and compress history if needed */
-    compressHistoryIfNeeded();
-
-    if (agentConfig.verbose) {
-        int     currentTokens = estimateTotalTokens();
-        QString info = QString("[Iteration %1 | Tokens: %2/%3 (%4%) | Messages: %5]")
-                           .arg(streamIteration)
-                           .arg(currentTokens)
-                           .arg(agentConfig.maxContextTokens)
-                           .arg(100.0 * currentTokens / agentConfig.maxContextTokens, 0, 'f', 1)
-                           .arg(messages.size());
-        emit    verboseOutput(info);
-    }
-
-    /* Build messages with system prompt (includes auto-injected memory) */
-    json messagesWithSystem = json::array();
-
-    QString fullSystemPrompt = buildSystemPromptWithMemory();
-    if (!fullSystemPrompt.isEmpty()) {
-        messagesWithSystem.push_back(
-            {{"role", "system"}, {"content", fullSystemPrompt.toStdString()}});
-    }
-
-    for (const auto &msg : messages) {
-        json sanitized = msg;
-        /* The internal `_usage` annotation is for our token estimator
-         * only; OpenAI / DeepSeek reject unknown top-level fields on
-         * messages, so strip it before the wire. */
-        sanitized.erase("_usage");
-        sanitized.erase("_img_tokens");
-        messagesWithSystem.push_back(sanitized);
-    }
-
-    /* Per-turn ephemeral reminders (critical reminder, plan mode, focus,
-     * approved plan, memory recall): appended to the wire payload as
-     * trailing <system-reminder> user-turn content. Not persisted into
-     * `messages`; keeps the cached system prefix stable and avoids a
-     * role:"system" message after the history that strict chat templates
-     * reject. */
-    injectPerTurnReminders(messagesWithSystem);
-
-    /* Get tool definitions, filtered by sub-agent allowlist when set. */
-    json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
-
-    /* Estimate input tokens for this request (includes system prompt + tool defs) */
-    int inputTokens = estimateTotalTokens();
-    totalInputTokens.fetch_add(inputTokens);
-
-    /* Determine model override for reasoning */
-    QString modelOverride;
-    if (!agentConfig.effortLevel.isEmpty() && !agentConfig.reasoningModel.isEmpty()) {
-        modelOverride = agentConfig.reasoningModel;
-    }
-
-    /* Send streaming request */
-    llmService->sendChatCompletionStream(
-        messagesWithSystem, tools, agentConfig.temperature, agentConfig.effortLevel, modelOverride);
 }
 
 void QSocAgent::handleStreamComplete(const json &response)
 {
-    if (!isStreaming) {
+    const ActiveRunPtr        run = activeRun_;
+    const QPointer<QSocAgent> owner(this);
+    if (!isCurrentRun(run) || run->mode != RunMode::Streaming || run->llm.isNull()
+        || sender() != run->llm.data()) {
+        return;
+    }
+    const auto restartOrStop = [owner, run]() {
+        if (owner.isNull()) {
+            return true;
+        }
+        switch (owner->checkpointRun(run)) {
+        case CheckpointAction::Continue:
+            return false;
+        case CheckpointAction::Restart:
+            owner->processStreamIteration();
+            return true;
+        case CheckpointAction::Terminal:
+            return true;
+        }
+        return true;
+    };
+    if (restartOrStop()) {
         return;
     }
 
     /* Check for errors */
     if (response.contains("error")) {
         QString errorMsg = QString::fromStdString(response["error"].get<std::string>());
-        isStreaming      = false;
-        heartbeatTimer->stop();
-        teardownStreamMonitor(QString());
-        emit runError(errorMsg);
+        finishStreamRun(run, RunOutcome::Error, errorMsg);
         return;
     }
 
     /* Extract assistant message */
     if (!response.contains("choices") || response["choices"].empty()) {
-        isStreaming = false;
-        heartbeatTimer->stop();
-        teardownStreamMonitor(QString());
-        emit runError("Invalid response from LLM");
+        finishStreamRun(run, RunOutcome::Error, QStringLiteral("Invalid response from LLM"));
         return;
     }
 
@@ -878,15 +1325,28 @@ void QSocAgent::handleStreamComplete(const json &response)
 
     /* Check for tool calls */
     if (message.contains("tool_calls") && !message["tool_calls"].empty()) {
+        run->toolBatchStart       = messages.size();
+        run->toolBatchAttachments = json::array();
         /* Add assistant message with tool calls to history */
         messages.push_back(message);
 
         if (agentConfig.verbose) {
             emit verboseOutput("[Assistant requesting tool calls]");
+            if (owner.isNull()) {
+                return;
+            }
         }
 
         /* Handle tool calls synchronously */
-        handleToolCalls(message["tool_calls"]);
+        if (!handleToolCalls(message["tool_calls"], run)) {
+            if (!restartOrStop() && !owner.isNull()) {
+                owner->processStreamIteration();
+            }
+            return;
+        }
+        if (restartOrStop()) {
+            return;
+        }
 
         /* Continue with next iteration */
         processStreamIteration();
@@ -903,6 +1363,9 @@ void QSocAgent::handleStreamComplete(const json &response)
 
     if (agentConfig.verbose) {
         emit verboseOutput(QString("[Assistant]: %1").arg(content));
+        if (restartOrStop()) {
+            return;
+        }
     }
 
     /* Push full message to preserve reasoning_content for the next
@@ -910,6 +1373,9 @@ void QSocAgent::handleStreamComplete(const json &response)
     messages.push_back(message);
 
     accountGoalUsageForIteration(streamPrevTokensEstimate, streamIterationTimer);
+    if (restartOrStop()) {
+        return;
+    }
 
     /* Continue if there are queued requests */
     if (hasPendingRequests()) {
@@ -917,7 +1383,11 @@ void QSocAgent::handleStreamComplete(const json &response)
         return;
     }
 
-    if (maybeQueueGoalContinuation()) {
+    const bool goalQueued = maybeQueueGoalContinuation(run);
+    if (restartOrStop()) {
+        return;
+    }
+    if (goalQueued) {
         /* A continuation (or budget-limit) prompt was just appended;
          * feed it back into the stream loop so the model answers it
          * without exiting to the REPL idle state. */
@@ -928,17 +1398,17 @@ void QSocAgent::handleStreamComplete(const json &response)
     /* Plan-mode protocol: a prose ending leaves the user with no
      * approval dialog. Give the model one pointed chance to route the
      * text through exit_plan_mode or ask_user before the turn ends. */
-    if (!content.trimmed().isEmpty() && maybeQueuePlanModeNudge()) {
+    const bool planQueued = !content.trimmed().isEmpty() && maybeQueuePlanModeNudge();
+    if (restartOrStop()) {
+        return;
+    }
+    if (planQueued) {
         processStreamIteration();
         return;
     }
 
     if (!content.isEmpty()) {
-        isStreaming = false;
-        heartbeatTimer->stop();
-        teardownStreamMonitor(QString());
-        fireStopHook(content);
-        emit runComplete(content);
+        finishStreamRun(run, RunOutcome::Complete, content);
         return;
     }
 
@@ -987,25 +1457,39 @@ void QSocAgent::handleStreamComplete(const json &response)
             emit verboseOutput(QString("[Empty response %1/%2: retrying]")
                                    .arg(emptyResponseRetryCount)
                                    .arg(maxEmptyRetries));
+            if (restartOrStop()) {
+                return;
+            }
         }
         processStreamIteration();
         return;
     }
 
-    isStreaming = false;
-    heartbeatTimer->stop();
-    teardownStreamMonitor(QString());
     emptyResponseRetryCount = 0;
-    fireStopHook(QString());
-    emit runError(diag);
+    finishStreamRun(run, RunOutcome::Error, diag);
 }
 
-bool QSocAgent::processIteration()
+QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
 {
-    if (!llmService || !toolRegistry) {
+    if (!isCurrentRun(run) || run->llm.isNull() || run->tools.isNull()) {
         QSocConsole::warn() << "LLM service or tool registry not configured";
-        return true;
+        return IterationResult::Complete;
     }
+    const QPointer<QSocAgent> owner(this);
+    const auto                checkpoint = [owner, run]() {
+        return owner.isNull() ? CheckpointAction::Terminal : owner->checkpointRun(run);
+    };
+    const auto checkpointPreparation = [&checkpoint]() -> std::optional<IterationResult> {
+        switch (checkpoint()) {
+        case CheckpointAction::Continue:
+            return std::nullopt;
+        case CheckpointAction::Restart:
+            return IterationResult::RestartPreparation;
+        case CheckpointAction::Terminal:
+            return IterationResult::Stopped;
+        }
+        return IterationResult::Stopped;
+    };
 
     /* Build messages with system prompt (includes auto-injected memory) */
     json messagesWithSystem = json::array();
@@ -1029,27 +1513,53 @@ bool QSocAgent::processIteration()
     /* Per-turn ephemeral reminders: same injection as the streaming path;
      * defends against drift on long sync runs. */
     injectPerTurnReminders(messagesWithSystem);
+    if (const auto result = checkpointPreparation()) {
+        return *result;
+    }
 
     /* Get tool definitions, filtered by sub-agent allowlist when set. */
-    json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
+    const json definitions = run->tools->getToolDefinitions();
+    if (owner.isNull() || run->llm.isNull() || run->tools.isNull()) {
+        return IterationResult::Stopped;
+    }
+    if (const auto result = checkpointPreparation()) {
+        return *result;
+    }
+    json tools = owner->filterAllowedTools(definitions, run->tools.data());
+    if (owner.isNull() || run->llm.isNull() || run->tools.isNull()) {
+        return IterationResult::Stopped;
+    }
+    if (const auto result = checkpointPreparation()) {
+        return *result;
+    }
 
     /* Call LLM */
-    json response
-        = llmService->sendChatCompletion(messagesWithSystem, tools, agentConfig.temperature);
+    json response = run->llm->sendChatCompletion(
+        messagesWithSystem, tools, agentConfig.temperature, run->stopSource.get_token());
+    if (owner.isNull() || !owner->isCurrentRun(run)) {
+        return IterationResult::Stopped;
+    }
+    CheckpointAction action = checkpoint();
+    if (action == CheckpointAction::Restart) {
+        return IterationResult::Continue;
+    }
+    if (action == CheckpointAction::Terminal) {
+        return IterationResult::Stopped;
+    }
 
     /* Check for errors */
     if (response.contains("error")) {
         QString errorMsg = QString::fromStdString(response["error"].get<std::string>());
         QSocConsole::warn() << "LLM error:" << errorMsg;
         addMessage("assistant", QString("Error: %1").arg(errorMsg));
-        return true;
+        return IterationResult::Complete;
     }
 
     /* Extract assistant message */
     if (!response.contains("choices") || response["choices"].empty()) {
         QSocConsole::warn() << "Invalid LLM response: no choices";
         addMessage("assistant", "Error: Invalid response from LLM");
-        return true;
+        return IterationResult::Complete;
     }
 
     auto message = response["choices"][0]["message"];
@@ -1059,17 +1569,36 @@ bool QSocAgent::processIteration()
 
     /* Check for tool calls */
     if (message.contains("tool_calls") && !message["tool_calls"].empty()) {
+        run->toolBatchStart       = messages.size();
+        run->toolBatchAttachments = json::array();
         /* Add assistant message with tool calls to history */
         messages.push_back(message);
 
         if (agentConfig.verbose) {
             emit verboseOutput("[Assistant requesting tool calls]");
+            if (owner.isNull()) {
+                return IterationResult::Stopped;
+            }
+            action = checkpoint();
+            if (action == CheckpointAction::Restart) {
+                owner->finishToolBatch(run);
+                return IterationResult::Continue;
+            }
+            if (action == CheckpointAction::Terminal) {
+                return IterationResult::Stopped;
+            }
         }
 
         /* Handle tool calls */
-        handleToolCalls(message["tool_calls"]);
+        if (!handleToolCalls(message["tool_calls"], run)) {
+            action = checkpoint();
+            if (action == CheckpointAction::Restart) {
+                return IterationResult::Continue;
+            }
+            return IterationResult::Stopped;
+        }
 
-        return false; /* Not complete yet, need to continue */
+        return IterationResult::Continue;
     }
 
     /* Regular response without tool calls */
@@ -1078,73 +1607,126 @@ bool QSocAgent::processIteration()
 
         if (agentConfig.verbose) {
             emit verboseOutput(QString("[Assistant]: %1").arg(content));
+            action = checkpoint();
+            if (action == CheckpointAction::Restart) {
+                return IterationResult::Continue;
+            }
+            if (action == CheckpointAction::Terminal) {
+                return IterationResult::Stopped;
+            }
         }
 
         /* Add to history */
         addMessage("assistant", content);
 
-        return true; /* Complete */
+        return IterationResult::Complete;
     }
 
     /* Empty response */
     addMessage("assistant", "");
-    return true;
+    return IterationResult::Complete;
 }
 
-void QSocAgent::handleToolCalls(const json &toolCalls)
+bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
 {
-    /* Tool calls count as progress */
+    const QPointer<QSocAgent> owner(this);
+    const auto current     = [owner, run]() { return !owner.isNull() && owner->isCurrentRun(run); };
+    const auto finishBatch = [owner, current, run]() {
+        if (current()) {
+            owner->finishToolBatch(run);
+        }
+    };
+    const auto stopBatch = [current, finishBatch, run]() {
+        if (current() && run->stop.load() == StopMode::None) {
+            return false;
+        }
+        finishBatch();
+        return true;
+    };
+    const auto dependencyFailed = [owner, current, finishBatch, run]() {
+        finishBatch();
+        if (!current()) {
+            return;
+        }
+        if (run->mode == RunMode::Streaming) {
+            owner->finishStreamRun(run, RunOutcome::Error, QStringLiteral("Tool registry destroyed"));
+        } else {
+            owner->finishSynchronousRun(run);
+        }
+    };
+
+    if (stopBatch()) {
+        return false;
+    }
+    if (run->tools.isNull()) {
+        dependencyFailed();
+        return false;
+    }
+
     if (streamMonitor != nullptr) {
         streamMonitor->notifyProgress();
     }
 
     for (const auto &toolCall : toolCalls) {
-        QString toolCallId   = QString::fromStdString(toolCall["id"].get<std::string>());
-        QString functionName = QString::fromStdString(
-            toolCall["function"]["name"].get<std::string>());
-        QString argumentsStr = QString::fromStdString(
-            toolCall["function"]["arguments"].get<std::string>());
-
-        /* Check for abort - must still add tool message for API format compliance */
-        if (abortRequested) {
-            addToolMessage(toolCallId, "Aborted by user");
-            emit toolResult(functionName, "Aborted by user");
-            continue;
+        if (stopBatch()) {
+            return false;
         }
+
+        const QString toolCallId   = QString::fromStdString(toolCall["id"].get<std::string>());
+        const QString functionName = QString::fromStdString(
+            toolCall["function"]["name"].get<std::string>());
+        const QString argumentsStr = QString::fromStdString(
+            toolCall["function"]["arguments"].get<std::string>());
 
         if (agentConfig.verbose) {
             emit verboseOutput(QString("  -> Calling tool: %1").arg(functionName));
+            if (stopBatch()) {
+                return false;
+            }
             emit verboseOutput(QString("     Arguments: %1").arg(argumentsStr));
+            if (stopBatch()) {
+                return false;
+            }
         }
 
         emit toolCalled(functionName, argumentsStr);
+        if (stopBatch()) {
+            return false;
+        }
+        if (run->tools.isNull()) {
+            dependencyFailed();
+            return false;
+        }
 
-        /* Allowlist guard. Defends against an LLM that ignores the
-         * filtered tool list or recalls a name from earlier history. */
-        const QString denyReason = toolDenyReason(functionName);
+        /* Defend against a model recalling a tool hidden from this run. */
+        const QString denyReason = owner->toolDenyReasonForRegistry(functionName, run->tools.data());
+        if (stopBatch()) {
+            return false;
+        }
         if (!denyReason.isEmpty()) {
             const QString denied = QStringLiteral("Error: tool \"%1\" is not available: %2")
                                        .arg(functionName, denyReason);
-            addToolMessage(toolCallId, denied);
-            emit toolResult(functionName, denied);
+            owner->addToolMessage(toolCallId, denied);
+            emit owner->toolResult(functionName, denied);
+            if (stopBatch()) {
+                return false;
+            }
             continue;
         }
 
-        /* Parse arguments */
         json arguments;
         try {
             arguments = json::parse(argumentsStr.toStdString());
         } catch (const json::parse_error &e) {
-            QString errorResult = QString("Error: Invalid JSON arguments - %1").arg(e.what());
-            addToolMessage(toolCallId, errorResult);
-            emit toolResult(functionName, errorResult);
+            const QString errorResult = QString("Error: Invalid JSON arguments - %1").arg(e.what());
+            owner->addToolMessage(toolCallId, errorResult);
+            emit owner->toolResult(functionName, errorResult);
+            if (stopBatch()) {
+                return false;
+            }
             continue;
         }
 
-        /* Plan-mode shell safety: bash / remote_shell_bash are judged
-         * per command by the injected LLM classifier (semantic, not a
-         * hardcoded allowlist). Fail-closed when no judge is installed.
-         * Read-only commands proceed; mutating ones become tool denials. */
         if (agentConfig.planMode
             && (functionName == QStringLiteral("bash")
                 || functionName == QStringLiteral("remote_shell_bash"))) {
@@ -1155,6 +1737,9 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
             QSocBashSafety verdict;
             if (bashSafetyJudge_) {
                 verdict = bashSafetyJudge_(command);
+            }
+            if (stopBatch()) {
+                return false;
             }
             if (!verdict.readOnly) {
                 const QString reason = verdict.reason.isEmpty()
@@ -1168,29 +1753,35 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
                                            "Plan mode: command blocked, it may modify state (%1). "
                                            "Use read-only inspection. %2")
                                            .arg(reason, nextStep);
-                addToolMessage(toolCallId, denied);
-                emit toolResult(functionName, denied);
+                owner->addToolMessage(toolCallId, denied);
+                emit owner->toolResult(functionName, denied);
+                if (stopBatch()) {
+                    return false;
+                }
                 continue;
             }
         }
 
-        /* Pre-tool hook: matched hooks may inspect or block the call.
-         * On block we short-circuit executeTool and surface the reason
-         * back to the model as the tool result. */
         if (hookManager != nullptr && hookManager->hasHooksFor(QSocHookEvent::PreToolUse)) {
             json payload          = buildHookEnvelope();
             payload["event"]      = "pre_tool_use";
             payload["tool_name"]  = functionName.toStdString();
             payload["tool_input"] = arguments;
             const auto outcome = hookManager->fire(QSocHookEvent::PreToolUse, functionName, payload);
+            if (stopBatch()) {
+                return false;
+            }
             if (outcome.blocked) {
                 const QString reason = outcome.blockReason.isEmpty()
                                            ? QStringLiteral("hook blocked execution")
                                            : outcome.blockReason;
                 const QString blocked
                     = QStringLiteral("Tool blocked by pre_tool_use hook: %1").arg(reason);
-                addToolMessage(toolCallId, blocked);
-                emit toolResult(functionName, blocked);
+                owner->addToolMessage(toolCallId, blocked);
+                emit owner->toolResult(functionName, blocked);
+                if (stopBatch()) {
+                    return false;
+                }
                 continue;
             }
             if (outcome.hasMergedResponse && outcome.mergedResponse.contains("updatedInput")
@@ -1199,27 +1790,54 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
             }
         }
 
-        /* Execute tool */
-        const QString rawResult = toolRegistry->executeTool(functionName, arguments, this);
-
-        /* Strip image-attachment markers up front so every consumer
-         * (verbose log, scrollview, hooks, message history) sees the
-         * same clean text. Attachments are passed separately to
-         * addToolMessage which lifts them into the OpenAI-compatible
-         * content array on the conversation history. */
-        QList<AttachmentSpec> attachments;
-        const QString         result = extractImageAttachments(rawResult, &attachments);
-
-        if (agentConfig.verbose) {
-            QString truncatedResult = result.length() > 200 ? result.left(200) + "... (truncated)"
-                                                            : result;
-            emit    verboseOutput(QString("     Result: %1").arg(truncatedResult));
+        if (run->tools.isNull()) {
+            dependencyFailed();
+            return false;
+        }
+        run->executingToolCallId = toolCallId;
+        const QString rawResult  = run->tools->executeTool(functionName, arguments, this);
+        if (!current()) {
+            return false;
         }
 
-        emit toolResult(functionName, result);
+        QList<AttachmentSpec> attachments;
+        const QString         result = extractImageAttachments(rawResult, &attachments);
+        const QString         historyResult
+            = run->stop.load() == StopMode::None
+                  ? result
+                  : QStringLiteral(
+                        "Tool reported: %1. A stop was requested while this tool was running. "
+                        "Completion is uncertain, and side effects may have occurred. "
+                        "Verify current state before retrying.")
+                        .arg(result);
+        owner->addToolMessage(toolCallId, historyResult);
+        if (const auto attachmentMessage = buildToolAttachmentMessage(attachments)) {
+            run->toolBatchAttachments.push_back(*attachmentMessage);
+        }
+        run->executingToolCallId.reset();
+        if (stopBatch()) {
+            return false;
+        }
+        if (run->tools.isNull()) {
+            dependencyFailed();
+            return false;
+        }
 
-        /* Post-tool hook: audit, log, or notify. Fire-and-forget; the
-         * outcome is not allowed to mutate the result the model sees. */
+        if (agentConfig.verbose) {
+            const QString truncatedResult = result.length() > 200
+                                                ? result.left(200) + "... (truncated)"
+                                                : result;
+            emit          owner->verboseOutput(QString("     Result: %1").arg(truncatedResult));
+            if (stopBatch()) {
+                return false;
+            }
+        }
+
+        emit owner->toolResult(functionName, result);
+        if (stopBatch()) {
+            return false;
+        }
+
         if (hookManager != nullptr && hookManager->hasHooksFor(QSocHookEvent::PostToolUse)) {
             json payload          = buildHookEnvelope();
             payload["event"]      = "post_tool_use";
@@ -1227,16 +1845,23 @@ void QSocAgent::handleToolCalls(const json &toolCalls)
             payload["tool_input"] = arguments;
             payload["response"]   = result.toStdString();
             hookManager->fire(QSocHookEvent::PostToolUse, functionName, payload);
+            if (stopBatch()) {
+                return false;
+            }
         }
-
-        /* Add tool response to messages */
-        addToolMessage(toolCallId, result, attachments);
     }
+    finishBatch();
+    return current();
 }
 
 void QSocAgent::setMemoryManager(QSocMemoryManager *manager)
 {
     memoryManager = manager;
+}
+
+void QSocAgent::setGoalCatalog(QSocGoalCatalog *catalog)
+{
+    goalCatalog = catalog;
 }
 
 void QSocAgent::setHookManager(QSocHookManager *manager)
@@ -1861,8 +2486,7 @@ QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentS
     return stripped;
 }
 
-void QSocAgent::addToolMessage(
-    const QString &toolCallId, const QString &content, const QList<AttachmentSpec> &attachments)
+void QSocAgent::addToolMessage(const QString &toolCallId, const QString &content)
 {
     /* Tool messages always carry a plain string. OpenAI defines a
      * content-array form for tool responses, but several backends
@@ -1874,32 +2498,6 @@ void QSocAgent::addToolMessage(
            {"tool_call_id", toolCallId.toStdString()},
            {"content", content.toStdString()}};
     messages.push_back(toolMsg);
-
-    if (attachments.isEmpty()) {
-        return;
-    }
-
-    /* Synthetic user message: one text part (required by strict
-     * providers) plus one image_url part per attachment, encoded
-     * as a data URL so the server never has to fetch the original
-     * host. */
-    json contentArr  = json::array();
-    int  imageTokens = 0;
-    contentArr.push_back({{"type", "text"}, {"text", std::string("Tool attachment payload:")}});
-    for (const auto &att : attachments) {
-        const QString dataUrl = QStringLiteral("data:%1;base64,%2").arg(att.mime, att.dataB64);
-        contentArr.push_back(
-            {{"type", "image_url"}, {"image_url", {{"url", dataUrl.toStdString()}}}});
-        imageTokens += att.estTokens;
-    }
-    /* Record the image token cost as an internal annotation (stripped on
-     * the wire like `_usage`) so the token estimator counts array-content
-     * image messages, which it otherwise skips. */
-    json imageMsg = {{"role", "user"}, {"content", contentArr}};
-    if (imageTokens > 0) {
-        imageMsg["_img_tokens"] = imageTokens;
-    }
-    messages.push_back(imageMsg);
 }
 
 void QSocAgent::clearHistory()
@@ -1909,7 +2507,8 @@ void QSocAgent::clearHistory()
 
 void QSocAgent::accountGoalUsageForIteration(int &prevTokensEstimate, QElapsedTimer &iterationTimer)
 {
-    if (goalCatalog == nullptr) {
+    const QPointer<QSocGoalCatalog> catalog = goalCatalog;
+    if (catalog.isNull()) {
         return;
     }
     const int newEstimate = estimateMessagesTokens();
@@ -1919,45 +2518,55 @@ void QSocAgent::accountGoalUsageForIteration(int &prevTokensEstimate, QElapsedTi
     iterationTimer.restart();
     if (deltaTokens > 0 || deltaSec > 0) {
         QString innerErr;
-        goalCatalog->accountUsage(deltaTokens, deltaSec, &innerErr);
+        catalog->accountUsage(deltaTokens, deltaSec, &innerErr);
     }
 }
 
-bool QSocAgent::maybeQueueGoalContinuation()
+bool QSocAgent::maybeQueueGoalContinuation(const ActiveRunPtr &run)
 {
-    if (goalCatalog == nullptr) {
-        return false;
-    }
-    if (hasPendingRequests()) {
+    const QPointer<QSocAgent>       owner(this);
+    const QPointer<QSocGoalCatalog> catalog = goalCatalog;
+    const auto                      current = [owner, catalog, run]() {
+        return !owner.isNull() && !catalog.isNull() && owner->isCurrentRun(run)
+               && run->stop.load() == StopMode::None;
+    };
+    if (!current() || hasPendingRequests()) {
         return false;
     }
     if (goalContinuationInFlight.exchange(true)) {
         return false;
     }
+    const auto finish = [owner](bool result) {
+        if (!owner.isNull()) {
+            owner->goalContinuationInFlight.store(false);
+        }
+        return result;
+    };
 
-    bool queued      = false;
-    auto currentGoal = goalCatalog->current();
+    const auto currentGoal = catalog->current();
+    if (!current()) {
+        return finish(false);
+    }
     if (currentGoal.has_value() && currentGoal->status == QSocGoalStatus::Active) {
         if (currentGoal->tokenBudget > 0 && currentGoal->tokensUsed >= currentGoal->tokenBudget) {
-            /* Flip to BudgetLimited and inject the wrap-up prompt
-             * exactly once; the next turn must not auto-continue
-             * because Active is no longer the status. */
-            QString innerErr;
-            goalCatalog->setStatus(QSocGoalStatus::BudgetLimited, &innerErr);
-            const auto refreshed = goalCatalog->current();
+            QString    innerErr;
+            const bool updated = catalog->setStatus(QSocGoalStatus::BudgetLimited, &innerErr);
+            if (!updated || !current()) {
+                return finish(false);
+            }
+            const auto refreshed = catalog->current();
             if (refreshed.has_value()) {
-                addMessage("user", QSocGoalPrompt::budgetLimit(*refreshed));
-                goalCatalog->noteContinuation(QStringLiteral("budget_limited"));
-                queued = true;
+                owner->addMessage("user", QSocGoalPrompt::budgetLimit(*refreshed));
+                catalog->noteContinuation(QStringLiteral("budget_limited"));
+                return finish(true);
             }
         } else {
-            addMessage("user", QSocGoalPrompt::continuation(*currentGoal));
-            goalCatalog->noteContinuation(QStringLiteral("auto"));
-            queued = true;
+            owner->addMessage("user", QSocGoalPrompt::continuation(*currentGoal));
+            catalog->noteContinuation(QStringLiteral("auto"));
+            return finish(true);
         }
     }
-    goalContinuationInFlight.store(false);
-    return queued;
+    return finish(false);
 }
 
 bool QSocAgent::maybeQueuePlanModeNudge()
@@ -1982,16 +2591,24 @@ bool QSocAgent::maybeQueuePlanModeNudge()
     return true;
 }
 
-void QSocAgent::queueRequest(const QString &request)
+bool QSocAgent::queueRequest(const QString &request)
 {
     QMutexLocker locker(&queueMutex);
+    if (rejectQueuedRequests_) {
+        return false;
+    }
     requestQueue.append({request, false});
+    return true;
 }
 
-void QSocAgent::queueTaskNotification(const QString &notification)
+bool QSocAgent::queueTaskNotification(const QString &notification)
 {
     QMutexLocker locker(&queueMutex);
+    if (rejectQueuedRequests_) {
+        return false;
+    }
     requestQueue.append({notification, true});
+    return true;
 }
 
 bool QSocAgent::hasPendingRequests() const
@@ -2012,6 +2629,17 @@ void QSocAgent::clearPendingRequests()
     requestQueue.clear();
 }
 
+void QSocAgent::abortAndDiscardPendingRequests()
+{
+    {
+        QMutexLocker locker(&queueMutex);
+        rejectQueuedRequests_ = true;
+        requestQueue.clear();
+    }
+    requestStop(StopMode::Hard);
+    abort();
+}
+
 void QSocAgent::addExternalTokenUsage(qint64 inputTokens, qint64 outputTokens)
 {
     if (inputTokens <= 0 && outputTokens <= 0) {
@@ -2028,15 +2656,21 @@ void QSocAgent::addExternalTokenUsage(qint64 inputTokens, qint64 outputTokens)
 
 void QSocAgent::abort()
 {
+    requestStop(StopMode::Soft);
+    const ActiveRunPtr               run = activeRun_;
     const QPointer<QSocAgent>        owner(this);
-    const quint64                    epoch = streamEpoch_;
     const QPointer<QLongTaskMonitor> monitor(streamMonitor);
-    const QPointer<QLLMService>      service(llmService);
-    const QPointer<QSocToolRegistry> registry(toolRegistry);
-    const bool                       subAgent = agentConfig.isSubAgent;
-    abortRequested                            = true;
+    const QPointer<QLLMService>      service(run ? run->llm : nullptr);
+    const QPointer<QSocToolRegistry> registry(run ? run->tools : toolRegistry);
 
-    if (retryTimer->isActive() && retryEpoch_ == streamEpoch_) {
+    if (!registry.isNull()) {
+        registry->abortCalls(owner.data());
+    }
+    if (owner.isNull() || !owner->isCurrentRun(run)) {
+        return;
+    }
+
+    if (retryTimer->isActive() && retryEpoch_ == run->epoch) {
         retryTimer->start(0);
     }
 
@@ -2045,25 +2679,12 @@ void QSocAgent::abort()
     if (!monitor.isNull()) {
         monitor->cancel(QStringLiteral("user abort"));
     }
-    if (owner.isNull() || owner->streamEpoch_ != epoch) {
+    if (owner.isNull() || !owner->isCurrentRun(run)) {
         return;
     }
 
-    /* Cascade to LLM stream */
-    if (!service.isNull()) {
+    if (run->mode == RunMode::Streaming && !service.isNull()) {
         service->abortStream();
-    }
-    if (owner.isNull() || owner->streamEpoch_ != epoch) {
-        return;
-    }
-
-    /* Cascade to running tools */
-    if (!registry.isNull()) {
-        if (subAgent) {
-            registry->abortCalls(owner.data());
-        } else {
-            registry->abortAll();
-        }
     }
 }
 
@@ -2107,7 +2728,7 @@ void QSocAgent::teardownStreamMonitor(const QString &cancelReason)
 
 bool QSocAgent::isRunning() const
 {
-    return isStreaming;
+    return activeRun_ != nullptr;
 }
 
 void QSocAgent::setLLMService(QLLMService *llmService)
@@ -2277,6 +2898,22 @@ int QSocAgent::estimateMessagesTokens() const
 
 int QSocAgent::estimateTotalTokens() const
 {
+    for (const auto &message : messages) {
+        if (message.contains("_usage") && message["_usage"].is_object()) {
+            return estimateMessagesTokens();
+        }
+    }
+
+    const QString systemPrompt = buildSystemPromptWithMemory();
+    json          tools        = json::array();
+    if (toolRegistry) {
+        tools = filterAllowedTools(toolRegistry->getToolDefinitions(), toolRegistry.data());
+    }
+    return estimateTotalTokensFromSnapshot(systemPrompt, tools);
+}
+
+int QSocAgent::estimateTotalTokensFromSnapshot(const QString &systemPrompt, const json &tools) const
+{
     int tokens = estimateMessagesTokens();
 
     /* When estimateMessagesTokens fell back to anchorless walking (no
@@ -2291,12 +2928,9 @@ int QSocAgent::estimateTotalTokens() const
         }
     }
     if (!anchored) {
-        tokens += estimateTokens(buildSystemPromptWithMemory());
-        if (toolRegistry) {
-            json tools = filterAllowedTools(toolRegistry->getToolDefinitions());
-            if (!tools.empty()) {
-                tokens += estimateTokens(QString::fromStdString(tools.dump()));
-            }
+        tokens += estimateTokens(systemPrompt);
+        if (!tools.empty()) {
+            tokens += estimateTokens(QString::fromStdString(tools.dump()));
         }
         /* Reminders are appended to messagesWithSystem every turn but never
          * stored in `messages`, so the walk misses them. Count them only in
@@ -2312,22 +2946,37 @@ int QSocAgent::estimateTotalTokens() const
 
 int QSocAgent::compact()
 {
-    int originalTokens = estimateMessagesTokens();
+    const QPointer<QSocAgent> owner(this);
+    const int                 originalTokens = estimateMessagesTokens();
 
     /* Layer 1: Force prune (skip threshold check) */
-    if (pruneToolOutputs(true)) {
-        int  afterPrune = estimateMessagesTokens();
-        emit compacting(1, originalTokens, afterPrune);
+    const bool pruned = pruneToolOutputs(true);
+    if (owner.isNull()) {
+        return 0;
+    }
+    if (pruned) {
+        const int afterPrune = estimateMessagesTokens();
+        emit      compacting(1, originalTokens, afterPrune);
+        if (owner.isNull()) {
+            return 0;
+        }
     }
 
     /* Layer 2: Force LLM compact (skip threshold check) */
-    int beforeCompact = estimateMessagesTokens();
-    if (compactWithLLM(true)) {
-        int  afterCompact = estimateMessagesTokens();
-        emit compacting(2, beforeCompact, afterCompact);
+    const int  beforeCompact = owner->estimateMessagesTokens();
+    const bool compacted     = owner->compactWithLLM(true);
+    if (owner.isNull()) {
+        return 0;
+    }
+    if (compacted) {
+        const int afterCompact = owner->estimateMessagesTokens();
+        emit      owner->compacting(2, beforeCompact, afterCompact);
+        if (owner.isNull()) {
+            return 0;
+        }
     }
 
-    int afterTokens = estimateMessagesTokens();
+    const int afterTokens = owner->estimateMessagesTokens();
     return originalTokens - afterTokens;
 }
 
@@ -2505,6 +3154,16 @@ QString QSocAgent::formatMessagesForSummary(int start, int end) const
 
 bool QSocAgent::compactWithLLM(bool force)
 {
+    const ActiveRunPtr        run = activeRun_;
+    const QPointer<QSocAgent> owner(this);
+    const auto                stopped = [owner, run]() {
+        return owner.isNull()
+               || (run && (!owner->isCurrentRun(run) || run->stopSource.stop_requested()));
+    };
+    if (stopped()) {
+        return false;
+    }
+
     if (!force) {
         int currentTokens = estimateTotalTokens();
         int compactTokens = static_cast<int>(
@@ -2514,7 +3173,8 @@ bool QSocAgent::compactWithLLM(bool force)
         }
     }
 
-    int msgCount = static_cast<int>(messages.size());
+    const json sourceMessages = messages;
+    int        msgCount       = static_cast<int>(sourceMessages.size());
 
     /* Anchored / rolling summary: if messages[0] is a prior compaction
      * summary we generated, lift it out and feed it back as a
@@ -2525,7 +3185,7 @@ bool QSocAgent::compactWithLLM(bool force)
     int           summarizeStart = 0;
     const QString summaryMarker  = QStringLiteral("[Conversation Summary]\n");
     if (msgCount > 0) {
-        const auto &first = messages[0];
+        const auto &first = sourceMessages[0];
         if (first.contains("role") && first["role"] == "user" && first.contains("content")
             && first["content"].is_string()) {
             const QString firstContent = QString::fromStdString(first["content"].get<std::string>());
@@ -2545,6 +3205,9 @@ bool QSocAgent::compactWithLLM(bool force)
         if (agentConfig.verbose) {
             emit verboseOutput(QString("[Layer 2: Cannot compact, only %1 new messages]")
                                    .arg(msgCount - summarizeStart));
+            if (stopped()) {
+                return false;
+            }
         }
         return false;
     }
@@ -2560,7 +3223,7 @@ bool QSocAgent::compactWithLLM(bool force)
     int effectiveKeep = 0;
     int tailTokens    = 0;
     for (int i = msgCount - 1; i >= summarizeStart && effectiveKeep < hardCap; --i) {
-        const auto &msg = messages[static_cast<size_t>(i)];
+        const auto &msg = sourceMessages[static_cast<size_t>(i)];
         QString     approx;
         if (msg.contains("content") && msg["content"].is_string()) {
             approx = QString::fromStdString(msg["content"].get<std::string>());
@@ -2601,8 +3264,9 @@ bool QSocAgent::compactWithLLM(bool force)
     const int summaryInputTokens = estimateTokens(oldContent);
     const int compactBudget      = static_cast<int>(
         static_cast<double>(agentConfig.maxContextTokens) * 0.8);
-    const bool llmCallable = compactFailureCount < maxCompactFailures && llmService
-                             && llmService->hasEndpoint() && summaryInputTokens < compactBudget;
+    const QPointer<QLLMService> compactLlm = run ? run->llm : llmService;
+    const bool llmCallable = compactFailureCount < maxCompactFailures && !compactLlm.isNull()
+                             && compactLlm->hasEndpoint() && summaryInputTokens < compactBudget;
 
     if (llmCallable) {
         const QString noToolsPreamble = QStringLiteral(
@@ -2671,15 +3335,20 @@ bool QSocAgent::compactWithLLM(bool force)
          * switch and restored right after, so normal turns are unaffected. */
         const QString priorModelId  = agentConfig.compactionModel.isEmpty()
                                           ? QString()
-                                          : llmService->getCurrentModelId();
+                                          : compactLlm->getCurrentModelId();
         const bool    modelSwitched = !agentConfig.compactionModel.isEmpty()
-                                      && llmService->setCurrentModel(agentConfig.compactionModel);
+                                      && compactLlm->setCurrentModel(agentConfig.compactionModel);
 
         /* Use synchronous call - safe because we're at the start of processStreamIteration */
-        json response = llmService->sendChatCompletion(summaryMessages, json::array(), 0.1);
+        const std::stop_token stopToken = run ? run->stopSource.get_token() : std::stop_token{};
+        const json            response
+            = compactLlm->sendChatCompletion(summaryMessages, json::array(), 0.1, stopToken);
 
-        if (modelSwitched) {
-            llmService->setCurrentModel(priorModelId);
+        if (modelSwitched && !compactLlm.isNull()) {
+            compactLlm->setCurrentModel(priorModelId);
+        }
+        if (stopped()) {
+            return false;
         }
 
         if (response.contains("choices") && !response["choices"].empty()) {
@@ -2705,6 +3374,9 @@ bool QSocAgent::compactWithLLM(bool force)
             emit verboseOutput(QString("[Layer 2: Using mechanical summary (failures: %1/%2)]")
                                    .arg(compactFailureCount)
                                    .arg(maxCompactFailures));
+            if (stopped()) {
+                return false;
+            }
         }
         const int summaryBudgetTokens
             = qMax(2048, static_cast<int>(agentConfig.maxContextTokens / 4));
@@ -2722,7 +3394,7 @@ bool QSocAgent::compactWithLLM(bool force)
                 summary += "...(truncated)";
                 break;
             }
-            const auto &msg = messages[static_cast<size_t>(i)];
+            const auto &msg = sourceMessages[static_cast<size_t>(i)];
             if (msg.contains("role") && msg.contains("content") && msg["content"].is_string()) {
                 QString role    = QString::fromStdString(msg["role"].get<std::string>());
                 QString content = QString::fromStdString(msg["content"].get<std::string>());
@@ -2745,7 +3417,7 @@ bool QSocAgent::compactWithLLM(bool force)
          {"content", QString("[Conversation Summary]\n%1").arg(summary).toStdString()}});
 
     for (int i = boundary; i < msgCount; i++) {
-        newMessages.push_back(messages[static_cast<size_t>(i)]);
+        newMessages.push_back(sourceMessages[static_cast<size_t>(i)]);
     }
 
     /* Post-compaction context restore: append the supplies (recent files,
@@ -2754,15 +3426,19 @@ bool QSocAgent::compactWithLLM(bool force)
      * payload from current state; running it here (not per-turn) means file
      * I/O happens only when a compaction actually fires. Covers every
      * compaction path: manual, auto, overflow. */
-    lastApplied_ = {};
+    QSocContextRestore appliedRestore;
     if (agentConfig.contextRestoreEnabled && contextRestoreProvider_) {
-        const QSocContextRestore restore = contextRestoreProvider_();
+        const std::function<QSocContextRestore()> provider = contextRestoreProvider_;
+        const QSocContextRestore                  restore  = provider();
+        if (stopped()) {
+            return false;
+        }
         if (!restore.isEmpty()) {
             const json restoreMsgs = QSocContextRestoreBuilder::toMessages(restore);
             for (const auto &msg : restoreMsgs) {
                 newMessages.push_back(msg);
             }
-            lastApplied_ = restore;
+            appliedRestore = restore;
         }
     }
 
@@ -2771,8 +3447,12 @@ bool QSocAgent::compactWithLLM(bool force)
      * dominates" pattern shows up as `before == after`: the LLM call
      * burned latency for no reason. Surfacing it lets users decide to
      * /clear or shrink keepRecentMessages instead of looping. */
+    if (stopped() || messages != sourceMessages) {
+        return false;
+    }
     const int beforeTokens = estimateMessagesTokens();
-    messages               = newMessages;
+    messages               = std::move(newMessages);
+    lastApplied_           = std::move(appliedRestore);
     const int afterTokens  = estimateMessagesTokens();
 
     if (agentConfig.verbose) {
@@ -2790,6 +3470,9 @@ bool QSocAgent::compactWithLLM(bool force)
                                .arg(afterTokens)
                                .arg(llmSuccess ? "" : " (fallback)")
                                .arg(tag));
+        if (stopped()) {
+            return false;
+        }
         /* Surface the head of the produced summary so users can verify
          * the template was followed (anchored vs fresh, section names
          * present, no leaked tool calls). Capped so the verbose stream
@@ -2800,26 +3483,40 @@ bool QSocAgent::compactWithLLM(bool force)
                                .arg(previousSummary.isEmpty() ? " (fresh)" : " (anchored)")
                                .arg(head)
                                .arg(summary.size() > dumpChars ? "\n... (truncated)" : ""));
+        if (stopped()) {
+            return false;
+        }
     }
 
-    if (!lastApplied_.isEmpty()) {
+    if (!lastApplied_.isEmpty() && !stopped()) {
         emit contextRestored();
     }
 
     return true;
 }
 
-void QSocAgent::compressHistoryIfNeeded()
+void QSocAgent::compressHistoryIfNeeded(const ActiveRunPtr &run)
 {
-    int originalTokens = estimateTotalTokens();
-    int tokens         = originalTokens;
+    if (!isCurrentRun(run) || run->stopSource.stop_requested()) {
+        return;
+    }
+    const QPointer<QSocAgent> owner(this);
+    int                       originalTokens = estimateTotalTokens();
+    int                       tokens         = originalTokens;
 
     /* Layer 1: Prune tool outputs */
     int pruneTokens = static_cast<int>(effectiveContextTokens() * agentConfig.pruneThreshold);
     if (tokens > pruneTokens) {
-        if (pruneToolOutputs()) {
-            tokens = estimateTotalTokens();
-            emit compacting(1, originalTokens, tokens);
+        const bool pruned = pruneToolOutputs();
+        if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
+            return;
+        }
+        if (pruned) {
+            tokens = owner->estimateTotalTokens();
+            emit owner->compacting(1, originalTokens, tokens);
+            if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
+                return;
+            }
         }
     }
 
@@ -2828,13 +3525,20 @@ void QSocAgent::compressHistoryIfNeeded()
     if (tokens > compactTokens) {
         int beforeCompact = tokens;
         if (compactWithLLM()) {
+            if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
+                return;
+            }
             tokens = estimateTotalTokens();
             emit compacting(2, beforeCompact, tokens);
+            if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
+                return;
+            }
         }
     }
 
     /* Layer 3: Auto-continue after compaction during streaming */
-    if (tokens < originalTokens && isStreaming) {
+    if (tokens < originalTokens && isStreaming && isCurrentRun(run)
+        && !run->stopSource.stop_requested()) {
         addMessage(
             "user",
             "[System: Context compacted. Your persistent memory is still available "

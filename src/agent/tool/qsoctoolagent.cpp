@@ -404,6 +404,7 @@ QString QSocToolAgent::execute(const json &arguments)
     if (defRegistry_ == nullptr || taskSource_ == nullptr) {
         return QStringLiteral(R"({"status":"error","error":"agent tool is not wired up"})");
     }
+    const QPointer<QSocToolCallContext> callContext(currentCallContext());
 
     const QString subagentType = jsonStringField(arguments, "subagent_type");
     const QString description  = jsonStringField(arguments, "description");
@@ -682,6 +683,19 @@ QString QSocToolAgent::execute(const json &arguments)
     auto wtCleanup = [parentRepoRoot, worktreePath]() {
         removeWorktreeAt(parentRepoRoot, worktreePath);
     };
+    auto cancelTask = [srcGuard, taskId, wtCleanup]() {
+        if (srcGuard.isNull()) {
+            return false;
+        }
+        QSocTask::Row row;
+        const bool    pending   = srcGuard->findRow(taskId, &row)
+                                  && row.status == QSocTask::Status::Pending;
+        const bool    cancelled = srcGuard->killTask(taskId);
+        if (cancelled && pending) {
+            wtCleanup();
+        }
+        return cancelled;
+    };
 
     /* If def declares specific `skills`, prepend their content to
      * the prompt as a context block. Capped at 4 KB per skill so a
@@ -791,7 +805,28 @@ QString QSocToolAgent::execute(const json &arguments)
     auto launcher = [child, effectivePrompt]() { child->runStream(effectivePrompt); };
 
     if (background) {
-        taskSource_->start(taskId, launcher);
+        QMetaObject::Connection cancelConnection;
+        if (!callContext.isNull()) {
+            cancelConnection = QObject::connect(
+                callContext,
+                &QSocToolCallContext::cancellationRequested,
+                taskSource_,
+                [cancelTask]() { cancelTask(); });
+            if (callContext->isCancellationRequested()) {
+                cancelTask();
+            }
+        }
+        QSocTask::Row beforeStart;
+        if (taskSource_->findRow(taskId, &beforeStart)
+            && beforeStart.status == QSocTask::Status::Pending) {
+            taskSource_->start(taskId, launcher);
+        }
+        QObject::disconnect(cancelConnection);
+        if (!callContext.isNull() && callContext->isCancellationRequested()) {
+            json resp      = launchedResponse;
+            resp["status"] = "aborted";
+            return QString::fromUtf8(resp.dump().c_str());
+        }
         QSocTask::Row row;
         const bool    queued = taskSource_->findRow(taskId, &row)
                                && row.status == QSocTask::Status::Pending;
@@ -831,6 +866,18 @@ QString QSocToolAgent::execute(const json &arguments)
         child, &QSocAgent::runAborted, &fgLoop, [&stopFg](const QString &partial) {
             stopFg(partial);
         });
+    if (!callContext.isNull()) {
+        const auto cancelForeground = [cancelTask, &stopFg]() {
+            if (cancelTask()) {
+                stopFg(QStringLiteral("aborted"));
+            }
+        };
+        fgConns << QObject::connect(
+            callContext, &QSocToolCallContext::cancellationRequested, &fgLoop, cancelForeground);
+        if (callContext->isCancellationRequested()) {
+            cancelForeground();
+        }
+    }
 
     QTimer autoBg;
     autoBg.setSingleShot(true);
@@ -842,7 +889,9 @@ QString QSocToolAgent::execute(const json &arguments)
         autoBg.start(effectiveConfig.autoBackgroundMs);
     }
 
-    taskSource_->start(taskId, launcher);
+    if (!fgTerminal) {
+        taskSource_->start(taskId, launcher);
+    }
     /* start() may run the child synchronously and the child may
      * terminate before returning (e.g. a blocking user_prompt_submit
      * hook makes runStream emit runError at once). That fires stopFg ->

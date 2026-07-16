@@ -301,7 +301,7 @@ private slots:
         QCOMPARE(agent->getLLMService(), nullptr);
     }
 
-    void testAbortPropagatesToTaskSource()
+    void testAbortWithoutActiveCallDoesNotCascade()
     {
         QSocSubAgentTaskSource *src  = nullptr;
         QSocToolRegistry       *reg  = nullptr;
@@ -321,6 +321,11 @@ private slots:
         root.abort();
 
         QSocTask::Row pending;
+        QVERIFY(src->findRow(pendingId, &pending));
+        QCOMPARE(pending.status, QSocTask::Status::Pending);
+        QVERIFY(pending.canKill);
+
+        tool->abort();
         QVERIFY(src->findRow(pendingId, &pending));
         QCOMPARE(pending.status, QSocTask::Status::Failed);
         QVERIFY(!pending.canKill);
