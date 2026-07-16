@@ -320,8 +320,9 @@ void dispatchScheduledPrompt(
     Q_UNUSED(source);
     if (agent != nullptr && agent->isRunning()
         && !QSocLoopScheduler::scheduledInputRequiresCliDispatch(prompt)) {
-        agent->queueRequest(prompt);
-        return;
+        if (agent->queueRequest(prompt)) {
+            return;
+        }
     }
     pendingAutoInputs.append(prompt);
     if (idlePromptLoop != nullptr) {
@@ -1500,7 +1501,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             agent,
             [agent](const QString &message, const QString &agentId) {
                 if (agentId.isEmpty()) {
-                    agent->queueTaskNotification(message);
+                    (void) agent->queueTaskNotification(message);
                 }
             });
 
@@ -1594,8 +1595,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                         }
                         return;
                     }
-                    agent->queueRequest(text);
-                    qout << "\n(queued: " << text << ")\n" << Qt::flush;
+                    if (agent->queueRequest(text)) {
+                        qout << "\n(queued: " << text << ")\n" << Qt::flush;
+                    } else {
+                        escMonitor.setInputBuffer(text);
+                        qout << "\n(Input not queued: agent is stopping.)\n" << Qt::flush;
+                    }
                 });
             connect(
                 agent,
@@ -3962,8 +3967,7 @@ bool QSocCliWorker::runAgentLoop(
                 if (!agentId.isEmpty()) {
                     return;
                 }
-                if (agent->isRunning()) {
-                    agent->queueTaskNotification(message);
+                if (agent->isRunning() && agent->queueTaskNotification(message)) {
                     return;
                 }
                 pendingAutoInputs.append(message);
@@ -7306,8 +7310,12 @@ bool QSocCliWorker::runAgentLoop(
                         }
                         return;
                     }
-                    agent->queueRequest(text);
-                    queueWidget.addRequest(text);
+                    if (agent->queueRequest(text)) {
+                        queueWidget.addRequest(text);
+                    } else {
+                        escMonitor.setInputBuffer(text);
+                        compositor.printContent("\nInput not queued: agent is stopping.\n");
+                    }
                 });
             auto connProcessingQueued = QObject::connect(
                 agent,
@@ -7949,8 +7957,12 @@ bool QSocCliWorker::runAgentLoop(
                         }
                         return;
                     }
-                    agent->queueRequest(text);
-                    queueWidget.addRequest(text);
+                    if (agent->queueRequest(text)) {
+                        queueWidget.addRequest(text);
+                    } else {
+                        escMonitor.setInputBuffer(text);
+                        compositor.printContent("\nInput not queued: agent is stopping.\n");
+                    }
                 });
             auto connProcessingQueued = QObject::connect(
                 agent,

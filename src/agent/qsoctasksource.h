@@ -88,10 +88,11 @@ public:
     virtual QString tailFor(const QString &id, int maxBytes) const = 0;
 
     /**
-     * @brief Best-effort terminate; returns true on success.
-     * @details The overlay does not gate by canKill — it always calls
-     *          this when the user presses x. Sources should handle the
-     *          "already gone" case gracefully (return false).
+     * @brief Submit a best-effort stop request.
+     * @details Returns true when the source accepted the request, not when
+     *          asynchronous work has already stopped. The overlay does not
+     *          gate by canKill; sources return false for an unknown or
+     *          terminal task.
      */
     virtual bool killTask(const QString &id) = 0;
 

@@ -254,7 +254,8 @@ void QTuiTaskOverlay::killSelected()
         return;
     const bool ok = registry_->killTask(tag, id);
     flashFooter(
-        ok ? QStringLiteral("Killed %1").arg(id) : QStringLiteral("Kill failed: %1").arg(id));
+        ok ? QStringLiteral("Stop requested: %1").arg(id)
+           : QStringLiteral("Stop request failed: %1").arg(id));
     refreshRows();
     if (mode_ == Mode::Detail) {
         /* If the detail target is gone, drop back to list. */

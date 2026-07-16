@@ -869,16 +869,16 @@ tail on the right.
     [`Up`/`Down`, `j`/`k`], [Move selection],
     [`Enter`], [Open the task's detail tail],
     [`x`],
-    [Abort or kill the highlighted task with no confirm prompt],
+    [Request stop or removal for the highlighted task],
     [`q`, `ESC`], [Close the overlay],
   )],
   caption: [TASK OVERLAY KEYS],
   kind: table,
 )
 
-`x` sends `SIGTERM` to bash jobs, calls `abort()` on streaming
-sub-agents, stops monitors, and removes a `/loop` job from the schedule.
-Aborting a sub-agent leaves other sub-agents running.
+`x` sends `SIGTERM` to bash jobs, requests cancellation for sub-agents,
+stops monitors, and removes a `/loop` job from the schedule. Cancelling a
+sub-agent discards its queued input and leaves other sub-agents running.
 Completed rows linger for a short window so their tail can still be
 inspected before being evicted.
 
