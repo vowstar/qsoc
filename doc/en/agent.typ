@@ -414,17 +414,16 @@ View and selection:
 Completion and interrupt:
 
 - *`@<name>`*: Fuzzy-complete a project file path
-- *ESC*: Abort the current operation
+- *ESC*: Request cancellation of the current operation
 
-While the agent is executing, you can keep typing. Press *Enter* to submit; the
-agent consumes queued requests at the start of the next iteration. Pressing
-*ESC* aborts the current LLM stream, tool execution, and any pending tool
-calls; conversation history is preserved. With a queued message waiting, *ESC*
-cuts only the current step and the agent continues directly with your queued
-message; with nothing queued it stops the whole run.
+While the agent is executing, *Enter* submits input for the next iteration and
+*ESC* requests cancellation. With queued input, the agent stops the current
+step and continues with that input; otherwise it stops the run. Conversation
+history and completed tool results are preserved. The active tool may already
+have changed external state.
 
-An interrupted tool batch keeps completed results, records that the active call
-may already have changed external state, and marks untouched calls as not executed.
+*ESC* is not processed while a synchronous remote command is running. Losing
+its SSH channel does not guarantee that the remote process has stopped.
 
 == DECISION FLOW
 <agent-decision-flow>
