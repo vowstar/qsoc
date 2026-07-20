@@ -518,6 +518,10 @@ target_compile_definitions(qsoc_core PUBLIC
     LEXBOR_STATIC
 )
 
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(qsoc_core PUBLIC -fexperimental-library)
+endif()
+
 if(WIN32)
     target_link_libraries(qsoc_core PUBLIC ws2_32)
     target_compile_definitions(qsoc_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
