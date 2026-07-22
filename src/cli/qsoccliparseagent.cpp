@@ -61,6 +61,7 @@
 #include "cli/qsocexternaleditor.h"
 #include "cli/qsocloopscheduler.h"
 #include "cli/qsocpredictioncontroller.h"
+#include "cli/qsocsessiontranscript.h"
 #include "cli/qterminalcapability.h"
 #include "common/qlspconfigloader.h"
 #include "common/qlspservice.h"
@@ -3237,6 +3238,7 @@ bool QSocCliWorker::runAgentLoop(
             const json restored = QSocSession::loadMessages(sessionPath);
             if (restored.is_array() && !restored.empty()) {
                 agent->setMessages(restored);
+                QSocSessionTranscript::appendTo(restored, compositor.contentView());
                 lastPersistedIndex = static_cast<int>(agent->getMessages().size());
                 /* Restore the extraction cursor so a turn left unextracted
                  * before a crash is picked up; fall back to the message
@@ -3268,6 +3270,8 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.printContent(QString("(Resumed session %1, %2 messages)\n\n")
                                             .arg(sessionId.left(8))
                                             .arg(lastPersistedIndex));
+                compositor.dismissTopBanner();
+                compositor.contentView().scrollToBottom();
 
                 /* Restore pending TODOs from .qsoc/todos.md so the user
                  * sees what was in progress when the session was saved. */

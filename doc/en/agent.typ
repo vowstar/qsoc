@@ -1063,7 +1063,8 @@ directory, one JSON event per line (messages plus metadata). This enables:
 
 - `qsoc agent --continue`: resume the most recent session
 - `qsoc agent --resume [id]`: pick a session from a list, or load one by id /
-  unique prefix
+  unique prefix; readable conversation messages and paired tool results are
+  restored from the persisted model context into the TUI scrollback
 - `/branch [name]`: fork the current session into a new id, preserving the
   original
 - `/rename <title>`: set a human-readable title shown by the resume picker
