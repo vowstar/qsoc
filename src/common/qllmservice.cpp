@@ -818,6 +818,8 @@ void QLLMService::commitEndpoint(const EndpointAttempt &attempt)
 QNetworkRequest QLLMService::prepareRequest(const LLMEndpoint &endpoint) const
 {
     QNetworkRequest request(endpoint.url);
+    /* Qt may read from a closed TLS socket while retiring an HTTP/2 connection. */
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
 
     /* Auth header dispatch: empty or "Authorization" sends the
@@ -1024,8 +1026,6 @@ void QLLMService::sendChatCompletionStream(
 
     LLMEndpoint     endpoint = selectEndpoint();
     QNetworkRequest request  = prepareRequest(endpoint);
-    /* Qt can dispatch an HTTP/2 read after a retired stream closes its TLS socket. */
-    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 
     /* Build payload with streaming enabled */
     json payload;

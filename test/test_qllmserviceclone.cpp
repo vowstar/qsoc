@@ -2533,7 +2533,7 @@ private slots:
             !capture.text().contains(QStringLiteral("device not open")), qPrintable(capture.text()));
     }
 
-    void testDoneRetirementKeepsStreamingOffHttp2()
+    void testDoneRetirementKeepsRequestsOffHttp2()
     {
         QSocTestCapture capture;
         MockHttpServer  server;
@@ -2597,7 +2597,7 @@ private slots:
             QVERIFY(retiredWasRunning);
             QVERIFY(!streamHttp2Allowed);
             QVERIFY(recapReplyObserved);
-            QVERIFY(recapHttp2Allowed);
+            QVERIFY(!recapHttp2Allowed);
             QVERIFY2(recapResult.error.isEmpty(), qPrintable(recapResult.error));
             QCOMPARE(recapResult.content, QStringLiteral("recap complete"));
             QCOMPARE(server.requestCount(), 2);
