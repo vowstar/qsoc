@@ -208,7 +208,12 @@ void QSocAgent::finishToolBatch(const ActiveRunPtr &run)
                         "uncertain, and side effects may have occurred. "
                         "Verify current state before retrying.")
                   : QStringLiteral("Not executed because the tool batch was interrupted.");
-        addToolMessage(id, result);
+        addToolMessage(
+            id,
+            result,
+            executingToolCallId.has_value() && id == *executingToolCallId
+                ? QStringLiteral("uncertain")
+                : QStringLiteral("skipped"));
         completedIds.insert(id);
     }
     for (const json &attachment : attachments) {
@@ -216,12 +221,20 @@ void QSocAgent::finishToolBatch(const ActiveRunPtr &run)
     }
 }
 
-void QSocAgent::finishSynchronousRun(const ActiveRunPtr &run)
+void QSocAgent::finishSynchronousRun(const ActiveRunPtr &run, RunOutcome outcome)
 {
     if (!isCurrentRun(run)) {
         return;
     }
+    const QPointer<QSocAgent> owner(this);
     finishToolBatch(run);
+    const PersistencePoint point = outcome == RunOutcome::Complete ? PersistencePoint::Completed
+                                   : outcome == RunOutcome::Error  ? PersistencePoint::Error
+                                                                   : PersistencePoint::Aborted;
+    runPersistenceBarrier(point);
+    if (owner.isNull() || owner->activeRun_ != run) {
+        return;
+    }
     run->phase = RunPhase::Terminal;
     activeRun_.reset();
 }
@@ -237,13 +250,35 @@ void QSocAgent::finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, con
     run->phase = RunPhase::Finishing;
 
     const QPointer<QSocAgent> owner(this);
-    if (outcome == RunOutcome::Complete) {
-        fireStopHook(payload);
+    QString                   finalPayload   = payload;
+    const auto                persistOutcome = [this](RunOutcome value) {
+        const PersistencePoint point = value == RunOutcome::Complete ? PersistencePoint::Completed
+                                       : value == RunOutcome::Error  ? PersistencePoint::Error
+                                                                     : PersistencePoint::Aborted;
+        return runPersistenceBarrier(point);
+    };
+    bool persisted = persistOutcome(outcome);
+    if (owner.isNull() || owner->activeRun_ != run || run->phase != RunPhase::Finishing) {
+        return;
+    }
+    if (!persisted) {
+        outcome      = RunOutcome::Error;
+        finalPayload = QStringLiteral("Session persistence failed");
+    } else if (outcome == RunOutcome::Complete) {
+        fireStopHook(finalPayload);
         if (owner.isNull() || owner->activeRun_ != run || run->phase != RunPhase::Finishing) {
             return;
         }
         if (run->stop.load() != StopMode::None) {
-            outcome = RunOutcome::Aborted;
+            outcome   = RunOutcome::Aborted;
+            persisted = persistOutcome(outcome);
+            if (owner.isNull() || owner->activeRun_ != run || run->phase != RunPhase::Finishing) {
+                return;
+            }
+            if (!persisted) {
+                outcome      = RunOutcome::Error;
+                finalPayload = QStringLiteral("Session persistence failed");
+            }
         }
     }
 
@@ -260,11 +295,11 @@ void QSocAgent::finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, con
     }
 
     if (outcome == RunOutcome::Complete) {
-        emit owner->runComplete(payload);
+        emit owner->runComplete(finalPayload);
     } else if (outcome == RunOutcome::Error) {
-        emit owner->runError(payload);
+        emit owner->runError(finalPayload);
     } else {
-        emit owner->runAborted(payload);
+        emit owner->runAborted(finalPayload);
     }
 }
 
@@ -322,7 +357,7 @@ QSocAgent::CheckpointAction QSocAgent::checkpointRun(const ActiveRunPtr &run)
     if (run->mode == RunMode::Streaming) {
         finishStreamRun(run, RunOutcome::Aborted, streamFinalContent);
     } else {
-        finishSynchronousRun(run);
+        finishSynchronousRun(run, RunOutcome::Aborted);
     }
     return CheckpointAction::Terminal;
 }
@@ -495,7 +530,7 @@ QString QSocAgent::run(const QString &userQuery)
         return QStringLiteral("[Agent aborted]");
     }
     if (!promptAllowed) {
-        owner->finishSynchronousRun(run);
+        owner->finishSynchronousRun(run, RunOutcome::Error);
         return QStringLiteral("[user_prompt_submit hook blocked: %1]").arg(blockReason);
     }
 
@@ -582,7 +617,7 @@ QString QSocAgent::run(const QString &userQuery)
             if (action == CheckpointAction::Terminal) {
                 return QStringLiteral("[Agent aborted]");
             }
-            owner->finishSynchronousRun(run);
+            owner->finishSynchronousRun(run, RunOutcome::Error);
             return QStringLiteral("[Agent aborted]");
         }
         action = checkpoint();
@@ -644,7 +679,7 @@ QString QSocAgent::run(const QString &userQuery)
             if (owner->hasPendingRequests()) {
                 continue;
             }
-            owner->finishSynchronousRun(run);
+            owner->finishSynchronousRun(run, RunOutcome::Complete);
             return finalText;
         }
     }
@@ -653,23 +688,38 @@ QString QSocAgent::run(const QString &userQuery)
      * "max turns limit" message; the default safety cap retains the
      * legacy phrasing so existing logs still match. */
     if (owner->agentConfig.maxTurnsOverride > 0) {
-        owner->finishSynchronousRun(run);
+        owner->finishSynchronousRun(run, RunOutcome::Error);
         return QString("Reached max turns limit (%1)").arg(turnCap);
     }
-    owner->finishSynchronousRun(run);
+    owner->finishSynchronousRun(run, RunOutcome::Error);
     return QString("[Agent safety limit reached (%1 iterations)]").arg(turnCap);
 }
 
 void QSocAgent::runStream(const QString &userQuery)
 {
+    startStream(userQuery, false);
+}
+
+void QSocAgent::resumeStream()
+{
+    startStream(std::nullopt, true);
+}
+
+void QSocAgent::startStream(const std::optional<QString> &userQuery, bool restoredSession)
+{
     if (activeRun_) {
-        if (activeRun_->mode == RunMode::Streaming && queueRequest(userQuery)) {
+        if (userQuery.has_value() && activeRun_->mode == RunMode::Streaming
+            && queueRequest(*userQuery)) {
             abort();
         }
         return;
     }
     if (!llmService || !toolRegistry) {
         emit runError("LLM service or tool registry not configured");
+        return;
+    }
+    if (!userQuery.has_value() && messages.empty()) {
+        emit runError("No persisted history to resume");
         return;
     }
 
@@ -684,30 +734,44 @@ void QSocAgent::runStream(const QString &userQuery)
     planNudgeUsed             = false;
     streamFinalContent.clear();
 
-    fireSessionStartHookOnce();
-    if (owner.isNull() || owner->checkpointRun(run) == CheckpointAction::Terminal) {
-        return;
+    if (restoredSession) {
+        sessionStartFired = true;
+    } else {
+        fireSessionStartHookOnce();
+        if (owner.isNull() || owner->checkpointRun(run) == CheckpointAction::Terminal) {
+            return;
+        }
     }
 
-    QString    prompt = userQuery;
-    QString    blockReason;
-    const bool promptAllowed = firePromptSubmitHook(&prompt, &blockReason);
-    if (owner.isNull() || owner->checkpointRun(run) == CheckpointAction::Terminal) {
-        return;
+    QString recallQuery;
+    if (userQuery.has_value()) {
+        QString    prompt = *userQuery;
+        QString    blockReason;
+        const bool promptAllowed = firePromptSubmitHook(&prompt, &blockReason);
+        if (owner.isNull() || owner->checkpointRun(run) == CheckpointAction::Terminal) {
+            return;
+        }
+        if (!promptAllowed) {
+            owner->finishStreamRun(
+                run,
+                RunOutcome::Error,
+                QStringLiteral("user_prompt_submit hook blocked: %1").arg(blockReason));
+            return;
+        }
+        addMessage("user", prompt);
+        recallQuery = prompt;
+    } else {
+        for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+            if (it->value("role", std::string()) == "user" && it->contains("content")
+                && (*it)["content"].is_string()) {
+                recallQuery = QString::fromStdString((*it)["content"].get<std::string>());
+                break;
+            }
+        }
     }
-    if (!promptAllowed) {
-        owner->finishStreamRun(
-            run,
-            RunOutcome::Error,
-            QStringLiteral("user_prompt_submit hook blocked: %1").arg(blockReason));
-        return;
-    }
-
-    /* Add user message to history */
-    addMessage("user", prompt);
 
     /* Rank relevant memories for this turn. */
-    computeRecallForTurn(prompt, run);
+    computeRecallForTurn(recallQuery, run);
     if (owner.isNull() || owner->checkpointRun(run) == CheckpointAction::Terminal) {
         return;
     }
@@ -1193,6 +1257,7 @@ void QSocAgent::processStreamIteration()
              * messages, so strip it before the wire. */
             sanitized.erase("_usage");
             sanitized.erase("_img_tokens");
+            sanitized.erase("_qsoc_tool_state");
             messagesWithSystem.push_back(sanitized);
         }
 
@@ -1257,6 +1322,27 @@ void QSocAgent::processStreamIteration()
             return;
         }
 
+        const bool persisted = owner->runPersistenceBarrier(PersistencePoint::BeforeRequest);
+        if (owner.isNull()) {
+            return;
+        }
+        if (!persisted) {
+            owner->finishStreamRun(
+                run, RunOutcome::Error, QStringLiteral("Session persistence failed"));
+            return;
+        }
+        action = checkpoint();
+        if (action == CheckpointAction::Restart) {
+            continue;
+        }
+        if (action == CheckpointAction::Terminal) {
+            return;
+        }
+        if (run->llm.isNull() || run->tools.isNull()) {
+            owner->finishStreamRun(
+                run, RunOutcome::Error, QStringLiteral("Agent dependency destroyed"));
+            return;
+        }
         owner->totalInputTokens.fetch_add(inputTokens);
         run->llm->sendChatCompletionStream(
             messagesWithSystem, tools, temperature, effortLevel, modelOverride);
@@ -1507,6 +1593,7 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
         json sanitized = msg;
         sanitized.erase("_usage");
         sanitized.erase("_img_tokens");
+        sanitized.erase("_qsoc_tool_state");
         messagesWithSystem.push_back(sanitized);
     }
 
@@ -1534,6 +1621,21 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
     }
 
     /* Call LLM */
+    const bool persisted = owner->runPersistenceBarrier(PersistencePoint::BeforeRequest);
+    if (owner.isNull()) {
+        return IterationResult::Stopped;
+    }
+    if (!persisted) {
+        owner->finishSynchronousRun(run, RunOutcome::Error);
+        return IterationResult::Stopped;
+    }
+    if (const auto result = checkpointPreparation()) {
+        return *result;
+    }
+    if (run->llm.isNull() || run->tools.isNull()) {
+        owner->finishSynchronousRun(run, RunOutcome::Error);
+        return IterationResult::Stopped;
+    }
     json response = run->llm->sendChatCompletion(
         messagesWithSystem, tools, agentConfig.temperature, run->stopSource.get_token());
     if (owner.isNull() || !owner->isCurrentRun(run)) {
@@ -1651,7 +1753,7 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         if (run->mode == RunMode::Streaming) {
             owner->finishStreamRun(run, RunOutcome::Error, QStringLiteral("Tool registry destroyed"));
         } else {
-            owner->finishSynchronousRun(run);
+            owner->finishSynchronousRun(run, RunOutcome::Error);
         }
     };
 
@@ -1725,6 +1827,31 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 return false;
             }
             continue;
+        }
+
+        const bool persisted
+            = owner->runPersistenceBarrier(PersistencePoint::BeforeTool, toolCallId);
+        if (owner.isNull()) {
+            return false;
+        }
+        if (!persisted) {
+            finishBatch();
+            if (run->mode == RunMode::Streaming) {
+                owner->finishStreamRun(
+                    run, RunOutcome::Error, QStringLiteral("Session persistence failed"));
+            } else {
+                run->stop.store(StopMode::Hard);
+                run->stopSource.request_stop();
+                owner->finishSynchronousRun(run, RunOutcome::Error);
+            }
+            return false;
+        }
+        if (stopBatch()) {
+            return false;
+        }
+        if (run->tools.isNull()) {
+            dependencyFailed();
+            return false;
         }
 
         if (agentConfig.planMode
@@ -1810,7 +1937,10 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                         "Completion is uncertain, and side effects may have occurred. "
                         "Verify current state before retrying.")
                         .arg(result);
-        owner->addToolMessage(toolCallId, historyResult);
+        owner->addToolMessage(
+            toolCallId,
+            historyResult,
+            run->stop.load() == StopMode::None ? QString() : QStringLiteral("uncertain"));
         if (const auto attachmentMessage = buildToolAttachmentMessage(attachments)) {
             run->toolBatchAttachments.push_back(*attachmentMessage);
         }
@@ -1862,6 +1992,17 @@ void QSocAgent::setMemoryManager(QSocMemoryManager *manager)
 void QSocAgent::setGoalCatalog(QSocGoalCatalog *catalog)
 {
     goalCatalog = catalog;
+}
+
+void QSocAgent::setPersistenceBarrier(PersistenceBarrier barrier)
+{
+    persistenceBarrier_ = std::move(barrier);
+}
+
+bool QSocAgent::runPersistenceBarrier(PersistencePoint point, const QString &toolCallId)
+{
+    const PersistenceBarrier barrier = persistenceBarrier_;
+    return !barrier || barrier(point, toolCallId);
 }
 
 void QSocAgent::setHookManager(QSocHookManager *manager)
@@ -2486,7 +2627,8 @@ QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentS
     return stripped;
 }
 
-void QSocAgent::addToolMessage(const QString &toolCallId, const QString &content)
+void QSocAgent::addToolMessage(
+    const QString &toolCallId, const QString &content, const QString &state)
 {
     /* Tool messages always carry a plain string. OpenAI defines a
      * content-array form for tool responses, but several backends
@@ -2497,6 +2639,9 @@ void QSocAgent::addToolMessage(const QString &toolCallId, const QString &content
         = {{"role", "tool"},
            {"tool_call_id", toolCallId.toStdString()},
            {"content", content.toStdString()}};
+    if (!state.isEmpty()) {
+        toolMsg["_qsoc_tool_state"] = state.toStdString();
+    }
     messages.push_back(toolMsg);
 }
 

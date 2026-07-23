@@ -65,6 +65,17 @@ class QSocAgent : public QObject
     Q_OBJECT
 
 public:
+    enum class PersistencePoint : quint8 {
+        BeforeRequest,
+        BeforeTool,
+        Completed,
+        Error,
+        Aborted,
+    };
+
+    using PersistenceBarrier
+        = std::function<bool(PersistencePoint point, const QString &toolCallId)>;
+
     /**
      * @brief Constructor
      * @param parent Parent QObject
@@ -97,6 +108,20 @@ public:
      * @param userQuery The user's input query
      */
     void runStream(const QString &userQuery);
+
+    /**
+     * @brief Resume streaming from the existing conversation tail.
+     * @details Does not append another user message. The restored history
+     *          must already end at a request or completed tool batch.
+     */
+    void resumeStream();
+
+    /**
+     * @brief Install a synchronous session-persistence barrier.
+     * @details Returning false prevents the pending request or tool from
+     *          running. An empty callback disables persistence checkpoints.
+     */
+    void setPersistenceBarrier(PersistenceBarrier barrier);
 
     /**
      * @brief Clear the conversation history
@@ -606,7 +631,8 @@ private:
     /* Re-entry guard for the goal-continuation hook. Atomic so the
      * sync run() and async runStream() paths cannot race. Mirrors
      * codex's continuation_lock semaphore. */
-    std::atomic<bool> goalContinuationInFlight{false};
+    std::atomic<bool>  goalContinuationInFlight{false};
+    PersistenceBarrier persistenceBarrier_;
 
     /* Per-stream-iteration accounting state. Snapshot at the start
      * of each runStream() so each iteration's token + elapsed delta
@@ -820,7 +846,8 @@ private:
      * @param toolCallId  The ID of the tool call
      * @param content     Stripped tool result content (no markers)
      */
-    void addToolMessage(const QString &toolCallId, const QString &content);
+    void addToolMessage(
+        const QString &toolCallId, const QString &content, const QString &state = QString());
 
     /**
      * @brief Compress history if needed based on token count
@@ -838,13 +865,15 @@ private:
      */
     void computeRecallForTurn(const QString &query, const ActiveRunPtr &run);
 
-    ActiveRunPtr     beginRun(RunMode mode);
-    bool             isCurrentRun(const ActiveRunPtr &run) const;
+    ActiveRunPtr beginRun(RunMode mode);
+    void         startStream(const std::optional<QString> &userQuery, bool restoredSession);
+    bool         isCurrentRun(const ActiveRunPtr &run) const;
+    bool runPersistenceBarrier(PersistencePoint point, const QString &toolCallId = QString());
     CheckpointAction checkpointRun(const ActiveRunPtr &run);
     int  estimateTotalTokensFromSnapshot(const QString &systemPrompt, const json &tools) const;
     void finishToolBatch(const ActiveRunPtr &run);
     void finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, const QString &payload);
-    void finishSynchronousRun(const ActiveRunPtr &run);
+    void finishSynchronousRun(const ActiveRunPtr &run, RunOutcome outcome);
     void requestStop(StopMode mode);
     bool hasPendingUserRequests() const;
     bool drainQueuedRequests(const ActiveRunPtr &run);

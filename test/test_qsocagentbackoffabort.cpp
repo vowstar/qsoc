@@ -4,6 +4,7 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsocgoal.h"
+#include "agent/qsochookmanager.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolagent.h"
@@ -597,6 +598,427 @@ class Test final : public QObject
     Q_OBJECT
 
 private slots:
+    void persistenceFailureStopsBeforeRequest()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry                   registry;
+        QSocAgent                          agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy                         errors(&agent, &QSocAgent::runError);
+        QList<QSocAgent::PersistencePoint> points;
+        bool                               historyReady = false;
+
+        agent.setPersistenceBarrier([&](QSocAgent::PersistencePoint point, const QString &) {
+            points.append(point);
+            if (point == QSocAgent::PersistencePoint::BeforeRequest) {
+                const json messages = agent.getMessages();
+                historyReady = messages.size() == 1
+                               && messages[0].value("content", std::string()) == "persist me";
+                return false;
+            }
+            return true;
+        });
+
+        agent.runStream(QStringLiteral("persist me"));
+
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(server.requestCount(), 0);
+        QVERIFY(historyReady);
+        const QList<QSocAgent::PersistencePoint> expected{
+            QSocAgent::PersistencePoint::BeforeRequest,
+            QSocAgent::PersistencePoint::Error,
+        };
+        QCOMPARE(points, expected);
+    }
+
+    void persistenceFailureStopsBeforeTool()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        SideEffectTool   tool;
+        registry.registerTool(&tool);
+        QSocAgent                          agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy                         errors(&agent, &QSocAgent::runError);
+        QList<QSocAgent::PersistencePoint> points;
+        bool                               toolCheckpointReady = false;
+
+        agent.setPersistenceBarrier([&](QSocAgent::PersistencePoint point,
+                                        const QString              &toolCallId) {
+            points.append(point);
+            if (point != QSocAgent::PersistencePoint::BeforeTool) {
+                return true;
+            }
+            const json messages = agent.getMessages();
+            toolCheckpointReady = toolCallId == QStringLiteral("call_0") && tool.executeCount() == 0
+                                  && messages.size() == 2 && messages[1].contains("tool_calls");
+            return false;
+        });
+
+        agent.runStream(QStringLiteral("use the tool"));
+        QTRY_COMPARE_WITH_TIMEOUT(errors.count(), 1, 3000);
+
+        QCOMPARE(tool.executeCount(), 0);
+        QCOMPARE(server.requestCount(), 1);
+        QVERIFY(toolCheckpointReady);
+        const QList<QSocAgent::PersistencePoint> expected{
+            QSocAgent::PersistencePoint::BeforeRequest,
+            QSocAgent::PersistencePoint::BeforeTool,
+            QSocAgent::PersistencePoint::Error,
+        };
+        QCOMPARE(points, expected);
+    }
+
+    void persistenceBarrierOrdersExternalActions()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        server.enqueueStream(QStringLiteral("done"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        SideEffectTool   tool;
+        registry.registerTool(&tool);
+        QSocAgent   agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy  completed(&agent, &QSocAgent::runComplete);
+        QStringList checkpoints;
+        bool        toolRanBeforeBarrier = false;
+
+        agent.setPersistenceBarrier([&](QSocAgent::PersistencePoint point, const QString &) {
+            QStringList roles;
+            for (const json &message : agent.getMessages()) {
+                roles.append(QString::fromStdString(message.value("role", std::string())));
+            }
+            QString name;
+            switch (point) {
+            case QSocAgent::PersistencePoint::BeforeRequest:
+                name = QStringLiteral("request");
+                break;
+            case QSocAgent::PersistencePoint::BeforeTool:
+                name = QStringLiteral("tool");
+                break;
+            case QSocAgent::PersistencePoint::Completed:
+                name = QStringLiteral("completed");
+                break;
+            case QSocAgent::PersistencePoint::Error:
+                name = QStringLiteral("error");
+                break;
+            case QSocAgent::PersistencePoint::Aborted:
+                name = QStringLiteral("aborted");
+                break;
+            }
+            checkpoints.append(name + QLatin1Char(':') + roles.join(QLatin1Char(',')));
+            if (point == QSocAgent::PersistencePoint::BeforeTool) {
+                toolRanBeforeBarrier = tool.executeCount() != 0;
+            }
+            return true;
+        });
+
+        agent.runStream(QStringLiteral("perform one action"));
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 3000);
+
+        QCOMPARE(tool.executeCount(), 1);
+        QVERIFY(!toolRanBeforeBarrier);
+        const QStringList expected{
+            QStringLiteral("request:user"),
+            QStringLiteral("tool:user,assistant"),
+            QStringLiteral("request:user,assistant,tool"),
+            QStringLiteral("completed:user,assistant,tool,assistant"),
+        };
+        QCOMPARE(checkpoints, expected);
+    }
+
+    void resumeStreamUsesPersistedTail()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("continued"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy       completed(&agent, &QSocAgent::runComplete);
+        agent.setMessages(
+            json::array(
+                {{{"role", "user"}, {"content", "persisted request"}},
+                 {{"role", "assistant"},
+                  {"content", nullptr},
+                  {"tool_calls",
+                   json::array(
+                       {{{"id", "call_0"},
+                         {"type", "function"},
+                         {"function", {{"name", "probe"}, {"arguments", "{}"}}}}})}},
+                 {{"role", "tool"},
+                  {"tool_call_id", "call_0"},
+                  {"content", "completion uncertain"},
+                  {"_qsoc_tool_state", "uncertain"}}}));
+
+        agent.resumeStream();
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 3000);
+
+        QCOMPARE(server.requestCount(), 1);
+        const json request = json::parse(server.requestBody(0).toStdString());
+        int        matches = 0;
+        for (const json &message : request.at("messages")) {
+            QVERIFY(!message.contains("_qsoc_tool_state"));
+            if (message.contains("content") && message["content"].is_string()
+                && message["content"].get<std::string>() == "persisted request") {
+                ++matches;
+            }
+        }
+        QCOMPARE(matches, 1);
+        const json history = agent.getMessages();
+        QCOMPARE(history.size(), size_t(4));
+        QCOMPARE(history[0].value("role", std::string()), std::string("user"));
+        QCOMPARE(history[2].value("_qsoc_tool_state", std::string()), std::string("uncertain"));
+        QCOMPARE(history[3].value("role", std::string()), std::string("assistant"));
+    }
+
+    void beforeRequestBarrierMayDeleteService()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        auto *service = new QLLMService;
+        configureService(*service, server);
+        QPointer<QLLMService> serviceOwner(service);
+        QSocToolRegistry      registry;
+        QSocAgent             agent(nullptr, service, &registry, testConfig());
+        QSignalSpy            errors(&agent, &QSocAgent::runError);
+
+        agent.setPersistenceBarrier([&](QSocAgent::PersistencePoint point, const QString &) {
+            if (point == QSocAgent::PersistencePoint::BeforeRequest) {
+                delete service;
+            }
+            return true;
+        });
+
+        agent.runStream(QStringLiteral("delete service at checkpoint"));
+
+        QVERIFY(serviceOwner.isNull());
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(server.requestCount(), 0);
+        QVERIFY(!agent.isRunning());
+    }
+
+    void beforeToolBarrierMayDeleteRegistry()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        QLLMService service;
+        configureService(service, server);
+        auto                      *registry = new QSocToolRegistry;
+        QPointer<QSocToolRegistry> registryOwner(registry);
+        SideEffectTool             tool;
+        registry->registerTool(&tool);
+        QSocAgent  agent(nullptr, &service, registry, testConfig());
+        QSignalSpy errors(&agent, &QSocAgent::runError);
+
+        agent.setPersistenceBarrier([&](QSocAgent::PersistencePoint point, const QString &) {
+            if (point == QSocAgent::PersistencePoint::BeforeTool) {
+                delete registry;
+            }
+            return true;
+        });
+
+        agent.runStream(QStringLiteral("delete registry at checkpoint"));
+        QTRY_COMPARE_WITH_TIMEOUT(errors.count(), 1, 3000);
+
+        QVERIFY(registryOwner.isNull());
+        QCOMPARE(tool.executeCount(), 0);
+        QCOMPARE(server.requestCount(), 1);
+        QVERIFY(!agent.isRunning());
+    }
+
+    void terminalBarrierMayDeleteAgent()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("done"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry    registry;
+        auto               *agent = new QSocAgent(nullptr, &service, &registry, testConfig());
+        QPointer<QSocAgent> owner(agent);
+
+        agent->setPersistenceBarrier([agent](QSocAgent::PersistencePoint point, const QString &) {
+            if (point == QSocAgent::PersistencePoint::Completed) {
+                delete agent;
+            }
+            return true;
+        });
+
+        agent->runStream(QStringLiteral("delete agent at checkpoint"));
+        QTRY_VERIFY_WITH_TIMEOUT(owner.isNull(), 3000);
+        QCOMPARE(server.requestCount(), 1);
+    }
+
+    void failedCompletedBarrierSkipsStopHook()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("done"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy       completed(&agent, &QSocAgent::runComplete);
+        QSignalSpy       errors(&agent, &QSocAgent::runError);
+        QSignalSpy       aborted(&agent, &QSocAgent::runAborted);
+        QTemporaryDir    tempDir(QDir::tempPath() + QStringLiteral("/qsoc_hook_XXXXXX"));
+        QVERIFY(tempDir.isValid());
+        const QString marker = tempDir.filePath(QStringLiteral("stop-ran"));
+
+        HookCommandConfig command;
+        command.command = QStringLiteral("printf hook > %1").arg(marker);
+        HookMatcherConfig matcher;
+        matcher.matcher = QStringLiteral("*");
+        matcher.commands.append(command);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::Stop].append(matcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+        agent.setHookManager(&hooks);
+        agent.setPersistenceBarrier([](QSocAgent::PersistencePoint point, const QString &) {
+            return point != QSocAgent::PersistencePoint::Completed;
+        });
+
+        agent.runStream(QStringLiteral("fail terminal persistence"));
+        QTRY_COMPARE_WITH_TIMEOUT(errors.count(), 1, 3000);
+
+        QCOMPARE(completed.count(), 0);
+        QCOMPARE(aborted.count(), 0);
+        QVERIFY(!QFile::exists(marker));
+    }
+
+    void stopHookAbortPersistsLatestOutcome()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("done"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy       completed(&agent, &QSocAgent::runComplete);
+        QSignalSpy       errors(&agent, &QSocAgent::runError);
+        QSignalSpy       aborted(&agent, &QSocAgent::runAborted);
+
+        HookCommandConfig command;
+        command.command    = QStringLiteral("sleep 0.05");
+        command.timeoutSec = 1;
+        HookMatcherConfig matcher;
+        matcher.matcher = QStringLiteral("*");
+        matcher.commands.append(command);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::Stop].append(matcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+        agent.setHookManager(&hooks);
+        QList<QSocAgent::PersistencePoint> points;
+        agent.setPersistenceBarrier([&](QSocAgent::PersistencePoint point, const QString &) {
+            points.append(point);
+            if (point == QSocAgent::PersistencePoint::Completed) {
+                QTimer::singleShot(0, &agent, &QSocAgent::abort);
+            }
+            return true;
+        });
+
+        agent.runStream(QStringLiteral("abort from stop hook window"));
+        QTRY_COMPARE_WITH_TIMEOUT(aborted.count(), 1, 3000);
+
+        QCOMPARE(completed.count(), 0);
+        QCOMPARE(errors.count(), 0);
+        const QList<QSocAgent::PersistencePoint> expected{
+            QSocAgent::PersistencePoint::BeforeRequest,
+            QSocAgent::PersistencePoint::Completed,
+            QSocAgent::PersistencePoint::Aborted,
+        };
+        QCOMPARE(points, expected);
+    }
+
+    void restoredHistorySkipsSessionStartHook()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("continued"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy       completed(&agent, &QSocAgent::runComplete);
+        QTemporaryDir    tempDir(QDir::tempPath() + QStringLiteral("/qsoc_hook_XXXXXX"));
+        QVERIFY(tempDir.isValid());
+        const QString marker = tempDir.filePath(QStringLiteral("session-start-ran"));
+
+        HookCommandConfig command;
+        command.command = QStringLiteral("printf hook > %1").arg(marker);
+        HookMatcherConfig matcher;
+        matcher.matcher = QStringLiteral("*");
+        matcher.commands.append(command);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::SessionStart].append(matcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+        agent.setHookManager(&hooks);
+        agent.setMessages(json::array({{{"role", "user"}, {"content", "persisted"}}}));
+
+        agent.resumeStream();
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 3000);
+
+        QVERIFY(!QFile::exists(marker));
+        QCOMPARE(server.requestCount(), 1);
+    }
+
+    void restoredContinuationSkipsUserHooks()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("continued"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy       completed(&agent, &QSocAgent::runComplete);
+        QTemporaryDir    tempDir(QDir::tempPath() + QStringLiteral("/qsoc_hook_XXXXXX"));
+        QVERIFY(tempDir.isValid());
+        const QString sessionMarker = tempDir.filePath(QStringLiteral("session-start-ran"));
+        const QString promptMarker  = tempDir.filePath(QStringLiteral("prompt-ran"));
+
+        HookMatcherConfig sessionMatcher;
+        sessionMatcher.matcher = QStringLiteral("*");
+        HookCommandConfig sessionCommand;
+        sessionCommand.command = QStringLiteral("printf s >> %1").arg(sessionMarker);
+        sessionMatcher.commands.append(sessionCommand);
+        HookMatcherConfig promptMatcher;
+        promptMatcher.matcher = QStringLiteral("*");
+        HookCommandConfig promptCommand;
+        promptCommand.command = QStringLiteral("printf p >> %1").arg(promptMarker);
+        promptMatcher.commands.append(promptCommand);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::SessionStart].append(sessionMatcher);
+        hookConfig.byEvent[QSocHookEvent::UserPromptSubmit].append(promptMatcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+        agent.setHookManager(&hooks);
+        agent.setMessages(
+            json::array({{{"role", "user"}, {"content", "continue the restored goal"}}}));
+
+        agent.resumeStream();
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 3000);
+
+        QVERIFY(!QFile::exists(sessionMarker));
+        QVERIFY(!QFile::exists(promptMarker));
+        QCOMPARE(server.requestCount(), 1);
+        QCOMPARE(lastUserMessage(server, 0), QStringLiteral("continue the restored goal"));
+    }
+
     void compactPruneObserverMayDeleteAgent()
     {
         QSocToolRegistry    registry;
@@ -1609,6 +2031,7 @@ private slots:
         QVERIFY(interrupted.contains(QStringLiteral("Completion is uncertain")));
         QVERIFY(interrupted.contains(QStringLiteral("side effects may have occurred")));
         QVERIFY(interrupted.contains(QStringLiteral("Verify current state before retrying")));
+        QCOMPARE(history[2].value("_qsoc_tool_state", std::string()), std::string("uncertain"));
         QVERIFY(!interrupted.contains(QStringLiteral("Tool reported")));
         QVERIFY(!interrupted.contains(QStringLiteral("cancelled"), Qt::CaseInsensitive));
         QCOMPARE(history[3].value("content", std::string()), std::string("replacement request"));
@@ -1664,6 +2087,7 @@ private slots:
         QVERIFY(interrupted.contains(QStringLiteral("side effects may have occurred")));
         QVERIFY(interrupted.contains(QStringLiteral("Tool reported: cancelled")));
         QVERIFY(interrupted.endsWith(QStringLiteral("Verify current state before retrying.")));
+        QCOMPARE(history[2].value("_qsoc_tool_state", std::string()), std::string("uncertain"));
         QCOMPARE(history[3].value("content", std::string()), std::string("queued request"));
         QCOMPARE(history[4].value("content", std::string()), std::string("queued complete"));
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
@@ -1751,6 +2175,7 @@ private slots:
         QVERIFY(
             QString::fromStdString(messages[batchStart + 2].value("content", std::string()))
                 .contains(QStringLiteral("not executed"), Qt::CaseInsensitive));
+        QVERIFY(!messages[batchStart + 2].contains("_qsoc_tool_state"));
         QCOMPARE(
             messages[batchStart + 3].value("content", std::string()), std::string("queued request"));
         server.setRequestObserver({});

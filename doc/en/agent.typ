@@ -1069,6 +1069,11 @@ directory, one JSON event per line (messages plus metadata). This enables:
   original
 - `/rename <title>`: set a human-readable title shown by the resume picker
 
+An explicit resume continues an interrupted run only when QSoC can verify its
+saved model, workspace, goal, and local recovery record. Finished or
+inconsistent runs return to the prompt. A tool interrupted in flight is
+reported as uncertain and requires a new user turn; it is not replayed directly.
+
 == USAGE EXAMPLES
 <agent-examples>
 
@@ -1303,7 +1308,8 @@ JSON, stdout JSON (optional), and process exit codes.
     [yes (exit 2)],
 
     [`session_start`],
-    [Once per agent lifetime, the first time `runStream` is invoked.],
+    [Once per agent lifetime before its first normal turn. Automatic recovery
+     of an interrupted run does not repeat it.],
     [no],
 
     [`stop`],
