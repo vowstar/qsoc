@@ -15,6 +15,7 @@ private slots:
     void runningToolHasOnlyHeaderAndBody();
     void finishedSuccessAddsCheckmarkFooter();
     void finishedFailureAddsCrossFooter();
+    void recoveryStatesUseDistinctFooters();
     void foldingCollapsesToHeaderSummary();
     void plainTextLooksLikeShellHistory();
     void markdownWrapsBodyInFencedBlock();
@@ -44,6 +45,25 @@ void Test::finishedFailureAddsCrossFooter()
     block.finish(QTuiToolBlock::Status::Failure, QStringLiteral("exit 1"));
     block.layout(40);
     QCOMPARE(block.rowCount(), 2); /* header + footer */
+}
+
+void Test::recoveryStatesUseDistinctFooters()
+{
+    QTuiToolBlock uncertain(QStringLiteral("write_file"), QStringLiteral("a.txt"));
+    uncertain.finish(QTuiToolBlock::Status::Uncertain, QString());
+    uncertain.layout(40);
+    QTuiScreen uncertainScreen(40, 1);
+    uncertain.paintRow(uncertainScreen, 0, 1, 0, 40, false, false);
+    QCOMPARE(uncertainScreen.at(2, 0).character, QChar(QLatin1Char('?')));
+    QCOMPARE(uncertainScreen.at(2, 0).fgColor, QTuiFgColor::Yellow);
+
+    QTuiToolBlock skipped(QStringLiteral("shell"), QStringLiteral("echo b"));
+    skipped.finish(QTuiToolBlock::Status::Skipped, QString());
+    skipped.layout(40);
+    QTuiScreen skippedScreen(40, 1);
+    skipped.paintRow(skippedScreen, 0, 1, 0, 40, false, false);
+    QCOMPARE(skippedScreen.at(2, 0).character, QChar(0x00B7));
+    QVERIFY(skippedScreen.at(2, 0).dim);
 }
 
 void Test::foldingCollapsesToHeaderSummary()

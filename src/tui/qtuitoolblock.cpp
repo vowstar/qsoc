@@ -134,18 +134,30 @@ void QTuiToolBlock::layout(int width)
         case Status::Failure:
             footer.append(colored(QStringLiteral("✗ "), QTuiFgColor::Red, /*bold=*/true));
             break;
+        case Status::Uncertain:
+            footer.append(colored(QStringLiteral("? "), QTuiFgColor::Yellow, /*bold=*/true));
+            break;
+        case Status::Skipped:
+            footer.append(dimRun(QStringLiteral("· ")));
+            break;
         case Status::Running:
         default:
             footer.append(dimRun(QStringLiteral("· ")));
             break;
         }
         QTuiStyledRun summaryRun;
-        summaryRun.text = summary.isEmpty()
-                              ? QStringLiteral("done, %1 line%2")
-                                    .arg(body.size())
-                                    .arg(body.size() == 1 ? QString() : QStringLiteral("s"))
-                              : summary;
-        summaryRun.dim  = true;
+        if (!summary.isEmpty()) {
+            summaryRun.text = summary;
+        } else if (status == Status::Uncertain) {
+            summaryRun.text = QStringLiteral("completion uncertain");
+        } else if (status == Status::Skipped) {
+            summaryRun.text = QStringLiteral("not executed");
+        } else {
+            summaryRun.text = QStringLiteral("done, %1 line%2")
+                                  .arg(body.size())
+                                  .arg(body.size() == 1 ? QString() : QStringLiteral("s"));
+        }
+        summaryRun.dim = true;
         footer.append(summaryRun);
         rows.append(footer);
     }

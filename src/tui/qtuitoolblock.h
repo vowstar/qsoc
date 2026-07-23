@@ -35,6 +35,8 @@ public:
         Running,
         Success,
         Failure,
+        Uncertain,
+        Skipped,
     };
 
     QTuiToolBlock(QString toolName, QString detail);
@@ -43,9 +45,8 @@ public:
      * on `\n` so the layout produces one row per source line. */
     void appendBody(const QString &chunk);
 
-    /* Mark the call as finished. Status renders the footer icon: ✓
-     * for success, ✗ for failure. The detail label may carry summary
-     * text shown after the icon. */
+    /* Mark the call as finished. The footer distinguishes success,
+     * failure, uncertain completion, and skipped execution. */
     void finish(Status status, const QString &summary);
 
     void layout(int width) override;

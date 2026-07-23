@@ -174,7 +174,14 @@ void appendTo(const json &messages, QTuiScrollView &view)
             const QString body  = QString::fromStdString(content->get<std::string>());
             auto          block = std::make_unique<QTuiToolBlock>(tool.name, tool.detail);
             block->appendBody(body);
-            block->finish(QTuiToolBlock::Status::Success, QString());
+            const QString state = stringValue(message, "_qsoc_tool_state");
+            if (state == QStringLiteral("uncertain")) {
+                block->finish(QTuiToolBlock::Status::Uncertain, QString());
+            } else if (state == QStringLiteral("skipped")) {
+                block->finish(QTuiToolBlock::Status::Skipped, QString());
+            } else {
+                block->finish(QTuiToolBlock::Status::Success, QString());
+            }
             view.appendBlock(std::move(block));
             continue;
         }

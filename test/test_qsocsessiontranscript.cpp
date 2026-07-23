@@ -50,6 +50,7 @@ class Test : public QObject
 private slots:
     void rendersReadableMessagesInOrder();
     void pairsToolCallsById();
+    void rendersRecoveryToolStates();
     void reusesToolIdsAcrossBatches();
     void rejectsMalformedToolHistory();
     void keepsSyntheticMessagesOutOfUserBlocks();
@@ -104,6 +105,34 @@ void Test::pairsToolCallsById()
         < text.indexOf(QStringLiteral("$ read_file notes.txt")));
     QVERIFY(text.contains(QStringLiteral("two matches")));
     QVERIFY(text.contains(QStringLiteral("file body")));
+}
+
+void Test::rendersRecoveryToolStates()
+{
+    const json messages = json::array(
+        {{{"role", "assistant"},
+          {"tool_calls",
+           json::array(
+               {toolCall("call-a", "write_file", R"({"file_path":"a.txt"})"),
+                toolCall("call-b", "shell", R"({"command":"echo b"})")})}},
+         {{"role", "tool"},
+          {"tool_call_id", "call-a"},
+          {"content", "state must be verified"},
+          {"_qsoc_tool_state", "uncertain"}},
+         {{"role", "tool"},
+          {"tool_call_id", "call-b"},
+          {"content", "execution did not start"},
+          {"_qsoc_tool_state", "skipped"}}});
+
+    QTuiScrollView view;
+    QSocSessionTranscript::appendTo(messages, view);
+
+    QTuiScreen screen(80, 12);
+    view.render(screen, 0, 12, 80);
+    const QString text = screenText(screen, 80, 12);
+    QVERIFY(text.contains(QStringLiteral("? completion uncertain")));
+    QVERIFY(text.contains(QStringLiteral("· not executed")));
+    QVERIFY(!text.contains(QStringLiteral("✓ done")));
 }
 
 void Test::reusesToolIdsAcrossBatches()

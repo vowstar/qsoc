@@ -158,9 +158,12 @@ public:
 private:
     std::vector<std::unique_ptr<QTuiBlock>> blocks;
     QString                                 partialLine; /* Current incomplete line */
-    LineStyle                               partialStyle     = Normal;
-    int                                     scrollOffset     = 0;  /* 0 = at bottom */
-    int                                     focusedBlockIdx_ = -1; /* -1 = none */
+    LineStyle                               partialStyle      = Normal;
+    int                                     scrollOffset      = 0; /* 0 = at bottom */
+    int                                     maxScrollOffset_  = 0;
+    int                                     lastTotalVisible_ = 0;
+    bool                                    hasRendered_      = false;
+    int                                     focusedBlockIdx_  = -1; /* -1 = none */
 
     /* Cached during the previous render() call: per-screen-row block
      * index, indexed by `screenRow - lastRenderStartRow_`. Lets a hit

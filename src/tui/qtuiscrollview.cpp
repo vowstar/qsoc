@@ -426,9 +426,21 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
         totalVisible += partialRows.size();
     }
 
+    /* A non-zero offset means the user left the tail. Preserve the
+     * visible rows when same-width content grows below them. Width changes
+     * reflow the whole document, so only clamp those to the new range. */
+    if (hasRendered_ && scrollOffset > 0 && lastRenderWidth_ == contentWidth
+        && totalVisible > lastTotalVisible_) {
+        scrollOffset += totalVisible - lastTotalVisible_;
+    }
+    maxScrollOffset_ = qMax(0, totalVisible - qMax(0, height));
+    scrollOffset     = qBound(0, scrollOffset, maxScrollOffset_);
+
     const int viewBottom = totalVisible - scrollOffset;
     const int viewTop    = viewBottom - height;
 
+    hasRendered_        = true;
+    lastTotalVisible_   = totalVisible;
     lastRenderStartRow_ = startRow;
     lastRenderHeight_   = height;
     lastRenderWidth_    = contentWidth;
@@ -628,15 +640,17 @@ void QTuiScrollView::toggleFocusedFold()
 
 void QTuiScrollView::scrollUp(int count)
 {
-    /* Soft cap: blocks count is a lower bound on display-row count.
-     * The actual cap depends on width-driven wrapping; render() clamps
-     * once it knows totalVisible. */
-    const int softCap = (static_cast<int>(blocks.size()) + 1) * 8;
-    scrollOffset      = qMin(scrollOffset + count, qMax(0, softCap));
+    if (count <= 0 || scrollOffset >= maxScrollOffset_) {
+        return;
+    }
+    scrollOffset += qMin(count, maxScrollOffset_ - scrollOffset);
 }
 
 void QTuiScrollView::scrollDown(int count)
 {
+    if (count <= 0) {
+        return;
+    }
     scrollOffset = qMax(0, scrollOffset - count);
 }
 
@@ -750,7 +764,10 @@ void QTuiScrollView::clear()
 {
     blocks.clear();
     partialLine.clear();
-    scrollOffset = 0;
+    scrollOffset      = 0;
+    maxScrollOffset_  = 0;
+    lastTotalVisible_ = 0;
+    hasRendered_      = false;
     previousVisibleBlocks_.clear();
     visibleGraphicsEntries_.clear();
 }
