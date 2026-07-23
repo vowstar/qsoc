@@ -13,6 +13,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <optional>
+
 /**
  * @brief Per-project agent session storage on disk.
  * @details A session is one append-only JSONL file under
@@ -26,12 +28,50 @@
  *            {"type":"message","role":"tool","tool_call_id":"...","content":"..."}
  *
  *          Sessions live inside the project directory so moving the project
- *          carries history with it — no global ~/.qsoc/projects/<sanitized>
- *          path-mangling like other CLI agents.
+ *          carries its history.
  */
 class QSocSession
 {
 public:
+    enum class RunEvent {
+        Invalid,
+        Started,
+        Checkpoint,
+        ToolStarted,
+        Completed,
+        Error,
+        Aborted,
+    };
+
+    struct RunRecord
+    {
+        QString     runId;
+        RunEvent    event = RunEvent::Invalid;
+        QString     input;
+        QString     goalId;
+        QString     toolCallId;
+        QStringList startedToolCallIds;
+        int         messageCount = -1;
+        QString     historyDigest;
+        bool        inputReplaySafe = false;
+        bool        contextPresent  = false;
+        bool        registryModel   = false;
+        QString     modelId;
+        QString     effortLevel;
+        QString     reasoningModel;
+        bool        planMode   = false;
+        bool        remoteMode = false;
+        QString     remoteName;
+        QString     projectRoot;
+        QString     workingDir;
+
+        bool isRunning() const
+        {
+            return event == RunEvent::Started || event == RunEvent::Checkpoint
+                   || event == RunEvent::ToolStarted;
+        }
+    };
+
     /**
      * @brief Lightweight metadata extracted by walking the session directory
      *        without parsing every entry. Used to render the resume picker.
@@ -68,7 +108,7 @@ public:
      *          `{"type":"message", ...message fields}` so loaders can
      *          quickly discriminate from meta entries on the same file.
      */
-    void appendMessage(const nlohmann::json &message);
+    bool appendMessage(const nlohmann::json &message);
 
     /**
      * @brief Append a metadata key/value pair. Latest wins on load.
@@ -76,20 +116,62 @@ public:
      *          is then flushed in insertion order. Calling appendMeta
      *          alone never creates the on-disk file.
      */
-    void appendMeta(const QString &key, const QString &value);
+    bool appendMeta(const QString &key, const QString &value);
+
+    /**
+     * @brief Append one main-agent run lifecycle event.
+     * @details Checkpoint records retain the input and goal binding from the
+     *          matching started record when loaded.
+     */
+    bool appendRun(const RunRecord &record);
+
+    /**
+     * @brief Append a complete conversation snapshot without rewriting the file.
+     * @details Loaders replace messages accumulated before this record, then
+     *          continue applying later message records.
+     */
+    bool appendSnapshot(const nlohmann::json &messages);
 
     /**
      * @brief Replace the entire JSONL with the given message list. Used by
      *        /clear to truncate the session, and by full rewrites when the
      *        agent compacts in place.
      */
-    void rewriteMessages(const nlohmann::json &messages);
+    bool rewriteMessages(const nlohmann::json &messages);
 
     /**
      * @brief Load a session JSONL into a flat OpenAI-style message array.
      * @return Empty array on failure or if the file does not exist.
      */
     static nlohmann::json loadMessages(const QString &filePath);
+
+    /**
+     * @brief Return a stable digest for a persisted message array.
+     * @return Empty when messages is not a serializable array.
+     */
+    static QString historyDigest(const nlohmann::json &messages);
+
+    /**
+     * @brief Create an atomic local authorization claim for an interrupted run.
+     */
+    static bool createRecoveryClaim(const QString &runId);
+
+    /**
+     * @brief Return whether an exact local authorization claim exists.
+     */
+    static bool hasRecoveryClaim(const QString &runId);
+
+    /**
+     * @brief Remove an existing local authorization claim.
+     */
+    static bool removeRecoveryClaim(const QString &runId);
+
+    /**
+     * @brief Load the newest run and fold its lifecycle records.
+     * @return Empty when the session predates run records. A record with
+     *         RunEvent::Invalid means a parsed run record was malformed.
+     */
+    static std::optional<RunRecord> latestRun(const QString &filePath);
 
     /**
      * @brief Read the latest value of a meta key from a session JSONL.
@@ -136,6 +218,8 @@ public:
     static QString generateId();
 
 private:
+    bool flushPendingMeta();
+
     QString                        sessionIdValue;
     QString                        filePathValue;
     QList<QPair<QString, QString>> pendingMeta; /* Flushed on first message */
