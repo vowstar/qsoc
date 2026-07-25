@@ -42,8 +42,10 @@
   set table(
     stroke: 0.5pt,
     fill: (_, y) => if y == 0 { gray.lighten(75%) },
-    align: (_, y) => if y == 0 { align(center) },
   )
+  /* Cells with `auto` align inherit the figure's centered body, which centers
+     identifier columns; pin the table's own context to the left instead */
+  show table: it => align(left, it)
   show table.header: strong
   show table.cell.where(y: 0): set text(weight: "semibold")
 
@@ -146,14 +148,14 @@
     #v(0.8em)
   ])
 
-  show heading.where(level: 1): it => {
-    block([
-      #text(weight: "bold", font: fonts.headings, [#if it.numbering != none {
-          counter(heading).display()
-        } #it.body])
-      #v(0.3em)
-    ])
-  }
+  let chapter_title = it => block([
+    #text(weight: "bold", font: fonts.headings, [#if it.numbering != none {
+        counter(heading).display()
+      } #it.body])
+    #v(0.3em)
+  ])
+
+  show heading.where(level: 1): it => chapter_title(it)
 
   let render_cover_page = () => {
     set page(numbering: none, footer: none, header: none, margin: 0cm)
@@ -243,7 +245,14 @@
   pagebreak()
 
   counter(heading).update(0)
-  document
+  {
+    /* Body chapters open a new page; the front matter keeps its own flow */
+    show heading.where(level: 1): it => {
+      pagebreak(weak: true)
+      chapter_title(it)
+    }
+    document
+  }
 
   pagebreak()
   render_indexing_page()

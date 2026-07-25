@@ -577,7 +577,7 @@ output is displayed in dim text.
 
 #figure(
   align(center)[#table(
-    columns: (0.3fr, 0.3fr, 1fr),
+    columns: (0.25fr, 0.45fr, 1fr),
     align: (auto, auto, left),
     table.header([`--effort`], [`model_reasoning`], [Behavior]),
     table.hline(),
