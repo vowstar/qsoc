@@ -109,8 +109,7 @@ hostList:
   - alias: fpga-build           # matches Host fpga-build in ~/.ssh/config
     workspace: /home/bob/build
     capability: |
-      Vivado 2024.2 synthesis, bitstream generation,
-      JTAG programming for XC7A200T
+      FPGA synthesis, bitstream generation, and JTAG programming
   - alias: gpu-sim              # not in ssh-config; uses fallback target
     target: alice@gpu01:22
     workspace: /home/alice/sim
@@ -178,7 +177,6 @@ hostnames, or other sensitive operational details there.
 A *project goal* lets the user say "keep working on X until you've
 actually finished it" and the agent keeps taking turns automatically
 until either the goal is marked complete or the token budget runs out.
-The design mirrors codex's thread-goal feature but stays SQLite-free.
 
 The catalog lives in two files under the project's `.qsoc/` directory:
 
@@ -1317,7 +1315,7 @@ JSON, stdout JSON (optional), and process exit codes.
      content. Fire-and-forget.],
     [no],
   ),
-  caption: [Hook events],
+  caption: [HOOK EVENTS],
   kind: table,
 )
 
@@ -1393,7 +1391,7 @@ Common payload fields:
     [`remote`],           [Present only when the agent is in remote mode;
                            carries `display`, `workspace`, `cwd`.],
   ),
-  caption: [Hook payload fields],
+  caption: [HOOK PAYLOAD FIELDS],
   kind: table,
 )
 
@@ -1419,7 +1417,7 @@ JSON object):
     [`context`],          [String prepended to the user prompt. Honored by
                            `user_prompt_submit` on success.],
   ),
-  caption: [Hook stdout JSON fields],
+  caption: [HOOK STDOUT JSON FIELDS],
   kind: table,
 )
 
