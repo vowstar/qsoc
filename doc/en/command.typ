@@ -359,5 +359,3 @@ The `generate stub` command generates Verilog and Liberty stub files for selecte
   caption: [STUB GENERATION OPTIONS],
   kind: table,
 )
-
-#pagebreak()

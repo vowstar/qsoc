@@ -85,5 +85,3 @@ The following terms are used in command descriptions.
   caption: [TERMINOLOGY OF COMMANDS],
   kind: table,
 )
-
-#pagebreak()

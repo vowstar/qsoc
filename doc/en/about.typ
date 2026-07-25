@@ -30,5 +30,3 @@ document are property of their respective owners, and are hereby acknowledged.
 The page header carries the QSoC version this manual documents. Per-release
 changes, binaries, and the matching PDF are published at
 #link("https://github.com/vowstar/qsoc/releases").
-
-#pagebreak()
