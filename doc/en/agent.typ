@@ -266,7 +266,7 @@ The following commands are available during an interactive session:
     align: (auto, left),
     table.header([Command], [Description]),
     table.hline(),
-    [`exit`, `/exit`], [Exit the agent],
+    [`exit`, `quit`, `/exit`, `/quit`], [Exit the agent],
     [`/branch [name]`], [Fork the current session into a new one],
     [`/clear`], [Clear conversation history],
     [`/compact`], [Compact context and report tokens saved],

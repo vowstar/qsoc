@@ -19,7 +19,7 @@ Prebuilt binaries are attached to every release: an AppImage for Linux, a
 
 To build from source instead:
 
-```sh
+```bash
 nix develop
 cmake -B build -G Ninja
 cmake --build build -j
@@ -27,7 +27,7 @@ cmake --build build -j
 
 A first session runs the commands described in @cli-overview:
 
-```sh
+```bash
 qsoc project create mychip              # create a project in the current directory
 qsoc module import rtl/*.v              # import Verilog modules into the library
 qsoc generate verilog output/top.soc_net # generate RTL from a netlist

@@ -63,6 +63,9 @@ The following global options are available for all commands:
       - 4=Debug - All messages including debug information \
       - 5=Verbose - Maximum detail for all operations
     ],
+    [`--color <when>`],
+    [Colorize output: `auto` (default), `always`, `never`. `auto` honors
+     `NO_COLOR` / `FORCE_COLOR` and whether the stream is a terminal],
     [`-v`, `--version`], [Display version information],
   )],
   caption: [GLOBAL OPTIONS],
@@ -227,7 +230,7 @@ instances, so any conflicting scalar in a later file is the override.
 
 Example:
 
-```sh
+```bash
 qsoc generate verilog --merge \
   output/soc_top.soc_net    \
   output/cpu_inst.soc_net   \
