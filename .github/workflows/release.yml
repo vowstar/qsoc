@@ -320,8 +320,17 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
     - name: Download all artifacts
       uses: actions/download-artifact@v4
+
+    - name: Generate release notes
+      run: |
+        .github/scripts/release-notes.sh "${{ github.ref_name }}" > RELEASE_NOTES.md
+        cat RELEASE_NOTES.md
 
     - name: Package Windows build
       run: |
@@ -343,8 +352,7 @@ jobs:
           QSoC-*-windows-x64.zip
           macos-dmg/QSoC-*-macos-arm64.dmg
           docs-pdf/*.pdf
-        body: |
-          **Full Changelog**: https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}
+        body_path: RELEASE_NOTES.md
         draft: false
         prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
       env:
