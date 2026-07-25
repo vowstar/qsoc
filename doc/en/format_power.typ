@@ -77,7 +77,7 @@ power:
         settle_off: 80
         follow:                      # Reset synchronizer entries
           - clock: clk_gpu           # Domain clock (typically post-ICG)
-            reset: rst_req_gpu_n     # Synchronized reset output (rst_req_*)
+            reset: rst_gpu_n         # Synchronized reset output
             stage: 4                 # Synchronizer stages (optional, default: 4)
 ```
 
@@ -92,8 +92,14 @@ Always-on domains have no dependency key and remain permanently active:
 - Always enabled (`ctrl_enable=1'b1`)
 - Zero timing parameters (no wait or settle cycles)
 - Used for essential infrastructure like AO power rails
-- If pgood signal absent, generator ties to `1'b1` and relies on settle cycles
-- If pgood is absent, at least one of settle_on/settle_off must be non-zero
+- If pgood signal absent, the generator ties the FSM input to `1'b1`
+
+*Warning*: a domain without `pgood` cannot complete a power-down. `S_TURN_OFF`
+leaves only through `!pgood`, so a tied-high input makes the FSM enter
+`S_FAULT` once `settle_off` expires and latch the sticky fault bit. Give every
+controllable domain a real `pgood`, or keep the domain permanently on. Nothing
+in the generator enforces this, and `wait_dep`, `settle_on` and `settle_off`
+all default to zero even though the property table marks them required.
 
 === Root Domain Type
 <soc-net-power-root>
@@ -145,7 +151,7 @@ module qsoc_power_fsm
     input  wire pgood,            /**< power good of this domain            */
 
     output reg  clk_enable,       /**< ICG enable for this domain clock     */
-    output reg  rst_allow,        /**< active-high reset allow for domain   */
+    output reg  rst_gate_n,       /**< reset gate to synchronizer, active-low */
     output reg  pwr_switch,       /**< power switch control                 */
 
     output reg  ready,            /**< domain usable clock on reset off     */
@@ -160,7 +166,7 @@ Key behaviors:
 - Soft timeout: set fault flag, continue operation
 - Clock-reset sequencing: S_CLK_ON provides one cycle for clock stability before reset release
 - Reset-clock sequencing: S_RST_ASSERT provides one cycle for reset assertion before clock disable
-- DFT override: test_en=1 forces outputs active (pwr_switch=1, clk_enable=1, rst_allow=1, ready=1, valid=1) while preserving FSM state
+- DFT override: test_en=1 forces outputs active (pwr_switch=1, clk_enable=1, rst_gate_n=1, ready=1, valid=1) while preserving FSM state
 - With test_en=1, ready=1 for all domains, so dep_hard_all/dep_soft_all evaluate to 1 and dependency checks are bypassed
 - Auto-heal works without fault_clear; fault remains sticky until cleared or reset
 - Auto-heal: automatic retry after cooldown when dependencies ready
@@ -180,24 +186,51 @@ module qsoc_power_rst_sync #(parameter integer STAGE=4)(
 
 qsoc_power_rst_sync provides async assert, sync deassert reset synchronization. Assert does not require clock, deassert requires STAGE edges on clk_dom. Default STAGE=4 provides better metastability protection.
 
+`STAGE` must be at least 2. The shift register is declared as `reg [STAGE-1:0]`
+and is not guarded against `STAGE=1`, which elaborates to an illegal part
+select.
+
+*Warning*: `test_en` here forces `rst_dom_n` permanently released, so a domain
+reset cannot be applied while test mode is active. This is the opposite of the
+reset controller cells (@soc-net-reset-components), where `test_en` bypasses
+the synchronizer but leaves the reset controllable. Scan patterns that rely on
+a reset-based initialization of domain flops are not possible under this cell.
+
+`rst_gate_n` is a combinational decode of the FSM state ORed with `test_en`,
+and it drives the asynchronous reset pin of this synchronizer. Treat it as a
+glitch-sensitive path in synthesis and STA, and keep `test_en` static while the
+domain is live.
+
 == GENERATED INTERFACES
 <soc-net-power-interfaces>
 Power controllers generate standardized interfaces with predictable naming:
 
-Inputs: `clk_ao`, `rst_ao_n`, `test_en`, `pgood_<domain>`, `en_<domain>`, `clr_<domain>`
+Inputs: `host_clock`, `host_reset`, `rst_sys_n`, `test_en`, `pgood_<domain>`,
+`en_<domain>`, `clr_<domain>`, and the domain clock named by each `follow`
+entry
 
-Note: `clr_<domain>` is optional; when absent tie low and rely on auto-heal
-Outputs: `icg_en_<domain>`, `rst_allow_<domain>`, `sw_<domain>`, `rdy_<domain>`, `flt_<domain>`
+Outputs: `icg_en_<domain>`, `sw_<domain>`, `rdy_<domain>`, `flt_<domain>`, and
+one synchronized reset per `follow` entry
+
+`en_<domain>` and `clr_<domain>` are generated for every controllable domain
+and for no AO domain: an AO domain gets `ctrl_enable` tied to `1'b1` and
+`fault_clear` tied to `1'b0` inside the controller. `sw_<domain>` is likewise
+absent for AO domains.
 
 Note: `test_en`, `en_<domain>`, `clr_<domain>`, and `pgood_<domain>` must be synchronized into host_clock domain
 
 Signal semantics:
 - `ready`: Asserted when FSM state = S_ON, equivalent to domain fully operational
-- `valid`: Equals 1 in S_ON; equals pgood in S_TURN_ON/S_TURN_OFF; 0 otherwise
-- `rst_allow`: Active-high reset permission, domain reset = `rst_sys_n & rst_allow`
+- `valid`: Equals 1 in S_ON; equals pgood in S_TURN_ON/S_TURN_OFF; 0 otherwise.
+  The controller leaves this port unconnected, so it is observable only inside
+  the FSM instance
+- `rst_gate_n`: active-low reset gate, an internal wire rather than a
+  controller port. It feeds the synchronizer as `rst_sys_n & rst_gate_<domain>_n`
 - Dependency aggregation uses `ready_<dep>` signals exclusively
 
-Domain reset composition: `rst_<domain>_n = rst_sys_n & rst_allow_<domain>`
+An AO domain has `fault_clear` tied low, so once its sticky `fault` bit is set
+only `host_reset` clears it. `flt_<domain>` then stays high for the rest of the
+session.
 
 Dependency aggregation is automatic:
 ```verilog
@@ -225,9 +258,11 @@ Key characteristics:
 - Direct array format eliminates ambiguous clock/reset pairing from previous versions
 - Each entry becomes one qsoc_power_rst_sync instance with dedicated ports
 - Reset gate signal: `rst_sys_n & rst_gate_domain_n` (async assert, sync deassert)
-- FSM outputs `rst_gate_n` (internal permission), synchronizer outputs `rst_req_*_n` (final reset)
-- Test enable bypass preserves DFT capability
-- Stage parameter controls synchronizer depth (1-16 stages typical)
+- FSM outputs `rst_gate_n` (internal permission), the synchronizer output is
+  named by the entry's `reset` key verbatim
+- Test enable forces the domain reset released; it does not preserve
+  reset controllability in test mode
+- Stage parameter controls synchronizer depth (2-16; 1 is invalid)
 - Empty follow array generates no synchronizers (common for AO/root domains)
 
 Generated RTL pattern per entry:
@@ -236,7 +271,7 @@ qsoc_power_rst_sync #(.STAGE(4)) u_rst_sync_gpu_0 (
     .clk_dom     (clk_gpu),
     .rst_gate_n  (rst_sys_n & rst_gate_gpu_n),
     .test_en     (test_en),
-    .rst_dom_n   (rst_req_gpu_n)
+    .rst_dom_n   (rst_gpu_n)
 );
 ```
 
