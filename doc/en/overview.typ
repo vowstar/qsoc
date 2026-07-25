@@ -1,28 +1,41 @@
 = OVERVIEW
 <overview>
-QSoC is a versatile System-on-Chip (SoC) design tool that provides a comprehensive
-solution for SoC development. The tool features both a graphical user interface
-(GUI) and a command-line interface (CLI), offering flexibility in how users
-interact with the system. At its core, QSoC provides powerful capabilities for
-project management, module library handling, bus interface management, schematic
-processing, and RTL generation.
+QSoC is a System-on-Chip (SoC) design tool with three front ends over one
+project format: a GUI for interactive editing, a CLI for scripted and batch
+flows, and a terminal agent for LLM-driven work. All three read and write the
+same project files, so a design can move between them at any point.
 
-The tool's architecture is designed to support efficient SoC development workflows
-by providing integrated features for managing Verilog modules, handling bus
-interfaces, and generating RTL code. The GUI mode offers an intuitive interface
-for interactive design, while the CLI mode enables automation and integration
-with other development tools and scripts.
+A project holds module and bus libraries, netlists, and generated output.
+Commands create and manage projects, import and update Verilog modules, manage
+bus interfaces, and generate RTL, register maps, and stub files. Verbosity is
+set per invocation, so the same command serves both interactive use and build
+scripts.
 
-The operation of QSoC is managed through various commands and subcommands, where
-users can create and manage projects, import and update modules, handle bus
-interfaces, process schematics, and generate RTL code. The tool provides
-comprehensive feedback through its status reporting and verbose output options,
-enabling efficient monitoring and management of the development process.
+== GETTING STARTED
+<getting-started>
+Prebuilt binaries are attached to every release: an AppImage for Linux, a
+`.dmg` for macOS, and a `.zip` for Windows. They are published at
+#link("https://github.com/vowstar/qsoc/releases") together with this manual.
 
-By providing a unified platform for SoC development, QSoC significantly reduces
-the complexity of managing different aspects of SoC design, from module
-management to RTL generation. This integrated approach ensures consistency and
-efficiency throughout the development process.
+To build from source instead:
+
+```sh
+nix develop
+cmake -B build -G Ninja
+cmake --build build -j
+```
+
+A first session runs the commands described in @cli-overview:
+
+```sh
+qsoc project create mychip              # create a project in the current directory
+qsoc module import rtl/*.v              # import Verilog modules into the library
+qsoc generate verilog output/top.soc_net # generate RTL from a netlist
+qsoc agent                              # or let the agent drive the same tools
+```
+
+Every command accepts `--help`. The agent is documented in @agent-overview, the
+netlist format in @soc-net-format, and configuration in @config-overview.
 
 == TERMINOLOGY
 <terminology>
@@ -72,16 +85,5 @@ The following terms are used in command descriptions.
   caption: [TERMINOLOGY OF COMMANDS],
   kind: table,
 )
-
-== QSoC
-<qsoc>
-QSoC is primarily used for SoC design and development.
-
-#quote(block: true)[
-  QSoC provides both GUI and CLI interfaces for SoC development. While the GUI
-  offers an intuitive interface for interactive design, the CLI enables
-  automation and integration with other development tools. Users can choose the
-  interface that best suits their workflow and requirements.
-]
 
 #pagebreak()

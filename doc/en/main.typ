@@ -12,41 +12,39 @@
     publish_date: [2025-09-15],
   ),
   features: [
-    - Comprehensive SoC design and development environment
-    - Both GUI and CLI interfaces for flexible workflow
-    - Project management and organization
-    - Verilog module library management
-    - Bus interface handling and management
-    - Schematic processing capabilities
-    - RTL code generation
-    - Easy integration with existing development tools
+    - GUI, CLI, and interactive terminal agent in one tool
+    - Project, Verilog module library, and bus interface management
+    - Netlist-driven RTL generation with connection validation
+    - Clock, reset, power, FSM, and combinational logic generators
+    - SystemRDL register templates and stub generation
+    - Schematic import with automatic layout
+    - LLM agent with sub-agents, skills, hooks, and MCP servers
+    - Persistent agent memory with selective recall
+    - Remote SSH workspaces and layered configuration
   ],
   applications: [
     - System-on-Chip (SoC) design
     - Hardware description and verification
     - RTL development and management
     - Bus interface design and implementation
-    - Schematic-based design
-    - Hardware module library management
+    - Clock tree, reset tree, and power sequence generation
+    - Register map and firmware header generation
+    - AI-assisted RTL authoring and code review
     - SoC project organization and documentation
   ],
   description: [
-    QSoC is a comprehensive System-on-Chip (SoC) design tool that provides both
-    graphical user interface (GUI) and command-line interface (CLI) for creating,
-    managing, and generating SoC components. This tool enables efficient SoC design
-    by providing features for project management, module library management, bus
-    interface handling, schematic processing, and RTL generation.
+    QSoC turns a declarative netlist into synthesizable RTL. Modules are imported
+    from Verilog, bus interfaces are matched by definition, and generators emit
+    clock trees, reset trees, power sequencers, state machines, and register maps
+    that stay consistent with the source description.
 
-    The tool's architecture is designed to support efficient SoC development workflows
-    by providing integrated features for managing Verilog modules, handling bus
-    interfaces, and generating RTL code. The GUI mode offers an intuitive interface
-    for interactive design, while the CLI mode enables automation and integration
-    with other development tools and scripts.
+    The GUI drives interactive editing; the CLI drives scripted and batch flows.
+    Both read the same project files, so a design can move between them at any
+    point.
 
-    By providing a unified platform for SoC development, QSoC significantly reduces
-    the complexity of managing different aspects of SoC design, from module
-    management to RTL generation. This integrated approach ensures consistency and
-    efficiency throughout the development process.
+    The terminal agent adds an LLM-driven workflow on top of the same tools: it
+    reads the project, runs commands, and edits files under the same
+    configuration, extended by MCP servers, sub-agents, and persistent memory.
   ],
   document: [
     #include "about.typ"
