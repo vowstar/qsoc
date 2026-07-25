@@ -89,10 +89,10 @@ Power controllers automatically infer domain types from configuration structure,
 <soc-net-power-ao>
 Always-on domains have no dependency key and remain permanently active:
 - No power switch control (HAS_SWITCH=0)
-- Always enabled (ctrl_enable=1'b1)
+- Always enabled (`ctrl_enable=1'b1`)
 - Zero timing parameters (no wait or settle cycles)
 - Used for essential infrastructure like AO power rails
-- If pgood signal absent, generator ties to 1'b1 and relies on settle cycles
+- If pgood signal absent, generator ties to `1'b1` and relies on settle cycles
 - If pgood is absent, at least one of settle_on/settle_off must be non-zero
 
 === Root Domain Type
@@ -256,42 +256,45 @@ Generates `.typ` circuit diagram alongside Verilog.
 
 #figure(
   align(center)[#table(
-    columns: (auto, auto, auto, auto),
+    columns: (0.3fr, 0.2fr, 0.2fr, 1fr),
     align: (left, left, left, left),
-    table.header([*Property*], [*Type*], [*Required*], [*Description*]),
+    table.header([Property], [Type], [Required], [Description]),
+    table.hline(),
     [`name`], [String], [Yes], [Controller instance name],
     [`host_clock`], [String], [Yes], [AO host clock signal],
     [`host_reset`], [String], [Yes], [AO host reset signal, active-low],
     [`test_enable`], [String], [No], [DFT test enable signal],
     [`domain`], [Array], [Yes], [Power domain definitions],
   )],
-  caption: [Power Controller Properties],
+  caption: [POWER CONTROLLER PROPERTIES],
 )
 
 #figure(
   align(center)[#table(
-    columns: (auto, auto, auto, auto),
+    columns: (0.3fr, 0.2fr, 0.2fr, 1fr),
     align: (left, left, left, left),
-    table.header([*Property*], [*Type*], [*Required*], [*Description*]),
+    table.header([Property], [Type], [Required], [Description]),
+    table.hline(),
     [`name`], [String], [Yes], [Domain instance name],
     [`depend`], [Array], [No], [Absent=AO, []=root, list=normal],
     [`v_mv`], [Integer], [No], [Voltage level in millivolts],
-    [`pgood`], [String], [No], [Power good input signal (ties 1'b1 if absent)],
+    [`pgood`], [String], [No], [Power good input signal (ties `1'b1` if absent)],
     [`wait_dep`], [Integer], [Yes], [Dependency wait cycles],
     [`settle_on`], [Integer], [Yes], [Power-on settle cycles],
     [`settle_off`], [Integer], [Yes], [Power-off settle cycles],
     [`follow`], [Array], [No], [Reset synchronizer entry array],
   )],
-  caption: [Domain Properties],
+  caption: [DOMAIN PROPERTIES],
 )
 
 #figure(
   align(center)[#table(
-    columns: (auto, auto, auto, auto),
+    columns: (0.3fr, 0.2fr, 0.2fr, 1fr),
     align: (left, left, left, left),
-    table.header([*Property*], [*Type*], [*Required*], [*Description*]),
+    table.header([Property], [Type], [Required], [Description]),
+    table.hline(),
     [`name`], [String], [Yes], [Dependency domain name],
     [`type`], [String], [No], [hard or soft (default: hard)],
   )],
-  caption: [Dependency Properties],
+  caption: [DEPENDENCY PROPERTIES],
 )

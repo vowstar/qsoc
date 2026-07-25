@@ -196,7 +196,7 @@ Reset controller properties provide structured configuration:
 
 #figure(
   align(center)[#table(
-    columns: (0.2fr, 0.3fr, 0.5fr),
+    columns: (0.45fr, 0.3fr, 1fr),
     align: (auto, left, left),
     table.header([Property], [Type], [Description]),
     table.hline(),

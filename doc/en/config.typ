@@ -149,7 +149,7 @@ optional except `url`.
 
 #figure(
   align(center)[#table(
-    columns: (0.45fr, 1fr),
+    columns: (0.65fr, 1fr),
     align: (auto, left),
     table.header([Field], [Description]),
     table.hline(),
@@ -294,7 +294,7 @@ These settings can also be overridden by command-line options (see @agent-comman
 
 #figure(
   align(center)[#table(
-    columns: (0.55fr, 1fr),
+    columns: (1.2fr, 1fr),
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),

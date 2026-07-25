@@ -36,6 +36,8 @@
 
   // Table styles
   show figure.where(kind: table): set figure.caption(position: top)
+  /* Figures default to unbreakable, which drops rows of page-tall tables */
+  show figure: set block(breakable: true)
 
   set table(
     stroke: 0.5pt,
