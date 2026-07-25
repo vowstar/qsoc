@@ -153,7 +153,7 @@ Provides asynchronous assert, synchronous deassert functionality (active-low):
 - Async assert when reset input becomes active
 - Sync deassert after STAGE clocks when reset input becomes inactive
 - Test bypass when test_enable=1
-- Parameters: STAGE (>=2 recommended for metastability resolution)
+- Parameters: STAGE (>=2 required for any asynchronous source)
 
 Configuration:
 ```yaml
@@ -189,6 +189,28 @@ count:
   clock: clk_sys              # Required: clock for counter
   cycle: 255                  # Number of cycles to count
 ```
+
+=== Test Bypass Behavior
+<soc-net-reset-test-bypass>
+All three cells implement the bypass as
+`rst_out_n = test_enable ? rst_in_n : core_rst_n`. In test mode the raw
+asynchronous reset input propagates combinationally to every consumer, and for
+`qsoc_rst_count` the entire counter delay is skipped. Three consequences that
+DFT and STA have to cover:
+
+- The synchronizer flops themselves get no async-deassert protection while
+  `test_enable` is high, so releasing `test_enable` and the reset in the wrong
+  order is a metastability event
+- The bypass path is not covered by the synchronizer's recovery and removal
+  constraints and needs its own STA exception
+- Toggle coverage of the synchronizer chain requires those flops to be
+  scan-observable; the bypass mux alone does not provide it
+
+`stage: 1` is accepted and elaborates to a single flop with no synchronization.
+Use it only when the source is already synchronous to `clock`.
+
+Note that the power controller uses the opposite convention: there `test_en`
+forces the domain reset permanently released (@soc-net-power-fsm).
 
 == RESET PROPERTIES
 <soc-net-reset-properties>
@@ -345,6 +367,18 @@ The reset reason recorder uses *sync-clear async-capture* sticky flags to avoid 
 - Always-on clock ensures operation even when main clocks are stopped
 - Root reset signal explicitly specified in `reason.root_reset` field
 - *Generate statement optimization*: Uses Verilog `generate` blocks to reduce code duplication for multiple sticky flags
+
+Design cost of that structure, which the reset cells otherwise avoid:
+
+- Each reset source becomes the asynchronous set pin of its own flag flop, so a
+  design with N recorded sources gains N asynchronous set paths that need STA
+  exceptions
+- These flops carry no `test_enable` bypass, unlike every other cell in
+  `reset_cell.v`. They are not controllable from scan and the reason register
+  cannot be initialized by a scan pattern
+- `reason.clear` is captured by a single flop before edge detection. Drive it
+  from a source synchronous to `reason.clock`, or add synchronization outside
+  the controller
 
 === Generated Logic Example
 <soc-net-reset-reason-logic>

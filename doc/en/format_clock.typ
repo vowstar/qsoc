@@ -328,9 +328,23 @@ qsoc_tc_clk_gate #(
 );
 ```
 
+*Warning*: the ICG routes both the `test_en` bypass and the
+`CLOCK_DURING_RESET` path through a plain combinational 2:1 mux, not a
+glitch-free one. Toggling `test_en`, or releasing `rst_n` while the clock is
+high, can produce a runt pulse on the gated clock. The divide-by-1 bypass in
+`qsoc_clk_div` uses the same plain mux with `test_en` in its select term. Change
+`test_en` or `clock_on_reset` only while the source clock is stopped. Note also
+that with `test_en` high the ICG output is the raw clock, so the gating latch
+itself gets no toggle coverage.
+
 == DIVIDER CONFIGURATION
 <soc-net-clock-divider-config>
 Clock dividers support three operational modes determined by the presence of `value` and `valid` signals:
+
+Odd division ratios keep a 50% duty cycle by toggling a second flop on the
+falling edge of the source clock. The generated divider therefore instantiates
+negative-edge flops whenever an odd ratio is reachable, which affects scan
+chain construction and mixed-edge timing closure.
 
 #figure(
   align(center)[#table(
