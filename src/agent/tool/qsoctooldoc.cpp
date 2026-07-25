@@ -24,7 +24,11 @@ QSocToolDocQuery::QSocToolDocQuery(QObject *parent)
            {"reset", ":/docs/en/format_reset.typ"},
            {"template", ":/docs/en/format_template.typ"},
            {"validation", ":/docs/en/format_validation.typ"},
-           {"overview", ":/docs/en/overview.typ"}})
+           {"overview", ":/docs/en/overview.typ"},
+           {"agent", ":/docs/en/agent.typ"},
+           {"gui_bus_editor", ":/docs/en/gui_bus_editor.typ"},
+           {"gui_module_editor", ":/docs/en/gui_module_editor.typ"},
+           {"tui", ":/docs/en/tui_image_preview.typ"}})
 {}
 
 QSocToolDocQuery::~QSocToolDocQuery() = default;
@@ -37,8 +41,9 @@ QString QSocToolDocQuery::getName() const
 QString QSocToolDocQuery::getDescription() const
 {
     return "Query QSoC documentation by topic. "
-           "Available topics: about, commands, config, datasheet, bus, clock, fsm, logic, "
-           "netlist, format_overview, power, reset, template, validation, overview.";
+           "Available topics: about, agent, commands, config, datasheet, bus, clock, fsm, "
+           "logic, netlist, format_overview, power, reset, template, validation, overview, "
+           "gui_bus_editor, gui_module_editor, tui.";
 }
 
 json QSocToolDocQuery::getParametersSchema() const
