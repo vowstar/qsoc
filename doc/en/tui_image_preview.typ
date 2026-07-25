@@ -24,7 +24,9 @@ protocol; other terminals see the `[image: ...]` metadata only.
     [foot, mlterm, contour], [placeholder text only], [`TERM` substring],
     [tmux / screen], [placeholder text only], [`TMUX` or `STY` set],
     [other], [placeholder text only], [no signal],
-  )]
+  )],
+  caption: [TERMINAL COMPATIBILITY MATRIX],
+  kind: table,
 )
 
 == AUTO-FOLD ON NEW IMAGE

@@ -140,17 +140,17 @@
 
   show heading: it => block([
     #v(0.3em)
-    #text(weight: "bold", font: fonts.headings, [#counter(
-        heading,
-      ).display() #it.body])
+    #text(weight: "bold", font: fonts.headings, [#if it.numbering != none {
+        counter(heading).display()
+      } #it.body])
     #v(0.8em)
   ])
 
   show heading.where(level: 1): it => {
     block([
-      #text(weight: "bold", font: fonts.headings, [#counter(
-          heading,
-        ).display() #it.body])
+      #text(weight: "bold", font: fonts.headings, [#if it.numbering != none {
+          counter(heading).display()
+        } #it.body])
       #v(0.3em)
     ])
   }
@@ -205,8 +205,12 @@
     [
       = Indexing
       #columns(2, gutter: 30pt)[
-        == Figures
-        #outline(title: none, target: figure.where(kind: image))
+        #context {
+          if query(figure.where(kind: image)).len() > 0 [
+            == Figures
+            #outline(title: none, target: figure.where(kind: image))
+          ]
+        }
 
         == Tables
         #outline(title: none, target: figure.where(kind: table))
