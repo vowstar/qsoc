@@ -158,9 +158,8 @@ std::shared_ptr<QSchematic::Items::Item> PrcPrimitiveItem::deepCopy() const
 }
 
 /* Serialization Helpers */
-namespace {
-
-void serializeSTAGuide(gpds::container &c, const STAGuideParams &p, const std::string &prefix)
+void PrcLibrary::serializeSTAGuide(
+    gpds::container &c, const STAGuideParams &p, const std::string &prefix)
 {
     c.add_value(prefix + "_configured", p.configured);
     if (p.configured) {
@@ -171,7 +170,8 @@ void serializeSTAGuide(gpds::container &c, const STAGuideParams &p, const std::s
     }
 }
 
-void deserializeSTAGuide(const gpds::container &c, STAGuideParams &p, const std::string &prefix)
+void PrcLibrary::deserializeSTAGuide(
+    const gpds::container &c, STAGuideParams &p, const std::string &prefix)
 {
     p.configured = c.get_value<bool>(prefix + "_configured").value_or(false);
     if (p.configured) {
@@ -183,7 +183,7 @@ void deserializeSTAGuide(const gpds::container &c, STAGuideParams &p, const std:
     }
 }
 
-void serializeICG(gpds::container &c, const ICGParams &p, const std::string &prefix)
+void PrcLibrary::serializeICG(gpds::container &c, const ICGParams &p, const std::string &prefix)
 {
     c.add_value(prefix + "_configured", p.configured);
     if (p.configured) {
@@ -196,7 +196,7 @@ void serializeICG(gpds::container &c, const ICGParams &p, const std::string &pre
     }
 }
 
-void deserializeICG(const gpds::container &c, ICGParams &p, const std::string &prefix)
+void PrcLibrary::deserializeICG(const gpds::container &c, ICGParams &p, const std::string &prefix)
 {
     p.configured = c.get_value<bool>(prefix + "_configured").value_or(false);
     if (p.configured) {
@@ -211,7 +211,7 @@ void deserializeICG(const gpds::container &c, ICGParams &p, const std::string &p
     }
 }
 
-void serializeDIV(gpds::container &c, const DIVParams &p, const std::string &prefix)
+void PrcLibrary::serializeDIV(gpds::container &c, const DIVParams &p, const std::string &prefix)
 {
     c.add_value(prefix + "_configured", p.configured);
     if (p.configured) {
@@ -224,7 +224,7 @@ void serializeDIV(gpds::container &c, const DIVParams &p, const std::string &pre
     }
 }
 
-void deserializeDIV(const gpds::container &c, DIVParams &p, const std::string &prefix)
+void PrcLibrary::deserializeDIV(const gpds::container &c, DIVParams &p, const std::string &prefix)
 {
     p.configured = c.get_value<bool>(prefix + "_configured").value_or(false);
     if (p.configured) {
@@ -236,6 +236,8 @@ void deserializeDIV(const gpds::container &c, DIVParams &p, const std::string &p
         deserializeSTAGuide(c, p.sta_guide, prefix + "_sta");
     }
 }
+
+namespace {
 
 void serializeMUX(gpds::container &c, const MUXParams &p, const std::string &prefix)
 {
@@ -253,7 +255,9 @@ void deserializeMUX(const gpds::container &c, MUXParams &p, const std::string &p
     }
 }
 
-void serializeINV(gpds::container &c, const INVParams &p, const std::string &prefix)
+} // namespace
+
+void PrcLibrary::serializeINV(gpds::container &c, const INVParams &p, const std::string &prefix)
 {
     c.add_value(prefix + "_configured", p.configured);
     if (p.configured) {
@@ -261,13 +265,15 @@ void serializeINV(gpds::container &c, const INVParams &p, const std::string &pre
     }
 }
 
-void deserializeINV(const gpds::container &c, INVParams &p, const std::string &prefix)
+void PrcLibrary::deserializeINV(const gpds::container &c, INVParams &p, const std::string &prefix)
 {
     p.configured = c.get_value<bool>(prefix + "_configured").value_or(false);
     if (p.configured) {
         deserializeSTAGuide(c, p.sta_guide, prefix + "_sta");
     }
 }
+
+namespace {
 
 void serializeResetSync(gpds::container &c, const ResetSyncParams &p, const std::string &prefix)
 {
@@ -364,6 +370,7 @@ gpds::container PrcPrimitiveItem::to_container() const
                 c.add_value("pwr_dom_wait_dep", params.wait_dep);
                 c.add_value("pwr_dom_settle_on", params.settle_on);
                 c.add_value("pwr_dom_settle_off", params.settle_off);
+                c.add_value("pwr_dom_always_on", params.always_on);
                 /* Serialize dependencies */
                 c.add_value("pwr_dom_depend_count", static_cast<int>(params.depend.size()));
                 for (int i = 0; i < params.depend.size(); ++i) {
@@ -488,6 +495,7 @@ void PrcPrimitiveItem::from_container(const gpds::container &container)
         params.wait_dep   = primContainer->get_value<int>("pwr_dom_wait_dep").value_or(0);
         params.settle_on  = primContainer->get_value<int>("pwr_dom_settle_on").value_or(0);
         params.settle_off = primContainer->get_value<int>("pwr_dom_settle_off").value_or(0);
+        params.always_on  = primContainer->get_value<bool>("pwr_dom_always_on").value_or(true);
         /* Deserialize dependencies */
         int depCount = primContainer->get_value<int>("pwr_dom_depend_count").value_or(0);
         for (int i = 0; i < depCount; ++i) {

@@ -5,6 +5,7 @@
 
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QInputDialog>
 #include <QLabel>
 #include <QMessageBox>
@@ -616,7 +617,57 @@ void PrcConfigDialog::createPowerDomainForm()
     pwrDomSettleOffSpin->setValue(params.settle_off);
     layout->addRow(tr("Settle Off Cycles:"), pwrDomSettleOffSpin);
 
+    pwrDomAlwaysOnCheck = new QCheckBox(tr("Always-on domain (no dependencies)"), this);
+    pwrDomAlwaysOnCheck->setChecked(params.always_on);
+    pwrDomAlwaysOnCheck->setToolTip(
+        tr("An always-on domain omits the depend key entirely. Clear this to make the "
+           "domain controllable; dependencies then come from the wires you draw into "
+           "its dep port."));
+    layout->addRow(QString(), pwrDomAlwaysOnCheck);
+
     mainLayout->addWidget(group);
+
+    /* Reset synchronizers driven from this domain */
+    auto *followGroup  = new QGroupBox(tr("Reset Synchronizers (follow)"), this);
+    auto *followLayout = new QVBoxLayout(followGroup);
+
+    pwrDomFollowTable = new QTableWidget(0, 3, this);
+    pwrDomFollowTable->setHorizontalHeaderLabels(
+        {tr("Domain Clock"), tr("Reset Output"), tr("Stages")});
+    pwrDomFollowTable->horizontalHeader()->setStretchLastSection(true);
+    pwrDomFollowTable->setMaximumHeight(140);
+    for (const PrcLibrary::PowerFollow &entry : params.follow) {
+        const int row = pwrDomFollowTable->rowCount();
+        pwrDomFollowTable->insertRow(row);
+        pwrDomFollowTable->setItem(row, 0, new QTableWidgetItem(entry.clock));
+        pwrDomFollowTable->setItem(row, 1, new QTableWidgetItem(entry.reset));
+        pwrDomFollowTable->setItem(row, 2, new QTableWidgetItem(QString::number(entry.stage)));
+    }
+    followLayout->addWidget(pwrDomFollowTable);
+
+    auto *followButtons = new QHBoxLayout();
+    auto *addFollowBtn  = new QPushButton(tr("Add"), this);
+    auto *delFollowBtn  = new QPushButton(tr("Remove"), this);
+    followButtons->addStretch();
+    followButtons->addWidget(addFollowBtn);
+    followButtons->addWidget(delFollowBtn);
+    followLayout->addLayout(followButtons);
+
+    connect(addFollowBtn, &QPushButton::clicked, this, [this]() {
+        const int row = pwrDomFollowTable->rowCount();
+        pwrDomFollowTable->insertRow(row);
+        pwrDomFollowTable->setItem(row, 0, new QTableWidgetItem(QString()));
+        pwrDomFollowTable->setItem(row, 1, new QTableWidgetItem(QString()));
+        pwrDomFollowTable->setItem(row, 2, new QTableWidgetItem(QStringLiteral("4")));
+    });
+    connect(delFollowBtn, &QPushButton::clicked, this, [this]() {
+        const int row = pwrDomFollowTable->currentRow();
+        if (row >= 0) {
+            pwrDomFollowTable->removeRow(row);
+        }
+    });
+
+    mainLayout->addWidget(followGroup);
 }
 
 /* Controller Selection Group */
@@ -1032,7 +1083,32 @@ void PrcConfigDialog::applyConfiguration()
         params.wait_dep   = pwrDomWaitDepSpin->value();
         params.settle_on  = pwrDomSettleOnSpin->value();
         params.settle_off = pwrDomSettleOffSpin->value();
-        /* TODO: dependencies and follow entries via separate UI */
+        params.always_on  = pwrDomAlwaysOnCheck && pwrDomAlwaysOnCheck->isChecked();
+
+        /* Dependencies come from the wires drawn into the dep port; only the
+           follow entries are edited here. */
+        params.follow.clear();
+        if (pwrDomFollowTable) {
+            for (int row = 0; row < pwrDomFollowTable->rowCount(); ++row) {
+                PrcLibrary::PowerFollow entry;
+                if (const auto *clockItem = pwrDomFollowTable->item(row, 0)) {
+                    entry.clock = clockItem->text().trimmed();
+                }
+                if (const auto *resetItem = pwrDomFollowTable->item(row, 1)) {
+                    entry.reset = resetItem->text().trimmed();
+                }
+                if (const auto *stageItem = pwrDomFollowTable->item(row, 2)) {
+                    entry.stage = stageItem->text().toInt();
+                }
+                if (entry.clock.isEmpty() || entry.reset.isEmpty()) {
+                    continue;
+                }
+                if (entry.stage < 2) {
+                    entry.stage = 2;
+                }
+                params.follow.append(entry);
+            }
+        }
         item->setParams(params);
         break;
     }

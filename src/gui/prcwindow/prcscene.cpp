@@ -117,6 +117,33 @@ void PrcScene::setLastStaGuideCell(const QString &cell)
     }
 }
 
+/* Link Parameters */
+
+ClockLinkParams PrcScene::linkParameters(const QString &wireNetName) const
+{
+    return linkParams.value(wireNetName, ClockLinkParams());
+}
+
+void PrcScene::setLinkParameters(const QString &wireNetName, const ClockLinkParams &params)
+{
+    linkParams[wireNetName] = params;
+}
+
+bool PrcScene::hasLinkParameters(const QString &wireNetName) const
+{
+    return linkParams.contains(wireNetName);
+}
+
+void PrcScene::removeLinkParameters(const QString &wireNetName)
+{
+    linkParams.remove(wireNetName);
+}
+
+const QMap<QString, ClockLinkParams> &PrcScene::allLinkParameters() const
+{
+    return linkParams;
+}
+
 /* Serialization */
 
 gpds::container PrcScene::to_container() const
@@ -152,6 +179,20 @@ gpds::container PrcScene::to_container() const
         c.add_value(prefix + "_test_enable", it->test_enable.toStdString());
     }
 
+    /* Serialize link operations. Without this the ICG/DIV/INV settings a user
+       configures on a wire are lost the moment the file is reopened. */
+    c.add_value("link_count", static_cast<int>(linkParams.size()));
+    idx = 0;
+    for (auto it = linkParams.begin(); it != linkParams.end(); ++it, ++idx) {
+        const std::string prefix = "link_" + std::to_string(idx);
+        c.add_value(prefix + "_key", it.key().toStdString());
+        c.add_value(prefix + "_source", it->sourceName.toStdString());
+        serializeICG(c, it->icg, prefix + "_icg");
+        serializeDIV(c, it->div, prefix + "_div");
+        serializeINV(c, it->inv, prefix + "_inv");
+        serializeSTAGuide(c, it->sta_guide, prefix + "_sta");
+    }
+
     return c;
 }
 
@@ -163,6 +204,26 @@ void PrcScene::from_container(const gpds::container &container)
     clockControllers.clear();
     resetControllers.clear();
     powerControllers.clear();
+    linkParams.clear();
+
+    /* Deserialize link operations */
+    const int linkCount = container.get_value<int>("link_count").value_or(0);
+    for (int i = 0; i < linkCount; ++i) {
+        const std::string prefix = "link_" + std::to_string(i);
+        const QString     key    = QString::fromStdString(
+            container.get_value<std::string>(prefix + "_key").value_or(""));
+        if (key.isEmpty()) {
+            continue;
+        }
+        ClockLinkParams params;
+        params.sourceName = QString::fromStdString(
+            container.get_value<std::string>(prefix + "_source").value_or(""));
+        deserializeICG(container, params.icg, prefix + "_icg");
+        deserializeDIV(container, params.div, prefix + "_div");
+        deserializeINV(container, params.inv, prefix + "_inv");
+        deserializeSTAGuide(container, params.sta_guide, prefix + "_sta");
+        linkParams.insert(key, params);
+    }
 
     /* Deserialize clock controllers */
     int clockCount = container.get_value<int>("clock_ctrl_count").value_or(0);

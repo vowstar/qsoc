@@ -347,6 +347,7 @@ private:
         QString sourceName;  /**< Source primitive name (ClockInput/ResetSource) */
         QString targetName;  /**< Target primitive name (ClockTarget/ResetTarget) */
         QString wireNetName; /**< Wire net name */
+        QSchematic::Items::WireNet *net = nullptr; /**< Net carrying the connection */
     };
 
     /**
@@ -376,13 +377,5 @@ private:
     QSocProjectManager           *projectManager;                    /**< Project manager */
     QString                       m_currentFilePath;                 /**< Current file path */
     QLabel                       *statusBarPermanentLabel = nullptr; /**< Status bar label */
-
-    /**
-     * @brief Link parameters storage
-     * @details Maps wire net name to link-level clock parameters.
-     *          This stores ICG/DIV/INV/STA_GUIDE operations for each wire.
-     *          Wire names use "source->target" format.
-     */
-    QMap<QString, PrcLibrary::ClockLinkParams> m_linkParams;
 };
 #endif // PRCWINDOW_H

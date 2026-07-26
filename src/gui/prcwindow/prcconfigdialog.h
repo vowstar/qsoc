@@ -18,6 +18,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTabWidget>
+#include <QTableWidget>
 
 namespace PrcLibrary {
 
@@ -162,11 +163,13 @@ private:
     QSpinBox  *rstTgtAsyncStageSpin;
 
     /* Power Domain widgets */
-    QSpinBox  *pwrDomVoltageSpin;
-    QLineEdit *pwrDomPgoodEdit;
-    QSpinBox  *pwrDomWaitDepSpin;
-    QSpinBox  *pwrDomSettleOnSpin;
-    QSpinBox  *pwrDomSettleOffSpin;
+    QSpinBox     *pwrDomVoltageSpin;
+    QLineEdit    *pwrDomPgoodEdit;
+    QSpinBox     *pwrDomWaitDepSpin;
+    QSpinBox     *pwrDomSettleOnSpin;
+    QSpinBox     *pwrDomSettleOffSpin;
+    QCheckBox    *pwrDomAlwaysOnCheck = nullptr; /**< Domain has no dependency key */
+    QTableWidget *pwrDomFollowTable   = nullptr; /**< Reset synchronizer entries */
 };
 
 /**

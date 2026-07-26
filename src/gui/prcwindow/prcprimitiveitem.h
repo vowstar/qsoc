@@ -226,15 +226,16 @@ struct PowerFollow
  */
 struct PowerDomainParams
 {
-    QString                name;           /**< Domain name (e.g., "ao", "gpu") */
-    QString                controller;     /**< Controller name this belongs to */
-    int                    v_mv = 900;     /**< Voltage level in mV */
-    QString                pgood;          /**< Power good input signal (optional) */
-    int                    wait_dep   = 0; /**< Dependency wait cycles */
-    int                    settle_on  = 0; /**< Power-on settle cycles */
-    int                    settle_off = 0; /**< Power-off settle cycles */
-    QList<PowerDependency> depend;         /**< Dependencies (empty = AO, [] = root) */
-    QList<PowerFollow>     follow;         /**< Reset synchronizer entries */
+    QString                name;              /**< Domain name (e.g., "ao", "gpu") */
+    QString                controller;        /**< Controller name this belongs to */
+    int                    v_mv = 900;        /**< Voltage level in mV */
+    QString                pgood;             /**< Power good input signal (optional) */
+    int                    wait_dep   = 0;    /**< Dependency wait cycles */
+    int                    settle_on  = 0;    /**< Power-on settle cycles */
+    int                    settle_off = 0;    /**< Power-off settle cycles */
+    bool                   always_on  = true; /**< No depend key at all: always-on domain */
+    QList<PowerDependency> depend; /**< Dependencies; empty with always_on false = root */
+    QList<PowerFollow>     follow; /**< Reset synchronizer entries */
 };
 
 /* Parameter Variant */
@@ -242,6 +243,17 @@ struct PowerDomainParams
 /**
  * @brief Type-safe union for all primitive parameters
  */
+/* Parameter serialization helpers, shared with the scene so link-level
+   settings survive a save. */
+void serializeSTAGuide(gpds::container &c, const STAGuideParams &p, const std::string &prefix);
+void deserializeSTAGuide(const gpds::container &c, STAGuideParams &p, const std::string &prefix);
+void serializeICG(gpds::container &c, const ICGParams &p, const std::string &prefix);
+void deserializeICG(const gpds::container &c, ICGParams &p, const std::string &prefix);
+void serializeDIV(gpds::container &c, const DIVParams &p, const std::string &prefix);
+void deserializeDIV(const gpds::container &c, DIVParams &p, const std::string &prefix);
+void serializeINV(gpds::container &c, const INVParams &p, const std::string &prefix);
+void deserializeINV(const gpds::container &c, INVParams &p, const std::string &prefix);
+
 using PrcParams = std::
     variant<ClockInputParams, ClockTargetParams, ResetSourceParams, ResetTargetParams, PowerDomainParams>;
 

@@ -249,7 +249,20 @@ QPointF PrcWindow::getWireStartPos(const QSchematic::Items::WireNet *wireNet) co
 
 void PrcWindow::autoNameWires()
 {
-    /* Not implemented yet */
+    /* An unnamed net leaves the link keyed by a placeholder, so the operations
+     * configured on it never reach the exported netlist. Name each net after
+     * the connection it carries. */
+    for (const auto &connection : analyzeWireConnections()) {
+        if (!connection.net || !connection.net->name().isEmpty()) {
+            continue;
+        }
+        const QString candidate
+            = QString("%1->%2").arg(connection.sourceName, connection.targetName);
+        if (getExistingWireNames().contains(candidate)) {
+            continue;
+        }
+        connection.net->set_name(candidate);
+    }
 }
 
 QSet<QString> PrcWindow::getExistingWireNames() const
@@ -447,6 +460,35 @@ void emitLinkOperations(YAML::Emitter &out, const PrcLibrary::ClockLinkParams &p
 } // namespace
 
 /* Netlist Export - Main Function */
+namespace {
+
+/**
+ * @brief Controller name shared by a group of primitives.
+ * @details Every primitive carries the controller it was assigned to. The
+ *          first non-empty assignment wins; an unassigned group keeps the
+ *          default name so the export stays valid.
+ * @param items Primitives of one family.
+ * @param fallback Name to use when nothing is assigned.
+ * @return The controller name to emit.
+ */
+QString controllerNameFor(
+    const QList<std::shared_ptr<PrcLibrary::PrcPrimitiveItem>> &items, const QString &fallback)
+{
+    for (const auto &item : items) {
+        if (!item) {
+            continue;
+        }
+        const QString name = std::visit(
+            [](const auto &params) -> QString { return params.controller; }, item->params());
+        if (!name.isEmpty()) {
+            return name;
+        }
+    }
+    return fallback;
+}
+
+} // namespace
+
 bool PrcWindow::exportNetlist(const QString &filePath)
 {
     try {
@@ -488,12 +530,23 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         QMap<QString, QMap<QString, PrcLibrary::ClockLinkParams>> linkParamsByTarget
             = getAllLinkParamsByTarget();
 
+        bool defaultedHostSignals = false;
+
         /* Export clock primitives */
         if (!clockInputs.isEmpty() || !clockTargets.isEmpty()) {
             out << YAML::Key << "clock";
             out << YAML::Value << YAML::BeginSeq;
             out << YAML::BeginMap;
-            out << YAML::Key << "name" << YAML::Value << "clock_ctrl";
+            const QString clockCtrlName
+                = controllerNameFor(clockInputs + clockTargets, "clock_ctrl");
+            out << YAML::Key << "name" << YAML::Value << clockCtrlName.toStdString();
+            {
+                const PrcLibrary::ClockControllerDef def = scene.clockController(clockCtrlName);
+                if (!def.test_enable.isEmpty()) {
+                    out << YAML::Key << "test_enable" << YAML::Value
+                        << def.test_enable.toStdString();
+                }
+            }
 
             if (!clockInputs.isEmpty()) {
                 out << YAML::Key << "input" << YAML::Value << YAML::BeginMap;
@@ -581,7 +634,16 @@ bool PrcWindow::exportNetlist(const QString &filePath)
             out << YAML::Key << "reset";
             out << YAML::Value << YAML::BeginSeq;
             out << YAML::BeginMap;
-            out << YAML::Key << "name" << YAML::Value << "reset_ctrl";
+            const QString resetCtrlName
+                = controllerNameFor(resetSources + resetTargets, "reset_ctrl");
+            out << YAML::Key << "name" << YAML::Value << resetCtrlName.toStdString();
+            {
+                const PrcLibrary::ResetControllerDef def = scene.resetController(resetCtrlName);
+                if (!def.test_enable.isEmpty()) {
+                    out << YAML::Key << "test_enable" << YAML::Value
+                        << def.test_enable.toStdString();
+                }
+            }
 
             if (!resetSources.isEmpty()) {
                 out << YAML::Key << "source" << YAML::Value << YAML::BeginMap;
@@ -642,7 +704,26 @@ bool PrcWindow::exportNetlist(const QString &filePath)
             out << YAML::Key << "power";
             out << YAML::Value << YAML::BeginSeq;
             out << YAML::BeginMap;
-            out << YAML::Key << "name" << YAML::Value << "power_ctrl";
+            const QString powerCtrlName = controllerNameFor(powerDomains, "power_ctrl");
+            out << YAML::Key << "name" << YAML::Value << powerCtrlName.toStdString();
+            {
+                /* host_clock and host_reset are required by the generator; a
+                 * netlist without them cannot produce a power controller. */
+                const PrcLibrary::PowerControllerDef def = scene.powerController(powerCtrlName);
+                const QString hostClock = def.host_clock.isEmpty() ? QStringLiteral("ao_clk")
+                                                                   : def.host_clock;
+                const QString hostReset = def.host_reset.isEmpty() ? QStringLiteral("ao_rst_n")
+                                                                   : def.host_reset;
+                if (def.host_clock.isEmpty() || def.host_reset.isEmpty()) {
+                    defaultedHostSignals = true;
+                }
+                out << YAML::Key << "host_clock" << YAML::Value << hostClock.toStdString();
+                out << YAML::Key << "host_reset" << YAML::Value << hostReset.toStdString();
+                if (!def.test_enable.isEmpty()) {
+                    out << YAML::Key << "test_enable" << YAML::Value
+                        << def.test_enable.toStdString();
+                }
+            }
 
             out << YAML::Key << "domain" << YAML::Value << YAML::BeginSeq;
             for (const auto &domain : powerDomains) {
@@ -657,13 +738,29 @@ bool PrcWindow::exportNetlist(const QString &filePath)
                 out << YAML::Key << "settle_on" << YAML::Value << domParams.settle_on;
                 out << YAML::Key << "settle_off" << YAML::Value << domParams.settle_off;
 
-                /* Dependencies */
-                if (!domParams.depend.isEmpty()) {
+                /* Dependencies. A drawn PowerDomain to PowerDomain wire is the
+                   only way to express one, so read them back from the scene and
+                   let any stored override win. Omitting the key entirely marks
+                   an always-on domain; an empty list marks a root domain. */
+                if (!domParams.always_on) {
+                    QList<PrcLibrary::PowerDependency> dependencies = domParams.depend;
+                    if (dependencies.isEmpty()) {
+                        for (const QString &source : getConnectedSources(domain->primitiveName())) {
+                            if (source == domain->primitiveName()) {
+                                continue;
+                            }
+                            PrcLibrary::PowerDependency dep;
+                            dep.name = source;
+                            dep.type = QStringLiteral("hard");
+                            dependencies.append(dep);
+                        }
+                    }
                     out << YAML::Key << "depend" << YAML::Value << YAML::BeginSeq;
-                    for (const auto &dep : domParams.depend) {
+                    for (const auto &dep : dependencies) {
                         out << YAML::BeginMap;
                         out << YAML::Key << "name" << YAML::Value << dep.name.toStdString();
-                        out << YAML::Key << "type" << YAML::Value << dep.type.toStdString();
+                        out << YAML::Key << "type" << YAML::Value
+                            << (dep.type.isEmpty() ? std::string("hard") : dep.type.toStdString());
                         out << YAML::EndMap;
                     }
                     out << YAML::EndSeq;
@@ -702,6 +799,15 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         stream << out.c_str();
         file.close();
 
+        if (defaultedHostSignals) {
+            QMessageBox::information(
+                this,
+                tr("Export Netlist"),
+                tr("The power controller has no always-on clock or reset assigned, so the "
+                   "export used ao_clk and ao_rst_n. Set them in the controller dialog if "
+                   "your design uses different names."));
+        }
+
         return true;
     } catch (const std::exception &e) {
         QSocConsole::warn() << "Failed to export netlist:" << e.what();
@@ -712,22 +818,22 @@ bool PrcWindow::exportNetlist(const QString &filePath)
 /* Link Parameter Management */
 PrcLibrary::ClockLinkParams PrcWindow::getLinkParams(const QString &wireNetName) const
 {
-    return m_linkParams.value(wireNetName, PrcLibrary::ClockLinkParams());
+    return prcScene().linkParameters(wireNetName);
 }
 
 void PrcWindow::setLinkParams(const QString &wireNetName, const PrcLibrary::ClockLinkParams &params)
 {
-    m_linkParams[wireNetName] = params;
+    prcScene().setLinkParameters(wireNetName, params);
 }
 
 bool PrcWindow::hasLinkParams(const QString &wireNetName) const
 {
-    return m_linkParams.contains(wireNetName);
+    return prcScene().hasLinkParameters(wireNetName);
 }
 
 void PrcWindow::removeLinkParams(const QString &wireNetName)
 {
-    m_linkParams.remove(wireNetName);
+    prcScene().removeLinkParameters(wireNetName);
 }
 
 QMap<QString, QMap<QString, PrcLibrary::ClockLinkParams>> PrcWindow::getAllLinkParamsByTarget() const
@@ -738,7 +844,8 @@ QMap<QString, QMap<QString, PrcLibrary::ClockLinkParams>> PrcWindow::getAllLinkP
     QMap<QString, QMap<QString, PrcLibrary::ClockLinkParams>> result;
 
     /* Iterate through all stored link params and organize by target/source */
-    for (auto it = m_linkParams.constBegin(); it != m_linkParams.constEnd(); ++it) {
+    const auto &stored = prcScene().allLinkParameters();
+    for (auto it = stored.constBegin(); it != stored.constEnd(); ++it) {
         QString                            wireName = it.key();
         const PrcLibrary::ClockLinkParams &params   = it.value();
 
@@ -888,6 +995,7 @@ QList<PrcWindow::WireConnectionInfo> PrcWindow::analyzeWireConnections() const
                     info.sourceName  = src;
                     info.targetName  = tgt;
                     info.wireNetName = wireNetName;
+                    info.net         = wireNet.get();
                     connections.append(info);
                 }
             }

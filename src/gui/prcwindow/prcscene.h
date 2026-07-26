@@ -83,6 +83,39 @@ public:
      */
     QStringList clockControllerNames() const;
 
+    /**
+     * @brief Link operations configured on a wire net.
+     * @param wireNetName Wire net name the link is keyed by.
+     * @return Stored parameters, default constructed when none exist.
+     */
+    ClockLinkParams linkParameters(const QString &wireNetName) const;
+
+    /**
+     * @brief Store link operations for a wire net.
+     * @param wireNetName Wire net name the link is keyed by.
+     * @param params Parameters to store.
+     */
+    void setLinkParameters(const QString &wireNetName, const ClockLinkParams &params);
+
+    /**
+     * @brief Whether a wire net carries link operations.
+     * @param wireNetName Wire net name the link is keyed by.
+     * @return true when parameters are stored.
+     */
+    bool hasLinkParameters(const QString &wireNetName) const;
+
+    /**
+     * @brief Drop link operations for a wire net.
+     * @param wireNetName Wire net name the link is keyed by.
+     */
+    void removeLinkParameters(const QString &wireNetName);
+
+    /**
+     * @brief All stored link operations.
+     * @return Map from wire net name to parameters.
+     */
+    const QMap<QString, ClockLinkParams> &allLinkParameters() const;
+
     /* Reset Controller Management */
 
     /**
@@ -235,6 +268,7 @@ private:
         QPainter *painter, const QRectF &bounds, const QString &name, const QColor &color) const;
 
     /* Controller definition storage */
+    QMap<QString, ClockLinkParams>    linkParams; /**< Link operations keyed by wire net name */
     QMap<QString, ClockControllerDef> clockControllers;
     QMap<QString, ResetControllerDef> resetControllers;
     QMap<QString, PowerControllerDef> powerControllers;
