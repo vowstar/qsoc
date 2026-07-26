@@ -28,7 +28,10 @@ QSocToolDocQuery::QSocToolDocQuery(QObject *parent)
            {"agent", ":/docs/en/agent.typ"},
            {"gui_bus_editor", ":/docs/en/gui_bus_editor.typ"},
            {"gui_module_editor", ":/docs/en/gui_module_editor.typ"},
-           {"tui", ":/docs/en/tui_image_preview.typ"}})
+           {"tui", ":/docs/en/tui_image_preview.typ"},
+           {"gui", ":/docs/en/gui_overview.typ"},
+           {"gui_schematic_editor", ":/docs/en/gui_schematic_editor.typ"},
+           {"gui_prc_editor", ":/docs/en/gui_prc_editor.typ"}})
 {}
 
 QSocToolDocQuery::~QSocToolDocQuery() = default;
@@ -43,7 +46,8 @@ QString QSocToolDocQuery::getDescription() const
     return "Query QSoC documentation by topic. "
            "Available topics: about, agent, commands, config, datasheet, bus, clock, fsm, "
            "logic, netlist, format_overview, power, reset, template, validation, overview, "
-           "gui_bus_editor, gui_module_editor, tui.";
+           "gui, gui_bus_editor, gui_module_editor, gui_schematic_editor, "
+           "gui_prc_editor, tui.";
 }
 
 json QSocToolDocQuery::getParametersSchema() const

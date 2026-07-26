@@ -3,6 +3,7 @@
     <qresource prefix="/docs">
         <file>en/about.typ</file>
         <file>en/agent.typ</file>
+        <file>en/cheatsheet.typ</file>
         <file>en/command.typ</file>
         <file>en/config.typ</file>
         <file>en/datasheet.typ</file>
@@ -18,6 +19,9 @@
         <file>en/format_validation.typ</file>
         <file>en/gui_bus_editor.typ</file>
         <file>en/gui_module_editor.typ</file>
+        <file>en/gui_overview.typ</file>
+        <file>en/gui_prc_editor.typ</file>
+        <file>en/gui_schematic_editor.typ</file>
         <file>en/main.typ</file>
         <file>en/overview.typ</file>
         <file>en/tui_image_preview.typ</file>
