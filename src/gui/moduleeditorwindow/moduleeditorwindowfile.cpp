@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocyamlutils.h"
 #include "moduleeditorwindow.h"
 
 #include <QDir>
@@ -148,6 +149,7 @@ void ModuleEditorWindow::selectModule(const QString &libraryName, const QString 
     currentLibraryName    = libraryName;
     currentModuleName     = moduleName;
     currentDefinitionBase = moduleManager.getModuleDefinition(libraryName, moduleName);
+    undoStack.clear();
     portModel->setPorts(currentDefinitionBase.ports);
     parameterModel->setParameters(currentDefinitionBase.parameters);
     busInterfaceModel->setBusInterfaces(currentDefinitionBase.busInterfaces);
@@ -201,6 +203,42 @@ QSocModuleDefinition ModuleEditorWindow::currentDefinitionFromModels() const
                                   && definition.ports.isEmpty() && definition.parameters.isEmpty()
                                   && definition.busInterfaces.isEmpty();
     return definition;
+}
+
+QSocModuleDefinition ModuleEditorWindow::captureDefinition() const
+{
+    QSocModuleDefinition definition = currentDefinitionFromModels();
+    /* YAML nodes copy by reference; without a deep copy the snapshot would
+       follow every later edit of the live definition. */
+    definition.extraAttributes = QSocYamlUtils::cloneNode(definition.extraAttributes);
+    return definition;
+}
+
+void ModuleEditorWindow::restoreDefinition(const QSocModuleDefinition &definition)
+{
+    currentDefinitionBase = definition;
+    portModel->setPorts(definition.ports);
+    parameterModel->setParameters(definition.parameters);
+    busInterfaceModel->setBusInterfaces(definition.busInterfaces);
+
+    currentInterfaceRow = -1;
+    if (busInterfaceModel->rowCount() > 0) {
+        const QModelIndex source = busInterfaceModel->index(0, 0);
+        const QModelIndex proxy  = interfaceProxyModel->mapFromSource(source);
+        changingSelection        = true;
+        busInterfaceView->setCurrentIndex(proxy);
+        changingSelection                      = false;
+        currentInterfaceRow                    = 0;
+        const QSocModuleBusInterface interface = busInterfaceModel->interfaceAt(0);
+        busMappingModel
+            ->setContext(interface, busDefinitionForName(interface.busName), portModel->ports());
+        busMappingModel->rebuildRowsFromBusDefinition(false);
+    } else {
+        busMappingModel->clear();
+    }
+
+    updateInspector();
+    updateActions();
 }
 
 QSocBusDefinition ModuleEditorWindow::busDefinitionForName(const QString &busName) const

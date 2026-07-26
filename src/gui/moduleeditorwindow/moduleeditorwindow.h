@@ -7,6 +7,7 @@
 #include "common/qsocbusmanager.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
+#include "gui/undo/snapshotcommand.h"
 #include "modulebusinterfacemodel.h"
 #include "modulebusmappingmodel.h"
 #include "modulelibrarymodel.h"
@@ -119,9 +120,26 @@ private:
     void clearCurrentModule();
 
     /* Editing */
-    bool                   checkSaveBeforeDiscard();
-    bool                   saveCurrentModule();
-    bool                   isDirty() const;
+    bool checkSaveBeforeDiscard();
+    bool saveCurrentModule();
+    bool isDirty() const;
+
+    /**
+     * @brief Capture the module currently loaded in the models.
+     * @details The definition owns a YAML node, which copies by reference, so
+     *          the node is deep copied or a later edit would rewrite the
+     *          snapshot too.
+     * @return Snapshot that can be restored later.
+     */
+    QSocModuleDefinition captureDefinition() const;
+
+    /**
+     * @brief Load a captured definition back into the models.
+     * @param[in] definition Snapshot to restore.
+     */
+    void restoreDefinition(const QSocModuleDefinition &definition);
+
+    using DefinitionScope = SnapshotScope<QSocModuleDefinition>;
     void                   setModelsDirty(bool dirty);
     void                   syncMappingToInterfaceModel();
     void                   rebuildInterfaceMapping(int row, bool markDirty);
@@ -153,10 +171,16 @@ private:
     QString                      currentLibraryName;
     QString                      currentModuleName;
     QSocModuleDefinition         currentDefinitionBase;
-    bool                         changingSelection   = false;
-    bool                         syncingInterfaceRow = false;
-    int                          currentInterfaceRow = -1;
-    BusEditorWindow             *busEditorWindow     = nullptr;
+
+    /* Bulk edits such as auto-match rewrite dozens of rows at once; one
+       snapshot per edit gives them a single step of undo. */
+    QUndoStack       undoStack;
+    QAction         *undoAction          = nullptr;
+    QAction         *redoAction          = nullptr;
+    bool             changingSelection   = false;
+    bool             syncingInterfaceRow = false;
+    int              currentInterfaceRow = -1;
+    BusEditorWindow *busEditorWindow     = nullptr;
 
     ModuleLibraryModel      *libraryModel        = nullptr;
     ModulePortModel         *portModel           = nullptr;

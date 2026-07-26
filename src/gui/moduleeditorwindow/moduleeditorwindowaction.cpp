@@ -695,6 +695,12 @@ bool ModuleEditorWindow::deleteLibrary(const QString &libraryName)
 
 void ModuleEditorWindow::handleImportVerilog()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Import Verilog"));
+
     if (!hasWritableProject() || isDirty())
         return;
 
@@ -736,6 +742,12 @@ bool ModuleEditorWindow::importVerilogFiles(
 
 void ModuleEditorWindow::handleAddRow()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Add Row"));
+
     if (currentLibraryName.isEmpty() || currentModuleName.isEmpty())
         return;
 
@@ -771,6 +783,12 @@ void ModuleEditorWindow::handleAddRow()
 
 void ModuleEditorWindow::handleDuplicateRow()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Duplicate Row"));
+
     if (currentLibraryName.isEmpty() || currentModuleName.isEmpty())
         return;
 
@@ -796,6 +814,12 @@ void ModuleEditorWindow::handleDuplicateRow()
 
 void ModuleEditorWindow::handleDeleteRow()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Delete Row"));
+
     if (currentLibraryName.isEmpty() || currentModuleName.isEmpty())
         return;
 
@@ -846,6 +870,12 @@ void ModuleEditorWindow::handleDeleteRow()
 
 void ModuleEditorWindow::handleAddInterface()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Add Interface"));
+
     if (currentLibraryName.isEmpty() || currentModuleName.isEmpty())
         return;
 
@@ -894,6 +924,12 @@ void ModuleEditorWindow::handleAddInterface()
 
 void ModuleEditorWindow::handleDuplicateInterface()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Duplicate Interface"));
+
     if (currentInterfaceRow < 0)
         return;
 
@@ -906,6 +942,12 @@ void ModuleEditorWindow::handleDuplicateInterface()
 
 void ModuleEditorWindow::handleRenameInterface()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Rename Interface"));
+
     if (currentInterfaceRow < 0)
         return;
 
@@ -957,6 +999,12 @@ void ModuleEditorWindow::handleRenameInterface()
 
 void ModuleEditorWindow::handleDeleteInterface()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Delete Interface"));
+
     const QList<int> rows = selectedInterfaceRows();
     if (rows.isEmpty())
         return;
@@ -1005,11 +1053,23 @@ void ModuleEditorWindow::handleDeleteInterface()
 
 void ModuleEditorWindow::handleAutoMatch()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Auto Match"));
+
     handleAutoMatchByPrefix();
 }
 
 void ModuleEditorWindow::handleAutoMatchByName()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Auto Match by Name"));
+
     if (currentInterfaceRow < 0)
         return;
     busMappingModel->autoMatchByName();
@@ -1019,6 +1079,12 @@ void ModuleEditorWindow::handleAutoMatchByName()
 
 void ModuleEditorWindow::handleAutoMatchByPrefix()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Auto Match by Prefix"));
+
     if (currentInterfaceRow < 0)
         return;
     busMappingModel->autoMatchByInterfacePrefix();
@@ -1028,6 +1094,12 @@ void ModuleEditorWindow::handleAutoMatchByPrefix()
 
 void ModuleEditorWindow::handleClearMissingMappings()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Clear Missing Mappings"));
+
     if (currentInterfaceRow < 0)
         return;
     const int oldCount = busMappingModel->rowCount();
@@ -1039,6 +1111,12 @@ void ModuleEditorWindow::handleClearMissingMappings()
 
 void ModuleEditorWindow::handleCreateMissingPorts()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocModuleDefinition &definition) { restoreDefinition(definition); },
+        tr("Create Missing Ports"));
+
     if (currentInterfaceRow < 0)
         return;
 
@@ -1223,7 +1301,7 @@ bool ModuleEditorWindow::saveCurrentModule()
 bool ModuleEditorWindow::isDirty() const
 {
     return portModel->isDirty() || parameterModel->isDirty() || busInterfaceModel->isDirty()
-           || busMappingModel->isDirty();
+           || busMappingModel->isDirty() || !undoStack.isClean();
 }
 
 void ModuleEditorWindow::setModelsDirty(bool dirty)
@@ -1232,6 +1310,9 @@ void ModuleEditorWindow::setModelsDirty(bool dirty)
     parameterModel->setDirty(dirty);
     busInterfaceModel->setDirty(dirty);
     busMappingModel->setDirty(dirty);
+    if (!dirty) {
+        undoStack.setClean();
+    }
 }
 
 void ModuleEditorWindow::syncMappingToInterfaceModel()

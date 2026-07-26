@@ -269,6 +269,24 @@ void ModuleEditorWindow::setupActions()
     auto *toolBar = addToolBar(tr("Module Editor"));
     toolBar->setMovable(false);
 
+    undoAction = undoStack.createUndoAction(this, tr("Undo"));
+    undoAction->setIcon(QIcon::fromTheme("edit-undo"));
+    undoAction->setShortcut(QKeySequence::Undo);
+    redoAction = undoStack.createRedoAction(this, tr("Redo"));
+    redoAction->setIcon(QIcon::fromTheme("edit-redo"));
+    redoAction->setShortcut(QKeySequence::Redo);
+    toolBar->addAction(undoAction);
+    toolBar->addAction(redoAction);
+    toolBar->addSeparator();
+    /* Keep the shortcuts working while a table view holds focus. */
+    addAction(undoAction);
+    addAction(redoAction);
+    connect(&undoStack, &QUndoStack::cleanChanged, this, [this](bool clean) {
+        setModelsDirty(!clean);
+        updateInspector();
+        updateActions();
+    });
+
     newLibraryAction = toolBar->addAction(QIcon::fromTheme("folder-new"), tr("New Library"));
     newModuleAction  = toolBar->addAction(QIcon::fromTheme("document-new"), tr("New Module"));
     duplicateModuleAction
