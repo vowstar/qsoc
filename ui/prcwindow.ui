@@ -35,6 +35,8 @@
     </property>
     <addaction name="actionOpen"/>
     <addaction name="actionSave"/>
+    <addaction name="actionSaveAs"/>
+    <addaction name="actionClose"/>
     <addaction name="separator"/>
     <addaction name="actionPrint"/>
     <addaction name="separator"/>
@@ -46,13 +48,6 @@
     </property>
     <addaction name="actionUndo"/>
     <addaction name="actionRedo"/>
-    <addaction name="separator"/>
-    <addaction name="actionCut"/>
-    <addaction name="actionCopy"/>
-    <addaction name="actionPaste"/>
-    <addaction name="actionDelete"/>
-    <addaction name="separator"/>
-    <addaction name="actionSelectAll"/>
    </widget>
    <widget class="QMenu" name="menuView">
     <property name="title">
@@ -60,34 +55,16 @@
     </property>
     <addaction name="actionShowGrid"/>
    </widget>
-   <widget class="QMenu" name="menuPlace">
-    <property name="title">
-     <string>Place</string>
-    </property>
-   </widget>
-   <widget class="QMenu" name="menuInspect">
-    <property name="title">
-     <string>Inspect</string>
-    </property>
-   </widget>
    <widget class="QMenu" name="menuTools">
     <property name="title">
      <string>Tools</string>
     </property>
     <addaction name="actionExportNetlist"/>
    </widget>
-   <widget class="QMenu" name="menuPreferences">
-    <property name="title">
-     <string>Preferences</string>
-    </property>
-   </widget>
    <addaction name="menuFile"/>
    <addaction name="menuEdit"/>
    <addaction name="menuView"/>
-   <addaction name="menuPlace"/>
-   <addaction name="menuInspect"/>
    <addaction name="menuTools"/>
-   <addaction name="menuPreferences"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <widget class="QDockWidget" name="dockWidgetPrcList">
@@ -131,7 +108,6 @@
    <addaction name="separator"/>
    <addaction name="actionPrint"/>
    <addaction name="separator"/>
-   <addaction name="actionPaste"/>
    <addaction name="separator"/>
    <addaction name="actionUndo"/>
    <addaction name="actionRedo"/>
@@ -200,6 +176,28 @@
     </layout>
    </widget>
   </widget>
+  <action name="actionSaveAs">
+   <property name="icon">
+    <iconset theme="document-save-as"/>
+   </property>
+   <property name="text">
+    <string>Save &amp;As...</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+S</string>
+   </property>
+  </action>
+  <action name="actionClose">
+   <property name="icon">
+    <iconset theme="document-close"/>
+   </property>
+   <property name="text">
+    <string>&amp;Close</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+W</string>
+   </property>
+  </action>
   <action name="actionQuit">
    <property name="icon">
     <iconset theme="window-close"/>
@@ -372,91 +370,6 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+Y</string>
-   </property>
-  </action>
-  <action name="actionCut">
-   <property name="icon">
-    <iconset theme="edit-cut"/>
-   </property>
-   <property name="text">
-    <string>Cut</string>
-   </property>
-   <property name="toolTip">
-    <string>Cut (CTRL+X)</string>
-   </property>
-   <property name="statusTip">
-    <string>Cut the currently selected object to clipboard(CTRL+X)</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+X</string>
-   </property>
-  </action>
-  <action name="actionCopy">
-   <property name="icon">
-    <iconset theme="edit-copy"/>
-   </property>
-   <property name="text">
-    <string>Copy</string>
-   </property>
-   <property name="toolTip">
-    <string>Copy (CTRL+C)</string>
-   </property>
-   <property name="statusTip">
-    <string>Copy the currently selected object to clipboard (CTRL+C)</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+C</string>
-   </property>
-  </action>
-  <action name="actionPaste">
-   <property name="icon">
-    <iconset theme="edit-paste"/>
-   </property>
-   <property name="text">
-    <string>Paste</string>
-   </property>
-   <property name="toolTip">
-    <string>Paste (CTRL+P)</string>
-   </property>
-   <property name="statusTip">
-    <string>Paste objects from the clipboard (CTRL+P)</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+P</string>
-   </property>
-  </action>
-  <action name="actionDelete">
-   <property name="icon">
-    <iconset theme="edit-delete"/>
-   </property>
-   <property name="text">
-    <string>Delete</string>
-   </property>
-   <property name="toolTip">
-    <string>Delete (Del)</string>
-   </property>
-   <property name="statusTip">
-    <string>Delete the currently selected object (Del)</string>
-   </property>
-   <property name="shortcut">
-    <string>Del</string>
-   </property>
-  </action>
-  <action name="actionSelectAll">
-   <property name="icon">
-    <iconset theme="edit-select-all"/>
-   </property>
-   <property name="text">
-    <string>Select All</string>
-   </property>
-   <property name="toolTip">
-    <string>Select All (CTRL+A)</string>
-   </property>
-   <property name="statusTip">
-    <string>Select all objects (CTRL+A)</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+A</string>
    </property>
   </action>
   <action name="actionExportNetlist">

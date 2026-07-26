@@ -51,7 +51,7 @@
              </font>
             </property>
             <property name="text">
-             <string>Edit golbal and/or project schematic modules</string>
+             <string>Edit global and/or project schematic modules</string>
             </property>
            </widget>
           </item>
@@ -237,15 +237,9 @@
     <addaction name="actionSchematicEditor" />
     <addaction name="actionPRCEditor" />
    </widget>
-   <widget class="QMenu" name="menuPreferences">
-    <property name="title">
-     <string>Preferences</string>
-    </property>
-   </widget>
    <addaction name="menuFile" />
    <addaction name="menuView" />
    <addaction name="menuTools" />
-   <addaction name="menuPreferences" />
   </widget>
   <widget class="QStatusBar" name="statusbar" />
   <widget class="QDockWidget" name="dockWidgetProjectFile">
