@@ -5239,6 +5239,48 @@ net:
         QVERIFY(content.contains("wire [7:0] p_bus"));
     }
 
+    /**
+     * A power section without host_clock cannot generate a controller. The
+     * command used to print the error, skip power_cell.v, and still report
+     * success, so a build script saw a passing run with a missing controller.
+     */
+    void testGenerateFailsWhenPrimitiveFails()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_power_no_host"
+instance: {}
+power:
+  - name: power_ctrl
+    domain:
+      - name: pd_0
+        v_mv: 900
+        wait_dep: 0
+        settle_on: 0
+        settle_off: 0
+)";
+        const QString filePath   = createTempFile("test_power_no_host.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool reportedFailure = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("failed to generate Verilog code")) {
+                reportedFailure = true;
+            }
+        }
+        QVERIFY(reportedFailure);
+
+        /* The power cell is the artifact that never got written. */
+        QVERIFY(!QFile::exists(QDir(projectManager.getOutputPath()).filePath("power_cell.v")));
+    }
+
     void testGenerateRefusesResetWithNoSource()
     {
         const QString netContent = R"(

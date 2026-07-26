@@ -99,6 +99,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     out << "`timescale 1ns / 1ps\n\n";
 
+    /* A primitive that fails to generate leaves its controller out of the
+     * output; the caller must not report success for a partial design. */
+    bool primitiveFailed = false;
+
     /* Generate reset primitive controllers first (before top-level module) */
     if (netlistData["reset"] && netlistData["reset"].IsSequence()
         && netlistData["reset"].size() > 0) {
@@ -111,7 +115,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             if (!generateResetPrimitive(resetItem, out)) {
-                QSocConsole::warn() << "Failed to generate reset primitive at index" << i;
+                QSocConsole::error() << "Failed to generate reset primitive at index" << i;
+                primitiveFailed = true;
                 continue;
             }
 
@@ -134,7 +139,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             if (!generateClockPrimitive(clockItem, out)) {
-                QSocConsole::warn() << "Failed to generate clock primitive at index" << i;
+                QSocConsole::error() << "Failed to generate clock primitive at index" << i;
+                primitiveFailed = true;
                 continue;
             }
 
@@ -157,7 +163,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             if (!generatePowerPrimitive(powerItem, out)) {
-                QSocConsole::warn() << "Failed to generate power primitive at index" << i;
+                QSocConsole::error() << "Failed to generate power primitive at index" << i;
+                primitiveFailed = true;
                 continue;
             }
 
@@ -182,7 +189,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             if (!generateFSMPrimitive(fsmItem, out)) {
-                QSocConsole::warn() << "Failed to generate FSM primitive at index" << i;
+                QSocConsole::error() << "Failed to generate FSM primitive at index" << i;
+                primitiveFailed = true;
                 continue;
             }
 
@@ -226,7 +234,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         outputFile.close();
         QSocConsole::info() << "Successfully generated Verilog file:" << outputFilePath;
         formatVerilogFile(outputFilePath);
-        return true;
+        return !primitiveFailed;
     }
 
     /* Generate top-level module declaration */
@@ -1941,7 +1949,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* Format generated Verilog file if verible-verilog-format is available */
     QSocGenerateManager::formatVerilogFile(outputFilePath);
 
-    return true;
+    return !primitiveFailed;
 }
 
 bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
