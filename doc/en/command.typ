@@ -100,6 +100,27 @@ The `project create` command creates a new QSoC project.
   kind: table,
 )
 
+=== Project Update, Remove, List and Show
+<project-other>
+`project update` takes the same options as `project create` and rewrites the
+paths of an existing project. `project remove`, `project list` and `project show`
+take only `-d, --directory` plus a project name or regex.
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Command], [Arguments]),
+    table.hline(),
+    [`project update <name>`], [Same options as `project create`],
+    [`project remove <regex>`], [`-d`; removes every matching project file],
+    [`project list [regex]`], [`-d`; lists project names],
+    [`project show <name>`], [`-d`; prints the project file contents],
+  )],
+  caption: [PROJECT SUBCOMMANDS],
+  kind: table,
+)
+
 == Module Command Options
 <module-options>
 The module command provides functionality for managing hardware modules.
@@ -160,6 +181,58 @@ qsoc module import -D NEW_FEATURE -U OLD_FEATURE module.v
 qsoc module import -p myproject -l stdlib -D DEBUG=1 -f filelist.txt
 ```
 
+=== Module Remove, List and Show
+<module-other>
+These three share `-d, --directory`, `-p, --project`, and `-l, --library`
+(base name or regex), and take a module name or regex as the argument.
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Command], [Effect]),
+    table.hline(),
+    [`module remove <regex>`], [Deletes matching modules from the libraries],
+    [`module list [regex]`], [Lists module names],
+    [`module show <regex>`], [Prints the stored module definition],
+  )],
+  caption: [MODULE SUBCOMMANDS],
+  kind: table,
+)
+
+=== Module Bus Interfaces
+<module-bus>
+`module bus` attaches bus interfaces to a module already in the library. The
+mapping between module ports and bus signals can be produced by an LLM.
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Option], [Description]),
+    table.hline(),
+    [`-d`, `--directory <path>`], [The path to the project directory],
+    [`-p`, `--project <name>`], [The project name],
+    [`-l`, `--library <regex>`], [Module library base name or regex],
+    [`-m`, `--module <regex>`], [Module name or regex (required)],
+    [`-b`, `--bus <name>`], [Bus name to attach (required)],
+    [`-o`, `--mode <mode>`], [Bus mode, for example `master` or `slave` (required)],
+    [`--bl`, `--bus-library <regex>`], [Bus library name or regex],
+    [`--ai`], [Let the configured model propose the port mapping],
+    [`<interface>`], [Name of the bus interface to create (required)],
+  )],
+  caption: [MODULE BUS ADD OPTIONS],
+  kind: table,
+)
+
+`module bus explain` asks the model which bus interfaces a module plausibly
+implements and prints the reasoning; it takes the same selection options plus
+`-b` and `--bl`. `module bus remove`, `list` and `show` operate on interfaces
+already attached and need only the selection options.
+
+Both AI-assisted paths use the endpoint from @llm-config. Without an endpoint
+configured, `--ai` and `explain` fail; the other subcommands do not need one.
+
 == Bus Command Options
 <bus-options>
 The bus command provides functionality for managing bus interfaces.
@@ -181,6 +254,25 @@ The `bus import` command imports buses into bus libraries.
     [files], [The bus definition CSV files to be processed],
   )],
   caption: [BUS IMPORT OPTIONS],
+  kind: table,
+)
+
+=== Bus Remove, List and Show
+<bus-other>
+These share `-d, --directory`, `-p, --project`, and `-l, --library` (base name
+or regex) and take a bus name or regex.
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Command], [Effect]),
+    table.hline(),
+    [`bus remove <regex>`], [Deletes matching buses from the libraries],
+    [`bus list [regex]`], [Lists bus names],
+    [`bus show <regex>`], [Prints the stored bus definition],
+  )],
+  caption: [BUS SUBCOMMANDS],
   kind: table,
 )
 
