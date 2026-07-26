@@ -6,9 +6,7 @@ the `clock:`, `reset:`, and `power:` sections of a netlist
 It is an authoring front end only: generation still runs through
 `qsoc generate verilog` (@verilog-generation).
 
-Read @gui-prc-limitations before relying on the editor for a real controller.
-Several fields shown in its dialogs do not reach the exported netlist in this
-release.
+Read @gui-prc-limitations for what the editor can and cannot express.
 
 == The Palette
 <gui-prc-palette>
@@ -60,7 +58,13 @@ field is still empty. Unchecking a group and confirming clears the fields
 inside it rather than remembering them.
 
 Double-click a wire to configure link-level operations. The wire label then
-carries markers such as `[ICG]` or `[DIV/2]`.
+carries markers such as `[ICG]` or `[DIV/2]`, and the settings are stored with
+the diagram.
+
+A power domain is always-on until you clear *Always-on domain* in its dialog.
+A controllable domain takes its dependencies from the wires drawn into its
+`dep` port, and its reset synchronizers from the follow table in the same
+dialog.
 
 == From Diagram to RTL
 <gui-prc-workflow>
@@ -68,13 +72,13 @@ carries markers such as `[ICG]` or `[DIV/2]`.
 + Save the drawing as `.soc_prc` (Ctrl+S).
 + Tools > Export Netlist (Ctrl+E) writes `<name>.soc_net` into the project
   output directory.
-+ Review the exported YAML against @gui-prc-limitations and add whatever the
-  editor could not express.
++ Review the exported YAML against @gui-prc-limitations.
 + Run `qsoc generate verilog <name>.soc_net`.
 
-The exporter writes exactly one controller per family, named `clock_ctrl`,
-`reset_ctrl`, and `power_ctrl`, whatever the diagram calls them. Keys come from
-the name shown on each box.
+The exporter writes one controller per family, named after the controller the
+primitives are assigned to, and falls back to `clock_ctrl`, `reset_ctrl` and
+`power_ctrl` when nothing is assigned. Keys come from the name shown on each
+box.
 
 == Limitations
 <gui-prc-limitations>
@@ -84,28 +88,23 @@ the name shown on each box.
     align: (auto, left),
     table.header([Area], [Behavior in this release]),
     table.hline(),
-    [Link operations], [ICG, divider, inverter and STA settings configured on a
-      wire are not written to the `.soc_prc` file and are lost on reload. The
-      label markers survive, so a link can look configured when it is not],
-    [Link operations in export],
-    [The same settings usually export as `null`, because the link is keyed by
-      the wire net name and nets are not named automatically here],
-    [Controller names], [Only the frame drawing uses them; the export always
-      emits the three fixed controller names],
-    [Controller test enable], [Not exported, so the generator falls back to
-      `1'b0` and the DFT bypass is lost],
-    [Power host clock and reset], [Not exported. `host_clock` and `host_reset`
-      are required, so an exported power section does not generate until they
-      are added by hand],
-    [Power dependencies], [`depend:` and `follow:` have no editor fields and are
-      never exported. Every exported domain therefore reads as always-on],
+    [Link operations], [Configured on a wire and saved with the diagram. The
+      wire must carry a name for the settings to reach the netlist; unnamed
+      wires are named after the connection they carry],
+    [Controller names], [The export uses the controller each primitive is
+      assigned to. A diagram with several controllers of one family still
+      exports only the first],
+    [Power host clock and reset], [Taken from the controller dialog. When they
+      are left empty the export falls back to `ao_clk` and `ao_rst_n` and says
+      so],
+    [Power dependencies], [`depend:` comes from the wires drawn into a domain's
+      dep port. Clear "Always-on domain" to make a domain controllable; an
+      always-on domain omits the key entirely],
     [Reset synchronizers], [Only the asynchronous form is available; `sync` and
       `count` have no fields. The asynchronous settings are written onto every
       link of a target rather than after the combination],
-    [Editing], [Cut, copy, paste and select all are not implemented. Delete
-      works from the keyboard],
-    [Files], [A `.soc_prc` written by an older release loads as an empty canvas
-      without an error; saving then overwrites the original],
+    [Editing], [Cut, copy and paste are not available. Delete works from the
+      keyboard],
   )],
   caption: [PRC EDITOR LIMITATIONS],
   kind: table,

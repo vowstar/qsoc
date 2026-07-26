@@ -5,9 +5,9 @@ result as a netlist (@soc-net-format). Two workflows share the same canvas:
 place and wire modules by hand, or import an existing netlist and let the
 editor lay it out.
 
-*Save immediately after importing.* Import and Auto Arrange bypass the undo
-stack, so they leave the document looking unmodified. Closing the window after
-an import discards the result without a prompt.
+Import and Auto Arrange build the scene without going through the undo stack,
+so neither can be undone. Both mark the document modified, so closing without
+saving asks first.
 
 == Window Anatomy
 <gui-schematic-anatomy>
@@ -42,8 +42,8 @@ Zoom with Ctrl and the wheel or Ctrl+`+`/`-`/`0`, pan with the middle mouse
 button, and press *F* to fit the whole drawing. The grid is fixed at 20 units
 and every item snaps to it; View > Show Grid only controls whether it is drawn.
 
-Delete removes the selected items through the undo stack. In this release Cut,
-Copy, Paste, and Select All appear in the Edit menu but are not implemented.
+Delete removes the selected items through the undo stack. Cut, copy and paste
+are not available.
 
 == Importing a Netlist
 <gui-schematic-import>
@@ -65,9 +65,8 @@ port names in the netlist, with directions guessed from the names. Since
 direction drives the layout, a partially loaded library produces a plausible
 but incorrect arrangement.
 
-If the canvas already holds anything, the import asks whether to replace it.
-Answering yes clears the scene and the undo stack without a separate save
-prompt.
+If the canvas already holds anything, the import asks whether to replace it and
+then offers to save the current document before clearing it.
 
 == How Auto Layout Works
 <gui-schematic-layout>
@@ -97,10 +96,10 @@ looks like:
   to stubs as well.
 
 Place > Auto Arrange (Ctrl+Shift+A) re-runs the whole import for the files
-imported in this session. It clears the canvas with no confirmation and no
-undo, so any manual placement, renaming, or hand-drawn wire since the import is
-lost. The remembered file list is not saved, so the action is unavailable after
-reopening a file.
+imported in this session. It asks for confirmation, then offers to save,
+because the re-layout discards any manual placement, renaming, or hand-drawn
+wire made since the import. The remembered file list is not saved, so the
+action is unavailable after reopening a file.
 
 == Exporting a Netlist
 <gui-schematic-export>
@@ -119,8 +118,8 @@ auto-naming failed is visible on the canvas but absent from the generated RTL.
 <gui-schematic-files>
 Schematics are saved as `.soc_sch` in the project schematic directory. The file
 embeds a copy of each placed module's definition, so a schematic still renders
-after the library changes, and equally does not follow those changes. Files
-written by an older release are not migrated; the editor reports an
-incompatible format instead.
+after the library changes, and equally does not follow those changes. A file
+written in a different format version is refused with an explicit message and
+left untouched, and a file that fails to load leaves the open document alone.
 
 Print renders the whole drawing onto one page with no scaling or pagination.
