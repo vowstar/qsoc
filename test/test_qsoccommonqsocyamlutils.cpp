@@ -18,7 +18,7 @@
  *          release used to load as an empty canvas and be overwritten on the
  *          next save.
  */
-class TestQSocYamlDocVersion : public QObject
+class TestQSocCommonQSocYamlUtils : public QObject
 {
     Q_OBJECT
 
@@ -117,5 +117,5 @@ private slots:
     }
 };
 
-QSOC_TEST_MAIN(TestQSocYamlDocVersion)
-#include "test_qsocyamldocversion.moc"
+QSOC_TEST_MAIN(TestQSocCommonQSocYamlUtils)
+#include "test_qsoccommonqsocyamlutils.moc"

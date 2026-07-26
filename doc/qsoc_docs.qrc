@@ -3,7 +3,7 @@
     <qresource prefix="/docs">
         <file>en/about.typ</file>
         <file>en/agent.typ</file>
-        <file>en/cheatsheet.typ</file>
+        <file>en/quick_reference.typ</file>
         <file>en/command.typ</file>
         <file>en/config.typ</file>
         <file>en/datasheet.typ</file>
