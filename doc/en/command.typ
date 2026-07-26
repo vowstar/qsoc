@@ -1,9 +1,9 @@
-= COMMAND-LINE OVERVIEW
+= Command-line Overview
 <cli-overview>
 QSoC provides a comprehensive command-line interface for SoC development and management.
 The following sections describe the available commands and options.
 
-== COMMAND LINE INTERFACE
+== Command Line Interface
 <cli>
 QSoC provides a comprehensive command-line interface for SoC development. The following
 commands and subcommands are available:
@@ -43,7 +43,7 @@ commands and subcommands are available:
   kind: table,
 )
 
-== GLOBAL OPTIONS
+== Global Options
 <global-options>
 The following global options are available for all commands:
 
@@ -72,7 +72,7 @@ The following global options are available for all commands:
   kind: table,
 )
 
-== PROJECT COMMAND OPTIONS
+== Project Command Options
 <project-options>
 The project command provides functionality for managing QSoC projects.
 
@@ -97,7 +97,7 @@ The `project create` command creates a new QSoC project.
   kind: table,
 )
 
-== MODULE COMMAND OPTIONS
+== Module Command Options
 <module-options>
 The module command provides functionality for managing hardware modules.
 
@@ -157,7 +157,7 @@ qsoc module import -D NEW_FEATURE -U OLD_FEATURE module.v
 qsoc module import -p myproject -l stdlib -D DEBUG=1 -f filelist.txt
 ```
 
-== BUS COMMAND OPTIONS
+== Bus Command Options
 <bus-options>
 The bus command provides functionality for managing bus interfaces.
 
@@ -181,7 +181,7 @@ The `bus import` command imports buses into bus libraries.
   kind: table,
 )
 
-== GENERATE COMMAND OPTIONS
+== Generate Command Options
 <generate-options>
 The generate command provides functionality for generating different types of outputs.
 
@@ -333,8 +333,8 @@ SystemRDL files generate simplified JSON format accessible in templates:
 
 ==== RCSV Processing
 RCSV files are processed through two-stage conversion:
-1. CSV to SystemRDL conversion using `csv_to_rdl()`
-2. SystemRDL elaboration to simplified JSON using `elaborate_simplified()`
++ CSV to SystemRDL conversion using `csv_to_rdl()`
++ SystemRDL elaboration to simplified JSON using `elaborate_simplified()`
 This ensures RCSV files follow the same template access patterns as RDL files.
 
 === Stub Generation Options

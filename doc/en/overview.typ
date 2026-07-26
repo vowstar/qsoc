@@ -1,4 +1,4 @@
-= OVERVIEW
+= Overview
 <overview>
 QSoC is a System-on-Chip (SoC) design tool with three front ends over one
 project format: a GUI for interactive editing, a CLI for scripted and batch
@@ -11,7 +11,7 @@ bus interfaces, and generate RTL, register maps, and stub files. Verbosity is
 set per invocation, so the same command serves both interactive use and build
 scripts.
 
-== GETTING STARTED
+== Getting Started
 <getting-started>
 Prebuilt binaries are attached to every release: an AppImage for Linux, a
 `.dmg` for macOS, and a `.zip` for Windows. They are published at
@@ -37,7 +37,7 @@ qsoc agent                              # or let the agent drive the same tools
 Every command accepts `--help`. The agent is documented in @agent-overview, the
 netlist format in @soc-net-format, and configuration in @config-overview.
 
-== TERMINOLOGY
+== Terminology
 <terminology>
 The following terms are used in system descriptions.
 

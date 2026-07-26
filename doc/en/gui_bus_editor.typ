@@ -1,17 +1,17 @@
-= GUI BUS EDITOR
+= GUI Bus Editor
 <gui-bus-editor>
 The Bus Editor manages project-local `.soc_bus` libraries with a table workflow.
 Open it from `Tools > Bus Editor` or by double-clicking a `.soc_bus` file in the
 project tree.
 
-== LIBRARY PANE
+== Library Pane
 <gui-bus-editor-library-pane>
 The left pane lists project bus libraries and their buses. Each library row shows
 enabled state, project-relative path, bus count, and load status. Empty pending
 libraries stay in memory until a bus is saved. Duplicate bus names across loaded
 libraries are rejected because the manager indexes definitions by bus name.
 
-== SIGNAL TABLE
+== Signal Table
 <gui-bus-editor-signal-table>
 The center table stores one `(signal, mode)` row per bus signal mode. Columns map
 to `Signal`, `Mode`, `Direction`, `Width`, `Qualifier`, and `Description`.
@@ -21,7 +21,7 @@ text, so symbolic legacy widths can round-trip as warnings.
 Rows can be added, duplicated, deleted, searched, saved, and reverted. The YAML
 preview shows the exact definition that will be written.
 
-== CSV IMPORT
+== CSV Import
 <gui-bus-editor-csv-import>
 CSV import parses rows without saving first, shows a preview, then applies one of
 three merge modes:
@@ -33,7 +33,7 @@ three merge modes:
 CSV columns are mapped to signal, mode, direction, width, qualifier, and
 description. Descriptions are preserved through preview and save.
 
-== VALIDATION AND REFERENCES
+== Validation and References
 <gui-bus-editor-validation>
 Save validates duplicate `(signal, mode)` rows, required signal and mode values,
 direction values, width warnings, preserved attribute conflicts, and module
@@ -43,7 +43,7 @@ The usage tab lists module library, module, interface, bus, mode, mapping count,
 and compact problem state. Problem rows select the affected signal table row when
 the issue belongs to a row.
 
-== SAFE RENAMES
+== Safe Renames
 <gui-bus-editor-safe-renames>
 Renaming a bus, signal, or mode scans module interfaces first. When references
 exist, the editor shows the affected interfaces and can update the module YAML

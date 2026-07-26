@@ -1,8 +1,8 @@
-= TEMPLATE FORMAT
+= Template Format
 <template-format>
 QSoC provides a powerful template system based on the Inja template engine for generating custom files from structured data sources including CSV, YAML, JSON, and SystemRDL files.
 
-== OVERVIEW
+== Overview
 <template-overview>
 The template system allows users to create dynamic output files by combining template files with data sources. Templates use Inja syntax for variable substitution, loops, conditions, and advanced text processing.
 
@@ -33,7 +33,7 @@ QSoC uses the Inja template engine, which provides:
 - Filters: `{{ value | filter_name(args) }}`
 - Comments: `{# This is a comment #}`
 
-== REGEX FILTERS
+== Regex Filters
 <regex-filters>
 QSoC provides three powerful regex filters for text processing within templates. All filters support inline modifiers for pattern matching options.
 
@@ -140,7 +140,7 @@ Use inline modifiers instead of separate parameters:
 {{ text | regex_search("name:(?i:[a-z]+)") }}
 ````
 
-== DATA ACCESS PATTERNS
+== Data Access Patterns
 <data-access-patterns>
 Template data is organized based on input file types and can be accessed using standard Inja syntax.
 
@@ -185,7 +185,7 @@ Template combining regex filters with CSV data:
 {% endfor %}
 ````
 
-== COMMAND USAGE
+== Command Usage
 <command-usage>
 Templates are processed using the `qsoc generate template` command:
 
@@ -205,11 +205,11 @@ qsoc generate template template.j2 output.sv \
   --rcsv register_defs.csv
 ```
 
-== BEST PRACTICES
+== Best Practices
 <best-practices>
-1. *Use inline modifiers* instead of separate parameters for regex operations
-2. *Validate regex patterns* during template development
-3. *Handle missing data* gracefully using default values in regex_search
-4. *Combine filters* for complex text transformations
-5. *Comment templates* using `{# ... #}` for maintainability
-6. *Test with sample data* before production use
++ *Use inline modifiers* instead of separate parameters for regex operations
++ *Validate regex patterns* during template development
++ *Handle missing data* gracefully using default values in regex_search
++ *Combine filters* for complex text transformations
++ *Comment templates* using `{# ... #}` for maintainability
++ *Test with sample data* before production use

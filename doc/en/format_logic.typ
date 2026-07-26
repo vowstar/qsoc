@@ -1,8 +1,8 @@
-= LOGIC DESCRIPTION FORMAT
+= Logic Description Format
 <logic-description-format>
 The logic description format provides high-level behavioral modeling capabilities through combinational and sequential logic blocks, allowing designers to describe complex digital behavior using intuitive YAML syntax.
 
-== COMBINATIONAL LOGIC (COMB)
+== Combinational Logic (Comb)
 <soc-net-comb>
 The `comb` section defines combinational logic blocks that generate pure combinational Verilog code. This section allows you to describe combinational logic using a high-level YAML DSL that is then translated to appropriate Verilog constructs.
 
@@ -193,7 +193,7 @@ This generates a comprehensive control unit with nested decoding for different i
 - Keep expressions simple and readable
 - Prefer case statements over long if-else chains for discrete value switching
 
-== SEQUENTIAL LOGIC (SEQ)
+== Sequential Logic (Seq)
 <soc-net-seq>
 The `seq` section defines sequential logic blocks that generate pure sequential Verilog code with proper clock and reset handling.
 
@@ -418,7 +418,7 @@ end
 - Provide default values in conditional logic to maintain current state
 - Consider clock edge requirements carefully for timing-critical designs
 
-== MIXED COMBINATIONAL AND SEQUENTIAL LOGIC
+== Mixed Combinational and Sequential Logic
 <soc-net-mixed-logic>
 Example showing comprehensive mixed logic with internal register pattern:
 

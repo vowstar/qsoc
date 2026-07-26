@@ -1,9 +1,9 @@
-= AGENT MODE
+= Agent Mode
 <agent-overview>
 QSoC provides an interactive AI agent for SoC design automation. The agent uses
 LLM tool calling to execute multi-step workflows through natural language.
 
-== AGENT COMMAND
+== Agent Command
 <agent-command>
 
 #figure(
@@ -243,7 +243,7 @@ tool for sub-agents, so only the parent can declare the goal complete.
 
 The status-line chip surfaces the live state at all times:
 
-```
+```text
 [E:high] [Qwen3.6-35B-A3B-FP8] [Goal: Build top-level RTL 1850/20000|active]
 ```
 
@@ -256,7 +256,7 @@ without touching the agent:
 tail -20 .qsoc/goal_log.jsonl | jq -c '{ts,event,goal_id}'
 ```
 
-== INTERACTIVE COMMANDS
+== Interactive Commands
 <agent-commands>
 The following commands are available during an interactive session:
 
@@ -379,7 +379,7 @@ The status bar also shows a `[ctx N%]` chip tracking how full the context
 window is against the effective budget; as auto-compaction nears it reads
 `N% to compact`, then `compacting`.
 
-== KEYBOARD AND INPUT
+== Keyboard and Input
 <agent-keyboard>
 Editing and navigation in the prompt:
 
@@ -411,7 +411,7 @@ View and selection:
 
 Completion and interrupt:
 
-- *`@<name>`*: Fuzzy-complete a project file path
+- `@<name>`: Fuzzy-complete a project file path
 - *ESC*: Request cancellation of the current operation
 
 While the agent is executing, *Enter* submits input for the next iteration and
@@ -423,7 +423,7 @@ have changed external state.
 *ESC* is not processed while a synchronous remote command is running. Losing
 its SSH channel does not guarantee that the remote process has stopped.
 
-== DECISION FLOW
+== Decision Flow
 <agent-decision-flow>
 The agent follows a four-tier decision flow for every request:
 
@@ -438,7 +438,7 @@ The agent follows a four-tier decision flow for every request:
   checklist before execution.
 + *Tier 4: Execute*: Use file, shell, generation, or other tools directly.
 
-== SoC INFRASTRUCTURE
+== SoC Infrastructure
 <agent-soc-infrastructure>
 The `generate_verilog` tool produces production RTL from `.soc_net` YAML files
 with four primitive generators:
@@ -456,7 +456,7 @@ with four primitive generators:
 The agent detects SoC infrastructure requests by keyword (clock, reset, power,
 FSM, etc.) and routes them through Tier 2 automatically.
 
-== CAPABILITIES
+== Capabilities
 <agent-capabilities>
 The agent provides the following tools through natural language:
 
@@ -501,7 +501,7 @@ The agent provides the following tools through natural language:
 LLM, MCP HTTP, and web requests are pinned to HTTP/1.1. HTTP/2-only
 endpoints are unsupported.
 
-== SKILLS
+== Skills
 <agent-skills>
 A skill is a `SKILL.md` markdown file with a YAML frontmatter block. Skills
 extend the agent without code changes. They are discovered across the four
@@ -513,7 +513,7 @@ shadow lower ones.
 <agent-skill-layout>
 Each skill lives in its own directory:
 
-```
+```text
 <root>/skills/<skill-name>/SKILL.md
 ```
 
@@ -562,7 +562,7 @@ missing or unclosed. `/help` lists the user-invocable skills along with
 their `argument-hint` so they are discoverable without grepping the
 filesystem.
 
-== REASONING EFFORT
+== Reasoning Effort
 <agent-effort>
 The `--effort` option enables extended reasoning for complex tasks. When set,
 a `reasoning_effort` parameter is sent to the LLM API.
@@ -592,7 +592,7 @@ output is displayed in dim text.
   kind: table,
 )
 
-== CONTEXT COMPACTION
+== Context Compaction
 <agent-context-compaction>
 Long conversations are managed by a three-layer compaction system:
 
@@ -629,7 +629,7 @@ overall token budget. qsoc memory files and files still inside the kept
 window are skipped (memory is re-injected every turn already). Disable with
 `agent.context_restore: false`.
 
-== MEMORY SYSTEM
+== Memory System
 <agent-memory-system>
 Persistent memory is stored as topic files with YAML frontmatter in two
 scopes: user-global (`<user root>/memory/`) and project-local
@@ -677,7 +677,7 @@ agent:
   memory_dream_model: other-model
 ```
 
-== SUB-AGENTS
+== Sub-agents
 <agent-subagents>
 A sub-agent is a child run with its own message history, its own tool
 allowlist, and its own system prompt. The parent dispatches through the
@@ -834,7 +834,7 @@ While a backgrounded run is alive:
   call to continue where a prior run left off, e.g. across a process
   restart.
 
-== BACKGROUND TASKS
+== Background Tasks
 <agent-tasks>
 A unified task panel lists every long-running activity attached to the
 current agent: backgrounded `bash` jobs, scheduled `/loop` prompts, and
@@ -893,7 +893,7 @@ change; the agent should write the watcher command itself and call
 `monitor` when event output needs to wake the session. Use `monitor_stop`
 with the returned `task_id` to stop it.
 
-== SCHEDULED PROMPTS
+== Scheduled Prompts
 <agent-loop>
 `/loop` runs a prompt on a cron schedule. Jobs are persisted to
 `<project>/.qsoc/loop.yml` and gated by a per-project file lock so only
@@ -926,7 +926,7 @@ between turns of any in-flight conversation. If another qsoc session
 already holds the loop lock, `/loop add/stop/clear` reports the conflict
 and exits without modifying state.
 
-== SYSTEM PROMPT SOURCES
+== System Prompt Sources
 <agent-system-prompt>
 On every turn, the system prompt is composed from:
 
@@ -941,7 +941,7 @@ On every turn, the system prompt is composed from:
 Set `agent.system_prompt` in the config to replace the modular base with a
 literal string (useful for testing or custom deployments).
 
-== REMOTE WORKSPACE
+== Remote Workspace
 <agent-remote>
 QSoC can drive a workspace on a remote host over SSH without installing
 anything on that host. The transport is `libssh2` linked statically against
@@ -1044,7 +1044,7 @@ reads those state files over SSH exec to report status, tail output, or
 send `SIGTERM`/`SIGKILL`. Jobs survive SSH channel closes; QSoC does not
 auto-kill them when the agent exits.
 
-== SECURITY
+== Security
 <agent-security>
 The agent uses a read-unrestricted, write-restricted permission model:
 
@@ -1054,7 +1054,7 @@ The agent uses a read-unrestricted, write-restricted permission model:
   `%TEMP%` on Windows; resolved via Qt `QDir::tempPath()`)
 - *Shell*: Configurable timeout, no upper limit
 
-== SESSIONS
+== Sessions
 <agent-persistence>
 Each session is persisted as `.qsoc/sessions/<id>.jsonl` under the project
 directory, one JSON event per line (messages plus metadata). This enables:
@@ -1072,17 +1072,17 @@ saved model, workspace, goal, and local recovery record. Finished or
 inconsistent runs return to the prompt. A tool interrupted in flight is
 reported as uncertain and requires a new user turn; it is not replayed directly.
 
-== USAGE EXAMPLES
+== Usage Examples
 <agent-examples>
 
-```
+```text
 qsoc> Create a new project named "soc_design" in the current directory
 qsoc> Import all Verilog files from ./rtl directory
 qsoc> Add AXI4 slave interface to the cpu module
 qsoc> Generate Verilog from netlist.yaml with output name "top"
 ```
 
-== MCP SERVERS
+== MCP Servers
 <agent-mcp>
 The agent can connect to external Model Context Protocol (MCP) servers and
 expose their tools to the LLM alongside the built-in tool set. MCP is an
@@ -1273,7 +1273,7 @@ available.
 - Tool annotations are untrusted server hints and never bypass plan-mode or
   other execution gates.
 
-== HOOKS
+== Hooks
 <agent-hooks>
 QSoC agent fires user-defined commands at well-known lifecycle points so
 projects can layer their own policy, audit trail, or context injection

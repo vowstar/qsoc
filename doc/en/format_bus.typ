@@ -1,8 +1,8 @@
-= BUS INTERFACE FORMAT
+= Bus Interface Format
 <bus-interface-format>
 The bus interface format provides high-level connectivity abstractions for protocol-based connections and advanced signal routing through bit selection capabilities.
 
-== BUS DEFINITION LIBRARY
+== Bus Definition Library
 <soc-bus-definition-library>
 Project bus libraries use `.soc_bus` YAML files. Each library maps a bus name to
 `port.<signal>.<mode>` entries. The editor and importer treat each
@@ -38,7 +38,7 @@ workflow.
 Module-to-bus interface mappings are edited in the Module Editor. See
 @gui-module-editor for that workflow.
 
-== BUS SECTION
+== Bus Section
 <soc-net-bus>
 The `bus` section defines bus interface connections that will be automatically expanded into individual net connections. Bus connections use the list format:
 
@@ -108,10 +108,10 @@ instance:
 
 ==== How It Works
 When QSoC processes the netlist, it:
-1. Scans all instances for bus sections with `link` attributes
-2. Creates or updates the corresponding bus in the `bus` section
-3. Adds the instance and bus port to the connection list
-4. Removes the `link` attribute after expansion
++ Scans all instances for bus sections with `link` attributes
++ Creates or updates the corresponding bus in the `bus` section
++ Adds the instance and bus port to the connection list
++ Removes the `link` attribute after expansion
 
 The expanded result is identical to the manual approach:
 
@@ -169,10 +169,10 @@ instance:
 
 ==== How Bus Uplink Works
 When QSoC processes bus uplink, it:
-1. Scans the bus definition to find all signals
-2. Maps each bus signal to the corresponding module port using the bus mapping
-3. Creates individual port uplinks with the naming pattern `[uplink_name]_[signal_name]`
-4. Removes the bus uplink attribute after expansion
++ Scans the bus definition to find all signals
++ Maps each bus signal to the corresponding module port using the bus mapping
++ Creates individual port uplinks with the naming pattern `[uplink_name]_[signal_name]`
++ Removes the bus uplink attribute after expansion
 
 The expansion converts bus uplink into multiple port uplinks:
 
@@ -284,7 +284,7 @@ Bus connection properties include:
   kind: table,
 )
 
-== BIT SELECTION
+== Bit Selection
 <soc-net-bit-selection>
 Bit selection allows connecting specific bits of a port to a net, enabling flexible signal routing and bus segmentation. This feature is supported by the `link` attribute and explicit `net` definitions.
 
@@ -310,9 +310,9 @@ Bit selection allows connecting specific bits of a port to a net, enabling flexi
 <soc-net-bit-selection-details>
 The system follows these principles when processing bit selection:
 
-1. *Wire Width Determination*: Generated wires use the *full width of the source port*, not the bit selection width
-2. *Connection Generation*: Bit selection is applied at the *port connection level* in generated Verilog
-3. *Width Safety*: Automatic validation ensures bit selections don't exceed port width
++ *Wire Width Determination*: Generated wires use the *full width of the source port*, not the bit selection width
++ *Connection Generation*: Bit selection is applied at the *port connection level* in generated Verilog
++ *Width Safety*: Automatic validation ensures bit selections don't exceed port width
 
 Example processing:
 ```yaml
@@ -387,9 +387,9 @@ instance:
 <soc-net-bit-selection-limitations>
 
 ==== Attribute Support
-- *`link`*: ✓ Full bit selection support
-- *`uplink`*: ✗ No bit selection support (design philosophy requires direct I/O mapping)
-- *`net`*: ✓ Full bit selection support via `bits` attribute
+- `link`: full bit selection support
+- `uplink`: no bit selection support; uplink maps a port directly
+- `net`: full bit selection support via the `bits` attribute
 
 ==== Width Validation
 The system performs automatic validation:
@@ -439,12 +439,12 @@ instance:
         link: shared_bus[6:3]    # Overlaps with [7:4]!
 ```
 
-== AUTOMATIC WIDTH CHECKING
+== Automatic Width Checking
 <soc-net-width-checking>
 QSoC performs automatic width checking for all connections:
 
-1. It calculates the effective width of each port in a connection, considering bit selections
-2. It compares widths of all ports connected to the same net
-3. It generates warnings for width mismatches, including detailed information about port widths and bit selections
++ It calculates the effective width of each port in a connection, considering bit selections
++ It compares widths of all ports connected to the same net
++ It generates warnings for width mismatches, including detailed information about port widths and bit selections
 
 This automatic checking helps catch design errors early in the development process and ensures signal integrity across the design hierarchy.

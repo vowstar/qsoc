@@ -1,8 +1,8 @@
-= FILE FORMATS OVERVIEW
+= File Formats Overview
 <file-formats-overview>
 QSoC uses several YAML-based file formats to define modules, buses, and netlists. This document provides an overview of these file formats, with a focus on the SOC_NET format for netlist description.
 
-== GENERATED RTL
+== Generated RTL
 <soc-net-generated-rtl>
 Generated RTL targets IEEE 1364-2001 Verilog. The generators stay inside a
 2001-safe subset: ANSI port lists, `generate` blocks, `localparam` state
@@ -20,7 +20,7 @@ and `verible-verilog-format` reformats generated files when it is present on
 RTL, and the QSoC test suite does not either. Validate generated RTL in your
 own flow before relying on it.
 
-== SOC_NET FORMAT
+== SOC_NET Format
 <soc-net-format>
 The SOC_NET format is a YAML-based netlist description format used to define SoC designs, including module instances, port connections, and bus mappings. It provides precise control over connections through features like bit selection.
 
@@ -65,7 +65,7 @@ module design (...);
 endmodule
 ```
 
-Note: Users are responsible for manually instantiating the generated primitive modules (reset, clock, FSM) in their design or other modules as needed.
+*Note*: Users are responsible for manually instantiating the generated primitive modules (reset, clock, FSM) in their design or other modules as needed.
 
 === Structure Overview
 <soc-net-structure>
@@ -100,10 +100,10 @@ A SOC_NET file consists of several key sections:
 <soc-net-processing-flow>
 The QSoC netlist processor follows a multi-stage processing flow:
 
-1. *Parse*: Read and validate YAML structure
-2. *Expand*: Process bus definitions into individual nets
-3. *Connect*: Build connectivity graph from nets and instances
-4. *Generate*: Create Verilog RTL output
++ *Parse*: Read and validate YAML structure
++ *Expand*: Process bus definitions into individual nets
++ *Connect*: Build connectivity graph from nets and instances
++ *Generate*: Create Verilog RTL output
 
 Each stage includes comprehensive validation and error checking to ensure design correctness.
 

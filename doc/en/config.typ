@@ -1,9 +1,9 @@
-= CONFIGURATION OVERVIEW
+= Configuration Overview
 <config-overview>
 QSoC provides a flexible configuration system that supports multiple configuration levels and sources.
 This document describes the available configuration options and how they are managed.
 
-== CONFIGURATION FILES
+== Configuration Files
 <config-files>
 QSoC resolves configuration, skills, and memory across four layered roots.
 User-level and project-level roots are identical on all platforms; only the
@@ -45,7 +45,7 @@ memory live at `<root>/skills/` and `<root>/memory/` respectively.
 `$XDG_CONFIG_HOME` is honored on every platform: if set, the user root
 becomes `$XDG_CONFIG_HOME/qsoc` instead of `~/.config/qsoc`.
 
-== CONFIGURATION PRIORITY
+== Configuration Priority
 <config-priority>
 QSoC applies configuration settings in the following order of precedence (highest to lowest):
 
@@ -70,7 +70,7 @@ Same-name skills in higher layers shadow lower ones. Listings and
 set; pass `scope: "system"` / `"user"` / `"project"` to inspect a specific
 layer for debugging.
 
-== LLM CONFIGURATION
+== LLM Configuration
 <llm-config>
 QSoC uses a unified LLM configuration format. All providers support the OpenAI Chat Completions API format,
 so you only need to configure the endpoint URL, API key, and model name.
@@ -206,7 +206,7 @@ llm:
         image_max_dimension: 1568
 ```
 
-== NETWORK PROXY CONFIGURATION
+== Network Proxy Configuration
 <proxy-config>
 QSoC resolves the proxy used for every HTTP-based subsystem (LLM
 endpoints, MCP HTTP transports, web tools) in three tiers, highest
@@ -287,7 +287,7 @@ mcp:
       proxy: none
 ```
 
-== AGENT CONFIGURATION
+== Agent Configuration
 <agent-config>
 Agent behavior can be configured in the YAML config file under the `agent` key.
 These settings can also be overridden by command-line options (see @agent-command).
@@ -372,7 +372,7 @@ These settings can also be overridden by command-line options (see @agent-comman
   kind: table,
 )
 
-== WEB CONFIGURATION
+== Web Configuration
 <web-config>
 The agent can search the web via SearXNG and fetch URL content. Web search
 requires a SearXNG instance URL to be configured; web fetch works without
@@ -401,7 +401,7 @@ web:
   search_api_key: my-secret-key
 ```
 
-== COMPLETE CONFIGURATION EXAMPLE
+== Complete Configuration Example
 <config-example>
 Below is an example of a complete QSoC configuration file:
 
@@ -429,12 +429,12 @@ web:
   search_api_url: http://localhost:8080
 ```
 
-== AUTOMATIC TEMPLATE CREATION
+== Automatic Template Creation
 <auto-template>
 When QSoC is run for the first time and the user configuration file (`~/.config/qsoc/qsoc.yml`) does not exist,
 the software will automatically create a template configuration file with recommended settings and detailed comments.
 
-== TROUBLESHOOTING
+== Troubleshooting
 <troubleshooting>
 If you encounter issues with QSoC startup or configuration-related problems:
 

@@ -1,8 +1,8 @@
-= NETLIST FORMAT
+= Netlist Format
 <netlist-format>
 The netlist format defines the structural elements of a design: ports, instances, and connections. These sections form the foundation of any SOC_NET design description.
 
-== PORT SECTION
+== Port Section
 <soc-net-port>
 The `port` section defines the top-level ports of the design, specifying their direction and type:
 
@@ -38,7 +38,7 @@ Port properties include:
   kind: table,
 )
 
-== INSTANCE SECTION
+== Instance Section
 <soc-net-instance>
 The `instance` section defines module instances and their optional parameters:
 
@@ -165,7 +165,7 @@ Port attributes within an instance can include:
   kind: table,
 )
 
-== NET SECTION
+== Net Section
 <soc-net-net>
 The `net` section defines explicit connections between instance ports using a standardized list format:
 
@@ -264,9 +264,9 @@ instance:
 ```
 
 This is equivalent to:
-1. Adding `ext_clk` to the `port` section as an input/output
-2. Creating a net named `ext_clk`
-3. Connecting `io_pad.PAD` to this net
++ Adding `ext_clk` to the `port` section as an input/output
++ Creating a net named `ext_clk`
++ Connecting `io_pad.PAD` to this net
 
 === Usage Guidelines
 <soc-net-link-uplink-guidelines>
@@ -275,7 +275,7 @@ This is equivalent to:
 - Both attributes automatically handle net creation and prevent duplication
 - Multiple instances can reference the same link/uplink net name for shared connections
 
-== DETAILED LINK AND UPLINK ATTRIBUTES
+== Detailed Link and Uplink Attributes
 <soc-net-detailed-link-uplink>
 The `link` and `uplink` attributes provide convenient shortcuts for creating connections without explicitly defining nets in the `net` section. These attributes serve different purposes and have distinct design philosophies.
 
@@ -376,9 +376,9 @@ instance:
 ```
 
 This automatically creates:
-1. A top-level port named `spi_clk` with direction inferred from the module port
-2. An internal net named `spi_clk`
-3. A connection between the instance port and the net
++ A top-level port named `spi_clk` with direction inferred from the module port
++ An internal net named `spi_clk`
++ A connection between the instance port and the net
 
 ==== Design Philosophy
 <soc-net-uplink-philosophy>
@@ -453,9 +453,9 @@ port:
 
 *4. Architectural Consistency*
 The QSoC connection system maintains clear separation of concerns:
-- *`link`*: Handles complex internal routing and bit manipulation
-- *`uplink`*: Handles simple I/O port mapping
-- *`bus`*: Handles protocol-level connections
+- `link`: Handles complex internal routing and bit manipulation
+- `uplink`: Handles simple I/O port mapping
+- `bus`: Handles protocol-level connections
 
 Adding bit selection to uplink would blur these boundaries and reduce system clarity.
 
@@ -513,7 +513,7 @@ port:
     connect: internal_data
 ```
 
-== EXAMPLE SOC_NET FILE
+== Example SOC_NET File
 <soc-net-example>
 Below is a complete example of a SOC_NET file demonstrating various features:
 

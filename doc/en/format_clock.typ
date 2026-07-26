@@ -1,4 +1,4 @@
-= CLOCK CONTROLLER FORMAT
+= Clock Controller Format
 <clock-format>
 The clock section defines clock controller primitives using a simplified format that eliminates complex type configurations. Clock operations are specified through direct attributes, with automatic selection of mux types based on signal presence.
 
@@ -10,7 +10,7 @@ The clock section defines clock controller primitives using a simplified format 
 )[
   *Standalone module:* a `clock:` block generates a self-contained
   Verilog module named after `clock.name`. The generated module is NOT
-  auto-instantiated by any parent netlist - the user instantiates it
+  auto-instantiated by any parent netlist: the user instantiates it
   manually (or via `qsoc module import` followed by an `_inst.soc_net`
   entry) at the top level. This is by design.
 
@@ -22,7 +22,7 @@ The clock section defines clock controller primitives using a simplified format 
   unwired controller pin, not as a qsoc warning.
 ]
 
-== CLOCK OVERVIEW
+== Clock Overview
 <soc-net-clock-overview>
 Clock controllers manage clock distribution with two processing levels: link-level and target-level. Each level supports specific operations in a defined order, providing clear signal flow without explicit type enumeration.
 
@@ -34,7 +34,7 @@ Key features include:
 - Template RTL cells replaceable with foundry-specific IP
 - Complete processing chain from multiple sources to single target
 
-== CLOCK STRUCTURE
+== Clock Structure
 <soc-net-clock-structure>
 Clock controllers use direct attribute specification without explicit type enumeration. Processing operations are determined by attribute presence rather than complex type parsing:
 
@@ -112,7 +112,7 @@ clock:
         test_clock: test_clock        # DFT test clock (uses controller test_enable)
 ```
 
-== PROCESSING LEVELS
+== Processing Levels
 <soc-net-clock-levels>
 Clock controllers operate at two distinct processing levels with defined operation support:
 
@@ -122,11 +122,11 @@ Clock controllers operate at two distinct processing levels with defined operati
     align: (auto, center, center, left),
     table.header([Operation], [Target Level], [Link Level], [Description]),
     table.hline(),
-    [ICG], [✓], [✓], [Clock gating with enable signal],
-    [DIV], [✓], [✓], [Clock division with configurable ratio],
-    [INV], [✓], [✓], [Clock signal inversion],
-    [STA_GUIDE], [✓], [✓], [STA guide buffer for timing constraints],
-    [MUX], [✓], [N/A], [Multi-source selection (>1 link only)],
+    [ICG], [Yes], [Yes], [Clock gating with enable signal],
+    [DIV], [Yes], [Yes], [Clock division with configurable ratio],
+    [INV], [Yes], [Yes], [Clock signal inversion],
+    [STA_GUIDE], [Yes], [Yes], [STA guide buffer for timing constraints],
+    [MUX], [Yes], [N/A], [Multi-source selection (>1 link only)],
   )],
   caption: [PROCESSING LEVEL SUPPORT],
   kind: table,
@@ -261,7 +261,7 @@ target:
             out: CKO
 ```
 
-== ICG CONFIGURATION
+== ICG Configuration
 <soc-net-clock-icg-config>
 Clock gating cells (ICG) control clock distribution by enabling or disabling clock output based on enable signals. The ICG primitive supports both target-level and link-level configurations.
 
@@ -273,14 +273,14 @@ Clock gating cells (ICG) control clock distribution by enabling or disabling clo
     align: (auto, center, left),
     table.header([Parameter], [Required], [Description]),
     table.hline(),
-    [enable], [✓], [Gate enable signal name],
-    [polarity], [], [Enable polarity: "high" (default) or "low"],
+    [enable], [Yes], [Gate enable signal name],
+    [polarity], [No], [Enable polarity: "high" (default) or "low"],
     [test_enable],
-    [],
+    [No],
     [Test enable bypass signal (uses controller-level if not specified)],
-    [reset], [], [Reset signal name (active-low)],
-    [clock_on_reset], [], [Enable clock output during reset (default: false)],
-    [sta_guide], [], [STA guide buffer configuration after ICG (optional)],
+    [reset], [No], [Reset signal name (active-low)],
+    [clock_on_reset], [No], [Enable clock output during reset (default: false)],
+    [sta_guide], [No], [STA guide buffer configuration after ICG (optional)],
   )],
   caption: [ICG CONFIGURATION PARAMETERS],
   kind: table,
@@ -337,7 +337,7 @@ high, can produce a runt pulse on the gated clock. The divide-by-1 bypass in
 that with `test_en` high the ICG output is the raw clock, so the gating latch
 itself gets no toggle coverage.
 
-== DIVIDER CONFIGURATION
+== Divider Configuration
 <soc-net-clock-divider-config>
 Clock dividers support three operational modes determined by the presence of `value` and `valid` signals:
 
@@ -375,23 +375,23 @@ chain construction and mixed-edge timing closure.
     table.header([Parameter], [Required], [Description]),
     table.hline(),
     [default],
-    [✓],
+    [Yes],
     [Default division value (≥1), used as reset default and static constant],
     [width],
-    [◐],
+    [Mode],
     [Divider width in bits (required for auto/dynamic modes, auto-calculated for static mode)],
     [reset],
     [],
     [Reset signal name (active-low), divider uses default value during reset],
-    [enable], [], [Enable signal name, disables divider when inactive],
-    [test_enable], [], [Test enable bypass signal],
-    [clock_on_reset], [], [Enable clock output during reset (default: false)],
-    [value], [], [Dynamic division input signal (empty = static mode)],
+    [enable], [No], [Enable signal name, disables divider when inactive],
+    [test_enable], [No], [Test enable bypass signal],
+    [clock_on_reset], [No], [Enable clock output during reset (default: false)],
+    [value], [No], [Dynamic division input signal (empty = static mode)],
     [valid],
     [],
     [Division value valid strobe signal (auto-generated for static mode)],
-    [ready], [], [Division ready output status signal],
-    [count], [], [Division counter output for debugging],
+    [ready], [No], [Division ready output status signal],
+    [count], [No], [Division counter output for debugging],
   )],
   caption: [DIVIDER CONFIGURATION PARAMETERS],
   kind: table,
@@ -547,7 +547,7 @@ target:
       value: div_control
 ```
 
-== CLOCK MULTIPLEXING
+== Clock Multiplexing
 <soc-net-clock-mux>
 Targets with multiple links (≥2) automatically generate multiplexers. Mux type is determined by reset signal presence:
 
@@ -593,7 +593,7 @@ target:
     test_clock: test_clock        # DFT test clock (optional)
 ```
 
-== CLOCK PROPERTIES
+== Clock Properties
 <soc-net-clock-properties>
 Clock controller properties define inputs, processing, and outputs:
 
@@ -665,7 +665,7 @@ Link-level processing uses key existence for operations:
   kind: table,
 )
 
-== STA GUIDE BUFFERS
+== STA Guide Buffers
 <soc-net-clock-sta-guide>
 STA (Static Timing Analysis) guide buffers are foundry-specific cells inserted *serially* in clock processing chains to assist with timing constraints during physical design.
 
@@ -806,7 +806,7 @@ FOUNDRY_GUIDE_BUF u_dsp_clk_pll_800m_sta (
 - Signal flow: `Processing → *_pre_sta → STA_Guide → *_out`
 - Downstream logic sees consistent signal names regardless of STA guide presence
 
-== TEMPLATE RTL CELLS
+== Template RTL Cells
 <soc-net-clock-templates>
 QSoC generates these templates:
 - `qsoc_tc_clk_gate` - Test-controllable clock gate
@@ -843,15 +843,15 @@ File generation behavior:
 - Generated templates include sophisticated FSM logic, not simple assign statements
 
 *Important Notes:*
-1. *Generated templates are production-quality* with proper FSM control, parameter validation, and comprehensive functionality
-2. *Template names in actual code differ from documentation examples* - refer to generated `clock_cell.v` for accurate naming
-3. *Functionality is much more sophisticated* than simple behavioral models shown in examples
-4. *Users should examine generated files* rather than relying on documentation examples
-5. *Replace with foundry-specific implementations* before production use
++ *Generated templates are production-quality* with proper FSM control, parameter validation, and comprehensive functionality
++ *Template names in actual code differ from documentation examples* - refer to generated `clock_cell.v` for accurate naming
++ *Functionality is much more sophisticated* than simple behavioral models shown in examples
++ *Users should examine generated files* rather than relying on documentation examples
++ *Replace with foundry-specific implementations* before production use
 
 Template cells must be replaced with foundry-specific implementations before production use.
 
-== SIGNAL DEDUPLICATION
+== Signal Deduplication
 <soc-net-clock-signal-dedup>
 Clock generators implement automatic signal deduplication to prevent duplicate port declarations in generated Verilog modules.
 
@@ -873,20 +873,20 @@ The deduplication system uses QSet containers to track signal names across:
 
 When the same signal name is used across multiple targets, only one port declaration is generated in the final Verilog module.
 
-== CODE GENERATION
+== Code Generation
 <soc-net-clock-generation>
 Clock controllers generate standalone modules that provide clean clock management infrastructure.
 
 === Generated Code Structure
 <soc-net-clock-code-structure>
 The clock controller generates a dedicated `clkctrl` module with:
-1. Template RTL cell definitions (if not already defined)
-2. Clock and test enable inputs with frequency documentation
-3. Clock input signal declarations with frequency specifications
-4. Clock target signal outputs with frequency documentation
-5. Internal wire declarations for intermediate clock signals
-6. Clock logic instantiations using template cells or foundry IP
-7. Output assignment logic with proper multiplexing and inversion
++ Template RTL cell definitions (if not already defined)
++ Clock and test enable inputs with frequency documentation
++ Clock input signal declarations with frequency specifications
++ Clock target signal outputs with frequency documentation
++ Internal wire declarations for intermediate clock signals
++ Clock logic instantiations using template cells or foundry IP
++ Output assignment logic with proper multiplexing and inversion
 
 === Generated Code Example
 <soc-net-clock-code-example>
@@ -963,7 +963,7 @@ Clock format supports two processing levels with distinct syntax patterns:
 - `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
 - Pass-through: No attributes specified
 
-== BEST PRACTICES
+== Best Practices
 <soc-net-clock-practices>
 
 === Processing Strategy

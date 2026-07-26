@@ -1,4 +1,4 @@
-= POWER CONTROLLER FORMAT
+= Power Controller Format
 <power-format>
 The power section defines power controller primitives that manage voltage domain sequencing with dependency tracking and automatic fault recovery. Power primitives provide comprehensive power management with support for multiple domain types, hard/soft dependencies, and DFT override capabilities.
 
@@ -10,7 +10,7 @@ The power section defines power controller primitives that manage voltage domain
 )[
   *Standalone module:* a `power:` block generates a self-contained
   Verilog module named after `power.name`. The generated module is NOT
-  auto-instantiated by any parent netlist - the user instantiates it
+  auto-instantiated by any parent netlist: the user instantiates it
   manually (or via `qsoc module import` followed by an `_inst.soc_net`
   entry) at the top level. This is by design.
 
@@ -20,7 +20,7 @@ The power section defines power controller primitives that manage voltage domain
   warning.
 ]
 
-== POWER OVERVIEW
+== Power Overview
 <soc-net-power-overview>
 Power controllers manage voltage domain sequencing through a three-domain architecture: AO (always-on), root (controllable without dependencies), and normal (controllable with dependencies). Each domain follows a strict power-up sequence: switch → pgood → clock enable → reset release, with configurable timing and automatic fault recovery.
 
@@ -32,7 +32,7 @@ Key features include:
 - FSM-based power sequencing with standardized timing
 - Template RTL cells replaceable with foundry-specific implementations
 
-== POWER STRUCTURE
+== Power Structure
 <soc-net-power-structure>
 Power controllers use domain-based configuration with automatic type inference based on dependency presence. Each domain specifies timing parameters and dependency relationships without complex type enumeration:
 
@@ -81,7 +81,7 @@ power:
             stage: 4                 # Synchronizer stages (optional, default: 4)
 ```
 
-== POWER DOMAINS
+== Power Domains
 <soc-net-power-domains>
 Power controllers automatically infer domain types from configuration structure, eliminating the need for explicit type specification:
 
@@ -119,7 +119,7 @@ Normal domains have dependency lists and wait for prerequisite domains:
 - Automatic dependency aggregation with AND gates
 - Used for peripheral domains with power sequencing requirements
 
-== POWER FSM OPERATION
+== Power FSM Operation
 <soc-net-power-fsm>
 Each domain uses a standardized 8-state FSM for power sequencing:
 
@@ -201,7 +201,7 @@ and it drives the asynchronous reset pin of this synchronizer. Treat it as a
 glitch-sensitive path in synthesis and STA, and keep `test_en` static while the
 domain is live.
 
-== GENERATED INTERFACES
+== Generated Interfaces
 <soc-net-power-interfaces>
 Power controllers generate standardized interfaces with predictable naming:
 
@@ -217,7 +217,7 @@ and for no AO domain: an AO domain gets `ctrl_enable` tied to `1'b1` and
 `fault_clear` tied to `1'b0` inside the controller. `sw_<domain>` is likewise
 absent for AO domains.
 
-Note: `test_en`, `en_<domain>`, `clr_<domain>`, and `pgood_<domain>` must be synchronized into host_clock domain
+*Note*: `test_en`, `en_<domain>`, `clr_<domain>`, and `pgood_<domain>` must be synchronized into host_clock domain
 
 Signal semantics:
 - `ready`: Asserted when FSM state = S_ON, equivalent to domain fully operational
@@ -240,7 +240,7 @@ wire dep_soft_all_gpu = rdy_vmem;            /**< Soft dependencies only */
 /* No dependencies = tie to 1'b1 */
 ```
 
-== RESET SYNCHRONIZATION
+== Reset Synchronization
 <soc-net-power-reset-sync>
 Power controllers support domain-specific reset synchronization through follow entries. Each entry mechanically maps to a qsoc_power_rst_sync instance using KISS (Keep It Simple) principle:
 
@@ -275,7 +275,7 @@ qsoc_power_rst_sync #(.STAGE(4)) u_rst_sync_gpu_0 (
 );
 ```
 
-== CODE GENERATION
+== Code Generation
 <soc-net-power-generation>
 
 === Diagram Output
@@ -286,7 +286,7 @@ Generates `.typ` circuit diagram alongside Verilog.
 
 *Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
 
-== PROPERTIES
+== Properties
 <soc-net-power-properties>
 
 #figure(
@@ -302,6 +302,7 @@ Generates `.typ` circuit diagram alongside Verilog.
     [`domain`], [Array], [Yes], [Power domain definitions],
   )],
   caption: [POWER CONTROLLER PROPERTIES],
+  kind: table,
 )
 
 #figure(
@@ -320,6 +321,7 @@ Generates `.typ` circuit diagram alongside Verilog.
     [`follow`], [Array], [No], [Reset synchronizer entry array],
   )],
   caption: [DOMAIN PROPERTIES],
+  kind: table,
 )
 
 #figure(
@@ -332,4 +334,5 @@ Generates `.typ` circuit diagram alongside Verilog.
     [`type`], [String], [No], [hard or soft (default: hard)],
   )],
   caption: [DEPENDENCY PROPERTIES],
+  kind: table,
 )

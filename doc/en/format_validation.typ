@@ -1,36 +1,36 @@
-= VALIDATION TOOLS AND FEATURES
+= Validation Tools and Features
 <validation-format>
 QSoC includes comprehensive netlist validation capabilities to ensure design integrity and catch potential issues early in the design process.
 
-== PROCESSING FLOW
+== Processing Flow
 <soc-net-processing>
 When QSoC processes a SOC_NET file, it follows this sequence:
 
-1. Parse all module definitions referenced in the instance section
-2. Validate port connections against module definitions
-3. Process `link` and `uplink` attributes to generate nets and top-level ports
-4. Expand bus connections into individual nets based on bus interface definitions
-5. Process and validate combinational logic (`comb`) section
-6. Process and validate sequential logic (`seq`) section
-7. Process and validate finite state machine (`fsm`) section
-8. Calculate effective widths for all connections, considering bit selections
-9. Check for width mismatches and generate appropriate warnings
-10. Generate Verilog output based on the processed netlist
++ Parse all module definitions referenced in the instance section
++ Validate port connections against module definitions
++ Process `link` and `uplink` attributes to generate nets and top-level ports
++ Expand bus connections into individual nets based on bus interface definitions
++ Process and validate combinational logic (`comb`) section
++ Process and validate sequential logic (`seq`) section
++ Process and validate finite state machine (`fsm`) section
++ Calculate effective widths for all connections, considering bit selections
++ Check for width mismatches and generate appropriate warnings
++ Generate Verilog output based on the processed netlist
 
 The Verilog generation follows this structure:
-1. Module declaration with ports and parameters
-2. Wire declarations (from processed nets)
-3. Module instantiations (from instance section)
-4. Combinational logic blocks (from comb section)
-5. Sequential logic blocks (from seq section)
-6. Finite state machine blocks (from fsm section)
-7. Module termination
++ Module declaration with ports and parameters
++ Wire declarations (from processed nets)
++ Module instantiations (from instance section)
++ Combinational logic blocks (from comb section)
++ Sequential logic blocks (from seq section)
++ Finite state machine blocks (from fsm section)
++ Module termination
 
-== VERILOG PORT WIDTHS
+== Verilog Port Widths
 <soc-net-verilog-widths>
 QSoC correctly handles Verilog port width declarations where LSB is not zero. For example, a port declared as `output [7:3] signal` in Verilog has a width of 5 bits. The SOC_NET format and processing logic properly calculates this width as `|7-3|+1 = 5`. This ensures accurate width checking even with non-zero-based bit ranges.
 
-== PORT DIRECTION CHECKING
+== Port Direction Checking
 <soc-net-port-direction>
 The netlist processor performs sophisticated port direction validation to detect connectivity issues:
 
@@ -113,7 +113,7 @@ in this conservative case, as it should.
 - Helps catch incomplete connections and missing driver assignments
 - Provides clear error messages indicating which nets need attention
 
-== BIT-LEVEL OVERLAP DETECTION
+== Bit-level Overlap Detection
 <soc-net-bit-overlap>
 Advanced bit-level analysis prevents conflicts in multi-driver scenarios:
 
@@ -145,7 +145,7 @@ net:
     - { instance: dma, port: addr_out[5:2] }    # Bits 5-2 overlap with 5-4
 ```
 
-== VALIDATION DIAGNOSTICS
+== Validation Diagnostics
 <soc-net-diagnostics>
 QSoC provides detailed diagnostic information for all validation issues:
 
@@ -171,17 +171,17 @@ category of its own.
 - Issues are reported without preventing generation (when possible)
 - Allows iterative design refinement with immediate feedback
 
-== WIDTH CHECKING
+== Width Checking
 <soc-net-width-checking>
 QSoC performs automatic width checking for all connections:
 
-1. It calculates the effective width of each port in a connection, considering bit selections
-2. It compares widths of all ports connected to the same net
-3. It generates warnings for width mismatches, including detailed information about port widths and bit selections
++ It calculates the effective width of each port in a connection, considering bit selections
++ It compares widths of all ports connected to the same net
++ It generates warnings for width mismatches, including detailed information about port widths and bit selections
 
 This automatic checking helps catch design errors early in the development process and ensures signal integrity across the design hierarchy.
 
-== BEST PRACTICES FOR VALIDATION
+== Best Practices for Validation
 <soc-net-validation-practices>
 
 === Design Guidelines
@@ -219,7 +219,7 @@ wired into several nets
 Solution: only the first connection is kept and the rest are dropped with a
 warning. Remove the duplicates so the netlist says what the RTL does
 
-== GENERATION-TIME CHECKS
+== Generation-time Checks
 <soc-net-generation-checks>
 The checks above run on connectivity. The generators add their own, and some of
 them change or drop parts of the design rather than only warning:

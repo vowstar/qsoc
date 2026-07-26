@@ -1,10 +1,10 @@
-= TUI LIVE IMAGE PREVIEW
+= TUI Live Image Preview
 <tui-image-preview>
 The agent TUI shows bitmap attachments (PNG, JPG, GIF, WebP) inline
 on terminals that speak the kitty graphics or iTerm2 inline image
 protocol; other terminals see the `[image: ...]` metadata only.
 
-== TERMINAL COMPATIBILITY MATRIX
+== Terminal Compatibility Matrix
 <tui-image-preview-matrix>
 
 #figure(
@@ -29,13 +29,13 @@ protocol; other terminals see the `[image: ...]` metadata only.
   kind: table,
 )
 
-== AUTO-FOLD ON NEW IMAGE
+== Auto-fold on New Image
 <tui-image-preview-fold>
 Only the latest image renders as a bitmap; older previews collapse
 to their `[image: ...]` line. `Tab` on a focused image block toggles
 the fold state.
 
-== MULTIPLEXER AND OPT-OUT GATING
+== Multiplexer and Opt-out Gating
 <tui-image-preview-gating>
 Image graphics are suppressed when `TMUX` or `STY` is set
 (multiplexers strip the escapes) or when `QSOC_NO_IMAGE_GRAPHICS` is

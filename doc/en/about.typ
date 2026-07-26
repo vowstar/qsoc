@@ -1,4 +1,4 @@
-= ABOUT THIS GUIDE
+= About This Guide
 <about>
 This guide documents QSoC for SoC designers and verification engineers. It
 covers the command-line interface, the terminal agent, the GUI editors, the
@@ -9,7 +9,7 @@ start with @getting-started, then @cli-overview for the command surface or
 @agent-overview for the agent workflow. File-format chapters double as
 reference material while writing a netlist.
 
-== DISCLAIMER
+== Disclaimer
 <disclaimer>
 Information in this document, including URL references, is subject to change
 without notice. *This document is provided as is with no warranties whatsoever,
@@ -25,7 +25,7 @@ rights are granted herein.
 All trade names, trademarks, and registered trademarks mentioned in this
 document are property of their respective owners, and are hereby acknowledged.
 
-== RELEASE HISTORY
+== Release History
 
 The page header carries the QSoC version this manual documents. Per-release
 changes, binaries, and the matching PDF are published at

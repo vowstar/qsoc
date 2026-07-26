@@ -1,8 +1,8 @@
-= FINITE STATE MACHINE FORMAT
+= Finite State Machine Format
 <fsm-format>
 The FSM format defines finite state machine blocks that generate structured Verilog FSM code. This section supports both Table-mode FSMs with Moore/Mealy outputs and Microcode-mode FSMs with ROM-based control, providing powerful tools for implementing complex control logic.
 
-== FSM OVERVIEW
+== FSM Overview
 <soc-net-fsm-overview>
 The `fsm` section is a sequence of FSM items, each describing one finite state machine. The system supports two main FSM architectures:
 
@@ -20,11 +20,11 @@ The `fsm` section is a sequence of FSM items, each describing one finite state m
 )
 
 Both architectures support multiple state encodings (binary, onehot, gray) and generate proper three-stage FSM structure:
-1. Next-state combinational logic
-2. State register with async reset
-3. Output combinational logic (Moore/Mealy/Control signals)
++ Next-state combinational logic
++ State register with async reset
++ Output combinational logic (Moore/Mealy/Control signals)
 
-== FSM STRUCTURE
+== FSM Structure
 <soc-net-fsm-structure>
 Each FSM item must have `name`, `clk`, `rst`, and `rst_state` fields, plus architecture-specific fields:
 
@@ -46,7 +46,7 @@ fsm:
     rom_depth: 32          # ROM depth (for port mode)
 ```
 
-== TABLE-MODE FSMS
+== Table-mode FSMs
 <soc-net-fsm-table>
 Table-mode FSMs use explicit state transition tables and are ideal for traditional state machines with clear state flow:
 
@@ -331,7 +331,7 @@ module test_fsm_encodings (
 endmodule
 ```
 
-== MICROCODE-MODE FSMS
+== Microcode-mode FSMs
 <soc-net-fsm-microcode>
 Microcode-mode FSMs use ROM-based sequencers with branch decoding, ideal for complex control units and microprocessors:
 
@@ -372,12 +372,12 @@ fsm:
     # mseq_prog_rom_we, mseq_prog_rom_addr, mseq_prog_rom_wdata
 ```
 
-== FSM PROPERTIES
+== FSM Properties
 <soc-net-fsm-properties>
 
 === Required Fields
 <soc-net-fsm-required>
-- `name`: FSM instance name (string) - used for signal prefixes
+- `name`: FSM instance name (string), used for signal prefixes
 - `clk`: Clock signal name (string)
 - `rst`: Reset signal name (string)
 - `rst_state`: Reset state name (string/number)
@@ -401,7 +401,7 @@ fsm:
 - `rom`: ROM initialization data (for parameter mode)
 - `rom_depth`: ROM depth in words (for port mode)
 
-== FSM VALIDATION
+== FSM Validation
 <soc-net-fsm-validation>
 The system performs comprehensive validation of FSM specifications:
 
@@ -425,7 +425,7 @@ The system performs comprehensive validation of FSM specifications:
 - Field values must fit within their bit ranges
 - Branch decoding must reference valid condition signals
 
-== BEST PRACTICES
+== Best Practices
 <soc-net-fsm-practices>
 
 === Naming Conventions
@@ -442,18 +442,18 @@ The system performs comprehensive validation of FSM specifications:
 - Keep state count reasonable (< 16 states for table-mode)
 - Use meaningful condition expressions
 
-== CODE GENERATION
+== Code Generation
 <soc-net-fsm-generation>
 FSM controllers generate standalone modules that are placed at the beginning of the Verilog file, providing structured control flow implementation and module reusability.
 
 === Generated Code Structure
 <soc-net-fsm-code-structure>
-1. State type definitions (for table-mode)
-2. State registers and next-state signals
-3. ROM arrays and initialization (for microcode-mode)
-4. Next-state combinational logic
-5. State register with async reset
-6. Output combinational logic (Moore/Mealy/Control)
++ State type definitions (for table-mode)
++ State registers and next-state signals
++ ROM arrays and initialization (for microcode-mode)
++ Next-state combinational logic
++ State register with async reset
++ Output combinational logic (Moore/Mealy/Control)
 
 === Naming Conventions
 <soc-net-fsm-code-naming>

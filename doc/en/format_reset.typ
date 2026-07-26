@@ -1,4 +1,4 @@
-= RESET CONTROLLER FORMAT
+= Reset Controller Format
 <reset-format>
 The reset section defines reset controller primitives that generate proper reset signaling throughout the SoC. Reset primitives provide comprehensive reset management with support for multiple reset sources, component-based processing, signal polarity handling, and standardized module generation.
 
@@ -10,7 +10,7 @@ The reset section defines reset controller primitives that generate proper reset
 )[
   *Standalone module:* a `reset:` block generates a self-contained
   Verilog module named after `reset.name`. The generated module is NOT
-  auto-instantiated by any parent netlist - the user instantiates it
+  auto-instantiated by any parent netlist: the user instantiates it
   manually (or via `qsoc module import` followed by an `_inst.soc_net`
   entry) at the top level. This is by design.
 
@@ -22,7 +22,7 @@ The reset section defines reset controller primitives that generate proper reset
   controller pin, not as a qsoc warning.
 ]
 
-== RESET OVERVIEW
+== Reset Overview
 <soc-net-reset-overview>
 Reset controllers are essential for proper SoC operation, ensuring that all logic blocks start in a known state and can be reset reliably. QSoC supports sophisticated reset topologies with multiple reset sources mapping to multiple reset targets through a clear source → target → link relationship structure.
 
@@ -34,7 +34,7 @@ Key features include:
 - Test mode bypass support
 - Standalone reset controller module generation
 
-== RESET STRUCTURE
+== Reset Structure
 <soc-net-reset-structure>
 Reset controllers use a modern structured YAML format that eliminates complex string parsing and provides component-based processing:
 
@@ -65,7 +65,7 @@ reset:
           por_rst_n:             # Direct assignment (no components)
 ```
 
-== PROCESSING LEVELS
+== Processing Levels
 <soc-net-reset-levels>
 Reset controllers operate at two distinct processing levels with defined component support:
 
@@ -75,9 +75,9 @@ Reset controllers operate at two distinct processing levels with defined compone
     align: (auto, center, center, left),
     table.header([Component], [Target Level], [Link Level], [Description]),
     table.hline(),
-    [async], [✓], [✓], [Asynchronous reset synchronizer (qsoc_rst_sync)],
-    [sync], [✓], [✓], [Synchronous reset pipeline (qsoc_rst_pipe)],
-    [count], [✓], [✓], [Counter-based reset release (qsoc_rst_count)],
+    [async], [Yes], [Yes], [Asynchronous reset synchronizer (qsoc_rst_sync)],
+    [sync], [Yes], [Yes], [Synchronous reset pipeline (qsoc_rst_pipe)],
+    [count], [Yes], [Yes], [Counter-based reset release (qsoc_rst_count)],
   )],
   caption: [PROCESSING LEVEL SUPPORT],
   kind: table,
@@ -96,7 +96,7 @@ Signal processing follows a defined order at each level:
 Two architectures are supported for multi-source reset targets:
 
 *Per-link Processing* (component on each link):
-```
+```text
 src_a ──→ [ARSR] ─┐
 src_b ──→ [ARSR] ─┼──→ [AND] ──→ target_rst_n
 src_c ──→ [ARSR] ─┘
@@ -106,7 +106,7 @@ src_c ──→ [ARSR] ─┘
 - Use when sources have different clock domain requirements
 
 *Post-AND Processing* (component after AND):
-```
+```text
 src_a ──────────┐
 src_b ──────────┼──→ [AND] ──→ [ARSR] ──→ target_rst_n
 src_c ──────────┘
@@ -143,7 +143,7 @@ rst_cpu_n:
     rst_wdt_n:                  # Direct connection
 ```
 
-== RESET COMPONENTS
+== Reset Components
 <soc-net-reset-components>
 Reset controllers use component-based architecture with three standard reset processing modules. Each link can specify different processing attributes, automatically selecting the appropriate component:
 
@@ -212,7 +212,7 @@ Use it only when the source is already synchronous to `clock`.
 Note that the power controller uses the opposite convention: there `test_en`
 forces the domain reset permanently released (@soc-net-power-fsm).
 
-== RESET PROPERTIES
+== Reset Properties
 <soc-net-reset-properties>
 Reset controller properties provide structured configuration:
 
@@ -321,13 +321,13 @@ Link-level processing uses key existence for component selection:
     [count.clock], [Clock for counter - *REQUIRED* when count specified],
     [count.cycle], [Number of cycles before release (default: 16)],
     [(empty)],
-    [Direct connection - no processing, source passes through to target AND],
+    [Direct connection, no processing; source passes through to target AND],
   )],
   caption: [RESET LINK PROPERTIES],
   kind: table,
 )
 
-== RESET REASON RECORDING
+== Reset Reason Recording
 <soc-net-reset-reason>
 Reset controllers can optionally record the source of the last reset using sync-clear async-capture sticky flags with bit vector output. This implementation provides reliable narrow pulse capture and flexible software decoding.
 
@@ -423,22 +423,22 @@ assign reason_valid = valid_q;
 assign reason = reason_valid ? flags : 3'b0;
 ```
 
-== CODE GENERATION
+== Code Generation
 <soc-net-reset-generation>
 Reset controllers generate standalone modules that are instantiated in the main design, providing clean separation and reusability. Additionally, QSoC automatically generates a `reset_cell.v` template file containing the required reset component modules (`qsoc_rst_sync`, `qsoc_rst_pipe`, `qsoc_rst_count`).
 
 === Generated Code Structure
 <soc-net-reset-code-structure>
 The reset controller generates a dedicated module with:
-1. Clock inputs (system clock and optional always-on clock for reason recording)
-2. Reset source signal inputs with polarity documentation
-3. Reset target signal outputs with polarity documentation
-4. Optional reset reason output bus (if recording enabled)
-5. Control signal inputs (test enable and optional reason clear signal)
-6. Internal wire declarations for signal normalization
-7. Reset logic using simplified DFF-based implementations
-8. Optional reset reason recording logic (Per-source sticky flags)
-9. Output assignment logic with proper signal combination
++ Clock inputs (system clock and optional always-on clock for reason recording)
++ Reset source signal inputs with polarity documentation
++ Reset target signal outputs with polarity documentation
++ Optional reset reason output bus (if recording enabled)
++ Control signal inputs (test enable and optional reason clear signal)
++ Internal wire declarations for signal normalization
++ Reset logic using simplified DFF-based implementations
++ Optional reset reason recording logic (Per-source sticky flags)
++ Output assignment logic with proper signal combination
 
 === Variable Naming Conventions
 <soc-net-reset-naming>
@@ -573,7 +573,7 @@ Generates `.typ` circuit diagram alongside Verilog.
 
 *Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
 
-== BEST PRACTICES
+== Best Practices
 <soc-net-reset-practices>
 
 === Processing Level Selection
