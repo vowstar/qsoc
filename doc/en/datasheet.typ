@@ -49,6 +49,16 @@
   show table.header: strong
   show table.cell.where(y: 0): set text(weight: "semibold")
 
+  /* Chapter the reader is currently in, for the running head */
+  let running_chapter = () => context {
+    let prev = query(selector(heading.where(level: 1)).before(here()))
+    if prev.len() > 0 and prev.last().numbering != none {
+      [#counter(heading).at(prev.last().location()).at(0). #prev.last().body]
+    } else {
+      [#metadata.revision - #metadata.publish_date]
+    }
+  }
+
   let header_layout = () => {
     [
       #set text(10pt)
@@ -66,7 +76,7 @@
               #set align(right)
               #link(metadata.product_url)[#metadata.product]
               #linebreak()
-              #metadata.revision - #metadata.publish_date
+              #running_chapter()
             ],
           )
         } else {
@@ -78,7 +88,7 @@
               #set align(left)
               #link(metadata.product_url)[#metadata.product]
               #linebreak()
-              #metadata.revision - #metadata.publish_date
+              #running_chapter()
             ],
             [
               #set align(right)
@@ -105,6 +115,7 @@
           [
             #set align(left)
             Copyright © #link(metadata.website_url)[#metadata.organization]
+            #h(1em) #metadata.revision - #metadata.publish_date
           ],
           [
             #set align(right)
@@ -122,6 +133,7 @@
           ],
           [
             #set align(right)
+            #metadata.revision - #metadata.publish_date #h(1em)
             Copyright © #link(metadata.website_url)[#metadata.organization]
           ],
         )

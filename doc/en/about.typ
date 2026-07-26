@@ -5,7 +5,8 @@ covers the command-line interface, the terminal agent, the GUI editors, the
 netlist and generator file formats, and the configuration system.
 
 Chapters are self-contained and can be read in any order. New users should
-start with @getting-started, then @cli-overview for the command surface or
+start with @getting-started, configure an endpoint per @config-overview if they
+intend to use the agent, then read @cli-overview for the command surface or
 @agent-overview for the agent workflow. File-format chapters double as
 reference material while writing a netlist.
 

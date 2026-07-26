@@ -187,7 +187,8 @@ The generate command provides functionality for generating different types of ou
 
 === Verilog Generation Options
 <verilog-generation>
-The `generate verilog` command generates Verilog code from netlist files.
+The `generate verilog` command generates Verilog code from netlist files. The
+input format is documented in @soc-net-format.
 
 #figure(
   align(center)[#table(

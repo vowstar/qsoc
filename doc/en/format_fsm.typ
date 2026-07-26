@@ -444,6 +444,10 @@ The system performs comprehensive validation of FSM specifications:
 
 == Code Generation
 <soc-net-fsm-generation>
+Run the generator with `qsoc generate verilog` (@verilog-generation).
+Connectivity and width problems are reported as described in
+@validation-format.
+
 FSM controllers generate standalone modules that are placed at the beginning of the Verilog file, providing structured control flow implementation and module reusability.
 
 === Generated Code Structure

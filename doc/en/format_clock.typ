@@ -875,6 +875,10 @@ When the same signal name is used across multiple targets, only one port declara
 
 == Code Generation
 <soc-net-clock-generation>
+Run the generator with `qsoc generate verilog` (@verilog-generation).
+Connectivity and width problems are reported as described in
+@validation-format.
+
 Clock controllers generate standalone modules that provide clean clock management infrastructure.
 
 === Generated Code Structure

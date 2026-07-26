@@ -425,6 +425,10 @@ assign reason = reason_valid ? flags : 3'b0;
 
 == Code Generation
 <soc-net-reset-generation>
+Run the generator with `qsoc generate verilog` (@verilog-generation).
+Connectivity and width problems are reported as described in
+@validation-format.
+
 Reset controllers generate standalone modules that are instantiated in the main design, providing clean separation and reusability. Additionally, QSoC automatically generates a `reset_cell.v` template file containing the required reset component modules (`qsoc_rst_sync`, `qsoc_rst_pipe`, `qsoc_rst_count`).
 
 === Generated Code Structure

@@ -277,6 +277,10 @@ qsoc_power_rst_sync #(.STAGE(4)) u_rst_sync_gpu_0 (
 
 == Code Generation
 <soc-net-power-generation>
+Run the generator with `qsoc generate verilog` (@verilog-generation).
+Connectivity and width problems are reported as described in
+@validation-format.
+
 
 === Diagram Output
 <soc-net-power-diagram>

@@ -77,20 +77,32 @@ A SOC_NET file consists of several key sections:
     align: (auto, left),
     table.header([Section], [Description]),
     table.hline(),
-    [port], [Defines top-level ports of the design],
-    [instance], [Defines module instances and their parameters],
-    [net], [Defines explicit connections between instance ports],
+    [port], [Defines top-level ports of the design (@soc-net-port)],
+    [instance],
+    [Defines module instances and their parameters (@soc-net-instance)],
+    [net],
+    [Defines explicit connections between instance ports (@soc-net-net)],
     [bus],
-    [Defines bus interface connections (automatically expanded into nets)],
-    [comb], [Defines combinational logic blocks for behavioral descriptions],
-    [seq], [Defines sequential logic blocks for register-based descriptions],
-    [fsm], [Defines finite state machine blocks for complex control logic],
+    [Defines bus interface connections, automatically expanded into nets
+     (@soc-net-bus)],
+    [comb],
+    [Defines combinational logic blocks for behavioral descriptions
+     (@soc-net-comb)],
+    [seq],
+    [Defines sequential logic blocks for register-based descriptions
+     (@soc-net-seq)],
+    [fsm],
+    [Defines finite state machine blocks for complex control logic
+     (@soc-net-fsm-overview)],
     [reset],
-    [Defines reset controller primitives (generates standalone modules)],
+    [Defines reset controller primitives, generates standalone modules
+     (@soc-net-reset-overview)],
     [clock],
-    [Defines clock controller primitives (generates standalone modules)],
+    [Defines clock controller primitives, generates standalone modules
+     (@soc-net-clock-overview)],
     [power],
-    [Defines power controller primitives (generates standalone modules)],
+    [Defines power controller primitives, generates standalone modules
+     (@soc-net-power-overview)],
   )],
   caption: [SOC_NET FILE SECTIONS],
   kind: table,
