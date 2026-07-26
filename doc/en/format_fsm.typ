@@ -464,7 +464,7 @@ All generated signals use the FSM name as prefix:
 
 === Verilog Generation Standards
 <soc-net-fsm-verilog-standards>
-1. *Verilog 2005 Compliance*: All output signals use internal register pattern with `_reg` suffix and continuous assign statements to ensure compatibility.
+1. *Verilog 2001 Compliance*: All output signals use internal register pattern with `_reg` suffix and continuous assign statements to ensure compatibility.
 
 2. *FSM Naming Conventions*: FSM-generated signals use lowercase FSM names with underscores (e.g., `test_onehot_cur_state`), while state constants use uppercase (e.g., `TEST_ONEHOT_S0`).
 

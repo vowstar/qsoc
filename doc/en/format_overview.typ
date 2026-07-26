@@ -2,6 +2,24 @@
 <file-formats-overview>
 QSoC uses several YAML-based file formats to define modules, buses, and netlists. This document provides an overview of these file formats, with a focus on the SOC_NET format for netlist description.
 
+== GENERATED RTL
+<soc-net-generated-rtl>
+Generated RTL targets IEEE 1364-2001 Verilog. The generators stay inside a
+2001-safe subset: ANSI port lists, `generate` blocks, `localparam` state
+constants, and a hand-written `clog2` function in place of `$clog2`. No
+SystemVerilog construct is emitted, so `always_ff`, `logic` declarations,
+`typedef enum`, packages and interfaces never appear in the output.
+
+Input is not restricted the same way. Module import parses full SystemVerilog
+through slang, and SystemVerilog port types are reduced to `wire`/`reg` on the
+way into the generated netlist.
+
+QSoC runs two external tools over Verilog: slang parses the modules you import,
+and `verible-verilog-format` reformats generated files when it is present on
+`PATH`. Neither one elaborates, simulates, lints, or synthesizes the generated
+RTL, and the QSoC test suite does not either. Validate generated RTL in your
+own flow before relying on it.
+
 == SOC_NET FORMAT
 <soc-net-format>
 The SOC_NET format is a YAML-based netlist description format used to define SoC designs, including module instances, port connections, and bus mappings. It provides precise control over connections through features like bit selection.

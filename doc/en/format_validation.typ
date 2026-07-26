@@ -154,14 +154,16 @@ QSoC provides detailed diagnostic information for all validation issues:
 - Exact instance and port names involved in conflicts
 - Bit range information for overlap detection
 - Clear descriptions of the nature of each problem
-- Suggestions for resolving connectivity issues
 
 === Warning Categories
 <soc-net-diagnostics-categories>
 - `Multiple Drivers`: Multiple outputs driving the same net or overlapping bits
 - `Undriven Nets`: Nets with no output drivers
 - `Width Mismatches`: Port width incompatibilities
-- `Direction Conflicts`: Improper port direction usage
+
+Direction problems are reported through the categories above: a port driven
+from the wrong side shows up as `Multiple Drivers` or `Undriven Nets`, not as a
+category of its own.
 
 === Integration with Generation Flow
 <soc-net-diagnostics-integration>
@@ -211,6 +213,35 @@ Solution: Add appropriate output driver or tie signal to constant value
 Problem: Connected ports have incompatible widths
 Solution: Adjust port widths in module definitions or use bit selection for partial connections
 
-==== Direction Conflicts
-Problem: Port directions don't match connectivity requirements
-Solution: Review module definitions and fix port directions to match intended signal flow
+==== Duplicate Connections
+Problem: a net lists the same instance port twice, or one instance port is
+wired into several nets
+Solution: only the first connection is kept and the rest are dropped with a
+warning. Remove the duplicates so the netlist says what the RTL does
+
+== GENERATION-TIME CHECKS
+<soc-net-generation-checks>
+The checks above run on connectivity. The generators add their own, and some of
+them change or drop parts of the design rather than only warning:
+
+- *Missing instance port*: an unresolved port is instantiated as
+  `.port(/* FIXME: ... missing */)`
+- *`tie` width violations*: a tie value wider or narrower than the port is
+  reported and the tie is not applied
+- *`tie` / `invert` on unsupported port kinds*: rejected with a warning
+- *Invalid identifiers*: reserved Verilog keywords and illegal characters in
+  port, parameter, or instance names are reported
+- *Bracket leakage in controller names*: reset, clock, and power configurations
+  with brackets in a signal name are renamed, with a warning
+- *`connect:` alias conflicts*: a net aliased by several top-level ports emits a
+  FIXME in the generated file
+- *Combinational and sequential driver conflicts*: a signal driven from more
+  than one `comb`/`seq` block is rejected
+- *Power `follow` conflicts*: an entry whose `clock` equals `host_clock`, or
+  whose `reset` equals `host_reset`, is reported as an error and *the entry is
+  dropped*. Generation continues with a reduced design
+- *Reset controller without `source`*: generation is refused outright. Without a
+  source every target would be tied inactive and the system would never reset
+
+The unconnected-port report (`<module>.nc.rpt`, see @verilog-generation) lists
+every port left unconnected after all of the above.
