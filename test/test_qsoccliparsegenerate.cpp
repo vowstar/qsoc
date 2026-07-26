@@ -5176,6 +5176,69 @@ seq:
      * controller that ties every target inactive (`assign rst = 1'b1`).
      * Refuse to generate so the user knows the reset is misconfigured.
      */
+    /**
+     * A packed array port such as `logic [1:0][3:0]` is 8 bits wide. Width
+     * parsing used to stop at the first range and declare a 2-bit wire, so
+     * six bits were dropped with no warning.
+     */
+    void testGeneratePackedArrayPortWidth()
+    {
+        const QString moduleContent = R"(
+packed_src:
+  port:
+    pdata:
+      type: logic[1:0][3:0]
+      direction: out
+packed_sink:
+  port:
+    pdata:
+      type: logic[1:0][3:0]
+      direction: in
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        const QString modulePath = moduleDir.filePath("packed_test.soc_mod");
+        QFile         moduleFile(modulePath);
+        QVERIFY(moduleFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream moduleStream(&moduleFile);
+        moduleStream << moduleContent;
+        moduleFile.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_packed_width"
+instance:
+  u_src:
+    module: packed_src
+  u_sink:
+    module: packed_sink
+net:
+  p_bus:
+    - instance: u_src
+      port: pdata
+    - instance: u_sink
+      port: pdata
+)";
+        const QString filePath   = createTempFile("test_packed_width.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_packed_width.v");
+        QVERIFY(QFile::exists(verilogPath));
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString content = QString::fromUtf8(verilogFile.readAll());
+        verilogFile.close();
+
+        QVERIFY(content.contains("wire [7:0] p_bus"));
+    }
+
     void testGenerateRefusesResetWithNoSource()
     {
         const QString netContent = R"(

@@ -1950,18 +1950,26 @@ int QSocGenerateManager::calculatePortWidth(const std::string &portType)
 {
     const QString type = QString::fromStdString(portType);
 
-    /* Handle range specification like [7:0] or [15:8] */
-    const QRegularExpression      rangeRegex(R"(\[(\d+):(\d+)\])");
-    const QRegularExpressionMatch rangeMatch = rangeRegex.match(type);
-    if (rangeMatch.hasMatch()) {
-        bool      msb_ok = false;
-        bool      lsb_ok = false;
-        const int msb    = rangeMatch.captured(1).toInt(&msb_ok);
-        const int lsb    = rangeMatch.captured(2).toInt(&lsb_ok);
+    /* Handle range specification like [7:0] or [15:8]. A packed array such as
+       [1:0][3:0] carries one range per dimension and is worth the product of
+       all of them; taking only the first would silently drop the inner bits. */
+    const QRegularExpression        rangeRegex(R"(\[(\d+):(\d+)\])");
+    QRegularExpressionMatchIterator rangeIter = rangeRegex.globalMatch(type);
+    int                             product   = 0;
+    while (rangeIter.hasNext()) {
+        const QRegularExpressionMatch rangeMatch = rangeIter.next();
+        bool                          msb_ok     = false;
+        bool                          lsb_ok     = false;
+        const int                     msb        = rangeMatch.captured(1).toInt(&msb_ok);
+        const int                     lsb        = rangeMatch.captured(2).toInt(&lsb_ok);
 
         if (msb_ok && lsb_ok) {
-            return qAbs(msb - lsb) + 1;
+            const int dimension = qAbs(msb - lsb) + 1;
+            product             = (product == 0) ? dimension : product * dimension;
         }
+    }
+    if (product > 0) {
+        return product;
     }
 
     /* Handle single bit specification like [5] */

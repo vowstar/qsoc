@@ -1188,8 +1188,18 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                     const int lsb   = match.captured(2).toInt(&lsbOk);
                                     if (msbOk) {
                                         requiredMaxBit = msb;
-                                        /* Remember non-canonical range like logic[21:2]. */
-                                        if (lsbOk && lsb > 0 && msb > preservedRangeMsb) {
+                                        /* A packed array like [1:0][3:0] needs the product of
+                                           every dimension; the outer range alone would drop
+                                           the inner bits from the wire. */
+                                        const int packedBits
+                                            = QSocGenerateManager::calculatePortWidth(
+                                                detail.width.toStdString());
+                                        if (packedBits > requiredMaxBit + 1) {
+                                            requiredMaxBit     = packedBits - 1;
+                                            preservedRangeType = QString();
+                                            preservedRangeMsb  = -1;
+                                        } else if (lsbOk && lsb > 0 && msb > preservedRangeMsb) {
+                                            /* Remember non-canonical range like logic[21:2]. */
                                             preservedRangeType = detail.width;
                                             preservedRangeMsb  = msb;
                                         }
