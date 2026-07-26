@@ -55,7 +55,7 @@ QSoC applies configuration settings in the following order of precedence (highes
     align: (auto, left),
     table.header([Priority], [Source]),
     table.hline(),
-    [1 (Highest)], [Environment variables (`QSOC_*`)],
+    [1 (Highest)], [Environment variables, see @config-env],
     [2], [Project-level configuration (`.qsoc.yml` in project directory)],
     [3], [Environment root (`$QSOC_HOME/qsoc.yml` when set)],
     [4], [User-level configuration (`~/.config/qsoc/qsoc.yml`)],
@@ -64,6 +64,45 @@ QSoC applies configuration settings in the following order of precedence (highes
   caption: [CONFIGURATION PRIORITY ORDER],
   kind: table,
 )
+
+=== Environment Variables
+<config-env>
+Only the names below are read. `QSOC_*` is not a general mapping onto
+configuration keys, so an invented name such as `QSOC_AGENT_EFFORT` is ignored.
+
+#figure(
+  align(center)[#table(
+    columns: (0.75fr, 1fr),
+    align: (auto, left),
+    table.header([Variable], [Sets],),
+    table.hline(),
+    [`QSOC_HOME`], [Environment root searched for `qsoc.yml`, skills, and memory],
+    [`QSOC_LLM_URL`], [`llm.url`],
+    [`QSOC_LLM_KEY`], [`llm.key`],
+    [`QSOC_LLM_MODEL`], [`llm.model`],
+    [`QSOC_LLM_TIMEOUT`], [`llm.timeout`],
+    [`QSOC_LLM_MAX_OUTPUT_TOKENS`], [`llm.max_output_tokens`],
+    [`QSOC_AGENT_TEMPERATURE`], [`agent.temperature`],
+    [`QSOC_AGENT_MAX_TOKENS`], [`agent.max_tokens`],
+    [`QSOC_AGENT_MAX_ITERATIONS`], [`agent.max_iterations`],
+    [`QSOC_AGENT_SYSTEM_PROMPT`], [`agent.system_prompt`],
+    [`QSOC_AGENT_AUTO_LOAD_MEMORY`], [`agent.auto_load_memory`],
+    [`QSOC_AGENT_MEMORY_MAX_CHARS`], [`agent.memory_max_chars`],
+    [`QSOC_WEB_SEARCH_API_URL`], [`web.search_api_url`],
+    [`QSOC_WEB_SEARCH_API_KEY`], [`web.search_api_key`],
+    [`QSOC_SKILLS_PATH`], [Extra skill search roots],
+    [`QSOC_MAX_CONCURRENT_SUBAGENTS`], [Sub-agent concurrency ceiling],
+    [`QSOC_AUTO_BACKGROUND_MS`], [Delay before a shell call moves to the background],
+    [`QSOC_NO_IMAGE_GRAPHICS`], [Disables inline image rendering when set to any value],
+    [`XDG_CONFIG_HOME`], [Moves the user configuration root off `~/.config`],
+  )],
+  caption: [ENVIRONMENT VARIABLES],
+  kind: table,
+)
+
+The legacy names `QSOC_AI_PROVIDER`, `QSOC_API_KEY`, `QSOC_AI_MODEL`, and
+`QSOC_API_URL` are still read and map to the flat `provider`, `api_key`,
+`ai_model`, and `api_url` keys.
 
 Same-name skills in higher layers shadow lower ones. Listings and
 `skill_find` with the default `scope: "all"` show the effective (unshadowed)
