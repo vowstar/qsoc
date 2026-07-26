@@ -4,7 +4,7 @@
 #include "gui/schematicwindow/schematicwindow.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
-#include "gui/schematicwindow/schematicitemfactory.h"
+#include "gui/items/editoritemfactory.h"
 #include "gui/schematicwindow/schematiclibrarywidget.h"
 #include "gui/schematicwindow/schematicmodule.h"
 #include "gui/schematicwindow/schematicwire.h"
@@ -42,8 +42,7 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     statusBar()->addPermanentWidget(statusBarPermanentLabel, 1);
 
     // Register custom item factory for SchematicModule
-    auto factoryFunc = std::bind(&SchematicItemFactory::from_container, std::placeholders::_1);
-    QSchematic::Items::Factory::instance().setCustomItemsFactory(factoryFunc);
+    EditorItemFactory::install();
 
     // Register custom wire factory for bus visualization
     scene.setWireFactory([]() -> std::shared_ptr<QSchematic::Items::Wire> {
@@ -75,14 +74,21 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     /* Auto-generate instance names when items are added (drag/drop, paste, etc.) */
     connect(&scene, &QSchematic::Scene::itemAdded, this, &SchematicWindow::onItemAdded);
 
-    ui->actionUndo->setEnabled(scene.undoStack()->canUndo());
-    ui->actionRedo->setEnabled(scene.undoStack()->canRedo());
+    ui->actionUndo->setEnabled(scene.undoStack()->canUndo() || m_documentUndo.canUndo());
+    ui->actionRedo->setEnabled(scene.undoStack()->canRedo() || m_documentUndo.canRedo());
 
-    connect(scene.undoStack(), &QUndoStack::canUndoChanged, [this](bool canUndo) {
-        ui->actionUndo->setEnabled(canUndo);
+    connect(&m_documentUndo, &QUndoStack::canUndoChanged, [this](bool) {
+        ui->actionUndo->setEnabled(scene.undoStack()->canUndo() || m_documentUndo.canUndo());
     });
-    connect(scene.undoStack(), &QUndoStack::canRedoChanged, [this](bool canRedo) {
-        ui->actionRedo->setEnabled(canRedo);
+    connect(&m_documentUndo, &QUndoStack::canRedoChanged, [this](bool) {
+        ui->actionRedo->setEnabled(scene.undoStack()->canRedo() || m_documentUndo.canRedo());
+    });
+    connect(&m_documentUndo, &QUndoStack::cleanChanged, this, &SchematicWindow::updateWindowTitle);
+    connect(scene.undoStack(), &QUndoStack::canUndoChanged, [this](bool) {
+        ui->actionUndo->setEnabled(scene.undoStack()->canUndo() || m_documentUndo.canUndo());
+    });
+    connect(scene.undoStack(), &QUndoStack::canRedoChanged, [this](bool) {
+        ui->actionRedo->setEnabled(scene.undoStack()->canRedo() || m_documentUndo.canRedo());
     });
     connect(scene.undoStack(), &QUndoStack::cleanChanged, this, &SchematicWindow::updateWindowTitle);
 

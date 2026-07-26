@@ -47,14 +47,19 @@ void SchematicWindow::on_actionAddWire_triggered()
 
 void SchematicWindow::on_actionUndo_triggered()
 {
+    /* Item steps always postdate the last bulk edit, so they come first. */
     if (scene.undoStack()->canUndo()) {
         scene.undoStack()->undo();
+    } else if (m_documentUndo.canUndo()) {
+        m_documentUndo.undo();
     }
 }
 
 void SchematicWindow::on_actionRedo_triggered()
 {
-    if (scene.undoStack()->canRedo()) {
+    if (m_documentUndo.canRedo()) {
+        m_documentUndo.redo();
+    } else if (scene.undoStack()->canRedo()) {
         scene.undoStack()->redo();
     }
 }

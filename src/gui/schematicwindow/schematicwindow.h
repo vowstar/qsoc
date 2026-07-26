@@ -4,6 +4,8 @@
 #ifndef SCHEMATICWINDOW_H
 #define SCHEMATICWINDOW_H
 
+#include "gui/undo/snapshotcommand.h"
+
 #include <QLabel>
 #include <QMainWindow>
 
@@ -234,7 +236,6 @@ private:
      * @return true if it's safe to proceed (saved/discarded/no changes), false if cancelled
      */
     bool checkSaveBeforeClose();
-    bool isModified() const;
 
     /**
      * @brief Save the schematic to a file.
@@ -372,9 +373,41 @@ private:
      * layout on the same input. */
     QStringList m_lastImportedFiles;
 
-    /* Import and re-layout build the scene with raw item adds, so the undo
-       stack stays clean and the document would look unmodified. */
-    bool m_unsavedImport = false;
+    /* Restoring a document runs Scene::from_container, which clears the
+       scene's undo stack. A command living on that stack would delete itself
+       mid-undo, so bulk edits get their own history. Each bulk edit also
+       clears the item-level history, which keeps the two in chronological
+       order: item steps always postdate the last bulk edit. */
+    QUndoStack m_documentUndo;
+
+    /**
+     * @brief Whole-document snapshot used for one-step undo of bulk edits.
+     */
+    struct SceneSnapshot
+    {
+        QByteArray  document;      /**< Serialized scene */
+        QStringList importedFiles; /**< Files Auto Arrange would replay */
+    };
+
+    using DocumentScope = SnapshotScope<SceneSnapshot>;
+
+    /**
+     * @brief Capture the current scene.
+     * @return Snapshot that can be restored later.
+     */
+    SceneSnapshot captureSnapshot() const;
+
+    /**
+     * @brief Whether the document differs from the last saved state.
+     * @return true when either history holds unsaved work.
+     */
+    bool isModified() const;
+
+    /**
+     * @brief Replace the scene with a snapshot.
+     * @param[in] snapshot State to restore.
+     */
+    void restoreSnapshot(const SceneSnapshot &snapshot);
 
     /* Status bar permanent label */
     QLabel *statusBarPermanentLabel = nullptr;

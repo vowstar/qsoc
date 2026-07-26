@@ -9,8 +9,13 @@
 #include "gui/schematicwindow/schematicmodule.h"
 #include "gui/schematicwindow/schematicwindow.h"
 #include "gui/schematicwindow/schematicwire.h"
+#include "gui/undo/scenedocument.h"
+#include "gui/undo/snapshotcommand.h"
 
 #include "./ui_schematicwindow.h"
+
+#include <gpds/archiver_yaml.hpp>
+#include <gpds/serialize.hpp>
 
 #include <QDir>
 #include <QFileDialog>
@@ -134,23 +139,28 @@ void SchematicWindow::on_actionImportNetlist_triggered()
         if (resp != QMessageBox::Yes) {
             return;
         }
-        /* Replacing discards the current document, so offer to save it first. */
-        if (!checkSaveBeforeClose()) {
-            return;
-        }
+    }
+
+    /* The whole import, including the replace, is one undo step. Item-level
+     * history from the previous document no longer applies. */
+    scene.undoStack()->clear();
+    DocumentScope scope(
+        &m_documentUndo,
+        [this]() { return captureSnapshot(); },
+        [this](const SceneSnapshot &snapshot) { restoreSnapshot(snapshot); },
+        tr("Import Netlist"));
+
+    if (haveContent) {
         scene.clear();
-        scene.undoStack()->clear();
-        m_unsavedImport = false;
     }
 
     if (!importNetlistFiles(files)) {
+        scope.cancel();
         QMessageBox::warning(
             this, tr("Import Netlist"), tr("No instances were imported from the selected files."));
         return;
     }
     m_lastImportedFiles = files;
-    m_unsavedImport     = true;
-    updateWindowTitle();
 }
 
 void SchematicWindow::on_actionAutoArrange_triggered()
@@ -175,8 +185,8 @@ void SchematicWindow::on_actionAutoArrange_triggered()
         }
     }
 
-    /* Re-layout throws away every manual placement, rename and hand-drawn
-     * wire made since the import, and none of it is on the undo stack. */
+    /* Re-layout replaces every manual placement, rename and hand-drawn wire
+     * made since the import; one undo step brings them all back. */
     const QMessageBox::StandardButton resp = QMessageBox::question(
         this,
         tr("Auto Arrange"),
@@ -187,19 +197,48 @@ void SchematicWindow::on_actionAutoArrange_triggered()
     if (resp != QMessageBox::Yes) {
         return;
     }
-    if (!checkSaveBeforeClose()) {
-        return;
-    }
+
+    scene.undoStack()->clear();
+    DocumentScope scope(
+        &m_documentUndo,
+        [this]() { return captureSnapshot(); },
+        [this](const SceneSnapshot &snapshot) { restoreSnapshot(snapshot); },
+        tr("Auto Arrange"));
 
     scene.clear();
-    scene.undoStack()->clear();
-    m_unsavedImport = false;
     if (!importNetlistFiles(m_lastImportedFiles)) {
+        scope.cancel();
         QMessageBox::warning(
             this, tr("Auto Arrange"), tr("No instances were imported during re-layout."));
         return;
     }
-    m_unsavedImport = true;
+}
+
+SchematicWindow::SceneSnapshot SchematicWindow::captureSnapshot() const
+{
+    SceneSnapshot snapshot;
+    snapshot.importedFiles = m_lastImportedFiles;
+
+    snapshot.document = SceneDocument::capture(const_cast<QSchematic::Scene &>(scene));
+    return snapshot;
+}
+
+void SchematicWindow::restoreSnapshot(const SceneSnapshot &snapshot)
+{
+    m_lastImportedFiles = snapshot.importedFiles;
+
+    /* autoNameWires reacts to every topology change; the names are already in
+       the snapshot, so keep it out of the restore. */
+    disconnect(&scene, &QSchematic::Scene::netlistChanged, this, &SchematicWindow::autoNameWires);
+    SceneDocument::restore(scene, snapshot.document);
+    connect(&scene, &QSchematic::Scene::netlistChanged, this, &SchematicWindow::autoNameWires);
+
+    /* The viewport still shows wherever the user was before the swap, which
+       for a whole-document change is rarely where the content landed. */
+    if (!scene.items().isEmpty()) {
+        ui->schematicView->fitInView();
+    }
+
     updateWindowTitle();
 }
 
