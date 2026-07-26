@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "buseditorwindow.h"
+#include "common/qsocyamlutils.h"
 
 #include <QFileInfo>
 
@@ -143,9 +144,29 @@ void BusEditorWindow::selectBus(const QString &libraryName, const QString &busNa
     currentLibraryName = libraryName;
     currentBusName     = busName;
     signalModeModel->setDefinition(busManager.getBusDefinition(libraryName, busName));
+    undoStack.clear();
     updateInspector();
     updateActions();
     setStatusText(tr("Loaded %1/%2").arg(libraryName, busName));
+}
+
+QSocBusDefinition BusEditorWindow::captureDefinition() const
+{
+    QSocBusDefinition definition = currentDefinitionFromModel();
+    /* YAML nodes copy by reference; without a deep copy the snapshot would
+       follow every later edit of the live definition. */
+    definition.extraAttributes = QSocYamlUtils::cloneNode(definition.extraAttributes);
+    return definition;
+}
+
+void BusEditorWindow::restoreDefinition(const QSocBusDefinition &definition)
+{
+    /* setDefinition clears the dirty flag because it is the load path; the
+       cleanChanged handler restores the real state once the stack index has
+       moved, which happens after this returns. */
+    signalModeModel->setDefinition(definition);
+    updateInspector();
+    updateActions();
 }
 
 void BusEditorWindow::clearCurrentBus()

@@ -194,6 +194,26 @@ void BusEditorWindow::setupActions()
     auto *toolBar = addToolBar(tr("Bus Editor"));
     toolBar->setMovable(false);
 
+    undoAction = undoStack.createUndoAction(this, tr("Undo"));
+    undoAction->setIcon(QIcon::fromTheme("edit-undo"));
+    undoAction->setShortcut(QKeySequence::Undo);
+    redoAction = undoStack.createRedoAction(this, tr("Redo"));
+    redoAction->setIcon(QIcon::fromTheme("edit-redo"));
+    redoAction->setShortcut(QKeySequence::Redo);
+    toolBar->addAction(undoAction);
+    toolBar->addAction(redoAction);
+    toolBar->addSeparator();
+    /* Keep the shortcuts working while the table view holds focus. */
+    addAction(undoAction);
+    addAction(redoAction);
+    connect(&undoStack, &QUndoStack::cleanChanged, this, [this](bool clean) {
+        if (signalModeModel) {
+            signalModeModel->setDirty(!clean);
+        }
+        updateInspector();
+        updateActions();
+    });
+
     newLibraryAction   = toolBar->addAction(QIcon::fromTheme("folder-new"), tr("New Library"));
     newBusAction       = toolBar->addAction(QIcon::fromTheme("document-new"), tr("New Bus"));
     duplicateBusAction = toolBar->addAction(QIcon::fromTheme("edit-copy"), tr("Duplicate Bus"));

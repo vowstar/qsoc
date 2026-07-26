@@ -9,6 +9,7 @@
 #include "bussignalmodemodel.h"
 #include "common/qsocbusmanager.h"
 #include "common/qsocprojectmanager.h"
+#include "gui/undo/snapshotcommand.h"
 
 #include <QLabel>
 #include <QLineEdit>
@@ -95,6 +96,23 @@ private:
     QList<int>        selectedSourceRows() const;
     QSocBusDefinition currentDefinitionFromModel() const;
 
+    /**
+     * @brief Capture the bus currently loaded in the model.
+     * @details The definition owns a YAML node, which copies by reference, so
+     *          the node is deep copied or a later edit would rewrite the
+     *          snapshot too.
+     * @return Snapshot that can be restored later.
+     */
+    QSocBusDefinition captureDefinition() const;
+
+    /**
+     * @brief Load a captured definition back into the model.
+     * @param[in] definition Snapshot to restore.
+     */
+    void restoreDefinition(const QSocBusDefinition &definition);
+
+    using DefinitionScope = SnapshotScope<QSocBusDefinition>;
+
     /* Inspector */
     QList<QSocBusProblem> currentProblems(QStringList *scanErrors = nullptr) const;
     void                  updateInspector();
@@ -109,9 +127,15 @@ private:
     /* Member Variables */
     QPointer<QSocProjectManager> projectManager;
     QSocBusManager               busManager;
-    QString                      currentLibraryName;
-    QString                      currentBusName;
-    bool                         changingSelection = false;
+    /* Bulk edits such as a CSV import rewrite the whole signal table; one
+       snapshot per edit gives them a single step of undo. */
+    QUndoStack undoStack;
+    QAction   *undoAction = nullptr;
+    QAction   *redoAction = nullptr;
+
+    QString currentLibraryName;
+    QString currentBusName;
+    bool    changingSelection = false;
 
     BusLibraryModel       *libraryModel     = nullptr;
     BusSignalModeModel    *signalModeModel  = nullptr;

@@ -498,6 +498,12 @@ bool BusEditorWindow::renameCurrentBus(const QString &newBusName, bool updateRef
 
 void BusEditorWindow::handleAddRow()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocBusDefinition &definition) { restoreDefinition(definition); },
+        tr("Add Row"));
+
     signalModeModel->addRow();
     const QModelIndex source = signalModeModel->index(signalModeModel->rowCount() - 1, 0);
     const QModelIndex proxy  = signalProxyModel->mapFromSource(source);
@@ -509,11 +515,23 @@ void BusEditorWindow::handleAddRow()
 
 void BusEditorWindow::handleDuplicateRows()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocBusDefinition &definition) { restoreDefinition(definition); },
+        tr("Duplicate Rows"));
+
     signalModeModel->duplicateRows(selectedSourceRows());
 }
 
 void BusEditorWindow::handleDeleteRows()
 {
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocBusDefinition &definition) { restoreDefinition(definition); },
+        tr("Delete Rows"));
+
     signalModeModel->removeRowIndices(selectedSourceRows());
 }
 

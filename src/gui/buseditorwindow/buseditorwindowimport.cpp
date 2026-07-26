@@ -68,6 +68,15 @@ void BusEditorWindow::handleImportCsv()
 
     const QStringList filePaths = QFileDialog::getOpenFileNames(
         this, tr("Import Bus CSV"), QString(), tr("CSV Files (*.csv);;All Files (*)"));
+    if (filePaths.isEmpty()) {
+        return;
+    }
+
+    DefinitionScope scope(
+        &undoStack,
+        [this]() { return captureDefinition(); },
+        [this](const QSocBusDefinition &definition) { restoreDefinition(definition); },
+        tr("Import CSV"));
     if (filePaths.isEmpty())
         return;
 
