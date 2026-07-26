@@ -10,6 +10,7 @@
     publish_date: [Publish Date],
   ),
   cover_image: "./image/cover.svg",
+  quickref: [],
   features: [],
   applications: [],
   description: [],
@@ -255,6 +256,12 @@
   counter(heading).update(0)
   render_toc_page()
   pagebreak()
+
+  if quickref != [] {
+    counter(heading).update(0)
+    quickref
+    pagebreak()
+  }
 
   counter(heading).update(0)
   {

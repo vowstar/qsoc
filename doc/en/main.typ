@@ -46,6 +46,7 @@
     reads the project, runs commands, and edits files under the same
     configuration, extended by MCP servers, sub-agents, and persistent memory.
   ],
+  quickref: include "cheatsheet.typ",
   document: [
     #include "about.typ"
     #include "overview.typ"
