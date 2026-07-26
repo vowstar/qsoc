@@ -100,6 +100,7 @@ endif()
 
 qt_add_test_target("test_qslangdriver")
 qt_add_test_target("test_qsocverilogsignalextractor")
+qt_add_test_target("test_qsocyamldocversion")
 qt_add_test_target("test_qsoccliparsebus")
 qt_add_test_target("test_qsocbusmanagerphase0")
 qt_add_test_target("test_qsoccliparsegenerate")

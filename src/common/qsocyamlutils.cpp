@@ -326,3 +326,30 @@ bool QSocYamlUtils::setValueByKeyPath(
         return false;
     }
 }
+
+bool QSocYamlUtils::readDocumentVersion(
+    const QString &filePath, const QString &rootName, int &version, QString &errorMessage)
+{
+    try {
+        const YAML::Node document = YAML::LoadFile(filePath.toStdString());
+        if (!document || !document.IsMap()) {
+            errorMessage = QObject::tr("The file is not a YAML document.");
+            return false;
+        }
+        const YAML::Node root = document[rootName.toStdString()];
+        if (!root || !root.IsMap()) {
+            errorMessage = QObject::tr("The file has no '%1' section.").arg(rootName);
+            return false;
+        }
+        const YAML::Node versionNode = root["-version"];
+        if (!versionNode || !versionNode.IsScalar()) {
+            errorMessage = QObject::tr("The file carries no version.");
+            return false;
+        }
+        version = versionNode.as<int>();
+        return true;
+    } catch (const std::exception &error) {
+        errorMessage = QString::fromUtf8(error.what());
+        return false;
+    }
+}

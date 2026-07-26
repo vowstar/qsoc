@@ -113,6 +113,20 @@ public:
      */
     static bool setValueByKeyPath(YAML::Node &yamlNode, const QString &keyPath, const QString &value);
 
+    /**
+     * @brief Read the serialization version of a gpds YAML document.
+     * @details Reads the `-version` attribute the gpds archiver writes under
+     *          the document root. Used to reject a file before its contents
+     *          replace the editor's current document.
+     * @param filePath Path of the file to inspect.
+     * @param rootName Document root key, e.g. "qschematic".
+     * @param version Receives the version when the call succeeds.
+     * @param errorMessage Receives the reason when the call fails.
+     * @return true when a version was read.
+     */
+    static bool readDocumentVersion(
+        const QString &filePath, const QString &rootName, int &version, QString &errorMessage);
+
 private:
     /**
      * @brief Constructor.
