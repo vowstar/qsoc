@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocyamlutils.h"
 #include "gui/schematicwindow/schematicwindow.h"
 
 #include "./ui_schematicwindow.h"
@@ -109,9 +110,60 @@ void SchematicWindow::on_actionPrint_triggered()
 
 void SchematicWindow::openFile(const QString &filePath)
 {
+    /* Check the format version before the current document is discarded. A
+     * mismatch used to load as an empty scene, adopt the path, and let the
+     * next save overwrite the file. */
+    int     fileVersion = 0;
+    QString versionError;
+    if (!QSocYamlUtils::readDocumentVersion(
+            filePath, QString::fromUtf8(QSchematic::Scene::gpds_name), fileVersion, versionError)) {
+        QMessageBox::critical(
+            this,
+            tr("Open Error"),
+            tr("Failed to read %1: %2").arg(QFileInfo(filePath).fileName(), versionError));
+        return;
+    }
+    if (fileVersion != static_cast<int>(QSchematic::Scene::serdes_version)) {
+        QMessageBox::critical(
+            this,
+            tr("Open Error"),
+            tr("%1 was written in format version %2, but this release reads "
+               "version %3. The file was left unchanged.")
+                .arg(QFileInfo(filePath).fileName())
+                .arg(fileVersion)
+                .arg(static_cast<int>(QSchematic::Scene::serdes_version)));
+        return;
+    }
+
+    /* Deserialize into a throwaway scene first, so a malformed file cannot
+     * destroy the document that is already open. */
+    {
+        QSchematic::Scene probe;
+        try {
+            const auto &[probeOk, probeMessage] = gpds::from_file<gpds::archiver_yaml>(
+                filePath.toStdString(), probe, QSchematic::Scene::gpds_name);
+            if (!probeOk) {
+                QMessageBox::critical(
+                    this,
+                    tr("Open Error"),
+                    tr("Failed to load %1: %2")
+                        .arg(QFileInfo(filePath).fileName(), QString::fromStdString(probeMessage)));
+                return;
+            }
+        } catch (const std::exception &error) {
+            QMessageBox::critical(
+                this,
+                tr("Open Error"),
+                tr("Failed to load %1: %2")
+                    .arg(QFileInfo(filePath).fileName(), QString::fromUtf8(error.what())));
+            return;
+        }
+    }
+
     // Clear existing scene and undo stack
     scene.clear();
     scene.undoStack()->clear();
+    m_unsavedImport = false;
 
     // Use standard gpds API to deserialize Scene directly
     const std::filesystem::path path = filePath.toStdString();
@@ -131,6 +183,7 @@ void SchematicWindow::openFile(const QString &filePath)
         // Successfully loaded
         m_currentFilePath = filePath;
         scene.undoStack()->setClean();
+        m_unsavedImport = false;
         updateWindowTitle();
 
     } catch (const std::bad_optional_access &e) {
@@ -163,6 +216,7 @@ void SchematicWindow::saveToFile(const QString &path)
     // Successfully saved
     m_currentFilePath = path;
     scene.undoStack()->setClean();
+    m_unsavedImport = false;
     updateWindowTitle();
 }
 
@@ -173,15 +227,21 @@ void SchematicWindow::closeFile()
 
     // Clear undo history
     scene.undoStack()->clear();
+    m_unsavedImport = false;
 
     // Reset to untitled state
     m_currentFilePath = "";
     updateWindowTitle();
 }
 
+bool SchematicWindow::isModified() const
+{
+    return !scene.undoStack()->isClean() || m_unsavedImport;
+}
+
 bool SchematicWindow::checkSaveBeforeClose()
 {
-    if (scene.undoStack()->isClean()) {
+    if (!isModified()) {
         return true; // No changes, safe to proceed
     }
 
@@ -193,7 +253,7 @@ bool SchematicWindow::checkSaveBeforeClose()
 
     if (result == QMessageBox::Save) {
         on_actionSave_triggered();
-        return scene.undoStack()->isClean(); // Return true if save succeeded
+        return !isModified(); // Return true if save succeeded
     } else if (result == QMessageBox::Discard) {
         return true; // Discard changes, safe to proceed
     } else {
@@ -216,7 +276,7 @@ void SchematicWindow::updateWindowTitle()
         filename = QFileInfo(m_currentFilePath).completeBaseName();
     }
 
-    if (!scene.undoStack()->isClean()) {
+    if (isModified()) {
         filename = "*" + filename;
     }
 

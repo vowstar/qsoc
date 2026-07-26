@@ -134,8 +134,13 @@ void SchematicWindow::on_actionImportNetlist_triggered()
         if (resp != QMessageBox::Yes) {
             return;
         }
+        /* Replacing discards the current document, so offer to save it first. */
+        if (!checkSaveBeforeClose()) {
+            return;
+        }
         scene.clear();
         scene.undoStack()->clear();
+        m_unsavedImport = false;
     }
 
     if (!importNetlistFiles(files)) {
@@ -144,6 +149,8 @@ void SchematicWindow::on_actionImportNetlist_triggered()
         return;
     }
     m_lastImportedFiles = files;
+    m_unsavedImport     = true;
+    updateWindowTitle();
 }
 
 void SchematicWindow::on_actionAutoArrange_triggered()
@@ -168,12 +175,32 @@ void SchematicWindow::on_actionAutoArrange_triggered()
         }
     }
 
+    /* Re-layout throws away every manual placement, rename and hand-drawn
+     * wire made since the import, and none of it is on the undo stack. */
+    const QMessageBox::StandardButton resp = QMessageBox::question(
+        this,
+        tr("Auto Arrange"),
+        tr("Re-running auto layout discards the current arrangement, including "
+           "manual placement and hand-drawn wires. Continue?"),
+        QMessageBox::Yes | QMessageBox::Cancel,
+        QMessageBox::Cancel);
+    if (resp != QMessageBox::Yes) {
+        return;
+    }
+    if (!checkSaveBeforeClose()) {
+        return;
+    }
+
     scene.clear();
     scene.undoStack()->clear();
+    m_unsavedImport = false;
     if (!importNetlistFiles(m_lastImportedFiles)) {
         QMessageBox::warning(
             this, tr("Auto Arrange"), tr("No instances were imported during re-layout."));
+        return;
     }
+    m_unsavedImport = true;
+    updateWindowTitle();
 }
 
 bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)

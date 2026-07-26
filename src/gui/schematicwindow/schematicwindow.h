@@ -234,6 +234,7 @@ private:
      * @return true if it's safe to proceed (saved/discarded/no changes), false if cancelled
      */
     bool checkSaveBeforeClose();
+    bool isModified() const;
 
     /**
      * @brief Save the schematic to a file.
@@ -370,6 +371,10 @@ private:
     /* Last imported .soc_net file list, used by Auto Arrange to re-run
      * layout on the same input. */
     QStringList m_lastImportedFiles;
+
+    /* Import and re-layout build the scene with raw item adds, so the undo
+       stack stays clean and the document would look unmodified. */
+    bool m_unsavedImport = false;
 
     /* Status bar permanent label */
     QLabel *statusBarPermanentLabel = nullptr;
