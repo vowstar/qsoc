@@ -50,13 +50,8 @@
   document: [
     #include "about.typ"
     #include "overview.typ"
+    #include "config.typ"
     #include "command.typ"
-    #include "agent.typ"
-    #include "gui_overview.typ"
-    #include "gui_bus_editor.typ"
-    #include "gui_module_editor.typ"
-    #include "gui_schematic_editor.typ"
-    #include "gui_prc_editor.typ"
     #include "format_overview.typ"
     #include "format_netlist.typ"
     #include "format_bus.typ"
@@ -67,7 +62,12 @@
     #include "format_power.typ"
     #include "format_template.typ"
     #include "format_validation.typ"
+    #include "agent.typ"
     #include "tui_image_preview.typ"
-    #include "config.typ"
+    #include "gui_overview.typ"
+    #include "gui_bus_editor.typ"
+    #include "gui_module_editor.typ"
+    #include "gui_schematic_editor.typ"
+    #include "gui_prc_editor.typ"
   ],
 )

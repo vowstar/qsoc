@@ -18,7 +18,7 @@ system-level root follows platform conventions.
     [Env], [`$QSOC_HOME` (when set)],
     [Project], [`<projectPath>/.qsoc`],
     [User], [`~/.config/qsoc`],
-    [System], [platform-specific, see below],
+    [System], [platform-specific, see @config-files],
   )],
   caption: [RESOURCE ROOTS PER LAYER],
   kind: table,

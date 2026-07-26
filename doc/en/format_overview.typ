@@ -154,4 +154,6 @@ power:
   # Power controllers
 ```
 
-The following chapters provide detailed specifications for each section of the SOC_NET format.
+Each section has its own chapter: @netlist-format, @bus-interface-format,
+@logic-description-format, @fsm-format, @reset-format, @clock-format,
+@power-format and @template-format.
