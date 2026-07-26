@@ -245,6 +245,21 @@ llm:
         image_max_dimension: 1568
 ```
 
+== LSP Configuration
+<lsp-config>
+`lsp.servers` registers external language servers for the agent's `lsp` tool
+(@agent-lsp). Each entry needs `command` and `extensions`; `args` is optional.
+An entry replaces the built-in slang backend for the extensions it lists.
+
+```yaml
+lsp:
+  servers:
+    verible:
+      command: verible-verilog-ls
+      args: []
+      extensions: [".v", ".sv"]
+```
+
 == Network Proxy Configuration
 <proxy-config>
 QSoC resolves the proxy used for every HTTP-based subsystem (LLM

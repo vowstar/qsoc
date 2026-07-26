@@ -28,7 +28,10 @@ commands and subcommands are available:
     [], [remove], [Remove buses from specified libraries],
     [], [list], [List all buses within designated libraries],
     [], [show], [Show detailed information on a chosen bus],
-    [schematic], [], [Process schematic designs (not implemented yet)],
+    [schematic],
+    [],
+    [Reserved. Schematic editing is available in the GUI, not on the
+     command line],
     [generate],
     [verilog],
     [Generate Verilog code and unconnected port reports from netlist files],

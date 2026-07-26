@@ -495,11 +495,63 @@ The agent provides the following tools through natural language:
   `~/.config/qsoc/skills`, and a platform-native system skills dir), plus
   any directory listed in `QSOC_SKILLS_PATH`; see @agent-skills for the
   SKILL.md format and @config-files for the full layout
-- *LSP*: `lsp` for language server diagnostics and symbol lookup
+- *LSP*: `lsp` for diagnostics, definitions, hover, references, and symbols
+  (@agent-lsp)
 - *Web*: `web_fetch` for URL content, `web_search` via SearXNG (when configured)
+- *Schedules*: `schedule_create`, `schedule_list`, `schedule_delete` share the
+  scheduler behind `/loop` (@agent-loop)
 
 LLM, MCP HTTP, and web requests are pinned to HTTP/1.1. HTTP/2-only
 endpoints are unsupported.
+
+== Code Intelligence
+<agent-lsp>
+The agent reads HDL through a Language Server Protocol layer. A built-in slang
+backend handles `.v`, `.sv`, `.svh`, and `.vh` in process, so nothing has to be
+installed for it to work. After the agent writes or edits a file, that file is
+re-sent to the backend, so the next `lsp diagnostics` call sees the current
+text.
+
+The `lsp` tool takes an operation and a file, plus a 1-based position for
+everything except diagnostics:
+
+#figure(
+  align(center)[#table(
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Operation], [Returns]),
+    table.hline(),
+    [`diagnostics`], [Errors and warnings for the file; needs only `file_path`],
+    [`definition`], [Declaration site of the symbol under the position],
+    [`hover`], [Type and documentation for the symbol under the position],
+    [`references`], [Every use of the symbol under the position],
+    [`symbols`], [Outline of the file: modules, ports, parameters, nets],
+  )],
+  caption: [LSP OPERATIONS],
+  kind: table,
+)
+
+A file type with no registered backend answers with an explicit error rather
+than an empty result.
+
+External language servers are added under `lsp.servers`. Each entry needs a
+`command` and an `extensions` list; `args` is optional. A server registered
+this way takes over the extensions it claims, including from the built-in
+backend:
+
+```yaml
+lsp:
+  servers:
+    verible:
+      command: verible-verilog-ls
+      extensions: [".v", ".sv"]
+```
+
+Linting is an agent-side capability. There is no `qsoc lint` command, the GUI
+does not surface diagnostics, and `generate verilog` does not lint its own
+output; it runs the netlist checks described in @validation-format instead.
+Modules brought in with `module import` are parsed by slang, so import is the
+one place where a plain CLI user sees HDL diagnostics.
 
 == Skills
 <agent-skills>
@@ -755,7 +807,7 @@ Three scopes exist, in shadowing order from highest to lowest:
 - *User*: `~/.config/qsoc/agents/*.md`
 - *Builtin*: compiled in. The shipped names are `general-purpose`
   (full tool set), `explore` (read-only), and `verification` (adds
-  `bash` and `lsp_*`).
+  `bash` and `lsp`).
 
 Same-name definitions in higher scopes shadow lower ones. Files whose
 frontmatter fails to parse appear in `/agents` under an "Errors"
