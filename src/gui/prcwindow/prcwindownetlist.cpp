@@ -7,6 +7,7 @@
 #include "gui/prcwindow/prcconfigdialog.h"
 #include "gui/prcwindow/prcprimitiveitem.h"
 #include "gui/prcwindow/prcwindow.h"
+#include "gui/prcwindow/prcpropertycommands.h"
 
 #include <yaml-cpp/yaml.h>
 #include <QDir>
@@ -160,15 +161,21 @@ void PrcWindow::handlePrcItemDoubleClick(QSchematic::Items::Item *item)
         connectedSources.sort();
     }
 
-    /* Show configuration dialog and apply changes if accepted */
-    PrcLibrary::PrcConfigDialog dialog(prcItem, &scene, connectedSources, this);
-    if (dialog.exec() == QDialog::Accepted) {
-        /* Dialog applies configuration automatically via applyConfiguration() */
+    /* The dialog edits the item in place, so remember the parameters on both
+       sides and let the scene's own history carry the change. */
+    const PrcLibrary::PrcParams before = prcItem->params();
 
-        /* Mark as modified */
-        scene.undoStack()->resetClean();
-        updateWindowTitle();
+    PrcLibrary::PrcConfigDialog dialog(prcItem, &scene, connectedSources, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
     }
+
+    auto shared = prcItem->sharedPtr<PrcLibrary::PrcPrimitiveItem>();
+    if (shared) {
+        scene.undoStack()->push(new PrcLibrary::PrcParamsCommand(
+            shared, before, prcItem->params(), tr("Configure %1").arg(prcItem->primitiveName())));
+    }
+    updateWindowTitle();
 }
 
 void PrcWindow::handleWireDoubleClick(QSchematic::Items::WireNet *wireNet)
@@ -176,6 +183,7 @@ void PrcWindow::handleWireDoubleClick(QSchematic::Items::WireNet *wireNet)
     if (!wireNet) {
         return;
     }
+
 
     /* Determine source and target names from wire connections */
     QString sourceName = "source";
@@ -204,8 +212,16 @@ void PrcWindow::handleWireDoubleClick(QSchematic::Items::WireNet *wireNet)
     linkParams.sourceName                  = sourceName;
 
     /* Show link configuration dialog */
+    PrcLibrary::PrcLinkParamsCommand::LinkState before;
+    before.present = prcScene().hasLinkParameters(baseWireName);
+    before.params  = prcScene().linkParameters(baseWireName);
+    before.netName = wireNet->name();
+
     PrcLibrary::PrcLinkConfigDialog dialog(sourceName, targetName, linkParams, &prcScene(), this);
-    if (dialog.exec() == QDialog::Accepted) {
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    {
         /* Get configured parameters and store them */
         PrcLibrary::ClockLinkParams newParams = dialog.getLinkParams();
 
@@ -234,8 +250,14 @@ void PrcWindow::handleWireDoubleClick(QSchematic::Items::WireNet *wireNet)
             wireNet->set_name(baseWireName);
         }
 
-        /* Mark as modified */
-        scene.undoStack()->resetClean();
+        PrcLibrary::PrcLinkParamsCommand::LinkState after;
+        after.present = prcScene().hasLinkParameters(baseWireName);
+        after.params  = prcScene().linkParameters(baseWireName);
+        after.netName = wireNet->name();
+
+        scene.undoStack()->push(new PrcLibrary::PrcLinkParamsCommand(
+            &prcScene(), wireNet, baseWireName, before, after, tr("Configure Link")));
+
         updateWindowTitle();
     }
 }

@@ -4,6 +4,7 @@
 #include "gui/prcwindow/prcwindow.h"
 #include "common/qsocprojectmanager.h"
 #include "gui/items/editoritemfactory.h"
+#include "gui/prcwindow/prcpropertycommands.h"
 #include "gui/prcwindow/prcconfigdialog.h"
 #include "gui/prcwindow/prclibrarywidget.h"
 #include "gui/prcwindow/prcprimitiveitem.h"
@@ -83,11 +84,12 @@ PrcWindow::PrcWindow(QWidget *parent, QSocProjectManager *projectManager)
     ui->actionUndo->setEnabled(scene.undoStack()->canUndo());
     ui->actionRedo->setEnabled(scene.undoStack()->canRedo());
 
-    connect(scene.undoStack(), &QUndoStack::canUndoChanged, [this](bool canUndo) {
-        ui->actionUndo->setEnabled(canUndo);
+
+    connect(scene.undoStack(), &QUndoStack::canUndoChanged, [this](bool) {
+        ui->actionUndo->setEnabled(scene.undoStack()->canUndo());
     });
-    connect(scene.undoStack(), &QUndoStack::canRedoChanged, [this](bool canRedo) {
-        ui->actionRedo->setEnabled(canRedo);
+    connect(scene.undoStack(), &QUndoStack::canRedoChanged, [this](bool) {
+        ui->actionRedo->setEnabled(scene.undoStack()->canRedo());
     });
     connect(scene.undoStack(), &QUndoStack::cleanChanged, this, &PrcWindow::updateWindowTitle);
 
@@ -260,11 +262,31 @@ void PrcWindow::handleEditController(int type, const QString &name)
         return;
     }
 
-    /* Show controller dialog */
+    /* Controller edits and deletions both change one definition, so record
+       that definition on both sides. */
+    const auto sceneType = static_cast<PrcLibrary::PrcScene::ControllerType>(type);
+    PrcLibrary::PrcControllerCommand::ControllerState before;
+    switch (sceneType) {
+    case PrcLibrary::PrcScene::ClockCtrl:
+        before.present = scene.clockControllerNames().contains(name);
+        before.clock   = scene.clockController(name);
+        break;
+    case PrcLibrary::PrcScene::ResetCtrl:
+        before.present = scene.resetControllerNames().contains(name);
+        before.reset   = scene.resetController(name);
+        break;
+    case PrcLibrary::PrcScene::PowerCtrl:
+        before.present = scene.powerControllerNames().contains(name);
+        before.power   = scene.powerController(name);
+        break;
+    }
+    bool changed = false;
+
     PrcLibrary::PrcControllerDialog dialog(ctrlType, name, &scene, this);
 
     /* Handle delete request */
-    connect(&dialog, &PrcLibrary::PrcControllerDialog::deleteRequested, [this, name, type]() {
+    connect(&dialog, &PrcLibrary::PrcControllerDialog::deleteRequested, [this, name, type, &changed]() {
+        changed = true;
         switch (static_cast<PrcLibrary::PrcScene::ControllerType>(type)) {
         case PrcLibrary::PrcScene::ClockCtrl:
             scene.removeClockController(name);
@@ -279,6 +301,7 @@ void PrcWindow::handleEditController(int type, const QString &name)
     });
 
     if (dialog.exec() == QDialog::Accepted) {
+        changed = true;
         /* Apply controller changes */
         switch (ctrlType) {
         case PrcLibrary::PrcControllerDialog::ClockController:
@@ -292,4 +315,27 @@ void PrcWindow::handleEditController(int type, const QString &name)
             break;
         }
     }
+
+    if (!changed) {
+        return;
+    }
+
+    PrcLibrary::PrcControllerCommand::ControllerState after;
+    switch (sceneType) {
+    case PrcLibrary::PrcScene::ClockCtrl:
+        after.present = scene.clockControllerNames().contains(name);
+        after.clock   = scene.clockController(name);
+        break;
+    case PrcLibrary::PrcScene::ResetCtrl:
+        after.present = scene.resetControllerNames().contains(name);
+        after.reset   = scene.resetController(name);
+        break;
+    case PrcLibrary::PrcScene::PowerCtrl:
+        after.present = scene.powerControllerNames().contains(name);
+        after.power   = scene.powerController(name);
+        break;
+    }
+
+    scene.undoStack()->push(new PrcLibrary::PrcControllerCommand(
+        &scene, sceneType, name, before, after, tr("Configure Controller %1").arg(name)));
 }

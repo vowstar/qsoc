@@ -234,9 +234,14 @@ void PrcWindow::closeFile()
     updateWindowTitle();
 }
 
+bool PrcWindow::isModified() const
+{
+    return !scene.undoStack()->isClean();
+}
+
 bool PrcWindow::checkSaveBeforeClose()
 {
-    if (scene.undoStack()->isClean()) {
+    if (!isModified()) {
         return true; // No changes, safe to proceed
     }
 
@@ -248,7 +253,7 @@ bool PrcWindow::checkSaveBeforeClose()
 
     if (result == QMessageBox::Save) {
         on_actionSave_triggered();
-        return scene.undoStack()->isClean(); // Return true if save succeeded
+        return !isModified(); // Return true if save succeeded
     } else if (result == QMessageBox::Discard) {
         return true; // Discard changes, safe to proceed
     } else {
@@ -271,7 +276,7 @@ void PrcWindow::updateWindowTitle()
         filename = QFileInfo(m_currentFilePath).completeBaseName();
     }
 
-    if (!scene.undoStack()->isClean()) {
+    if (isModified()) {
         filename = "*" + filename;
     }
 
