@@ -59,7 +59,8 @@ inside it rather than remembering them.
 
 Double-click a wire to configure link-level operations. The wire label then
 carries markers such as `[ICG]` or `[DIV/2]`, and the settings are stored with
-the diagram.
+the diagram. Ctrl+Z reverts a configuration the same way it reverts a
+placement.
 
 A power domain is always-on until you clear *Always-on domain* in its dialog.
 A controllable domain takes its dependencies from the wires drawn into its
@@ -104,7 +105,8 @@ box.
       `count` have no fields. The asynchronous settings are written onto every
       link of a target rather than after the combination],
     [Editing], [Cut, copy and paste are not available. Delete works from the
-      keyboard],
+      keyboard. Placing an item, configuring a primitive, a link or a
+      controller each form one step of undo],
   )],
   caption: [PRC EDITOR LIMITATIONS],
   kind: table,

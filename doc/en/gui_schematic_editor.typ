@@ -5,9 +5,9 @@ result as a netlist (@soc-net-format). Two workflows share the same canvas:
 place and wire modules by hand, or import an existing netlist and let the
 editor lay it out.
 
-Import and Auto Arrange build the scene without going through the undo stack,
-so neither can be undone. Both mark the document modified, so closing without
-saving asks first.
+Import and Auto Arrange each count as one step of undo: the editor records the
+whole document before and after, so Ctrl+Z brings back exactly what was on the
+canvas beforehand and Ctrl+Y puts the result back.
 
 == Window Anatomy
 <gui-schematic-anatomy>
@@ -44,6 +44,11 @@ and every item snaps to it; View > Show Grid only controls whether it is drawn.
 
 Delete removes the selected items through the undo stack. Cut, copy and paste
 are not available.
+
+Undo covers both kinds of change, but they are kept apart: a bulk edit clears
+the item-level history, because item steps from the previous document no
+longer apply to the new one. Undoing works back through the item steps first
+and then through the bulk edits, which is the order they happened in.
 
 == Importing a Netlist
 <gui-schematic-import>
@@ -96,10 +101,9 @@ looks like:
   to stubs as well.
 
 Place > Auto Arrange (Ctrl+Shift+A) re-runs the whole import for the files
-imported in this session. It asks for confirmation, then offers to save,
-because the re-layout discards any manual placement, renaming, or hand-drawn
-wire made since the import. The remembered file list is not saved, so the
-action is unavailable after reopening a file.
+imported in this session. It asks for confirmation first, and one Ctrl+Z
+restores the arrangement it replaced. The remembered file list is not saved,
+so the action is unavailable after reopening a file.
 
 == Exporting a Netlist
 <gui-schematic-export>

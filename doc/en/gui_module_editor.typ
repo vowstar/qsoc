@@ -57,6 +57,16 @@ instance name, module name, port count, bus interface count, and status.
 Placed schematic items remain copies. The usage list is informational; library
 edits do not rewrite schematic files automatically.
 
+== Undo
+<gui-module-editor-undo>
+Row and interface edits, the auto-match passes, create-missing-ports and the
+Verilog import each form one step of undo. Ctrl+Z restores the module exactly
+as it stood before the operation, and the summary returns to `clean` once the
+document matches the file again.
+
+While a cell is in edit mode Ctrl+Z belongs to the cell editor; press Escape
+first to undo the operation instead.
+
 == Preview and Save
 <gui-module-editor-preview-save>
 The preview pane renders the module with the schematic module item path. It is

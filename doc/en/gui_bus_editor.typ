@@ -43,6 +43,11 @@ The usage tab lists module library, module, interface, bus, mode, mapping count,
 and compact problem state. Problem rows select the affected signal table row when
 the issue belongs to a row.
 
+== Undo
+<gui-bus-editor-undo>
+CSV import and the row operations each form one step of undo, restoring the
+signal table as it stood before the operation.
+
 == Safe Renames
 <gui-bus-editor-safe-renames>
 Renaming a bus, signal, or mode scans module interfaces first. When references
