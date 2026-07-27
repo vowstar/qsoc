@@ -833,7 +833,7 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
             }
         }
 
-        auto reorder = [&](QList<std::shared_ptr<SchematicConnector>> &ports) {
+        auto reorder = [&](const QList<std::shared_ptr<SchematicConnector>> &ports) {
             if (ports.size() < 2) {
                 return;
             }
@@ -944,10 +944,10 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
      * net-by-name. */
     struct WirePlan
     {
-        QPointF rightPort;  /* Endpoint on the Right side of its module. */
-        QPointF leftPort;   /* Endpoint on the Left side of its module. */
-        bool    isBackward; /* true when right-side module is in a higher layer. */
-        qreal   detourY;    /* For backward: Y above both modules' tops. */
+        QPointF rightPort;          /* Endpoint on the Right side of its module. */
+        QPointF leftPort;           /* Endpoint on the Left side of its module. */
+        bool    isBackward = false; /* true when right-side module is in a higher layer. */
+        qreal   detourY    = 0.0;   /* For backward: Y above both modules' tops. */
     };
     const qreal              detourMargin = 30.0;
     QHash<QString, WirePlan> realWireNets;
@@ -1211,8 +1211,9 @@ bool SchematicWindow::importNetlistFiles(const QStringList &filePaths)
         /* Build trunk X at the gap midpoint and cover the full Y span. */
         const QPointF singletonPos = singleton->scenePos();
         qreal         trunkX       = singletonPos.x();
-        qreal         minY         = singletonPos.y();
-        qreal         maxY         = singletonPos.y();
+        // cppcheck-suppress duplicateAssignExpression
+        qreal minY = singletonPos.y();
+        qreal maxY = singletonPos.y();
         for (const auto &conn : cluster) {
             const QPointF pos = conn->scenePos();
             trunkX            = (trunkX + pos.x()) / 2.0; /* running pairwise mean */

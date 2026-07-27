@@ -77,7 +77,7 @@ private:
     QStringList cmdArguments;
 
     /* ExitCode of the application. */
-    int exitCode;
+    int exitCode = 0;
 
     QSocProjectManager  *projectManager  = nullptr;
     QSocConfig          *socConfig       = nullptr;

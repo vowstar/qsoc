@@ -72,6 +72,12 @@ public:
      */
     ~SchematicLibraryTreeItem();
 
+    /* Owns its children and its data, so copying it would free them twice */
+    SchematicLibraryTreeItem(const SchematicLibraryTreeItem &)            = delete;
+    SchematicLibraryTreeItem &operator=(const SchematicLibraryTreeItem &) = delete;
+    SchematicLibraryTreeItem(SchematicLibraryTreeItem &&)                 = delete;
+    SchematicLibraryTreeItem &operator=(SchematicLibraryTreeItem &&)      = delete;
+
     /**
      * @brief Add a child to the module tree item.
      * @details This function will add a child to the module tree item.

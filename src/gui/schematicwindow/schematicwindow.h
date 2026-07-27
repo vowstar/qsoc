@@ -285,7 +285,7 @@ private:
     {
         QString instanceName;
         QString portName;
-        int     portPosition; // SchematicConnector::Position enum value
+        int     portPosition = 0; // SchematicConnector::Position enum value
     };
 
     /**
