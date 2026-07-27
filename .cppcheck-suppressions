@@ -53,3 +53,22 @@ variableScope
 passedByValue
 redundantAssignment
 redundantInitialization
+
+# --inconclusive reports every member function that happens not to touch
+# members as "either a missing override, or it can be const/static". Qt slots
+# and virtual overrides trip it by design.
+functionConst
+functionStatic
+
+# Returning members by const reference is a call-site lifetime hazard and Qt
+# containers are copy-on-write, so returning by value stays the default here.
+# The mirror check, passedByValue, is suppressed above for the same reason.
+returnByReference
+
+# Reports the analysis depth used, not a finding.
+checkLevelNormal
+
+# A local named after a member function cannot silently take its place: any
+# unqualified call in that scope stops compiling, so the compiler is the guard.
+# Domain nouns like a "run" object are worth keeping.
+shadowFunction

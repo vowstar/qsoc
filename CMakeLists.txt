@@ -687,6 +687,14 @@ endif()
 find_program(CPPCHECK_COMMAND NAMES cppcheck)
 if(CPPCHECK_COMMAND)
     message(STATUS "Found cppcheck: ${CPPCHECK_COMMAND}")
+    # Analyse the platform this build targets. Without a platform define cppcheck
+    # only ever sees the non-UNIX side of every Q_OS_UNIX block, so the POSIX
+    # process-group, signal and path code is never checked.
+    if(UNIX)
+        set(CPPCHECK_PLATFORM_DEFINES -DQ_OS_UNIX)
+    else()
+        set(CPPCHECK_PLATFORM_DEFINES -DQ_OS_WIN)
+    endif()
     add_custom_target(
         cppcheck
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/cppcheck
@@ -694,11 +702,17 @@ if(CPPCHECK_COMMAND)
             --enable=all
             --inconclusive
             --max-ctu-depth=0
+            --check-level=exhaustive
+            --library=qt
+            --inline-suppr
+            ${CPPCHECK_PLATFORM_DEFINES}
             --suppressions-list=${CMAKE_CURRENT_SOURCE_DIR}/.cppcheck-suppressions
             --cppcheck-build-dir=${CMAKE_BINARY_DIR}/cppcheck
             -I${CMAKE_CURRENT_SOURCE_DIR}/src
             -I${CMAKE_CURRENT_SOURCE_DIR}/test
             -I${CMAKE_BINARY_DIR}
+            -I${CMAKE_BINARY_DIR}/qsoc_core_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_autogen/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_CURRENT_SOURCE_DIR}/test
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
