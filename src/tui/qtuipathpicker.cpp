@@ -428,7 +428,7 @@ QString QTuiPathPicker::exec()
                     *out = 2;
                     return true;
                 case VK_RIGHT:
-                    *out = 3;
+                    *out = 4;
                     return true;
                 }
             }
@@ -549,7 +549,7 @@ QString QTuiPathPicker::exec()
         if (jumpMode) {
 #ifdef Q_OS_WIN
             /* Arrow virtual keys surface as bytes 0..3; ignore while typing. */
-            if (byte >= 0 && byte <= 3) {
+            if ((byte >= 0 && byte <= 2) || byte == 4) {
                 continue;
             }
 #endif
@@ -593,7 +593,7 @@ QString QTuiPathPicker::exec()
             renderOverlay();
             continue;
         }
-        if (byte == 3) {
+        if (byte == 4) {
             activate();
             renderOverlay();
             continue;
