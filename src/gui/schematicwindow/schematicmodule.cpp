@@ -25,9 +25,8 @@ SchematicModule::SchematicModule(
     , m_moduleName(moduleName)
     , m_instanceName(moduleName) // Default to module name, will be set properly when added to scene
     , m_moduleYaml(moduleYaml)
+    , m_label(std::make_shared<QSchematic::Items::Label>())
 {
-    // Create instance name label
-    m_label = std::make_shared<QSchematic::Items::Label>();
     m_label->setParentItem(this);
     m_label->setVisible(true);
     m_label->setMovable(true);        // Make label draggable

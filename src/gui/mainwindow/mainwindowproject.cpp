@@ -92,7 +92,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         QStringList busFilters;
         busFilters << "*.soc_bus";
         busDir.setNameFilters(busFilters);
-        foreach (const QString busFileName, busDir.entryList(QDir::Files)) {
+        for (const QString &busFileName : busDir.entryList(QDir::Files)) {
             auto *busFileItem = new QStandardItem(busFileName);
             busFileItem->setIcon(QIcon::fromTheme("applications-bus"));
             busFileItem->setData(busDir.filePath(busFileName), Qt::UserRole);
@@ -108,7 +108,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         QStringList moduleFilters;
         moduleFilters << "*.soc_mod";
         moduleDir.setNameFilters(moduleFilters);
-        foreach (const QString moduleFileName, moduleDir.entryList(QDir::Files)) {
+        for (const QString &moduleFileName : moduleDir.entryList(QDir::Files)) {
             auto *moduleFileItem = new QStandardItem(moduleFileName);
             moduleFileItem->setIcon(QIcon::fromTheme("applications-module"));
             moduleFileItem->setData(moduleDir.filePath(moduleFileName), Qt::UserRole);
@@ -124,7 +124,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
         QStringList schematicFilters;
         schematicFilters << "*.soc_sch";
         schematicDir.setNameFilters(schematicFilters);
-        foreach (const QString schematicFileName, schematicDir.entryList(QDir::Files)) {
+        for (const QString &schematicFileName : schematicDir.entryList(QDir::Files)) {
             auto *schematicFileItem = new QStandardItem(schematicFileName);
             schematicFileItem->setIcon(QIcon::fromTheme("applications-schematic"));
             schematicFileItem->setData(schematicDir.filePath(schematicFileName), Qt::UserRole);
@@ -140,7 +140,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
 
         /* Add .soc_net files */
         outputDir.setNameFilters(QStringList() << "*.soc_net");
-        foreach (const QString outputFileName, outputDir.entryList(QDir::Files)) {
+        for (const QString &outputFileName : outputDir.entryList(QDir::Files)) {
             auto *outputFileItem = new QStandardItem(outputFileName);
             outputFileItem->setIcon(QIcon::fromTheme("applications-net"));
             outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
@@ -149,7 +149,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
 
         /* Add Verilog/SystemVerilog files */
         outputDir.setNameFilters(QStringList() << "*.v" << "*.sv" << "*.vh" << "*.svh");
-        foreach (const QString outputFileName, outputDir.entryList(QDir::Files)) {
+        for (const QString &outputFileName : outputDir.entryList(QDir::Files)) {
             auto *outputFileItem = new QStandardItem(outputFileName);
             outputFileItem->setIcon(QIcon::fromTheme("applications-verilog"));
             outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);
@@ -158,7 +158,7 @@ void MainWindow::setupProjectTreeView(const QString &projectName)
 
         /* Add .csv files */
         outputDir.setNameFilters(QStringList() << "*.csv");
-        foreach (const QString outputFileName, outputDir.entryList(QDir::Files)) {
+        for (const QString &outputFileName : outputDir.entryList(QDir::Files)) {
             auto *outputFileItem = new QStandardItem(outputFileName);
             outputFileItem->setIcon(QIcon::fromTheme("document-open"));
             outputFileItem->setData(outputDir.filePath(outputFileName), Qt::UserRole);

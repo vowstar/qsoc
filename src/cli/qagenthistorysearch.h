@@ -30,7 +30,7 @@ public:
         QString text;       /* Matched entry */
     };
 
-    explicit QAgentHistorySearch(const QStringList &history);
+    explicit QAgentHistorySearch(const QStringList &historyRef);
 
     /**
      * @brief Find the next older unique substring match for the given query.

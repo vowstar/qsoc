@@ -280,7 +280,7 @@ private:
      * @brief Handle PRC item double-click
      * @param[in] prcItem Clicked PRC item
      */
-    void handlePrcItemDoubleClick(QSchematic::Items::Item *prcItem);
+    void handlePrcItemDoubleClick(QSchematic::Items::Item *item);
 
     /**
      * @brief Handle wire double-click

@@ -16,7 +16,7 @@
 #endif
 
 namespace {
-bool isGui(int &argc, char *argv[])
+bool isGui(int argc, char *argv[])
 {
     for (int i = 1; i < argc; ++i) {
         if (0 == qstrcmp(argv[i], "gui"))

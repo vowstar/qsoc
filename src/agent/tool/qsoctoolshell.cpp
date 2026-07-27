@@ -303,7 +303,7 @@ QSocToolShellBash::QSocToolShellBash(QObject *parent, QSocProjectManager *projec
 
 QSocToolShellBash::~QSocToolShellBash()
 {
-    abort();
+    QSocToolShellBash::abort();
     killTracked(this);
 }
 
@@ -764,6 +764,7 @@ QString QSocToolShellBash::execute(const json &arguments)
         }
     }
 
+    // cppcheck-suppress danglingLifetime
     foregroundWaits_.insert(&wait);
     if (!wait.aborted) {
         loop.exec();
@@ -912,7 +913,7 @@ QSocToolBashManage::QSocToolBashManage(QObject *parent)
 
 QSocToolBashManage::~QSocToolBashManage()
 {
-    abort();
+    QSocToolBashManage::abort();
 }
 
 void QSocToolBashManage::abort()
@@ -1139,6 +1140,7 @@ QString QSocToolBashManage::execute(const json &arguments)
 
         bindCancellation(&wait);
 
+        // cppcheck-suppress danglingLifetime
         activeWaits_.insert(&wait);
         if (!wait.aborted) {
             loop.exec();
@@ -1276,6 +1278,7 @@ QString QSocToolBashManage::execute(const json &arguments)
 
         bindCancellation(&wait);
 
+        // cppcheck-suppress danglingLifetime
         activeWaits_.insert(&wait);
         if (!wait.aborted) {
             loop.exec();

@@ -490,6 +490,7 @@ void QLLMService::sendRequestAsync(
             if (abortReply) {
                 guardedReply->abort();
             }
+            // cppcheck-suppress identicalInnerCondition
             if (!guardedReply.isNull()) {
                 guardedReply->deleteLater();
             }

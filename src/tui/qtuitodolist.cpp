@@ -65,9 +65,9 @@ void QTuiTodoList::render(QTuiScreen &screen, int startY, int width)
     }
 }
 
-void QTuiTodoList::setItems(const QList<TodoItem> &newItems)
+void QTuiTodoList::setItems(const QList<TodoItem> &items)
 {
-    items = newItems;
+    this->items = items;
 }
 
 void QTuiTodoList::addItem(const TodoItem &item)

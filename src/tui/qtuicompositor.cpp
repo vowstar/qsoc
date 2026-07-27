@@ -127,9 +127,9 @@ void QTuiCompositor::resume()
     render();
 }
 
-void QTuiCompositor::setTitle(const QString &newTitle)
+void QTuiCompositor::setTitle(const QString &title)
 {
-    title = newTitle;
+    this->title = title;
 }
 
 void QTuiCompositor::printContent(const QString &content, QTuiScrollView::LineStyle style)
@@ -144,7 +144,7 @@ void QTuiCompositor::printContent(const QString &content, QTuiScrollView::LineSt
     sealStream(StreamMode::Reasoning);
     /* Old reasoning monologue (across all groups) collapses since the
      * user is clearly past it. */
-    for (auto &group : reasoningHistory) {
+    for (const auto &group : reasoningHistory) {
         for (auto *block : group.blocks) {
             block->setFolded(true);
         }
@@ -209,7 +209,7 @@ void QTuiCompositor::feedSplitChunk(const QString &chunk, StreamMode mode)
             /* Starting a new reasoning run collapses every prior
              * reasoning group so only the freshest monologue stays
              * expanded in the scrollback. */
-            for (auto &group : reasoningHistory) {
+            for (const auto &group : reasoningHistory) {
                 for (auto *block : group.blocks) {
                     block->setFolded(true);
                 }
@@ -488,14 +488,14 @@ void QTuiCompositor::invalidate()
     screen.invalidate();
 }
 
-void QTuiCompositor::scrollContentUp(int lineCount)
+void QTuiCompositor::scrollContentUp(int lines)
 {
-    scrollView.scrollUp(lineCount);
+    scrollView.scrollUp(lines);
 }
 
-void QTuiCompositor::scrollContentDown(int lineCount)
+void QTuiCompositor::scrollContentDown(int lines)
 {
-    scrollView.scrollDown(lineCount);
+    scrollView.scrollDown(lines);
 }
 
 void QTuiCompositor::render()

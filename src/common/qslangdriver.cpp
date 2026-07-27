@@ -269,7 +269,7 @@ bool QSlangDriver::parseFileList(
             }
             /* Add file list */
             baseArgs += QString(" -f \"%1\"").arg(tempFile.fileName());
-            const QString args = baseArgs;
+            const QString &args = baseArgs;
             /* clang-format on */
 
             QSocConsole::debug().noquote().nospace()

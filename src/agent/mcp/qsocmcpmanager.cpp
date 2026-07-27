@@ -750,7 +750,7 @@ void QSocMcpManager::handleToolListFailure(QSocMcpClient *client, int id, const 
     if (name.isEmpty()) {
         return;
     }
-    auto &state = servers_[name];
+    const auto &state = servers_[name];
     if (state.pendingListId < 0 || id != state.pendingListId) {
         return;
     }

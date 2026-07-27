@@ -549,7 +549,7 @@ private:
      * @param out Output text stream
      * @return true if generation successful, false otherwise
      */
-    bool generateFSMPrimitive(const YAML::Node &fsmItem, QTextStream &out);
+    bool generateFSMPrimitive(const YAML::Node &fsmNode, QTextStream &out);
 
     /**
      * @brief Generate reset primitive controller from YAML configuration

@@ -1638,6 +1638,7 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
     }
     json response = run->llm->sendChatCompletion(
         messagesWithSystem, tools, agentConfig.temperature, run->stopSource.get_token());
+    // cppcheck-suppress identicalConditionAfterEarlyExit
     if (owner.isNull() || !owner->isCurrentRun(run)) {
         return IterationResult::Stopped;
     }
@@ -2700,6 +2701,7 @@ bool QSocAgent::maybeQueueGoalContinuation(const ActiveRunPtr &run)
                 return finish(false);
             }
             const auto refreshed = catalog->current();
+            // cppcheck-suppress identicalInnerCondition
             if (refreshed.has_value()) {
                 owner->addMessage("user", QSocGoalPrompt::budgetLimit(*refreshed));
                 catalog->noteContinuation(QStringLiteral("budget_limited"));
@@ -2824,6 +2826,7 @@ void QSocAgent::abort()
     if (!monitor.isNull()) {
         monitor->cancel(QStringLiteral("user abort"));
     }
+    // cppcheck-suppress knownConditionTrueFalse
     if (owner.isNull() || !owner->isCurrentRun(run)) {
         return;
     }
@@ -3102,6 +3105,7 @@ int QSocAgent::compact()
     if (pruned) {
         const int afterPrune = estimateMessagesTokens();
         emit      compacting(1, originalTokens, afterPrune);
+        // cppcheck-suppress identicalConditionAfterEarlyExit
         if (owner.isNull()) {
             return 0;
         }
@@ -3110,12 +3114,14 @@ int QSocAgent::compact()
     /* Layer 2: Force LLM compact (skip threshold check) */
     const int  beforeCompact = owner->estimateMessagesTokens();
     const bool compacted     = owner->compactWithLLM(true);
+    // cppcheck-suppress identicalConditionAfterEarlyExit
     if (owner.isNull()) {
         return 0;
     }
     if (compacted) {
         const int afterCompact = owner->estimateMessagesTokens();
         emit      owner->compacting(2, beforeCompact, afterCompact);
+        // cppcheck-suppress identicalConditionAfterEarlyExit
         if (owner.isNull()) {
             return 0;
         }

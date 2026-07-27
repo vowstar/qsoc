@@ -216,6 +216,7 @@ public:
      *        service for each child so concurrent sub-agents don't
      *        share the single-flight stream invariant.
      */
+    // cppcheck-suppress CastIntegerToAddressAtReturn
     QLLMService *getLLMService() const { return llmService; }
 
     /**
@@ -228,6 +229,7 @@ public:
      * @brief Get the current tool registry.
      * @return Pointer (may be nullptr if never set).
      */
+    // cppcheck-suppress CastIntegerToAddressAtReturn
     QSocToolRegistry *getToolRegistry() const { return toolRegistry; }
 
     /**

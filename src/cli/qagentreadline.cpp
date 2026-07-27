@@ -75,6 +75,7 @@ QString QAgentReadline::readLine(const QString &prompt)
     const char *result = replxxInstance->input(prompt.toStdString());
 
     if (result == nullptr) {
+        // cppcheck-suppress knownConditionTrueFalse
         if (ctrlCFlag) {
             return QString();
         }

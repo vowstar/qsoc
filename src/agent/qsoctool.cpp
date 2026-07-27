@@ -152,6 +152,7 @@ QString QSocToolRegistry::executeTool(const QString &name, const json &arguments
     }
 
     ActiveCall call(tool, owner, this);
+    // cppcheck-suppress danglingLifetime
     activeCalls_.insert(&call);
     tool->callContexts_.append(&call.context);
     QPointer<QSocToolRegistry> registry(this);

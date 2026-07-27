@@ -229,7 +229,7 @@ QLspSlangBackend::QLspSlangBackend(QObject *parent)
 
 QLspSlangBackend::~QLspSlangBackend()
 {
-    stop();
+    QLspSlangBackend::stop();
 }
 
 bool QLspSlangBackend::start(const QString &workspaceFolder)

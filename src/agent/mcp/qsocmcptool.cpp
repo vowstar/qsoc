@@ -207,6 +207,7 @@ QString QSocMcpTool::execute(const json &arguments)
     CallState  callState;
     QEventLoop loop;
     callState.loop = &loop;
+    // cppcheck-suppress danglingLifetime
     activeCalls_.insert(&callState);
 
     QPointer<QSocMcpTool> self(this);

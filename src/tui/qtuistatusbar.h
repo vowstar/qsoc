@@ -41,7 +41,7 @@ public:
      */
     static QString formatContextChip(int used, int budget, double compactFraction);
     void           setEffortLevel(const QString &level);
-    void           setModel(const QString &modelId);
+    void           setModel(const QString &model);
     /** @brief Toggle the read-only plan-mode chip (paused indicator). */
     void setPlanMode(bool active);
     /** @brief Toggle the "away" chip when the terminal loses focus. */

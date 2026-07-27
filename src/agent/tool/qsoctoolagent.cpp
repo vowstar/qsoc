@@ -898,6 +898,7 @@ QString QSocToolAgent::execute(const json &arguments)
      * fgLoop.quit() BEFORE exec(), and Qt resets the exit flag on
      * exec() entry, so the quit would be lost and exec() would block
      * forever. Only enter the loop if the run is still pending. */
+    // cppcheck-suppress duplicateCondition
     if (!fgTerminal) {
         fgLoop.exec();
     }

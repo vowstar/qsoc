@@ -11,21 +11,19 @@
 #include <QDirIterator>
 #include <QFileInfo>
 
+/* bus/ module/ schematic/ hold user-authored project content and must stay
+ * completable. Only caches and generated artifacts are ignored. */
 QAgentCompletionEngine::QAgentCompletionEngine()
-{
-    /* bus/ module/ schematic/ are user-authored YAML/XML content in QSoC
-     * projects — they must remain completable. Only ignore caches and
-     * generated artifacts here. */
-    ignoreDirs = {
-        QStringLiteral(".git"),
-        QStringLiteral(".qsoc"),
-        QStringLiteral("build"),
-        QStringLiteral("output"),
-        QStringLiteral("node_modules"),
-        QStringLiteral(".cache"),
-        QStringLiteral("__pycache__"),
-    };
-}
+    : ignoreDirs{
+          QStringLiteral(".git"),
+          QStringLiteral(".qsoc"),
+          QStringLiteral("build"),
+          QStringLiteral("output"),
+          QStringLiteral("node_modules"),
+          QStringLiteral(".cache"),
+          QStringLiteral("__pycache__"),
+      }
+{}
 
 bool QAgentCompletionEngine::shouldRescan(const QString &projectPath) const
 {

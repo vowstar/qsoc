@@ -16,7 +16,7 @@
 
 #include <optional>
 
-class QSocMonitorTaskSource : public QSocTaskSource
+class QSocMonitorTaskSource final : public QSocTaskSource
 {
     Q_OBJECT
 

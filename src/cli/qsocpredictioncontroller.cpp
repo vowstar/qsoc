@@ -130,7 +130,7 @@ void QSocPredictionController::requestPrediction(const json &messages)
     QPointer<QSocPredictionController> self(this);
     llm->sendRequestAsync(
         transcript,
-        [self, token](LLMResponse &response) {
+        [self, token](const LLMResponse &response) {
             if (self.isNull() || token != self->generation) {
                 return; /* Cancelled or controller gone */
             }

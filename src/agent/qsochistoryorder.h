@@ -48,6 +48,7 @@ inline QList<int> orderedDedup(const QStringList &displays, const QList<bool> &c
     QSet<QString> seen;
     QList<int>    kept;
     for (int j = ordered.size() - 1; j >= 0; --j) {
+        // cppcheck-suppress containerOutOfBounds
         const QString &display = displays[ordered[j]];
         if (seen.contains(display)) {
             continue;

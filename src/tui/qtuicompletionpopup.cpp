@@ -101,18 +101,18 @@ void QTuiCompletionPopup::render(QTuiScreen &screen, int startY, int width)
         MENU_BG_NORMAL);
 }
 
-void QTuiCompletionPopup::setVisible(bool vis)
+void QTuiCompletionPopup::setVisible(bool visible)
 {
-    visible = vis;
-    if (!vis) {
+    this->visible = visible;
+    if (!visible) {
         viewStart = 0;
         highlight = 0;
     }
 }
 
-void QTuiCompletionPopup::setItems(const QStringList &newItems)
+void QTuiCompletionPopup::setItems(const QStringList &items)
 {
-    items = newItems;
+    this->items = items;
     /* Hints are item-aligned; reset whenever the item list changes so a
      * stale hint cannot leak across two unrelated popup invocations. */
     hints.clear();
@@ -122,9 +122,9 @@ void QTuiCompletionPopup::setItems(const QStringList &newItems)
     adjustViewport();
 }
 
-void QTuiCompletionPopup::setHints(const QStringList &newHints)
+void QTuiCompletionPopup::setHints(const QStringList &hints)
 {
-    hints = newHints;
+    this->hints = hints;
 }
 
 void QTuiCompletionPopup::setHighlight(int index)

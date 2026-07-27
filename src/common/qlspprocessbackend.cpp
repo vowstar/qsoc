@@ -23,7 +23,7 @@ QLspProcessBackend::QLspProcessBackend(
 
 QLspProcessBackend::~QLspProcessBackend()
 {
-    stop();
+    QLspProcessBackend::stop();
 }
 
 bool QLspProcessBackend::start(const QString &workspaceFolder)
