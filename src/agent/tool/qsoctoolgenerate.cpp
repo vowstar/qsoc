@@ -90,7 +90,7 @@ QString QSocToolGenerateVerilog::execute(const json &arguments)
 
 void QSocToolGenerateVerilog::setGenerateManager(QSocGenerateManager *generateManager)
 {
-    generateManager = generateManager;
+    this->generateManager = generateManager;
 }
 
 /* QSocToolGenerateTemplate Implementation */
@@ -227,5 +227,5 @@ QString QSocToolGenerateTemplate::execute(const json &arguments)
 
 void QSocToolGenerateTemplate::setGenerateManager(QSocGenerateManager *generateManager)
 {
-    generateManager = generateManager;
+    this->generateManager = generateManager;
 }

@@ -232,7 +232,7 @@ QString QSocToolTodoList::execute(const json &arguments)
 
 void QSocToolTodoList::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager = projectManager;
+    this->projectManager = projectManager;
 }
 
 /* QSocToolTodoAdd Implementation */
@@ -374,7 +374,7 @@ QString QSocToolTodoAdd::execute(const json &arguments)
 
 void QSocToolTodoAdd::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager = projectManager;
+    this->projectManager = projectManager;
 }
 
 /* QSocToolTodoUpdate Implementation */
@@ -505,7 +505,7 @@ QString QSocToolTodoUpdate::execute(const json &arguments)
 
 void QSocToolTodoUpdate::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager = projectManager;
+    this->projectManager = projectManager;
 }
 
 /* QSocToolTodoDelete Implementation */
@@ -625,5 +625,5 @@ QString QSocToolTodoDelete::execute(const json &arguments)
 
 void QSocToolTodoDelete::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager = projectManager;
+    this->projectManager = projectManager;
 }

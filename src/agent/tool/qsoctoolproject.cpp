@@ -77,7 +77,7 @@ QString QSocToolProjectList::execute(const json &arguments)
 
 void QSocToolProjectList::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager = projectManager;
+    this->projectManager = projectManager;
 }
 
 /* QSocToolProjectShow Implementation */
@@ -154,7 +154,7 @@ QString QSocToolProjectShow::execute(const json &arguments)
 
 void QSocToolProjectShow::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager = projectManager;
+    this->projectManager = projectManager;
 }
 
 /* QSocToolProjectCreate Implementation */
@@ -239,5 +239,5 @@ QString QSocToolProjectCreate::execute(const json &arguments)
 
 void QSocToolProjectCreate::setProjectManager(QSocProjectManager *projectManager)
 {
-    projectManager = projectManager;
+    this->projectManager = projectManager;
 }

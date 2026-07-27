@@ -88,7 +88,7 @@ QString QSocToolModuleList::execute(const json &arguments)
 
 void QSocToolModuleList::setModuleManager(QSocModuleManager *moduleManager)
 {
-    moduleManager = moduleManager;
+    this->moduleManager = moduleManager;
 }
 
 /* QSocToolModuleShow Implementation */
@@ -170,7 +170,7 @@ QString QSocToolModuleShow::execute(const json &arguments)
 
 void QSocToolModuleShow::setModuleManager(QSocModuleManager *moduleManager)
 {
-    moduleManager = moduleManager;
+    this->moduleManager = moduleManager;
 }
 
 /* QSocToolModuleImport Implementation */
@@ -268,7 +268,7 @@ QString QSocToolModuleImport::execute(const json &arguments)
 
 void QSocToolModuleImport::setModuleManager(QSocModuleManager *moduleManager)
 {
-    moduleManager = moduleManager;
+    this->moduleManager = moduleManager;
 }
 
 /* QSocToolModuleBusAdd Implementation */
@@ -368,5 +368,5 @@ QString QSocToolModuleBusAdd::execute(const json &arguments)
 
 void QSocToolModuleBusAdd::setModuleManager(QSocModuleManager *moduleManager)
 {
-    moduleManager = moduleManager;
+    this->moduleManager = moduleManager;
 }

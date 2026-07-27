@@ -88,7 +88,7 @@ QString QSocToolBusList::execute(const json &arguments)
 
 void QSocToolBusList::setBusManager(QSocBusManager *busManager)
 {
-    busManager = busManager;
+    this->busManager = busManager;
 }
 
 /* QSocToolBusShow Implementation */
@@ -171,7 +171,7 @@ QString QSocToolBusShow::execute(const json &arguments)
 
 void QSocToolBusShow::setBusManager(QSocBusManager *busManager)
 {
-    busManager = busManager;
+    this->busManager = busManager;
 }
 
 /* QSocToolBusImport Implementation */
@@ -263,5 +263,5 @@ QString QSocToolBusImport::execute(const json &arguments)
 
 void QSocToolBusImport::setBusManager(QSocBusManager *busManager)
 {
-    busManager = busManager;
+    this->busManager = busManager;
 }
