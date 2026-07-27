@@ -221,6 +221,7 @@ void Test::visibleFoldExpansionKeepsBlockAnchored()
     view.setFocusedBlockIdx(10);
     view.toggleFocusedFold();
     const QStringList after = renderText(view, 32, 8).split(QLatin1Char('\n'));
+    // cppcheck-suppress negativeContainerIndex
     QVERIFY(after[blockRow].contains(QStringLiteral("row-100")));
     QVERIFY(after[blockRow + 1].contains(QStringLiteral("row-104")));
 }

@@ -256,7 +256,7 @@ McpServerConfig httpConfig(const QString &url)
     return cfg;
 }
 
-bool waitForSignal(QSignalSpy &spy, int minCount, int timeoutMs = 2000)
+bool waitForSignal(const QSignalSpy &spy, int minCount, int timeoutMs = 2000)
 {
     QElapsedTimer timer;
     timer.start();
@@ -315,7 +315,7 @@ QList<QByteArray> requestSessionsForMethod(const MockHttpServer &server, const Q
 bool establishSession(
     MockHttpServer       &server,
     QSocMcpHttpTransport &transport,
-    QSignalSpy           &messageSpy,
+    const QSignalSpy     &messageSpy,
     const QByteArray     &sessionId)
 {
     MockResponse initialize;
@@ -2036,7 +2036,7 @@ private slots:
         first.bodyDelayMs = 3000;
         server.enqueueForRequestId(2, first);
 
-        MockResponse second = first;
+        const MockResponse &second = first;
         server.enqueueForRequestId(3, second);
 
         transport.sendMessage({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "first"}});

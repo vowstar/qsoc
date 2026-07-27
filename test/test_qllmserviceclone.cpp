@@ -1712,7 +1712,7 @@ private slots:
 
         int     callbackCount = 0;
         QString error;
-        service.sendRequestAsync(QStringLiteral("runtime prompt"), [&](LLMResponse &response) {
+        service.sendRequestAsync(QStringLiteral("runtime prompt"), [&](const LLMResponse &response) {
             callbackCount++;
             error = response.errorMessage;
         });
@@ -1812,7 +1812,7 @@ private slots:
         bool    success       = false;
         QString content;
         QString error;
-        service.sendRequestAsync(QStringLiteral("runtime prompt"), [&](LLMResponse &response) {
+        service.sendRequestAsync(QStringLiteral("runtime prompt"), [&](const LLMResponse &response) {
             callbackCount++;
             success = response.success;
             content = response.content;
@@ -1857,7 +1857,7 @@ private slots:
         int     callbackCount = 0;
         bool    success       = false;
         QString content;
-        service->sendRequestAsync(QStringLiteral("runtime prompt"), [&](LLMResponse &response) {
+        service->sendRequestAsync(QStringLiteral("runtime prompt"), [&](const LLMResponse &response) {
             callbackCount++;
             success = response.success;
             content = response.content;
@@ -1911,7 +1911,7 @@ private slots:
 
         int     callbackCount = 0;
         QString error;
-        service->sendRequestAsync(QStringLiteral("runtime prompt"), [&](LLMResponse &response) {
+        service->sendRequestAsync(QStringLiteral("runtime prompt"), [&](const LLMResponse &response) {
             callbackCount++;
             error = response.errorMessage;
             delete service.data();
@@ -2361,10 +2361,11 @@ private slots:
         for (const QString &content : expected) {
             bool        completed = false;
             LLMResponse response;
-            service.sendRequestAsync(QStringLiteral("runtime prompt"), [&](LLMResponse &result) {
-                response  = result;
-                completed = true;
-            });
+            service
+                .sendRequestAsync(QStringLiteral("runtime prompt"), [&](const LLMResponse &result) {
+                    response  = result;
+                    completed = true;
+                });
             QVERIFY2(waitUntil([&]() { return completed; }), "async request did not finish");
             QVERIFY2(response.success, qPrintable(response.errorMessage));
             QCOMPARE(response.content, content);

@@ -1605,11 +1605,11 @@ UPLINK_TEST_CELL_16BIT:
             }
 
             /* Additional debugging: check if modules were created correctly */
-            const QDir moduleDir(projectManager.getModulePath());
-            qDebug() << "Module directory:" << moduleDir.absolutePath();
+            const QDir createdModuleDir(projectManager.getModulePath());
+            qDebug() << "Module directory:" << createdModuleDir.absolutePath();
             qDebug() << "Module files:";
             for (const QString &file :
-                 moduleDir.entryList(QStringList() << "*UPLINK_TEST*", QDir::Files)) {
+                 createdModuleDir.entryList(QStringList() << "*UPLINK_TEST*", QDir::Files)) {
                 qDebug() << "  " << file;
             }
 
@@ -2115,9 +2115,9 @@ ampfifo_2phase:
                 const QRegularExpression regex("Successfully generated Verilog code: (.+\\.v)");
                 const QRegularExpressionMatch match = regex.match(msg);
                 if (match.hasMatch()) {
-                    const QString filePath = match.captured(1);
-                    if (QFile::exists(filePath)) {
-                        QFile file(filePath);
+                    const QString generatedPath = match.captured(1);
+                    if (QFile::exists(generatedPath)) {
+                        QFile file(generatedPath);
                         if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
                             verilogContent = file.readAll();
                             file.close();

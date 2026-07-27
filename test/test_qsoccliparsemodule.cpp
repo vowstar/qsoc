@@ -58,9 +58,6 @@ private:
         }
 
         for (const QString &msg : messageList) {
-            if (msg.isNull() || msg.isEmpty()) {
-                continue;
-            }
             if (msg.contains(message, Qt::CaseInsensitive)) {
                 return true;
             }

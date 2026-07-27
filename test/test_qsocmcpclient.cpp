@@ -42,7 +42,7 @@ bool waitForState(const QSocMcpClient *client, QSocMcpClient::State target, int 
     return true;
 }
 
-bool waitForSignal(QSignalSpy &spy, int minCount, int timeoutMs = 2000)
+bool waitForSignal(const QSignalSpy &spy, int minCount, int timeoutMs = 2000)
 {
     QElapsedTimer timer;
     timer.start();

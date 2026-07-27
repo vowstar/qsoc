@@ -30,8 +30,8 @@ public:
 
     QString getName() const override
     {
-        const QString name     = name_;
-        const auto    callback = std::exchange(callback_, {});
+        const QString &name     = name_;
+        const auto     callback = std::exchange(callback_, {});
         if (callback) {
             callback();
         }

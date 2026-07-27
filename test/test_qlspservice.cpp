@@ -172,8 +172,10 @@ void Test::didSave_triggersDiagnostics()
 
     /* After didSave, diagnostics should be available. */
     QJsonArray diags = service->diagnostics(filePath);
-    /* Valid file may have zero or warning-only diagnostics. */
-    QVERIFY(diags.isEmpty() || !diags.isEmpty());
+    /* A valid file may produce none; whatever appears must be a diagnostic object. */
+    for (const QJsonValue &diag : diags) {
+        QVERIFY(diag.isObject());
+    }
 
     service->stopAll();
 }

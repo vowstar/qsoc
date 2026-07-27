@@ -56,9 +56,6 @@ private:
         }
 
         for (const QString &msg : messageList) {
-            if (msg.isNull() || msg.isEmpty()) {
-                continue;
-            }
             if (msg.contains(message, Qt::CaseInsensitive)) {
                 return true;
             }
@@ -803,7 +800,7 @@ endmodule
         /* Then ensure the module has a bus assigned */
         {
             QSocCliWorker     socCliWorker;
-            const QString     projectPath = projectManager.getProjectPath();
+            const QString     projectDirPath = projectManager.getProjectPath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -818,7 +815,7 @@ endmodule
                    "--project",
                    projectName,
                    "-d",
-                   projectPath,
+                   projectDirPath,
                    "apb"};
             socCliWorker.setup(appArguments, false);
             socCliWorker.run();
@@ -844,7 +841,7 @@ endmodule
         /* Now test module bus remove command */
         messageList.clear();
         QSocCliWorker     socCliWorker;
-        const QString     projectPath = projectManager.getProjectPath();
+        const QString     projectDirPath = projectManager.getProjectPath();
         const QStringList appArguments
             = {"qsoc",
                "module",
@@ -855,7 +852,7 @@ endmodule
                "--project",
                projectName,
                "-d",
-               projectPath,
+               projectDirPath,
                "apb"};
 
         socCliWorker.setup(appArguments, false);
@@ -1105,7 +1102,7 @@ endmodule
         /* Add a bus to the module */
         {
             QSocCliWorker     socCliWorker;
-            const QString     projectPath = projectManager.getProjectPath();
+            const QString     projectDirPath = projectManager.getProjectPath();
             const QStringList appArguments
                 = {"qsoc",
                    "module",
@@ -1120,7 +1117,7 @@ endmodule
                    "--project",
                    projectName,
                    "-d",
-                   projectPath,
+                   projectDirPath,
                    "test_master"};
             socCliWorker.setup(appArguments, false);
             socCliWorker.run();
@@ -1132,7 +1129,7 @@ endmodule
         /* Now test module bus show command */
         messageList.clear();
         QSocCliWorker     socCliWorker;
-        const QString     projectPath = projectManager.getProjectPath();
+        const QString     projectDirPath = projectManager.getProjectPath();
         const QStringList appArguments
             = {"qsoc",
                "module",
@@ -1143,7 +1140,7 @@ endmodule
                "--project",
                projectName,
                "-d",
-               projectPath,
+               projectDirPath,
                "test_master"};
 
         socCliWorker.setup(appArguments, false);

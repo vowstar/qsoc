@@ -448,7 +448,8 @@ uart:
     QVERIFY(invalidDirection);
     QVERIFY(emptyMapping);
 
-    bool      ok         = false;
+    bool ok = false;
+    // cppcheck-suppress nullPointer
     const int sourceRow  = invalidDirection->data(Qt::UserRole).toInt(&ok);
     auto     *signalView = window.findChild<QTableView *>(QStringLiteral("busSignalTableView"));
     QVERIFY(ok);

@@ -60,6 +60,7 @@ public:
         if (!wait.cancelled) {
             loop.exec();
         }
+        // cppcheck-suppress danglingLifetime
         activeWaits_.remove(&wait);
 
         return (wait.cancelled ? QStringLiteral("aborted:") : QStringLiteral("completed:")) + label;
