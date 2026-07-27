@@ -21,7 +21,7 @@ public:
     {
         QString label;
         QString hint;
-        bool    marked;
+        bool    marked = false;
     };
 
     int  lineCount() const override;

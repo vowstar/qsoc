@@ -50,7 +50,9 @@ void QTuiMenu::render(QTuiScreen &screen, int startY, int width)
     /* Items */
     for (int idx = 0; idx < items.size(); idx++) {
         const MenuItem &item = items[idx];
-        QString         num  = QString("  %1 ").arg(idx + 1, 2);
+        QString         num  = QString("%1 %2 ")
+                                   .arg(item.marked ? QLatin1Char('*') : QLatin1Char(' '))
+                                   .arg(idx + 1, 2);
         QString         body = item.label;
         if (!item.hint.isEmpty()) {
             body += QStringLiteral(" ") + item.hint;
@@ -82,13 +84,13 @@ void QTuiMenu::render(QTuiScreen &screen, int startY, int width)
         static_cast<QTuiBgColor>(BG_NORMAL));
 }
 
-void QTuiMenu::setTitle(const QString &newTitle)
+void QTuiMenu::setTitle(const QString &title)
 {
-    title = newTitle;
+    this->title = title;
 }
-void QTuiMenu::setItems(const QList<MenuItem> &newItems)
+void QTuiMenu::setItems(const QList<MenuItem> &items)
 {
-    items = newItems;
+    this->items = items;
 }
 void QTuiMenu::setHighlight(int index)
 {
@@ -256,10 +258,11 @@ int QTuiMenu::exec()
                 } else {
                     const int       rawIdx = filteredIndices[visIdx];
                     const MenuItem &item   = items[rawIdx];
+                    const QChar     mark   = item.marked ? QLatin1Char('*') : QLatin1Char(' ');
                     if (searchable) {
-                        line = QStringLiteral("  ") + item.label;
+                        line = QString("%1 %2").arg(mark).arg(item.label);
                     } else {
-                        line = QString("  %1 %2").arg(rawIdx + 1, 2).arg(item.label);
+                        line = QString("%1 %2 %3").arg(mark).arg(rawIdx + 1, 2).arg(item.label);
                     }
                     if (!item.hint.isEmpty()) {
                         line += QStringLiteral("  ") + item.hint;
