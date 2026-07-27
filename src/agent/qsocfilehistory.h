@@ -233,8 +233,6 @@ private:
     QString         readBackup(const QString &sha256) const;
     QList<Snapshot> loadSnapshots() const;
     void            saveSnapshots(const QList<Snapshot> &snapshots) const;
-    void            appendSnapshot(const Snapshot &snapshot) const;
-    void            evictOldest();
     /* Walk every surviving snapshot, collect referenced sha256 set, and
      * delete any .bak blob that is no longer referenced. */
     void gcOrphanedBackups() const;

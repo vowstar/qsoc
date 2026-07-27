@@ -419,17 +419,6 @@ void QSocFileHistory::saveSnapshots(const QList<Snapshot> &snapshots) const
     cacheValid      = true;
 }
 
-void QSocFileHistory::appendSnapshot(const Snapshot & /*snapshot*/) const
-{
-    /* Reserved for future optimisation: avoid full rewrite on the hot
-     * append path. Current callers always go through saveSnapshots(). */
-}
-
-void QSocFileHistory::evictOldest()
-{
-    /* Currently folded into makeSnapshot's trim loop. */
-}
-
 void QSocFileHistory::gcOrphanedBackups() const
 {
     /* Collect every sha256 still referenced by a surviving snapshot. */

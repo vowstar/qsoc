@@ -828,8 +828,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                             portDirection = "output";
                                         } else if (portDirection == "in" || portDirection == "input") {
                                             portDirection = "input";
-                                        } else if (portDirection == "inout") {
-                                            portDirection = "inout";
                                         }
                                     }
                                 }
@@ -1260,12 +1258,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                        part of the module header; emitting another `wire` would duplicate
                        the identifier. */
                     if (topLevelPortNames.contains(netName)) {
-                        if (!connectedToTopPort) {
-                            QSocConsole::warn()
-                                << "Net" << netName
-                                << "shares a name with a top-level port; using the port "
-                                   "directly. Add 'connect:' to silence this warning";
-                        }
+                        QSocConsole::warn()
+                            << "Net" << netName
+                            << "shares a name with a top-level port; using the port "
+                               "directly. Add 'connect:' to silence this warning";
                     } else if (!netWidth.isEmpty()) {
                         /* Clean the type string to remove unwanted keywords like 'reg', 'logic', etc. */
                         const QString cleanedWidth
@@ -1280,54 +1276,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         out << "    wire " << netName << ";\n";
                         scalarNets.insert(netName);
                     }
-                } else {
-                    /* Check for width mismatches between port and net */
-                    QString portWidth     = "";
-                    QString netWidth      = "";
-                    QString portDirection = "input";
-
-                    /* Get port information */
-                    if (netlistData["port"]
-                        && netlistData["port"][connectedPortName.toStdString()]) {
-                        auto portNode = netlistData["port"][connectedPortName.toStdString()];
-
-                        /* Get port direction */
-                        if (portNode["direction"] && portNode["direction"].IsScalar()) {
-                            const QString dirStr = QString::fromStdString(
-                                                       portNode["direction"].as<std::string>())
-                                                       .toLower();
-
-                            /* Handle both full and abbreviated forms */
-                            if (dirStr == "out" || dirStr == "output") {
-                                portDirection = "output";
-                            } else if (dirStr == "in" || dirStr == "input") {
-                                portDirection = "input";
-                            } else if (dirStr == "inout") {
-                                portDirection = "inout";
-                            }
-                        }
-
-                        /* Get port width/type */
-                        if (portNode["type"] && portNode["type"].IsScalar()) {
-                            portWidth = QString::fromStdString(portNode["type"].as<std::string>());
-                        }
-                    }
-
-                    /* Net width fallback was a no-op: `net.<name>` is required
-                       to be a sequence so the sibling `type:` key never exists. */
-
-                    /* Check width compatibility */
-                    const bool widthMismatch = !portWidth.isEmpty() && !netWidth.isEmpty()
-                                               && portWidth != netWidth;
-
-                    /* Add width mismatch FIXME comment if needed */
-                    if (widthMismatch) {
-                        out << "    /* FIXME: Port " << connectedPortName << " (net " << netName
-                            << ") width mismatch - port width: " << portWidth
-                            << ", net width: " << netWidth << " */\n";
-                    }
-
-                    /* Note: Removed inout bidirectional behavior warning - this is normal for uplink connections */
                 }
             }
             out << "\n";
@@ -1339,6 +1287,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 for (auto instIt = instancePortConnections.begin();
                      instIt != instancePortConnections.end();
                      ++instIt) {
+                    // cppcheck-suppress constVariableReference
                     QMap<QString, QString>         &portMap = instIt.value();
                     static const QRegularExpression scrubRegex(
                         R"(^(~?)([A-Za-z_][A-Za-z0-9_]*)\[\s*0\s*(?::\s*0\s*)?\]$)");

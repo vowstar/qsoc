@@ -1008,14 +1008,7 @@ void QSocClockPrimitive::generateOutputAssignments(
                 out << "        .test_en(" << testEn << "),\n";
 
                 // Auto module handles div value automatically (auto-sync & self-strobe div_valid)
-                if (!target.div.value.isEmpty()) {
-                    // Dynamic mode: connect to value signal
-                    out << "        .div(" << target.div.value << "),\n";
-                } else {
-                    // Static mode: tie to default constant
-                    out << "        .div(" << target.div.width << "'d" << target.div.default_value
-                        << "),\n";
-                }
+                out << "        .div(" << target.div.value << "),\n";
 
                 out << "        .clk_out(" << divTempOutput << "),\n";
 
@@ -1405,19 +1398,6 @@ void QSocClockPrimitive::generateMuxInstance(
     out << "\n";
 }
 
-QSocClockPrimitive::MuxType QSocClockPrimitive::parseMuxType(const QString &typeStr)
-{
-    if (typeStr == "STD_MUX")
-        return STD_MUX;
-    if (typeStr == "GF_MUX")
-        return GF_MUX;
-
-    // Validate mux type
-    QSocConsole::error() << "Unknown mux type:" << typeStr;
-    QSocConsole::err() << "Valid types: STD_MUX, GF_MUX" << "\n";
-    return STD_MUX; // Still return something for compilation
-}
-
 QString QSocClockPrimitive::getLinkWireName(
     const QString &targetName, const QString &sourceName, int linkIndex)
 {
@@ -1522,27 +1502,6 @@ bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
 
     /* Format generated clock_cell.v file if verible-verilog-format is available */
     QSocGenerateManager::formatVerilogFile(filePath);
-
-    return true;
-}
-
-bool QSocClockPrimitive::isClockCellFileComplete(const QString &filePath)
-{
-    QFile file(filePath);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return false;
-    }
-
-    QString content = file.readAll();
-    file.close();
-
-    // Check if all required cells are present
-    QStringList requiredCells = getRequiredTemplateCells();
-    for (const QString &cellName : requiredCells) {
-        if (!content.contains(QString("module %1").arg(cellName))) {
-            return false;
-        }
-    }
 
     return true;
 }
@@ -3026,7 +2985,8 @@ QString QSocClockPrimitive::typstTarget(
         QString     te   = testEnable.isEmpty() ? QStringLiteral("test_en") : testEnable;
         const float tmH  = 2.0f;
         const float tmY  = muxCenterY - 3.0f * tmH / 4.0f; // port-in0 aligns at muxCenterY
-        finalOutY        = tmY + tmH / 2.0f;               // test MUX output at its center
+        // cppcheck-suppress duplicateExpression
+        finalOutY = tmY + tmH / 2.0f; // test MUX output at its center
         s << "  element.multiplexer(\n";
         s << "    x: " << currentX << ", y: " << tmY << ", w: 1.0, h: " << tmH << ",\n";
         s << "    id: \"" << tmId << "\", fill: util.colors.orange, entries: 2\n";

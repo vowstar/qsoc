@@ -552,11 +552,8 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
             const int scrollRange = totalVisible - height;
             const int clampedOff  = qBound(0, scrollOffset, scrollRange);
             const int currentPos  = scrollRange - clampedOff;
-            int       thumbTop    = 0;
-            if (scrollRange > 0) {
-                thumbTop = currentPos * (height - thumbSize) / scrollRange;
-            }
-            thumbTop              = qBound(0, thumbTop, height - thumbSize);
+            const int thumbTop
+                = qBound(0, currentPos * (height - thumbSize) / scrollRange, height - thumbSize);
             const int thumbBottom = thumbTop + thumbSize;
             for (int row = 0; row < height; ++row) {
                 const bool  inThumb   = (row >= thumbTop && row < thumbBottom);
@@ -638,20 +635,20 @@ void QTuiScrollView::toggleFocusedFold()
     block->setFolded(!block->isFolded());
 }
 
-void QTuiScrollView::scrollUp(int count)
+void QTuiScrollView::scrollUp(int lines)
 {
-    if (count <= 0 || scrollOffset >= maxScrollOffset_) {
+    if (lines <= 0 || scrollOffset >= maxScrollOffset_) {
         return;
     }
-    scrollOffset += qMin(count, maxScrollOffset_ - scrollOffset);
+    scrollOffset += qMin(lines, maxScrollOffset_ - scrollOffset);
 }
 
-void QTuiScrollView::scrollDown(int count)
+void QTuiScrollView::scrollDown(int lines)
 {
-    if (count <= 0) {
+    if (lines <= 0) {
         return;
     }
-    scrollOffset = qMax(0, scrollOffset - count);
+    scrollOffset = qMax(0, scrollOffset - lines);
 }
 
 void QTuiScrollView::scrollToBottom()

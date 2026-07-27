@@ -212,7 +212,6 @@ private:
      * @param filePath Path to clock_cell.v file
      * @return true if file exists and contains all required cells
      */
-    bool isClockCellFileComplete(const QString &filePath);
 
     /**
      * @brief Get all required template cell names with QSOC_ prefix
@@ -283,7 +282,6 @@ private:
      * @param typeStr Type string ("STD_MUX" or "GF_MUX")
      * @return Mux type enumeration value
      */
-    MuxType parseMuxType(const QString &typeStr);
 
     /**
      * @brief Get wire name for clock link

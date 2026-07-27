@@ -69,17 +69,13 @@ void QSocFSMPrimitive::generateModuleHeader(const YAML::Node &fsmNode, QTextStre
         /* Microcode FSM ports */
 
         /* Branch condition input for microcode FSM */
-        QMap<QString, QPair<int, int>> fields;
-        bool                           hasBranch = false;
-        if (fsmNode["fields"] && fsmNode["fields"].IsMap()) {
-            for (const auto &fieldEntry : fsmNode["fields"]) {
-                if (fieldEntry.first.IsScalar()) {
-                    const QString fieldName = QString::fromStdString(
-                        fieldEntry.first.as<std::string>());
-                    if (fieldName == "branch") {
-                        hasBranch = true;
-                        break;
-                    }
+        bool hasBranch = false;
+        for (const auto &fieldEntry : fsmNode["fields"]) {
+            if (fieldEntry.first.IsScalar()) {
+                const QString fieldName = QString::fromStdString(fieldEntry.first.as<std::string>());
+                if (fieldName == "branch") {
+                    hasBranch = true;
+                    break;
                 }
             }
         }
@@ -105,31 +101,29 @@ void QSocFSMPrimitive::generateModuleHeader(const YAML::Node &fsmNode, QTextStre
         }
 
         /* Control outputs from fields (excluding branch and next) */
-        if (fsmNode["fields"] && fsmNode["fields"].IsMap()) {
-            out << "    /* Control outputs */\n";
-            for (const auto &fieldEntry : fsmNode["fields"]) {
-                if (!fieldEntry.first.IsScalar() || !fieldEntry.second.IsSequence()
-                    || fieldEntry.second.size() != 2) {
-                    continue;
+        out << "    /* Control outputs */\n";
+        for (const auto &fieldEntry : fsmNode["fields"]) {
+            if (!fieldEntry.first.IsScalar() || !fieldEntry.second.IsSequence()
+                || fieldEntry.second.size() != 2) {
+                continue;
+            }
+
+            const QString fieldName = QString::fromStdString(fieldEntry.first.as<std::string>());
+            const int     loBit     = fieldEntry.second[0].as<int>();
+            const int     hiBit     = fieldEntry.second[1].as<int>();
+
+            if (fieldName != "branch" && fieldName != "next") {
+                QString outputPortName = fieldName;
+                if (fieldName == "ctrl") {
+                    outputPortName = "ctrl_bus"; /* Map ctrl field to ctrl_bus port */
                 }
 
-                const QString fieldName = QString::fromStdString(fieldEntry.first.as<std::string>());
-                const int loBit = fieldEntry.second[0].as<int>();
-                const int hiBit = fieldEntry.second[1].as<int>();
-
-                if (fieldName != "branch" && fieldName != "next") {
-                    QString outputPortName = fieldName;
-                    if (fieldName == "ctrl") {
-                        outputPortName = "ctrl_bus"; /* Map ctrl field to ctrl_bus port */
-                    }
-
-                    if (loBit == hiBit) {
-                        out << "    output " << outputPortName << ",                      /**< "
-                            << fieldName << " field output */\n";
-                    } else {
-                        out << "    output [" << hiBit << ":" << loBit << "] " << outputPortName
-                            << ",        /**< " << fieldName << " field output */\n";
-                    }
+                if (loBit == hiBit) {
+                    out << "    output " << outputPortName << ",                      /**< "
+                        << fieldName << " field output */\n";
+                } else {
+                    out << "    output [" << hiBit << ":" << loBit << "] " << outputPortName
+                        << ",        /**< " << fieldName << " field output */\n";
                 }
             }
         }

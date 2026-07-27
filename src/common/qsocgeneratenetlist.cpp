@@ -1343,8 +1343,6 @@ QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirection
                             direction = "output";
                         } else if (direction == "in" || direction == "input") {
                             direction = "input";
-                        } else if (direction == "inout") {
-                            direction = "inout";
                         }
                     }
                 }
@@ -2662,7 +2660,7 @@ bool QSocGenerateManager::doBitRangesOverlap(const QString &range1, const QStrin
 
     // Ensure msb >= lsb for range1
     if (msb1 < lsb1) {
-        qSwap(msb1, lsb1);
+        std::swap(msb1, lsb1);
     }
 
     // Parse range2
@@ -2687,7 +2685,7 @@ bool QSocGenerateManager::doBitRangesOverlap(const QString &range1, const QStrin
 
     // Ensure msb >= lsb for range2
     if (msb2 < lsb2) {
-        qSwap(msb2, lsb2);
+        std::swap(msb2, lsb2);
     }
 
     // Check for overlap: ranges [a:b] and [c:d] overlap if they have any common bits
@@ -2745,7 +2743,7 @@ bool QSocGenerateManager::doBitRangesProvideFullCoverage(const QStringList &rang
 
         // Ensure msb >= lsb
         if (msb < lsb) {
-            qSwap(msb, lsb);
+            std::swap(msb, lsb);
         }
 
         // Mark coverage for this range

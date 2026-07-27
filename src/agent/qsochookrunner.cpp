@@ -75,15 +75,7 @@ void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &p
     m_process
         ->start(QStringLiteral("/bin/bash"), QStringList() << QStringLiteral("-c") << cfg.command);
 
-    QPointer<QSocHookRunner> guard(this);
-    QProcess *const          process = m_process;
-    const bool               started = process->waitForStarted(5000);
-    if (!guard) {
-        return;
-    }
-    if (process != m_process || m_phase != Phase::Running) {
-        return;
-    }
+    const bool started = m_process->waitForStarted(5000);
     if (!started) {
         m_result.status       = Status::StartFailed;
         m_result.errorMessage = m_process->errorString();
@@ -155,14 +147,17 @@ void QSocHookRunner::publishResult()
     QPointer<QSocHookRunner> guard(this);
     m_phase = Phase::Publishing;
     emit resultPublished(m_result);
+    // cppcheck-suppress knownConditionTrueFalse
     if (!guard) {
         return;
     }
     emit resultReady(m_result);
+    // cppcheck-suppress knownConditionTrueFalse
     if (!guard) {
         return;
     }
     emit finished();
+    // cppcheck-suppress knownConditionTrueFalse
     if (!guard) {
         return;
     }

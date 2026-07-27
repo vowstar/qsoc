@@ -77,8 +77,6 @@ void BusEditorWindow::handleImportCsv()
         [this]() { return captureDefinition(); },
         [this](const QSocBusDefinition &definition) { restoreDefinition(definition); },
         tr("Import CSV"));
-    if (filePaths.isEmpty())
-        return;
 
     QStringList                    warnings;
     const QList<QSocBusSignalMode> rows = busManager.parseBusCsvFiles(filePaths, &warnings);
