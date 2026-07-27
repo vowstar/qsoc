@@ -546,6 +546,9 @@ bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
     }
 
     QTextStream out(&file);
+    /* The generated top carries a time scale; a cell file without one makes
+       the design fail elaboration as soon as the two are read together. */
+    out << "`timescale 1ns / 1ps\n\n";
     out << generatePowerFSMModule();
     out << "\n" << generateResetPipeModule();
     file.close();
