@@ -415,21 +415,24 @@ SchematicWindow::ConnectionInfo SchematicWindow::findStartConnection(
         return info;
     }
 
-    /* Get wire start position */
-    QPointF startPos;
+    /* Collect every endpoint of the net. Naming used to consider the first
+       point only, so a wire drawn from empty canvas towards a port stayed
+       unnamed and was later dropped from the exported netlist. */
+    QList<QPointF> endpoints;
     for (const auto &wire : wireNet->wires()) {
         auto qsWire = std::dynamic_pointer_cast<QSchematic::Items::Wire>(wire);
-        if (qsWire && qsWire->points_count() > 0) {
-            startPos = qsWire->scenePos() + qsWire->pointsRelative().first();
-            break;
+        if (!qsWire || qsWire->points_count() == 0) {
+            continue;
         }
+        endpoints << qsWire->scenePos() + qsWire->pointsRelative().first();
+        endpoints << qsWire->scenePos() + qsWire->pointsRelative().last();
     }
 
-    if (startPos.isNull()) {
+    if (endpoints.isEmpty()) {
         return info;
     }
 
-    /* Find connector at start position */
+    /* Find connector at any endpoint */
     const qreal tolerance = 5.0; // Grid tolerance
     for (const auto &node : scene.nodes()) {
         auto socItem = std::dynamic_pointer_cast<SchematicModule>(node);
@@ -442,11 +445,17 @@ SchematicWindow::ConnectionInfo SchematicWindow::findStartConnection(
                 continue;
             }
 
-            /* Check if connector is at wire start position */
-            QPointF connectorPos = connector->scenePos();
-            qreal   distance     = QLineF(connectorPos, startPos).length();
+            /* Check if connector sits at any endpoint of the net */
+            const QPointF connectorPos = connector->scenePos();
+            bool          touches      = false;
+            for (const QPointF &endpoint : endpoints) {
+                if (QLineF(connectorPos, endpoint).length() < tolerance) {
+                    touches = true;
+                    break;
+                }
+            }
 
-            if (distance < tolerance) {
+            if (touches) {
                 /* Found the start connector */
                 info.instanceName = socItem->instanceName();
                 info.portName     = connector->text();
@@ -525,11 +534,20 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
 
     QMap<QString, InstanceInfo> instances;
 
+    /* A net or port that carries no name cannot be written, and a wire the
+       user can see on the canvas must never vanish from the output without
+       saying so. */
+    int droppedNets  = 0;
+    int droppedPorts = 0;
+
     /* Process all nets */
     for (const auto &net : netlist.nets) {
         QString netName = net.name;
         if (netName.isEmpty()) {
-            continue; /* Skip unnamed nets */
+            if (!net.connectorNodePairs.empty()) {
+                ++droppedNets;
+            }
+            continue;
         }
 
         /* For each connector in this net, add port connection to its instance */
@@ -561,7 +579,8 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
                 portName = connector->label()->text();
             }
             if (portName.isEmpty()) {
-                continue; /* Skip connectors without port names */
+                ++droppedPorts;
+                continue;
             }
 
             /* Check if this is a bus connector */
@@ -630,6 +649,31 @@ bool SchematicWindow::exportNetlist(const QString &filePath)
     if (!fout) {
         QSocConsole::warn() << "Failed to write netlist to file:" << filePath;
         return false;
+    }
+
+    if (instances.isEmpty()) {
+        QSocConsole::warn() << "Netlist export produced no instances:" << filePath;
+        QMessageBox::warning(
+            this,
+            tr("Export Netlist"),
+            tr("%1 contains no instances.\n\n"
+               "A wire has to end on a port for the connection to be exported; one that "
+               "only looks attached is not connected.")
+                .arg(QFileInfo(filePath).fileName()));
+        return true;
+    }
+
+    if (droppedNets > 0 || droppedPorts > 0) {
+        QSocConsole::warn() << "Netlist export skipped" << droppedNets << "unnamed net(s) and"
+                            << droppedPorts << "unnamed port(s)";
+        QMessageBox::warning(
+            this,
+            tr("Export Netlist"),
+            tr("%1 net(s) and %2 port(s) had no name and were left out of %3.\n\n"
+               "Name them by double-clicking the wire or the port, then export again.")
+                .arg(droppedNets)
+                .arg(droppedPorts)
+                .arg(QFileInfo(filePath).fileName()));
     }
 
     return true;
