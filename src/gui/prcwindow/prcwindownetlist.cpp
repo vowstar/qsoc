@@ -6,8 +6,8 @@
 #include "common/qsocprojectmanager.h"
 #include "gui/prcwindow/prcconfigdialog.h"
 #include "gui/prcwindow/prcprimitiveitem.h"
-#include "gui/prcwindow/prcwindow.h"
 #include "gui/prcwindow/prcpropertycommands.h"
+#include "gui/prcwindow/prcwindow.h"
 
 #include <yaml-cpp/yaml.h>
 #include <QDir>
@@ -183,7 +183,6 @@ void PrcWindow::handleWireDoubleClick(QSchematic::Items::WireNet *wireNet)
     if (!wireNet) {
         return;
     }
-
 
     /* Determine source and target names from wire connections */
     QString sourceName = "source";

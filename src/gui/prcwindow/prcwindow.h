@@ -376,12 +376,12 @@ private:
 
     /* Member Variables */
 
-    Ui::PrcWindow                *ui;                /**< Main window UI */
-    PrcLibrary::PrcScene          scene;             /**< PRC scene */
-    QSchematic::Settings          settings;          /**< Scene settings */
-    PrcLibrary::PrcLibraryWidget *prcLibraryWidget;  /**< PRC library widget */
-    QSocProjectManager           *projectManager;    /**< Project manager */
-    QString                       m_currentFilePath; /**< Current file path */
-    QLabel    *statusBarPermanentLabel = nullptr; /**< Status bar label */
+    Ui::PrcWindow                *ui;                                /**< Main window UI */
+    PrcLibrary::PrcScene          scene;                             /**< PRC scene */
+    QSchematic::Settings          settings;                          /**< Scene settings */
+    PrcLibrary::PrcLibraryWidget *prcLibraryWidget;                  /**< PRC library widget */
+    QSocProjectManager           *projectManager;                    /**< Project manager */
+    QString                       m_currentFilePath;                 /**< Current file path */
+    QLabel                       *statusBarPermanentLabel = nullptr; /**< Status bar label */
 };
 #endif // PRCWINDOW_H

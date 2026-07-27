@@ -4,10 +4,10 @@
 #include "gui/prcwindow/prcwindow.h"
 #include "common/qsocprojectmanager.h"
 #include "gui/items/editoritemfactory.h"
-#include "gui/prcwindow/prcpropertycommands.h"
 #include "gui/prcwindow/prcconfigdialog.h"
 #include "gui/prcwindow/prclibrarywidget.h"
 #include "gui/prcwindow/prcprimitiveitem.h"
+#include "gui/prcwindow/prcpropertycommands.h"
 
 #include "./ui_prcwindow.h"
 
@@ -83,7 +83,6 @@ PrcWindow::PrcWindow(QWidget *parent, QSocProjectManager *projectManager)
 
     ui->actionUndo->setEnabled(scene.undoStack()->canUndo());
     ui->actionRedo->setEnabled(scene.undoStack()->canRedo());
-
 
     connect(scene.undoStack(), &QUndoStack::canUndoChanged, [this](bool) {
         ui->actionUndo->setEnabled(scene.undoStack()->canUndo());

@@ -107,6 +107,21 @@ private slots:
         QVERIFY(!error.isEmpty());
     }
 
+    void cloneNodeBreaksTheReferenceSemantics()
+    {
+        /* YAML::Node copies alias the same data, so a definition snapshot
+           taken without cloning would follow every later edit. */
+        YAML::Node original = YAML::Load("vendor: acme\nrevision: 1\n");
+
+        const YAML::Node aliased = original;
+        const YAML::Node cloned  = QSocYamlUtils::cloneNode(original);
+
+        original["vendor"] = "other";
+
+        QCOMPARE(QString::fromStdString(aliased["vendor"].as<std::string>()), QString("other"));
+        QCOMPARE(QString::fromStdString(cloned["vendor"].as<std::string>()), QString("acme"));
+    }
+
     void failsOnAMissingFile()
     {
         int     version = 0;
