@@ -6634,9 +6634,9 @@ bool QSocCliWorker::runAgentLoop(
 
                 const QString sshConfigPath = QDir::homePath() + QStringLiteral("/.ssh/config");
                 if (QFileInfo::exists(sshConfigPath)) {
-                    QSocSshConfigParser parser;
-                    parser.parse(sshConfigPath);
-                    for (const QString &alias : parser.listMenuHosts()) {
+                    QSocSshConfigParser sshParser;
+                    sshParser.parse(sshConfigPath);
+                    for (const QString &alias : sshParser.listMenuHosts()) {
                         if (shownAliases.contains(alias)) {
                             continue;
                         }
@@ -6952,6 +6952,7 @@ bool QSocCliWorker::runAgentLoop(
                 delete remoteSftp;
                 remoteSftp = nullptr;
             }
+            // cppcheck-suppress knownConditionTrueFalse
             if (remoteSession != nullptr) {
                 remoteSession->disconnectFromHost();
                 delete remoteSession;
@@ -7910,7 +7911,7 @@ bool QSocCliWorker::runAgentLoop(
             QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, &loop, [agent]() {
                 agent->abort();
             });
-            auto connCtrlC = QObject::connect(
+            auto execCtrlC = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
                 agent,
@@ -8201,7 +8202,7 @@ bool QSocCliWorker::runAgentLoop(
             QObject::disconnect(connRetry);
             QObject::disconnect(connCompact);
             QObject::disconnect(connAborted);
-            QObject::disconnect(connCtrlC);
+            QObject::disconnect(execCtrlC);
             QObject::disconnect(connInputReady);
             QObject::disconnect(connProcessingQueued);
             QObject::disconnect(connInputChanged);
@@ -8581,7 +8582,7 @@ bool QSocCliWorker::runAgentLoop(
             QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, &loop, [agent]() {
                 agent->abort();
             });
-            auto connCtrlC = QObject::connect(
+            auto execCtrlC = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
                 agent,
@@ -8845,7 +8846,7 @@ bool QSocCliWorker::runAgentLoop(
             QObject::disconnect(connRetry);
             QObject::disconnect(connCompact);
             QObject::disconnect(connAborted);
-            QObject::disconnect(connCtrlC);
+            QObject::disconnect(execCtrlC);
             QObject::disconnect(connInputReady);
             QObject::disconnect(connProcessingQueued);
             QObject::disconnect(connInputChanged);

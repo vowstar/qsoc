@@ -23,11 +23,11 @@ bool QSocCliWorker::parseBus(const QStringList &appArguments)
         "bus <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
-    if (cmdArguments.isEmpty()) {
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
     }
-    const QString &command       = cmdArguments.first();
+    const QString &command       = positionalArgs.first();
     QStringList    nextArguments = appArguments;
     if (command == "import") {
         nextArguments.removeOne(command);
@@ -77,10 +77,10 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
         "[<CSV files>]");
 
     parser.parse(appArguments);
-    const QStringList  cmdArguments = parser.positionalArguments();
-    const QString     &libraryName  = parser.isSet("library") ? parser.value("library") : "";
-    const QString     &busName      = parser.isSet("bus") ? parser.value("bus") : "";
-    const QStringList &filePathList = cmdArguments;
+    const QStringList  positionalArgs = parser.positionalArguments();
+    const QString     &libraryName    = parser.isSet("library") ? parser.value("library") : "";
+    const QString     &busName        = parser.isSet("bus") ? parser.value("bus") : "";
+    const QStringList &filePathList   = positionalArgs;
 
     if (filePathList.isEmpty()) {
         return showHelpOrError(
@@ -154,9 +154,9 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
         "[<bus name or regex list>]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList       busNameList  = cmdArguments;
+    const QStringList positionalArgs = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
+    QStringList       busNameList    = positionalArgs;
     if (busNameList.isEmpty()) {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: missing bus name or regex."));
@@ -269,9 +269,9 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList       busNameList  = !cmdArguments.empty() ? cmdArguments : QStringList() << ".*";
+    const QStringList positionalArgs = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
+    QStringList busNameList = !positionalArgs.empty() ? positionalArgs : QStringList() << ".*";
     /* Removing duplicates */
     busNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
@@ -378,9 +378,9 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList       busNameList  = !cmdArguments.empty() ? cmdArguments : QStringList() << ".*";
+    const QStringList positionalArgs = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
+    QStringList busNameList = !positionalArgs.empty() ? positionalArgs : QStringList() << ".*";
     /* Removing duplicates */
     busNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */

@@ -23,11 +23,11 @@ bool QSocCliWorker::parseModuleBus(const QStringList &appArguments)
         "module bus <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
-    if (cmdArguments.isEmpty()) {
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
     }
-    const QString &command       = cmdArguments.first();
+    const QString &command       = positionalArgs.first();
     QStringList    nextArguments = appArguments;
     if (command == "add") {
         nextArguments.removeOne(command);
@@ -92,10 +92,10 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
         "<bus interface name>");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : "";
-    const QString    &busName      = parser.isSet("bus") ? parser.value("bus") : "";
+    const QStringList positionalArgs = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
+    const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : "";
+    const QString    &busName        = parser.isSet("bus") ? parser.value("bus") : "";
     const QString    &busLibrary = parser.isSet("bus-library") ? parser.value("bus-library") : ".*";
     const QString    &busMode    = parser.isSet("mode") ? parser.value("mode") : "";
     const bool        useAI      = parser.isSet("ai");
@@ -114,8 +114,8 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
 
     /* Get bus interface name from positional arguments */
     QString busInterface;
-    if (!cmdArguments.isEmpty()) {
-        busInterface = cmdArguments.first();
+    if (!positionalArgs.isEmpty()) {
+        busInterface = positionalArgs.first();
     } else {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: bus interface name is required."));
@@ -254,10 +254,10 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : "";
-    const QString    &busName      = cmdArguments.isEmpty() ? "" : cmdArguments.first();
+    const QStringList positionalArgs = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
+    const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : "";
+    const QString    &busName        = positionalArgs.isEmpty() ? "" : positionalArgs.first();
 
     /* Validate required parameters */
     if (moduleName.isEmpty()) {
@@ -397,10 +397,10 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : ".*";
-    const QString    &busName      = cmdArguments.isEmpty() ? ".*" : cmdArguments.first();
+    const QStringList positionalArgs = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
+    const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : ".*";
+    const QString    &busName        = positionalArgs.isEmpty() ? ".*" : positionalArgs.first();
 
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
@@ -524,10 +524,10 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments = parser.positionalArguments();
-    const QString    &libraryName  = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName   = parser.isSet("module") ? parser.value("module") : ".*";
-    const QString    &busName      = cmdArguments.isEmpty() ? ".*" : cmdArguments.first();
+    const QStringList positionalArgs = parser.positionalArguments();
+    const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
+    const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : ".*";
+    const QString    &busName        = positionalArgs.isEmpty() ? ".*" : positionalArgs.first();
 
     /* Validate required parameters */
     if (moduleName.isEmpty()) {
@@ -666,6 +666,7 @@ bool QSocCliWorker::parseModuleBusExplain(const QStringList &appArguments)
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: module name is required."));
     }
+    // cppcheck-suppress knownConditionTrueFalse
     if (busName.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: bus name is required."));
     }

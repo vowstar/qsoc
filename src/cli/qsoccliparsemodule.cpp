@@ -24,11 +24,11 @@ bool QSocCliWorker::parseModule(const QStringList &appArguments)
         "module <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
-    if (cmdArguments.isEmpty()) {
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
     }
-    const QString &command       = cmdArguments.first();
+    const QString &command       = positionalArgs.first();
     QStringList    nextArguments = appArguments;
     if (command == "import") {
         nextArguments.removeOne(command);
@@ -97,10 +97,10 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
         "[<verilog files>]");
 
     parser.parse(appArguments);
-    const QStringList  cmdArguments   = parser.positionalArguments();
+    const QStringList  positionalArgs = parser.positionalArguments();
     const QString     &libraryName    = parser.isSet("library") ? parser.value("library") : "";
     const QString     &moduleName     = parser.isSet("module") ? parser.value("module") : ".*";
-    const QStringList &filePathList   = cmdArguments;
+    const QStringList &filePathList   = positionalArgs;
     const QStringList &macroDefines   = parser.values("define");
     const QStringList &macroUndefines = parser.values("undefine");
     if (filePathList.isEmpty() && !parser.isSet("filelist")) {
@@ -201,9 +201,9 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
         "[<module name or regex list>]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments   = parser.positionalArguments();
+    const QStringList positionalArgs = parser.positionalArguments();
     const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList       moduleNameList = cmdArguments;
+    QStringList       moduleNameList = positionalArgs;
     if (moduleNameList.isEmpty()) {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: missing module name or regex."));
@@ -317,9 +317,9 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments   = parser.positionalArguments();
+    const QStringList positionalArgs = parser.positionalArguments();
     const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList       moduleNameList = !cmdArguments.empty() ? cmdArguments : QStringList() << ".*";
+    QStringList moduleNameList = !positionalArgs.empty() ? positionalArgs : QStringList() << ".*";
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */
@@ -423,9 +423,9 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments   = parser.positionalArguments();
+    const QStringList positionalArgs = parser.positionalArguments();
     const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
-    QStringList       moduleNameList = !cmdArguments.empty() ? cmdArguments : QStringList() << ".*";
+    QStringList moduleNameList = !positionalArgs.empty() ? positionalArgs : QStringList() << ".*";
     /* Removing duplicates */
     moduleNameList.removeDuplicates();
     /* Removing empty strings and strings containing only whitespace */

@@ -105,13 +105,10 @@ bool QSocCliWorker::showInfo(int exitCode, const QString &message)
 
 bool QSocCliWorker::showHelpOrError(int exitCode, const QString &message)
 {
-    bool result = false;
     if (parser.isSet("help")) {
-        result = showHelp(0);
-    } else {
-        result = showErrorWithHelp(exitCode, message);
+        return showHelp(0);
     }
-    return result;
+    return showErrorWithHelp(exitCode, message);
 }
 
 bool QSocCliWorker::parseRoot(const QStringList &appArguments)
@@ -188,12 +185,12 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
     if (parser.isSet("version")) {
         return showVersion(0);
     }
-    const QStringList cmdArguments = parser.positionalArguments();
-    if (cmdArguments.isEmpty()) {
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
     }
     /* Perform different operations according to different subcommands */
-    const QString &command       = cmdArguments.first();
+    const QString &command       = positionalArgs.first();
     QStringList    nextArguments = appArguments;
     if (command == "gui") {
         QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":Starting GUI ...";

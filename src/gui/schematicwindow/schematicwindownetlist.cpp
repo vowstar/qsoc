@@ -96,9 +96,9 @@ bool SchematicWindow::eventFilter(QObject *watched, QEvent *event)
                     if (wire) {
                         auto net = wire->net();
                         if (net) {
-                            auto *wireNet = dynamic_cast<QSchematic::Items::WireNet *>(net.get());
-                            if (wireNet) {
-                                handleWireDoubleClick(wireNet);
+                            auto *castNet = dynamic_cast<QSchematic::Items::WireNet *>(net.get());
+                            if (castNet) {
+                                handleWireDoubleClick(castNet);
                                 return true;
                             }
                         }

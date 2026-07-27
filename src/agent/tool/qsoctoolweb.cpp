@@ -228,18 +228,18 @@ QString QSocToolWebSearch::execute(const json &arguments)
             break;
         }
 
-        QString title   = result.contains("title") && result["title"].is_string()
-                              ? QString::fromStdString(result["title"].get<std::string>())
-                              : "(no title)";
-        QString url     = result.contains("url") && result["url"].is_string()
-                              ? QString::fromStdString(result["url"].get<std::string>())
-                              : "(no url)";
-        QString snippet = result.contains("content") && result["content"].is_string()
-                              ? QString::fromStdString(result["content"].get<std::string>())
-                              : "";
+        QString title     = result.contains("title") && result["title"].is_string()
+                                ? QString::fromStdString(result["title"].get<std::string>())
+                                : "(no title)";
+        QString resultUrl = result.contains("url") && result["url"].is_string()
+                                ? QString::fromStdString(result["url"].get<std::string>())
+                                : "(no url)";
+        QString snippet   = result.contains("content") && result["content"].is_string()
+                                ? QString::fromStdString(result["content"].get<std::string>())
+                                : "";
 
         shown++;
-        output += QString("\n%1. Title: %2\n   URL: %3\n").arg(shown).arg(title, url);
+        output += QString("\n%1. Title: %2\n   URL: %3\n").arg(shown).arg(title, resultUrl);
         if (!snippet.isEmpty()) {
             output += QString("   Snippet: %1\n").arg(snippet);
         }

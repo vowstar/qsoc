@@ -21,7 +21,7 @@ QSocProjectManager::QSocProjectManager(QObject *parent)
     /* Get system environments */
     const QStringList envList = QProcess::systemEnvironment();
     /* Save system environments into QMap */
-    foreach (const QString str, envList) {
+    for (const QString &str : envList) {
         QStringList keyAndValue = str.split('=');
         if (keyAndValue.size() == 2) {
             env[keyAndValue[0]] = keyAndValue[1];
@@ -341,7 +341,6 @@ bool QSocProjectManager::isValidProjectNode()
 
 bool QSocProjectManager::isValidProjectName()
 {
-    const QString &projectName = getProjectName();
     /* Check if project name is empty */
     if (projectName.isEmpty()) {
         QSocConsole::error() << "Project name is empty.";

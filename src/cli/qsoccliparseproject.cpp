@@ -22,11 +22,11 @@ bool QSocCliWorker::parseProject(const QStringList &appArguments)
         "project <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
-    if (cmdArguments.isEmpty()) {
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
     }
-    const QString &command       = cmdArguments.first();
+    const QString &command       = positionalArgs.first();
     QStringList    nextArguments = appArguments;
     if (command == "create") {
         nextArguments.removeOne(command);
@@ -88,14 +88,14 @@ bool QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
         "[<name>]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
+    const QStringList positionalArgs = parser.positionalArguments();
 
-    if (cmdArguments.isEmpty()) {
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
     }
 
     /* Pass projectName to projectManager */
-    const QString &projectName = cmdArguments.first();
+    const QString &projectName = positionalArgs.first();
 
     if (parser.isSet("directory")) {
         projectManager->setProjectPath(parser.value("directory"));
@@ -149,13 +149,13 @@ bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
         "[<name>]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
+    const QStringList positionalArgs = parser.positionalArguments();
 
-    if (cmdArguments.isEmpty()) {
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
     }
     /* Pass projectName to projectManager */
-    const QString &projectName = cmdArguments.first();
+    const QString &projectName = positionalArgs.first();
 
     if (parser.isSet("directory")) {
         projectManager->setProjectPath(parser.value("directory"));
@@ -205,13 +205,13 @@ bool QSocCliWorker::parseProjectRemove(const QStringList &appArguments)
         "[<name>]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
+    const QStringList positionalArgs = parser.positionalArguments();
 
-    if (cmdArguments.isEmpty()) {
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
     }
     /* Pass projectName to projectManager */
-    const QString &projectName = cmdArguments.first();
+    const QString &projectName = positionalArgs.first();
 
     if (parser.isSet("directory")) {
         projectManager->setProjectPath(parser.value("directory"));
@@ -252,9 +252,9 @@ bool QSocCliWorker::parseProjectList(const QStringList &appArguments)
     if (parser.isSet("help")) {
         return showHelp(0);
     }
-    const QStringList cmdArguments = parser.positionalArguments();
+    const QStringList positionalArgs = parser.positionalArguments();
     /* Select all files when regular expression is empty */
-    const QString projectNameRegexStr = cmdArguments.isEmpty() ? ".*" : cmdArguments.first();
+    const QString projectNameRegexStr = positionalArgs.isEmpty() ? ".*" : positionalArgs.first();
     const QRegularExpression projectNameRegex(projectNameRegexStr);
     /* Pass ProjectPath to projectManager */
     if (parser.isSet("directory")) {
@@ -285,13 +285,13 @@ bool QSocCliWorker::parseProjectShow(const QStringList &appArguments)
         "[<name>]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
+    const QStringList positionalArgs = parser.positionalArguments();
 
-    if (cmdArguments.isEmpty()) {
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing project name."));
     }
     /* Pass projectName to projectManager */
-    const QString &projectName = cmdArguments.first();
+    const QString &projectName = positionalArgs.first();
     if (parser.isSet("directory")) {
         projectManager->setProjectPath(parser.value("directory"));
     }

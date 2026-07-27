@@ -684,9 +684,9 @@ bool QSocGenerateManager::renderTemplate(
                 /* Serialize dataObject to formatted JSON */
                 const std::string formattedJson = dataObject.dump(4); /* 4 spaces indentation */
 
-                QTextStream stream(&jsonFile);
-                stream.setEncoding(QStringConverter::Utf8);
-                stream << QString::fromStdString(formattedJson);
+                QTextStream jsonStream(&jsonFile);
+                jsonStream.setEncoding(QStringConverter::Utf8);
+                jsonStream << QString::fromStdString(formattedJson);
                 jsonFile.close();
             } catch (const std::exception &e) {
                 QSocConsole::warn()

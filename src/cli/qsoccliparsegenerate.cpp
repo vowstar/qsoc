@@ -30,11 +30,11 @@ bool QSocCliWorker::parseGenerate(const QStringList &appArguments)
         "generate <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
-    const QStringList cmdArguments = parser.positionalArguments();
-    if (cmdArguments.isEmpty()) {
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
     }
-    const QString &command       = cmdArguments.first();
+    const QString &command       = positionalArgs.first();
     QStringList    nextArguments = appArguments;
     if (command == "verilog") {
         nextArguments.removeOne(command);
@@ -87,8 +87,8 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList  cmdArguments = parser.positionalArguments();
-    const QStringList &filePathList = cmdArguments;
+    const QStringList  positionalArgs = parser.positionalArguments();
+    const QStringList &filePathList   = positionalArgs;
     if (filePathList.isEmpty()) {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: missing netlist files."));
@@ -326,8 +326,8 @@ bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList  cmdArguments     = parser.positionalArguments();
-    const QStringList &templateFileList = cmdArguments;
+    const QStringList  positionalArgs   = parser.positionalArguments();
+    const QStringList &templateFileList = positionalArgs;
     if (templateFileList.isEmpty()) {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: missing template files."));
@@ -458,12 +458,12 @@ bool QSocCliWorker::parseGenerateStub(const QStringList &appArguments)
         return showHelp(0);
     }
 
-    const QStringList cmdArguments = parser.positionalArguments();
-    if (cmdArguments.isEmpty()) {
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing stub name."));
     }
 
-    const QString &stubName = cmdArguments.first();
+    const QString &stubName = positionalArgs.first();
 
     /* Setup project manager and project path  */
     if (parser.isSet("directory")) {
