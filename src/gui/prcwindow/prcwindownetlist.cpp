@@ -5,6 +5,7 @@
 #include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "gui/prcwindow/prcconfigdialog.h"
+#include "gui/prcwindow/prccontrollergrouping.h"
 #include "gui/prcwindow/prcprimitiveitem.h"
 #include "gui/prcwindow/prcpropertycommands.h"
 #include "gui/prcwindow/prcwindow.h"
@@ -481,34 +482,7 @@ void emitLinkOperations(YAML::Emitter &out, const PrcLibrary::ClockLinkParams &p
 } // namespace
 
 /* Netlist Export - Main Function */
-namespace {
-
-/**
- * @brief Controller name shared by a group of primitives.
- * @details Every primitive carries the controller it was assigned to. The
- *          first non-empty assignment wins; an unassigned group keeps the
- *          default name so the export stays valid.
- * @param items Primitives of one family.
- * @param fallback Name to use when nothing is assigned.
- * @return The controller name to emit.
- */
-QString controllerNameFor(
-    const QList<std::shared_ptr<PrcLibrary::PrcPrimitiveItem>> &items, const QString &fallback)
-{
-    for (const auto &item : items) {
-        if (!item) {
-            continue;
-        }
-        const QString name = std::visit(
-            [](const auto &params) -> QString { return params.controller; }, item->params());
-        if (!name.isEmpty()) {
-            return name;
-        }
-    }
-    return fallback;
-}
-
-} // namespace
+namespace {} // namespace
 
 bool PrcWindow::exportNetlist(const QString &filePath)
 {
@@ -557,96 +531,104 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         if (!clockInputs.isEmpty() || !clockTargets.isEmpty()) {
             out << YAML::Key << "clock";
             out << YAML::Value << YAML::BeginSeq;
-            out << YAML::BeginMap;
-            const QString clockCtrlName
-                = controllerNameFor(clockInputs + clockTargets, "clock_ctrl");
-            out << YAML::Key << "name" << YAML::Value << clockCtrlName.toStdString();
-            {
-                const PrcLibrary::ClockControllerDef def = scene.clockController(clockCtrlName);
-                if (!def.test_enable.isEmpty()) {
-                    out << YAML::Key << "test_enable" << YAML::Value
-                        << def.test_enable.toStdString();
-                }
-            }
-
-            if (!clockInputs.isEmpty()) {
-                out << YAML::Key << "input" << YAML::Value << YAML::BeginMap;
-                for (const auto &input : clockInputs) {
-                    const auto &inputParams = std::get<PrcLibrary::ClockInputParams>(
-                        input->params());
-                    out << YAML::Key << input->primitiveName().toStdString();
-                    out << YAML::Value << YAML::BeginMap;
-                    if (!inputParams.freq.isEmpty()) {
-                        out << YAML::Key << "freq" << YAML::Value << inputParams.freq.toStdString();
+            for (const QString &clockCtrlName : PrcLibrary::PrcControllerGrouping::controllerNames(
+                     clockInputs + clockTargets, "clock_ctrl")) {
+                const PrcLibrary::PrcItemList clockInputsGroup
+                    = PrcLibrary::PrcControllerGrouping::itemsOfController(
+                        clockInputs, clockCtrlName, "clock_ctrl");
+                const PrcLibrary::PrcItemList clockTargetsGroup
+                    = PrcLibrary::PrcControllerGrouping::itemsOfController(
+                        clockTargets, clockCtrlName, "clock_ctrl");
+                out << YAML::BeginMap;
+                out << YAML::Key << "name" << YAML::Value << clockCtrlName.toStdString();
+                {
+                    const PrcLibrary::ClockControllerDef def = scene.clockController(clockCtrlName);
+                    if (!def.test_enable.isEmpty()) {
+                        out << YAML::Key << "test_enable" << YAML::Value
+                            << def.test_enable.toStdString();
                     }
-                    out << YAML::EndMap;
                 }
-                out << YAML::EndMap;
-            }
 
-            if (!clockTargets.isEmpty()) {
-                out << YAML::Key << "target" << YAML::Value << YAML::BeginMap;
-                for (const auto &target : clockTargets) {
-                    const auto &targetParams = std::get<PrcLibrary::ClockTargetParams>(
-                        target->params());
-                    QString targetName = target->primitiveName();
-                    out << YAML::Key << targetName.toStdString();
-                    out << YAML::Value << YAML::BeginMap;
-
-                    if (!targetParams.freq.isEmpty()) {
-                        out << YAML::Key << "freq" << YAML::Value
-                            << targetParams.freq.toStdString();
-                    }
-
-                    emitMUX(out, targetParams.mux);
-                    emitICG(out, targetParams.icg);
-                    emitDIV(out, targetParams.div);
-                    emitINV(out, targetParams.inv);
-
-                    /* Link section - only for actually connected sources */
-                    QSet<QString> connectedSources = getConnectedSources(targetName);
-                    if (!connectedSources.isEmpty()) {
-                        out << YAML::Key << "link" << YAML::Value << YAML::BeginMap;
-
-                        /* Get link params for this target */
-                        QMap<QString, PrcLibrary::ClockLinkParams> targetLinks
-                            = linkParamsByTarget.value(targetName);
-
-                        for (const QString &sourceName : connectedSources) {
-                            out << YAML::Key << sourceName.toStdString();
-
-                            /* Check if this link has operations configured */
-                            if (targetLinks.contains(sourceName)
-                                && hasLinkOperations(targetLinks[sourceName])) {
-                                out << YAML::Value << YAML::BeginMap;
-                                emitLinkOperations(out, targetLinks[sourceName]);
-                                out << YAML::EndMap;
-                            } else {
-                                out << YAML::Value << YAML::Null;
-                            }
+                if (!clockInputsGroup.isEmpty()) {
+                    out << YAML::Key << "input" << YAML::Value << YAML::BeginMap;
+                    for (const auto &input : clockInputsGroup) {
+                        const auto &inputParams = std::get<PrcLibrary::ClockInputParams>(
+                            input->params());
+                        out << YAML::Key << input->primitiveName().toStdString();
+                        out << YAML::Value << YAML::BeginMap;
+                        if (!inputParams.freq.isEmpty()) {
+                            out << YAML::Key << "freq" << YAML::Value
+                                << inputParams.freq.toStdString();
                         }
                         out << YAML::EndMap;
                     }
-
-                    if (!targetParams.select.isEmpty()) {
-                        out << YAML::Key << "select" << YAML::Value
-                            << targetParams.select.toStdString();
-                    }
-                    if (!targetParams.reset.isEmpty()) {
-                        out << YAML::Key << "reset" << YAML::Value
-                            << targetParams.reset.toStdString();
-                    }
-                    if (!targetParams.test_clock.isEmpty()) {
-                        out << YAML::Key << "test_clock" << YAML::Value
-                            << targetParams.test_clock.toStdString();
-                    }
-
                     out << YAML::EndMap;
                 }
+
+                if (!clockTargetsGroup.isEmpty()) {
+                    out << YAML::Key << "target" << YAML::Value << YAML::BeginMap;
+                    for (const auto &target : clockTargetsGroup) {
+                        const auto &targetParams = std::get<PrcLibrary::ClockTargetParams>(
+                            target->params());
+                        QString targetName = target->primitiveName();
+                        out << YAML::Key << targetName.toStdString();
+                        out << YAML::Value << YAML::BeginMap;
+
+                        if (!targetParams.freq.isEmpty()) {
+                            out << YAML::Key << "freq" << YAML::Value
+                                << targetParams.freq.toStdString();
+                        }
+
+                        emitMUX(out, targetParams.mux);
+                        emitICG(out, targetParams.icg);
+                        emitDIV(out, targetParams.div);
+                        emitINV(out, targetParams.inv);
+
+                        /* Link section - only for actually connected sources */
+                        QSet<QString> connectedSources = getConnectedSources(targetName);
+                        if (!connectedSources.isEmpty()) {
+                            out << YAML::Key << "link" << YAML::Value << YAML::BeginMap;
+
+                            /* Get link params for this target */
+                            QMap<QString, PrcLibrary::ClockLinkParams> targetLinks
+                                = linkParamsByTarget.value(targetName);
+
+                            for (const QString &sourceName : connectedSources) {
+                                out << YAML::Key << sourceName.toStdString();
+
+                                /* Check if this link has operations configured */
+                                if (targetLinks.contains(sourceName)
+                                    && hasLinkOperations(targetLinks[sourceName])) {
+                                    out << YAML::Value << YAML::BeginMap;
+                                    emitLinkOperations(out, targetLinks[sourceName]);
+                                    out << YAML::EndMap;
+                                } else {
+                                    out << YAML::Value << YAML::Null;
+                                }
+                            }
+                            out << YAML::EndMap;
+                        }
+
+                        if (!targetParams.select.isEmpty()) {
+                            out << YAML::Key << "select" << YAML::Value
+                                << targetParams.select.toStdString();
+                        }
+                        if (!targetParams.reset.isEmpty()) {
+                            out << YAML::Key << "reset" << YAML::Value
+                                << targetParams.reset.toStdString();
+                        }
+                        if (!targetParams.test_clock.isEmpty()) {
+                            out << YAML::Key << "test_clock" << YAML::Value
+                                << targetParams.test_clock.toStdString();
+                        }
+
+                        out << YAML::EndMap;
+                    }
+                    out << YAML::EndMap;
+                }
+
                 out << YAML::EndMap;
             }
-
-            out << YAML::EndMap;
             out << YAML::EndSeq;
         }
 
@@ -654,69 +636,78 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         if (!resetSources.isEmpty() || !resetTargets.isEmpty()) {
             out << YAML::Key << "reset";
             out << YAML::Value << YAML::BeginSeq;
-            out << YAML::BeginMap;
-            const QString resetCtrlName
-                = controllerNameFor(resetSources + resetTargets, "reset_ctrl");
-            out << YAML::Key << "name" << YAML::Value << resetCtrlName.toStdString();
-            {
-                const PrcLibrary::ResetControllerDef def = scene.resetController(resetCtrlName);
-                if (!def.test_enable.isEmpty()) {
-                    out << YAML::Key << "test_enable" << YAML::Value
-                        << def.test_enable.toStdString();
+            for (const QString &resetCtrlName : PrcLibrary::PrcControllerGrouping::controllerNames(
+                     resetSources + resetTargets, "reset_ctrl")) {
+                const PrcLibrary::PrcItemList resetSourcesGroup
+                    = PrcLibrary::PrcControllerGrouping::itemsOfController(
+                        resetSources, resetCtrlName, "reset_ctrl");
+                const PrcLibrary::PrcItemList resetTargetsGroup
+                    = PrcLibrary::PrcControllerGrouping::itemsOfController(
+                        resetTargets, resetCtrlName, "reset_ctrl");
+                out << YAML::BeginMap;
+                out << YAML::Key << "name" << YAML::Value << resetCtrlName.toStdString();
+                {
+                    const PrcLibrary::ResetControllerDef def = scene.resetController(resetCtrlName);
+                    if (!def.test_enable.isEmpty()) {
+                        out << YAML::Key << "test_enable" << YAML::Value
+                            << def.test_enable.toStdString();
+                    }
                 }
-            }
 
-            if (!resetSources.isEmpty()) {
-                out << YAML::Key << "source" << YAML::Value << YAML::BeginMap;
-                for (const auto &source : resetSources) {
-                    const auto &srcParams = std::get<PrcLibrary::ResetSourceParams>(
-                        source->params());
-                    out << YAML::Key << source->primitiveName().toStdString();
-                    out << YAML::Value << YAML::BeginMap;
-                    out << YAML::Key << "active" << YAML::Value << srcParams.active.toStdString();
-                    out << YAML::EndMap;
-                }
-                out << YAML::EndMap;
-            }
-
-            if (!resetTargets.isEmpty()) {
-                out << YAML::Key << "target" << YAML::Value << YAML::BeginMap;
-                for (const auto &target : resetTargets) {
-                    const auto &tgtParams = std::get<PrcLibrary::ResetTargetParams>(
-                        target->params());
-                    QString targetName = target->primitiveName();
-                    out << YAML::Key << targetName.toStdString();
-                    out << YAML::Value << YAML::BeginMap;
-                    out << YAML::Key << "active" << YAML::Value << tgtParams.active.toStdString();
-
-                    /* Link section - only for actually connected sources */
-                    QSet<QString> connectedSources = getConnectedSources(targetName);
-                    if (!connectedSources.isEmpty()) {
-                        out << YAML::Key << "link" << YAML::Value << YAML::BeginMap;
-                        for (const QString &sourceName : connectedSources) {
-                            out << YAML::Key << sourceName.toStdString();
-                            if (tgtParams.sync.async_configured) {
-                                out << YAML::Value << YAML::BeginMap;
-                                out << YAML::Key << "async" << YAML::Value << YAML::BeginMap;
-                                out << YAML::Key << "clock" << YAML::Value
-                                    << tgtParams.sync.async_clock.toStdString();
-                                out << YAML::Key << "stage" << YAML::Value
-                                    << tgtParams.sync.async_stage;
-                                out << YAML::EndMap;
-                                out << YAML::EndMap;
-                            } else {
-                                out << YAML::Value << YAML::Null;
-                            }
-                        }
+                if (!resetSourcesGroup.isEmpty()) {
+                    out << YAML::Key << "source" << YAML::Value << YAML::BeginMap;
+                    for (const auto &source : resetSourcesGroup) {
+                        const auto &srcParams = std::get<PrcLibrary::ResetSourceParams>(
+                            source->params());
+                        out << YAML::Key << source->primitiveName().toStdString();
+                        out << YAML::Value << YAML::BeginMap;
+                        out << YAML::Key << "active" << YAML::Value
+                            << srcParams.active.toStdString();
                         out << YAML::EndMap;
                     }
-
                     out << YAML::EndMap;
                 }
+
+                if (!resetTargetsGroup.isEmpty()) {
+                    out << YAML::Key << "target" << YAML::Value << YAML::BeginMap;
+                    for (const auto &target : resetTargetsGroup) {
+                        const auto &tgtParams = std::get<PrcLibrary::ResetTargetParams>(
+                            target->params());
+                        QString targetName = target->primitiveName();
+                        out << YAML::Key << targetName.toStdString();
+                        out << YAML::Value << YAML::BeginMap;
+                        out << YAML::Key << "active" << YAML::Value
+                            << tgtParams.active.toStdString();
+
+                        /* Link section - only for actually connected sources */
+                        QSet<QString> connectedSources = getConnectedSources(targetName);
+                        if (!connectedSources.isEmpty()) {
+                            out << YAML::Key << "link" << YAML::Value << YAML::BeginMap;
+                            for (const QString &sourceName : connectedSources) {
+                                out << YAML::Key << sourceName.toStdString();
+                                if (tgtParams.sync.async_configured) {
+                                    out << YAML::Value << YAML::BeginMap;
+                                    out << YAML::Key << "async" << YAML::Value << YAML::BeginMap;
+                                    out << YAML::Key << "clock" << YAML::Value
+                                        << tgtParams.sync.async_clock.toStdString();
+                                    out << YAML::Key << "stage" << YAML::Value
+                                        << tgtParams.sync.async_stage;
+                                    out << YAML::EndMap;
+                                    out << YAML::EndMap;
+                                } else {
+                                    out << YAML::Value << YAML::Null;
+                                }
+                            }
+                            out << YAML::EndMap;
+                        }
+
+                        out << YAML::EndMap;
+                    }
+                    out << YAML::EndMap;
+                }
+
                 out << YAML::EndMap;
             }
-
-            out << YAML::EndMap;
             out << YAML::EndSeq;
         }
 
@@ -724,87 +715,96 @@ bool PrcWindow::exportNetlist(const QString &filePath)
         if (!powerDomains.isEmpty()) {
             out << YAML::Key << "power";
             out << YAML::Value << YAML::BeginSeq;
-            out << YAML::BeginMap;
-            const QString powerCtrlName = controllerNameFor(powerDomains, "power_ctrl");
-            out << YAML::Key << "name" << YAML::Value << powerCtrlName.toStdString();
-            {
-                /* host_clock and host_reset are required by the generator; a
-                 * netlist without them cannot produce a power controller. */
-                const PrcLibrary::PowerControllerDef def = scene.powerController(powerCtrlName);
-                const QString hostClock = def.host_clock.isEmpty() ? QStringLiteral("ao_clk")
-                                                                   : def.host_clock;
-                const QString hostReset = def.host_reset.isEmpty() ? QStringLiteral("ao_rst_n")
-                                                                   : def.host_reset;
-                if (def.host_clock.isEmpty() || def.host_reset.isEmpty()) {
-                    defaultedHostSignals = true;
-                }
-                out << YAML::Key << "host_clock" << YAML::Value << hostClock.toStdString();
-                out << YAML::Key << "host_reset" << YAML::Value << hostReset.toStdString();
-                if (!def.test_enable.isEmpty()) {
-                    out << YAML::Key << "test_enable" << YAML::Value
-                        << def.test_enable.toStdString();
-                }
-            }
-
-            out << YAML::Key << "domain" << YAML::Value << YAML::BeginSeq;
-            for (const auto &domain : powerDomains) {
-                const auto &domParams = std::get<PrcLibrary::PowerDomainParams>(domain->params());
+            for (const QString &powerCtrlName :
+                 PrcLibrary::PrcControllerGrouping::controllerNames(powerDomains, "power_ctrl")) {
+                const PrcLibrary::PrcItemList powerDomainsGroup
+                    = PrcLibrary::PrcControllerGrouping::itemsOfController(
+                        powerDomains, powerCtrlName, "power_ctrl");
                 out << YAML::BeginMap;
-                out << YAML::Key << "name" << YAML::Value << domain->primitiveName().toStdString();
-                out << YAML::Key << "v_mv" << YAML::Value << domParams.v_mv;
-                if (!domParams.pgood.isEmpty()) {
-                    out << YAML::Key << "pgood" << YAML::Value << domParams.pgood.toStdString();
+                out << YAML::Key << "name" << YAML::Value << powerCtrlName.toStdString();
+                {
+                    /* host_clock and host_reset are required by the generator; a
+                 * netlist without them cannot produce a power controller. */
+                    const PrcLibrary::PowerControllerDef def = scene.powerController(powerCtrlName);
+                    const QString hostClock = def.host_clock.isEmpty() ? QStringLiteral("ao_clk")
+                                                                       : def.host_clock;
+                    const QString hostReset = def.host_reset.isEmpty() ? QStringLiteral("ao_rst_n")
+                                                                       : def.host_reset;
+                    if (def.host_clock.isEmpty() || def.host_reset.isEmpty()) {
+                        defaultedHostSignals = true;
+                    }
+                    out << YAML::Key << "host_clock" << YAML::Value << hostClock.toStdString();
+                    out << YAML::Key << "host_reset" << YAML::Value << hostReset.toStdString();
+                    if (!def.test_enable.isEmpty()) {
+                        out << YAML::Key << "test_enable" << YAML::Value
+                            << def.test_enable.toStdString();
+                    }
                 }
-                out << YAML::Key << "wait_dep" << YAML::Value << domParams.wait_dep;
-                out << YAML::Key << "settle_on" << YAML::Value << domParams.settle_on;
-                out << YAML::Key << "settle_off" << YAML::Value << domParams.settle_off;
 
-                /* Dependencies. A drawn PowerDomain to PowerDomain wire is the
+                out << YAML::Key << "domain" << YAML::Value << YAML::BeginSeq;
+                for (const auto &domain : powerDomainsGroup) {
+                    const auto &domParams = std::get<PrcLibrary::PowerDomainParams>(
+                        domain->params());
+                    out << YAML::BeginMap;
+                    out << YAML::Key << "name" << YAML::Value
+                        << domain->primitiveName().toStdString();
+                    out << YAML::Key << "v_mv" << YAML::Value << domParams.v_mv;
+                    if (!domParams.pgood.isEmpty()) {
+                        out << YAML::Key << "pgood" << YAML::Value << domParams.pgood.toStdString();
+                    }
+                    out << YAML::Key << "wait_dep" << YAML::Value << domParams.wait_dep;
+                    out << YAML::Key << "settle_on" << YAML::Value << domParams.settle_on;
+                    out << YAML::Key << "settle_off" << YAML::Value << domParams.settle_off;
+
+                    /* Dependencies. A drawn PowerDomain to PowerDomain wire is the
                    only way to express one, so read them back from the scene and
                    let any stored override win. Omitting the key entirely marks
                    an always-on domain; an empty list marks a root domain. */
-                if (!domParams.always_on) {
-                    QList<PrcLibrary::PowerDependency> dependencies = domParams.depend;
-                    if (dependencies.isEmpty()) {
-                        for (const QString &source : getConnectedSources(domain->primitiveName())) {
-                            if (source == domain->primitiveName()) {
-                                continue;
+                    if (!domParams.always_on) {
+                        QList<PrcLibrary::PowerDependency> dependencies = domParams.depend;
+                        if (dependencies.isEmpty()) {
+                            for (const QString &source :
+                                 getConnectedSources(domain->primitiveName())) {
+                                if (source == domain->primitiveName()) {
+                                    continue;
+                                }
+                                PrcLibrary::PowerDependency dep;
+                                dep.name = source;
+                                dep.type = QStringLiteral("hard");
+                                dependencies.append(dep);
                             }
-                            PrcLibrary::PowerDependency dep;
-                            dep.name = source;
-                            dep.type = QStringLiteral("hard");
-                            dependencies.append(dep);
                         }
+                        out << YAML::Key << "depend" << YAML::Value << YAML::BeginSeq;
+                        for (const auto &dep : dependencies) {
+                            out << YAML::BeginMap;
+                            out << YAML::Key << "name" << YAML::Value << dep.name.toStdString();
+                            out << YAML::Key << "type" << YAML::Value
+                                << (dep.type.isEmpty() ? std::string("hard")
+                                                       : dep.type.toStdString());
+                            out << YAML::EndMap;
+                        }
+                        out << YAML::EndSeq;
                     }
-                    out << YAML::Key << "depend" << YAML::Value << YAML::BeginSeq;
-                    for (const auto &dep : dependencies) {
-                        out << YAML::BeginMap;
-                        out << YAML::Key << "name" << YAML::Value << dep.name.toStdString();
-                        out << YAML::Key << "type" << YAML::Value
-                            << (dep.type.isEmpty() ? std::string("hard") : dep.type.toStdString());
-                        out << YAML::EndMap;
-                    }
-                    out << YAML::EndSeq;
-                }
 
-                /* Follow entries */
-                if (!domParams.follow.isEmpty()) {
-                    out << YAML::Key << "follow" << YAML::Value << YAML::BeginSeq;
-                    for (const auto &fol : domParams.follow) {
-                        out << YAML::BeginMap;
-                        out << YAML::Key << "clock" << YAML::Value << fol.clock.toStdString();
-                        out << YAML::Key << "reset" << YAML::Value << fol.reset.toStdString();
-                        out << YAML::Key << "stage" << YAML::Value << fol.stage;
-                        out << YAML::EndMap;
+                    /* Follow entries */
+                    if (!domParams.follow.isEmpty()) {
+                        out << YAML::Key << "follow" << YAML::Value << YAML::BeginSeq;
+                        for (const auto &fol : domParams.follow) {
+                            out << YAML::BeginMap;
+                            out << YAML::Key << "clock" << YAML::Value << fol.clock.toStdString();
+                            out << YAML::Key << "reset" << YAML::Value << fol.reset.toStdString();
+                            out << YAML::Key << "stage" << YAML::Value << fol.stage;
+                            out << YAML::EndMap;
+                        }
+                        out << YAML::EndSeq;
                     }
-                    out << YAML::EndSeq;
+
+                    out << YAML::EndMap;
                 }
+                out << YAML::EndSeq;
 
                 out << YAML::EndMap;
             }
-            out << YAML::EndSeq;
-
-            out << YAML::EndMap;
             out << YAML::EndSeq;
         }
 
