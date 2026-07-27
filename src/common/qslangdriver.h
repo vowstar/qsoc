@@ -6,15 +6,13 @@
 
 #include "common/qsocprojectmanager.h"
 
-#include <memory>
 #include <QDir>
 #include <QObject>
 #include <QString>
 #include <QStringList>
 
+#include <memory>
 #include <nlohmann/json.hpp>
-#include <slang/ast/Compilation.h>
-#include <slang/ast/symbols/InstanceSymbols.h>
 
 using json = nlohmann::json;
 
@@ -26,6 +24,8 @@ class QSlangDriver : public QObject
 {
     Q_OBJECT
 public:
+    enum class UnknownModulePolicy { Allow, Reject };
+
     /**
      * @brief Constructor for QSlangDriver.
      * @details This constructor will initialize the resources.
@@ -84,6 +84,23 @@ public slots:
         const QStringList &macroUndefines = QStringList());
 
     /**
+     * @brief Parse a file list with an explicit unknown-module policy.
+     * @param fileListPath file list path.
+     * @param filePathList file path list.
+     * @param macroDefines macro definitions in KEY or KEY=VALUE format.
+     * @param macroUndefines macro names to undefine.
+     * @param unknownModulePolicy whether unresolved module definitions are allowed.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseFileList(
+        const QString      &fileListPath,
+        const QStringList  &filePathList,
+        const QStringList  &macroDefines,
+        const QStringList  &macroUndefines,
+        UnknownModulePolicy unknownModulePolicy);
+
+    /**
      * @brief Get Abstract Syntax Tree.
      * @details This function will return the Abstract Syntax Tree
      *          of the parsed files.
@@ -131,6 +148,10 @@ public slots:
     QSet<QString> extractSignalReferences(const QSet<QString> &excludeSignals = {});
 
 private:
+    struct Session;
+
+    void clearParseState();
+
     /**
      * @brief Extract bit width requirements from Verilog code syntax
      * @details Analyzes syntax tree to find bit selections like signal[N:M] or signal[N]
@@ -176,8 +197,8 @@ public:
 private:
     /* Pointer of project manager. */
     QSocProjectManager *projectManager = nullptr;
-    /* Compilation object to store parsing results */
-    std::unique_ptr<slang::ast::Compilation> compilation = nullptr;
+    /* Slang objects with one shared source lifetime. */
+    std::unique_ptr<Session> session;
     /* Abstract Syntax Tree JSON data. */
     json ast;
     /* Module list. */

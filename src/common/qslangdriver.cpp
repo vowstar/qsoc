@@ -16,8 +16,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <slang/analysis/AnalysisManager.h>
 #include <slang/ast/ASTSerializer.h>
-#include <slang/ast/ASTVisitor.h>
 #include <slang/ast/Compilation.h>
 #include <slang/ast/expressions/MiscExpressions.h>
 #include <slang/ast/symbols/CompilationUnitSymbols.h>
@@ -31,6 +31,12 @@
 #include <slang/util/String.h>
 #include <slang/util/TimeTrace.h>
 #include <slang/util/VersionInfo.h>
+
+struct QSlangDriver::Session
+{
+    slang::driver::Driver                    driver;
+    std::unique_ptr<slang::ast::Compilation> compilation;
+};
 
 QSlangDriver::QSlangDriver(QObject *parent, QSocProjectManager *projectManager)
     : QObject(parent)
@@ -54,14 +60,24 @@ QSocProjectManager *QSlangDriver::getProjectManager()
     return projectManager;
 }
 
+void QSlangDriver::clearParseState()
+{
+    session.reset();
+    ast = json{};
+    moduleList.clear();
+}
+
 bool QSlangDriver::parseArgs(const QString &args, bool silent)
 {
+    clearParseState();
+
     slang::OS::setStderrColorsEnabled(false);
     slang::OS::setStdoutColorsEnabled(false);
 
     auto guard = slang::OS::captureOutput();
 
-    slang::driver::Driver driver;
+    auto  candidateSession = std::make_unique<Session>();
+    auto &driver           = candidateSession->driver;
     driver.addStandardArgs();
 
     bool result = false;
@@ -116,22 +132,10 @@ bool QSlangDriver::parseArgs(const QString &args, bool silent)
         }
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
-        if (!driver.reportParseDiags()) {
-            if (!silent) {
-                if (!slang::OS::capturedStdout.empty()) {
-                    QSocConsole::errorPlain() << slang::OS::capturedStdout.c_str();
-                }
-                if (!slang::OS::capturedStderr.empty()) {
-                    QSocConsole::errorPlain() << slang::OS::capturedStderr.c_str();
-                }
-            }
-            throw std::runtime_error("Failed to report parse diagnostics");
-        }
-        slang::OS::capturedStdout.clear();
-        slang::OS::capturedStderr.clear();
-        /* Move the compilation object to class member */
-        compilation = std::move(driver.createCompilation());
-        if (!driver.runFullCompilation(false)) {
+        candidateSession->compilation = driver.createCompilation();
+        driver.reportCompilation(*candidateSession->compilation, false);
+        driver.runAnalysis(*candidateSession->compilation);
+        if (!driver.reportDiagnostics(false)) {
             if (!silent) {
                 if (!slang::OS::capturedStdout.empty()) {
                     QSocConsole::errorPlain() << slang::OS::capturedStdout.c_str();
@@ -142,32 +146,28 @@ bool QSlangDriver::parseArgs(const QString &args, bool silent)
             }
             throw std::runtime_error("Failed to report compilation");
         }
-        result = true;
         if (!silent) {
             QSocConsole::infoPlain() << slang::OS::capturedStdout.c_str();
         }
 
         slang::JsonWriter         writer;
-        slang::ast::ASTSerializer serializer(*compilation, writer);
+        slang::ast::ASTSerializer serializer(*candidateSession->compilation, writer);
 
-        serializer.serialize(compilation->getRoot());
+        serializer.serialize(candidateSession->compilation->getRoot());
 
-        /* Define a SAX callback to limit parsing depth */
         const json::parser_callback_t callback =
             [](int depth, json::parse_event_t /*event*/, json & /*parsed*/) -> bool {
-            /* Skip parsing when depth exceeds 4 levels */
             return depth <= 6;
         };
-
-        /* Parse JSON with depth limitation using callback */
-        auto jsonStr = std::string(writer.view());
-        ast          = json::parse(jsonStr, callback);
-
-        /* Print partial AST */
+        json candidateAst = json::parse(std::string(writer.view()), callback);
         if (!silent) {
-            QSocConsole::debugPlain() << ast.dump(4).c_str();
+            QSocConsole::debugPlain() << candidateAst.dump(4).c_str();
         }
+        session = std::move(candidateSession);
+        ast     = std::move(candidateAst);
+        result  = true;
     } catch (const std::exception &e) {
+        clearParseState();
         /* Handle error */
         if (!silent) {
             QSocConsole::error().noquote().nospace() << Q_FUNC_INFO << ":" << e.what();
@@ -182,6 +182,19 @@ bool QSlangDriver::parseFileList(
     const QStringList &macroDefines,
     const QStringList &macroUndefines)
 {
+    return parseFileList(
+        fileListPath, filePathList, macroDefines, macroUndefines, UnknownModulePolicy::Allow);
+}
+
+bool QSlangDriver::parseFileList(
+    const QString      &fileListPath,
+    const QStringList  &filePathList,
+    const QStringList  &macroDefines,
+    const QStringList  &macroUndefines,
+    UnknownModulePolicy unknownModulePolicy)
+{
+    clearParseState();
+
     bool    result  = false;
     QString content = "";
     if (!QFileInfo::exists(fileListPath) && filePathList.isEmpty()) {
@@ -241,7 +254,6 @@ bool QSlangDriver::parseFileList(
             /* clang-format off */
             QString baseArgs = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
                 slang
-                --ignore-unknown-modules
                 --single-unit
                 --compat vcs
                 --timescale 1ns/10ps
@@ -259,6 +271,9 @@ bool QSlangDriver::parseFileList(
                 --ignore-directive delay_mode_distributed
                 --ignore-directive delay_mode_unit
             )");
+            if (unknownModulePolicy == UnknownModulePolicy::Allow) {
+                baseArgs += " --ignore-unknown-modules";
+            }
             /* Add macro definitions */
             for (const QString &macro : macroDefines) {
                 baseArgs += QString(" -D\"%1\"").arg(macro);
@@ -490,6 +505,8 @@ QMap<QString, int> QSlangDriver::extractBitWidthRequirements(const QString &veri
 
 bool QSlangDriver::parseVerilogSnippet(const QString &verilogCode, bool wrapInModule)
 {
+    clearParseState();
+
     /* If no wrapping needed, directly parse */
     if (!wrapInModule) {
         QTemporaryFile tempFile("qsoc_snippet_XXXXXX.v");
@@ -604,45 +621,33 @@ QSet<QString> QSlangDriver::extractSignalReferences(const QSet<QString> &exclude
 {
     QSet<QString> signalSet;
 
-    if (!compilation) {
+    if (!session || !session->compilation) {
         QSocConsole::warn().noquote().nospace() << Q_FUNC_INFO << ":" << "No compilation available";
         return signalSet;
     }
 
-    /* Recursive function to extract identifiers from JSON AST */
     std::function<void(const json &)> extractFromJson = [&](const json &node) {
         if (node.is_object()) {
-            /* Check if this node has a "name" field and represents a signal */
             if (node.contains("kind") && node.contains("name")) {
-                std::string kind = node["kind"];
-
-                /* Extract names from Variable, Net, and expression nodes */
+                const std::string kind = node["kind"];
                 if (kind == "Variable" || kind == "Net" || kind == "NamedValue"
                     || kind == "NamedValueExpression") {
-                    std::string name  = node["name"].get<std::string>();
-                    QString     qname = QString::fromStdString(name);
-
-                    /* Filter internal symbols and excluded signals */
-                    if (!qname.isEmpty() && !qname.startsWith("__")
-                        && !excludeSignals.contains(qname)) {
-                        signalSet.insert(qname);
+                    const QString signal = QString::fromStdString(node["name"].get<std::string>());
+                    if (!signal.isEmpty() && !signal.startsWith("__")
+                        && !excludeSignals.contains(signal)) {
+                        signalSet.insert(signal);
                     }
                 }
             }
-
-            /* Recursively process all object members */
             for (auto it = node.begin(); it != node.end(); ++it) {
                 extractFromJson(it.value());
             }
         } else if (node.is_array()) {
-            /* Recursively process array elements */
             for (const auto &element : node) {
                 extractFromJson(element);
             }
         }
     };
-
-    /* Extract from JSON AST */
     extractFromJson(ast);
 
     return signalSet;

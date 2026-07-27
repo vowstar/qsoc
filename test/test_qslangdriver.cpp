@@ -31,11 +31,15 @@ private slots:
     /* Test parsing command line arguments */
     void parseArgs_validArgs();
     void parseArgs_invalidArgs();
+    void parseArgs_failureClearsState();
+    void parseArgs_successReplacesState();
 
     /* Test file list parsing */
     void parseFileList_validFiles();
     void parseFileList_invalidFiles();
     void parseFileList_emptyList();
+    void parseFileList_failureClearsState();
+    void parseFileList_unknownModulePolicy();
 
     /* Test utility functions */
     void contentCleanComment_singleLine();
@@ -139,6 +143,42 @@ void Test::parseArgs_invalidArgs()
     QVERIFY(!result);
 }
 
+void Test::parseArgs_failureClearsState()
+{
+    const QString verilogFile = createTemporaryVerilogFile(R"(
+        module retained_module(input logic source, output logic result);
+            assign result = source;
+        endmodule
+    )");
+    QVERIFY(!verilogFile.isEmpty());
+
+    QSlangDriver driver;
+    QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(verilogFile)));
+    QVERIFY(!driver.getAst().empty());
+    QVERIFY(driver.getModuleList().contains("retained_module"));
+
+    QVERIFY(!driver.parseArgs("slang --invalid-option"));
+    QVERIFY(driver.getAst().empty());
+    QVERIFY(driver.getModuleList().isEmpty());
+    QVERIFY(driver.getModuleAst("retained_module").empty());
+    QVERIFY(driver.extractSignalReferences().isEmpty());
+}
+
+void Test::parseArgs_successReplacesState()
+{
+    const QString firstFile  = createTemporaryVerilogFile("module first_module; endmodule");
+    const QString secondFile = createTemporaryVerilogFile("module second_module; endmodule");
+    QVERIFY(!firstFile.isEmpty());
+    QVERIFY(!secondFile.isEmpty());
+
+    QSlangDriver driver;
+    QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(firstFile)));
+    QCOMPARE(driver.getModuleList(), QStringList{"first_module"});
+
+    QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(secondFile)));
+    QCOMPARE(driver.getModuleList(), QStringList{"second_module"});
+}
+
 void Test::parseFileList_validFiles()
 {
     /* Create a simple Verilog file */
@@ -208,6 +248,44 @@ void Test::parseFileList_emptyList()
 
     /* Parse should fail with empty list */
     QVERIFY(!result);
+}
+
+void Test::parseFileList_failureClearsState()
+{
+    const QString verilogFile = createTemporaryVerilogFile("module previous_module; endmodule");
+    QVERIFY(!verilogFile.isEmpty());
+
+    QSlangDriver driver;
+    QVERIFY(driver.parseFileList("", {verilogFile}));
+    QVERIFY(!driver.getAst().empty());
+
+    QVERIFY(!driver.parseFileList("", {}));
+    QVERIFY(driver.getAst().empty());
+    QVERIFY(driver.getModuleList().isEmpty());
+}
+
+void Test::parseFileList_unknownModulePolicy()
+{
+    const QString topFile = createTemporaryVerilogFile(R"(
+        module top(input logic source, output logic result);
+            missing_module child(.source(source), .result(result));
+        endmodule
+    )");
+    QVERIFY(!topFile.isEmpty());
+
+    QSlangDriver driver;
+    QVERIFY(driver.parseFileList("", {topFile}));
+    QVERIFY(!driver.parseFileList("", {topFile}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+    QVERIFY(driver.getAst().empty());
+
+    const QString stubFile = createTemporaryVerilogFile(R"(
+        module missing_module(input logic source, output logic result);
+            assign result = source;
+        endmodule
+    )");
+    QVERIFY(!stubFile.isEmpty());
+    QVERIFY(driver.parseFileList(
+        "", {topFile, stubFile}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
 }
 
 void Test::contentCleanComment_singleLine()
