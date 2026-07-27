@@ -78,8 +78,8 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList  positionalArgs = parser.positionalArguments();
-    const QString     &libraryName    = parser.isSet("library") ? parser.value("library") : "";
-    const QString     &busName        = parser.isSet("bus") ? parser.value("bus") : "";
+    const QString      libraryName    = parser.value("library");
+    const QString      busName        = parser.value("bus");
     const QStringList &filePathList   = positionalArgs;
 
     if (filePathList.isEmpty()) {

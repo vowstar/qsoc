@@ -98,7 +98,7 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
 
     parser.parse(appArguments);
     const QStringList  positionalArgs = parser.positionalArguments();
-    const QString     &libraryName    = parser.isSet("library") ? parser.value("library") : "";
+    const QString      libraryName    = parser.value("library");
     const QString     &moduleName     = parser.isSet("module") ? parser.value("module") : ".*";
     const QStringList &filePathList   = positionalArgs;
     const QStringList &macroDefines   = parser.values("define");

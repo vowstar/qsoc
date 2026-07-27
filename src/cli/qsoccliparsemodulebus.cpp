@@ -94,10 +94,10 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
     parser.parse(appArguments);
     const QStringList positionalArgs = parser.positionalArguments();
     const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : "";
-    const QString    &busName        = parser.isSet("bus") ? parser.value("bus") : "";
+    const QString     moduleName     = parser.value("module");
+    const QString     busName        = parser.value("bus");
     const QString    &busLibrary = parser.isSet("bus-library") ? parser.value("bus-library") : ".*";
-    const QString    &busMode    = parser.isSet("mode") ? parser.value("mode") : "";
+    const QString     busMode    = parser.value("mode");
     const bool        useAI      = parser.isSet("ai");
 
     /* Validate required parameters */
@@ -256,7 +256,7 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
 
     const QStringList positionalArgs = parser.positionalArguments();
     const QString    &libraryName    = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : "";
+    const QString     moduleName     = parser.value("module");
     const QString    &busName        = positionalArgs.isEmpty() ? "" : positionalArgs.first();
 
     /* Validate required parameters */
@@ -657,8 +657,8 @@ bool QSocCliWorker::parseModuleBusExplain(const QStringList &appArguments)
     }
 
     const QString &libraryName = parser.isSet("library") ? parser.value("library") : ".*";
-    const QString &moduleName  = parser.isSet("module") ? parser.value("module") : "";
-    const QString &busName     = parser.isSet("bus") ? parser.value("bus") : "";
+    const QString  moduleName  = parser.value("module");
+    const QString  busName     = parser.value("bus");
     const QString &busLibrary  = parser.isSet("bus-library") ? parser.value("bus-library") : ".*";
 
     /* Validate required parameters */
@@ -666,7 +666,6 @@ bool QSocCliWorker::parseModuleBusExplain(const QStringList &appArguments)
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: module name is required."));
     }
-    // cppcheck-suppress knownConditionTrueFalse
     if (busName.isEmpty()) {
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: bus name is required."));
     }
