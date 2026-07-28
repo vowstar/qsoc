@@ -169,6 +169,59 @@ comb:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* Combinational logic */"));
     }
 
+    /* `expr` wins over `if` and `case` at emission. Counting the item as a
+       process anyway declared a register nothing writes and drove the output
+       from both that register and the expression. */
+    void testMixedFormCombDrivesOutputOnce()
+    {
+        const QString netlistContent = R"(
+port:
+  a:
+    direction: input
+    type: logic[7:0]
+  b:
+    direction: input
+    type: logic[7:0]
+  sel:
+    direction: input
+    type: logic
+  y:
+    direction: output
+    type: logic[7:0]
+
+comb:
+  - out: y
+    expr: a
+    if:
+      - cond: sel
+        then: b
+    default: a
+)";
+        const QString netlistPath    = createTempFile("test_mixed_form.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_mixed_form.v");
+        QVERIFY(QFile::exists(verilogPath));
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign y = a;"));
+        QCOMPARE(verilogContent.count("assign y ="), 1);
+        QVERIFY(!verilogContent.contains("y_reg"));
+    }
+
     void testConditionalComb()
     {
         QString netlistContent = R"(
@@ -793,6 +846,124 @@ comb:
         QVERIFY(!verilogContent.contains("a_primary_reg"));
         QVERIFY(!verilogContent.contains("z_alias_reg"));
         QVERIFY(!verilogContent.contains("multiple drivers"));
+    }
+
+    void testOverlappingProcessesKeepFirstDriver()
+    {
+        const QString netlistContent = R"(
+port:
+  sel:
+    direction: input
+    type: logic
+  low_first:
+    direction: input
+    type: logic[3:0]
+  low_second:
+    direction: input
+    type: logic[3:0]
+  high:
+    direction: input
+    type: logic[3:0]
+  result:
+    direction: output
+    type: logic[7:0]
+  whole_first:
+    direction: output
+    type: logic[7:0]
+  slice_first:
+    direction: output
+    type: logic[7:0]
+
+comb:
+  - out: result[3:0]
+    if:
+      - cond: sel
+        then: low_first
+    default: 4'h0
+  - out: result[3:0]
+    if:
+      - cond: sel
+        then: low_second
+    default: 4'h1
+  - out: result[7:4]
+    if:
+      - cond: sel
+        then: high
+    default: 4'h2
+  - out: whole_first
+    if:
+      - cond: sel
+        then: "8'hA5"
+    default: 8'h00
+  - out: whole_first[3:0]
+    if:
+      - cond: sel
+        then: low_second
+    default: 4'h3
+  - out: slice_first[3:0]
+    if:
+      - cond: sel
+        then: low_first
+    default: 4'h4
+  - out: slice_first
+    if:
+      - cond: sel
+        then: "8'h5A"
+    default: 8'h00
+)";
+
+        const QString netlistPath
+            = createTempFile("test_overlapping_processes.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_overlapping_processes.v");
+        QVERIFY(QFile::remove(verilogPath) || !QFile::exists(verilogPath));
+
+        QSocCliWorker worker;
+        worker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+            false);
+        worker.run();
+
+        const QString messages = messageList.join('\n');
+        QVERIFY2(
+            messages.contains("Successfully generated Verilog code: " + verilogPath),
+            qPrintable(messages));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+
+        QCOMPARE(verilogContent.count("always @(*) begin"), 4);
+        QCOMPARE(verilogContent.count("assign result[3:0] = result_reg[3:0];"), 1);
+        QCOMPARE(verilogContent.count("assign result[7:4] = result_reg[7:4];"), 1);
+        QVERIFY(verilogContent.contains("result_reg[3:0] = low_first;"));
+        QVERIFY(!verilogContent.contains("result_reg[3:0] = low_second;"));
+        QVERIFY(verilogContent.contains("result_reg[7:4] = high;"));
+        QCOMPARE(verilogContent.count("assign whole_first = whole_first_reg;"), 1);
+        QVERIFY(verilogContent.contains("whole_first_reg = 8'hA5;"));
+        QVERIFY(!verilogContent.contains("whole_first_reg[3:0] = low_second;"));
+        QCOMPARE(verilogContent.count("assign slice_first[3:0] = slice_first_reg[3:0];"), 1);
+        QVERIFY(verilogContent.contains("slice_first_reg[3:0] = low_first;"));
+        QVERIFY(!verilogContent.contains("slice_first_reg = 8'h5A;"));
+        QCOMPARE(
+            verilogContent.count("FIXME: overlapping comb process driver for result[3:0] skipped"),
+            1);
+        QCOMPARE(
+            verilogContent.count(
+                "FIXME: overlapping comb process driver for whole_first[3:0] skipped"),
+            1);
+        QCOMPARE(
+            verilogContent.count("FIXME: overlapping comb process driver for slice_first skipped"),
+            1);
+        QVERIFY(messages.contains("comb has overlapping process driver for result[3:0]"));
+
+        QSlangDriver driver;
+        QVERIFY2(
+            driver
+                .parseFileList("", {verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject),
+            qPrintable("Generated Verilog did not elaborate:\n" + verilogContent));
     }
 
     void testFullWidthProcessesUseDeclaredSignalWidths()

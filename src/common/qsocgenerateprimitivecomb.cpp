@@ -16,12 +16,20 @@ struct CombTarget
     QString requestedBase;
     QString emittedBase;
     QString slice;
-    bool    topInput = false;
-    bool    known    = false;
+    bool    topInput         = false;
+    bool    known            = false;
+    bool    ownsProcessRange = true;
 };
 
 bool usesProcessBlock(const YAML::Node &combItem)
 {
+    /* Emission resolves `expr` ahead of `if` and `case`. Answering yes here for
+       an item that also carries an expression declares a register the process
+       never writes and drives the output from both the register and the
+       expression. */
+    if (combItem["expr"] && combItem["expr"].IsScalar()) {
+        return false;
+    }
     return (combItem["if"] && combItem["if"].IsSequence())
            || (combItem["case"] && combItem["case"].IsScalar() && combItem["cases"]
                && combItem["cases"].IsMap());
@@ -145,6 +153,7 @@ bool QSocCombPrimitive::generateCombLogic(
     QSet<QString>              processFullOutputs;
     QMap<QString, QStringList> processOutputSlices;
     QMap<QString, int>         processMaxBits;
+    QMap<QString, QStringList> processDriverRanges;
     for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
         const YAML::Node &combItem = netlistData["comb"][i];
         if (!combItem.IsMap() || !combItem["out"] || !combItem["out"].IsScalar()) {
@@ -159,6 +168,11 @@ bool QSocCombPrimitive::generateCombLogic(
            would declare a reg and drive the input from inside the module.
            The emission loop carries the diagnostic. */
         if (target.topInput) {
+            continue;
+        }
+        target.ownsProcessRange = QSocGenerateManager::claimDriverRange(
+            processDriverRanges, target.emittedBase, target.slice);
+        if (!target.ownsProcessRange) {
             continue;
         }
         if (!processOutputBases.contains(target.emittedBase)) {
@@ -246,7 +260,24 @@ bool QSocCombPrimitive::generateCombLogic(
                 << " - check the source netlist */\n";
             continue;
         }
+        if (!hasExpression && usesProcessBlock(combItem) && !target.ownsProcessRange) {
+            const QString fullOutputSignal = target.emittedBase + target.slice;
+            QSocConsole::warn() << "comb has overlapping process driver for" << fullOutputSignal
+                                << "; keeping the first - check the source netlist";
+            out << "    /* FIXME: overlapping comb process driver for " << fullOutputSignal
+                << " skipped - check the source netlist */\n";
+            continue;
+        }
         if (hasExpression) {
+            /* An item that also spells a process form emits only the
+               expression; surface the dropped branch instead of silently
+               ignoring it. */
+            if ((combItem["if"] && combItem["if"].IsSequence())
+                || (combItem["case"] && combItem["case"].IsScalar())) {
+                QSocConsole::warn() << "comb item for" << target.emittedBase
+                                    << "mixes expr with if/case; expr wins and the "
+                                       "process form is ignored";
+            }
             if (target.topInput) {
                 QSocConsole::warn() << "comb writes to top-level input port" << target.emittedBase
                                     << "; cannot drive an input from inside the module - "

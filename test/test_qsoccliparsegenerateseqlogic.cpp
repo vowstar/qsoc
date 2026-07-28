@@ -739,6 +739,110 @@ endmodule
             qPrintable("Generated Verilog changed signal width:\n" + verilogContent));
     }
 
+    void testOverlappingProcessesKeepFirstDriver()
+    {
+        const QString netlistContent = R"(
+port:
+  clk:
+    direction: input
+    type: logic
+  low_first:
+    direction: input
+    type: logic[3:0]
+  low_second:
+    direction: input
+    type: logic[3:0]
+  high:
+    direction: input
+    type: logic[3:0]
+  result:
+    direction: output
+    type: logic[7:0]
+  whole_first:
+    direction: output
+    type: logic[7:0]
+  slice_first:
+    direction: output
+    type: logic[7:0]
+
+seq:
+  - reg: result[3:0]
+    clk: clk
+    next: low_first
+  - reg: result[3:0]
+    clk: clk
+    next: low_second
+  - reg: result[7:4]
+    clk: clk
+    next: high
+  - reg: whole_first
+    clk: clk
+    next: "8'hA5"
+  - reg: whole_first[3:0]
+    clk: clk
+    next: low_second
+  - reg: slice_first[3:0]
+    clk: clk
+    next: low_first
+  - reg: slice_first
+    clk: clk
+    next: "8'h5A"
+)";
+
+        const QString netlistPath
+            = createTempFile("test_overlapping_seq_processes.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_overlapping_seq_processes.v");
+        QVERIFY(QFile::remove(verilogPath) || !QFile::exists(verilogPath));
+
+        QSocCliWorker worker;
+        worker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+            false);
+        worker.run();
+
+        const QString messages = messageList.join('\n');
+        QVERIFY2(
+            messages.contains("Successfully generated Verilog code: " + verilogPath),
+            qPrintable(messages));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+
+        QCOMPARE(verilogContent.count("always @(posedge clk) begin"), 4);
+        QCOMPARE(verilogContent.count("assign result[3:0] = result_reg[3:0];"), 1);
+        QCOMPARE(verilogContent.count("assign result[7:4] = result_reg[7:4];"), 1);
+        QVERIFY(verilogContent.contains("result_reg[3:0] <= low_first;"));
+        QVERIFY(!verilogContent.contains("result_reg[3:0] <= low_second;"));
+        QVERIFY(verilogContent.contains("result_reg[7:4] <= high;"));
+        QCOMPARE(verilogContent.count("assign whole_first = whole_first_reg;"), 1);
+        QVERIFY(verilogContent.contains("whole_first_reg <= 8'hA5;"));
+        QVERIFY(!verilogContent.contains("whole_first_reg[3:0] <= low_second;"));
+        QCOMPARE(verilogContent.count("assign slice_first[3:0] = slice_first_reg[3:0];"), 1);
+        QVERIFY(verilogContent.contains("slice_first_reg[3:0] <= low_first;"));
+        QVERIFY(!verilogContent.contains("slice_first_reg <= 8'h5A;"));
+        QCOMPARE(
+            verilogContent.count("FIXME: overlapping seq process driver for result[3:0] skipped"),
+            1);
+        QCOMPARE(
+            verilogContent.count(
+                "FIXME: overlapping seq process driver for whole_first[3:0] skipped"),
+            1);
+        QCOMPARE(
+            verilogContent.count("FIXME: overlapping seq process driver for slice_first skipped"),
+            1);
+        QVERIFY(messages.contains("seq has overlapping process driver for result[3:0]"));
+
+        QSlangDriver driver;
+        QVERIFY2(
+            driver
+                .parseFileList("", {verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject),
+            qPrintable("Generated Verilog did not elaborate:\n" + verilogContent));
+    }
+
     void testDirectPrimitiveWidthGeneration()
     {
         const YAML::Node netlistData = YAML::Load(R"(

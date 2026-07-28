@@ -2699,6 +2699,20 @@ bool QSocGenerateManager::doBitRangesOverlap(const QString &range1, const QStrin
     return !(max1 < min2 || max2 < min1);
 }
 
+bool QSocGenerateManager::claimDriverRange(
+    QMap<QString, QStringList> &claimedRanges, const QString &base, const QString &range)
+{
+    QStringList &ranges = claimedRanges[base];
+    for (const QString &claimed : std::as_const(ranges)) {
+        if (claimed.isEmpty() || range.isEmpty() || claimed == range
+            || doBitRangesOverlap(claimed, range)) {
+            return false;
+        }
+    }
+    ranges.append(range);
+    return true;
+}
+
 bool QSocGenerateManager::doBitRangesProvideFullCoverage(const QStringList &ranges, int signalWidth)
 {
     if (ranges.isEmpty()) {

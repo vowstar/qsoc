@@ -333,6 +333,16 @@ public:
     static bool doBitRangesOverlap(const QString &range1, const QString &range2);
 
     /**
+     * @brief Claim one resolved signal range for a process driver
+     * @param claimedRanges Ranges already claimed, grouped by resolved base
+     * @param base Resolved signal base
+     * @param range Resolved bit range, or empty for the whole signal
+     * @return true when claimed, false when it overlaps an earlier claim
+     */
+    static bool claimDriverRange(
+        QMap<QString, QStringList> &claimedRanges, const QString &base, const QString &range);
+
+    /**
      * @brief Check if bit ranges provide full coverage for a signal width
      * @param ranges List of bit range strings
      * @param signalWidth Expected signal width (0 means single bit)

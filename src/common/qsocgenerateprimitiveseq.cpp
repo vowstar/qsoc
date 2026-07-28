@@ -6,6 +6,8 @@
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
 
+#include <vector>
+
 namespace {
 
 QString numericPortWidth(const YAML::Node &netlistData, const QString &baseName)
@@ -105,6 +107,24 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
         }
     }
 
+    std::vector<bool>          seqOwnsDriverRange(netlistData["seq"].size(), true);
+    QMap<QString, QStringList> seqDriverRanges;
+    for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
+        const YAML::Node &seqItem = netlistData["seq"][i];
+        if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["clk"] || !seqItem["reg"].IsScalar()
+            || !seqItem["clk"].IsScalar()) {
+            continue;
+        }
+        const auto parsed = QSocGenerateManager::parseSignalBitSelect(
+            QString::fromStdString(seqItem["reg"].as<std::string>()));
+        const QString regBase = resolveBase(parsed.first);
+        if (inputTopPortNames.contains(regBase)) {
+            continue;
+        }
+        seqOwnsDriverRange[i] = QSocGenerateManager::claimDriverRange(
+            seqDriverRanges, regBase, resolveSlice(parsed.first, parsed.second));
+    }
+
     /* First pass: collect base names that need internal reg declarations.
        A `reg: counter[3]` form historically formed `counter[3]_reg`, an
        illegal Verilog identifier. Strip the bit-select for the reg name
@@ -115,6 +135,9 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
     for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
         const YAML::Node &seqItem = netlistData["seq"][i];
         if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["reg"].IsScalar()) {
+            continue;
+        }
+        if (!seqOwnsDriverRange[i]) {
             continue;
         }
         const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
@@ -142,6 +165,9 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
     for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
         const YAML::Node &seqItem = netlistData["seq"][i];
         if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["reg"].IsScalar()) {
+            continue;
+        }
+        if (!seqOwnsDriverRange[i]) {
             continue;
         }
         const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
@@ -337,8 +363,16 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
             continue;
         }
         const QString regBitSlice = resolveSlice(parsedReg.first, parsedReg.second);
-        const QString regSignal   = regBase + "_reg" + regBitSlice;
-        const QString clkSignal   = QString::fromStdString(seqItem["clk"].as<std::string>());
+        if (!seqOwnsDriverRange[i]) {
+            const QString fullRegName = regBase + regBitSlice;
+            QSocConsole::warn() << "seq has overlapping process driver for" << fullRegName
+                                << "; keeping the first - check the source netlist";
+            out << "    /* FIXME: overlapping seq process driver for " << fullRegName
+                << " skipped - check the source netlist */\n";
+            continue;
+        }
+        const QString regSignal = regBase + "_reg" + regBitSlice;
+        const QString clkSignal = QString::fromStdString(seqItem["clk"].as<std::string>());
         if (!knownSignals.contains(clkSignal)) {
             QSocConsole::warn() << "seq for" << regName << "uses clk" << clkSignal
                                 << "which is not declared as a port or net";
