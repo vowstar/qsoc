@@ -22,7 +22,8 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
        illegal Verilog identifier. Strip the bit-select for the reg name
        and emit a full-width reg per base; the bit-select stays on the
        always-block target so each item still writes the right bit. */
-    QSet<QString> seqRegBases;
+    QStringList   seqRegBases;
+    QSet<QString> seenSeqRegBases;
     for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
         const YAML::Node &seqItem = netlistData["seq"][i];
         if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["reg"].IsScalar()) {
@@ -30,7 +31,10 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
         }
         const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
         const auto    parsed  = QSocGenerateManager::parseSignalBitSelect(regName);
-        seqRegBases.insert(parsed.first);
+        if (!seenSeqRegBases.contains(parsed.first)) {
+            seenSeqRegBases.insert(parsed.first);
+            seqRegBases.append(parsed.first);
+        }
     }
 
     /* For each base, also remember the highest bit index any seq item

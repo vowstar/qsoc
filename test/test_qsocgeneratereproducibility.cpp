@@ -19,6 +19,8 @@
 #include <QFileInfo>
 #include <QLockFile>
 #include <QMap>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QScopeGuard>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -127,6 +129,68 @@ bool generateDiagram(const QString &kind, const QString &path)
     }
     QSocPowerPrimitive primitive;
     return primitive.generateTypstDiagram({}, path);
+}
+
+YAML::Node sequentialOrderingFixture()
+{
+    return YAML::Load(R"(
+port:
+  clk:
+    direction: input
+    type: logic
+  source:
+    direction: input
+    type: logic
+  seq_z:
+    direction: output
+    type: logic
+  seq_a:
+    direction: output
+    type: logic
+  seq_m:
+    direction: output
+    type: logic
+  seq_b:
+    direction: output
+    type: logic
+  seq_y:
+    direction: output
+    type: logic
+  seq_c:
+    direction: output
+    type: logic
+  seq_x:
+    direction: output
+    type: logic
+  seq_d:
+    direction: output
+    type: logic
+seq:
+  - reg: seq_z
+    clk: clk
+    next: source
+  - reg: seq_a
+    clk: clk
+    next: source
+  - reg: seq_m
+    clk: clk
+    next: source
+  - reg: seq_b
+    clk: clk
+    next: source
+  - reg: seq_y
+    clk: clk
+    next: source
+  - reg: seq_c
+    clk: clk
+    next: source
+  - reg: seq_x
+    clk: clk
+    next: source
+  - reg: seq_d
+    clk: clk
+    next: source
+)");
 }
 
 class Test : public QObject
@@ -245,6 +309,91 @@ private slots:
             QVERIFY(!it.value().contains("9.8.7"));
             QVERIFY(!it.value().contains("# Generated:"));
             QVERIFY(!it.value().contains('\r'));
+        }
+    }
+
+    void sequentialOutputIsStableAcrossProcessHashSeeds()
+    {
+        const QString mode = qEnvironmentVariable("QSOC_TEST_REPRO_SEQ_MODE");
+        if (!mode.isEmpty()) {
+            QVERIFY(mode == "zero" || mode == "random");
+
+            const QString projectPath = qEnvironmentVariable("QSOC_TEST_REPRO_SEQ_PROJECT");
+            QVERIFY(!projectPath.isEmpty());
+            QSocProjectManager manager;
+            manager.setCurrentPath(projectPath);
+            QVERIFY(manager.mkpath());
+            QSocGenerateManager generator(nullptr, &manager);
+            QVERIFY(generator.setNetlistData(sequentialOrderingFixture()));
+            QVERIFY(generator.processNetlist());
+            QVERIFY(generator.generateVerilog("seq_order"));
+            return;
+        }
+
+        QTemporaryDir runDirectory;
+        QVERIFY(runDirectory.isValid());
+        QByteArray baseline;
+        for (int run = 0; run < 9; ++run) {
+            const QString runPath = QDir(runDirectory.path()).filePath(QString("run_%1").arg(run));
+            const QString projectPath = QDir(runPath).filePath("project");
+            QVERIFY(QDir().mkpath(runPath));
+
+            QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+            environment.insert("QSOC_TEST_REPRO_SEQ_MODE", run == 0 ? "zero" : "random");
+            environment.insert("QSOC_TEST_REPRO_SEQ_PROJECT", projectPath);
+            environment.insert("TMPDIR", runPath);
+            if (run == 0) {
+                environment.insert("QT_HASH_SEED", "0");
+            } else {
+                environment.remove("QT_HASH_SEED");
+            }
+
+            QProcess child;
+            child.setProcessEnvironment(environment);
+            child.setProcessChannelMode(QProcess::MergedChannels);
+            child.setWorkingDirectory(runPath);
+            child.start(
+                QCoreApplication::applicationFilePath(),
+                {"sequentialOutputIsStableAcrossProcessHashSeeds"});
+            QVERIFY(child.waitForStarted(5000));
+            const bool stopped = child.waitForFinished(30000);
+            if (!stopped) {
+                child.kill();
+                child.waitForFinished(1000);
+            }
+            const QByteArray childOutput = child.readAll();
+            QVERIFY2(stopped, childOutput.constData());
+            QVERIFY2(
+                child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
+                childOutput.constData());
+
+            QFile outputFile(QDir(projectPath).filePath("output/seq_order.v"));
+            QVERIFY(outputFile.open(QIODevice::ReadOnly));
+            const QByteArray output = outputFile.readAll();
+            QVERIFY(!output.isEmpty());
+            if (baseline.isEmpty()) {
+                baseline = output;
+            } else {
+                QCOMPARE(output, baseline);
+            }
+        }
+
+        const QStringList
+            expectedOrder{"seq_z", "seq_a", "seq_m", "seq_b", "seq_y", "seq_c", "seq_x", "seq_d"};
+        qsizetype previousDeclaration = -1;
+        qsizetype previousAssignment  = -1;
+        for (const QString &name : expectedOrder) {
+            const QByteArray declaration = "    reg " + name.toUtf8() + "_reg;";
+            const QByteArray assignment  = "    assign " + name.toUtf8() + " = " + name.toUtf8()
+                                           + "_reg;";
+            QCOMPARE(baseline.count(declaration), 1);
+            QCOMPARE(baseline.count(assignment), 1);
+            const qsizetype declarationPosition = baseline.indexOf(declaration);
+            const qsizetype assignmentPosition  = baseline.indexOf(assignment);
+            QVERIFY(declarationPosition > previousDeclaration);
+            QVERIFY(assignmentPosition > previousAssignment);
+            previousDeclaration = declarationPosition;
+            previousAssignment  = assignmentPosition;
         }
     }
 

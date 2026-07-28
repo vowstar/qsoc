@@ -309,6 +309,10 @@ always @(posedge clk or negedge rst_n) begin
 end
 ```
 
+Sequential internal register declarations and base-signal assignment groups
+follow the first occurrence of each target base in `seq`; slices within a group
+use lexical order.
+
 === Clock Edge Control
 <soc-net-seq-edge>
 Control the clock edge using the `edge` field:
