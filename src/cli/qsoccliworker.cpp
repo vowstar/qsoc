@@ -239,6 +239,9 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: unknown subcommand: %1.").arg(command));
     }
-    parser.process(*QCoreApplication::instance());
+    if (!parser.parse(appArguments)) {
+        return showErrorWithHelp(
+            1, QCoreApplication::translate("main", "Error: %1").arg(parser.errorText()));
+    }
     return true;
 }

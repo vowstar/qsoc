@@ -49,6 +49,11 @@ int main(int argc, char *argv[])
         QApplication::setWindowIcon(QIcon(QStringLiteral(":/qsoc.svg")));
         QStaticTranslator::setup();
         QSocCliWorker socCliWorker;
+        QObject::connect(&socCliWorker, &QSocCliWorker::exit, &app, [](int exitCode) {
+            if (exitCode != 0) {
+                QCoreApplication::exit(exitCode);
+            }
+        });
         socCliWorker.setup(app.arguments(), true);
         QStaticIconTheme::setup();
         MainWindow mainWindow;

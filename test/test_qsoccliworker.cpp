@@ -8,24 +8,13 @@
 
 #include <QBuffer>
 #include <QStringList>
-#include <QThread>
 #include <QtCore>
 #include <QtTest>
 
-#include <iostream>
+#include <array>
+#include <cstdio>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
+namespace {
 
 class Test : public QObject
 {
@@ -55,12 +44,34 @@ private:
     }
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     void cleanupTestCase()
     {
         QSocConsole::setOutputDevice(nullptr);
         QSocConsole::setErrorDevice(nullptr);
+    }
+
+    void explicitArgumentsIgnoreHostArguments()
+    {
+        resetCapture();
+        QSocCliWorker socCliWorker;
+        QSignalSpy    exitSpy(&socCliWorker, &QSocCliWorker::exit);
+        socCliWorker.setup({"qsoc", "gui"}, true);
+
+        QTRY_COMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.takeFirst().at(0).toInt(), 0);
+        QVERIFY(!captured().contains("host-only"));
+    }
+
+    void invalidGuiOptionIsReported()
+    {
+        resetCapture();
+        QSocCliWorker socCliWorker;
+        QSignalSpy    exitSpy(&socCliWorker, &QSocCliWorker::exit);
+        socCliWorker.setup({"qsoc", "gui", "--bogus"}, true);
+
+        QTRY_COMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.takeFirst().at(0).toInt(), 1);
+        QVERIFY(captured().contains("Unknown option 'bogus'"));
     }
 
     void optionH()
@@ -75,7 +86,8 @@ private slots:
             socCliWorker.setup(appArguments, true);
             socCliWorker.run();
         }
-        QVERIFY(captured().contains("Usage: qsoc [options]"));
+        const QString text = captured();
+        QVERIFY2(text.contains("Usage: qsoc [options]"), qPrintable(text));
     }
 
     void optionHelp()
@@ -142,6 +154,20 @@ private slots:
     }
 };
 
-QSOC_TEST_MAIN(Test)
+} // namespace
+
+int main(int argc, char *argv[])
+{
+    int                    hostArgc     = 2;
+    char                   hostName[]   = "qsoc";
+    char                   hostOption[] = "--host-only";
+    std::array<char *, 2>  hostArgv{{hostName, hostOption}};
+    const QCoreApplication application(hostArgc, hostArgv.data());
+    Test                   testCase;
+    const int              result = QTest::qExec(&testCase, argc, argv);
+    fprintf(stderr, "Tests completed with result: %d\n", result);
+    _exit(result ? 1 : 0);
+    return result;
+}
 
 #include "test_qsoccliworker.moc"
