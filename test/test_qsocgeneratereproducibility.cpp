@@ -151,6 +151,241 @@ private slots:
         }
     }
 
+    void projectMetadataDoesNotChangeBytes()
+    {
+        const QString originalVersion = QCoreApplication::applicationVersion();
+        const auto    restoreVersion  = qScopeGuard(
+            [&]() { QCoreApplication::setApplicationVersion(originalVersion); });
+        QTemporaryDir firstDirectory;
+        QTemporaryDir secondDirectory;
+        QVERIFY(firstDirectory.isValid());
+        QVERIFY(secondDirectory.isValid());
+
+        const QString firstProjectPath = QDir(firstDirectory.path()).filePath("project");
+        QCoreApplication::setApplicationVersion("1.2.3");
+        QSocProjectManager firstManager;
+        firstManager.setCurrentPath(firstProjectPath);
+        firstManager.setEnv("QSOC_NOISE", firstProjectPath);
+        QVERIFY(firstManager.create("stable"));
+        QFile firstFile(QDir(firstProjectPath).filePath("stable.soc_pro"));
+        QVERIFY(firstFile.open(QIODevice::ReadOnly));
+        const QByteArray firstBytes = firstFile.readAll();
+
+        const QString secondProjectPath = QDir(secondDirectory.path()).filePath("project");
+        QCoreApplication::setApplicationVersion("9.8.7");
+        QSocProjectManager secondManager;
+        secondManager.setCurrentPath(secondProjectPath);
+        secondManager.setEnv("QSOC_NOISE", QDir(secondDirectory.path()).filePath("unrelated"));
+        QVERIFY(secondManager.create("stable"));
+        QFile secondFile(QDir(secondProjectPath).filePath("stable.soc_pro"));
+        QVERIFY(secondFile.open(QIODevice::ReadOnly));
+        const QByteArray secondBytes = secondFile.readAll();
+
+        QCOMPARE(secondBytes, firstBytes);
+        QVERIFY(!firstBytes.contains("version"));
+        QVERIFY(!firstBytes.contains("QSOC_NOISE"));
+        QVERIFY(!firstBytes.contains('\r'));
+        QVERIFY(firstBytes.endsWith('\n'));
+        QVERIFY(!firstBytes.chopped(1).endsWith('\n'));
+    }
+
+    void legacyProjectMetadataIsIgnored()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QByteArray label = QStringLiteral("芯片").toUtf8();
+        QByteArray       input = "version: 9999.0.0\n"
+                                 "bus: ${QSOC_PROJECT_DIR}/bus\n"
+                                 "module: ${QSOC_PROJECT_DIR}/module\n"
+                                 "schematic: ${QSOC_PROJECT_DIR}/schematic\n"
+                                 "output: ${QSOC_PROJECT_DIR}/output\n"
+                                 "extension:\n"
+                                 "  label: \"";
+        input += label;
+        input += "\"\n"
+                 "  note: |+\n"
+                 "    first\n"
+                 "\n";
+
+        const QString projectFilePath = QDir(directory.path()).filePath("legacy.soc_pro");
+        QFile         projectFile(projectFilePath);
+        QVERIFY(projectFile.open(QIODevice::WriteOnly));
+        QCOMPARE(projectFile.write(input), input.size());
+        projectFile.close();
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(directory.path());
+        QVERIFY(manager.load("legacy"));
+        QVERIFY(manager.save("legacy"));
+
+        QVERIFY(projectFile.open(QIODevice::ReadOnly));
+        const QByteArray savedBytes = projectFile.readAll();
+        QVERIFY(!savedBytes.contains("version"));
+        QVERIFY(savedBytes.contains(label));
+        QVERIFY(!savedBytes.contains('\r'));
+        QVERIFY(savedBytes.endsWith('\n'));
+        QVERIFY(!savedBytes.chopped(1).endsWith('\n'));
+
+        const YAML::Node savedNode = YAML::Load(
+            std::string(savedBytes.constData(), savedBytes.size()));
+        QVERIFY(!savedNode["version"].IsDefined());
+        QCOMPARE(
+            QString::fromStdString(savedNode["extension"]["label"].as<std::string>()),
+            QStringLiteral("芯片"));
+        QCOMPARE(
+            QString::fromStdString(savedNode["extension"]["note"].as<std::string>()),
+            QString("first\n\n"));
+    }
+
+    void newProjectDoesNotInheritLoadedExtensions()
+    {
+        QTemporaryDir sourceDirectory;
+        QTemporaryDir targetDirectory;
+        QVERIFY(sourceDirectory.isValid());
+        QVERIFY(targetDirectory.isValid());
+        const QByteArray sourceBytes = "bus: bus\n"
+                                       "module: module\n"
+                                       "schematic: schematic\n"
+                                       "output: output\n"
+                                       "extension: retained-only-by-save\n";
+        QFile            sourceFile(QDir(sourceDirectory.path()).filePath("source.soc_pro"));
+        QVERIFY(sourceFile.open(QIODevice::WriteOnly));
+        QCOMPARE(sourceFile.write(sourceBytes), sourceBytes.size());
+        sourceFile.close();
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(sourceDirectory.path());
+        QVERIFY(manager.load("source"));
+        manager.setCurrentPath(targetDirectory.path());
+        QVERIFY(manager.create("target"));
+
+        QFile targetFile(QDir(targetDirectory.path()).filePath("target.soc_pro"));
+        QVERIFY(targetFile.open(QIODevice::ReadOnly));
+        const QByteArray targetBytes = targetFile.readAll();
+        const YAML::Node targetNode  = YAML::Load(
+            std::string(targetBytes.constData(), targetBytes.size()));
+        QVERIFY(!targetNode["extension"].IsDefined());
+    }
+
+    void relativeProjectPathUsesProjectVariable()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString previousPath = QDir::currentPath();
+        const auto    restorePath = qScopeGuard([&]() { QVERIFY(QDir::setCurrent(previousPath)); });
+        QVERIFY(QDir::setCurrent(directory.path()));
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(".");
+        QVERIFY(manager.create("relative"));
+
+        QFile projectFile(QDir(directory.path()).filePath("relative.soc_pro"));
+        QVERIFY(projectFile.open(QIODevice::ReadOnly));
+        const QByteArray projectBytes = projectFile.readAll();
+        const YAML::Node projectNode  = YAML::Load(
+            std::string(projectBytes.constData(), projectBytes.size()));
+        QCOMPARE(
+            QString::fromStdString(projectNode["bus"].as<std::string>()),
+            QString("${QSOC_PROJECT_DIR}/bus"));
+        QCOMPARE(
+            QString::fromStdString(projectNode["module"].as<std::string>()),
+            QString("${QSOC_PROJECT_DIR}/module"));
+        QCOMPARE(
+            QString::fromStdString(projectNode["schematic"].as<std::string>()),
+            QString("${QSOC_PROJECT_DIR}/schematic"));
+        QCOMPARE(
+            QString::fromStdString(projectNode["output"].as<std::string>()),
+            QString("${QSOC_PROJECT_DIR}/output"));
+    }
+
+    void invalidProjectSchemaDoesNotChangeState_data()
+    {
+        QTest::addColumn<QByteArray>("projectBytes");
+
+        QTest::newRow("malformed") << QByteArray("bus: [\n");
+        QTest::newRow("sequence-root") << QByteArray("- bus\n- module\n");
+        QTest::newRow("missing-output")
+            << QByteArray("bus: bus\nmodule: module\nschematic: schematic\nversion: 1.0\n");
+        QTest::newRow("non-scalar")
+            << QByteArray("bus: []\nmodule: module\nschematic: schematic\noutput: output\n");
+        QTest::newRow("empty-path")
+            << QByteArray("bus: ''\nmodule: module\nschematic: schematic\noutput: output\n");
+    }
+
+    void invalidProjectSchemaDoesNotChangeState()
+    {
+        QFETCH(QByteArray, projectBytes);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(directory.path());
+        manager.setProjectName("before");
+        manager.setEnv("QSOC_NOISE", "unchanged");
+        const YAML::Node initialNode = YAML::Load(R"(
+bus: bus
+module: module
+schematic: schematic
+output: output
+extension: retained
+)");
+        manager.setProjectNode(initialNode);
+        const auto previousState = manager.captureState();
+
+        QFile projectFile(QDir(directory.path()).filePath("invalid.soc_pro"));
+        QVERIFY(projectFile.open(QIODevice::WriteOnly));
+        QCOMPARE(projectFile.write(projectBytes), projectBytes.size());
+        projectFile.close();
+
+        QVERIFY(!manager.load("invalid"));
+        const auto currentState = manager.captureState();
+        QCOMPARE(currentState.env, previousState.env);
+        QCOMPARE(currentState.projectName, previousState.projectName);
+        QCOMPARE(currentState.projectPath, previousState.projectPath);
+        QCOMPARE(currentState.busPath, previousState.busPath);
+        QCOMPARE(currentState.modulePath, previousState.modulePath);
+        QCOMPARE(currentState.schematicPath, previousState.schematicPath);
+        QCOMPARE(currentState.outputPath, previousState.outputPath);
+        QCOMPARE(currentState.currentPath, previousState.currentPath);
+        QCOMPARE(
+            QString::fromStdString(YAML::Dump(currentState.projectNode)),
+            QString::fromStdString(YAML::Dump(previousState.projectNode)));
+    }
+
+    void loadFirstReportsInvalidProject()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QByteArray invalidBytes
+            = "bus: bus\nmodule: module\nschematic: schematic\noutput: []\n";
+        QFile projectFile(QDir(directory.path()).filePath("first.soc_pro"));
+        QVERIFY(projectFile.open(QIODevice::WriteOnly));
+        QCOMPARE(projectFile.write(invalidBytes), invalidBytes.size());
+        projectFile.close();
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(directory.path());
+        QVERIFY(!manager.loadFirst(true));
+    }
+
+    void projectPathSubstitutionUsesDirectoryBoundary()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
+        const QString siblingPath = QDir(directory.path()).filePath("project_evil/bus");
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(projectPath);
+        manager.setBusPath(siblingPath);
+        const YAML::Node &projectYaml = manager.getProjectYaml();
+
+        QCOMPARE(
+            QString::fromStdString(projectYaml["module"].as<std::string>()),
+            QString("${QSOC_PROJECT_DIR}/module"));
+        QCOMPARE(QString::fromStdString(projectYaml["bus"].as<std::string>()), siblingPath);
+    }
+
     void concurrentProjectCreateHasOneWinner()
     {
         QTemporaryDir directory;

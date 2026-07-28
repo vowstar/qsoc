@@ -4,7 +4,6 @@
 #include "common/qsocprojectmanager.h"
 #include "common/qsocconsole.h"
 
-#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -14,8 +13,8 @@
 #include <QScopeGuard>
 #include <QStringList>
 #include <QTextStream>
-#include <QVersionNumber>
 
+#include <array>
 #include <optional>
 
 namespace {
@@ -58,15 +57,69 @@ void createMarkerFile(const QString &path)
     }
 }
 
+QString yamlScalarToQString(const YAML::Node &node)
+{
+    const std::string value = node.Scalar();
+    return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
+}
+
+QString lexicalAbsolutePath(const QString &path)
+{
+    const QString normalizedPath = QDir::fromNativeSeparators(path);
+    if (QDir::isAbsolutePath(normalizedPath)) {
+        return QDir::cleanPath(normalizedPath);
+    }
+    return QDir::cleanPath(QDir::current().absoluteFilePath(normalizedPath));
+}
+
+bool validateProjectNode(const YAML::Node &projectNode, bool reportError = true)
+{
+    try {
+        if (!projectNode.IsMap()) {
+            if (reportError) {
+                QSocConsole::error() << "project file root must be a map.";
+            }
+            return false;
+        }
+
+        constexpr std::array<const char *, 4> pathFields{"bus", "module", "schematic", "output"};
+        for (const char *field : pathFields) {
+            const YAML::Node value = projectNode[field];
+            if (!value.IsScalar() || value.Scalar().empty()) {
+                if (reportError) {
+                    QSocConsole::error() << "invalid or missing project field: " << field;
+                }
+                return false;
+            }
+        }
+        return true;
+    } catch (const YAML::Exception &) {
+        if (reportError) {
+            QSocConsole::error() << "invalid project fields.";
+        }
+        return false;
+    }
+}
+
 std::optional<QByteArray> serializeProjectFile(const YAML::Node &projectNode)
 {
     try {
         YAML::Emitter emitter;
+        emitter.SetOutputCharset(YAML::EmitNonAscii);
+        emitter.SetMapFormat(YAML::Block);
+        emitter.SetSeqFormat(YAML::Block);
         emitter << projectNode;
         if (!emitter.good()) {
             return std::nullopt;
         }
-        return QByteArray::fromStdString(std::string(emitter.c_str(), emitter.size()));
+        QByteArray result = QByteArray::fromStdString(std::string(emitter.c_str(), emitter.size()));
+        result.replace("\r\n", "\n");
+        result.replace('\r', '\n');
+        while (result.endsWith('\n')) {
+            result.chop(1);
+        }
+        result.append('\n');
+        return result;
     } catch (const YAML::Exception &) {
         return std::nullopt;
     }
@@ -145,17 +198,29 @@ const QMap<QString, QString> &QSocProjectManager::getEnv()
 
 QString QSocProjectManager::getSimplifyPath(const QString &path)
 {
-    QString result = path;
-    /* Substitute path to environment variables */
-    QMapIterator<QString, QString> iterator(env);
-    while (iterator.hasNext()) {
-        iterator.next();
-        if (iterator.key().contains("QSOC_")) {
-            const QString pattern = QString("${%1}").arg(iterator.key());
-            result                = result.replace(iterator.value(), pattern);
-        }
+    if (projectPath.isEmpty()) {
+        return path;
     }
-    return result;
+    const QString normalizedPath        = lexicalAbsolutePath(path);
+    QString       normalizedProjectPath = lexicalAbsolutePath(projectPath);
+#ifdef Q_OS_WIN
+    constexpr Qt::CaseSensitivity caseSensitivity = Qt::CaseInsensitive;
+#else
+    constexpr Qt::CaseSensitivity caseSensitivity = Qt::CaseSensitive;
+#endif
+    if (normalizedProjectPath.isEmpty()) {
+        return path;
+    }
+    if (normalizedPath.compare(normalizedProjectPath, caseSensitivity) == 0) {
+        return "${QSOC_PROJECT_DIR}";
+    }
+    if (!normalizedProjectPath.endsWith('/')) {
+        normalizedProjectPath += '/';
+    }
+    if (normalizedPath.startsWith(normalizedProjectPath, caseSensitivity)) {
+        return "${QSOC_PROJECT_DIR}/" + normalizedPath.mid(normalizedProjectPath.size());
+    }
+    return path;
 }
 
 QString QSocProjectManager::getExpandPath(const QString &path)
@@ -261,6 +326,7 @@ bool QSocProjectManager::create(const QString &projectName)
         return false;
     }
 
+    projectNode                                  = YAML::Node(YAML::NodeType::Map);
     const std::optional<QByteArray> projectBytes = serializeProjectFile(getProjectYaml());
     if (!projectBytes) {
         QSocConsole::error() << "failed to serialize project file.";
@@ -344,24 +410,34 @@ bool QSocProjectManager::load(const QString &projectName)
         QSocConsole::error() << "project file not found.";
         return false;
     }
-    /* Load project file */
-    YAML::Node localProjectNode = YAML::LoadFile(filePath.toStdString());
-    /* Check project file version */
-    const QVersionNumber projectVersion = QVersionNumber::fromString(
-        QString::fromStdString(localProjectNode["version"].as<std::string>()));
-    const QVersionNumber appVersion = QVersionNumber::fromString(
-        QCoreApplication::applicationVersion());
-    if (projectVersion > appVersion) {
-        QSocConsole::error() << "project file version is newer than application version.";
+    QFile projectFile(filePath);
+    if (!projectFile.open(QIODevice::ReadOnly)) {
+        QSocConsole::error() << "failed to open project file.";
         return false;
     }
-    /* Set project name */
-    setProjectName(QFileInfo(filePath).completeBaseName());
-    /* Set project paths */
-    setProjectPath(QFileInfo(filePath).absoluteDir().absolutePath());
-    setProjectNode(localProjectNode);
+    const QByteArray projectBytes = projectFile.readAll();
+    if (projectFile.error() != QFileDevice::NoError) {
+        QSocConsole::error() << "failed to read project file.";
+        return false;
+    }
 
-    return true;
+    const State previousState = captureState();
+    auto        rollback      = qScopeGuard([&]() { this->restoreState(previousState); });
+    try {
+        const YAML::Node localProjectNode = YAML::Load(
+            std::string(projectBytes.constData(), projectBytes.size()));
+        if (!validateProjectNode(localProjectNode)) {
+            return false;
+        }
+        setProjectName(QFileInfo(filePath).completeBaseName());
+        setProjectPath(QFileInfo(filePath).absoluteDir().absolutePath());
+        setProjectNode(localProjectNode);
+        rollback.dismiss();
+        return true;
+    } catch (const YAML::Exception &) {
+        QSocConsole::error() << "failed to parse project file.";
+        return false;
+    }
 }
 
 bool QSocProjectManager::loadFirst(bool silent)
@@ -393,9 +469,7 @@ bool QSocProjectManager::loadFirst(bool silent)
     }
     const QString localProjectName = QFileInfo(filePath).completeBaseName();
     /* Load the project */
-    load(localProjectName);
-
-    return true;
+    return load(localProjectName);
 }
 
 bool QSocProjectManager::remove(const QString &projectName)
@@ -490,7 +564,7 @@ bool QSocProjectManager::isValid(bool writable)
 
 bool QSocProjectManager::isValidProjectNode()
 {
-    return projectNode.IsDefined() && !projectNode.IsNull();
+    return validateProjectNode(projectNode);
 }
 
 bool QSocProjectManager::isValidProjectName()
@@ -543,7 +617,11 @@ bool QSocProjectManager::isValidOutputPath(bool writable)
 
 const YAML::Node &QSocProjectManager::getProjectYaml()
 {
-    projectNode["version"]   = QCoreApplication::applicationVersion().toStdString();
+    if (!projectNode.IsMap()) {
+        projectNode = YAML::Node(YAML::NodeType::Map);
+    } else {
+        projectNode.remove("version");
+    }
     projectNode["bus"]       = getSimplifyPath(busPath).toStdString();
     projectNode["module"]    = getSimplifyPath(modulePath).toStdString();
     projectNode["schematic"] = getSimplifyPath(schematicPath).toStdString();
@@ -583,11 +661,11 @@ const QString &QSocProjectManager::getOutputPath()
 
 void QSocProjectManager::setProjectNode(const YAML::Node &projectNode)
 {
-    this->projectNode = projectNode;
-    setBusPath(QString::fromStdString(projectNode["bus"].as<std::string>()));
-    setModulePath(QString::fromStdString(projectNode["module"].as<std::string>()));
-    setSchematicPath(QString::fromStdString(projectNode["schematic"].as<std::string>()));
-    setOutputPath(QString::fromStdString(projectNode["output"].as<std::string>()));
+    this->projectNode = YAML::Clone(projectNode);
+    setBusPath(yamlScalarToQString(projectNode["bus"]));
+    setModulePath(yamlScalarToQString(projectNode["module"]));
+    setSchematicPath(yamlScalarToQString(projectNode["schematic"]));
+    setOutputPath(yamlScalarToQString(projectNode["output"]));
 }
 
 void QSocProjectManager::setProjectName(const QString &projectName)

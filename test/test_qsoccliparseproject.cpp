@@ -194,7 +194,7 @@ private slots:
         projectFile.close();
 
         /* Check for updated schematic path */
-        QVERIFY(content.contains("schematic: ./"));
+        QVERIFY(content.contains("schematic: ${QSOC_PROJECT_DIR}"));
     }
 
     void testProjectRemove()
@@ -246,10 +246,10 @@ private slots:
         projectFile.close();
 
         /* Check for custom directory paths */
-        QVERIFY(content.contains("bus: ./bus_dir"));
-        QVERIFY(content.contains("module: ./module_dir"));
-        QVERIFY(content.contains("schematic: ./schematic_dir"));
-        QVERIFY(content.contains("output: ./output_dir"));
+        QVERIFY(content.contains("bus: ${QSOC_PROJECT_DIR}/bus_dir"));
+        QVERIFY(content.contains("module: ${QSOC_PROJECT_DIR}/module_dir"));
+        QVERIFY(content.contains("schematic: ${QSOC_PROJECT_DIR}/schematic_dir"));
+        QVERIFY(content.contains("output: ${QSOC_PROJECT_DIR}/output_dir"));
 
         /* Clean up */
         QFile::remove("custom_dir_project.soc_pro");
@@ -296,9 +296,9 @@ private slots:
         projectFile.close();
 
         /* Check for updated paths */
-        QVERIFY(content.contains("bus: ./custom_bus"));
-        QVERIFY(content.contains("module: ./custom_module"));
-        QVERIFY(content.contains("output: ./custom_output"));
+        QVERIFY(content.contains("bus: ${QSOC_PROJECT_DIR}/custom_bus"));
+        QVERIFY(content.contains("module: ${QSOC_PROJECT_DIR}/custom_module"));
+        QVERIFY(content.contains("output: ${QSOC_PROJECT_DIR}/custom_output"));
 
         /* Clean up */
         QFile::remove("update_test_project.soc_pro");
