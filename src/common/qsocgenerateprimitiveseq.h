@@ -2,6 +2,7 @@
 #define QSOCGENERATEPRIMITIVESEQ_H
 
 #include <yaml-cpp/yaml.h>
+#include <QMap>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -38,7 +39,24 @@ public:
      */
     bool generateSeqLogic(const YAML::Node &netlistData, QTextStream &out);
 
+    /**
+     * @brief Generate sequential logic from YAML configuration
+     * @param netlistData YAML node containing the full netlist
+     * @param declaredSignalRanges emitted packed ranges indexed by signal name
+     * @param out Output text stream for generated Verilog
+     * @return true if generation successful, false otherwise
+     */
+    bool generateSeqLogicWithRanges(
+        const YAML::Node             &netlistData,
+        const QMap<QString, QString> &declaredSignalRanges,
+        QTextStream                  &out);
+
 private:
+    bool generateSeqLogicImpl(
+        const YAML::Node                   &netlistData,
+        const QMap<QString, QString> *const declaredSignalRanges,
+        QTextStream                        &out);
+
     /**
      * @brief Generate sequential logic content for a register
      * @param seqItem The YAML node containing the sequential logic specification

@@ -3,7 +3,9 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "common/qslangdriver.h"
 #include "common/qsocconsole.h"
+#include "common/qsocgenerateprimitiveseq.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
@@ -15,19 +17,6 @@
 #include <QTextStream>
 #include <QtCore>
 #include <QtTest>
-
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
 
 class Test : public QObject
 {
@@ -100,7 +89,6 @@ private:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
@@ -621,6 +609,161 @@ seq:
         int beginCount = verilogContent.count(" begin");
         int endCount   = verilogContent.count("end");
         QVERIFY(beginCount > 0 && endCount >= beginCount); /* Allow for endcase and end statements */
+    }
+
+    void testFullWidthRegistersUseDeclaredSignalWidths()
+    {
+        const QString moduleContent = R"(
+seq_width_sink:
+  port:
+    data:
+      type: logic[7:0]
+      direction: in
+)";
+        const QString modulePath = createTempFile("module/seq_width_sink.soc_mod", moduleContent);
+        QVERIFY(!modulePath.isEmpty());
+
+        const QString netlistContent = R"(
+parameter:
+  WIDTH:
+    type: integer
+    value: 12
+
+port:
+  clk:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  data8:
+    direction: input
+    type: logic[7:0]
+  param_data:
+    direction: input
+    type: logic[WIDTH-1:0]
+  packed_data:
+    direction: input
+    type: logic[1:0][3:0]
+  spaced_data:
+    direction: input
+    type: "logic [ 7 : 0 ]"
+  param_out:
+    direction: output
+    type: logic[WIDTH-1:0]
+  packed_out:
+    direction: output
+    type: logic[1:0][3:0]
+  spaced_out:
+    direction: output
+    type: "logic [ 7 : 0 ]"
+
+instance:
+  u_sink:
+    module: seq_width_sink
+
+net:
+  net_bus:
+    - instance: u_sink
+      port: data
+
+seq:
+  - reg: net_bus
+    clk: clk
+    rst: rst_n
+    rst_val: "8'h00"
+    next: data8
+  - reg: param_out
+    clk: clk
+    rst: rst_n
+    rst_val: "'0"
+    next: param_data
+  - reg: packed_out
+    clk: clk
+    rst: rst_n
+    rst_val: "'0"
+    next: packed_data
+  - reg: spaced_out
+    clk: clk
+    rst: rst_n
+    rst_val: "8'h00"
+    next: spaced_data
+)";
+
+        const QString netlistPath = createTempFile("test_seq_signal_width.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_seq_signal_width.v");
+        QVERIFY(QFile::remove(verilogPath) || !QFile::exists(verilogPath));
+
+        QSocCliWorker worker;
+        worker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+            false);
+        worker.run();
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+
+        QCOMPARE(verilogContent.count("wire [7:0] net_bus;"), 1);
+        QCOMPARE(verilogContent.count("reg [7:0] net_bus_reg;"), 1);
+        QCOMPARE(verilogContent.count("reg [WIDTH-1:0] param_out_reg;"), 1);
+        QCOMPARE(verilogContent.count("reg [1:0][3:0] packed_out_reg;"), 1);
+        QCOMPARE(verilogContent.count("reg [7:0] spaced_out_reg;"), 1);
+        QVERIFY(!verilogContent.contains("\n    reg net_bus_reg;"));
+        QVERIFY(!verilogContent.contains("\n    reg param_out_reg;"));
+        QVERIFY(!verilogContent.contains("\n    reg [1:0] packed_out_reg;"));
+        QVERIFY(!verilogContent.contains("\n    reg [ 7 : 0 ] spaced_out_reg;"));
+
+        const QString stubContent = R"(
+module seq_width_sink (
+    input wire [7:0] data
+);
+endmodule
+)";
+        const QString stubPath    = createTempFile("seq_width_sink.v", stubContent);
+        QVERIFY(!stubPath.isEmpty());
+
+        QSlangDriver driver;
+        QVERIFY2(
+            driver.parseFileList(
+                "", {stubPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject),
+            qPrintable("Generated Verilog did not elaborate:\n" + verilogContent));
+        QVERIFY2(
+            driver.parseArgs(QString(
+                                 "slang --single-unit --timescale 1ns/10ps --error-limit=0 "
+                                 "-Werror=width-trunc -Werror=width-expand \"%1\" \"%2\"")
+                                 .arg(stubPath, verilogPath)),
+            qPrintable("Generated Verilog changed signal width:\n" + verilogContent));
+    }
+
+    void testDirectPrimitiveWidthGeneration()
+    {
+        const YAML::Node netlistData = YAML::Load(R"(
+port:
+  clk:
+    direction: input
+    type: logic
+  data_in:
+    direction: input
+    type: logic[7:0]
+  data:
+    direction: output
+    type: logic[7:0]
+seq:
+  - reg: data
+    clk: clk
+    next: data_in
+)");
+
+        QString     verilogContent;
+        QTextStream out(&verilogContent);
+
+        QSocSeqPrimitive primitive;
+        QVERIFY(primitive.generateSeqLogic(netlistData, out));
+        QCOMPARE(verilogContent.count("reg [7:0] data_reg;"), 1);
     }
 };
 

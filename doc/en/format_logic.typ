@@ -309,6 +309,8 @@ always @(posedge clk or negedge rst_n) begin
 end
 ```
 
+Sequential internal registers use the same emitted packed range as their target
+port or wire.
 Sequential internal register declarations and base-signal assignment groups
 follow the first occurrence of each target base in `seq`; slices within a group
 use lexical order.

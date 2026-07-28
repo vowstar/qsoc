@@ -226,7 +226,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             /* Generate sequential logic */
-            if (!generateSeqPrimitive(netlistData, out)) {
+            if (!generateSeqPrimitive(netlistData, {}, out)) {
                 QSocConsole::warn() << "Failed to generate sequential logic primitives";
                 return false;
             }
@@ -1810,7 +1810,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     }
 
     /* Generate sequential logic after combinational logic */
-    if (!generateSeqPrimitive(netlistData, out)) {
+    if (!generateSeqPrimitive(netlistData, declaredSignalRanges, out)) {
         QSocConsole::warn() << "Failed to generate sequential logic primitives";
         return false;
     }
@@ -2028,14 +2028,17 @@ bool QSocGenerateManager::generatePowerPrimitive(const YAML::Node &powerNode, QT
     return powerPrimitive->generatePowerController(powerNode, out);
 }
 
-bool QSocGenerateManager::generateSeqPrimitive(const YAML::Node &netlistData, QTextStream &out)
+bool QSocGenerateManager::generateSeqPrimitive(
+    const YAML::Node             &netlistData,
+    const QMap<QString, QString> &declaredSignalRanges,
+    QTextStream                  &out)
 {
     if (!seqPrimitive) {
         QSocConsole::warn() << "Seq primitive generator not initialized";
         return false;
     }
 
-    return seqPrimitive->generateSeqLogic(netlistData, out);
+    return seqPrimitive->generateSeqLogicWithRanges(netlistData, declaredSignalRanges, out);
 }
 
 bool QSocGenerateManager::parseMacroCondition(

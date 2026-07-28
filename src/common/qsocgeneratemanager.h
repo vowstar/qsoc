@@ -581,10 +581,14 @@ private:
     /**
      * @brief Generate sequential logic using Seq primitive
      * @param netlistData YAML node containing the full netlist
+     * @param declaredSignalRanges emitted packed ranges indexed by signal name
      * @param out Output text stream for generated Verilog
      * @return true if generation successful, false otherwise
      */
-    bool generateSeqPrimitive(const YAML::Node &netlistData, QTextStream &out);
+    bool generateSeqPrimitive(
+        const YAML::Node             &netlistData,
+        const QMap<QString, QString> &declaredSignalRanges,
+        QTextStream                  &out);
 
     /**
      * @brief Parse and validate ifdef/ifndef conditions from instance data

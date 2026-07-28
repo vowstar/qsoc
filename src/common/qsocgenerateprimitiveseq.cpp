@@ -6,11 +6,61 @@
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
 
+namespace {
+
+QString numericPortWidth(const YAML::Node &netlistData, const QString &baseName)
+{
+    if (!netlistData["port"] || !netlistData["port"].IsMap()) {
+        return {};
+    }
+    for (const auto &portEntry : netlistData["port"]) {
+        if (!portEntry.first.IsScalar()
+            || QString::fromStdString(portEntry.first.as<std::string>()) != baseName) {
+            continue;
+        }
+        if (!portEntry.second.IsMap() || !portEntry.second["type"]
+            || !portEntry.second["type"].IsScalar()) {
+            return {};
+        }
+        const QString portType = QString::fromStdString(portEntry.second["type"].as<std::string>());
+        if (portType == "logic" || portType == "wire") {
+            return {};
+        }
+        const QRegularExpression      widthRegex(R"(\[\s*(\d+)\s*:\s*(\d+)\s*\])");
+        const QRegularExpressionMatch match = widthRegex.match(portType);
+        if (!match.hasMatch()) {
+            return {};
+        }
+        const int msb = match.captured(1).toInt();
+        const int lsb = match.captured(2).toInt();
+        return QString("[%1:%2]").arg(msb).arg(lsb);
+    }
+    return {};
+}
+
+} // namespace
+
 QSocSeqPrimitive::QSocSeqPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
 {}
 
 bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStream &out)
+{
+    return generateSeqLogicImpl(netlistData, nullptr, out);
+}
+
+bool QSocSeqPrimitive::generateSeqLogicWithRanges(
+    const YAML::Node             &netlistData,
+    const QMap<QString, QString> &declaredSignalRanges,
+    QTextStream                  &out)
+{
+    return generateSeqLogicImpl(netlistData, &declaredSignalRanges, out);
+}
+
+bool QSocSeqPrimitive::generateSeqLogicImpl(
+    const YAML::Node                   &netlistData,
+    const QMap<QString, QString> *const declaredSignalRanges,
+    QTextStream                        &out)
 {
     if (!netlistData["seq"] || !netlistData["seq"].IsSequence() || netlistData["seq"].size() == 0) {
         // No seq section or empty - this is valid
@@ -106,35 +156,28 @@ bool QSocSeqPrimitive::generateSeqLogic(const YAML::Node &netlistData, QTextStre
     if (!seqRegBases.isEmpty()) {
         out << "\n    /* Internal reg declarations for sequential logic */\n";
         for (const QString &baseName : seqRegBases) {
-            /* Find the port width for this output signal */
-            QString regWidth = "";
-            if (netlistData["port"] && netlistData["port"].IsMap()) {
-                for (const auto &portEntry : netlistData["port"]) {
-                    if (portEntry.first.IsScalar()
-                        && QString::fromStdString(portEntry.first.as<std::string>()) == baseName) {
-                        if (portEntry.second.IsMap() && portEntry.second["type"]
-                            && portEntry.second["type"].IsScalar()) {
-                            QString portType = QString::fromStdString(
-                                portEntry.second["type"].as<std::string>());
-                            if (portType != "logic" && portType != "wire") {
-                                /* Extract width from type like "logic[7:0]" */
-                                QRegularExpression widthRegex(R"(\[\s*(\d+)\s*:\s*(\d+)\s*\])");
-                                QRegularExpressionMatch match = widthRegex.match(portType);
-                                if (match.hasMatch()) {
-                                    int msb  = match.captured(1).toInt();
-                                    int lsb  = match.captured(2).toInt();
-                                    regWidth = QString("[%1:%2] ").arg(msb).arg(lsb);
-                                }
-                            }
-                            break;
-                        }
-                    }
+            QString regWidth;
+            if (declaredSignalRanges != nullptr) {
+                regWidth                = declaredSignalRanges->value(baseName);
+                const QString portWidth = numericPortWidth(netlistData, baseName);
+                if (regWidth.count('[') == 1 && !portWidth.isEmpty()) {
+                    regWidth = portWidth;
+                }
+                if (!regWidth.isEmpty()) {
+                    regWidth += " ";
+                }
+            } else {
+                regWidth = numericPortWidth(netlistData, baseName);
+                if (!regWidth.isEmpty()) {
+                    regWidth += " ";
                 }
             }
-            /* No port type found: size the reg from the highest bit-select
+            /* Without a packed range, size the reg from the highest bit-select
                we saw, otherwise it would be scalar and any [N] write would
                be a part-select on a non-vector reg. */
-            if (regWidth.isEmpty() && seqRegMaxBit.contains(baseName)
+            const bool declared = declaredSignalRanges != nullptr
+                                  && declaredSignalRanges->contains(baseName);
+            if (!declared && regWidth.isEmpty() && seqRegMaxBit.contains(baseName)
                 && seqRegMaxBit.value(baseName) > 0) {
                 regWidth = QString("[%1:0] ").arg(seqRegMaxBit.value(baseName));
             }
