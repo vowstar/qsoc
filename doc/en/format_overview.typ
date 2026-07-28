@@ -14,11 +14,12 @@ Input is not restricted the same way. Module import parses full SystemVerilog
 through slang, and SystemVerilog port types are reduced to `wire`/`reg` on the
 way into the generated netlist.
 
-QSoC runs two external tools over Verilog: slang parses the modules you import,
-and `verible-verilog-format` reformats generated files when it is present on
-`PATH`. Neither one elaborates, simulates, lints, or synthesizes the generated
-RTL, and the QSoC test suite does not either. Validate generated RTL in your
-own flow before relying on it.
+Slang parses the modules you import. Default generation does not run
+`verible-verilog-format`, so canonical output is independent of `PATH`. The
+`generate verilog --format` option resolves that program from `PATH` and
+reformats each generated top-level file; that post-processed text is
+non-canonical. Neither operation simulates, lints, or synthesizes the
+generated RTL. Validate generated RTL in your own flow before relying on it.
 
 == SOC_NET Format
 <soc-net-format>

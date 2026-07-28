@@ -272,11 +272,9 @@ public:
     static bool doBitRangesProvideFullCoverage(const QStringList &ranges, int signalWidth);
 
     /**
-     * @brief Format generated Verilog file using verible-verilog-format if available
-     * @details This function attempts to format a Verilog file using verible-verilog-format.
-     *          If the tool is not available, it silently returns false without error.
+     * @brief Format a Verilog file as an explicit non-canonical action.
      * @param filePath Absolute path to the Verilog file to format
-     * @return true if formatting successful, false if tool not found or formatting failed
+     * @return true if formatting succeeds, otherwise false
      */
     static bool formatVerilogFile(const QString &filePath);
 

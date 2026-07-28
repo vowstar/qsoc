@@ -12,6 +12,9 @@ endif()
 
 enable_testing()
 
+add_executable(qsoc_formatter_probe qsoc_formatter_probe.cpp)
+target_link_libraries(qsoc_formatter_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 set(CMAKE_AUTOUIC ON)
@@ -34,19 +37,15 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS
 function(QT_ADD_TEST_TARGET TARGET_NAME)
     add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
 
-    # Disable verible formatting in tests so generated output is
-    # deterministic regardless of whether verible-verilog-format is
-    # installed; it stays enabled at runtime. GUI tests also need the
-    # offscreen platform plugin.
+    # GUI tests need the offscreen platform plugin.
     if(${TARGET_NAME} MATCHES "^test_qsocgui")
         set_tests_properties(${TARGET_NAME} PROPERTIES
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSOC_SKIP_VERIBLE_FORMAT=1"
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         )
     else()
         set_tests_properties(${TARGET_NAME} PROPERTIES
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-            ENVIRONMENT "QSOC_SKIP_VERIBLE_FORMAT=1"
         )
     endif()
 
@@ -114,6 +113,11 @@ qt_add_test_target("test_qtuiscrollviewgraphicslayer")
 qt_add_test_target("test_qsoccliparsegeneratepowerlogic")
 qt_add_test_target("test_qsoccliparsegeneratereportunconnected")
 qt_add_test_target("test_qsocgeneratereproducibility")
+add_dependencies(test_qsocgeneratereproducibility qsoc_formatter_probe)
+target_compile_definitions(
+    test_qsocgeneratereproducibility
+    PRIVATE QSOC_FORMATTER_PROBE_PATH="$<TARGET_FILE:qsoc_formatter_probe>"
+)
 qt_add_test_target("test_qsoccliparsegenerateresetlogic")
 qt_add_test_target("test_qsoccliparsegenerateseqlogic")
 qt_add_test_target("test_qsoccliparsegeneratestub")

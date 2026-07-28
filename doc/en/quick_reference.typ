@@ -37,6 +37,7 @@
       [`-p, --project`], [project name],
       [`-l, --library`], [module or bus library],
       [`-m, --merge`], [fold netlists; first name wins],
+      [`--format`], [post-process with `verible-verilog-format`],
       [`--verbose 0..5`], [silent … verbose],
       [`--color`], [`auto`, `always`, `never`],
     )

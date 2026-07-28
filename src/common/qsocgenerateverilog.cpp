@@ -19,6 +19,7 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QTextStream>
 
 #include <fstream>
@@ -230,7 +231,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
         outputFile.close();
         QSocConsole::info() << "Successfully generated Verilog file:" << outputFilePath;
-        formatVerilogFile(outputFilePath);
         return !primitiveFailed;
     }
 
@@ -1892,33 +1892,17 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         }
     }
 
-    /* Format generated Verilog file if verible-verilog-format is available */
-    QSocGenerateManager::formatVerilogFile(outputFilePath);
-
     return !primitiveFailed;
 }
 
 bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
 {
-    /* Verible formatting is a runtime convenience only. Tests set
-     * QSOC_SKIP_VERIBLE_FORMAT=1 so generated output is deterministic and
-     * independent of whether (or which) verible-verilog-format is on PATH. */
-    if (qEnvironmentVariableIsSet("QSOC_SKIP_VERIBLE_FORMAT")) {
+    const QString formatterPath = QStandardPaths::findExecutable("verible-verilog-format");
+    if (formatterPath.isEmpty()) {
+        QSocConsole::warn() << "Verilog formatter not found.";
         return false;
     }
-    /* Check if verible-verilog-format tool is available in the system */
-    QProcess which;
-    which.start("which", QStringList() << "verible-verilog-format");
-    which.waitForFinished();
-
-    if (which.exitCode() != 0) {
-        /* Tool not found, silently return */
-        QSocConsole::debug() << "verible-verilog-format not found, skipping formatting";
-        return false;
-    }
-
-    /* Tool found, proceed with formatting */
-    QSocConsole::info() << "Formatting Verilog file using verible-verilog-format...";
+    QSocConsole::info() << "Formatting Verilog file...";
 
     QProcess formatter;
     /* clang-format off */
@@ -1947,14 +1931,30 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
     QStringList args = argsStr.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
     args << filePath;
 
-    formatter.start("verible-verilog-format", args);
-    formatter.waitForFinished();
+    formatter.start(formatterPath, args);
+    if (!formatter.waitForStarted()) {
+        QSocConsole::warn() << "failed to start Verilog formatter:" << formatter.errorString();
+        return false;
+    }
+    if (!formatter.waitForFinished()) {
+        formatter.kill();
+        formatter.waitForFinished();
+        QSocConsole::warn() << "Verilog formatter timed out.";
+        return false;
+    }
 
-    if (formatter.exitCode() == 0) {
+    if (formatter.exitStatus() == QProcess::NormalExit && formatter.exitCode() == 0) {
         QSocConsole::info() << "Successfully formatted Verilog file";
         return true;
     }
-    QSocConsole::warn() << "failed to format Verilog file:" << formatter.errorString();
+    if (formatter.exitStatus() != QProcess::NormalExit) {
+        QSocConsole::warn() << "Verilog formatter terminated abnormally:"
+                            << formatter.errorString();
+        return false;
+    }
+    const QString standardError = QString::fromUtf8(formatter.readAllStandardError()).trimmed();
+    QSocConsole::warn() << "Verilog formatter failed with exit code" << formatter.exitCode()
+                        << (standardError.isEmpty() ? QString() : ": " + standardError);
     return false;
 }
 

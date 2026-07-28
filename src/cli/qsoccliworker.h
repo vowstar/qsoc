@@ -327,6 +327,14 @@ private:
     bool parseGenerateVerilog(const QStringList &appArguments);
 
     /**
+     * @brief Apply explicitly requested formatting to generated Verilog.
+     * @param outputFileName Generated file basename without extension.
+     * @retval true No formatting was requested or formatting succeeded.
+     * @retval false Formatting was requested and failed.
+     */
+    bool formatGeneratedVerilog(const QString &outputFileName);
+
+    /**
      * @brief Process multiple netlist files by merging them.
      * @details This function will load multiple netlist files, merge them in order,
      *          and then process the merged result to generate a single Verilog file.

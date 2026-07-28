@@ -896,10 +896,6 @@ bool QSocResetPrimitive::generateResetCellFile(const QString &outputDir)
 
     generateResetCellFile(out); // Call existing implementation
     file.close();
-
-    /* Format generated reset_cell.v file if verible-verilog-format is available */
-    QSocGenerateManager::formatVerilogFile(filePath);
-
     return true;
 }
 

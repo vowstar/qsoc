@@ -299,11 +299,17 @@ input format is documented in @soc-net-format.
     [Merge multiple netlist files in order before processing],
     [`-f`, `--force`],
     [Force overwrite existing primitive cell files (clock_cell.v, reset_cell.v)],
+    [`--format`],
+    [Run `verible-verilog-format` from `PATH` on each generated top-level Verilog file],
     [files], [The netlist files to be processed],
   )],
   caption: [VERILOG GENERATION OPTIONS],
   kind: table,
 )
+
+Default generation writes canonical QSoC output without consulting `PATH`.
+`--format` is an explicit post-processing step; its bytes depend on the
+installed `verible-verilog-format` and are not canonical.
 
 ==== Netlist Merge Semantics (`-m` / `--merge`)
 <netlist-merge-semantics>

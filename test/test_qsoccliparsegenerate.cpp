@@ -3971,9 +3971,7 @@ net:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        /* Assert via verifyVerilogContent so the check is whitespace- and
-         * formatter-agnostic: the instance reads compact or multi-line
-         * depending on whether verible-verilog-format is present. */
+        /* Check connectivity independent of whitespace. */
         QVERIFY(verifyVerilogContent("test_net_top_collision", "output wire [7:0] data_bus"));
         QVERIFY(!verifyVerilogContent("test_net_top_collision", "wire [7:0] data_bus;"));
         QVERIFY(verifyVerilogContent("test_net_top_collision", "u_drv (.out8(data_bus))"));

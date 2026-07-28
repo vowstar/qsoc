@@ -1456,10 +1456,6 @@ bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
         }
 
         file.close();
-
-        /* Format generated clock_cell.v file if verible-verilog-format is available */
-        QSocGenerateManager::formatVerilogFile(filePath);
-
         return true;
     }
 
@@ -1498,10 +1494,6 @@ bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
         outAppend << "\n";
     }
     file.close();
-
-    /* Format generated clock_cell.v file if verible-verilog-format is available */
-    QSocGenerateManager::formatVerilogFile(filePath);
-
     return true;
 }
 

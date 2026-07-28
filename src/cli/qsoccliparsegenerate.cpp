@@ -74,6 +74,10 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         {{"f", "force"},
          QCoreApplication::translate(
              "main", "Force overwrite existing primitive cell files (clock_cell.v, reset_cell.v).")},
+        {"format",
+         QCoreApplication::translate(
+             "main",
+             "Run verible-verilog-format from PATH on each generated top-level Verilog file.")},
     });
 
     parser.addPositionalArgument(
@@ -81,7 +85,10 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         QCoreApplication::translate("main", "The netlist files to be processed."),
         "[<netlist files>]");
 
-    parser.parse(appArguments);
+    if (!parser.parse(appArguments)) {
+        return showErrorWithHelp(
+            1, QCoreApplication::translate("main", "Error: %1").arg(parser.errorText()));
+    }
 
     if (parser.isSet("help")) {
         return showHelp(0);
@@ -150,6 +157,22 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
     }
     /* Normal mode: process each netlist file separately */
     return processIndividualNetlists(filePathList);
+}
+
+bool QSocCliWorker::formatGeneratedVerilog(const QString &outputFileName)
+{
+    if (!parser.isSet("format")) {
+        return true;
+    }
+    const QString outputFilePath
+        = QDir(projectManager->getOutputPath()).filePath(outputFileName + ".v");
+    if (QSocGenerateManager::formatVerilogFile(outputFilePath)) {
+        return true;
+    }
+    return showError(
+        1,
+        QCoreApplication::translate("main", "Error: failed to format Verilog file: %1")
+            .arg(outputFilePath));
 }
 
 bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
@@ -231,6 +254,9 @@ bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
                 "main", "Error: failed to generate Verilog code for merged netlist: %1")
                 .arg(outputFileName));
     }
+    if (!formatGeneratedVerilog(outputFileName)) {
+        return false;
+    }
 
     showInfo(
         0,
@@ -277,6 +303,9 @@ bool QSocCliWorker::processIndividualNetlists(const QStringList &filePathList)
                 1,
                 QCoreApplication::translate("main", "Error: failed to generate Verilog code for: %1")
                     .arg(outputFileName));
+        }
+        if (!formatGeneratedVerilog(outputFileName)) {
+            return false;
         }
 
         showInfo(

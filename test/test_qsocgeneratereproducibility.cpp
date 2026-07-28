@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "cli/qsoccliworker.h"
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivepower.h"
@@ -149,6 +150,202 @@ private slots:
             QVERIFY(!it.value().contains("# Generated:"));
             QVERIFY(!it.value().contains('\r'));
         }
+    }
+
+    void pathFormatterIsExplicitOnly()
+    {
+        QTemporaryDir formatterDirectory;
+        QTemporaryDir emptyPathDirectory;
+        QTemporaryDir baselineDirectory;
+        QTemporaryDir projectDirectory;
+        QVERIFY(formatterDirectory.isValid());
+        QVERIFY(emptyPathDirectory.isValid());
+        QVERIFY(baselineDirectory.isValid());
+        QVERIFY(projectDirectory.isValid());
+
+#ifdef Q_OS_WIN
+        const QString formatterName = "verible-verilog-format.exe";
+#else
+        const QString formatterName = "verible-verilog-format";
+#endif
+        const QString formatterPath = QDir(formatterDirectory.path()).filePath(formatterName);
+        QVERIFY(QFile::copy(QString::fromUtf8(QSOC_FORMATTER_PROBE_PATH), formatterPath));
+#ifndef Q_OS_WIN
+        QVERIFY(
+            QFile::setPermissions(
+                formatterPath,
+                QFile::permissions(formatterPath) | QFileDevice::ExeOwner | QFileDevice::ExeUser
+                    | QFileDevice::ExeGroup | QFileDevice::ExeOther));
+#endif
+
+        const QByteArray originalPath     = qgetenv("PATH");
+        const bool       hadOriginalPath  = qEnvironmentVariableIsSet("PATH");
+        const QByteArray originalSentinel = qgetenv("QSOC_FORMATTER_PROBE_SENTINEL");
+        const bool       hadSentinel = qEnvironmentVariableIsSet("QSOC_FORMATTER_PROBE_SENTINEL");
+        const QByteArray originalProbeExit = qgetenv("QSOC_FORMATTER_PROBE_EXIT_CODE");
+        const bool       hadProbeExit = qEnvironmentVariableIsSet("QSOC_FORMATTER_PROBE_EXIT_CODE");
+        const auto       restoreEnvironment = qScopeGuard([&]() {
+            if (hadOriginalPath) {
+                qputenv("PATH", originalPath);
+            } else {
+                qunsetenv("PATH");
+            }
+            if (hadSentinel) {
+                qputenv("QSOC_FORMATTER_PROBE_SENTINEL", originalSentinel);
+            } else {
+                qunsetenv("QSOC_FORMATTER_PROBE_SENTINEL");
+            }
+            if (hadProbeExit) {
+                qputenv("QSOC_FORMATTER_PROBE_EXIT_CODE", originalProbeExit);
+            } else {
+                qunsetenv("QSOC_FORMATTER_PROBE_EXIT_CODE");
+            }
+        });
+
+        QByteArray testPath = QFile::encodeName(formatterDirectory.path());
+        if (!originalPath.isEmpty()) {
+            testPath += QDir::listSeparator().toLatin1();
+            testPath += originalPath;
+        }
+        qputenv("PATH", QFile::encodeName(emptyPathDirectory.path()));
+        const QString sentinelPath = QDir(formatterDirectory.path()).filePath("called");
+        qputenv("QSOC_FORMATTER_PROBE_SENTINEL", QFile::encodeName(sentinelPath));
+
+        const YAML::Node netlist = YAML::Load(R"(
+port:
+  clk_sys:
+    direction: input
+    type: logic
+  osc_24m:
+    direction: input
+    type: logic
+  por_rst_n:
+    direction: input
+    type: logic
+  test_en:
+    direction: input
+    type: logic
+  adc_clk:
+    direction: output
+    type: logic
+  cpu_rst_n:
+    direction: output
+    type: logic
+instance: {}
+net: {}
+clock:
+  - name: clock_controller
+    clock: clk_sys
+    input:
+      osc_24m:
+        freq: 24MHz
+    target:
+      adc_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+reset:
+  - name: reset_controller
+    clock: clk_sys
+    test_enable: test_en
+    source:
+      por_rst_n:
+        active: low
+    target:
+      cpu_rst_n:
+        active: low
+        link:
+          por_rst_n:
+)");
+
+        QMap<QString, QByteArray> baselineFiles;
+        {
+            QSocProjectManager baselineManager;
+            baselineManager.setCurrentPath(QDir(baselineDirectory.path()).filePath("project"));
+            QVERIFY(baselineManager.mkpath());
+            QSocGenerateManager baselineGenerator(nullptr, &baselineManager);
+            QVERIFY(baselineGenerator.setNetlistData(netlist));
+            QVERIFY(baselineGenerator.processNetlist());
+            QVERIFY(baselineGenerator.generateVerilog("canonical"));
+            const QStringList fileNames{"canonical.v", "clock_cell.v", "reset_cell.v"};
+            for (const QString &fileName : fileNames) {
+                QFile file(QDir(baselineManager.getOutputPath()).filePath(fileName));
+                QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(fileName));
+                baselineFiles.insert(fileName, file.readAll());
+            }
+        }
+
+        qputenv("PATH", testPath);
+        const QString      projectPath = QDir(projectDirectory.path()).filePath("project");
+        QSocProjectManager manager;
+        manager.setCurrentPath(projectPath);
+        QVERIFY(manager.mkpath());
+        QVERIFY(manager.save("formatter"));
+        QSocGenerateManager generator(nullptr, &manager);
+        QVERIFY(generator.setNetlistData(netlist));
+        QVERIFY(generator.processNetlist());
+        QVERIFY(generator.generateVerilog("canonical"));
+
+        const QStringList defaultFiles{"canonical.v", "clock_cell.v", "reset_cell.v"};
+        for (const QString &fileName : defaultFiles) {
+            QFile file(QDir(manager.getOutputPath()).filePath(fileName));
+            QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(fileName));
+            const QByteArray bytes = file.readAll();
+            QVERIFY2(!bytes.contains("formatter probe"), qPrintable(fileName));
+            QCOMPARE(bytes, baselineFiles.value(fileName));
+        }
+        QVERIFY(!QFileInfo::exists(sentinelPath));
+
+        const QString netlistPath = QDir(projectPath).filePath("formatted.soc_net");
+        QFile         netlistFile(netlistPath);
+        QVERIFY(netlistFile.open(QIODevice::WriteOnly));
+        const QByteArray netlistBytes = QByteArray::fromStdString(YAML::Dump(netlist));
+        QCOMPARE(netlistFile.write(netlistBytes), netlistBytes.size());
+        netlistFile.close();
+
+        QSocCliWorker invalidWorker;
+        QSignalSpy    invalidExitSpy(&invalidWorker, &QSocCliWorker::exit);
+        invalidWorker.setup(
+            {"qsoc", "generate", "verilog", "--format=bad", "-d", projectPath, netlistPath}, true);
+        QVERIFY(invalidExitSpy.wait());
+        QCOMPARE(invalidExitSpy.count(), 1);
+        QCOMPARE(invalidExitSpy.takeFirst().at(0).toInt(), 1);
+        QVERIFY(!QFileInfo::exists(sentinelPath));
+        QVERIFY(!QFileInfo::exists(QDir(manager.getOutputPath()).filePath("formatted.v")));
+
+        QSocCliWorker worker;
+        QSignalSpy    exitSpy(&worker, &QSocCliWorker::exit);
+        worker
+            .setup({"qsoc", "generate", "verilog", "--format", "-d", projectPath, netlistPath}, true);
+        QVERIFY(exitSpy.wait());
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.takeFirst().at(0).toInt(), 0);
+
+        QVERIFY(QFileInfo::exists(sentinelPath));
+        QFile formattedFile(QDir(manager.getOutputPath()).filePath("formatted.v"));
+        QVERIFY(formattedFile.open(QIODevice::ReadOnly));
+        QVERIFY(formattedFile.readAll().contains("formatter probe"));
+        formattedFile.close();
+
+        QVERIFY(QFile::remove(sentinelPath));
+        qputenv("PATH", QFile::encodeName(emptyPathDirectory.path()));
+        QSocCliWorker missingWorker;
+        QSignalSpy    missingExitSpy(&missingWorker, &QSocCliWorker::exit);
+        missingWorker
+            .setup({"qsoc", "generate", "verilog", "--format", "-d", projectPath, netlistPath}, true);
+        QVERIFY(missingExitSpy.wait());
+        QCOMPARE(missingExitSpy.count(), 1);
+        QCOMPARE(missingExitSpy.takeFirst().at(0).toInt(), 1);
+        QVERIFY(!QFileInfo::exists(sentinelPath));
+
+        qputenv("PATH", testPath);
+        qputenv("QSOC_FORMATTER_PROBE_EXIT_CODE", "9");
+        QSocTestCapture capture;
+        QVERIFY(!QSocGenerateManager::formatVerilogFile(
+            QDir(manager.getOutputPath()).filePath("formatted.v")));
+        const QString diagnostic = capture.text();
+        QVERIFY(diagnostic.contains("exit code 9"));
+        QVERIFY(diagnostic.contains("formatter probe failure"));
     }
 
     void projectMetadataDoesNotChangeBytes()
