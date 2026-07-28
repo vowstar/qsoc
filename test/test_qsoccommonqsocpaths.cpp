@@ -5,6 +5,10 @@
 #include "qsoc_test.h"
 
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QScopeGuard>
+#include <QTemporaryDir>
 #include <QtTest>
 
 class TestQSocPaths : public QObject
@@ -30,6 +34,14 @@ private slots:
     void resourceDirs_emptySubdirReturnsRoots();
     void resourceDirs_dedupesIdenticalRoots();
     void resourceDirs_skipsEmptyLayers();
+
+    void artifactPathAcceptsLinuxNames_data();
+    void artifactPathAcceptsLinuxNames();
+    void artifactPathAcceptsContainedPaths();
+    void artifactPathAcceptsRelativeOutputRoot();
+    void artifactPathRejectsEscapes();
+    void artifactPathResolvesRawParent();
+    void artifactPathRejectsUnsafeTargets();
 
 private:
     QByteArray savedQsocHome;
@@ -158,6 +170,140 @@ void TestQSocPaths::resourceDirs_skipsEmptyLayers()
     QCOMPARE(dirs.size(), 2);
     QCOMPARE(dirs.at(0), QSocPaths::userRoot() + "/memory");
     QCOMPARE(dirs.at(1), QSocPaths::systemRoot() + "/memory");
+}
+
+void TestQSocPaths::artifactPathAcceptsLinuxNames_data()
+{
+    QTest::addColumn<QString>("requestedPath");
+    QTest::newRow("con") << QStringLiteral("CON");
+    QTest::newRow("aux") << QStringLiteral("AUX.v");
+    QTest::newRow("colon") << QStringLiteral("name:part.v");
+    QTest::newRow("trailing-dot") << QStringLiteral("tail.");
+    QTest::newRow("question") << QStringLiteral("what?.v");
+    QTest::newRow("backslash") << QStringLiteral("back\\slash.v");
+    QTest::newRow("leading-space") << QStringLiteral(" leading.v");
+    QTest::newRow("trailing-space") << QStringLiteral("trailing.v ");
+}
+
+void TestQSocPaths::artifactPathAcceptsLinuxNames()
+{
+#ifndef Q_OS_LINUX
+    QSKIP("This test covers Linux file-name semantics.");
+#else
+    QFETCH(QString, requestedPath);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const auto artifact = QSocPaths::resolveArtifactPath(directory.path(), requestedPath);
+    QVERIFY2(artifact.isValid(), qPrintable(artifact.error));
+
+    QFile file(artifact.path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write("stable\n"), 7);
+    file.close();
+
+    const auto existing = QSocPaths::resolveArtifactPath(directory.path(), requestedPath);
+    QVERIFY2(existing.isValid(), qPrintable(existing.error));
+    QCOMPARE(existing.path, artifact.path);
+#endif
+}
+
+void TestQSocPaths::artifactPathAcceptsContainedPaths()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString nestedPath = QDir(directory.path()).filePath("nested");
+    QVERIFY(QDir().mkpath(nestedPath));
+
+    const auto nested = QSocPaths::resolveArtifactPath(directory.path(), "nested/file.v");
+    QVERIFY2(nested.isValid(), qPrintable(nested.error));
+    QCOMPARE(nested.path, QDir(nestedPath).filePath("file.v"));
+
+    const auto parent = QSocPaths::resolveArtifactPath(directory.path(), "nested/../top.v");
+    QVERIFY2(parent.isValid(), qPrintable(parent.error));
+    QCOMPARE(parent.path, QDir(directory.path()).canonicalPath() + "/top.v");
+
+    const QString absolutePath = QDir(nestedPath).filePath("absolute.v");
+    const auto    absolute     = QSocPaths::resolveArtifactPath(directory.path(), absolutePath);
+    QVERIFY2(absolute.isValid(), qPrintable(absolute.error));
+    QCOMPARE(absolute.path, absolutePath);
+}
+
+void TestQSocPaths::artifactPathAcceptsRelativeOutputRoot()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString originalPath = QDir::currentPath();
+    QVERIFY(QDir::setCurrent(directory.path()));
+    const auto restorePath = qScopeGuard([&]() { QDir::setCurrent(originalPath); });
+
+    QVERIFY(QDir().mkpath("output/nested"));
+    const auto artifact = QSocPaths::resolveArtifactPath("output", "nested/../top.v");
+    QVERIFY2(artifact.isValid(), qPrintable(artifact.error));
+    QCOMPARE(artifact.path, QDir(directory.path()).canonicalPath() + "/output/top.v");
+}
+
+void TestQSocPaths::artifactPathRejectsEscapes()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString outputPath  = QDir(directory.path()).filePath("output");
+    const QString outsidePath = QDir(directory.path()).filePath("outside");
+    const QString prefixPath  = QDir(directory.path()).filePath("output-other");
+    QVERIFY(QDir().mkpath(outputPath));
+    QVERIFY(QDir().mkpath(outsidePath));
+    QVERIFY(QDir().mkpath(prefixPath));
+
+    QVERIFY(!QSocPaths::resolveArtifactPath(outputPath, "../outside/file.v").isValid());
+    QVERIFY(
+        !QSocPaths::resolveArtifactPath(outputPath, QDir(outsidePath).filePath("file.v")).isValid());
+    QVERIFY(!QSocPaths::resolveArtifactPath(outputPath, "../output-other/file.v").isValid());
+    QVERIFY(!QSocPaths::resolveArtifactPath(outputPath, QString()).isValid());
+    QVERIFY(!QSocPaths::resolveArtifactPath(outputPath, QString::fromLatin1("embedded\0null.v", 15))
+                 .isValid());
+}
+
+void TestQSocPaths::artifactPathResolvesRawParent()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("This platform does not provide Unix symbolic-link semantics.");
+#else
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString outputPath       = QDir(directory.path()).filePath("output");
+    const QString insidePath       = QDir(outputPath).filePath("inside");
+    const QString outsidePath      = QDir(directory.path()).filePath("outside");
+    const QString outsideChildPath = QDir(outsidePath).filePath("child");
+    QVERIFY(QDir().mkpath(insidePath));
+    QVERIFY(QDir().mkpath(outsideChildPath));
+
+    const QString outsideLink = QDir(outputPath).filePath("outside-link");
+    QVERIFY(QFile::link(outsideChildPath, outsideLink));
+    QVERIFY(!QSocPaths::resolveArtifactPath(outputPath, "outside-link/../escaped.v").isValid());
+    QVERIFY(!QSocPaths::resolveArtifactPath(outputPath, "outside-link/file.v").isValid());
+
+    const QString insideLink = QDir(outputPath).filePath("inside-link");
+    QVERIFY(QFile::link(insidePath, insideLink));
+    const auto inside = QSocPaths::resolveArtifactPath(outputPath, "inside-link/file.v");
+    QVERIFY2(inside.isValid(), qPrintable(inside.error));
+    QCOMPARE(inside.path, QDir(insidePath).filePath("file.v"));
+#endif
+}
+
+void TestQSocPaths::artifactPathRejectsUnsafeTargets()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    QVERIFY(QDir(directory.path()).mkdir("directory.v"));
+    QVERIFY(!QSocPaths::resolveArtifactPath(directory.path(), "directory.v").isValid());
+    QVERIFY(!QSocPaths::resolveArtifactPath(directory.path(), "missing/file.v").isValid());
+
+    const QString fileRoot = QDir(directory.path()).filePath("file-root");
+    QFile         rootFile(fileRoot);
+    QVERIFY(rootFile.open(QIODevice::WriteOnly));
+    rootFile.close();
+    QVERIFY(!QSocPaths::resolveArtifactPath(fileRoot, "file.v").isValid());
 }
 
 QSOC_TEST_MAIN(TestQSocPaths)

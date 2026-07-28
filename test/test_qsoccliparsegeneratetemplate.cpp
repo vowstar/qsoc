@@ -664,6 +664,47 @@ endmodule // {{ module.name }})";
         /* Test binary formatting */
         QVERIFY(verifyTemplateContent("format_test_template", "Binary: 0b1111"));
     }
+
+    void testTemplateArtifactCompatibility()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(projectPath);
+        QVERIFY(manager.mkpath());
+        QSocGenerateManager generator(nullptr, &manager);
+
+        const QString templatePath = QDir(projectPath).filePath("stable.inja");
+        QFile         templateFile(templatePath);
+        QVERIFY(templateFile.open(QIODevice::WriteOnly));
+        QCOMPARE(templateFile.write("stable output\n"), 14);
+        templateFile.close();
+
+        QVERIFY(QDir(manager.getOutputPath()).mkdir("nested"));
+        QVERIFY(generator.renderTemplate(templatePath, {}, {}, {}, {}, {}, "nested/rendered.txt"));
+        QFile nestedOutput(QDir(manager.getOutputPath()).filePath("nested/rendered.txt"));
+        QVERIFY(nestedOutput.open(QIODevice::ReadOnly));
+        QCOMPARE(nestedOutput.readAll(), QByteArray("stable output\n"));
+        QVERIFY(QFileInfo::exists(QDir(manager.getOutputPath()).filePath("rendered.json")));
+
+        QVERIFY(generator.renderTemplate(templatePath, {}, {}, {}, {}, {}, "/nested/leading.txt"));
+        QFile leadingOutput(QDir(manager.getOutputPath()).filePath("nested/leading.txt"));
+        QVERIFY(leadingOutput.open(QIODevice::ReadOnly));
+        QCOMPARE(leadingOutput.readAll(), QByteArray("stable output\n"));
+
+        QVERIFY(generator.renderTemplate(templatePath, {}, {}, {}, {}, {}, "payload.json"));
+        QFile collisionOutput(QDir(manager.getOutputPath()).filePath("payload.json"));
+        QVERIFY(collisionOutput.open(QIODevice::ReadOnly));
+        QCOMPARE(collisionOutput.readAll(), QByteArray("stable output\n"));
+
+#ifdef Q_OS_LINUX
+        QVERIFY(generator.renderTemplate(templatePath, {}, {}, {}, {}, {}, "case.JSON"));
+        QVERIFY(QFileInfo::exists(QDir(manager.getOutputPath()).filePath("case.JSON")));
+        QVERIFY(QFileInfo::exists(QDir(manager.getOutputPath()).filePath("case.json")));
+#endif
+    }
 };
 
 QStringList Test::messageList;

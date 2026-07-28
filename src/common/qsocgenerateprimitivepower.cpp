@@ -3,10 +3,12 @@
 
 #include "qsocgenerateprimitivepower.h"
 #include "common/qsocconsole.h"
+#include "common/qsocpaths.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <cmath>
 #include <QDebug>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
 #include <QSet>
@@ -75,11 +77,14 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
 
     // Generate Typst power diagram (failure does not affect Verilog generation)
     if (m_parent && m_parent->getProjectManager()) {
-        QString outputDir = m_parent->getProjectManager()->getOutputPath();
-        QString typstPath = outputDir + QStringLiteral("/") + config.moduleName
-                            + QStringLiteral(".typ");
-        if (!generateTypstDiagram(config, typstPath)) {
-            QSocConsole::warn() << "Failed to generate Typst diagram (non-critical):" << typstPath;
+        const QString outputDir = m_parent->getProjectManager()->getOutputPath();
+        const QString typstName = config.moduleName + QStringLiteral(".typ");
+        const auto    artifact  = QSocPaths::resolveArtifactPath(outputDir, typstName);
+        if (!artifact.isValid()) {
+            QSocConsole::warn() << artifact.error;
+        } else if (!generateTypstDiagram(config, artifact.path)) {
+            QSocConsole::warn() << "Failed to generate Typst diagram (non-critical):"
+                                << artifact.path;
         }
     }
 
@@ -529,7 +534,12 @@ void QSocPowerPrimitive::generateOutputAssignments(
 
 bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
 {
-    QString filePath = QDir(outputDir).filePath("power_cell.v");
+    const auto artifact = QSocPaths::resolveArtifactPath(outputDir, "power_cell.v");
+    if (!artifact.isValid()) {
+        QSocConsole::warn() << artifact.error;
+        return false;
+    }
+    const QString filePath = artifact.path;
 
     // Check if file exists and is complete
     if (!m_forceOverwrite && isPowerCellFileComplete(filePath)) {
@@ -1194,9 +1204,17 @@ QString QSocPowerPrimitive::typstDomain(const PowerDomain &domain, float x, floa
 bool QSocPowerPrimitive::generateTypstDiagram(
     const PowerControllerConfig &config, const QString &outputPath)
 {
-    QFile file(outputPath);
+    const QFileInfo outputInfo(outputPath);
+    const auto      artifact
+        = QSocPaths::resolveArtifactPath(outputInfo.absolutePath(), outputInfo.fileName());
+    if (!artifact.isValid()) {
+        QSocConsole::warn() << artifact.error;
+        return false;
+    }
+
+    QFile file(artifact.path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QSocConsole::warn() << "Failed to open file for writing:" << outputPath;
+        QSocConsole::warn() << "Failed to open file for writing:" << artifact.path;
         return false;
     }
 
@@ -1238,6 +1256,6 @@ bool QSocPowerPrimitive::generateTypstDiagram(
 
     file.close();
 
-    QSocConsole::info() << "Generated Typst diagram:" << outputPath;
+    QSocConsole::info() << "Generated Typst diagram:" << artifact.path;
     return true;
 }

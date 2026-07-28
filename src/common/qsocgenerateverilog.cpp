@@ -8,6 +8,7 @@
 #include "common/qsocgenerateprimitivepower.h"
 #include "common/qsocgenerateprimitiveseq.h"
 #include "common/qsocgeneratereportunconnected.h"
+#include "common/qsocpaths.h"
 #include "common/qsocverilogutils.h"
 #include "common/qstaticstringweaver.h"
 #include "qsocgenerateprimitivefsm.h"
@@ -72,9 +73,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         return false;
     }
 
-    /* Prepare output file path */
-    const QString outputFilePath
-        = QDir(projectManager->getOutputPath()).filePath(outputFileName + ".v");
+    const auto outputArtifact
+        = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), outputFileName + ".v");
+    if (!outputArtifact.isValid()) {
+        QSocConsole::error() << outputArtifact.error;
+        return false;
+    }
+    const QString outputFilePath = outputArtifact.path;
 
     /* Open output file for writing */
     QFile outputFile(outputFilePath);
@@ -1900,6 +1905,15 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
         QSocConsole::warn() << "Verilog formatter not found.";
         return false;
     }
+
+    const QFileInfo fileInfo(filePath);
+    const auto      artifactPath
+        = QSocPaths::resolveArtifactPath(fileInfo.absolutePath(), fileInfo.fileName());
+    if (!artifactPath.isValid()) {
+        QSocConsole::warn() << artifactPath.error;
+        return false;
+    }
+
     QSocConsole::info() << "Formatting Verilog file...";
 
     QProcess formatter;
@@ -1927,7 +1941,7 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
     /* clang-format on */
 
     QStringList args = argsStr.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-    args << filePath;
+    args << artifactPath.path;
 
     formatter.start(formatterPath, args);
     if (!formatter.waitForStarted()) {

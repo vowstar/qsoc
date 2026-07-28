@@ -7,6 +7,7 @@
 #include "common/qsocgenerateprimitivepower.h"
 #include "common/qsocgenerateprimitivereset.h"
 #include "common/qsocgeneratereportunconnected.h"
+#include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
@@ -20,6 +21,7 @@
 #include <QScopeGuard>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QTextStream>
 #include <QThread>
 #include <QtTest>
 
@@ -30,6 +32,97 @@
 #include <vector>
 
 namespace {
+
+YAML::Node controllerFixture(const QString &kind, const QString &name)
+{
+    YAML::Node node;
+    if (kind == "clock") {
+        node = YAML::Load(R"(
+name: controller
+clock: clk_sys
+input:
+  osc_24m:
+    freq: 24MHz
+target:
+  adc_clk:
+    freq: 24MHz
+    link:
+      osc_24m:
+)");
+    } else if (kind == "reset") {
+        node = YAML::Load(R"(
+name: controller
+clock: clk_sys
+source:
+  por_rst_n:
+    active: low
+target:
+  cpu_rst_n:
+    active: low
+    link:
+      por_rst_n:
+)");
+    } else {
+        node = YAML::Load(R"(
+name: controller
+host_clock: clk_ao
+host_reset: rst_ao_n
+domain:
+  - name: ao
+    v_mv: 900
+    pgood: pgood_ao
+    wait_dep: 0
+    settle_on: 0
+    settle_off: 0
+    follow: []
+)");
+    }
+    node["name"] = name.toStdString();
+    return node;
+}
+
+bool generateController(
+    const QString       &kind,
+    const YAML::Node    &node,
+    QSocGenerateManager &manager,
+    bool                 force           = false,
+    QString             *generatedOutput = nullptr)
+{
+    QString     generated;
+    QTextStream out(&generated);
+    bool        result = false;
+    if (kind == "clock") {
+        QSocClockPrimitive primitive(&manager);
+        primitive.setForceOverwrite(force);
+        result = primitive.generateClockController(node, out);
+    } else if (kind == "reset") {
+        QSocResetPrimitive primitive(&manager);
+        primitive.setForceOverwrite(force);
+        result = primitive.generateResetController(node, out);
+    } else {
+        QSocPowerPrimitive primitive(&manager);
+        primitive.setForceOverwrite(force);
+        result = primitive.generatePowerController(node, out);
+    }
+    if (generatedOutput) {
+        *generatedOutput = generated;
+    }
+    return result;
+}
+
+bool generateDiagram(const QString &kind, const QString &path)
+{
+    if (kind == "clock") {
+        QSocClockPrimitive primitive;
+        return primitive.generateTypstDiagram({}, path);
+    }
+    if (kind == "reset") {
+        QSocResetPrimitive primitive;
+        return primitive.generateTypstDiagram({}, path);
+    }
+    QSocPowerPrimitive primitive;
+    return primitive.generateTypstDiagram({}, path);
+}
 
 class Test : public QObject
 {
@@ -58,8 +151,6 @@ port:
   result:
     direction: output
     type: logic
-instance: {}
-net: {}
 comb:
   - out: result
     expr: source
@@ -231,8 +322,6 @@ port:
   cpu_rst_n:
     direction: output
     type: logic
-instance: {}
-net: {}
 clock:
   - name: clock_controller
     clock: clk_sys
@@ -766,6 +855,114 @@ extension: retained
         QCOMPARE(entriesAfter, entriesBefore);
         QVERIFY(sentinelFile.open(QIODevice::ReadOnly));
         QCOMPARE(sentinelFile.readAll(), sentinelBytes);
+    }
+
+    void primitiveCellLinkIsRejected_data()
+    {
+        QTest::addColumn<QString>("kind");
+        for (const QString &kind : {"clock", "reset", "power"}) {
+            QTest::newRow(qPrintable(kind)) << kind;
+        }
+    }
+
+    void directTypstWriterPreservesRelativePath_data()
+    {
+        QTest::addColumn<QString>("kind");
+        QTest::newRow("clock") << QStringLiteral("clock");
+        QTest::newRow("reset") << QStringLiteral("reset");
+        QTest::newRow("power") << QStringLiteral("power");
+    }
+
+    void directTypstWriterPreservesRelativePath()
+    {
+        QFETCH(QString, kind);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString originalPath = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(directory.path()));
+        const auto restorePath = qScopeGuard([&]() { QDir::setCurrent(originalPath); });
+
+        QVERIFY(QDir().mkdir("nested"));
+        const QString relativePath = "nested/" + kind + ".typ";
+        QVERIFY(generateDiagram(kind, relativePath));
+        QVERIFY(QFileInfo::exists(relativePath));
+        QVERIFY(!QFileInfo::exists("nested/nested/" + kind + ".typ"));
+    }
+
+    void primaryArtifactsRejectEscapes()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(projectPath);
+        QVERIFY(manager.mkpath());
+        QSocGenerateManager generator(nullptr, &manager);
+        const YAML::Node    netlist = YAML::Load(R"(
+port:
+  source:
+    direction: input
+    type: logic
+  result:
+    direction: output
+    type: logic
+comb:
+  - out: result
+    expr: source
+)");
+        QVERIFY(generator.setNetlistData(netlist));
+        QVERIFY(generator.processNetlist());
+
+        const QByteArray sentinelBytes("primary artifact sentinel\n");
+        const QString    sentinelPath = QDir(projectPath).filePath("escaped.v");
+        QFile            sentinel(sentinelPath);
+        QVERIFY(sentinel.open(QIODevice::WriteOnly));
+        QCOMPARE(sentinel.write(sentinelBytes), sentinelBytes.size());
+        sentinel.close();
+
+        QVERIFY(!generator.generateVerilog("../escaped"));
+        QVERIFY(sentinel.open(QIODevice::ReadOnly));
+        QCOMPARE(sentinel.readAll(), sentinelBytes);
+        sentinel.close();
+    }
+
+    void relativeProjectOutputIsNotRepeated()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString originalPath = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(directory.path()));
+        const auto restorePath = qScopeGuard([&]() { QDir::setCurrent(originalPath); });
+
+        QSocProjectManager manager;
+        manager.setCurrentPath("relative-project");
+        QVERIFY(manager.mkpath());
+        QSocGenerateManager generator(nullptr, &manager);
+        const YAML::Node    netlist = YAML::Load(R"(
+port:
+  source:
+    direction: input
+    type: logic
+  result:
+    direction: output
+    type: logic
+comb:
+  - out: result
+    expr: source
+)");
+        QVERIFY(generator.setNetlistData(netlist));
+        QVERIFY(generator.processNetlist());
+        QVERIFY(generator.generateVerilog("stable"));
+
+        const QString expectedPath
+            = QDir(directory.path()).filePath("relative-project/output/stable.v");
+        const QString repeatedPath = QDir(directory.path())
+                                         .filePath(
+                                             "relative-project/output/"
+                                             "relative-project/output/stable.v");
+        QVERIFY(QFileInfo::exists(expectedPath));
+        QVERIFY(!QFileInfo::exists(repeatedPath));
     }
 };
 

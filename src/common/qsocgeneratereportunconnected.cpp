@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "qsocgeneratereportunconnected.h"
+#include "common/qsocpaths.h"
 
-#include <QDir>
 #include <QFile>
 #include <QMap>
 #include <QSet>
@@ -27,7 +27,11 @@ bool QSocGenerateReportUnconnected::generateReport(
     }
 
     const QString reportFileName = topModuleName + ".nc.rpt";
-    const QString reportFilePath = QDir(outputPath).filePath(reportFileName);
+    const auto    reportArtifact = QSocPaths::resolveArtifactPath(outputPath, reportFileName);
+    if (!reportArtifact.isValid()) {
+        return false;
+    }
+    const QString reportFilePath = reportArtifact.path;
 
     QFile reportFile(reportFilePath);
     if (!reportFile.open(QIODevice::WriteOnly | QIODevice::Text)) {

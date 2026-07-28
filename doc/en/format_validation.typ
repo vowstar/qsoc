@@ -231,6 +231,10 @@ them change or drop parts of the design rather than only warning:
 - *`tie` / `invert` on unsupported port kinds*: rejected with a warning
 - *Invalid identifiers*: reserved Verilog keywords and illegal characters in
   port, parameter, or instance names are reported
+- *Artifact paths*: primary outputs whose resolved parent leaves `output/`, or
+  whose target is a symbolic link or non-regular file, are rejected. Existing
+  nested directories are allowed; optional diagrams, reports, and JSON
+  sidecars remain non-critical
 - *Bracket leakage in controller names*: reset, clock, and power configurations
   with brackets in a signal name are renamed, with a warning
 - *`connect:` aliases*: all-output groups use the first declared port as the

@@ -3,9 +3,9 @@
 
 #include "common/qsocconsole.h"
 #include "common/qsocgeneratemanager.h"
+#include "common/qsocpaths.h"
 
 #include <QDebug>
-#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
@@ -51,6 +51,16 @@ bool QSocGenerateManager::generateStub(
         return false;
     }
 
+    const auto verilogArtifact
+        = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), stubName + ".v");
+    const auto libertyArtifact
+        = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), stubName + ".lib");
+    if (!verilogArtifact.isValid() || !libertyArtifact.isValid()) {
+        QSocConsole::error()
+            << (verilogArtifact.isValid() ? libertyArtifact.error : verilogArtifact.error);
+        return false;
+    }
+
     QSocConsole::info() << "Found" << selectedModules.size()
                         << "modules matching criteria:" << selectedModules.join(", ");
 
@@ -71,8 +81,17 @@ bool QSocGenerateManager::generateStub(
 
 bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QStringList &moduleNames)
 {
-    /* Prepare output file path */
-    const QString outputFilePath = QDir(projectManager->getOutputPath()).filePath(stubName + ".v");
+    if (!projectManager || !projectManager->isValidOutputPath(true)) {
+        QSocConsole::error() << "Invalid project output path";
+        return false;
+    }
+    const auto outputArtifact
+        = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), stubName + ".v");
+    if (!outputArtifact.isValid()) {
+        QSocConsole::error() << outputArtifact.error;
+        return false;
+    }
+    const QString outputFilePath = outputArtifact.path;
 
     /* Open output file for writing */
     QFile outputFile(outputFilePath);
@@ -279,8 +298,17 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
 
 bool QSocGenerateManager::generateLibStub(const QString &stubName, const QStringList &moduleNames)
 {
-    /* Prepare output file path */
-    const QString outputFilePath = QDir(projectManager->getOutputPath()).filePath(stubName + ".lib");
+    if (!projectManager || !projectManager->isValidOutputPath(true)) {
+        QSocConsole::error() << "Invalid project output path";
+        return false;
+    }
+    const auto outputArtifact
+        = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), stubName + ".lib");
+    if (!outputArtifact.isValid()) {
+        QSocConsole::error() << outputArtifact.error;
+        return false;
+    }
+    const QString outputFilePath = outputArtifact.path;
 
     /* Open output file for writing */
     QFile outputFile(outputFilePath);

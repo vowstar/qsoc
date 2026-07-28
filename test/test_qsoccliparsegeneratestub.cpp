@@ -4,6 +4,8 @@
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
 #include "common/qsocconsole.h"
+#include "common/qsocgeneratemanager.h"
+#include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
@@ -14,19 +16,6 @@
 #include <QTextStream>
 #include <QtCore>
 #include <QtTest>
-
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
 
 class Test : public QObject
 {
@@ -244,7 +233,6 @@ simple_pll:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);

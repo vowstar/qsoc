@@ -3,6 +3,7 @@
 
 #include "common/qsocconsole.h"
 #include "common/qsocgeneratemanager.h"
+#include "common/qsocpaths.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -656,8 +657,19 @@ bool QSocGenerateManager::renderTemplate(
         const std::string result      = env.render(templateStr, dataObject);
 
         /* Create output file */
-        const QString outputPath = projectManager->getOutputPath() + QDir::separator()
-                                   + outputFileName;
+        if (!projectManager || !projectManager->isValidOutputPath(true)) {
+            QSocConsole::error() << "Invalid project output path";
+            return false;
+        }
+        const QString outputRoot      = QDir(projectManager->getOutputPath()).canonicalPath();
+        const QString outputCandidate = outputRoot + QDir::separator() + outputFileName;
+        const auto    outputArtifact
+            = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), outputCandidate);
+        if (!outputArtifact.isValid()) {
+            QSocConsole::error() << outputArtifact.error;
+            return false;
+        }
+        const QString outputPath = outputArtifact.path;
         QFile         outputFile(outputPath);
         if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QSocConsole::error() << QCoreApplication::translate(
@@ -672,9 +684,27 @@ bool QSocGenerateManager::renderTemplate(
 
         /* Generate corresponding JSON data file for debugging/third-party tools */
         const QFileInfo outputFileInfo(outputFileName);
-        const QString   jsonFileName = outputFileInfo.baseName() + ".json";
-        const QString jsonPath = projectManager->getOutputPath() + QDir::separator() + jsonFileName;
-        QFile         jsonFile(jsonPath);
+        const QString   jsonFileName  = outputFileInfo.baseName() + ".json";
+        const QString   jsonCandidate = outputRoot + QDir::separator() + jsonFileName;
+        const auto      jsonArtifact
+            = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), jsonCandidate);
+        if (!jsonArtifact.isValid()) {
+            QSocConsole::warn() << jsonArtifact.error;
+            return true;
+        }
+
+        const QString jsonPath            = jsonArtifact.path;
+        const QString outputCanonicalPath = QFileInfo(outputPath).canonicalFilePath();
+        const QString jsonCanonicalPath   = QFileInfo(jsonPath).canonicalFilePath();
+        const bool sameArtifact = outputPath == jsonPath
+                                  || (!outputCanonicalPath.isEmpty() && !jsonCanonicalPath.isEmpty()
+                                      && outputCanonicalPath == jsonCanonicalPath);
+        if (sameArtifact) {
+            QSocConsole::warn() << "Template JSON sidecar matches the primary output; skipping";
+            return true;
+        }
+
+        QFile jsonFile(jsonPath);
         if (!jsonFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QSocConsole::warn() << QCoreApplication::translate(
                                        "generate", "Warning: Could not create JSON data file \"%1\"")

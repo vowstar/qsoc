@@ -1,10 +1,12 @@
 #include "qsocgenerateprimitivereset.h"
 #include "common/qsocconsole.h"
+#include "common/qsocpaths.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <cmath>
 #include <vector>
 #include <QDebug>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
 
@@ -72,11 +74,14 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
 
     // Generate Typst reset diagram (failure does not affect Verilog generation)
     if (m_parent && m_parent->getProjectManager()) {
-        QString outputDir = m_parent->getProjectManager()->getOutputPath();
-        QString typstPath = outputDir + QStringLiteral("/") + config.moduleName
-                            + QStringLiteral(".typ");
-        if (!generateTypstDiagram(config, typstPath)) {
-            QSocConsole::warn() << "Failed to generate Typst diagram (non-critical):" << typstPath;
+        const QString outputDir = m_parent->getProjectManager()->getOutputPath();
+        const QString typstName = config.moduleName + QStringLiteral(".typ");
+        const auto    artifact  = QSocPaths::resolveArtifactPath(outputDir, typstName);
+        if (!artifact.isValid()) {
+            QSocConsole::warn() << artifact.error;
+        } else if (!generateTypstDiagram(config, artifact.path)) {
+            QSocConsole::warn() << "Failed to generate Typst diagram (non-critical):"
+                                << artifact.path;
         }
     }
 
@@ -884,8 +889,13 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
 
 bool QSocResetPrimitive::generateResetCellFile(const QString &outputDir)
 {
-    QString filePath = QDir(outputDir).filePath("reset_cell.v");
-    QFile   file(filePath);
+    const auto artifact = QSocPaths::resolveArtifactPath(outputDir, "reset_cell.v");
+    if (!artifact.isValid()) {
+        QSocConsole::warn() << artifact.error;
+        return false;
+    }
+    const QString filePath = artifact.path;
+    QFile         file(filePath);
 
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QSocConsole::warn() << "Cannot open reset_cell.v for writing:" << file.errorString();
@@ -1492,9 +1502,17 @@ QString QSocResetPrimitive::typstTarget(
 bool QSocResetPrimitive::generateTypstDiagram(
     const ResetControllerConfig &config, const QString &outputPath)
 {
-    QFile file(outputPath);
+    const QFileInfo outputInfo(outputPath);
+    const auto      artifact
+        = QSocPaths::resolveArtifactPath(outputInfo.absolutePath(), outputInfo.fileName());
+    if (!artifact.isValid()) {
+        QSocConsole::warn() << artifact.error;
+        return false;
+    }
+
+    QFile file(artifact.path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QSocConsole::warn() << "Failed to open Typst output file:" << outputPath;
+        QSocConsole::warn() << "Failed to open Typst output file:" << artifact.path;
         return false;
     }
 
@@ -1578,6 +1596,6 @@ bool QSocResetPrimitive::generateTypstDiagram(
     out << "})\n";
 
     file.close();
-    QSocConsole::info() << "Generated Typst reset diagram:" << outputPath;
+    QSocConsole::info() << "Generated Typst reset diagram:" << artifact.path;
     return true;
 }

@@ -23,6 +23,14 @@
  */
 namespace QSocPaths {
 
+struct ArtifactPathResult
+{
+    QString path;
+    QString error;
+
+    [[nodiscard]] bool isValid() const { return !path.isEmpty(); }
+};
+
 /** $QSOC_HOME value or empty string if unset. */
 QString envRoot();
 
@@ -47,6 +55,14 @@ QString systemRoot();
  * @param projectPath Project directory for layer 2; empty skips that layer.
  */
 QStringList resourceDirs(const QString &subdir, const QString &projectPath = QString());
+
+/**
+ * @brief Resolve a generated artifact inside an output directory.
+ * @param outputDirectory Existing output directory.
+ * @param requestedPath Relative or absolute candidate artifact path.
+ * @return Resolved path, or an error when the target is unsafe.
+ */
+ArtifactPathResult resolveArtifactPath(const QString &outputDirectory, const QString &requestedPath);
 
 } // namespace QSocPaths
 

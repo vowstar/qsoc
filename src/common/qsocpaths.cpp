@@ -4,6 +4,7 @@
 #include "common/qsocpaths.h"
 
 #include <QDir>
+#include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QSet>
 
@@ -76,6 +77,58 @@ QStringList resourceDirs(const QString &subdir, const QString &projectPath)
         }
     }
     return out;
+}
+
+ArtifactPathResult resolveArtifactPath(const QString &outputDirectory, const QString &requestedPath)
+{
+    if (requestedPath.isEmpty()) {
+        return {{}, QStringLiteral("Artifact path is empty.")};
+    }
+    if (requestedPath.contains(QChar::Null)) {
+        return {{}, QStringLiteral("Artifact path contains a null character.")};
+    }
+
+    const QFileInfo outputInfo(outputDirectory);
+    if (!outputInfo.exists() || !outputInfo.isDir()) {
+        return {{}, QStringLiteral("Artifact output directory does not exist.")};
+    }
+    const QString canonicalOutput = outputInfo.canonicalFilePath();
+    if (canonicalOutput.isEmpty()) {
+        return {{}, QStringLiteral("Artifact output directory cannot be resolved.")};
+    }
+
+    const QString   candidatePath = QDir(canonicalOutput).absoluteFilePath(requestedPath);
+    const QFileInfo candidateInfo(candidatePath);
+    if (candidateInfo.exists() && !candidateInfo.isFile()) {
+        return {{}, QStringLiteral("Artifact target is not a regular file.")};
+    }
+
+    const QFileInfo parentInfo(candidateInfo.path());
+    if (!parentInfo.exists() || !parentInfo.isDir()) {
+        return {{}, QStringLiteral("Artifact parent directory does not exist.")};
+    }
+    const QString canonicalParent = QDir(candidateInfo.path()).canonicalPath();
+    if (canonicalParent.isEmpty()) {
+        return {{}, QStringLiteral("Artifact parent directory cannot be resolved.")};
+    }
+
+    const QString normalizedOutput = QDir::fromNativeSeparators(canonicalOutput);
+    const QString normalizedParent = QDir::fromNativeSeparators(canonicalParent);
+#ifdef Q_OS_WIN
+    constexpr Qt::CaseSensitivity pathCase = Qt::CaseInsensitive;
+#else
+    constexpr Qt::CaseSensitivity pathCase = Qt::CaseSensitive;
+#endif
+    QString outputPrefix = normalizedOutput;
+    if (!outputPrefix.endsWith('/')) {
+        outputPrefix += '/';
+    }
+    if (normalizedParent.compare(normalizedOutput, pathCase) != 0
+        && !normalizedParent.startsWith(outputPrefix, pathCase)) {
+        return {{}, QStringLiteral("Artifact target is outside the output directory.")};
+    }
+
+    return {QDir(canonicalParent).filePath(candidateInfo.fileName()), {}};
 }
 
 } // namespace QSocPaths
