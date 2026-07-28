@@ -1806,14 +1806,37 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                         tieValue = numInfo.originalString;
                                                     }
                                                 } else {
+                                                    /* A literal is bounded by its
+                                                       declared width before any
+                                                       port adaptation: 4'h1F is
+                                                       4'hF. */
+                                                    if (numInfo.hasExplicitWidth
+                                                        && numInfo.width > 0) {
+                                                        const BigUnsigned declaredMask
+                                                            = (BigUnsigned(1) << numInfo.width)
+                                                              - BigUnsigned(1);
+                                                        if (adjustedInfo.value.getSign()
+                                                            == BigInteger::negative) {
+                                                            adjustedInfo.value = BigInteger(
+                                                                adjustedInfo.value.getMagnitude()
+                                                                    & declaredMask,
+                                                                BigInteger::negative);
+                                                        } else {
+                                                            adjustedInfo.value = BigInteger(
+                                                                adjustedInfo.value.getMagnitude()
+                                                                & declaredMask);
+                                                        }
+                                                    }
+
                                                     /* Normal handling for regular values */
                                                     adjustedInfo.width            = portWidth;
                                                     adjustedInfo.hasExplicitWidth = true;
 
                                                     /* Create a mask for the width */
                                                     BigUnsigned mask = BigUnsigned(0);
-                                                    for (int i = 0; i < portWidth; i++) {
-                                                        mask = (mask << 1) + BigUnsigned(1);
+                                                    if (portWidth > 0) {
+                                                        mask = (BigUnsigned(1) << portWidth)
+                                                               - BigUnsigned(1);
                                                     }
                                                     /* Apply mask to truncate the value */
                                                     if (adjustedInfo.value.getSign()

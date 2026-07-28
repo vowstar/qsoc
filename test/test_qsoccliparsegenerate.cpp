@@ -4390,6 +4390,112 @@ instance:
         QVERIFY(verifyVerilogContent("test_tie_exact", ".din (~(sel_a & sel_b))"));
     }
 
+    /* A literal's value is bounded by its declared width before port
+       adaptation and inversion: 4'h1F is 4'hF, so an 8-bit port sees
+       8'hf, and inversion applies to the truncated value. */
+    void testGenerateTieHonorsDeclaredWidth()
+    {
+        const QString drvContent = R"(
+width_dut:
+  port:
+    d8:
+      type: "logic[7:0]"
+      direction: input
+    e8:
+      type: "logic[7:0]"
+      direction: input
+    f8:
+      type: "logic[7:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("width_dut.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_tie_declared_width"
+instance:
+  u0:
+    module: "width_dut"
+    port:
+      d8: { tie: "4'h1F" }
+      e8: { tie: "2'd7" }
+      f8: { tie: "4'h1F", invert: true }
+)";
+        const QString filePath   = createTempFile("test_tie_declared_width.soc_net", netContent);
+        QVERIFY(filePath != "");
+        QVERIFY(removeVerilogOutput("test_tie_declared_width"));
+        messageList.clear();
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+        QVERIFY2(sawVerilogSuccess("test_tie_declared_width"), qPrintable(messageList.join('\n')));
+
+        QVERIFY(verifyVerilogContent("test_tie_declared_width", ".d8 (8'hf)"));
+        QVERIFY(!verifyVerilogContent("test_tie_declared_width", "8'h1f"));
+        QVERIFY(verifyVerilogContent("test_tie_declared_width", ".e8 (8'd3)"));
+        QVERIFY(!verifyVerilogContent("test_tie_declared_width", "8'd7"));
+        QVERIFY(verifyVerilogContent("test_tie_declared_width", ".f8 (~(8'hf))"));
+    }
+
+    void testGenerateTieBuildsWideMasksWithinBound()
+    {
+        const QString moduleContent = R"(
+wide_mask_dut:
+  port:
+    declared:
+      type: "logic[7:0]"
+      direction: input
+    contextual:
+      type: "logic[999999:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         moduleFile(moduleDir.filePath("wide_mask_dut.soc_mod"));
+        QVERIFY(moduleFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        moduleFile.write(moduleContent.toUtf8());
+        moduleFile.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_tie_wide_masks"
+instance:
+  u0:
+    module: "wide_mask_dut"
+    port:
+      declared: { tie: "1000000'd1" }
+      contextual: { tie: "1" }
+)";
+        const QString filePath   = createTempFile("test_tie_wide_masks.soc_net", netContent);
+        QVERIFY(!filePath.isEmpty());
+        const QString outputPath = verilogOutputPath("test_tie_wide_masks");
+        QVERIFY(removeVerilogOutput("test_tie_wide_masks"));
+        messageList.clear();
+
+        QElapsedTimer timer;
+        timer.start();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+        const qint64 elapsed = timer.elapsed();
+        QVERIFY2(sawVerilogSuccess("test_tie_wide_masks"), qPrintable(messageList.join('\n')));
+        QVERIFY(QFile::exists(outputPath));
+        QVERIFY2(elapsed < 5000, "wide tie masks exceeded the generation deadline");
+
+        QVERIFY(verifyVerilogContent(
+            "test_tie_wide_masks",
+            ".declared (8'd1 /* FIXME: Value 1000000'd1 wider than port width 8 bits */)"));
+        QVERIFY(verifyVerilogContent("test_tie_wide_masks", ".contextual (1000000'd1)"));
+    }
+
     void testGenerateEmptyTieAndLinkIgnored()
     {
         const QString drvContent = R"(
