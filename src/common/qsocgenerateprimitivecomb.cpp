@@ -3,8 +3,57 @@
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
 #include <QDebug>
+#include <QMap>
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
+
+#include <vector>
+
+namespace {
+
+struct ProcessTarget
+{
+    QString base;
+    QString slice;
+};
+
+bool usesProcessBlock(const YAML::Node &combItem)
+{
+    return (combItem["if"] && combItem["if"].IsSequence())
+           || (combItem["case"] && combItem["case"].IsScalar() && combItem["cases"]
+               && combItem["cases"].IsMap());
+}
+
+ProcessTarget parseProcessTarget(const YAML::Node &combItem)
+{
+    const QString output = QString::fromStdString(combItem["out"].as<std::string>());
+    const auto    parsed = QSocGenerateManager::parseSignalBitSelect(output);
+    ProcessTarget target{parsed.first, parsed.second};
+    if (combItem["bits"] && combItem["bits"].IsScalar()) {
+        target.slice = QSocVerilogUtils::normalizeBitSelect(
+            QString::fromStdString(combItem["bits"].as<std::string>()));
+    }
+    return target;
+}
+
+int highestSelectedBit(const QString &slice)
+{
+    const QRegularExpression      regex(R"(^\[(\d+)(?::(\d+))?\]$)");
+    const QRegularExpressionMatch match = regex.match(slice);
+    if (!match.hasMatch()) {
+        return -1;
+    }
+    bool      firstOk = false;
+    const int first   = match.captured(1).toInt(&firstOk);
+    if (!firstOk || match.captured(2).isEmpty()) {
+        return firstOk ? first : -1;
+    }
+    bool      secondOk = false;
+    const int second   = match.captured(2).toInt(&secondOk);
+    return secondOk ? qMax(first, second) : first;
+}
+
+} // namespace
 
 QSocCombPrimitive::QSocCombPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
@@ -64,34 +113,49 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
         }
     }
 
-    /* First pass: collect all outputs that need internal reg declarations */
-    QSet<QString> alwaysBlockOutputs;
+    /* First pass: collect process targets and internal reg requirements. */
+    std::vector<ProcessTarget> processTargets(netlistData["comb"].size());
+    QStringList                processOutputBases;
+    QSet<QString>              processFullOutputs;
+    QMap<QString, QStringList> processOutputSlices;
+    QMap<QString, int>         processMaxBits;
     for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
         const YAML::Node &combItem = netlistData["comb"][i];
         if (!combItem.IsMap() || !combItem["out"] || !combItem["out"].IsScalar()) {
             continue;
         }
-        const QString outputSignal = QString::fromStdString(combItem["out"].as<std::string>());
-
-        /* Check if this output needs an always block */
-        if ((combItem["if"] && combItem["if"].IsSequence())
-            || (combItem["case"] && combItem["case"].IsScalar() && combItem["cases"]
-                && combItem["cases"].IsMap())) {
-            alwaysBlockOutputs.insert(outputSignal);
+        if (!usesProcessBlock(combItem)) {
+            continue;
+        }
+        ProcessTarget &target = processTargets[i];
+        target                = parseProcessTarget(combItem);
+        if (!processOutputBases.contains(target.base)) {
+            processOutputBases.append(target.base);
+        }
+        if (target.slice.isEmpty()) {
+            processFullOutputs.insert(target.base);
+        } else {
+            QStringList &slices = processOutputSlices[target.base];
+            if (!slices.contains(target.slice)) {
+                slices.append(target.slice);
+            }
+            const int maxBit = highestSelectedBit(target.slice);
+            if (maxBit > processMaxBits.value(target.base, -1)) {
+                processMaxBits.insert(target.base, maxBit);
+            }
         }
     }
 
     /* Generate internal reg declarations for always block outputs */
-    if (!alwaysBlockOutputs.isEmpty()) {
+    if (!processOutputBases.isEmpty()) {
         out << "\n    /* Internal reg declarations for combinational logic */\n";
-        for (const QString &outputSignal : alwaysBlockOutputs) {
+        for (const QString &baseName : processOutputBases) {
             /* Find the port width for this output signal */
             QString regWidth = "";
             if (netlistData["port"] && netlistData["port"].IsMap()) {
                 for (const auto &portEntry : netlistData["port"]) {
                     if (portEntry.first.IsScalar()
-                        && QString::fromStdString(portEntry.first.as<std::string>())
-                               == outputSignal) {
+                        && QString::fromStdString(portEntry.first.as<std::string>()) == baseName) {
                         if (portEntry.second.IsMap() && portEntry.second["type"]
                             && portEntry.second["type"].IsScalar()) {
                             QString portType = QString::fromStdString(
@@ -111,11 +175,22 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
                     }
                 }
             }
-            out << "    reg " << regWidth << outputSignal << "_reg;\n";
+            if (regWidth.isEmpty() && processMaxBits.value(baseName, -1) > 0) {
+                regWidth = QString("[%1:0] ").arg(processMaxBits.value(baseName));
+            }
+            out << "    reg " << regWidth << baseName << "_reg;\n";
         }
         out << "\n    /* Assign internal regs to outputs */\n";
-        for (const QString &outputSignal : alwaysBlockOutputs) {
-            out << "    assign " << outputSignal << " = " << outputSignal << "_reg;\n";
+        for (const QString &baseName : processOutputBases) {
+            const QStringList slices = processOutputSlices.value(baseName);
+            if (processFullOutputs.contains(baseName) || slices.isEmpty()) {
+                out << "    assign " << baseName << " = " << baseName << "_reg;\n";
+                continue;
+            }
+            for (const QString &slice : slices) {
+                out << "    assign " << baseName << slice << " = " << baseName << "_reg" << slice
+                    << ";\n";
+            }
         }
     }
 
@@ -194,7 +269,8 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
             out << "    assign " << fullOutputSignal << " = " << expression << ";\n";
         } else if (combItem["if"] && combItem["if"].IsSequence()) {
             /* Generate always block with if-else logic */
-            const QString regSignal = outputSignal + "_reg";
+            const ProcessTarget &target    = processTargets[i];
+            const QString        regSignal = target.base + "_reg" + target.slice;
             out << "    always @(*) begin\n";
 
             /* Set default value if specified */
@@ -232,7 +308,8 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
             combItem["case"] && combItem["case"].IsScalar() && combItem["cases"]
             && combItem["cases"].IsMap()) {
             /* Generate always block with case statement */
-            const QString regSignal = outputSignal + "_reg";
+            const ProcessTarget &target    = processTargets[i];
+            const QString        regSignal = target.base + "_reg" + target.slice;
             out << "    always @(*) begin\n";
 
             /* Set default value if specified */

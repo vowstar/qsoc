@@ -49,6 +49,30 @@ comb:
     default: "default_result"
 ```
 
+=== Output Slices
+<soc-net-comb-output-slices>
+Every combinational form can target part of an output with an inline select or
+the `bits` field:
+
+```yaml
+comb:
+  - out: data[3:0]
+    if:
+      - cond: select_low
+        then: low_value
+    default: 4'b0
+  - out: data
+    bits: "[7:4]"
+    case: select_high
+    cases:
+      "1'b1": high_value
+    default: 4'b0
+```
+
+When both forms are present, `bits` overrides the select in `out`. Process
+forms (`if` and `case`) use one internal register per output base and connect
+only the selected slices.
+
 === Simple Assignment (expr)
 <soc-net-comb-expr>
 Simple assignments generate `assign` statements in Verilog:

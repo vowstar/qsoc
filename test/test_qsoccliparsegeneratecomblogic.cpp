@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "common/qslangdriver.h"
 #include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
@@ -16,18 +17,7 @@
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
+namespace {
 
 class Test : public QObject
 {
@@ -100,7 +90,6 @@ private:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
@@ -484,9 +473,95 @@ comb:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "alu_op_reg = 4'b0101;"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign alu_op = alu_op_reg;"));
     }
+
+    void testProcessTargetsPreserveSlices()
+    {
+        const QString netlistContent = R"(
+port:
+  sel:
+    direction: input
+    type: logic
+  mode:
+    direction: input
+    type: logic
+  low:
+    direction: input
+    type: logic[3:0]
+  high:
+    direction: input
+    type: logic[3:0]
+  data:
+    direction: output
+    type: logic[7:0]
+  status:
+    direction: output
+    type: logic
+
+comb:
+  - out: data[3:0]
+    if:
+      - cond: sel
+        then:
+          case: mode
+          cases:
+            "1'b0": low
+          default: 4'hf
+    default: 4'h0
+  - out: status
+    if:
+      - cond: sel
+        then: 1'b1
+    default: 1'b0
+  - out: data[0]
+    bits: "[7:4]"
+    case: sel
+    cases:
+      "1'b1": high
+    default: 4'h0
+)";
+
+        const QString netlistPath = createTempFile("test_process_slices.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+            false);
+        socCliWorker.run();
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_process_slices.v");
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+
+        QSlangDriver driver;
+        QVERIFY2(
+            driver
+                .parseFileList("", {verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject),
+            qPrintable("Generated Verilog did not elaborate:\n" + verilogContent));
+        QCOMPARE(verilogContent.count("reg [7:0] data_reg;"), 1);
+        QCOMPARE(verilogContent.count("reg status_reg;"), 1);
+        QVERIFY(
+            verilogContent.indexOf("reg [7:0] data_reg;")
+            < verilogContent.indexOf("reg status_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign data[3:0] = data_reg[3:0];"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign data[7:4] = data_reg[7:4];"));
+        QVERIFY(
+            verilogContent.indexOf("assign data[3:0]") < verilogContent.indexOf("assign data[7:4]"));
+        QVERIFY(
+            verilogContent.indexOf("assign data[7:4]")
+            < verilogContent.indexOf("assign status = status_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "data_reg[3:0] = low;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "data_reg[7:4] = high;"));
+        QVERIFY(!verilogContent.contains("]_reg"));
+        QVERIFY(!verifyVerilogContentNormalized(verilogContent, "assign data = data_reg;"));
+    }
 };
 
 QStringList Test::messageList;
+
+} // namespace
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsoccliparsegeneratecomblogic.moc"
