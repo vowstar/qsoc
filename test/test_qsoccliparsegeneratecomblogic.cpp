@@ -788,6 +788,137 @@ comb:
         QVERIFY(!verilogContent.contains("z_alias_reg"));
         QVERIFY(!verilogContent.contains("multiple drivers"));
     }
+
+    void testFullWidthProcessesUseDeclaredSignalWidths()
+    {
+        const QString moduleContent = R"(
+comb_width_sink:
+  port:
+    if_data:
+      type: logic[7:0]
+      direction: in
+    case_data:
+      type: logic[15:0]
+      direction: in
+)";
+        const QString modulePath = createTempFile("module/comb_width_sink.soc_mod", moduleContent);
+        QVERIFY(!modulePath.isEmpty());
+
+        const QString netlistContent = R"(
+parameter:
+  WIDTH:
+    type: integer
+    value: 12
+
+port:
+  sel:
+    direction: input
+    type: logic
+  data8:
+    direction: input
+    type: logic[7:0]
+  data16:
+    direction: input
+    type: logic[15:0]
+  param_data:
+    direction: input
+    type: logic[WIDTH-1:0]
+  param_out:
+    direction: output
+    type: logic[WIDTH-1:0]
+  packed_data:
+    direction: input
+    type: logic[1:0][3:0]
+  packed_out:
+    direction: output
+    type: logic[1:0][3:0]
+
+instance:
+  u_sink:
+    module: comb_width_sink
+
+net:
+  if_bus:
+    - instance: u_sink
+      port: if_data
+  case_bus:
+    - instance: u_sink
+      port: case_data
+
+comb:
+  - out: if_bus
+    if:
+      - cond: sel
+        then: data8
+    default: 8'h00
+  - out: case_bus
+    case: sel
+    cases:
+      "1'b1": data16
+    default: 16'h0000
+  - out: param_out
+    if:
+      - cond: sel
+        then: param_data
+    default: "'0"
+  - out: packed_out
+    case: sel
+    cases:
+      "1'b1": packed_data
+    default: 8'h00
+)";
+
+        const QString netlistPath
+            = createTempFile("test_internal_process_width.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+            false);
+        socCliWorker.run();
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_internal_process_width.v");
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+
+        QCOMPARE(verilogContent.count("wire [7:0] if_bus;"), 1);
+        QCOMPARE(verilogContent.count("wire [15:0] case_bus;"), 1);
+        QCOMPARE(verilogContent.count("reg [7:0] if_bus_reg;"), 1);
+        QCOMPARE(verilogContent.count("reg [15:0] case_bus_reg;"), 1);
+        QCOMPARE(verilogContent.count("reg [WIDTH-1:0] param_out_reg;"), 1);
+        QCOMPARE(verilogContent.count("reg [1:0][3:0] packed_out_reg;"), 1);
+        QVERIFY(!verilogContent.contains("\n    reg if_bus_reg;"));
+        QVERIFY(!verilogContent.contains("\n    reg case_bus_reg;"));
+        QVERIFY(!verilogContent.contains("\n    reg param_out_reg;"));
+        QVERIFY(!verilogContent.contains("\n    reg packed_out_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign if_bus = if_bus_reg;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign case_bus = case_bus_reg;"));
+
+        const QString stubContent = R"(
+module comb_width_sink (
+    input wire [7:0] if_data,
+    input wire [15:0] case_data
+);
+endmodule
+)";
+        const QString stubPath    = createTempFile("comb_width_sink.v", stubContent);
+        QVERIFY(!stubPath.isEmpty());
+
+        QSlangDriver driver;
+        QVERIFY2(
+            driver.parseFileList(
+                "", {stubPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject),
+            qPrintable("Generated Verilog did not elaborate:\n" + verilogContent));
+        QVERIFY2(
+            driver.parseArgs(QString(
+                                 "slang --single-unit --timescale 1ns/10ps --error-limit=0 "
+                                 "-Werror=width-trunc -Werror=width-expand \"%1\" \"%2\"")
+                                 .arg(stubPath, verilogPath)),
+            qPrintable("Generated Verilog changed signal width:\n" + verilogContent));
+    }
 };
 
 QStringList Test::messageList;

@@ -72,7 +72,10 @@ QSocCombPrimitive::QSocCombPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
 {}
 
-bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextStream &out)
+bool QSocCombPrimitive::generateCombLogic(
+    const YAML::Node             &netlistData,
+    const QMap<QString, QString> &declaredSignalRanges,
+    QTextStream                  &out)
 {
     if (!netlistData["comb"] || !netlistData["comb"].IsSequence()
         || netlistData["comb"].size() == 0) {
@@ -165,32 +168,11 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
     if (!processOutputBases.isEmpty()) {
         out << "\n    /* Internal reg declarations for combinational logic */\n";
         for (const QString &baseName : processOutputBases) {
-            /* Find the port width for this output signal */
-            QString regWidth = "";
-            if (netlistData["port"] && netlistData["port"].IsMap()) {
-                for (const auto &portEntry : netlistData["port"]) {
-                    if (portEntry.first.IsScalar()
-                        && QString::fromStdString(portEntry.first.as<std::string>()) == baseName) {
-                        if (portEntry.second.IsMap() && portEntry.second["type"]
-                            && portEntry.second["type"].IsScalar()) {
-                            QString portType = QString::fromStdString(
-                                portEntry.second["type"].as<std::string>());
-                            if (portType != "logic" && portType != "wire") {
-                                /* Extract width from type like "logic[7:0]" */
-                                QRegularExpression widthRegex(R"(\[\s*(\d+)\s*:\s*(\d+)\s*\])");
-                                QRegularExpressionMatch match = widthRegex.match(portType);
-                                if (match.hasMatch()) {
-                                    int msb  = match.captured(1).toInt();
-                                    int lsb  = match.captured(2).toInt();
-                                    regWidth = QString("[%1:%2] ").arg(msb).arg(lsb);
-                                }
-                            }
-                            break;
-                        }
-                    }
-                }
+            QString regWidth = declaredSignalRanges.value(baseName);
+            if (!regWidth.isEmpty()) {
+                regWidth += " ";
             }
-            if (regWidth.isEmpty() && processMaxBits.value(baseName, -1) > 0) {
+            if (!declaredSignalRanges.contains(baseName) && processMaxBits.value(baseName, -1) > 0) {
                 regWidth = QString("[%1:0] ").arg(processMaxBits.value(baseName));
             }
             out << "    reg " << regWidth << baseName << "_reg;\n";

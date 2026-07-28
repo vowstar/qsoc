@@ -215,7 +215,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             out << "module " << outputFileName << " ();\n\n";
 
             /* Generate combinational logic */
-            if (!generateCombPrimitive(netlistData, out)) {
+            if (!generateCombPrimitive(netlistData, {}, out)) {
                 QSocConsole::warn() << "Failed to generate combinational logic primitives";
                 return false;
             }
@@ -312,6 +312,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* Collect all ports for module interface */
     QStringList            ports;
     QMap<QString, QString> portToNetConnections; /* Map of port name to connected net name */
+    QMap<QString, QString> declaredSignalRanges;
     /* Reverse lookup with full membership: a net may be claimed by several
        top-level ports via `connect:`. Pre-fix only the first port saw the
        internal driver; the others were declared but never wired. */
@@ -379,6 +380,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
 
             /* Add port declaration */
+            declaredSignalRanges.insert(portName, type);
             if (direction == "input" || direction == "output") {
                 ports.append(QString("%1 wire %2")
                                  .arg(direction)
@@ -1249,7 +1251,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                        connection maps, so a sibling `type:` key on the net
                        is unreachable here. Width must come from port details
                        or the inferred bit-select MSB above. */
-
+                    const QString cleanedNetWidth
+                        = QSocGenerateManager::cleanTypeForWireDeclaration(netWidth);
                     /* Add wire declaration for this net with width information if available.
                        A net whose name matches a top-level port is already declared as
                        part of the module header; emitting another `wire` would duplicate
@@ -1259,19 +1262,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             << "Net" << netName
                             << "shares a name with a top-level port; using the port "
                                "directly. Add 'connect:' to silence this warning";
-                    } else if (!netWidth.isEmpty()) {
-                        /* Clean the type string to remove unwanted keywords like 'reg', 'logic', etc. */
-                        const QString cleanedWidth
-                            = QSocGenerateManager::cleanTypeForWireDeclaration(netWidth);
-                        if (!cleanedWidth.isEmpty()) {
-                            out << "    wire " << cleanedWidth << " " << netName << ";\n";
+                    } else {
+                        declaredSignalRanges.insert(netName, cleanedNetWidth);
+                        if (!cleanedNetWidth.isEmpty()) {
+                            out << "    wire " << cleanedNetWidth << " " << netName << ";\n";
                         } else {
                             out << "    wire " << netName << ";\n";
                             scalarNets.insert(netName);
                         }
-                    } else {
-                        out << "    wire " << netName << ";\n";
-                        scalarNets.insert(netName);
                     }
                 }
             }
@@ -1801,7 +1799,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     }
 
     /* Generate combinational logic after module instantiations */
-    if (!generateCombPrimitive(netlistData, out)) {
+    if (!generateCombPrimitive(netlistData, declaredSignalRanges, out)) {
         QSocConsole::warn() << "Failed to generate combinational logic primitives";
         return false;
     }
@@ -1958,14 +1956,17 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
     return false;
 }
 
-bool QSocGenerateManager::generateCombPrimitive(const YAML::Node &netlistData, QTextStream &out)
+bool QSocGenerateManager::generateCombPrimitive(
+    const YAML::Node             &netlistData,
+    const QMap<QString, QString> &declaredSignalRanges,
+    QTextStream                  &out)
 {
     if (!combPrimitive) {
         QSocConsole::warn() << "Comb primitive generator not initialized";
         return false;
     }
 
-    return combPrimitive->generateCombLogic(netlistData, out);
+    return combPrimitive->generateCombLogic(netlistData, declaredSignalRanges, out);
 }
 
 /**

@@ -71,7 +71,10 @@ comb:
 
 When both forms are present, `bits` overrides the select in `out`. Process
 forms (`if` and `case`) use one internal register per output base and connect
-only the selected slices.
+only the selected slices. Process registers reuse the packed range emitted for
+the target port or internal wire. This preserves symbolic and multidimensional
+top-level port ranges and keeps internal registers aligned with inferred wire
+ranges.
 
 When a top-level port uses `connect` to name an internal net, combinational
 logic emits through that port. Simple `expr` assignments retain diagnostics

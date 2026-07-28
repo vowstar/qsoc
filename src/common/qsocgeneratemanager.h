@@ -19,6 +19,7 @@ class QSocFSMPrimitive;
 class QSocCombPrimitive;
 class QSocSeqPrimitive;
 
+#include <QMap>
 #include <QObject>
 #include <QPair>
 #include <QString>
@@ -530,10 +531,14 @@ private:
     /**
      * @brief Generate combinational logic using Comb primitive
      * @param netlistData YAML node containing the full netlist
+     * @param declaredSignalRanges emitted packed ranges indexed by signal name
      * @param out Output text stream for generated Verilog
      * @return true if generation successful, false otherwise
      */
-    bool generateCombPrimitive(const YAML::Node &netlistData, QTextStream &out);
+    bool generateCombPrimitive(
+        const YAML::Node             &netlistData,
+        const QMap<QString, QString> &declaredSignalRanges,
+        QTextStream                  &out);
 
     /**
      * @brief Process sequential logic section in the netlist

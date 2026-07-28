@@ -2,6 +2,7 @@
 #define QSOCGENERATEPRIMITIVECOMB_H
 
 #include <yaml-cpp/yaml.h>
+#include <QMap>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -32,10 +33,14 @@ public:
     /**
      * @brief Generate combinational logic from YAML configuration
      * @param netlistData YAML node containing the full netlist
+     * @param declaredSignalRanges emitted packed ranges indexed by signal name
      * @param out Output text stream for generated Verilog
      * @return true if generation successful, false otherwise
      */
-    bool generateCombLogic(const YAML::Node &netlistData, QTextStream &out);
+    bool generateCombLogic(
+        const YAML::Node             &netlistData,
+        const QMap<QString, QString> &declaredSignalRanges,
+        QTextStream                  &out);
 
 private:
     /**
