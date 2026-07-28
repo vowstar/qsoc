@@ -399,6 +399,14 @@ private:
         class QSocGoalCatalog       *goalCatalog       = nullptr);
 
     /**
+     * @brief Parse options and report a command-line error.
+     * @param appArguments command line arguments.
+     * @retval true Parsing succeeded and command execution may continue.
+     * @retval false Parsing failed or a terminal option was handled.
+     */
+    bool parseOptions(const QStringList &appArguments);
+
+    /**
      * @brief Show application name and version and emit exit with exitCode.
      * @details This function will show application name and version and emit
      *          exit with exitCode.

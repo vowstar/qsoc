@@ -10,15 +10,23 @@
 #include "qsoc_test.h"
 
 #include <QCoreApplication>
+#include <QDeadlineTimer>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QLockFile>
 #include <QMap>
 #include <QScopeGuard>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtTest>
 
 #include <yaml-cpp/yaml.h>
+
+#include <atomic>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -108,6 +116,8 @@ private slots:
         QVERIFY(projectManager.mkpath());
     }
 
+    void cleanupTestCase() { QVERIFY(QDir(temporaryDirectory.path()).removeRecursively()); }
+
     void applicationMetadataDoesNotChangeArtifacts()
     {
         const QString originalName    = QCoreApplication::applicationName();
@@ -139,6 +149,191 @@ private slots:
             QVERIFY(!it.value().contains("# Generated:"));
             QVERIFY(!it.value().contains('\r'));
         }
+    }
+
+    void concurrentProjectCreateHasOneWinner()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
+
+        std::atomic<int>          startState   = 0;
+        std::atomic<int>          successCount = 0;
+        std::vector<std::jthread> workers;
+        workers.reserve(2);
+
+        try {
+            for (int worker = 0; worker < 2; ++worker) {
+                workers.emplace_back([&]() {
+                    QSocProjectManager manager;
+                    manager.setCurrentPath(projectPath);
+                    startState.wait(0);
+                    if (startState.load() == 1 && manager.create("shared")) {
+                        ++successCount;
+                    }
+                });
+            }
+        } catch (...) {
+            startState.store(2);
+            startState.notify_all();
+            throw;
+        }
+
+        startState.store(1);
+        startState.notify_all();
+        workers.clear();
+
+        QCOMPARE(successCount.load(), 1);
+        QFile projectFile(QDir(projectPath).filePath("shared.soc_pro"));
+        QVERIFY(projectFile.open(QIODevice::ReadOnly));
+        QVERIFY(!projectFile.readAll().isEmpty());
+        QVERIFY(!QFile::exists(projectFile.fileName() + ".lock"));
+    }
+
+    void heldProjectLockBlocksCreate()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
+        QVERIFY(QDir().mkpath(projectPath));
+
+        const QString projectFilePath = QDir(projectPath).filePath("locked.soc_pro");
+        QLockFile     projectLock(projectFilePath + ".lock");
+        QVERIFY(projectLock.tryLock());
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(projectPath);
+        QVERIFY(!manager.create("locked"));
+        QVERIFY(!QFileInfo::exists(projectFilePath));
+
+        projectLock.unlock();
+        QVERIFY(manager.create("locked"));
+        QVERIFY(QFileInfo::exists(projectFilePath));
+    }
+
+    void projectNameCannotEscapeDirectory()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(projectPath);
+
+        QVERIFY(!manager.create("../escaped"));
+        QVERIFY(!QFileInfo::exists(QDir(directory.path()).filePath("escaped.soc_pro")));
+        QVERIFY(!QFileInfo::exists(projectPath));
+    }
+
+    void existingMarkerLinkPreservesTarget()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This platform does not provide Unix symbolic-link semantics.");
+#else
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
+        const QString busPath     = QDir(projectPath).filePath("bus");
+        QVERIFY(QDir().mkpath(busPath));
+
+        const QByteArray sentinelBytes(4096, 's');
+        const QString    sentinelPath = QDir(directory.path()).filePath("sentinel");
+        QFile            sentinelFile(sentinelPath);
+        QVERIFY(sentinelFile.open(QIODevice::WriteOnly));
+        QCOMPARE(sentinelFile.write(sentinelBytes), sentinelBytes.size());
+        sentinelFile.close();
+
+        const QString markerPath = QDir(busPath).filePath(".gitkeep");
+        QVERIFY(QFile::link(sentinelPath, markerPath));
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(projectPath);
+        QVERIFY(manager.create("safe"));
+
+        QVERIFY(sentinelFile.open(QIODevice::ReadOnly));
+        QCOMPARE(sentinelFile.readAll(), sentinelBytes);
+        QVERIFY(QFileInfo(markerPath).isSymLink());
+#endif
+    }
+
+    void lateProjectLinkCannotClobberTarget()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This platform does not provide Unix symbolic-link semantics.");
+#else
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
+        QString       deepBusPath = QDir(projectPath).filePath("bus");
+        for (int depth = 0; depth < 256; ++depth) {
+            deepBusPath = QDir(deepBusPath).filePath("d");
+        }
+
+        const QByteArray sentinelBytes(4096, 's');
+        const QString    sentinelPath = QDir(directory.path()).filePath("sentinel");
+        QFile            sentinelFile(sentinelPath);
+        QVERIFY(sentinelFile.open(QIODevice::WriteOnly));
+        QCOMPARE(sentinelFile.write(sentinelBytes), sentinelBytes.size());
+        sentinelFile.close();
+
+        std::atomic_bool createResult = false;
+        std::atomic_bool finished     = false;
+        std::jthread     worker([&]() {
+            QSocProjectManager manager;
+            manager.setCurrentPath(projectPath);
+            manager.setBusPath(deepBusPath);
+            createResult.store(manager.create("race"));
+            finished.store(true);
+        });
+
+        const QString  gitignorePath  = QDir(projectPath).filePath(".gitignore");
+        QDeadlineTimer waitForPrepare = QDeadlineTimer(5000);
+        while (!QFileInfo::exists(gitignorePath) && !finished.load()
+               && !waitForPrepare.hasExpired()) {
+            QThread::yieldCurrentThread();
+        }
+        QVERIFY2(QFileInfo::exists(gitignorePath), "Project preparation did not start.");
+        QVERIFY2(!finished.load(), "Project preparation completed before conflict injection.");
+
+        const QString projectFilePath = QDir(projectPath).filePath("race.soc_pro");
+        QVERIFY(QFile::link(sentinelPath, projectFilePath));
+        worker.join();
+
+        QVERIFY(!createResult.load());
+        QVERIFY(sentinelFile.open(QIODevice::ReadOnly));
+        QCOMPARE(sentinelFile.readAll(), sentinelBytes);
+        QVERIFY(QFileInfo(projectFilePath).isSymLink());
+#endif
+    }
+
+    void failedProjectSavePreservesTarget()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(directory.path());
+        QVERIFY(manager.mkpath());
+
+        const QString projectFilePath = QDir(directory.path()).filePath("blocked.soc_pro");
+        QVERIFY(QDir().mkpath(projectFilePath));
+        const QByteArray sentinelBytes(4096, 's');
+        QFile            sentinelFile(QDir(projectFilePath).filePath("sentinel"));
+        QVERIFY(sentinelFile.open(QIODevice::WriteOnly));
+        QCOMPARE(sentinelFile.write(sentinelBytes), sentinelBytes.size());
+        sentinelFile.close();
+
+        const QStringList entriesBefore
+            = QDir(directory.path())
+                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
+        QVERIFY(!manager.save("blocked"));
+
+        const QStringList entriesAfter
+            = QDir(directory.path())
+                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
+        QCOMPARE(entriesAfter, entriesBefore);
+        QVERIFY(sentinelFile.open(QIODevice::ReadOnly));
+        QCOMPARE(sentinelFile.readAll(), sentinelBytes);
     }
 };
 

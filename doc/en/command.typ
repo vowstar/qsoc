@@ -82,6 +82,8 @@ The project command provides functionality for managing QSoC projects.
 === Project Creation Options
 <project-creation>
 The `project create` command creates a new QSoC project.
+It refuses an existing project file; use `project update` to change its paths.
+Project names are file names, not paths.
 
 #figure(
   align(center)[#table(

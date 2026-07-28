@@ -64,6 +64,19 @@ void QSocCliWorker::run()
     emit exit(exitCode);
 }
 
+bool QSocCliWorker::parseOptions(const QStringList &appArguments)
+{
+    if (!parser.parse(appArguments)) {
+        return showErrorWithHelp(
+            1, QCoreApplication::translate("main", "Error: %1").arg(parser.errorText()));
+    }
+    if (parser.isSet("help")) {
+        showHelp(0);
+        return false;
+    }
+    return true;
+}
+
 bool QSocCliWorker::showVersion(int exitCode)
 {
     QSocConsole::out() << QCoreApplication::applicationName() << ' '

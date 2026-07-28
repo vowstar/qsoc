@@ -8,12 +8,71 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QProcess>
+#include <QSaveFile>
+#include <QScopeGuard>
 #include <QStringList>
 #include <QTextStream>
 #include <QVersionNumber>
 
-#include <fstream>
+#include <optional>
+
+namespace {
+
+bool validateProjectName(const QString &projectName, bool reportError = true)
+{
+    if (projectName.isEmpty()) {
+        if (reportError) {
+            QSocConsole::error() << "Project name is empty.";
+        }
+        return false;
+    }
+
+    const QString invalidChars = "\\/:*?\"<>|";
+    for (const QChar invalidChar : invalidChars) {
+        if (projectName.contains(invalidChar)) {
+            if (reportError) {
+                QSocConsole::error() << "Project name contains invalid characters: " << invalidChar;
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+bool pathEntryExists(const QString &path)
+{
+    const QFileInfo pathInfo(path);
+    return pathInfo.exists() || pathInfo.isSymLink();
+}
+
+void createMarkerFile(const QString &path)
+{
+    if (pathEntryExists(path)) {
+        return;
+    }
+    QFile markerFile(path);
+    if (!markerFile.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+        QSocConsole::warn() << "Failed to create directory marker file.";
+    }
+}
+
+std::optional<QByteArray> serializeProjectFile(const YAML::Node &projectNode)
+{
+    try {
+        YAML::Emitter emitter;
+        emitter << projectNode;
+        if (!emitter.good()) {
+            return std::nullopt;
+        }
+        return QByteArray::fromStdString(std::string(emitter.c_str(), emitter.size()));
+    } catch (const YAML::Exception &) {
+        return std::nullopt;
+    }
+}
+
+} // namespace
 
 QSocProjectManager::QSocProjectManager(QObject *parent)
     : QObject{parent}
@@ -40,6 +99,34 @@ QSocProjectManager::QSocProjectManager(QObject *parent)
 }
 
 QSocProjectManager::~QSocProjectManager() = default;
+
+QSocProjectManager::State QSocProjectManager::captureState() const
+{
+    State state;
+    state.env           = env;
+    state.projectNode   = YAML::Clone(projectNode);
+    state.projectName   = projectName;
+    state.projectPath   = projectPath;
+    state.busPath       = busPath;
+    state.modulePath    = modulePath;
+    state.schematicPath = schematicPath;
+    state.outputPath    = outputPath;
+    state.currentPath   = currentPath;
+    return state;
+}
+
+void QSocProjectManager::restoreState(const State &state)
+{
+    env           = state.env;
+    projectNode   = YAML::Clone(state.projectNode);
+    projectName   = state.projectName;
+    projectPath   = state.projectPath;
+    busPath       = state.busPath;
+    modulePath    = state.modulePath;
+    schematicPath = state.schematicPath;
+    outputPath    = state.outputPath;
+    currentPath   = state.currentPath;
+}
 
 void QSocProjectManager::setEnv(const QString &key, const QString &value)
 {
@@ -86,19 +173,13 @@ QString QSocProjectManager::getExpandPath(const QString &path)
 
 bool QSocProjectManager::isExist(const QString &projectName)
 {
-    bool result = false;
-    /* Check project name */
-    if (projectName.isEmpty()) {
-        QSocConsole::error() << "project name is empty.";
+    if (!validateProjectName(projectName, false)) {
         return false;
     }
     /* Check project file */
     const QString &projectFilePath
         = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
-    if (QFile::exists(projectFilePath)) {
-        result = true;
-    }
-    return result;
+    return pathEntryExists(projectFilePath);
 }
 
 bool QSocProjectManager::mkpath()
@@ -111,9 +192,9 @@ bool QSocProjectManager::mkpath()
 
     /* Create .gitignore file */
     const QString gitignorePath = QDir(projectPath).filePath(".gitignore");
-    if (!QFile::exists(gitignorePath)) {
+    if (!pathEntryExists(gitignorePath)) {
         QFile gitignoreFile(gitignorePath);
-        if (gitignoreFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (gitignoreFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::NewOnly)) {
             QTextStream out(&gitignoreFile);
             out << "qsoc.fl.*" << Qt::endl;
             gitignoreFile.close();
@@ -127,59 +208,133 @@ bool QSocProjectManager::mkpath()
         QSocConsole::error() << "Failed to create bus directory.";
         return false;
     }
-    QFile(QDir(busPath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
+    createMarkerFile(QDir(busPath).filePath(".gitkeep"));
 
     /* Check and create module directory */
     if (!QDir().mkpath(modulePath)) {
         QSocConsole::error() << "Failed to create module directory.";
         return false;
     }
-    QFile(QDir(modulePath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
+    createMarkerFile(QDir(modulePath).filePath(".gitkeep"));
 
     /* Check and create schematic directory */
     if (!QDir().mkpath(schematicPath)) {
         QSocConsole::error() << "Failed to create schematic directory.";
         return false;
     }
-    QFile(QDir(schematicPath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
+    createMarkerFile(QDir(schematicPath).filePath(".gitkeep"));
 
     /* Check and create output directory */
     if (!QDir().mkpath(outputPath)) {
         QSocConsole::error() << "Failed to create output directory.";
         return false;
     }
-    QFile(QDir(outputPath).filePath(".gitkeep")).open(QIODevice::WriteOnly);
+    createMarkerFile(QDir(outputPath).filePath(".gitkeep"));
+    return true;
+}
+
+bool QSocProjectManager::create(const QString &projectName)
+{
+    if (!validateProjectName(projectName)) {
+        return false;
+    }
+    const State previousState = captureState();
+    auto        rollback      = qScopeGuard([&]() { this->restoreState(previousState); });
+
+    const QString projectFilePath
+        = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
+    if (!QDir().mkpath(projectPath)) {
+        QSocConsole::error() << "failed to create project directory.";
+        return false;
+    }
+    QLockFile projectLock(projectFilePath + ".lock");
+    if (!projectLock.tryLock()) {
+        QSocConsole::error() << "project file is locked.";
+        return false;
+    }
+    if (pathEntryExists(projectFilePath)) {
+        QSocConsole::error() << "project already exists.";
+        return false;
+    }
+    if (!mkpath()) {
+        QSocConsole::error() << "failed to create project directories.";
+        return false;
+    }
+
+    const std::optional<QByteArray> projectBytes = serializeProjectFile(getProjectYaml());
+    if (!projectBytes) {
+        QSocConsole::error() << "failed to serialize project file.";
+        return false;
+    }
+
+    QFile projectFile(projectFilePath);
+    if (!projectFile.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+        if (pathEntryExists(projectFilePath)) {
+            QSocConsole::error() << "project already exists.";
+        } else {
+            QSocConsole::error() << "failed to create project file.";
+        }
+        return false;
+    }
+    if (projectFile.write(*projectBytes) != projectBytes->size() || !projectFile.flush()) {
+        QSocConsole::error() << "failed to write project file.";
+        if (!projectFile.remove()) {
+            QSocConsole::warn() << "failed to remove incomplete project file.";
+        }
+        return false;
+    }
+    projectFile.close();
+    setProjectName(projectName);
+    rollback.dismiss();
     return true;
 }
 
 bool QSocProjectManager::save(const QString &projectName)
 {
     /* Check project name */
-    if (projectName.isEmpty()) {
-        QSocConsole::error() << "project name is empty.";
+    if (!validateProjectName(projectName)) {
         return false;
     }
-    setProjectName(projectName);
+    const State previousState = captureState();
+    auto        rollback      = qScopeGuard([&]() { this->restoreState(previousState); });
     /* Create project directories */
     if (!mkpath()) {
         QSocConsole::error() << "failed to create project directories.";
         return false;
     }
-    /* Save project file */
-    const QString &projectFilePath
-        = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
-    std::ofstream outputFileStream(projectFilePath.toStdString());
-    /* Serialize project yaml data */
-    outputFileStream << getProjectYaml();
 
+    const std::optional<QByteArray> projectBytes = serializeProjectFile(getProjectYaml());
+    if (!projectBytes) {
+        QSocConsole::error() << "failed to serialize project file.";
+        return false;
+    }
+
+    const QString projectFilePath
+        = QDir(projectPath).filePath(QString("%1.soc_pro").arg(projectName));
+    QSaveFile projectFile(projectFilePath);
+    projectFile.setDirectWriteFallback(false);
+    if (!projectFile.open(QIODevice::WriteOnly)) {
+        QSocConsole::error() << "failed to open project file.";
+        return false;
+    }
+    if (projectFile.write(*projectBytes) != projectBytes->size()) {
+        projectFile.cancelWriting();
+        QSocConsole::error() << "failed to write project file.";
+        return false;
+    }
+    if (!projectFile.commit()) {
+        QSocConsole::error() << "failed to commit project file.";
+        return false;
+    }
+    setProjectName(projectName);
+    rollback.dismiss();
     return true;
 }
 
 bool QSocProjectManager::load(const QString &projectName)
 {
     /* Check project name */
-    if (projectName.isEmpty()) {
-        QSocConsole::error() << "project name is empty.";
+    if (!validateProjectName(projectName)) {
         return false;
     }
     /* Load project file */
@@ -246,8 +401,7 @@ bool QSocProjectManager::loadFirst(bool silent)
 bool QSocProjectManager::remove(const QString &projectName)
 {
     /* Check project name */
-    if (projectName.isEmpty()) {
-        QSocConsole::error() << "project name is empty.";
+    if (!validateProjectName(projectName)) {
         return false;
     }
     /* Check the existence of project files */
@@ -341,24 +495,7 @@ bool QSocProjectManager::isValidProjectNode()
 
 bool QSocProjectManager::isValidProjectName()
 {
-    /* Check if project name is empty */
-    if (projectName.isEmpty()) {
-        QSocConsole::error() << "Project name is empty.";
-        return false;
-    }
-
-    /* Define a list of invalid characters for file names */
-    const QString invalidChars = "\\/:*?\"<>|";
-
-    /* Check if project name contains any invalid characters */
-    for (const QChar invalidChar : invalidChars) {
-        if (projectName.contains(invalidChar)) {
-            QSocConsole::error() << "Project name contains invalid characters: " << invalidChar;
-            return false;
-        }
-    }
-
-    return true;
+    return validateProjectName(projectName);
 }
 
 bool QSocProjectManager::isValidPath(const QString &path, bool writable)

@@ -19,21 +19,10 @@
 #include <QDir>
 #include <QFile>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
-
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
 
 class Test : public QObject
 {
@@ -50,7 +39,6 @@ private:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         QVERIFY(tempDir.isValid());
 
         projectManager  = new QSocProjectManager(this);
@@ -69,6 +57,7 @@ private slots:
         delete busManager;
         delete moduleManager;
         delete projectManager;
+        QVERIFY(QDir(tempDir.path()).removeRecursively());
     }
 
     /* Tool Registry Tests */
@@ -161,6 +150,96 @@ private slots:
         QVERIFY(result.startsWith("Error:"));
     }
 
+    void testProjectCreateExistingPreservesFile()
+    {
+        QSocToolProjectCreate tool(this, projectManager);
+        const QString         projectName = "existing_agent_project";
+        const QString         projectFile = QDir(tempDir.path()).filePath(projectName + ".soc_pro");
+
+        const json createArgs{
+            {"name", projectName.toStdString()},
+            {"directory", tempDir.path().toStdString()},
+            {"bus_path", QDir(tempDir.path()).filePath("original_bus").toStdString()},
+            {"module_path", QDir(tempDir.path()).filePath("module").toStdString()},
+            {"schematic_path", QDir(tempDir.path()).filePath("schematic").toStdString()},
+            {"output_path", QDir(tempDir.path()).filePath("output").toStdString()}};
+        QVERIFY(tool.execute(createArgs).contains("successfully"));
+
+        QFile file(projectFile);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QByteArray originalBytes = file.readAll();
+        file.close();
+        QVERIFY(!originalBytes.isEmpty());
+
+        json replacementArgs = createArgs;
+        replacementArgs["bus_path"] = QDir(tempDir.path()).filePath("replacement_bus").toStdString();
+        const QString result = tool.execute(replacementArgs);
+
+        QVERIFY(result.contains("already exists", Qt::CaseInsensitive));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(file.readAll(), originalBytes);
+        file.close();
+    }
+
+    void testProjectCreateRejectsEscapingName()
+    {
+        QSocToolProjectCreate tool(this, projectManager);
+        const QString         projectPath = QDir(tempDir.path()).filePath("contained");
+        const json            arguments{
+            {"name", "../escaped_agent"},
+            {"directory", projectPath.toStdString()},
+            {"bus_path", QDir(projectPath).filePath("bus").toStdString()},
+            {"module_path", QDir(projectPath).filePath("module").toStdString()},
+            {"schematic_path", QDir(projectPath).filePath("schematic").toStdString()},
+            {"output_path", QDir(projectPath).filePath("output").toStdString()}};
+        const auto previousState  = projectManager->captureState();
+        const auto restoreProject = qScopeGuard(
+            [&]() { projectManager->restoreState(previousState); });
+
+        QVERIFY(tool.execute(arguments).startsWith("Error:"));
+        QCOMPARE(projectManager->getProjectName(), previousState.projectName);
+        QCOMPARE(projectManager->getProjectPath(), previousState.projectPath);
+        QCOMPARE(projectManager->getBusPath(), previousState.busPath);
+        QCOMPARE(projectManager->getModulePath(), previousState.modulePath);
+        QCOMPARE(projectManager->getSchematicPath(), previousState.schematicPath);
+        QCOMPARE(projectManager->getOutputPath(), previousState.outputPath);
+        QCOMPARE(projectManager->getCurrentPath(), previousState.currentPath);
+        QCOMPARE(projectManager->getEnv(), previousState.env);
+        const auto restoredState = projectManager->captureState();
+        QCOMPARE(
+            QString::fromStdString(YAML::Dump(restoredState.projectNode)),
+            QString::fromStdString(YAML::Dump(previousState.projectNode)));
+        QVERIFY(!QFile::exists(QDir(tempDir.path()).filePath("escaped_agent.soc_pro")));
+        QVERIFY(!QDir(projectPath).exists());
+    }
+
+    void testProjectCreateDirectoryContainsDefaults()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath    = QDir(directory.path()).filePath("project");
+        const auto    previousState  = projectManager->captureState();
+        const auto    restoreProject = qScopeGuard(
+            [&]() { projectManager->restoreState(previousState); });
+
+        QSocToolProjectCreate tool(this, projectManager);
+        const json            arguments{
+            {"name", "contained_agent_project"},
+            {"directory", projectPath.toStdString()},
+        };
+        QVERIFY(tool.execute(arguments).contains("successfully"));
+
+        QCOMPARE(projectManager->getProjectPath(), projectPath);
+        QCOMPARE(projectManager->getBusPath(), QDir(projectPath).filePath("bus"));
+        QCOMPARE(projectManager->getModulePath(), QDir(projectPath).filePath("module"));
+        QCOMPARE(projectManager->getSchematicPath(), QDir(projectPath).filePath("schematic"));
+        QCOMPARE(projectManager->getOutputPath(), QDir(projectPath).filePath("output"));
+        const QStringList directories{"bus", "module", "schematic", "output"};
+        for (const QString &name : directories) {
+            QVERIFY(QFileInfo(QDir(projectPath).filePath(name)).isDir());
+        }
+    }
+
     /* File Tools Tests */
     void testFileReadMissingPath()
     {
@@ -185,26 +264,102 @@ private slots:
 
     void testFileReadSecurityCheck()
     {
-        /* Read should be unrestricted - /etc/passwd should be readable */
+        QTemporaryDir outsideDirectory(QDir::home().filePath(".qsoc_test_outside_read_XXXXXX"));
+        if (!outsideDirectory.isValid()) {
+            QSKIP("No writable directory outside the allowed roots.");
+        }
+        const QString fixturePath = QDir(outsideDirectory.path()).filePath("read_fixture.txt");
+        QFile         fixtureFile(fixturePath);
+        QVERIFY(fixtureFile.open(QIODevice::WriteOnly));
+        QCOMPARE(fixtureFile.write("runtime read fixture"), 20);
+        fixtureFile.close();
+        if (pathContext->isWriteAllowed(fixturePath)) {
+            QSKIP("The generated directory is inside an allowed root.");
+        }
+
         QSocToolFileRead tool(this, pathContext);
-        json             args = {{"file_path", "/etc/passwd"}};
+        json             args = {{"file_path", fixturePath.toStdString()}};
 
-        QString result = tool.execute(args);
+        const QString result = tool.execute(args);
 
-        /* Should succeed (contain file content like root:) or fail with permission error,
-         * but NOT "Access denied" */
-        QVERIFY(!result.contains("Access denied"));
+        QVERIFY(result.contains("runtime read fixture"));
     }
 
     void testFileWriteSecurityCheck()
     {
-        /* Write outside allowed directories should be denied */
-        QSocToolFileWrite tool(this, pathContext);
-        json              args = {{"file_path", "/etc/test_write_deny.txt"}, {"content", "test"}};
+        QTemporaryDir outsideDirectory(QDir::home().filePath(".qsoc_test_outside_write_XXXXXX"));
+        if (!outsideDirectory.isValid()) {
+            QSKIP("No writable directory outside the allowed roots.");
+        }
+        const QString deniedPath = QDir(outsideDirectory.path()).filePath("denied.txt");
+        if (pathContext->isWriteAllowed(deniedPath)) {
+            QSKIP("The generated directory is inside an allowed root.");
+        }
 
-        QString result = tool.execute(args);
+        QSocToolFileWrite tool(this, pathContext);
+        json              args = {{"file_path", deniedPath.toStdString()}, {"content", "test"}};
+
+        const QString result = tool.execute(args);
 
         QVERIFY(result.contains("Access denied"));
+        QVERIFY(!QFile::exists(deniedPath));
+    }
+
+    void testPathWriteBoundary()
+    {
+        QTemporaryDir boundaryRoot(QDir::home().filePath(".qsoc_test_path_boundary_XXXXXX"));
+        if (!boundaryRoot.isValid()) {
+            QSKIP("No writable directory outside the allowed roots.");
+        }
+        const QString allowedDirectory = QDir(boundaryRoot.path()).filePath("project");
+        const QString siblingDirectory = QDir(boundaryRoot.path()).filePath("project_evil");
+        QVERIFY(QDir().mkpath(allowedDirectory));
+        QVERIFY(QDir().mkpath(siblingDirectory));
+        const QString allowedFile = QDir(allowedDirectory).filePath("allowed.txt");
+        const QString siblingFile = QDir(siblingDirectory).filePath("denied.txt");
+        if (pathContext->isWriteAllowed(siblingFile)) {
+            QSKIP("The generated directory is inside an allowed root.");
+        }
+
+        pathContext->addUserDir(allowedDirectory);
+        const auto removeAllowedDirectory = qScopeGuard(
+            [&]() { pathContext->removeUserDir(allowedDirectory); });
+
+        QVERIFY(pathContext->isWriteAllowed(allowedFile));
+        QVERIFY(!pathContext->isWriteAllowed(siblingFile));
+    }
+
+    void testDanglingLinkCannotEscapeWriteBoundary()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This platform does not provide Unix symbolic-link semantics.");
+#else
+        QTemporaryDir boundaryRoot(QDir::home().filePath(".qsoc_test_dangling_link_XXXXXX"));
+        if (!boundaryRoot.isValid()) {
+            QSKIP("No writable directory outside the allowed roots.");
+        }
+        const QString allowedDirectory = QDir(boundaryRoot.path()).filePath("allowed");
+        const QString outsideDirectory = QDir(boundaryRoot.path()).filePath("outside");
+        QVERIFY(QDir().mkpath(allowedDirectory));
+        QVERIFY(QDir().mkpath(outsideDirectory));
+
+        const QString outsidePath = QDir(outsideDirectory).filePath("target.txt");
+        const QString linkPath    = QDir(allowedDirectory).filePath("link.txt");
+        QVERIFY(QFile::link(outsidePath, linkPath));
+        QVERIFY(QFileInfo(linkPath).isSymLink());
+        QVERIFY(!QFileInfo::exists(outsidePath));
+
+        pathContext->addUserDir(allowedDirectory);
+        const auto removeAllowedDirectory = qScopeGuard(
+            [&]() { pathContext->removeUserDir(allowedDirectory); });
+
+        QVERIFY(!pathContext->isWriteAllowed(linkPath));
+        QSocToolFileWrite tool(this, pathContext);
+        const json        arguments{{"file_path", linkPath.toStdString()}, {"content", "blocked"}};
+        QVERIFY(tool.execute(arguments).contains("Access denied"));
+        QVERIFY(!QFileInfo::exists(outsidePath));
+        QVERIFY(QFileInfo(linkPath).isSymLink());
+#endif
     }
 
     void testFileListDirectory()

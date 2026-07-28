@@ -4,6 +4,7 @@
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
 #include "common/qsocconsole.h"
+#include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
 #include <QDir>
@@ -13,19 +14,6 @@
 #include <QtTest>
 
 #include <iostream>
-
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
 
 class Test : public QObject
 {
@@ -43,7 +31,6 @@ private:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
         /* Mirror QSocConsole writes through the message handler so legacy
@@ -58,8 +45,8 @@ private slots:
             = {"test_project.soc_pro",
                "custom_dir_project.soc_pro",
                "update_test_project.soc_pro",
-               "duplicate_project.soc_pro",
-               "test_invalid_option.soc_pro"};
+               "existing_project.soc_pro",
+               "unexpected_project.soc_pro"};
 
         for (const QString &file : filesToRemove) {
             if (QFile::exists(file)) {
@@ -83,6 +70,8 @@ private slots:
                QDir::currentPath() + "/abs_temp_dir/bus",
                QDir::currentPath() + "/abs_temp_dir/modules",
                "./bus_dir",
+               "./original_bus",
+               "./replacement_bus",
                "./module_dir",
                "./schematic_dir",
                "./output_dir"};
@@ -112,7 +101,7 @@ private slots:
         QVERIFY(projectFile.exists());
 
         /* Read the file content */
-        projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
+        QVERIFY(projectFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString content = projectFile.readAll();
         projectFile.close();
 
@@ -200,7 +189,7 @@ private slots:
         QVERIFY(projectFile.exists());
 
         /* Read the file content */
-        projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
+        QVERIFY(projectFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString content = projectFile.readAll();
         projectFile.close();
 
@@ -252,7 +241,7 @@ private slots:
         QVERIFY(projectFile.exists());
 
         /* Read the file content */
-        projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
+        QVERIFY(projectFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString content = projectFile.readAll();
         projectFile.close();
 
@@ -302,7 +291,7 @@ private slots:
         QVERIFY(projectFile.exists());
 
         /* Read the file content */
-        projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
+        QVERIFY(projectFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString content = projectFile.readAll();
         projectFile.close();
 
@@ -348,10 +337,18 @@ private slots:
             "qsoc",
             "project",
             "create",
-            "duplicate_project",
+            "-b",
+            "./original_bus",
+            "existing_project",
         };
         socCliWorker1.setup(createArguments, false);
         socCliWorker1.run();
+
+        QFile projectFile("existing_project.soc_pro");
+        QVERIFY(projectFile.open(QIODevice::ReadOnly));
+        const QByteArray originalBytes = projectFile.readAll();
+        projectFile.close();
+        QVERIFY(!originalBytes.isEmpty());
 
         /* Now try to create a project with the same name */
         messageList.clear();
@@ -360,24 +357,19 @@ private slots:
             "qsoc",
             "project",
             "create",
-            "duplicate_project",
+            "-b",
+            "./replacement_bus",
+            "existing_project",
         };
         socCliWorker2.setup(appArguments, false);
         socCliWorker2.run();
 
-        /* Check for error message about duplicate project */
-        bool hasErrorMsg = false;
-        for (const QString &msg : messageList) {
-            if (msg.contains("already exists") || msg.contains("duplicate")
-                || msg.contains("error")) {
-                hasErrorMsg = true;
-                break;
-            }
-        }
-        QVERIFY(hasErrorMsg);
+        QVERIFY(messageList.join('\n').contains("already exists", Qt::CaseInsensitive));
 
-        /* Clean up */
-        QFile::remove("duplicate_project.soc_pro");
+        QVERIFY(projectFile.open(QIODevice::ReadOnly));
+        QCOMPARE(projectFile.readAll(), originalBytes);
+        projectFile.close();
+        QVERIFY(QFile::remove("existing_project.soc_pro"));
     }
 
     void testProjectWithVerbosityLevels()
@@ -389,57 +381,111 @@ private slots:
         /* Create arguments with verbosity level 3 (info) */
         const QStringList appArguments = {"qsoc", "--verbose=3", "project", "list"};
 
+        QSignalSpy exitSpy(&socCliWorker, &QSocCliWorker::exit);
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Don't verify specific output, just that the command runs without crashing */
-        QVERIFY(true);
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.takeFirst().at(0).toInt(), 0);
+        QVERIFY(!messageList.join('\n').contains("Error:"));
+    }
+
+    void testProjectWithInvalidOption_data()
+    {
+        QTest::addColumn<QString>("subcommand");
+
+        QTest::newRow("create") << QString("create");
+        QTest::newRow("update") << QString("update");
+        QTest::newRow("remove") << QString("remove");
+        QTest::newRow("list") << QString("list");
+        QTest::newRow("show") << QString("show");
     }
 
     void testProjectWithInvalidOption()
     {
+        QFETCH(QString, subcommand);
         messageList.clear();
         QSocCliWorker socCliWorker;
 
-        /* Print current working directory for debugging */
-        qDebug() << "Current working directory:" << QDir::currentPath();
-
         const QStringList appArguments
-            = {"qsoc", "project", "create", "--invalid-option", "test_invalid_option"};
+            = {"qsoc", "project", subcommand, "--invalid-option", "unexpected_project"};
 
+        QSignalSpy exitSpy(&socCliWorker, &QSocCliWorker::exit);
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Check for error message about invalid option */
-        bool hasErrorMsg = false;
-        for (const QString &msg : messageList) {
-            if (msg.contains("invalid") || msg.contains("unknown") || msg.contains("error")) {
-                hasErrorMsg = true;
-                break;
-            }
-        }
-        QVERIFY(hasErrorMsg);
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.takeFirst().at(0).toInt(), 1);
+        QVERIFY(messageList.join('\n').contains("unknown option", Qt::CaseInsensitive));
+        QVERIFY(!QFile::exists("unexpected_project.soc_pro"));
+    }
 
-        /* Check if the file was created despite error (for debugging) */
-        qDebug() << "Checking if file exists:"
-                 << QDir::currentPath() + "/test_invalid_option.soc_pro";
-        const QFile projectFile("test_invalid_option.soc_pro");
-        if (projectFile.exists()) {
-            qDebug() << "File exists in current directory";
-        } else {
-            qDebug() << "File does not exist in current directory";
+    void testProjectHelpHasNoSideEffects_data()
+    {
+        QTest::addColumn<QString>("subcommand");
+
+        QTest::newRow("create") << QString("create");
+        QTest::newRow("update") << QString("update");
+        QTest::newRow("remove") << QString("remove");
+        QTest::newRow("list") << QString("list");
+        QTest::newRow("show") << QString("show");
+    }
+
+    void testProjectHelpHasNoSideEffects()
+    {
+        QFETCH(QString, subcommand);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(directory.path());
+        QVERIFY(manager.create("victim"));
+
+        const QString victimPath = QDir(directory.path()).filePath("victim.soc_pro");
+        QFile         victimFile(victimPath);
+        QVERIFY(victimFile.open(QIODevice::ReadOnly));
+        const QByteArray originalBytes = victimFile.readAll();
+        victimFile.close();
+
+        const QString projectName = subcommand == "create" ? "new_project" : "victim";
+        QStringList   appArguments
+            = {"qsoc", "project", subcommand, "-d", directory.path(), projectName, "--help"};
+        if (subcommand == "create" || subcommand == "update") {
+            appArguments.insert(appArguments.size() - 1, "-b");
+            appArguments
+                .insert(appArguments.size() - 1, QDir(directory.path()).filePath("replacement_bus"));
         }
 
-        const QString buildDir = QDir::currentPath() + "/build/test";
-        qDebug() << "Checking if file exists in build dir:"
-                 << buildDir + "/test_invalid_option.soc_pro";
-        const QFile buildProjectFile(buildDir + "/test_invalid_option.soc_pro");
-        if (buildProjectFile.exists()) {
-            qDebug() << "File exists in build directory";
-            /* File will be deleted in cleanupTestCase */
-        } else {
-            qDebug() << "File does not exist in build directory";
-        }
+        messageList.clear();
+        QSocCliWorker worker;
+        QSignalSpy    exitSpy(&worker, &QSocCliWorker::exit);
+        worker.setup(appArguments, false);
+        worker.run();
+
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.takeFirst().at(0).toInt(), 0);
+        QVERIFY(messageList.join('\n').contains("Usage:"));
+        QVERIFY(victimFile.open(QIODevice::ReadOnly));
+        QCOMPARE(victimFile.readAll(), originalBytes);
+        QVERIFY(!QFile::exists(QDir(directory.path()).filePath("new_project.soc_pro")));
+    }
+
+    void testProjectNameCannotEscapeDirectory()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
+
+        messageList.clear();
+        QSocCliWorker     worker;
+        const QStringList appArguments
+            = {"qsoc", "project", "create", "-d", projectPath, "../escaped"};
+        worker.setup(appArguments, false);
+        worker.run();
+
+        QVERIFY(messageList.join('\n').contains("invalid characters", Qt::CaseInsensitive));
+        QVERIFY(!QFile::exists(QDir(directory.path()).filePath("escaped.soc_pro")));
+        QVERIFY(!QDir(projectPath).exists());
     }
 
     void testProjectWithMissingRequiredArgument()
@@ -467,8 +513,9 @@ private slots:
 
     void testProjectWithRelativePaths()
     {
-        /* Create temporary directory for test */
-        QDir().mkpath("./temp_test_dir");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString projectPath = QDir(directory.path()).filePath("project");
 
         messageList.clear();
         QSocCliWorker     socCliWorker;
@@ -477,20 +524,19 @@ private slots:
             "project",
             "create",
             "-d",
-            "./temp_test_dir",
+            projectPath,
             "relative_path_project",
         };
 
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Check if project file was created in the specified directory */
-        QFile projectFile("./temp_test_dir/relative_path_project.soc_pro");
+        QFile projectFile(QDir(projectPath).filePath("relative_path_project.soc_pro"));
         QVERIFY(projectFile.exists());
-
-        /* Clean up */
-        projectFile.remove();
-        QDir().rmdir("./temp_test_dir");
+        const QStringList directories{"bus", "module", "schematic", "output"};
+        for (const QString &name : directories) {
+            QVERIFY(QFileInfo(QDir(projectPath).filePath(name)).isDir());
+        }
     }
 
     void testProjectWithAbsolutePaths()
@@ -526,7 +572,7 @@ private slots:
         QVERIFY(projectFile.exists());
 
         /* Read the file content */
-        projectFile.open(QIODevice::ReadOnly | QIODevice::Text);
+        QVERIFY(projectFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString content = projectFile.readAll();
         projectFile.close();
 

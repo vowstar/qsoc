@@ -87,7 +87,9 @@ bool QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
         QCoreApplication::translate("main", "The name of the project to be create."),
         "[<name>]");
 
-    parser.parse(appArguments);
+    if (!parseOptions(appArguments)) {
+        return false;
+    }
     const QStringList positionalArgs = parser.positionalArguments();
 
     if (positionalArgs.isEmpty()) {
@@ -98,7 +100,13 @@ bool QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
     const QString &projectName = positionalArgs.first();
 
     if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
+        projectManager->setCurrentPath(parser.value("directory"));
+    }
+    if (projectManager->isExist(projectName)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: project %1 already exists.")
+                .arg(projectName));
     }
     if (parser.isSet("bus")) {
         projectManager->setBusPath(parser.value("bus"));
@@ -112,7 +120,7 @@ bool QSocCliWorker::parseProjectCreate(const QStringList &appArguments)
     if (parser.isSet("output")) {
         projectManager->setOutputPath(parser.value("output"));
     }
-    if (!projectManager->save(projectName)) {
+    if (!projectManager->create(projectName)) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: failed to create project %1.")
@@ -148,7 +156,9 @@ bool QSocCliWorker::parseProjectUpdate(const QStringList &appArguments)
         QCoreApplication::translate("main", "The name of the project to be update."),
         "[<name>]");
 
-    parser.parse(appArguments);
+    if (!parseOptions(appArguments)) {
+        return false;
+    }
     const QStringList positionalArgs = parser.positionalArguments();
 
     if (positionalArgs.isEmpty()) {
@@ -204,7 +214,9 @@ bool QSocCliWorker::parseProjectRemove(const QStringList &appArguments)
         QCoreApplication::translate("main", "The name of the project to be remove."),
         "[<name>]");
 
-    parser.parse(appArguments);
+    if (!parseOptions(appArguments)) {
+        return false;
+    }
     const QStringList positionalArgs = parser.positionalArguments();
 
     if (positionalArgs.isEmpty()) {
@@ -247,11 +259,10 @@ bool QSocCliWorker::parseProjectList(const QStringList &appArguments)
         QCoreApplication::translate("main", "The regular expression to filter project list."),
         "[<regex>]");
 
-    parser.parse(appArguments);
-
-    if (parser.isSet("help")) {
-        return showHelp(0);
+    if (!parseOptions(appArguments)) {
+        return false;
     }
+
     const QStringList positionalArgs = parser.positionalArguments();
     /* Select all files when regular expression is empty */
     const QString projectNameRegexStr = positionalArgs.isEmpty() ? ".*" : positionalArgs.first();
@@ -284,7 +295,9 @@ bool QSocCliWorker::parseProjectShow(const QStringList &appArguments)
         QCoreApplication::translate("main", "The name of the project to be show."),
         "[<name>]");
 
-    parser.parse(appArguments);
+    if (!parseOptions(appArguments)) {
+        return false;
+    }
     const QStringList positionalArgs = parser.positionalArguments();
 
     if (positionalArgs.isEmpty()) {

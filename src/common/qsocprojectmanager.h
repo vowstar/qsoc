@@ -21,6 +21,19 @@ class QSocProjectManager : public QObject
 {
     Q_OBJECT
 public:
+    struct State
+    {
+        QMap<QString, QString> env;
+        YAML::Node             projectNode;
+        QString                projectName;
+        QString                projectPath;
+        QString                busPath;
+        QString                modulePath;
+        QString                schematicPath;
+        QString                outputPath;
+        QString                currentPath;
+    };
+
     /**
      * @brief Constructor for QSocProjectManager.
      * @details This constructor will initialize project environment.
@@ -33,6 +46,18 @@ public:
      * @details This destructor will free all the allocated resources.
      */
     ~QSocProjectManager() override;
+
+    /**
+     * @brief Capture all in-memory project state.
+     * @return Independent project state snapshot.
+     */
+    State captureState() const;
+
+    /**
+     * @brief Restore a project state snapshot.
+     * @param state Project state to restore.
+     */
+    void restoreState(const State &state);
 
 public slots:
     /**
@@ -74,6 +99,16 @@ public slots:
      * @retval false if any directory creation failed.
      */
     bool mkpath();
+
+    /**
+     * @brief Create a new project.
+     * @details This function creates a project only when its project file does
+     *          not already exist.
+     * @param projectName The name of the project.
+     * @retval true Create successfully.
+     * @retval false Create failed or the project already exists.
+     */
+    bool create(const QString &projectName);
 
     /**
      * @brief Save project environment variables and settings.

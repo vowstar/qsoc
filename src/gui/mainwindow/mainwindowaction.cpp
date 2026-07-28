@@ -13,6 +13,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QStandardItemModel>
 #include <QStatusBar>
 
@@ -48,9 +49,6 @@ void MainWindow::on_toolButtonPRCEditor_clicked()
 
 void MainWindow::on_actionNewProject_triggered()
 {
-    /* Close current project first (silent mode) */
-    closeProject(true);
-
     /* Show save dialog to get project name and path */
     const QString filePath = QFileDialog::getSaveFileName(
         this,
@@ -68,11 +66,13 @@ void MainWindow::on_actionNewProject_triggered()
     const QString   projectName = fileInfo.baseName();
     const QString   projectDir  = QDir(fileInfo.absolutePath()).filePath(projectName);
 
+    const auto previousState  = projectManager->captureState();
+    auto       restoreProject = qScopeGuard([&]() { projectManager->restoreState(previousState); });
+
     /* Configure project manager */
-    projectManager->setProjectName(projectName);
     projectManager->setCurrentPath(projectDir);
     /* Create project structure */
-    if (!projectManager->mkpath() || !projectManager->save(projectName)) {
+    if (!projectManager->create(projectName)) {
         /* Error handling */
         QSocConsole::error() << "Failed to initialize project structure";
         QMessageBox::critical(
@@ -81,6 +81,10 @@ void MainWindow::on_actionNewProject_triggered()
             tr("Failed to create project structure at: %1").arg(projectDir));
         return;
     }
+    restoreProject.dismiss();
+
+    closeProject(true);
+    projectManager->setProjectName(projectName);
 
     /* Remember the current project directory for next time */
     QDir dir(fileInfo.absolutePath());

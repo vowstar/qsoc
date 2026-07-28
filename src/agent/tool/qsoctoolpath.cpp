@@ -7,6 +7,28 @@
 #include <QFileInfo>
 #include <QMutexLocker>
 
+namespace {
+
+bool pathIsWithin(const QString &path, const QString &directory)
+{
+    const QString normalizedPath      = QDir::cleanPath(QDir::fromNativeSeparators(path));
+    QString       normalizedDirectory = QDir::cleanPath(QDir::fromNativeSeparators(directory));
+#ifdef Q_OS_WIN
+    constexpr Qt::CaseSensitivity caseSensitivity = Qt::CaseInsensitive;
+#else
+    constexpr Qt::CaseSensitivity caseSensitivity = Qt::CaseSensitive;
+#endif
+    if (normalizedPath.compare(normalizedDirectory, caseSensitivity) == 0) {
+        return true;
+    }
+    if (!normalizedDirectory.endsWith('/')) {
+        normalizedDirectory += '/';
+    }
+    return normalizedPath.startsWith(normalizedDirectory, caseSensitivity);
+}
+
+} // namespace
+
 /* QSocPathContext Implementation */
 
 QSocPathContext::QSocPathContext(QObject *parent, QSocProjectManager *projectManager)
@@ -89,6 +111,9 @@ bool QSocPathContext::isWriteAllowed(const QString &path) const
     QFileInfo fileInfo(path);
     QString   canonicalPath = fileInfo.canonicalFilePath();
     if (canonicalPath.isEmpty()) {
+        if (fileInfo.isSymLink()) {
+            return false;
+        }
         /* File doesn't exist yet, check parent */
         QFileInfo parentInfo(fileInfo.absolutePath());
         canonicalPath = parentInfo.canonicalFilePath();
@@ -100,7 +125,7 @@ bool QSocPathContext::isWriteAllowed(const QString &path) const
     for (const QString &dir : dirs) {
         QDir    d(dir);
         QString canonicalDir = d.canonicalPath();
-        if (!canonicalDir.isEmpty() && canonicalPath.startsWith(canonicalDir)) {
+        if (!canonicalDir.isEmpty() && pathIsWithin(canonicalPath, canonicalDir)) {
             return true;
         }
     }

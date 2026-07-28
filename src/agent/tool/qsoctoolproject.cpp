@@ -6,6 +6,7 @@
 #include "common/qstaticdatasedes.h"
 
 #include <QRegularExpression>
+#include <QScopeGuard>
 
 /* QSocToolProjectList Implementation */
 
@@ -206,12 +207,17 @@ QString QSocToolProjectCreate::execute(const json &arguments)
         return "Error: Project name is required";
     }
 
-    QString projectName = QString::fromStdString(arguments["name"].get<std::string>());
+    const QString projectName   = QString::fromStdString(arguments["name"].get<std::string>());
+    const auto    previousState = projectManager->captureState();
+    auto restoreProject = qScopeGuard([&]() { projectManager->restoreState(previousState); });
 
     /* Set paths if provided */
     if (arguments.contains("directory") && arguments["directory"].is_string()) {
-        projectManager->setProjectPath(
+        projectManager->setCurrentPath(
             QString::fromStdString(arguments["directory"].get<std::string>()));
+    }
+    if (projectManager->isExist(projectName)) {
+        return QString("Error: Project '%1' already exists").arg(projectName);
     }
     if (arguments.contains("bus_path") && arguments["bus_path"].is_string()) {
         projectManager->setBusPath(QString::fromStdString(arguments["bus_path"].get<std::string>()));
@@ -230,10 +236,11 @@ QString QSocToolProjectCreate::execute(const json &arguments)
     }
 
     /* Save project */
-    if (!projectManager->save(projectName)) {
+    if (!projectManager->create(projectName)) {
         return QString("Error: Failed to create project '%1'").arg(projectName);
     }
 
+    restoreProject.dismiss();
     return QString("Project '%1' created successfully.").arg(projectName);
 }
 
