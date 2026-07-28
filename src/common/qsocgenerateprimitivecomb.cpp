@@ -11,10 +11,13 @@
 
 namespace {
 
-struct ProcessTarget
+struct CombTarget
 {
-    QString base;
+    QString requestedBase;
+    QString emittedBase;
     QString slice;
+    bool    topInput = false;
+    bool    known    = false;
 };
 
 bool usesProcessBlock(const YAML::Node &combItem)
@@ -24,15 +27,25 @@ bool usesProcessBlock(const YAML::Node &combItem)
                && combItem["cases"].IsMap());
 }
 
-ProcessTarget parseProcessTarget(const YAML::Node &combItem)
+CombTarget resolveCombTarget(
+    const YAML::Node             &combItem,
+    const QMap<QString, QString> &netToTopPort,
+    const QSet<QString>          &inputTopPortNames,
+    const QSet<QString>          &knownTargets)
 {
     const QString output = QString::fromStdString(combItem["out"].as<std::string>());
     const auto    parsed = QSocGenerateManager::parseSignalBitSelect(output);
-    ProcessTarget target{parsed.first, parsed.second};
+    CombTarget    target;
+    target.requestedBase = parsed.first;
+    target.emittedBase   = netToTopPort.value(target.requestedBase, target.requestedBase);
+    target.slice         = parsed.second;
     if (combItem["bits"] && combItem["bits"].IsScalar()) {
         target.slice = QSocVerilogUtils::normalizeBitSelect(
             QString::fromStdString(combItem["bits"].as<std::string>()));
     }
+    target.topInput = inputTopPortNames.contains(target.emittedBase);
+    target.known    = knownTargets.contains(target.requestedBase)
+                      || knownTargets.contains(target.emittedBase);
     return target;
 }
 
@@ -114,7 +127,7 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
     }
 
     /* First pass: collect process targets and internal reg requirements. */
-    std::vector<ProcessTarget> processTargets(netlistData["comb"].size());
+    std::vector<CombTarget>    combTargets(netlistData["comb"].size());
     QStringList                processOutputBases;
     QSet<QString>              processFullOutputs;
     QMap<QString, QStringList> processOutputSlices;
@@ -124,24 +137,24 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
         if (!combItem.IsMap() || !combItem["out"] || !combItem["out"].IsScalar()) {
             continue;
         }
+        CombTarget &target = combTargets[i];
+        target = resolveCombTarget(combItem, netToTopPort, inputTopPortNames, knownTargets);
         if (!usesProcessBlock(combItem)) {
             continue;
         }
-        ProcessTarget &target = processTargets[i];
-        target                = parseProcessTarget(combItem);
-        if (!processOutputBases.contains(target.base)) {
-            processOutputBases.append(target.base);
+        if (!processOutputBases.contains(target.emittedBase)) {
+            processOutputBases.append(target.emittedBase);
         }
         if (target.slice.isEmpty()) {
-            processFullOutputs.insert(target.base);
+            processFullOutputs.insert(target.emittedBase);
         } else {
-            QStringList &slices = processOutputSlices[target.base];
+            QStringList &slices = processOutputSlices[target.emittedBase];
             if (!slices.contains(target.slice)) {
                 slices.append(target.slice);
             }
             const int maxBit = highestSelectedBit(target.slice);
-            if (maxBit > processMaxBits.value(target.base, -1)) {
-                processMaxBits.insert(target.base, maxBit);
+            if (maxBit > processMaxBits.value(target.emittedBase, -1)) {
+                processMaxBits.insert(target.emittedBase, maxBit);
             }
         }
     }
@@ -208,54 +221,34 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
             continue; /* Skip invalid items */
         }
 
-        const QString outputSignal = QString::fromStdString(combItem["out"].as<std::string>());
-
-        if (combItem["expr"] && combItem["expr"].IsScalar()) {
-            /* Generate assign statement */
-            const QString expression = QString::fromStdString(combItem["expr"].as<std::string>());
-
-            /* Normalize the bit-select on the output side. A raw `out:
-               data_rev[0:3]` would otherwise leak an illegal reversed
-               slice and a `bits: "[ 7 : 4 ]"` would carry whitespace into
-               the assign statement. */
-            const auto parsedOut = QSocGenerateManager::parseSignalBitSelect(outputSignal);
-            QString    baseName  = parsedOut.first;
-            QString    bitSelect = parsedOut.second;
-            if (combItem["bits"] && combItem["bits"].IsScalar()) {
-                bitSelect = QSocVerilogUtils::normalizeBitSelect(
-                    QString::fromStdString(combItem["bits"].as<std::string>()));
-            }
-            /* Redirect to the top-level port when the net was elided in
-               favour of the port (via `connect:`). Without this the assign
-               would reference an undefined identifier. */
-            if (netToTopPort.contains(baseName)) {
-                baseName = netToTopPort.value(baseName);
-            }
-
+        const CombTarget &target        = combTargets[i];
+        const bool        hasExpression = combItem["expr"] && combItem["expr"].IsScalar();
+        if (hasExpression) {
             /* Driving a top-level INPUT port from inside the module is
                illegal Verilog. Warn and skip the assign so the offending
                line is not emitted. */
-            if (inputTopPortNames.contains(baseName)) {
-                QSocConsole::warn() << "comb writes to top-level input port" << baseName
+            if (target.topInput) {
+                QSocConsole::warn() << "comb writes to top-level input port" << target.emittedBase
                                     << "; cannot drive an input from inside the module - "
                                        "skipping the assign";
-                out << "    /* FIXME: comb tried to drive top-level input " << baseName
+                out << "    /* FIXME: comb tried to drive top-level input " << target.emittedBase
                     << " - check the source netlist */\n";
                 continue;
             }
 
             /* Writing to a name that is neither a top port nor a declared
-               net used to silently emit `assign <name> = ...;` against an
-               undeclared identifier. Surface the typo. */
-            if (!knownTargets.contains(baseName) && !knownTargets.contains(parsedOut.first)) {
-                QSocConsole::warn() << "comb writes to" << baseName
+               net can emit an undeclared identifier. Preserve compatibility
+               while surfacing the typo. */
+            if (!target.known) {
+                QSocConsole::warn() << "comb writes to" << target.emittedBase
                                     << "which is not declared as a port or net - "
                                        "the assign will reference an undeclared identifier";
-                out << "    /* FIXME: comb target " << baseName
+                out << "    /* FIXME: comb target " << target.emittedBase
                     << " is not declared as a port or net */\n";
             }
-
-            const QString fullOutputSignal = baseName + bitSelect;
+            /* Generate assign statement */
+            const QString expression = QString::fromStdString(combItem["expr"].as<std::string>());
+            const QString fullOutputSignal = target.emittedBase + target.slice;
 
             if (seenAssignTargets.contains(fullOutputSignal)) {
                 QSocConsole::warn() << "comb has duplicate driver for" << fullOutputSignal
@@ -269,8 +262,7 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
             out << "    assign " << fullOutputSignal << " = " << expression << ";\n";
         } else if (combItem["if"] && combItem["if"].IsSequence()) {
             /* Generate always block with if-else logic */
-            const ProcessTarget &target    = processTargets[i];
-            const QString        regSignal = target.base + "_reg" + target.slice;
+            const QString regSignal = target.emittedBase + "_reg" + target.slice;
             out << "    always @(*) begin\n";
 
             /* Set default value if specified */
@@ -308,8 +300,7 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
             combItem["case"] && combItem["case"].IsScalar() && combItem["cases"]
             && combItem["cases"].IsMap()) {
             /* Generate always block with case statement */
-            const ProcessTarget &target    = processTargets[i];
-            const QString        regSignal = target.base + "_reg" + target.slice;
+            const QString regSignal = target.emittedBase + "_reg" + target.slice;
             out << "    always @(*) begin\n";
 
             /* Set default value if specified */

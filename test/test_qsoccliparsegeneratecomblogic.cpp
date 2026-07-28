@@ -557,6 +557,164 @@ comb:
         QVERIFY(!verilogContent.contains("]_reg"));
         QVERIFY(!verifyVerilogContentNormalized(verilogContent, "assign data = data_reg;"));
     }
+
+    void testProcessTargetsUseCommonResolution()
+    {
+        const QString netlistContent = R"(
+port:
+  sel:
+    direction: input
+    type: logic
+  value:
+    direction: input
+    type: logic[3:0]
+  out_if:
+    direction: output
+    type: logic[7:0]
+    connect: if_net
+  out_case:
+    direction: output
+    type: logic[7:0]
+    connect: case_net
+  connected_expr_in:
+    direction: input
+    type: logic[3:0]
+    connect: expr_input_net
+  direct_expr_in:
+    direction: input
+    type: logic[3:0]
+  implicit_expr:
+    type: logic[3:0]
+  sideways_expr:
+    direction: sideways
+    type: logic[3:0]
+  connected_process_in:
+    direction: input
+    type: logic[3:0]
+    connect: process_input_net
+  direct_process_in:
+    direction: input
+    type: logic[3:0]
+  implicit_process:
+    type: logic[3:0]
+  sideways_process:
+    direction: sideways
+    type: logic[3:0]
+
+comb:
+  - out: if_net[3:0]
+    if:
+      - cond: sel
+        then: value
+    default: 4'h0
+  - out: case_net[0]
+    bits: "[7:4]"
+    case: sel
+    cases:
+      "1'b1": value
+    default: 4'h0
+  - out: expr_input_net
+    expr: value
+  - out: direct_expr_in
+    expr: value
+  - out: implicit_expr
+    expr: value
+  - out: sideways_expr
+    expr: value
+  - out: process_input_net
+    if:
+      - cond: sel
+        then: value
+    default: 4'h0
+  - out: direct_process_in
+    case: sel
+    cases:
+      "1'b1": value
+    default: 4'h0
+  - out: implicit_process
+    if:
+      - cond: sel
+        then: value
+    default: 4'h0
+  - out: sideways_process
+    case: sel
+    cases:
+      "1'b1": value
+    default: 4'h0
+)";
+
+        const QString netlistPath
+            = createTempFile("test_process_resolution.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+            false);
+        socCliWorker.run();
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_process_resolution.v");
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+
+        QSlangDriver driver;
+        QVERIFY2(
+            driver
+                .parseFileList("", {verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject),
+            qPrintable("Generated Verilog did not elaborate:\n" + verilogContent));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "assign out_if[3:0] = out_if_reg[3:0];"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "assign out_case[7:4] = out_case_reg[7:4];"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "out_if_reg[3:0] = value;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "out_case_reg[7:4] = value;"));
+        QVERIFY(!verilogContent.contains("if_net_reg"));
+        QVERIFY(!verilogContent.contains("case_net_reg"));
+
+        const QStringList skippedExprNames = {"connected_expr_in", "direct_expr_in"};
+        for (const QString &name : skippedExprNames) {
+            QCOMPARE(verilogContent.count("FIXME: comb tried to drive top-level input " + name), 1);
+            QVERIFY(!verifyVerilogContentNormalized(verilogContent, "assign " + name + " = value;"));
+        }
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign implicit_expr = value;"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign sideways_expr = value;"));
+        QVERIFY(
+            !verilogContent.contains("FIXME: comb tried to drive top-level input implicit_expr"));
+        QVERIFY(
+            !verilogContent.contains("FIXME: comb tried to drive top-level input sideways_expr"));
+
+        const QStringList processNames
+            = {"connected_process_in", "direct_process_in", "implicit_process", "sideways_process"};
+        for (const QString &name : processNames) {
+            QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg [3:0] " + name + "_reg;"));
+            QVERIFY(verifyVerilogContentNormalized(
+                verilogContent, "assign " + name + " = " + name + "_reg;"));
+            QVERIFY(verifyVerilogContentNormalized(verilogContent, name + "_reg = value;"));
+            QVERIFY(!verilogContent.contains("FIXME: comb tried to drive top-level input " + name));
+        }
+        QVERIFY(!verilogContent.contains("process_input_net_reg"));
+        QCOMPARE(verilogContent.count("always @(*)"), 6);
+
+        QMap<QString, int> warningCounts;
+        for (const QString &message : messageList) {
+            if (!message.contains("comb writes to top-level input port")) {
+                continue;
+            }
+            for (const QString &name : skippedExprNames + processNames) {
+                if (message.contains(name)) {
+                    ++warningCounts[name];
+                }
+            }
+        }
+        for (const QString &name : skippedExprNames) {
+            QCOMPARE(warningCounts.value(name), 1);
+        }
+        for (const QString &name : processNames) {
+            QCOMPARE(warningCounts.value(name), 0);
+        }
+    }
 };
 
 QStringList Test::messageList;

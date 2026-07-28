@@ -73,6 +73,10 @@ When both forms are present, `bits` overrides the select in `out`. Process
 forms (`if` and `case`) use one internal register per output base and connect
 only the selected slices.
 
+When a top-level port uses `connect` to name an internal net, combinational
+logic emits through that port. Simple `expr` assignments retain diagnostics
+for explicitly declared input ports and undeclared targets.
+
 === Simple Assignment (expr)
 <soc-net-comb-expr>
 Simple assignments generate `assign` statements in Verilog:
