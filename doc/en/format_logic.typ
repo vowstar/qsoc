@@ -77,6 +77,10 @@ When a top-level port uses `connect` to name an internal net, combinational
 logic emits through that port. Simple `expr` assignments retain diagnostics
 for explicitly declared input ports and undeclared targets.
 
+When several output ports use `connect` for the same net, the first declared
+port is canonical and drives the remaining aliases. Mixed-direction and inout
+alias groups require manual correction.
+
 === Simple Assignment (expr)
 <soc-net-comb-expr>
 Simple assignments generate `assign` statements in Verilog:

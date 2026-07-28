@@ -715,6 +715,79 @@ comb:
             QCOMPARE(warningCounts.value(name), 0);
         }
     }
+
+    void testSharedConnectUsesFirstDeclaredPort()
+    {
+        const QString netlistContent = R"(
+port:
+  sel:
+    direction: input
+    type: logic
+  low:
+    direction: input
+    type: logic[3:0]
+  high:
+    direction: input
+    type: logic[3:0]
+  m_alias:
+    direction: output
+    type: logic[7:0]
+    connect: shared_net
+  a_primary:
+    direction: output
+    type: logic[7:0]
+    connect: shared_net
+  z_alias:
+    direction: output
+    type: logic[7:0]
+    connect: shared_net
+
+comb:
+  - out: shared_net[3:0]
+    if:
+      - cond: sel
+        then: low
+    default: 4'h0
+  - out: shared_net[0]
+    bits: "[7:4]"
+    case: sel
+    cases:
+      "1'b1": high
+    default: 4'h0
+)";
+
+        const QString netlistPath = createTempFile("test_shared_connect.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+            false);
+        socCliWorker.run();
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_shared_connect.v");
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+
+        QSlangDriver driver;
+        QVERIFY2(
+            driver
+                .parseFileList("", {verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject),
+            qPrintable("Generated Verilog did not elaborate:\n" + verilogContent));
+        QCOMPARE(verilogContent.count("reg [7:0] m_alias_reg;"), 1);
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "assign m_alias[3:0] = m_alias_reg[3:0];"));
+        QVERIFY(
+            verifyVerilogContentNormalized(verilogContent, "assign m_alias[7:4] = m_alias_reg[7:4];"));
+        QCOMPARE(verilogContent.count("assign a_primary = m_alias;"), 1);
+        QCOMPARE(verilogContent.count("assign z_alias = m_alias;"), 1);
+        QVERIFY(!verilogContent.contains("shared_net"));
+        QVERIFY(!verilogContent.contains("a_primary_reg"));
+        QVERIFY(!verilogContent.contains("z_alias_reg"));
+        QVERIFY(!verilogContent.contains("multiple drivers"));
+    }
 };
 
 QStringList Test::messageList;

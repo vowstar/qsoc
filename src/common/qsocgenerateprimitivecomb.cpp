@@ -110,7 +110,9 @@ bool QSocCombPrimitive::generateCombLogic(const YAML::Node &netlistData, QTextSt
             if (portEntry.second["connect"] && portEntry.second["connect"].IsScalar()) {
                 const QString netName = QString::fromStdString(
                     portEntry.second["connect"].as<std::string>());
-                netToTopPort.insert(netName, portName);
+                if (!netToTopPort.contains(netName)) {
+                    netToTopPort.insert(netName, portName);
+                }
                 knownTargets.insert(netName);
                 if (dir == "in" || dir == "input") {
                     inputTopPortNames.insert(netName);

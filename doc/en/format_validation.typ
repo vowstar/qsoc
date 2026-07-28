@@ -233,8 +233,8 @@ them change or drop parts of the design rather than only warning:
   port, parameter, or instance names are reported
 - *Bracket leakage in controller names*: reset, clock, and power configurations
   with brackets in a signal name are renamed, with a warning
-- *`connect:` alias conflicts*: a net aliased by several top-level ports emits a
-  FIXME in the generated file
+- *`connect:` aliases*: all-output groups use the first declared port as the
+  canonical signal; mixed-direction or inout groups emit a FIXME
 - *Combinational and sequential driver conflicts*: a signal driven from more
   than one `comb`/`seq` block is rejected
 - *Power `follow` conflicts*: an entry whose `clock` equals `host_clock`, or
