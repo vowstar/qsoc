@@ -641,8 +641,6 @@ private:
     QSocFSMPrimitive   *fsmPrimitive   = nullptr;
     QSocCombPrimitive  *combPrimitive  = nullptr;
     QSocSeqPrimitive   *seqPrimitive   = nullptr;
-    /** Force overwrite mode for primitive cell files */
-    bool forceOverwrite = false;
     /** Netlist data. */
     YAML::Node netlistData;
 };

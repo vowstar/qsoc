@@ -441,7 +441,9 @@ The agent follows a four-tier decision flow for every request:
 == SoC Infrastructure
 <agent-soc-infrastructure>
 The `generate_verilog` tool produces production RTL from `.soc_net` YAML files
-with four primitive generators:
+with four primitive generators. Its optional Boolean `force` parameter applies
+only to the current call; omitted or `false` preserves any existing user cell
+file.
 
 - *Clock*: ICG gating, static/dynamic/auto dividers, glitch-free MUX, STA
   guide buffers, test enable bypass

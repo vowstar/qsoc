@@ -65,23 +65,28 @@ QString QSocToolGenerateVerilog::execute(const json &arguments)
         return QString("Error: Netlist file not found: %1").arg(netlistFile);
     }
 
-    /* Set force overwrite if specified */
-    if (arguments.contains("force") && arguments["force"].is_boolean()) {
-        generateManager->setForceOverwrite(arguments["force"].get<bool>());
+    if (arguments.contains("force") && !arguments["force"].is_boolean()) {
+        return "Error: force must be a boolean";
     }
+    const bool force = arguments.contains("force") && arguments["force"].get<bool>();
 
-    /* Load netlist */
-    if (!generateManager->loadNetlist(netlistFile)) {
+    QSocGenerateManager callManager(
+        nullptr,
+        generateManager->getProjectManager(),
+        generateManager->getModuleManager(),
+        generateManager->getBusManager(),
+        generateManager->getLLMService());
+    callManager.setForceOverwrite(force);
+
+    if (!callManager.loadNetlist(netlistFile)) {
         return QString("Error: Failed to load netlist file: %1").arg(netlistFile);
     }
 
-    /* Process netlist */
-    if (!generateManager->processNetlist()) {
+    if (!callManager.processNetlist()) {
         return "Error: Failed to process netlist";
     }
 
-    /* Generate Verilog */
-    if (!generateManager->generateVerilog(outputName)) {
+    if (!callManager.generateVerilog(outputName)) {
         return QString("Error: Failed to generate Verilog for: %1").arg(outputName);
     }
 
