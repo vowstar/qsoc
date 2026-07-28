@@ -13,6 +13,7 @@
 #include <QTextStream>
 
 #include <algorithm>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -38,6 +39,12 @@ struct QSlangDriver::Session
     std::unique_ptr<slang::ast::Compilation> compilation;
 };
 
+namespace {
+
+std::mutex slangMutex;
+
+} // namespace
+
 QSlangDriver::QSlangDriver(QObject *parent, QSocProjectManager *projectManager)
     : QObject(parent)
     , projectManager(projectManager)
@@ -45,7 +52,11 @@ QSlangDriver::QSlangDriver(QObject *parent, QSocProjectManager *projectManager)
     /* All private members set by constructor */
 }
 
-QSlangDriver::~QSlangDriver() = default;
+QSlangDriver::~QSlangDriver()
+{
+    const std::scoped_lock slangLock(slangMutex);
+    clearParseState();
+}
 
 void QSlangDriver::setProjectManager(QSocProjectManager *projectManager)
 {
@@ -69,6 +80,12 @@ void QSlangDriver::clearParseState()
 
 bool QSlangDriver::parseArgs(const QString &args, bool silent)
 {
+    return parseArgsImpl(args, silent, nullptr);
+}
+
+bool QSlangDriver::parseArgsImpl(const QString &args, bool silent, QString *diagnosticOutput)
+{
+    const std::scoped_lock slangLock(slangMutex);
     clearParseState();
 
     slang::OS::setStderrColorsEnabled(false);
@@ -173,6 +190,9 @@ bool QSlangDriver::parseArgs(const QString &args, bool silent)
             QSocConsole::error().noquote().nospace() << Q_FUNC_INFO << ":" << e.what();
         }
     }
+    if (diagnosticOutput) {
+        *diagnosticOutput = QString::fromStdString(slang::OS::capturedStderr);
+    }
     return result;
 }
 
@@ -193,7 +213,10 @@ bool QSlangDriver::parseFileList(
     const QStringList  &macroUndefines,
     UnknownModulePolicy unknownModulePolicy)
 {
-    clearParseState();
+    {
+        const std::scoped_lock slangLock(slangMutex);
+        clearParseState();
+    }
 
     bool    result  = false;
     QString content = "";
@@ -378,7 +401,8 @@ QString QSlangDriver::contentValidFile(const QString &content, const QDir &baseD
 
 QSet<QString> QSlangDriver::extractAllIdentifiers(const QString &verilogCode)
 {
-    QSet<QString> identifiers;
+    const std::scoped_lock slangLock(slangMutex);
+    QSet<QString>          identifiers;
 
     /* Create a temporary syntax tree */
     auto tree = slang::syntax::SyntaxTree::fromText(verilogCode.toStdString());
@@ -408,7 +432,8 @@ QSet<QString> QSlangDriver::extractAllIdentifiers(const QString &verilogCode)
 
 QMap<QString, int> QSlangDriver::extractBitWidthRequirements(const QString &verilogCode)
 {
-    QMap<QString, int> bitWidths;
+    const std::scoped_lock slangLock(slangMutex);
+    QMap<QString, int>     bitWidths;
 
     /* Create a temporary syntax tree to analyze bit selections */
     auto tree = slang::syntax::SyntaxTree::fromText(verilogCode.toStdString());
@@ -505,7 +530,10 @@ QMap<QString, int> QSlangDriver::extractBitWidthRequirements(const QString &veri
 
 bool QSlangDriver::parseVerilogSnippet(const QString &verilogCode, bool wrapInModule)
 {
-    clearParseState();
+    {
+        const std::scoped_lock slangLock(slangMutex);
+        clearParseState();
+    }
 
     /* If no wrapping needed, directly parse */
     if (!wrapInModule) {
@@ -538,13 +566,11 @@ bool QSlangDriver::parseVerilogSnippet(const QString &verilogCode, bool wrapInMo
     tempFile1.flush();
     tempFile1.close();
 
-    /* Save original stderr content */
-    std::string originalStderr = slang::OS::capturedStderr;
-
     /* Try first parse - may fail, use silent mode to suppress expected errors during probing */
     QString args1
         = QString("slang --single-unit --ignore-unknown-modules %1").arg(tempFile1.fileName());
-    bool firstPassResult = parseArgs(args1, true /* silent */);
+    QString stderrOutput;
+    bool    firstPassResult = parseArgsImpl(args1, true /* silent */, &stderrOutput);
 
     if (firstPassResult) {
         /* Parsing succeeded, no need for second pass */
@@ -553,12 +579,6 @@ bool QSlangDriver::parseVerilogSnippet(const QString &verilogCode, bool wrapInMo
     }
 
     /* First pass failed, continue to extract undeclared identifiers */
-
-    /* Extract stderr from parseArgs */
-    QString stderrOutput = QString::fromStdString(slang::OS::capturedStderr);
-
-    /* Restore original stderr */
-    slang::OS::capturedStderr = originalStderr;
 
     /* Extract undeclared identifiers from error messages */
     QSet<QString>                   undeclaredIds;
@@ -619,7 +639,8 @@ bool QSlangDriver::parseVerilogSnippet(const QString &verilogCode, bool wrapInMo
 
 QSet<QString> QSlangDriver::extractSignalReferences(const QSet<QString> &excludeSignals)
 {
-    QSet<QString> signalSet;
+    const std::scoped_lock slangLock(slangMutex);
+    QSet<QString>          signalSet;
 
     if (!session || !session->compilation) {
         QSocConsole::warn().noquote().nospace() << Q_FUNC_INFO << ":" << "No compilation available";

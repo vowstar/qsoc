@@ -13,6 +13,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <thread>
+#include <vector>
+
 using json = nlohmann::json;
 
 class Test : public QObject
@@ -33,6 +37,7 @@ private slots:
     void parseArgs_invalidArgs();
     void parseArgs_failureClearsState();
     void parseArgs_successReplacesState();
+    void parseVerilogSnippet_concurrentDiagnostics();
 
     /* Test file list parsing */
     void parseFileList_validFiles();
@@ -177,6 +182,54 @@ void Test::parseArgs_successReplacesState()
 
     QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(secondFile)));
     QCOMPARE(driver.getModuleList(), QStringList{"second_module"});
+}
+
+void Test::parseVerilogSnippet_concurrentDiagnostics()
+{
+    constexpr int workerCount    = 8;
+    constexpr int iterationCount = 20;
+
+    std::atomic<int>          startState   = 0;
+    std::atomic<int>          failureCount = 0;
+    std::vector<std::jthread> workers;
+    workers.reserve(workerCount);
+
+    try {
+        for (int worker = 0; worker < workerCount; ++worker) {
+            workers.emplace_back([worker, &startState, &failureCount]() {
+                QSlangDriver driver;
+                startState.wait(0);
+                if (startState.load() != 1) {
+                    return;
+                }
+
+                for (int iteration = 0; iteration < iterationCount; ++iteration) {
+                    const QString output = QString("output_%1_%2").arg(worker).arg(iteration);
+                    const QString input  = QString("input_%1_%2").arg(worker).arg(iteration);
+                    const QString code   = QString("assign %1 = %2;").arg(output, input);
+
+                    if (!driver.parseVerilogSnippet(code)) {
+                        ++failureCount;
+                        continue;
+                    }
+
+                    const QSet<QString> references = driver.extractSignalReferences();
+                    if (references != QSet<QString>{output, input}) {
+                        ++failureCount;
+                    }
+                }
+            });
+        }
+    } catch (...) {
+        startState.store(2);
+        startState.notify_all();
+        throw;
+    }
+
+    startState.store(1);
+    startState.notify_all();
+    workers.clear();
+    QCOMPARE(failureCount.load(), 0);
 }
 
 void Test::parseFileList_validFiles()

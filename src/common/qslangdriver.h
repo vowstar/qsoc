@@ -151,6 +151,7 @@ private:
     struct Session;
 
     void clearParseState();
+    bool parseArgsImpl(const QString &args, bool silent, QString *diagnosticOutput);
 
     /**
      * @brief Extract bit width requirements from Verilog code syntax
