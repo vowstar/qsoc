@@ -4496,6 +4496,209 @@ instance:
         QVERIFY(verifyVerilogContent("test_tie_wide_masks", ".contextual (1000000'd1)"));
     }
 
+    void testGenerateTieRecognizesBuiltInPackedTypes()
+    {
+        const QString moduleContent = R"(
+packed_type_dut:
+  port:
+    dlogic:
+      type: "logic [7:0]"
+      direction: input
+    dwire:
+      type: "wire [7:0]"
+      direction: input
+    dreg:
+      type: "reg [7:0]"
+      direction: input
+    dbit:
+      type: "bit [7:0]"
+      direction: input
+    dtri:
+      type: "tri [7:0]"
+      direction: input
+    dtris:
+      type: "tri signed [7:0]"
+      direction: input
+    dint:
+      type: "integer [7:0]"
+      direction: input
+    dnamed:
+      type: "word_t [7:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         moduleFile(moduleDir.filePath("packed_type_dut.soc_mod"));
+        QVERIFY(moduleFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        moduleFile.write(moduleContent.toUtf8());
+        moduleFile.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_tie_packed_types"
+instance:
+  u0:
+    module: "packed_type_dut"
+    port:
+      dlogic: { tie: "4'hF" }
+      dwire:  { tie: "4'hF" }
+      dreg:   { tie: "4'hF" }
+      dbit:   { tie: "4'hF" }
+      dtri:   { tie: "4'hF" }
+      dtris:  { tie: "4'hF" }
+      dint:   { tie: "4'hF" }
+      dnamed: { tie: "4'hF" }
+)";
+        const QString filePath   = createTempFile("test_tie_packed_types.soc_net", netContent);
+        QVERIFY(!filePath.isEmpty());
+        QVERIFY(removeVerilogOutput("test_tie_packed_types"));
+        messageList.clear();
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+        QVERIFY2(sawVerilogSuccess("test_tie_packed_types"), qPrintable(messageList.join('\n')));
+
+        for (const QString &port : {"dlogic", "dwire", "dreg", "dbit", "dtri", "dtris"}) {
+            QVERIFY2(
+                verifyVerilogContent("test_tie_packed_types", "." + port + " (8'hf)"),
+                qPrintable(port));
+        }
+        QVERIFY(verifyVerilogContent("test_tie_packed_types", ".dint (4'hF)"));
+        QVERIFY(verifyVerilogContent("test_tie_packed_types", ".dnamed (4'hF)"));
+    }
+
+    /* A port whose width is symbolic, packed, or parameter-dependent has no
+       proven width; masking would destroy the value, so the literal is kept
+       exactly as written. */
+    void testGenerateTiePreservesUnprovenWidths()
+    {
+        const QString drvContent = R"(
+param_dut:
+  parameter:
+    WIDTH:
+      type: int
+      value: 8
+  port:
+    dsym:
+      type: "logic[WIDTH-1:0]"
+      direction: input
+    dint:
+      type: integer
+      direction: input
+    dpack:
+      type: "logic[3:0][1:0]"
+      direction: input
+    dfix:
+      type: "logic[7:0]"
+      direction: input
+    dsc:
+      type: "logic signed"
+      direction: input
+    dint2:
+      type: "integer [7:0]"
+      direction: input
+    dnamed:
+      type: "word_t [3:0]"
+      direction: input
+    dlarge_endpoint:
+      type: "logic[2147483654:2147483647]"
+      direction: input
+    dlarge_width:
+      type: "logic[2147483647:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("param_dut.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_tie_unproven"
+instance:
+  u0:
+    module: "param_dut"
+    port:
+      dsym:  { tie: "8'hAB" }
+      dint:  { tie: "42" }
+      dpack: { tie: "8'hA5" }
+  u1:
+    module: "param_dut"
+    parameter:
+      WIDTH: 16
+    port:
+      dfix: { tie: "8'hCD" }
+  u2:
+    module: "param_dut"
+    port:
+      dsym: { tie: "8'hF0", invert: true }
+  u3:
+    module: "param_dut"
+    port:
+      dsym: { tie: "0x1F" }
+  u4:
+    module: "param_dut"
+    port:
+      dsym: { tie: "0644" }
+  u5:
+    module: "param_dut"
+    port:
+      dsc:  { tie: "1" }
+  u6:
+    module: "param_dut"
+    port:
+      dint2:          { tie: "32'hDEADBEEF" }
+      dnamed:         { tie: "32'h12345678" }
+      dlarge_endpoint: { tie: "8'hAB" }
+      dlarge_width:    { tie: "8'hCD" }
+)";
+        const QString filePath   = createTempFile("test_tie_unproven.soc_net", netContent);
+        QVERIFY(filePath != "");
+        QVERIFY(removeVerilogOutput("test_tie_unproven"));
+        messageList.clear();
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+        QVERIFY2(sawVerilogSuccess("test_tie_unproven"), qPrintable(messageList.join('\n')));
+
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dsym (8'hAB)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", "1'h1"));
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dint (42)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", "1'd0"));
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dpack (8'hA5)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", "4'h5"));
+        /* A recorded fixed width stops being proven once a parameter is
+           overridden. */
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dfix (8'hCD)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", "8'hcd"));
+        /* Inversion survives on an unproven-width tie. */
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dsym (~(8'hF0))"));
+        /* C spellings are not Verilog: they re-emerge as widthless Verilog
+           with the value and base kept, so 0644 stays octal 420. */
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dsym ('h1f)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", "0x1F"));
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dsym ('o644)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", "(0644)"));
+        /* A scalar with a signedness modifier still has a proven width. */
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dsc (1'd1)"));
+        /* A bracket after integer or a named type is not a proven width;
+           masking through it destroyed the value. */
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dint2 (32'hDEADBEEF)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", "8'hef"));
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dnamed (32'h12345678)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", "4'h8"));
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dlarge_endpoint (8'hAB)"));
+        QVERIFY(verifyVerilogContent("test_tie_unproven", ".dlarge_width    (8'hCD)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", ".dlarge_endpoint (1'h1)"));
+        QVERIFY(!verifyVerilogContent("test_tie_unproven", ".dlarge_width    (1'h1)"));
+    }
+
     void testGenerateEmptyTieAndLinkIgnored()
     {
         const QString drvContent = R"(

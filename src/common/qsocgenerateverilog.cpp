@@ -25,6 +25,47 @@
 
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <optional>
+
+namespace {
+
+std::optional<int> provenBuiltInWidth(const QString &type)
+{
+    static const QRegularExpression typeRegex(
+        R"(^\s*(?:logic|wire|reg|bit|tri)(?:\s+(?:signed|unsigned))?)"
+        R"(\s*(?:\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\])?\s*$)",
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch match = typeRegex.match(type);
+    if (!match.hasMatch()) {
+        return std::nullopt;
+    }
+    if (match.captured(1).isEmpty()) {
+        return 1;
+    }
+
+    bool         msbOk = false;
+    const qint64 msb   = match.captured(1).toLongLong(&msbOk);
+    if (!msbOk || msb > std::numeric_limits<int>::max()) {
+        return std::nullopt;
+    }
+
+    qint64 width = msb + 1;
+    if (!match.captured(2).isEmpty()) {
+        bool         lsbOk = false;
+        const qint64 lsb   = match.captured(2).toLongLong(&lsbOk);
+        if (!lsbOk || lsb > std::numeric_limits<int>::max()) {
+            return std::nullopt;
+        }
+        width = msb >= lsb ? msb - lsb + 1 : lsb - msb + 1;
+    }
+    if (width <= 0 || width > QSocNumberInfo::MaximumDeclaredWidth) {
+        return std::nullopt;
+    }
+    return static_cast<int>(width);
+}
+
+} // namespace
 
 bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 {
@@ -1631,7 +1672,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         } else {
                             /* Port exists in module but has no connection */
                             QString direction = "signal";
-                            QString width     = "";
+                            QString displayWidth;
 
                             if (portIter->second && portIter->second["direction"]
                                 && portIter->second["direction"].IsScalar()) {
@@ -1640,54 +1681,33 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             }
 
                             /* Get port width/type */
+                            std::optional<int> provenPortWidth{1};
                             if (portIter->second && portIter->second["type"]
                                 && portIter->second["type"].IsScalar()) {
-                                QString type = QString::fromStdString(
+                                const QString rawType = QString::fromStdString(
                                     portIter->second["type"].as<std::string>());
+                                provenPortWidth = provenBuiltInWidth(rawType);
 
-                                /* Clean type for Verilog 2001 compatibility */
-                                type = QSocGenerateManager::cleanTypeForWireDeclaration(type);
-
-                                /* Extract width information if it exists in format [x:y] or [x] */
-                                const QRegularExpression widthRegex(
+                                const QString cleanType
+                                    = QSocGenerateManager::cleanTypeForWireDeclaration(rawType);
+                                static const QRegularExpression widthRegex(
                                     R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
-                                const QRegularExpressionMatch match = widthRegex.match(type);
+                                const QRegularExpressionMatch match = widthRegex.match(cleanType);
                                 if (match.hasMatch()) {
-                                    /* Both [x] and [x:y] formats use the full match */
-                                    width = match.captured(0);
+                                    displayWidth = match.captured(0);
                                 }
+                            }
+
+                            /* An overridden parameter can change any recorded
+                               width, so nothing recorded stays proven. */
+                            if (instanceData["parameter"] && instanceData["parameter"].IsMap()
+                                && instanceData["parameter"].size() > 0) {
+                                provenPortWidth.reset();
                             }
 
                             /* Check for tie attribute in instance's port */
                             bool    hasTie = false;
                             QString tieValue;
-                            int     portWidth = 1; /* Default width if not specified */
-
-                            /* Extract port width for bit size validation */
-                            if (!width.isEmpty()) {
-                                const QRegularExpression widthRegex(R"(\[(\d+)(?::(\d+))?\])");
-                                auto                     match = widthRegex.match(width);
-                                if (match.hasMatch()) {
-                                    bool      msb_ok = false;
-                                    const int msb    = match.captured(1).toInt(&msb_ok);
-                                    if (msb_ok) {
-                                        if (match.capturedLength(2) > 0) {
-                                            /* Case with specified LSB, e.g. [7:3] */
-                                            bool      lsb_ok = false;
-                                            const int lsb    = match.captured(2).toInt(&lsb_ok);
-                                            if (lsb_ok) {
-                                                portWidth = qAbs(msb - lsb) + 1;
-                                            } else {
-                                                portWidth = msb
-                                                            + 1; /* Fallback to default handling */
-                                            }
-                                        } else {
-                                            /* Case with only MSB specified, e.g. [7] */
-                                            portWidth = msb + 1; /* [7] means 8 bits [7:0] */
-                                        }
-                                    }
-                                }
-                            }
 
                             /* Check if this port is already connected to any net in the design */
                             bool isConnectedToNet = false;
@@ -1785,6 +1805,39 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                             if (direction.toLower() == "input"
                                                 || direction.toLower() == "in") {
                                                 hasTie = true;
+
+                                                /* An unproven port width would
+                                                   mask the value with garbage;
+                                                   keep the literal exactly as
+                                                   written. */
+                                                if (!provenPortWidth.has_value()) {
+                                                    /* C spellings are not
+                                                       Verilog; re-express them
+                                                       with the value and base
+                                                       kept, width left to the
+                                                       context. */
+                                                    static const QRegularExpression cStyleRegex(
+                                                        R"(^(?:0[xXbB][0-9a-fA-F_]+|0\d+)$)");
+                                                    if (cStyleRegex.match(tieStr).hasMatch()
+                                                        && !numInfo.errorDetected) {
+                                                        tieValue = numInfo.formatVerilog();
+                                                        tieValue.remove(
+                                                            QRegularExpression(R"(^\d+)"));
+                                                    } else {
+                                                        tieValue = numInfo.originalString;
+                                                    }
+                                                    if (portNode["invert"]
+                                                        && portNode["invert"].IsScalar()
+                                                        && portNode["invert"].as<bool>()) {
+                                                        tieValue = QString("~(%1)").arg(tieValue);
+                                                    }
+                                                    portConnections.append(QString("        .%1(%2)")
+                                                                               .arg(portName)
+                                                                               .arg(tieValue));
+                                                    continue;
+                                                }
+
+                                                const int portWidth = provenPortWidth.value();
 
                                                 /* Format the tie value */
                                                 /* Create a copy of numInfo with adjusted width */
@@ -1927,16 +1980,16 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 portInfo.direction    = direction;
 
                                 /* Clean the type for reporting - combine width and base type */
-                                if (width.isEmpty()) {
+                                if (displayWidth.isEmpty()) {
                                     portInfo.type = "logic";
                                 } else {
-                                    portInfo.type = QString("logic%1").arg(width);
+                                    portInfo.type = QString("logic%1").arg(displayWidth);
                                 }
 
                                 unconnectedPortReporter.addUnconnectedPort(portInfo);
 
                                 /* Format FIXME message with width if available */
-                                if (width.isEmpty()) {
+                                if (displayWidth.isEmpty()) {
                                     portConnections.append(
                                         QString("        .%1(/* FIXME: %2 %3 missing */)")
                                             .arg(portName)
@@ -1947,7 +2000,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                         QString("        .%1(/* FIXME: %2 %3 %4 missing */)")
                                             .arg(portName)
                                             .arg(direction)
-                                            .arg(width)
+                                            .arg(displayWidth)
                                             .arg(portName));
                                 }
                             }

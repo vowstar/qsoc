@@ -13,6 +13,8 @@
 class QSocNumberInfo
 {
 public:
+    static constexpr int MaximumDeclaredWidth = 16777215;
+
     /**
      * @brief Numeric base enumeration
      */
