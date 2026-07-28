@@ -1740,114 +1740,131 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                                    portNode["tie"].as<std::string>())
                                                                    .trimmed();
 
-                                        /* Recognise non-numeric Verilog expressions
-                                           (e.g. `data_a + data_b`, `{8{1'b1}}`) and
-                                           pass them through verbatim. The number
-                                           parser otherwise silently collapses them
-                                           to 4'd0. Allow digits, single-quote, the
-                                           hex/binary digits and the Verilog base
-                                           letters (b, d, h, o + uppercase, plus x/z
-                                           for don't-care). */
-                                        const QRegularExpression numericRegex(
-                                            R"(^[\s0-9'a-fA-FhHoOxXzZ_\?]+$)");
+                                        /* Only a fully matched two-state number
+                                           may enter numeric normalization. A
+                                           looser test fed identifiers spelled in
+                                           hex letters (`cafe`) and four-state
+                                           values (`16'hzzzz`) to the number
+                                           parser, which collapsed them to
+                                           unrelated constants. Everything else
+                                           passes through verbatim. */
+                                        static const QRegularExpression twoStateNumberRegex(
+                                            R"(^(?:\d[\d_]*|0[xX][0-9a-fA-F_]+|0[bB][01_]+)"
+                                            R"(|(?:\d[\d_]*)?')"
+                                            R"((?:[bB][01_]+|[oO][0-7_]+|[dD][0-9_]+|[hHxX][0-9a-fA-F_]+))$)");
                                         const bool tieIsExpression
-                                            = !numericRegex.match(tieStr).hasMatch();
+                                            = !twoStateNumberRegex.match(tieStr).hasMatch();
                                         if (tieIsExpression) {
-                                            hasTie   = true;
-                                            tieValue = tieStr;
-                                            if (portNode["invert"] && portNode["invert"].IsScalar()
-                                                && portNode["invert"].as<bool>()) {
-                                                tieValue = QString("~(%1)").arg(tieValue);
-                                            }
-                                            portConnections.append(QString("        .%1(%2)")
-                                                                       .arg(portName)
-                                                                       .arg(tieValue));
-                                            continue;
-                                        }
-
-                                        /* Parse the tie value using our number parser */
-                                        const QSocNumberInfo numInfo = QSocNumberInfo::parseNumber(
-                                            tieStr);
-
-                                        /* Only apply tie to input ports */
-                                        if (direction.toLower() == "input"
-                                            || direction.toLower() == "in") {
-                                            hasTie = true;
-
-                                            /* Format the tie value */
-                                            /* Create a copy of numInfo with adjusted width */
-                                            QSocNumberInfo adjustedInfo = numInfo;
-
-                                            /* Special handling for overflow detection */
-                                            if (numInfo.errorDetected) {
-                                                /* For overflow values, keep the original string representation */
-                                                if (numInfo.width > portWidth) {
-                                                    tieValue
-                                                        = QString(
-                                                              "%1 /* FIXME: Value width %2 bits "
-                                                              "exceeds port width %3 bits */")
-                                                              .arg(numInfo.originalString)
-                                                              .arg(numInfo.width)
-                                                              .arg(portWidth);
-                                                } else {
-                                                    tieValue = numInfo.originalString;
-                                                }
-                                            } else {
-                                                /* Normal handling for regular values */
-                                                adjustedInfo.width            = portWidth;
-                                                adjustedInfo.hasExplicitWidth = true;
-
-                                                /* Create a mask for the width */
-                                                BigUnsigned mask = BigUnsigned(0);
-                                                for (int i = 0; i < portWidth; i++) {
-                                                    mask = (mask << 1) + BigUnsigned(1);
-                                                }
-                                                /* Apply mask to truncate the value */
-                                                if (adjustedInfo.value.getSign()
-                                                    == BigInteger::negative) {
-                                                    /* For negative numbers, apply mask to magnitude and maintain sign */
-                                                    const BigUnsigned result
-                                                        = adjustedInfo.value.getMagnitude() & mask;
-                                                    adjustedInfo.value
-                                                        = BigInteger(result, BigInteger::negative);
-                                                } else {
-                                                    /* For non-negative numbers, just apply the mask */
-                                                    adjustedInfo.value = BigInteger(
-                                                        adjustedInfo.value.getMagnitude() & mask);
-                                                }
-
-                                                if (numInfo.width > portWidth) {
-                                                    /* Value is wider than port - show FIXME comment but use proper width */
-                                                    tieValue
-                                                        = QString(
-                                                              "%1 /* FIXME: Value %2 wider than "
-                                                              "port width %3 bits */")
-                                                              .arg(adjustedInfo.formatVerilog())
-                                                              .arg(numInfo.formatVerilog())
-                                                              .arg(portWidth);
-                                                } else {
-                                                    /* Use adjusted formatting with correct width, preserving original base */
-                                                    tieValue = adjustedInfo.formatVerilog();
-                                                }
-                                            }
-
-                                            /* Check for invert attribute */
-                                            if (portNode.IsMap() && portNode["invert"]
-                                                && portNode["invert"].IsScalar()) {
-                                                /* Use direct YAML boolean parsing instead of string conversion */
-                                                if (portNode["invert"].as<bool>()) {
-                                                    /* If we need to invert, apply logical NOT (~) to the value */
+                                            if (direction.toLower() == "input"
+                                                || direction.toLower() == "in") {
+                                                hasTie   = true;
+                                                tieValue = tieStr;
+                                                if (portNode["invert"]
+                                                    && portNode["invert"].IsScalar()
+                                                    && portNode["invert"].as<bool>()) {
                                                     tieValue = QString("~(%1)").arg(tieValue);
                                                 }
+                                                portConnections.append(QString("        .%1(%2)")
+                                                                           .arg(portName)
+                                                                           .arg(tieValue));
+                                                continue;
                                             }
+                                            /* The port keeps the standard
+                                               unconnected handling, so it stays
+                                               visible in the report. */
+                                            QSocConsole::warn()
+                                                << "'tie' on" << instanceName << "." << portName
+                                                << "ignored:" << direction.toLower()
+                                                << "ports cannot be tied";
                                         } else {
-                                            /* Add warning for non-input ports with tie */
-                                            tieValue
-                                                = QString(
-                                                      "/* FIXME: 'tie' attribute for %1 port %2 "
-                                                      "ignored */")
-                                                      .arg(direction.toLower())
-                                                      .arg(portName);
+                                            /* Parse the tie value using our number parser */
+                                            const QSocNumberInfo numInfo
+                                                = QSocNumberInfo::parseNumber(tieStr);
+
+                                            /* Only apply tie to input ports */
+                                            if (direction.toLower() == "input"
+                                                || direction.toLower() == "in") {
+                                                hasTie = true;
+
+                                                /* Format the tie value */
+                                                /* Create a copy of numInfo with adjusted width */
+                                                QSocNumberInfo adjustedInfo = numInfo;
+
+                                                /* Special handling for overflow detection */
+                                                if (numInfo.errorDetected) {
+                                                    /* For overflow values, keep the original string representation */
+                                                    if (numInfo.width > portWidth) {
+                                                        tieValue
+                                                            = QString(
+                                                                  "%1 /* FIXME: Value width %2 "
+                                                                  "bits "
+                                                                  "exceeds port width %3 bits */")
+                                                                  .arg(numInfo.originalString)
+                                                                  .arg(numInfo.width)
+                                                                  .arg(portWidth);
+                                                    } else {
+                                                        tieValue = numInfo.originalString;
+                                                    }
+                                                } else {
+                                                    /* Normal handling for regular values */
+                                                    adjustedInfo.width            = portWidth;
+                                                    adjustedInfo.hasExplicitWidth = true;
+
+                                                    /* Create a mask for the width */
+                                                    BigUnsigned mask = BigUnsigned(0);
+                                                    for (int i = 0; i < portWidth; i++) {
+                                                        mask = (mask << 1) + BigUnsigned(1);
+                                                    }
+                                                    /* Apply mask to truncate the value */
+                                                    if (adjustedInfo.value.getSign()
+                                                        == BigInteger::negative) {
+                                                        /* For negative numbers, apply mask to magnitude and maintain sign */
+                                                        const BigUnsigned result
+                                                            = adjustedInfo.value.getMagnitude()
+                                                              & mask;
+                                                        adjustedInfo.value = BigInteger(
+                                                            result, BigInteger::negative);
+                                                    } else {
+                                                        /* For non-negative numbers, just apply the mask */
+                                                        adjustedInfo.value = BigInteger(
+                                                            adjustedInfo.value.getMagnitude()
+                                                            & mask);
+                                                    }
+
+                                                    if (numInfo.width > portWidth) {
+                                                        /* Value is wider than port - show FIXME comment but use proper width */
+                                                        tieValue
+                                                            = QString(
+                                                                  "%1 /* FIXME: Value %2 wider "
+                                                                  "than "
+                                                                  "port width %3 bits */")
+                                                                  .arg(adjustedInfo.formatVerilog())
+                                                                  .arg(numInfo.formatVerilog())
+                                                                  .arg(portWidth);
+                                                    } else {
+                                                        /* Use adjusted formatting with correct width, preserving original base */
+                                                        tieValue = adjustedInfo.formatVerilog();
+                                                    }
+                                                }
+
+                                                /* Check for invert attribute */
+                                                if (portNode.IsMap() && portNode["invert"]
+                                                    && portNode["invert"].IsScalar()) {
+                                                    /* Use direct YAML boolean parsing instead of string conversion */
+                                                    if (portNode["invert"].as<bool>()) {
+                                                        /* If we need to invert, apply logical NOT (~) to the value */
+                                                        tieValue = QString("~(%1)").arg(tieValue);
+                                                    }
+                                                }
+                                            } else {
+                                                /* Add warning for non-input ports with tie */
+                                                tieValue = QString(
+                                                               "/* FIXME: 'tie' attribute for %1 "
+                                                               "port %2 "
+                                                               "ignored */")
+                                                               .arg(direction.toLower())
+                                                               .arg(portName);
+                                            }
                                         }
                                     }
                                     /* If no tie but has invert attribute on an input port, warn about missing tie */

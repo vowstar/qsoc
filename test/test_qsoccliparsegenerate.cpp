@@ -54,8 +54,43 @@ private:
             QTextStream stream(&file);
             stream << content;
             file.close();
+            return filePath;
         }
+        return {};
+    }
+
+    QString createModuleFile(const QString &fileName, const QString &content)
+    {
+        const QString filePath = QDir(projectManager.getModulePath()).filePath(fileName);
+        QFile         file(filePath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            return {};
+        }
+        QTextStream(&file) << content;
         return filePath;
+    }
+
+    QString verilogOutputPath(const QString &baseFileName)
+    {
+        return QDir(projectManager.getOutputPath()).filePath(baseFileName + ".v");
+    }
+
+    bool removeVerilogOutput(const QString &baseFileName)
+    {
+        const QString filePath = verilogOutputPath(baseFileName);
+        return (!QFile::exists(filePath) || QFile::remove(filePath)) && !QFile::exists(filePath);
+    }
+
+    bool sawVerilogSuccess(const QString &baseFileName)
+    {
+        const QString filePath = verilogOutputPath(baseFileName);
+        for (const QString &message : messageList) {
+            if (message.contains("Successfully generated Verilog code:")
+                && message.contains(filePath)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     void createTestGenerateFiles()
@@ -3346,8 +3381,8 @@ wide8_rcv:
       type: "logic[7:0]"
       direction: in
 )";
-        QVERIFY(createTempFile("module/narrow4_drv.soc_mod", driverContent) != "");
-        QVERIFY(createTempFile("module/wide8_rcv.soc_mod", receiverContent) != "");
+        QVERIFY(!createModuleFile("narrow4_drv.soc_mod", driverContent).isEmpty());
+        QVERIFY(!createModuleFile("wide8_rcv.soc_mod", receiverContent).isEmpty());
 
         const QString netlistContent = R"(
 ---
@@ -3401,8 +3436,8 @@ wide8_rcv:
       type: "logic[7:0]"
       direction: in
 )";
-        QVERIFY(createTempFile("module/narrow4_drv.soc_mod", driverContent) != "");
-        QVERIFY(createTempFile("module/wide8_rcv.soc_mod", receiverContent) != "");
+        QVERIFY(!createModuleFile("narrow4_drv.soc_mod", driverContent).isEmpty());
+        QVERIFY(!createModuleFile("wide8_rcv.soc_mod", receiverContent).isEmpty());
 
         const QString drvFirstContent = R"(
 ---
@@ -3468,7 +3503,7 @@ single_drv:
       type: "logic"
       direction: out
 )";
-        QVERIFY(createTempFile("module/single_drv.soc_mod", driverContent) != "");
+        QVERIFY(!createModuleFile("single_drv.soc_mod", driverContent).isEmpty());
 
         const QString netlistContent = R"(
 ---
@@ -4268,6 +4303,93 @@ instance:
      * `.data_in(40)`. Empty tie / empty link must be ignored at parse
      * time so the port falls through to the unconnected FIXME.
      */
+    /* A tie spelled in hex letters is an identifier, a four-state literal
+       is not a normalizable number, and an expression on a non-input port
+       follows the numeric tie's ignored-with-FIXME policy. */
+    void testGenerateTiePreservesIdentifierAndFourState()
+    {
+        const QString drvContent = R"(
+exact_dut:
+  port:
+    din:
+      type: "logic[15:0]"
+      direction: input
+    dout:
+      type: "logic[15:0]"
+      direction: output
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("exact_dut.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_tie_exact"
+instance:
+  u0:
+    module: "exact_dut"
+    port:
+      din:  { tie: "cafe" }
+  u1:
+    module: "exact_dut"
+    port:
+      din:  { tie: "16'hzzzz" }
+  u2:
+    module: "exact_dut"
+    port:
+      dout: { tie: "cafe + 1" }
+  u3:
+    module: "exact_dut"
+    port:
+      din:  { tie: "8'sd5" }
+  u4:
+    module: "exact_dut"
+    port:
+      din:  { tie: "0x1F" }
+  u5:
+    module: "exact_dut"
+    port:
+      din:  { tie: "0b1010" }
+  u6:
+    module: "exact_dut"
+    port:
+      din:  { tie: "sel_a & sel_b", invert: true }
+)";
+        const QString filePath   = createTempFile("test_tie_exact.soc_net", netContent);
+        QVERIFY(filePath != "");
+        QVERIFY(removeVerilogOutput("test_tie_exact"));
+        messageList.clear();
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+        QVERIFY2(sawVerilogSuccess("test_tie_exact"), qPrintable(messageList.join('\n')));
+
+        /* Identifier survives exactly; it must not collapse to a number. */
+        QVERIFY(verifyVerilogContent("test_tie_exact", ".din (cafe)"));
+        QVERIFY(!verifyVerilogContent("test_tie_exact", "16'd0"));
+        /* Four-state literal survives verbatim. */
+        QVERIFY(verifyVerilogContent("test_tie_exact", ".din (16'hzzzz)"));
+        QVERIFY(!verifyVerilogContent("test_tie_exact", "16'd16"));
+        /* An expression tie cannot drive an output port; the port keeps the
+           standard unconnected handling. */
+        QVERIFY(!verifyVerilogContent("test_tie_exact", ".dout (cafe + 1)"));
+        QVERIFY(verifyVerilogContent("test_tie_exact", "dout missing"));
+        /* A signed literal is not normalizable; it survives verbatim instead
+           of having its digits concatenated. */
+        QVERIFY(verifyVerilogContent("test_tie_exact", ".din (8'sd5)"));
+        QVERIFY(!verifyVerilogContent("test_tie_exact", "8'd85"));
+        /* C-style literals stay on the numeric path. */
+        QVERIFY(verifyVerilogContent("test_tie_exact", ".din (16'h1f)"));
+        QVERIFY(verifyVerilogContent("test_tie_exact", ".din (16'b1010)"));
+        /* Inversion wraps a pass-through expression. */
+        QVERIFY(verifyVerilogContent("test_tie_exact", ".din (~(sel_a & sel_b))"));
+    }
+
     void testGenerateEmptyTieAndLinkIgnored()
     {
         const QString drvContent = R"(
