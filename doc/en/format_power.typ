@@ -184,6 +184,10 @@ module qsoc_power_rst_sync #(parameter integer STAGE=4)(
 );
 ```
 
+QSoC creates a missing `power_cell.v` atomically and preserves any existing
+file byte-for-byte. `--force` is required to replace an existing
+implementation.
+
 qsoc_power_rst_sync provides async assert, sync deassert reset synchronization. Assert does not require clock, deassert requires STAGE edges on clk_dom. Default STAGE=4 provides better metastability protection.
 
 `STAGE` must be at least 2. The shift register is declared as `reg [STAGE-1:0]`

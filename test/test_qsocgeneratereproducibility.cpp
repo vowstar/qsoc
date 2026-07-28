@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoccliworker.h"
+#include "common/qsocgenerateartifact.h"
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivepower.h"
@@ -30,6 +31,10 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -871,6 +876,249 @@ extension: retained
         QTest::newRow("clock") << QStringLiteral("clock");
         QTest::newRow("reset") << QStringLiteral("reset");
         QTest::newRow("power") << QStringLiteral("power");
+    }
+
+    void primitiveCellOwnership_data()
+    {
+        QTest::addColumn<QString>("kind");
+        QTest::addColumn<QString>("state");
+        QTest::addColumn<bool>("force");
+        for (const QString &kind : {"clock", "reset", "power"}) {
+            for (const QString &state : {"absent", "canonical", "opaque"}) {
+                for (const bool force : {false, true}) {
+                    const QString rowName
+                        = QString("%1-%2-%3").arg(kind, state, force ? "force" : "default");
+                    QTest::newRow(qPrintable(rowName)) << kind << state << force;
+                }
+            }
+        }
+    }
+
+    void primitiveCellOwnership()
+    {
+        QFETCH(QString, kind);
+        QFETCH(QString, state);
+        QFETCH(bool, force);
+
+        QTemporaryDir canonicalDirectory;
+        QTemporaryDir targetDirectory;
+        QVERIFY(canonicalDirectory.isValid());
+        QVERIFY(targetDirectory.isValid());
+
+        QSocProjectManager canonicalProject;
+        canonicalProject.setCurrentPath(
+            QDir(canonicalDirectory.path()).filePath("canonical_project"));
+        QVERIFY(canonicalProject.mkpath());
+        QSocGenerateManager canonicalGenerator(nullptr, &canonicalProject);
+        QVERIFY(generateController(
+            kind, controllerFixture(kind, "canonical_controller"), canonicalGenerator));
+
+        const QString cellName = kind + "_cell.v";
+        QFile         canonicalFile(QDir(canonicalProject.getOutputPath()).filePath(cellName));
+        QVERIFY(canonicalFile.open(QIODevice::ReadOnly));
+        const QByteArray canonicalBytes = canonicalFile.readAll();
+        canonicalFile.close();
+        QVERIFY(!canonicalBytes.isEmpty());
+
+        QSocProjectManager targetProject;
+        targetProject.setCurrentPath(QDir(targetDirectory.path()).filePath("target_project"));
+        QVERIFY(targetProject.mkpath());
+        QSocGenerateManager targetGenerator(nullptr, &targetProject);
+        const QString       targetCellPath = QDir(targetProject.getOutputPath()).filePath(cellName);
+
+        QByteArray seededBytes;
+        if (state == "canonical") {
+            seededBytes = canonicalBytes + "// user-owned cell\n";
+        } else if (state == "opaque") {
+            seededBytes = "`include \"technology_cells.vh\"\n";
+        }
+        if (!seededBytes.isEmpty()) {
+            QFile targetCell(targetCellPath);
+            QVERIFY(targetCell.open(QIODevice::WriteOnly));
+            QCOMPARE(targetCell.write(seededBytes), seededBytes.size());
+            targetCell.close();
+        }
+
+        const QDir        outputDirectory(targetProject.getOutputPath());
+        const QStringList entriesBefore
+            = outputDirectory
+                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
+        const bool result = generateController(
+            kind, controllerFixture(kind, "ownership_controller"), targetGenerator, force);
+        const QStringList entriesAfter
+            = outputDirectory
+                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
+
+        QStringList expectedEntries = entriesBefore;
+        if (!expectedEntries.contains(cellName)) {
+            expectedEntries.append(cellName);
+        }
+        expectedEntries.append("ownership_controller.typ");
+        expectedEntries.sort();
+        QCOMPARE(entriesAfter, expectedEntries);
+
+        QFile targetCell(targetCellPath);
+        QVERIFY(targetCell.open(QIODevice::ReadOnly));
+        const QByteArray actualBytes = targetCell.readAll();
+        if (state != "absent" && !force) {
+            QCOMPARE(actualBytes, seededBytes);
+        } else {
+            QCOMPARE(actualBytes, canonicalBytes);
+        }
+        QVERIFY(result);
+    }
+
+    void primitiveCellForcedHardLinkReplacementIsIsolated_data()
+    {
+        primitiveCellLinkIsRejected_data();
+    }
+
+    void primitiveCellForcedHardLinkReplacementIsIsolated()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This platform does not provide POSIX hard-link semantics.");
+#else
+        QFETCH(QString, kind);
+        QTemporaryDir canonicalDirectory;
+        QTemporaryDir targetDirectory;
+        QVERIFY(canonicalDirectory.isValid());
+        QVERIFY(targetDirectory.isValid());
+
+        QSocProjectManager canonicalProject;
+        canonicalProject.setCurrentPath(
+            QDir(canonicalDirectory.path()).filePath("canonical_project"));
+        QVERIFY(canonicalProject.mkpath());
+        QSocGenerateManager canonicalGenerator(nullptr, &canonicalProject);
+        QVERIFY(generateController(
+            kind, controllerFixture(kind, "canonical_controller"), canonicalGenerator));
+
+        const QString cellName = kind + "_cell.v";
+        QFile         canonicalFile(QDir(canonicalProject.getOutputPath()).filePath(cellName));
+        QVERIFY(canonicalFile.open(QIODevice::ReadOnly));
+        const QByteArray canonicalBytes = canonicalFile.readAll();
+        canonicalFile.close();
+
+        QSocProjectManager targetProject;
+        targetProject.setCurrentPath(QDir(targetDirectory.path()).filePath("target_project"));
+        QVERIFY(targetProject.mkpath());
+        QSocGenerateManager targetGenerator(nullptr, &targetProject);
+
+        const QByteArray sentinelBytes("hard-link target sentinel\n");
+        const QString sentinelPath = QDir(targetProject.getCurrentPath()).filePath("cell_target");
+        const QString cellPath     = QDir(targetProject.getOutputPath()).filePath(cellName);
+        QFile         sentinel(sentinelPath);
+        QVERIFY(sentinel.open(QIODevice::WriteOnly));
+        QCOMPARE(sentinel.write(sentinelBytes), sentinelBytes.size());
+        sentinel.close();
+        const QByteArray encodedSentinel = QFile::encodeName(sentinelPath);
+        const QByteArray encodedCell     = QFile::encodeName(cellPath);
+        QCOMPARE(::link(encodedSentinel.constData(), encodedCell.constData()), 0);
+
+        QVERIFY(generateController(
+            kind, controllerFixture(kind, "hard_link_controller"), targetGenerator, true));
+        QVERIFY(sentinel.open(QIODevice::ReadOnly));
+        QCOMPARE(sentinel.readAll(), sentinelBytes);
+        sentinel.close();
+
+        QFile generatedCell(cellPath);
+        QVERIFY(generatedCell.open(QIODevice::ReadOnly));
+        QCOMPARE(generatedCell.readAll(), canonicalBytes);
+        const QStringList entries
+            = QDir(targetProject.getOutputPath())
+                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
+        QStringList expectedEntries{".gitkeep", cellName, "hard_link_controller.typ"};
+        expectedEntries.sort();
+        QCOMPARE(entries, expectedEntries);
+#endif
+    }
+
+    void primitiveCellOpenFailurePreservesBytes_data() { primitiveCellLinkIsRejected_data(); }
+
+    void primitiveCellOpenFailurePreservesBytes()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This platform does not provide POSIX directory permissions.");
+#else
+        QFETCH(QString, kind);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        QSocProjectManager project;
+        project.setCurrentPath(QDir(directory.path()).filePath("project"));
+        QVERIFY(project.mkpath());
+        QSocGenerateManager generator(nullptr, &project);
+        QVERIFY(generateController(kind, controllerFixture(kind, "seed_controller"), generator));
+
+        const QString cellPath = QDir(project.getOutputPath()).filePath(kind + "_cell.v");
+        QFile         cell(cellPath);
+        QVERIFY(cell.open(QIODevice::Append));
+        const QByteArray sentinelBytes("// open failure sentinel\n");
+        QCOMPARE(cell.write(sentinelBytes), sentinelBytes.size());
+        cell.close();
+        QVERIFY(cell.open(QIODevice::ReadOnly));
+        const QByteArray bytesBefore = cell.readAll();
+        cell.close();
+
+        const QDir        outputDirectory(project.getOutputPath());
+        const QStringList entriesBefore
+            = outputDirectory
+                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
+        const QFileDevice::Permissions originalPermissions = QFile::permissions(
+            project.getOutputPath());
+        const auto restorePermissions = qScopeGuard(
+            [&]() { QFile::setPermissions(project.getOutputPath(), originalPermissions); });
+        QVERIFY(
+            QFile::setPermissions(
+                project.getOutputPath(), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+
+        const QString probePath = outputDirectory.filePath("permission_probe");
+        QFile         probe(probePath);
+        if (probe.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+            probe.close();
+            QVERIFY(QFile::setPermissions(project.getOutputPath(), originalPermissions));
+            QVERIFY(QFile::remove(probePath));
+            QSKIP("Directory write permissions are not enforced for this test process.");
+        }
+
+        const bool result
+            = generateController(kind, controllerFixture(kind, "failed_controller"), generator, true);
+        QVERIFY(cell.open(QIODevice::ReadOnly));
+        QCOMPARE(cell.readAll(), bytesBefore);
+        QCOMPARE(
+            outputDirectory
+                .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name),
+            entriesBefore);
+        QVERIFY(!result);
+#endif
+    }
+
+    void primitiveCellEmptyCanonicalHonorsOwnership()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QSocGenerateArtifact::PrimitiveCellSpec spec{"cell.v", {}};
+        const QString    cellPath = QDir(directory.path()).filePath("cell.v");
+        const QByteArray existingBytes("user-owned cell\n");
+        QFile            existing(cellPath);
+        QVERIFY(existing.open(QIODevice::WriteOnly));
+        QCOMPARE(existing.write(existingBytes), existingBytes.size());
+        existing.close();
+
+        const auto preserved
+            = QSocGenerateArtifact::ensurePrimitiveCell(directory.path(), spec, false);
+        QVERIFY(preserved.success);
+        QVERIFY(!preserved.written);
+        QVERIFY(existing.open(QIODevice::ReadOnly));
+        QCOMPARE(existing.readAll(), existingBytes);
+        existing.close();
+
+        QVERIFY(QFile::remove(cellPath));
+        const auto missing
+            = QSocGenerateArtifact::ensurePrimitiveCell(directory.path(), spec, false);
+        QVERIFY(!missing.success);
+        QVERIFY(!missing.written);
+        QVERIFY(missing.error.contains("content is empty"));
+        QVERIFY(!QFileInfo::exists(cellPath));
     }
 
     void directTypstWriterPreservesRelativePath()

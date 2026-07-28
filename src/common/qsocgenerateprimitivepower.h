@@ -150,13 +150,6 @@ private:
     bool generatePowerCellFile(const QString &outputDir);
 
     /**
-     * @brief Check if power_cell.v file exists and is complete
-     * @param filePath Path to power_cell.v file
-     * @return true if file exists and contains required module
-     */
-    bool isPowerCellFileComplete(const QString &filePath);
-
-    /**
      * @brief Generate qsoc_power_fsm module definition with 8-state FSM
      * @return Module definition string
      */

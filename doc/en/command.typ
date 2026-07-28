@@ -298,7 +298,7 @@ input format is documented in @soc-net-format.
     [`-m`, `--merge`],
     [Merge multiple netlist files in order before processing],
     [`-f`, `--force`],
-    [Force overwrite existing primitive cell files (clock_cell.v, reset_cell.v)],
+    [Replace existing clock, reset, and power primitive cell files],
     [`--format`],
     [Run `verible-verilog-format` from `PATH` on each generated top-level Verilog file],
     [files], [The netlist files to be processed],

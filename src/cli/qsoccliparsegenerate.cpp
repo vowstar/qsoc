@@ -73,7 +73,7 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
              "main", "Merge multiple netlist files in order before processing.")},
         {{"f", "force"},
          QCoreApplication::translate(
-             "main", "Force overwrite existing primitive cell files (clock_cell.v, reset_cell.v).")},
+             "main", "Replace existing clock, reset, and power primitive cell files.")},
         {"format",
          QCoreApplication::translate(
              "main",

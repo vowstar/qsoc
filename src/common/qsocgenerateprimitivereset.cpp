@@ -1,5 +1,6 @@
 #include "qsocgenerateprimitivereset.h"
 #include "common/qsocconsole.h"
+#include "common/qsocgenerateartifact.h"
 #include "common/qsocpaths.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
@@ -889,24 +890,17 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
 
 bool QSocResetPrimitive::generateResetCellFile(const QString &outputDir)
 {
-    const auto artifact = QSocPaths::resolveArtifactPath(outputDir, "reset_cell.v");
-    if (!artifact.isValid()) {
-        QSocConsole::warn() << artifact.error;
-        return false;
+    QString     canonical;
+    QTextStream out(&canonical);
+    generateResetCellFile(out);
+    out.flush();
+
+    const QSocGenerateArtifact::PrimitiveCellSpec spec{"reset_cell.v", canonical.toUtf8()};
+    const auto result = QSocGenerateArtifact::ensurePrimitiveCell(outputDir, spec, m_forceOverwrite);
+    if (!result.success) {
+        QSocConsole::warn() << result.error;
     }
-    const QString filePath = artifact.path;
-    QFile         file(filePath);
-
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QSocConsole::warn() << "Cannot open reset_cell.v for writing:" << file.errorString();
-        return false;
-    }
-
-    QTextStream out(&file);
-
-    generateResetCellFile(out); // Call existing implementation
-    file.close();
-    return true;
+    return result.success;
 }
 
 void QSocResetPrimitive::generateResetComponentInstance(

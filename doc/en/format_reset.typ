@@ -523,17 +523,18 @@ The reset controller uses three standard component modules:
 
 === Auto-generated Template File: reset_cell.v
 <soc-net-reset-template-file>
-When any `reset` primitive is present, QSoC ensures an output file `reset_cell.v` exists containing all required template cells:
+When `reset_cell.v` is missing, QSoC creates it with all required template cells:
 
 - `qsoc_rst_sync` - Asynchronous reset synchronizer with test enable
 - `qsoc_rst_pipe` - Synchronous reset pipeline with test enable
 - `qsoc_rst_count` - Counter-based reset release with test enable
 
-The generated file includes proper header comments, timescale directives, and include guards to prevent multiple inclusions.
+The generated file includes header comments and a timescale directive.
 
 File generation behavior:
-- Always overwrites existing files with complete template set
-- Use `--force` option for explicit overwrite confirmation
+- Creates a missing file atomically
+- Preserves any existing file byte-for-byte
+- Replaces an existing file only when `--force` is explicit
 
 Users should replace these template implementations with their technology-specific standard cell implementations before using in production.
 

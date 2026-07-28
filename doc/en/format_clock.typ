@@ -809,12 +809,19 @@ FOUNDRY_GUIDE_BUF u_dsp_clk_pll_800m_sta (
 == Template RTL Cells
 <soc-net-clock-templates>
 QSoC generates these templates:
+- `qsoc_tc_clk_buf` - Test-controllable clock buffer
 - `qsoc_tc_clk_gate` - Test-controllable clock gate
+- `qsoc_tc_clk_gate_pos` - Positive-edge clock gate
+- `qsoc_tc_clk_gate_neg` - Negative-edge clock gate
+- `qsoc_tc_clk_inv` - Clock inverter
+- `qsoc_tc_clk_or2` - Two-input clock OR
+- `qsoc_tc_clk_mux2` - Two-input clock multiplexer
+- `qsoc_tc_clk_xor2` - Two-input clock XOR
 - `qsoc_clk_div` - Clock divider with FSM control
 - `qsoc_clk_div_auto` - Auto-width clock divider
-- `qsoc_clk_mux2` - 2-input clock multiplexer
-- `qsoc_clk_buf` - Clock buffer for STA guides
-- `qsoc_clk_inv` - Clock inverter
+- `qsoc_clk_or_tree` - Parameterized clock OR tree
+- `qsoc_clk_mux_gf` - Glitch-free clock multiplexer
+- `qsoc_clk_mux_raw` - Parameterized clock multiplexer
 
 Templates include:
 - Full FSM implementations, not toy assign statements
@@ -828,28 +835,17 @@ Replace with foundry cells before production use.
 
 === Auto-generated Template File: clock_cell.v
 <soc-net-clock-template-file>
-When any `clock` primitive is present, QSoC generates `clock_cell.v` containing all required template cells:
-
-- `qsoc_tc_clk_gate` - Test-controllable clock gate with proper enable logic and FSM control
-- `qsoc_clk_div` - Full-featured clock divider with dynamic configuration, parameter validation, and FSM-based control
-- `qsoc_clk_div_auto` - Auto-width clock divider with optimized parameter calculation
-- `qsoc_clk_mux2` - 2-input clock multiplexer with glitch-free switching
-- `qsoc_clk_buf` - Clock buffer for STA guide insertion
-- `qsoc_clk_inv` - Clock inverter with proper timing characteristics
+When missing, QSoC creates `clock_cell.v` with every template module listed in
+@soc-net-clock-templates.
 
 File generation behavior:
-- Always overwrites existing files with complete template set
-- Use `--force` option for explicit overwrite confirmation
-- Generated templates include sophisticated FSM logic, not simple assign statements
+- Creates a missing file atomically
+- Preserves any existing file byte-for-byte
+- Replaces an existing file only when `--force` is explicit
 
 *Important Notes:*
-+ *Generated templates are production-quality* with proper FSM control, parameter validation, and comprehensive functionality
-+ *Template names in actual code differ from documentation examples* - refer to generated `clock_cell.v` for accurate naming
-+ *Functionality is much more sophisticated* than simple behavioral models shown in examples
-+ *Users should examine generated files* rather than relying on documentation examples
-+ *Replace with foundry-specific implementations* before production use
-
-Template cells must be replaced with foundry-specific implementations before production use.
++ Inspect the generated interfaces before integrating technology cells.
++ Replace the templates with technology-specific implementations before production use.
 
 == Signal Deduplication
 <soc-net-clock-signal-dedup>

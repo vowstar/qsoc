@@ -3,6 +3,7 @@
 
 #include "qsocgenerateprimitivepower.h"
 #include "common/qsocconsole.h"
+#include "common/qsocgenerateartifact.h"
 #include "common/qsocpaths.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
@@ -534,55 +535,23 @@ void QSocPowerPrimitive::generateOutputAssignments(
 
 bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
 {
-    const auto artifact = QSocPaths::resolveArtifactPath(outputDir, "power_cell.v");
-    if (!artifact.isValid()) {
-        QSocConsole::warn() << artifact.error;
-        return false;
-    }
-    const QString filePath = artifact.path;
-
-    // Check if file exists and is complete
-    if (!m_forceOverwrite && isPowerCellFileComplete(filePath)) {
-        QSocConsole::info() << "power_cell.v already exists and is complete, skipping generation";
-        return true;
-    }
-
-    // Generate power_cell.v
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QSocConsole::warn() << "Failed to open file for writing:" << filePath;
-        return false;
-    }
-
-    QTextStream out(&file);
-    /* The generated top carries a time scale; a cell file without one makes
-       the design fail elaboration as soon as the two are read together. */
+    QString     canonical;
+    QTextStream out(&canonical);
     out << "`timescale 1ns / 1ps\n\n";
     out << generatePowerFSMModule();
     out << "\n" << generateResetPipeModule();
-    file.close();
+    out.flush();
 
-    QSocConsole::info() << "Generated power_cell.v at:" << filePath;
-    return true;
-}
-
-bool QSocPowerPrimitive::isPowerCellFileComplete(const QString &filePath)
-{
-    QFile file(filePath);
-    if (!file.exists()) {
-        return false;
+    const QSocGenerateArtifact::PrimitiveCellSpec spec{"power_cell.v", canonical.toUtf8()};
+    const auto result = QSocGenerateArtifact::ensurePrimitiveCell(outputDir, spec, m_forceOverwrite);
+    if (!result.success) {
+        QSocConsole::warn() << result.error;
+    } else if (result.written) {
+        QSocConsole::info() << "Generated power_cell.v at:" << result.path;
+    } else {
+        QSocConsole::info() << "power_cell.v already exists, skipping generation";
     }
-
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return false;
-    }
-
-    QString content = QTextStream(&file).readAll();
-    file.close();
-
-    // Check if both qsoc_power_fsm and qsoc_power_rst_sync modules exist
-    return content.contains("module qsoc_power_fsm")
-           && content.contains("module qsoc_power_rst_sync");
+    return result.success;
 }
 
 QString QSocPowerPrimitive::generatePowerFSMModule()

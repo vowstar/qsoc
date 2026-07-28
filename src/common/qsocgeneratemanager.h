@@ -342,8 +342,8 @@ public slots:
 
     /**
      * @brief Set force overwrite mode for primitive cell files.
-     * @details When enabled, existing primitive cell files (clock_cell.v, reset_cell.v)
-     *          will be forcefully overwritten during generation.
+     * @details When enabled, existing clock, reset, and power primitive cell files
+     *          will be replaced during generation.
      * @param force true to enable force overwrite, false to preserve existing files.
      */
     void setForceOverwrite(bool force);
