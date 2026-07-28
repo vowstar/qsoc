@@ -67,6 +67,44 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
         return true;
     }
 
+    /* A seq target may be spelled as a net that a top-level port carries.
+       Without this redirect the reg is sized from a name that owns no
+       declaration, so it degrades to a scalar and its assign references an
+       identifier the module never declares. */
+    const QMap<QString, QSocGenerateManager::TopPortBinding> topPortRedirect
+        = QSocGenerateManager::buildTopPortRedirect(netlistData);
+    const auto resolveBase = [&topPortRedirect](const QString &baseName) -> QString {
+        return topPortRedirect.value(baseName, {baseName, QString()}).port;
+    };
+    /* A net bound over a slice carries only that part of the port. Without the
+       slice the assign would drive the whole port and silently capture the
+       bits the netlist never bound. */
+    const auto resolveSlice =
+        [&topPortRedirect](const QString &baseName, const QString &ownSlice) -> QString {
+        const QString boundSlice = topPortRedirect.value(baseName, {baseName, QString()}).slice;
+        return QSocGenerateManager::composeBitSelect(
+            boundSlice, ownSlice, QStringLiteral("seq target ") + baseName);
+    };
+
+    /* A top-level input already has an external source; a seq reg on it
+       would drive the input from inside the module. */
+    QSet<QString> inputTopPortNames;
+    if (netlistData["port"] && netlistData["port"].IsMap()) {
+        for (const auto &portEntry : netlistData["port"]) {
+            if (!portEntry.first.IsScalar() || !portEntry.second.IsMap()) {
+                continue;
+            }
+            if (!portEntry.second["direction"] || !portEntry.second["direction"].IsScalar()) {
+                continue;
+            }
+            const QString dir
+                = QString::fromStdString(portEntry.second["direction"].as<std::string>()).toLower();
+            if (dir == "in" || dir == "input") {
+                inputTopPortNames.insert(QString::fromStdString(portEntry.first.as<std::string>()));
+            }
+        }
+    }
+
     /* First pass: collect base names that need internal reg declarations.
        A `reg: counter[3]` form historically formed `counter[3]_reg`, an
        illegal Verilog identifier. Strip the bit-select for the reg name
@@ -81,9 +119,13 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
         }
         const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
         const auto    parsed  = QSocGenerateManager::parseSignalBitSelect(regName);
-        if (!seenSeqRegBases.contains(parsed.first)) {
-            seenSeqRegBases.insert(parsed.first);
-            seqRegBases.append(parsed.first);
+        const QString regBase = resolveBase(parsed.first);
+        if (inputTopPortNames.contains(regBase)) {
+            continue;
+        }
+        if (!seenSeqRegBases.contains(regBase)) {
+            seenSeqRegBases.insert(regBase);
+            seqRegBases.append(regBase);
         }
     }
 
@@ -102,14 +144,18 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
         if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["reg"].IsScalar()) {
             continue;
         }
-        const QString regName   = QString::fromStdString(seqItem["reg"].as<std::string>());
-        const auto    parsed    = QSocGenerateManager::parseSignalBitSelect(regName);
-        const QString bitSelect = parsed.second;
-        if (bitSelect.isEmpty()) {
-            seqRegHasFullWrite.insert(parsed.first, true);
+        const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
+        const auto    parsed  = QSocGenerateManager::parseSignalBitSelect(regName);
+        const QString regBase = resolveBase(parsed.first);
+        if (inputTopPortNames.contains(regBase)) {
             continue;
         }
-        seqRegBitSelects[parsed.first].insert(bitSelect);
+        const QString bitSelect = resolveSlice(parsed.first, parsed.second);
+        if (bitSelect.isEmpty()) {
+            seqRegHasFullWrite.insert(regBase, true);
+            continue;
+        }
+        seqRegBitSelects[regBase].insert(bitSelect);
         const QRegularExpression      widthRegex(R"(\[\s*(\d+)\s*(?::\s*(\d+))?\s*\])");
         const QRegularExpressionMatch match = widthRegex.match(bitSelect);
         if (!match.hasMatch()) {
@@ -117,8 +163,8 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
         }
         bool      ok  = false;
         const int idx = match.captured(1).toInt(&ok);
-        if (ok && idx > seqRegMaxBit.value(parsed.first, -1)) {
-            seqRegMaxBit.insert(parsed.first, idx);
+        if (ok && idx > seqRegMaxBit.value(regBase, -1)) {
+            seqRegMaxBit.insert(regBase, idx);
         }
     }
 
@@ -187,30 +233,42 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
            drives. Two `assign foo = ...;` lines on the same target are a
            Verilog multi-driver conflict, and pre-fix this seq vs comb
            split silently emitted both. */
-        QSet<QString> combTargets;
+        QMap<QString, QStringList> combSlicesByBase;
         if (netlistData["comb"] && netlistData["comb"].IsSequence()) {
             for (size_t combIdx = 0; combIdx < netlistData["comb"].size(); ++combIdx) {
                 const YAML::Node &combItem = netlistData["comb"][combIdx];
                 if (!combItem.IsMap() || !combItem["out"] || !combItem["out"].IsScalar()) {
                     continue;
                 }
-                const QString outSig = QString::fromStdString(combItem["out"].as<std::string>());
-                const auto    parsed = QSocGenerateManager::parseSignalBitSelect(outSig);
-                QString       slice  = parsed.second;
+                const QString outSig  = QString::fromStdString(combItem["out"].as<std::string>());
+                const auto    parsed  = QSocGenerateManager::parseSignalBitSelect(outSig);
+                QString       slice   = parsed.second;
+                const QString outBase = resolveBase(parsed.first);
                 if (combItem["bits"] && combItem["bits"].IsScalar()) {
                     slice = QSocVerilogUtils::normalizeBitSelect(
                         QString::fromStdString(combItem["bits"].as<std::string>()));
                 }
-                combTargets.insert(parsed.first + slice);
+                combSlicesByBase[outBase].append(resolveSlice(parsed.first, slice));
             }
         }
+        /* A whole-base comb assign overlaps every seq slice of the base, so
+           the conflict is judged on bit ranges, not string equality. */
+        const auto combDrives = [&combSlicesByBase](const QString &base, const QString &slice) {
+            for (const QString &combSlice : combSlicesByBase.value(base)) {
+                if (combSlice.isEmpty() || slice.isEmpty()
+                    || QSocGenerateManager::doBitRangesOverlap(combSlice, slice)) {
+                    return true;
+                }
+            }
+            return false;
+        };
 
         out << "\n    /* Assign internal regs to outputs */\n";
         for (const QString &baseName : seqRegBases) {
             const bool           hasFullWrite = seqRegHasFullWrite.value(baseName, false);
             const QSet<QString> &slices       = seqRegBitSelects[baseName];
             if (hasFullWrite || slices.isEmpty()) {
-                if (combTargets.contains(baseName)) {
+                if (combDrives(baseName, QString())) {
                     QSocConsole::warn() << "seq and comb both drive" << baseName
                                         << "- multi-driver conflict in synth";
                     out << "    /* FIXME: comb also drives " << baseName
@@ -224,7 +282,7 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
                 QStringList sortedSlices = slices.values();
                 sortedSlices.sort();
                 for (const QString &slice : sortedSlices) {
-                    if (combTargets.contains(baseName + slice)) {
+                    if (combDrives(baseName, slice)) {
                         QSocConsole::warn() << "seq and comb both drive" << baseName << slice
                                             << "- multi-driver conflict in synth";
                         out << "    /* FIXME: comb also drives " << baseName << slice
@@ -267,10 +325,18 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
             continue; /* Skip invalid items */
         }
 
-        const QString regName     = QString::fromStdString(seqItem["reg"].as<std::string>());
-        const auto    parsedReg   = QSocGenerateManager::parseSignalBitSelect(regName);
-        const QString regBase     = parsedReg.first;
-        const QString regBitSlice = parsedReg.second;
+        const QString regName   = QString::fromStdString(seqItem["reg"].as<std::string>());
+        const auto    parsedReg = QSocGenerateManager::parseSignalBitSelect(regName);
+        const QString regBase   = resolveBase(parsedReg.first);
+        if (inputTopPortNames.contains(regBase)) {
+            QSocConsole::warn() << "seq writes to top-level input port" << regBase
+                                << "; cannot drive an input from inside the module - "
+                                   "skipping the always block";
+            out << "    /* FIXME: seq tried to drive top-level input " << regBase
+                << " - check the source netlist */\n";
+            continue;
+        }
+        const QString regBitSlice = resolveSlice(parsedReg.first, parsedReg.second);
         const QString regSignal   = regBase + "_reg" + regBitSlice;
         const QString clkSignal   = QString::fromStdString(seqItem["clk"].as<std::string>());
         if (!knownSignals.contains(clkSignal)) {

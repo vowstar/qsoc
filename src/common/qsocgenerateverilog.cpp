@@ -316,12 +316,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 
     /* Collect all ports for module interface */
     QStringList            ports;
-    QMap<QString, QString> portToNetConnections; /* Map of port name to connected net name */
     QMap<QString, QString> declaredSignalRanges;
-    /* Reverse lookup with full membership: a net may be claimed by several
-       top-level ports via `connect:`. Pre-fix only the first port saw the
-       internal driver; the others were declared but never wired. */
-    QMap<QString, QStringList> netToTopPortAliases;
+    /* Full membership per net. Routing and alias emission both read this,
+       then choose ownership by direction from the same component. */
+    const QMap<QString, NetTopPorts> netToTopPortAliases = QSocGenerateManager::buildNetToTopPorts(
+        netlistData);
 
     /* Process port section if it exists */
     if (netlistData["port"] && netlistData["port"].IsMap()) {
@@ -376,14 +375,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 type = QSocGenerateManager::cleanTypeForWireDeclaration(type);
             }
 
-            /* Store the connection information if present */
-            if (portIter->second["connect"] && portIter->second["connect"].IsScalar()) {
-                const QString connectedNet = QString::fromStdString(
-                    portIter->second["connect"].as<std::string>());
-                portToNetConnections[portName] = connectedNet;
-                netToTopPortAliases[connectedNet].append(portName);
-            }
-
             /* Add port declaration */
             declaredSignalRanges.insert(portName, type);
             if (direction == "input" || direction == "output") {
@@ -428,6 +419,70 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             }
         }
     }
+    QMap<QString, QPair<QStringList, QStringList>> instanceGuards;
+    QSet<QString>                                  emittableInstanceNames;
+    if (netlistData["instance"] && netlistData["instance"].IsMap()) {
+        QSet<QString> seenInstanceNames;
+        for (auto instanceIter = netlistData["instance"].begin();
+             instanceIter != netlistData["instance"].end();
+             ++instanceIter) {
+            if (!instanceIter->first.IsScalar()) {
+                continue;
+            }
+            const QString instanceName = QString::fromStdString(
+                instanceIter->first.as<std::string>());
+            if (seenInstanceNames.contains(instanceName)) {
+                continue;
+            }
+            seenInstanceNames.insert(instanceName);
+            if (!instanceIter->second || !instanceIter->second.IsMap()
+                || !instanceIter->second["module"] || !instanceIter->second["module"].IsScalar()) {
+                continue;
+            }
+            QStringList ifdefList;
+            QStringList ifndefList;
+            if (parseMacroCondition(instanceIter->second, instanceName, ifdefList, ifndefList)) {
+                emittableInstanceNames.insert(instanceName);
+                instanceGuards.insert(instanceName, qMakePair(ifdefList, ifndefList));
+            }
+        }
+    }
+    enum class InstancePortRole { Input, Output, Inout, Unowned, Dropped };
+    const auto instancePortRole = [&](const QString &instanceName, const QString &portName) {
+        if (!emittableInstanceNames.contains(instanceName) || !netlistData["instance"]
+            || !netlistData["instance"][instanceName.toStdString()]
+            || !netlistData["instance"][instanceName.toStdString()]["module"]
+            || !netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
+            return InstancePortRole::Dropped;
+        }
+        const QString moduleName = QString::fromStdString(
+            netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
+        if (!moduleManager || !moduleManager->isModuleExist(moduleName)) {
+            return InstancePortRole::Unowned;
+        }
+        const YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+        if (!moduleData["port"] || !moduleData["port"].IsMap()
+            || !moduleData["port"][portName.toStdString()]) {
+            return InstancePortRole::Dropped;
+        }
+        const YAML::Node portData = moduleData["port"][portName.toStdString()];
+        if (!portData["direction"] || !portData["direction"].IsScalar()) {
+            return InstancePortRole::Unowned;
+        }
+        const QString direction
+            = QString::fromStdString(portData["direction"].as<std::string>()).toLower();
+        if (direction == QStringLiteral("in") || direction == QStringLiteral("input")) {
+            return InstancePortRole::Input;
+        }
+        if (direction == QStringLiteral("out") || direction == QStringLiteral("output")) {
+            return InstancePortRole::Output;
+        }
+        if (direction == QStringLiteral("inout")) {
+            return InstancePortRole::Inout;
+        }
+        return InstancePortRole::Unowned;
+    };
+    QSet<QString> forcedInternalWireNets;
 
     /* First, create the instancePortConnections map with port connections */
     /* This needs to be done before wire generation to ensure port names are used */
@@ -441,16 +496,42 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             const QString netName = QString::fromStdString(netIter->first.as<std::string>());
 
             /* Check if this net is connected to a top-level port */
-            QString connectedPortName;
-            bool    connectedToTopPort = false;
-
-            for (auto it = portToNetConnections.begin(); it != portToNetConnections.end(); ++it) {
-                if (it.value() == netName) {
-                    connectedToTopPort = true;
-                    connectedPortName  = it.key();
-                    break;
+            const NetTopPorts netTopPorts        = netToTopPortAliases.value(netName);
+            const bool        connectedToTopPort = !netTopPorts.members.isEmpty()
+                                                   || !netTopPorts.slices.isEmpty();
+            /* A net is carried by its head sink so an instance driver lands
+               on a port that may legally sit on the left of an assign;
+               instance connections land on that port and slice together. */
+            QString connectedPortNameValue;
+            QString connectedPortSliceValue;
+            {
+                bool headFound = false;
+                for (const QString &member : netTopPorts.members) {
+                    if (topPortDirection(netlistData, member) == QStringLiteral("output")) {
+                        connectedPortNameValue = member;
+                        headFound              = true;
+                        break;
+                    }
+                }
+                if (!headFound) {
+                    for (const auto &candidate : netTopPorts.slices) {
+                        if (candidate.direction == QStringLiteral("output")) {
+                            connectedPortNameValue  = candidate.port;
+                            connectedPortSliceValue = candidate.slice;
+                            headFound               = true;
+                            break;
+                        }
+                    }
+                }
+                if (!headFound && !netTopPorts.members.isEmpty()) {
+                    connectedPortNameValue = netTopPorts.members.first();
+                } else if (!headFound && !netTopPorts.slices.isEmpty()) {
+                    connectedPortNameValue  = netTopPorts.slices.first().port;
+                    connectedPortSliceValue = netTopPorts.slices.first().slice;
                 }
             }
+            const QString &connectedPortName  = connectedPortNameValue;
+            const QString &connectedPortSlice = connectedPortSliceValue;
 
             try {
                 /* Build connections using List format only */
@@ -485,7 +566,16 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         const QString portName = QString::fromStdString(
                             connectionNode["port"].as<std::string>());
 
-                        const auto instancePortKey = qMakePair(instanceName, portName);
+                        /* A top-level port may bind several distinct slices to
+                           one net, so `top` keys carry the slice; an instance
+                           port takes a single named connection either way. */
+                        QString dedupPortKey = portName;
+                        if (instanceName == "top" && connectionNode["bits"]
+                            && connectionNode["bits"].IsScalar()) {
+                            dedupPortKey += QSocVerilogUtils::normalizeBitSelect(
+                                QString::fromStdString(connectionNode["bits"].as<std::string>()));
+                        }
+                        const auto instancePortKey = qMakePair(instanceName, dedupPortKey);
                         if (seenInstancePort.contains(instancePortKey)) {
                             QSocConsole::warn()
                                 << "Net" << netName << "lists" << instanceName << "." << portName
@@ -513,11 +603,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                             instancePortToFirstNet.insert(instancePortKey, netName);
                         }
 
-                        /* If this is a top-level port connection, add it to portToNetConnections */
-                        if (instanceName == "top") {
-                            portToNetConnections[portName] = netName;
-                        }
-
                         /* Check if this port has invert attribute */
                         bool hasInvert = false;
                         if (netlistData["instance"]
@@ -543,15 +628,42 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 QString::fromStdString(connectionNode["bits"].as<std::string>()));
                         }
 
+                        bool useTopPort = connectedToTopPort;
+                        if (useTopPort && instanceName != "top") {
+                            const InstancePortRole role = instancePortRole(instanceName, portName);
+                            const QString carrierDirection = QSocGenerateManager::topPortDirection(
+                                netlistData, connectedPortName);
+                            if (carrierDirection == QStringLiteral("input")
+                                && role == InstancePortRole::Output) {
+                                useTopPort = false;
+                                if (!topLevelPortNames.contains(netName)) {
+                                    forcedInternalWireNets.insert(netName);
+                                }
+                            }
+                        }
+
                         /* If connected to top-level port, use the port name instead of net name */
-                        if (connectedToTopPort) {
+                        if (useTopPort) {
+                            QString select = bitSelect;
+                            /* `top` entries are the bindings themselves, not
+                               consumers of the net. */
+                            if (!connectedPortSlice.isEmpty() && instanceName != "top") {
+                                select = connectedPortSlice;
+                            }
                             instancePortConnections[instanceName][portName]
-                                = hasInvert ? QString("~%1%2")
-                                                  .arg(connectedPortName)
-                                                  .arg(bitSelect.isEmpty() ? "" : bitSelect)
-                                            : QString("%1%2")
-                                                  .arg(connectedPortName)
-                                                  .arg(bitSelect.isEmpty() ? "" : bitSelect);
+                                = hasInvert ? QString("~%1%2").arg(connectedPortName).arg(select)
+                                            : QString("%1%2").arg(connectedPortName).arg(select);
+                        } else if (
+                            instanceName != "top" && topLevelPortNames.contains(netName)
+                            && topPortDirection(netlistData, netName) == QStringLiteral("input")
+                            && instancePortRole(instanceName, portName)
+                                   == InstancePortRole::Output) {
+                            instancePortConnections[instanceName][portName] = {};
+                            QSocConsole::warn()
+                                << "Net" << netName
+                                << "cannot carry an instance output without driving the "
+                                   "same-named top-level input; leaving"
+                                << instanceName << "." << portName << "unconnected";
                         } else {
                             instancePortConnections[instanceName][portName]
                                 = hasInvert ? QString("~%1%2").arg(netName).arg(
@@ -582,28 +694,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         } else {
             /* Collect comb/seq/fsm signals (inputs and outputs) once before the loop */
             const QList<PortDetailInfo> combSeqFsmSignals = collectCombSeqFsmSignals();
-
-            /* Build per-instance ifdef/ifndef guard cache so the multi-driver
-               check can prove drivers under mutually exclusive macros are not
-               actually conflicting. */
-            QMap<QString, QPair<QStringList, QStringList>> instanceGuards;
-            if (netlistData["instance"] && netlistData["instance"].IsMap()) {
-                for (auto instIter = netlistData["instance"].begin();
-                     instIter != netlistData["instance"].end();
-                     ++instIter) {
-                    if (!instIter->first.IsScalar()) {
-                        continue;
-                    }
-                    const QString instanceName = QString::fromStdString(
-                        instIter->first.as<std::string>());
-                    QStringList ifdefList;
-                    QStringList ifndefList;
-                    if (instIter->second.IsMap()) {
-                        parseMacroCondition(instIter->second, instanceName, ifdefList, ifndefList);
-                    }
-                    instanceGuards.insert(instanceName, qMakePair(ifdefList, ifndefList));
-                }
-            }
 
             /* Track nets that resolved to scalar wires so per-port [0] / [0:0]
                selects on those nets can be scrubbed before instantiation. */
@@ -647,18 +737,43 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                 QList<PortDetailInfo> portDetails;
 
                 /* Check if this net is connected to a top-level port */
-                bool    connectedToTopPort = false;
-                QString connectedPortName;
-                QString topLevelPortDirection = "unknown";
+                const NetTopPorts netTopPorts        = netToTopPortAliases.value(netName);
+                const bool        connectedToTopPort = !netTopPorts.members.isEmpty()
+                                                       || !netTopPorts.slices.isEmpty();
+                QString           connectedPortNameValue;
+                QString           connectedHeadSliceValue;
+                {
+                    bool headFound = false;
+                    for (const QString &member : netTopPorts.members) {
+                        if (topPortDirection(netlistData, member) == QStringLiteral("output")) {
+                            connectedPortNameValue = member;
+                            headFound              = true;
+                            break;
+                        }
+                    }
+                    if (!headFound) {
+                        for (const auto &candidate : netTopPorts.slices) {
+                            if (candidate.direction == QStringLiteral("output")) {
+                                connectedPortNameValue  = candidate.port;
+                                connectedHeadSliceValue = candidate.slice;
+                                headFound               = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!headFound && !netTopPorts.members.isEmpty()) {
+                        connectedPortNameValue = netTopPorts.members.first();
+                    } else if (!headFound && !netTopPorts.slices.isEmpty()) {
+                        connectedPortNameValue  = netTopPorts.slices.first().port;
+                        connectedHeadSliceValue = netTopPorts.slices.first().slice;
+                    }
+                }
+                const QString &connectedPortName     = connectedPortNameValue;
+                QString        topLevelPortDirection = "unknown";
                 QString reversedDirection = "unknown"; /* Default fallback, defined in outer scope */
 
-                /* Check if this net is connected to a top-level port */
-                for (auto it = portToNetConnections.begin(); it != portToNetConnections.end();
-                     ++it) {
-                    if (it.value() == netName) {
-                        connectedToTopPort = true;
-                        connectedPortName  = it.key();
-
+                if (connectedToTopPort) {
+                    {
                         /* Get the port direction */
                         if (netlistData["port"]
                             && netlistData["port"][connectedPortName.toStdString()]
@@ -737,7 +852,35 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                 portWidthSpec,
                                 topLevelPortDirection,
                                 bitSelection));
-                        break;
+                    }
+
+                    /* The remaining members and every slice binding carry the
+                       same net; without them an input-slice source is invisible
+                       here and the net is misreported as undriven. */
+                    bool headDetailSkipped = false;
+                    const auto appendTopDetail = [&](const QString &portName, const QString &slice) {
+                        if (!headDetailSkipped && portName == connectedPortName
+                            && slice == connectedHeadSliceValue) {
+                            headDetailSkipped = true;
+                            return;
+                        }
+                        QString widthSpec;
+                        if (netlistData["port"] && netlistData["port"][portName.toStdString()]) {
+                            const auto portNode = netlistData["port"][portName.toStdString()];
+                            if (portNode["type"] && portNode["type"].IsScalar()) {
+                                widthSpec = QString::fromStdString(
+                                    portNode["type"].as<std::string>());
+                            }
+                        }
+                        portDetails.append(
+                            PortDetailInfo::createTopLevelPort(
+                                portName, widthSpec, topPortDirection(netlistData, portName), slice));
+                    };
+                    for (const QString &member : netTopPorts.members) {
+                        appendTopDetail(member, QString());
+                    }
+                    for (const auto &bound : netTopPorts.slices) {
+                        appendTopDetail(bound.port, bound.slice);
                     }
                 }
 
@@ -767,9 +910,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                         const QString portName = QString::fromStdString(
                             connectionNode["port"].as<std::string>());
 
-                        /* If this is a top-level port connection, add it to portToNetConnections */
-                        if (instanceName == "top") {
-                            portToNetConnections[portName] = netName;
+                        if (instanceName != "top"
+                            && !emittableInstanceNames.contains(instanceName)) {
+                            continue;
                         }
 
                         /* Create a module port connection */
@@ -1158,8 +1301,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                     }
                 }
 
-                /* Only declare wire if not connected to top-level port to avoid redundancy */
-                if (!connectedToTopPort) {
+                /* An instance output cannot use a top-level input as its
+                   destination; keep an internal wire for that conflict. */
+                if (!connectedToTopPort || forcedInternalWireNets.contains(netName)) {
                     /* Get net width from all ports connected to this net */
                     QString netWidth = "";
                     int     maxWidth = 0;
@@ -1354,13 +1498,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             const QString moduleName = QString::fromStdString(
                 instanceData["module"].as<std::string>());
 
-            /* Parse conditional compilation directives */
-            QStringList ifdefList;
-            QStringList ifndefList;
-            if (!parseMacroCondition(instanceData, instanceName, ifdefList, ifndefList)) {
-                /* Conflict detected, skip this instance */
+            /* Use the validated conditional compilation directives. */
+            if (!emittableInstanceNames.contains(instanceName)) {
                 continue;
             }
+            const auto  guardEntry = instanceGuards.value(instanceName);
+            QStringList ifdefList  = guardEntry.first;
+            QStringList ifndefList = guardEntry.second;
 
             /* Write ifdef/ifndef begin directives if present */
             if (!ifdefList.isEmpty() || !ifndefList.isEmpty()) {
@@ -1818,63 +1962,446 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* NOTE: FSM, reset, and clock primitive modules are now generated
      * at file level before the top-level module. No inline generation needed. */
 
-    /* When several top-level ports `connect:` to the same internal net,
-       only one of them sees the driver via portToNetConnections. Wire the
-       remaining output ports as aliases of the chosen one so they are not
-       left silently dangling. Mixed direction or inout aliases are not
-       expressible via `assign`, so those just get a FIXME. */
-    auto topPortDirection = [&](const QString &portName) -> QString {
-        if (!netlistData["port"] || !netlistData["port"][portName.toStdString()]) {
-            return {};
-        }
-        const auto &node = netlistData["port"][portName.toStdString()];
-        if (!node["direction"] || !node["direction"].IsScalar()) {
-            return {};
-        }
-        const QString dir = QString::fromStdString(node["direction"].as<std::string>()).toLower();
-        if (dir == "out" || dir == "output") {
-            return "output";
-        }
-        if (dir == "in" || dir == "input") {
-            return "input";
-        }
-        if (dir == "inout") {
-            return "inout";
-        }
-        return dir;
+    /* When several top-level ports share one internal net, route drivers by
+       direction and fan out compatible output sinks from the selected source.
+       Ambiguous ownership is diagnosed without inventing a connection. */
+    const auto topPortDirection = [&](const QString &portName) {
+        return QSocGenerateManager::topPortDirection(netlistData, portName);
     };
 
-    bool aliasHeaderEmitted = false;
-    for (auto aliasIt = netToTopPortAliases.constBegin(); aliasIt != netToTopPortAliases.constEnd();
-         ++aliasIt) {
-        const QStringList &aliases = aliasIt.value();
-        if (aliases.size() < 2) {
-            continue;
-        }
-        const QString primary    = aliases.first();
-        const QString primaryDir = topPortDirection(primary);
-        bool          allOutputs = (primaryDir == "output");
-        for (int aliasIdx = 1; aliasIdx < aliases.size() && allOutputs; ++aliasIdx) {
-            if (topPortDirection(aliases.at(aliasIdx)) != "output") {
-                allOutputs = false;
+    /* Ranges that comb, seq, or an instance already drive, per resolved port.
+       An empty range means
+       the whole port. Conflicts are judged on bit ranges: a driver on one
+       slice does not collide with an alias assignment onto a disjoint one. */
+    QMap<QString, QStringList> drivenRangesByPort;
+    QSet<QString>              processDrivenNets;
+    QSet<QString>              instanceDrivenNets;
+    QSet<QString>              inoutConnectionNets;
+    QSet<QString>              unknownOwnershipNets;
+    const auto                 rangesOverlap = [](const QString &lhs, const QString &rhs) {
+        return lhs.isEmpty() || rhs.isEmpty() || QSocGenerateManager::doBitRangesOverlap(lhs, rhs);
+    };
+    const auto collidesWithDriver = [&drivenRangesByPort,
+                                     &rangesOverlap](const QString &port, const QString &slice) {
+        for (const QString &driven : drivenRangesByPort.value(port)) {
+            if (rangesOverlap(driven, slice)) {
+                return true;
             }
         }
+        return false;
+    };
+    {
+        const QMap<QString, QSocGenerateManager::TopPortBinding> redirect
+            = QSocGenerateManager::buildTopPortRedirect(netlistData);
+        const auto collect = [&](const char *section, const char *key, bool combSection) {
+            if (!netlistData[section] || !netlistData[section].IsSequence()) {
+                return;
+            }
+            for (const auto &item : netlistData[section]) {
+                if (!item.IsMap() || !item[key] || !item[key].IsScalar()) {
+                    continue;
+                }
+                if (combSection) {
+                    const bool hasExpression = item["expr"] && item["expr"].IsScalar();
+                    const bool hasIf         = item["if"] && item["if"].IsSequence();
+                    const bool hasCase = item["case"] && item["case"].IsScalar() && item["cases"]
+                                         && item["cases"].IsMap();
+                    if (!hasExpression && !hasIf && !hasCase) {
+                        continue;
+                    }
+                }
+                const QString name   = QString::fromStdString(item[key].as<std::string>());
+                const auto    parsed = parseSignalBitSelect(name);
+                const QSocGenerateManager::TopPortBinding target
+                    = redirect.value(parsed.first, {parsed.first, QString()});
+                if (netlistData["port"] && netlistData["port"][target.port.toStdString()]
+                    && netlistData["port"][target.port.toStdString()]["direction"]
+                    && netlistData["port"][target.port.toStdString()]["direction"].IsScalar()) {
+                    const QString direction
+                        = QString::fromStdString(
+                              netlistData["port"][target.port.toStdString()]["direction"]
+                                  .as<std::string>())
+                              .toLower();
+                    if (direction == QStringLiteral("in") || direction == QStringLiteral("input")) {
+                        continue;
+                    }
+                }
+                QString ownSlice = parsed.second;
+                if (combSection && item["bits"] && item["bits"].IsScalar()) {
+                    ownSlice = QSocVerilogUtils::normalizeBitSelect(
+                        QString::fromStdString(item["bits"].as<std::string>()));
+                }
+                /* The inner select is relative to the bound slice; record the
+                   composed port range or the collision check compares
+                   mismatched coordinate systems. */
+                const QString range = QSocGenerateManager::composeBitSelect(
+                    target.slice, ownSlice, QStringLiteral("driver record ") + parsed.first);
+                drivenRangesByPort[target.port].append(range);
+                if (netToTopPortAliases.contains(parsed.first)) {
+                    processDrivenNets.insert(parsed.first);
+                }
+            }
+        };
+        collect("comb", "out", true);
+        collect("seq", "reg", false);
+
+        /* An instance output reaching a member through a net that carries the
+           member's name drives it just as a process would. */
+        if (netlistData["net"] && netlistData["net"].IsMap()) {
+            for (const auto &netEntry : netlistData["net"]) {
+                if (!netEntry.first.IsScalar() || !netEntry.second.IsSequence()) {
+                    continue;
+                }
+                const QString netName = QString::fromStdString(netEntry.first.as<std::string>());
+                if (!topLevelPortNames.contains(netName) && !netToTopPortAliases.contains(netName)) {
+                    continue;
+                }
+                for (const auto &connectionNode : netEntry.second) {
+                    if (!connectionNode.IsMap() || !connectionNode["instance"]
+                        || !connectionNode["instance"].IsScalar()) {
+                        continue;
+                    }
+                    const QString instanceName = QString::fromStdString(
+                        connectionNode["instance"].as<std::string>());
+                    if (instanceName == "top") {
+                        continue;
+                    }
+                    /* Only a driving instance port collides with the alias
+                       assignment; an instance input just reads the net. */
+                    if (!connectionNode["port"] || !connectionNode["port"].IsScalar()) {
+                        continue;
+                    }
+                    const QString portName = QString::fromStdString(
+                        connectionNode["port"].as<std::string>());
+                    const InstancePortRole role = instancePortRole(instanceName, portName);
+                    if (role == InstancePortRole::Input || role == InstancePortRole::Dropped) {
+                        continue;
+                    }
+                    if (role == InstancePortRole::Unowned) {
+                        unknownOwnershipNets.insert(netName);
+                        continue;
+                    }
+                    if (role == InstancePortRole::Inout) {
+                        instanceDrivenNets.insert(netName);
+                        inoutConnectionNets.insert(netName);
+                        continue;
+                    }
+                    instanceDrivenNets.insert(netName);
+                    QString connection = instancePortConnections.value(instanceName).value(portName);
+                    if (connection.startsWith('~')) {
+                        connection.remove(0, 1);
+                    }
+                    const auto target = parseSignalBitSelect(connection);
+                    if (!target.first.isEmpty()) {
+                        drivenRangesByPort[target.first].append(target.second);
+                    }
+                }
+            }
+        }
+    }
+
+    bool       aliasHeaderEmitted = false;
+    const auto emitAliasHeader    = [&]() {
         if (!aliasHeaderEmitted) {
             out << "\n    /* Top-level port aliases (multiple ports share one net) */\n";
             aliasHeaderEmitted = true;
         }
-        if (allOutputs) {
-            for (int aliasIdx = 1; aliasIdx < aliases.size(); ++aliasIdx) {
-                out << "    assign " << aliases.at(aliasIdx) << " = " << primary << ";\n";
+    };
+    /* Statically known bit widths for the alias mismatch diagnostic;
+       -1 when the width cannot be proven from the netlist alone. */
+    const auto sliceWidthOf = [](const QString &slice) -> int {
+        static const QRegularExpression rangeRegex(R"(^\[(\d+)(?::(\d+))?\]$)");
+        const QRegularExpressionMatch   match = rangeRegex.match(slice);
+        if (!match.hasMatch()) {
+            return -1;
+        }
+        if (match.capturedLength(2) == 0) {
+            return 1;
+        }
+        const int msb = match.captured(1).toInt();
+        const int lsb = match.captured(2).toInt();
+        return (msb >= lsb ? msb - lsb : lsb - msb) + 1;
+    };
+    const auto boundWidthOf = [&](const QString &portName, const QString &slice) -> int {
+        if (!slice.isEmpty()) {
+            return sliceWidthOf(slice);
+        }
+        if (!netlistData["port"] || !netlistData["port"][portName.toStdString()]) {
+            return -1;
+        }
+        const auto portNode = netlistData["port"][portName.toStdString()];
+        if (!portNode["type"] || !portNode["type"].IsScalar()) {
+            return -1;
+        }
+        const QString typeStr = QString::fromStdString(portNode["type"].as<std::string>());
+        static const QRegularExpression typeRangeRegex(
+            R"(^\s*(?:logic|wire|reg|bit)(?:\s+(?:signed|unsigned))?\s*(\[(\d+):(\d+)\])?\s*$)");
+        const QRegularExpressionMatch match = typeRangeRegex.match(typeStr);
+        if (!match.hasMatch()) {
+            return -1;
+        }
+        if (match.capturedLength(1) == 0) {
+            return 1;
+        }
+        const int msb = match.captured(2).toInt();
+        const int lsb = match.captured(3).toInt();
+        return (msb >= lsb ? msb - lsb : lsb - msb) + 1;
+    };
+    const auto warnAliasWidthMismatch = [&](const QString &sinkPort,
+                                            const QString &sinkSlice,
+                                            const QString &srcPort,
+                                            const QString &srcSlice) {
+        const int sinkWidth = boundWidthOf(sinkPort, sinkSlice);
+        const int srcWidth  = boundWidthOf(srcPort, srcSlice);
+        if (sinkWidth > 0 && srcWidth > 0 && sinkWidth != srcWidth) {
+            emitAliasHeader();
+            out << "    /* FIXME: " << sinkPort << sinkSlice << " is " << sinkWidth
+                << " bits but its source " << srcPort << srcSlice << " is " << srcWidth
+                << " bits - width mismatch */\n";
+            QSocConsole::warn() << sinkPort + sinkSlice << "is" << sinkWidth
+                                << "bits but its source" << srcPort + srcSlice << "is" << srcWidth
+                                << "bits; width mismatch";
+        }
+    };
+    const auto emitAssign = [&](const QString &lhsPort,
+                                const QString &lhsSlice,
+                                const QString &rhsPort,
+                                const QString &rhsSlice) {
+        emitAliasHeader();
+        warnAliasWidthMismatch(lhsPort, lhsSlice, rhsPort, rhsSlice);
+        if (collidesWithDriver(lhsPort, lhsSlice)) {
+            QSocConsole::warn() << "alias and another driver both reach" << lhsPort
+                                << "- multi-driver conflict in synth";
+            out << "    /* FIXME: another driver also reaches " << lhsPort
+                << " - multi-driver conflict */\n";
+        }
+        out << "    assign " << lhsPort << lhsSlice << " = " << rhsPort << rhsSlice << ";\n";
+    };
+
+    /* Every spelling of one connected component names one signal, so its
+       endpoints are judged together: whole members and slice bindings of
+       every net name in the component form one list, direction fixes each
+       endpoint's role, and exactly one source may drive the sinks. */
+    struct NetEndpoint
+    {
+        QString port;
+        QString slice; /* empty for a whole binding */
+        QString direction;
+    };
+    struct NetComponent
+    {
+        QStringList        netNames;
+        QStringList        members;
+        QList<NetEndpoint> endpoints;
+    };
+    QMap<QString, NetComponent> componentsByKey;
+    QStringList                 componentOrder;
+    for (auto aliasIt = netToTopPortAliases.constBegin(); aliasIt != netToTopPortAliases.constEnd();
+         ++aliasIt) {
+        const NetTopPorts &entry = aliasIt.value();
+        if (entry.members.isEmpty() && entry.slices.isEmpty()) {
+            continue;
+        }
+        const QString key = entry.members.isEmpty()
+                                ? QStringLiteral("net:") + aliasIt.key()
+                                : QStringLiteral("grp:") + entry.members.first();
+        if (!componentsByKey.contains(key)) {
+            componentOrder.append(key);
+            NetComponent component;
+            component.members = entry.members;
+            for (const QString &member : entry.members) {
+                component.endpoints.append({member, QString(), topPortDirection(member)});
             }
+            componentsByKey.insert(key, component);
+        }
+        NetComponent &component = componentsByKey[key];
+        component.netNames.append(aliasIt.key());
+        for (const auto &bound : entry.slices) {
+            component.endpoints.append({bound.port, bound.slice, bound.direction});
+        }
+    }
+
+    for (const QString &componentKey : componentOrder) {
+        const NetComponent &component = componentsByKey.value(componentKey);
+        const QString      &netLabel  = component.netNames.first();
+
+        QList<NetEndpoint> sinks;
+        QList<NetEndpoint> sources;
+        bool               unowned                  = false;
+        bool               unownedDiagnosticEmitted = false;
+        for (const auto &endpoint : component.endpoints) {
+            if (endpoint.direction == QStringLiteral("output")) {
+                sinks.append(endpoint);
+            } else if (endpoint.direction == QStringLiteral("input")) {
+                sources.append(endpoint);
+            } else {
+                unowned = true;
+                if (component.endpoints.size() >= 2) {
+                    /* A lone unowned endpoint needs no wiring decision; only a
+                       component that actually fans out is worth a diagnostic. */
+                    emitAliasHeader();
+                    out << "    /* FIXME: net " << netLabel << " binds " << endpoint.port
+                        << endpoint.slice << " whose direction gives no ownership - not wired */\n";
+                    QSocConsole::warn()
+                        << "Net" << netLabel << "binds" << endpoint.port << endpoint.slice
+                        << "whose direction gives no ownership; not wired";
+                    unownedDiagnosticEmitted = true;
+                }
+            }
+        }
+        bool hasUnownedConnection = false;
+        for (const QString &netName : component.netNames) {
+            if (component.endpoints.size() >= 2
+                && (unknownOwnershipNets.contains(netName)
+                    || inoutConnectionNets.contains(netName))) {
+                hasUnownedConnection = true;
+                break;
+            }
+        }
+        if (hasUnownedConnection) {
+            unowned = true;
+            if (!unownedDiagnosticEmitted) {
+                emitAliasHeader();
+                out << "    /* FIXME: net " << netLabel
+                    << " has a connection whose direction gives no ownership - not wired */\n";
+                QSocConsole::warn() << "Net" << netLabel
+                                    << "has a connection whose direction gives no ownership; "
+                                       "not wired";
+            }
+        }
+        if (unowned) {
+            continue;
+        }
+
+        /* Only a real driver counts: a process or instance output reaching
+           any spelling or endpoint port. Membership alone proves nothing. */
+        static const QRegularExpression numericRange(R"(^\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\]$)");
+        const auto numericRangeContains = [&](const QString &outer, const QString &inner) {
+            const QRegularExpressionMatch outerMatch = numericRange.match(outer);
+            const QRegularExpressionMatch innerMatch = numericRange.match(inner);
+            if (!outerMatch.hasMatch() || !innerMatch.hasMatch()) {
+                return false;
+            }
+            bool      outerFirstOk  = false;
+            bool      outerSecondOk = false;
+            bool      innerFirstOk  = false;
+            bool      innerSecondOk = false;
+            const int outerFirst    = outerMatch.captured(1).toInt(&outerFirstOk);
+            const int outerSecond   = outerMatch.capturedLength(2) > 0
+                                          ? outerMatch.captured(2).toInt(&outerSecondOk)
+                                          : outerFirst;
+            const int innerFirst    = innerMatch.captured(1).toInt(&innerFirstOk);
+            const int innerSecond   = innerMatch.capturedLength(2) > 0
+                                          ? innerMatch.captured(2).toInt(&innerSecondOk)
+                                          : innerFirst;
+            outerSecondOk = outerMatch.capturedLength(2) == 0 ? outerFirstOk : outerSecondOk;
+            innerSecondOk = innerMatch.capturedLength(2) == 0 ? innerFirstOk : innerSecondOk;
+            if (!outerFirstOk || !outerSecondOk || !innerFirstOk || !innerSecondOk) {
+                return false;
+            }
+            const int outerLo = qMin(outerFirst, outerSecond);
+            const int outerHi = qMax(outerFirst, outerSecond);
+            const int innerLo = qMin(innerFirst, innerSecond);
+            const int innerHi = qMax(innerFirst, innerSecond);
+            return outerLo <= innerLo && outerHi >= innerHi;
+        };
+        const auto endpointHasDriver = [&](const NetEndpoint &endpoint) {
+            for (const QString &driverRange : drivenRangesByPort.value(endpoint.port)) {
+                const bool bothNumeric = numericRange.match(driverRange).hasMatch()
+                                         && numericRange.match(endpoint.slice).hasMatch();
+                if (driverRange.isEmpty() || endpoint.slice.isEmpty() || !bothNumeric
+                    || QSocGenerateManager::doBitRangesOverlap(driverRange, endpoint.slice)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const auto endpointCarriesDriver = [&](const NetEndpoint &endpoint) {
+            for (const QString &driverRange : drivenRangesByPort.value(endpoint.port)) {
+                if (driverRange.isEmpty()
+                    && (endpoint.slice.isEmpty() || numericRange.match(endpoint.slice).hasMatch())) {
+                    return true;
+                }
+                if (!endpoint.slice.isEmpty() && numericRangeContains(driverRange, endpoint.slice)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        bool netDriven = false;
+        for (const auto &endpoint : component.endpoints) {
+            if (endpointHasDriver(endpoint)) {
+                netDriven = true;
+                break;
+            }
+        }
+        if (sinks.isEmpty()) {
+            for (const QString &netName : component.netNames) {
+                if (processDrivenNets.contains(netName) || instanceDrivenNets.contains(netName)) {
+                    netDriven = true;
+                    break;
+                }
+            }
+        }
+
+        if (sinks.isEmpty() && sources.isEmpty()) {
+            continue;
+        }
+
+        if (netDriven) {
+            /* The net's own driver reaches the head sink through routing;
+               the remaining sinks follow it, and every bound input is a
+               second source. */
+            QList<int> carrierIndices;
+            for (int sinkIdx = 0; sinkIdx < sinks.size(); ++sinkIdx) {
+                if (endpointCarriesDriver(sinks.at(sinkIdx))) {
+                    carrierIndices.append(sinkIdx);
+                }
+            }
+            if (carrierIndices.size() > 1) {
+                emitAliasHeader();
+                out << "    /* FIXME: net " << netLabel << " has multiple driven sinks ("
+                    << carrierIndices.size() << ") - not wired */\n";
+                QSocConsole::warn() << "Net" << netLabel << "has multiple driven sinks"
+                                    << carrierIndices.size() << "; not wired";
+            } else {
+                const int carrierIndex = carrierIndices.isEmpty() ? 0 : carrierIndices.first();
+                for (int sinkIdx = 0; sinkIdx < sinks.size(); ++sinkIdx) {
+                    if (sinkIdx == carrierIndex) {
+                        continue;
+                    }
+                    const auto &bound = sinks.at(sinkIdx);
+                    emitAssign(
+                        bound.port,
+                        bound.slice,
+                        sinks.at(carrierIndex).port,
+                        sinks.at(carrierIndex).slice);
+                }
+            }
+            for (const auto &bound : sources) {
+                emitAliasHeader();
+                out << "    /* FIXME: net " << netLabel << " is already driven but binds "
+                    << bound.port << bound.slice << " - multi-driver conflict */\n";
+                QSocConsole::warn() << "Net" << netLabel << "is already driven but binds"
+                                    << bound.port << bound.slice << "- multi-driver conflict";
+            }
+        } else if (sources.size() == 1) {
+            for (const auto &bound : sinks) {
+                emitAssign(bound.port, bound.slice, sources.first().port, sources.first().slice);
+            }
+        } else if (sources.size() >= 2) {
+            emitAliasHeader();
+            out << "    /* FIXME: net " << netLabel << " binds " << sources.size()
+                << " sources - ambiguous driver, not wired */\n";
+            QSocConsole::warn() << "Net" << netLabel << "binds" << sources.size()
+                                << "sources; ambiguous driver, not wired";
         } else {
-            out << "    /* FIXME: net " << aliasIt.key() << " is connect:'d by " << aliases.size()
-                << " ports of mixed direction or inout; "
-                << "automatic aliasing only handles all-output cases - "
-                << "review the source netlist */\n";
-            QSocConsole::warn() << "Net" << aliasIt.key() << "is connect:'d by" << aliases.size()
-                                << "top-level ports of mixed direction; "
-                                   "review the netlist";
+            /* No source at all: keep the sink chain so the head's undriven
+               state stays visible to the existing diagnostics. */
+            for (int sinkIdx = 1; sinkIdx < sinks.size(); ++sinkIdx) {
+                const auto &bound = sinks.at(sinkIdx);
+                emitAssign(bound.port, bound.slice, sinks.first().port, sinks.first().slice);
+            }
         }
     }
 

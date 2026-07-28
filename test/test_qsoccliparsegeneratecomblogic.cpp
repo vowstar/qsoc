@@ -685,8 +685,14 @@ comb:
         QVERIFY(
             !verilogContent.contains("FIXME: comb tried to drive top-level input sideways_expr"));
 
-        const QStringList processNames
-            = {"connected_process_in", "direct_process_in", "implicit_process", "sideways_process"};
+        /* A process form on a top-level input is the same illegal driver as
+           an expression on one; both skip emission behind a FIXME. */
+        const QStringList skippedProcessNames = {"connected_process_in", "direct_process_in"};
+        for (const QString &name : skippedProcessNames) {
+            QCOMPARE(verilogContent.count("FIXME: comb tried to drive top-level input " + name), 1);
+            QVERIFY(!verilogContent.contains(name + "_reg"));
+        }
+        const QStringList processNames = {"implicit_process", "sideways_process"};
         for (const QString &name : processNames) {
             QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg [3:0] " + name + "_reg;"));
             QVERIFY(verifyVerilogContentNormalized(
@@ -695,20 +701,20 @@ comb:
             QVERIFY(!verilogContent.contains("FIXME: comb tried to drive top-level input " + name));
         }
         QVERIFY(!verilogContent.contains("process_input_net_reg"));
-        QCOMPARE(verilogContent.count("always @(*)"), 6);
+        QCOMPARE(verilogContent.count("always @(*)"), 4);
 
         QMap<QString, int> warningCounts;
         for (const QString &message : messageList) {
             if (!message.contains("comb writes to top-level input port")) {
                 continue;
             }
-            for (const QString &name : skippedExprNames + processNames) {
+            for (const QString &name : skippedExprNames + skippedProcessNames + processNames) {
                 if (message.contains(name)) {
                     ++warningCounts[name];
                 }
             }
         }
-        for (const QString &name : skippedExprNames) {
+        for (const QString &name : skippedExprNames + skippedProcessNames) {
             QCOMPARE(warningCounts.value(name), 1);
         }
         for (const QString &name : processNames) {

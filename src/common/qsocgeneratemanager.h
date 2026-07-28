@@ -248,6 +248,74 @@ public:
     static QPair<QString, QString> parseSignalBitSelect(const QString &signalName);
 
     /**
+     * @brief One top-level port bound to a net, with the bound slice
+     */
+    struct TopPortBinding
+    {
+        QString port;
+        QString slice;     /**< Empty when the whole port is bound */
+        QString direction; /**< Normalized: "input", "output", "inout", or empty */
+    };
+
+    /**
+     * @brief Whole-port members of a net plus the ports it binds in part
+     */
+    struct NetTopPorts
+    {
+        QStringList           members; /**< Whole-port members, declaration order */
+        QList<TopPortBinding> slices;  /**< Partial bindings, declaration order */
+    };
+
+    /**
+     * @brief Map every net to the top-level ports that share its identity
+     * @details A net acquires a top-level port through three spellings: a port
+     *          that declares `connect: <net>`, an explicit `instance: top`
+     *          entry inside the net, and a net whose own name is a declared
+     *          port. Members follow port declaration order regardless of which
+     *          spelling bound them. Consumers choose a carrier by direction
+     *          from this shared component, so routing, aliasing, comb, and seq
+     *          cannot disagree about ownership.
+     * @param netlistData Processed netlist root node
+     * @return Map of net name to its ordered top-level port members
+     */
+    static QMap<QString, NetTopPorts> buildNetToTopPorts(const YAML::Node &netlistData);
+
+    /**
+     * @brief Map every alias spelling to the port that carries it
+     * @details Covers both net names and the non-canonical member ports of an
+     *          alias group. Process targets must resolve through this map, or
+     *          a target written as a secondary member is driven twice: once by
+     *          the process and once by the group's alias assignment.
+     *          A net that only binds slices resolves to its head slice; the
+     *          alias emitter fans the head out to the remaining bound slices.
+     * @param netlistData Processed netlist root node
+     * @return Map of net or port name to its canonical target
+     */
+    static QMap<QString, TopPortBinding> buildTopPortRedirect(const YAML::Node &netlistData);
+
+    /**
+     * @brief Compose an inner bit select with a bound slice
+     * @details A name bound to `port[m:l]` denotes just that part, so an inner
+     *          select `[a:b]` on the name lands on `port[l+a:l+b]`. An inner
+     *          select reaching past the bound width is reported and composed
+     *          arithmetically so the overflow stays visible.
+     * @param boundSlice The slice the name is bound to, e.g. "[7:4]"
+     * @param innerSlice The select written on the name, e.g. "[1:0]"
+     * @param context Diagnostic prefix naming the caller
+     * @return The composed select, or the inner one when composition fails
+     */
+    static QString composeBitSelect(
+        const QString &boundSlice, const QString &innerSlice, const QString &context);
+
+    /**
+     * @brief Normalized direction of a top-level port
+     * @param netlistData Processed netlist root node
+     * @param portName Top-level port name
+     * @return "input", "output", or "inout"; missing directions default to input
+     */
+    static QString topPortDirection(const YAML::Node &netlistData, const QString &portName);
+
+    /**
      * @brief Collect all signals (inputs and outputs) from comb/seq/fsm sections
      * @details Analyzes netlist data and collects all signals referenced by combinational,
      *          sequential, and FSM logic blocks. This includes both output signals and

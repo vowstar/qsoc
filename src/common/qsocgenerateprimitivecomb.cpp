@@ -28,21 +28,27 @@ bool usesProcessBlock(const YAML::Node &combItem)
 }
 
 CombTarget resolveCombTarget(
-    const YAML::Node             &combItem,
-    const QMap<QString, QString> &netToTopPort,
-    const QSet<QString>          &inputTopPortNames,
-    const QSet<QString>          &knownTargets)
+    const YAML::Node                                         &combItem,
+    const QMap<QString, QSocGenerateManager::TopPortBinding> &topPortRedirect,
+    const QSet<QString>                                      &inputTopPortNames,
+    const QSet<QString>                                      &knownTargets)
 {
     const QString output = QString::fromStdString(combItem["out"].as<std::string>());
     const auto    parsed = QSocGenerateManager::parseSignalBitSelect(output);
     CombTarget    target;
     target.requestedBase = parsed.first;
-    target.emittedBase   = netToTopPort.value(target.requestedBase, target.requestedBase);
-    target.slice         = parsed.second;
+    const QSocGenerateManager::TopPortBinding binding
+        = topPortRedirect.value(target.requestedBase, {target.requestedBase, QString()});
+    target.emittedBase = binding.port;
+    target.slice       = parsed.second;
     if (combItem["bits"] && combItem["bits"].IsScalar()) {
         target.slice = QSocVerilogUtils::normalizeBitSelect(
             QString::fromStdString(combItem["bits"].as<std::string>()));
     }
+    /* A net bound over a slice denotes just that part of the port, so an
+       inner select composes with the binding instead of replacing it. */
+    target.slice = QSocGenerateManager::composeBitSelect(
+        binding.slice, target.slice, QStringLiteral("comb target ") + target.requestedBase);
     target.topInput = inputTopPortNames.contains(target.emittedBase);
     target.known    = knownTargets.contains(target.requestedBase)
                       || knownTargets.contains(target.emittedBase);
@@ -83,17 +89,22 @@ bool QSocCombPrimitive::generateCombLogic(
         return true;
     }
 
-    /* Build a net-name -> top-port-name redirect. When a top-level port
+    /* Redirect a net to the port that carries it. When a top-level port
        declares `connect: <net>`, the wire-decl pass skips emitting `<net>`
        as a wire; the port itself serves as the wire. A comb item that
        writes to `<net>` would otherwise reference an undefined identifier.
        Also remember top-port direction so we can warn when comb tries to
        drive an input port (illegal Verilog), and collect every name that
        could legally appear on a comb assign LHS so we can warn on typos. */
-    QMap<QString, QString> netToTopPort;
+    const QMap<QString, QSocGenerateManager::TopPortBinding> topPortRedirect
+        = QSocGenerateManager::buildTopPortRedirect(netlistData);
     QMap<QString, QString> portDirection;
     QSet<QString>          inputTopPortNames;
     QSet<QString>          knownTargets;
+    for (auto redirectIt = topPortRedirect.constBegin(); redirectIt != topPortRedirect.constEnd();
+         ++redirectIt) {
+        knownTargets.insert(redirectIt.key());
+    }
     if (netlistData["port"] && netlistData["port"].IsMap()) {
         for (const auto &portEntry : netlistData["port"]) {
             if (!portEntry.first.IsScalar() || !portEntry.second.IsMap()) {
@@ -113,9 +124,6 @@ bool QSocCombPrimitive::generateCombLogic(
             if (portEntry.second["connect"] && portEntry.second["connect"].IsScalar()) {
                 const QString netName = QString::fromStdString(
                     portEntry.second["connect"].as<std::string>());
-                if (!netToTopPort.contains(netName)) {
-                    netToTopPort.insert(netName, portName);
-                }
                 knownTargets.insert(netName);
                 if (dir == "in" || dir == "input") {
                     inputTopPortNames.insert(netName);
@@ -143,8 +151,14 @@ bool QSocCombPrimitive::generateCombLogic(
             continue;
         }
         CombTarget &target = combTargets[i];
-        target = resolveCombTarget(combItem, netToTopPort, inputTopPortNames, knownTargets);
+        target = resolveCombTarget(combItem, topPortRedirect, inputTopPortNames, knownTargets);
         if (!usesProcessBlock(combItem)) {
+            continue;
+        }
+        /* A top-level input already has an external source; registering it
+           would declare a reg and drive the input from inside the module.
+           The emission loop carries the diagnostic. */
+        if (target.topInput) {
             continue;
         }
         if (!processOutputBases.contains(target.emittedBase)) {
@@ -165,6 +179,20 @@ bool QSocCombPrimitive::generateCombLogic(
     }
 
     /* Generate internal reg declarations for always block outputs */
+    /* One registry for every target this section assigns, whatever form
+       produced it. A whole-base assign and a sliced one overlap just as two
+       identical strings do, so conflicts are judged on bit ranges. */
+    QMap<QString, QStringList> seenAssignSlices;
+    const auto conflictsWithSeen = [&seenAssignSlices](const QString &base, const QString &slice) {
+        for (const QString &seen : seenAssignSlices.value(base)) {
+            if (seen.isEmpty() || slice.isEmpty()
+                || QSocGenerateManager::doBitRangesOverlap(seen, slice)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     if (!processOutputBases.isEmpty()) {
         out << "\n    /* Internal reg declarations for combinational logic */\n";
         for (const QString &baseName : processOutputBases) {
@@ -182,11 +210,13 @@ bool QSocCombPrimitive::generateCombLogic(
             const QStringList slices = processOutputSlices.value(baseName);
             if (processFullOutputs.contains(baseName) || slices.isEmpty()) {
                 out << "    assign " << baseName << " = " << baseName << "_reg;\n";
+                seenAssignSlices[baseName].append(QString());
                 continue;
             }
             for (const QString &slice : slices) {
                 out << "    assign " << baseName << slice << " = " << baseName << "_reg" << slice
                     << ";\n";
+                seenAssignSlices[baseName].append(slice);
             }
         }
     }
@@ -196,8 +226,6 @@ bool QSocCombPrimitive::generateCombLogic(
     /* Track which (target, bit-slice) we have already emitted an assign for.
        Duplicate `out:` lines silently produced two `assign foo[3:0] = ...;`
        statements, a guaranteed multi-driver conflict. Keep the first. */
-    QSet<QString> seenAssignTargets;
-
     for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
         const YAML::Node &combItem = netlistData["comb"][i];
 
@@ -207,10 +235,18 @@ bool QSocCombPrimitive::generateCombLogic(
 
         const CombTarget &target        = combTargets[i];
         const bool        hasExpression = combItem["expr"] && combItem["expr"].IsScalar();
+        /* Driving a top-level INPUT port from inside the module is illegal
+           Verilog whatever form the item takes. Warn and skip the emission
+           so the offending driver never lands in the output. */
+        if (!hasExpression && target.topInput && usesProcessBlock(combItem)) {
+            QSocConsole::warn() << "comb writes to top-level input port" << target.emittedBase
+                                << "; cannot drive an input from inside the module - "
+                                   "skipping the always block";
+            out << "    /* FIXME: comb tried to drive top-level input " << target.emittedBase
+                << " - check the source netlist */\n";
+            continue;
+        }
         if (hasExpression) {
-            /* Driving a top-level INPUT port from inside the module is
-               illegal Verilog. Warn and skip the assign so the offending
-               line is not emitted. */
             if (target.topInput) {
                 QSocConsole::warn() << "comb writes to top-level input port" << target.emittedBase
                                     << "; cannot drive an input from inside the module - "
@@ -234,14 +270,14 @@ bool QSocCombPrimitive::generateCombLogic(
             const QString expression = QString::fromStdString(combItem["expr"].as<std::string>());
             const QString fullOutputSignal = target.emittedBase + target.slice;
 
-            if (seenAssignTargets.contains(fullOutputSignal)) {
+            if (conflictsWithSeen(target.emittedBase, target.slice)) {
                 QSocConsole::warn() << "comb has duplicate driver for" << fullOutputSignal
                                     << "; keeping the first - check the source netlist";
                 out << "    /* FIXME: duplicate comb driver for " << fullOutputSignal
                     << " skipped - check the source netlist */\n";
                 continue;
             }
-            seenAssignTargets.insert(fullOutputSignal);
+            seenAssignSlices[target.emittedBase].append(target.slice);
 
             out << "    assign " << fullOutputSignal << " = " << expression << ";\n";
         } else if (combItem["if"] && combItem["if"].IsSequence()) {
