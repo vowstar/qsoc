@@ -683,7 +683,8 @@ endmodule // {{ module.name }})";
                                      "    \"prefixedOctal\": \"0o644\",\n"
                                      "    \"badHex\": \"0xZZ\",\n"
                                      "    \"badUnderscore\": \"8'h___\",\n"
-                                     "    \"plainDecimal\": \"42\"\n"
+                                     "    \"plainDecimal\": \"42\",\n"
+                                     "    \"bareZero\": \"0\"\n"
                                      "}";
         const QString jsonFilePath = projectDir.filePath("format_numeric_data.json");
         QFile         jsonFile(jsonFilePath);
@@ -699,6 +700,7 @@ poctal={{ "{:d}"|format(prefixedOctal) }}
 bad=[{{ "{:s}"|format(badHex) }}]
 badu=[{{ "{:s}"|format(badUnderscore) }}]
 plain=[{{ "{:s}"|format(plainDecimal) }}]
+zero={{ "{:d}"|format(bareZero) }}
 )";
         const QString templateFilePath = projectDir.filePath("format_numeric_template.j2");
         QFile         templateFile(templateFilePath);
@@ -739,6 +741,9 @@ plain=[{{ "{:s}"|format(plainDecimal) }}]
         QVERIFY(output.contains("bad=[0xZZ]"));
         QVERIFY(output.contains("badu=[8'h___]"));
         QVERIFY(output.contains("plain=[42]"));
+        /* Bare 0 is the zero of the C octal family, not a plain-decimal
+           string; it converts like 00 and 0o0 do. */
+        QVERIFY(output.contains("zero=0"));
     }
 
     /* A converted value outside the signed 64-bit range fails generation

@@ -46,7 +46,8 @@ complete C numeric literal (`0x`, `0b`, `0o`, or leading-zero octal) or a
 two-state SystemVerilog `b`/`o`/`d`/`h` literal, sized or unsized. A sized
 literal denotes only its declared bits, so `16'hFFFFF` formats as 65535.
 The converted value must fit the signed 64-bit range; an overflow fails
-generation before the output file is written. Every other string,
+generation before the output file is written. A bare `0` belongs to the
+leading-zero octal family and converts to zero. Every other string,
 including plain decimals, keeps string semantics.
 
 == Regex Filters

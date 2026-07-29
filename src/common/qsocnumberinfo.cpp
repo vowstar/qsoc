@@ -987,7 +987,10 @@ QSocNumberInfo::NumericText QSocNumberInfo::classifyNumericText(const QString &t
     if (text.size() > MaximumNumericCharacters) {
         return reject;
     }
-    if (text.at(0) == '0' && text.size() > 1) {
+    /* Bare `0` is the zero of the C octal family, exactly like `00`,
+       `0_0`, and `0o0`; excluding it was the one special case in the
+       zero-led rule. Plain decimals start with 1-9. */
+    if (text.at(0) == '0') {
         return allOctal ? NumericText{NumericTextKind::Normalize, Spelling::CStyle} : reject;
     }
     return {NumericTextKind::Normalize, Spelling::PlainDecimal};
