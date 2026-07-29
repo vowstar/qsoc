@@ -26,6 +26,8 @@
 #include <qschematic/items/wire.hpp>
 #include <qschematic/items/wirenet.hpp>
 
+#include <algorithm>
+
 /* Event Filter */
 bool PrcWindow::eventFilter(QObject *watched, QEvent *event)
 {
@@ -157,9 +159,7 @@ void PrcWindow::handlePrcItemDoubleClick(QSchematic::Items::Item *item)
     QStringList connectedSources;
     if (prcItem->primitiveType() == PrcLibrary::ClockTarget
         || prcItem->primitiveType() == PrcLibrary::ResetTarget) {
-        QSet<QString> sources = getConnectedSources(prcItem->primitiveName());
-        connectedSources      = sources.values();
-        connectedSources.sort();
+        connectedSources = getConnectedSources(prcItem->primitiveName());
     }
 
     /* The dialog edits the item in place, so remember the parameters on both
@@ -585,7 +585,7 @@ bool PrcWindow::exportNetlist(const QString &filePath)
                         emitINV(out, targetParams.inv);
 
                         /* Link section - only for actually connected sources */
-                        QSet<QString> connectedSources = getConnectedSources(targetName);
+                        const QStringList connectedSources = getConnectedSources(targetName);
                         if (!connectedSources.isEmpty()) {
                             out << YAML::Key << "link" << YAML::Value << YAML::BeginMap;
 
@@ -680,7 +680,7 @@ bool PrcWindow::exportNetlist(const QString &filePath)
                             << tgtParams.active.toStdString();
 
                         /* Link section - only for actually connected sources */
-                        QSet<QString> connectedSources = getConnectedSources(targetName);
+                        const QStringList connectedSources = getConnectedSources(targetName);
                         if (!connectedSources.isEmpty()) {
                             out << YAML::Key << "link" << YAML::Value << YAML::BeginMap;
                             for (const QString &sourceName : connectedSources) {
@@ -949,8 +949,20 @@ QList<PrcWindow::WireConnectionInfo> PrcWindow::analyzeWireConnections() const
 
         /* Find all wire endpoints and their connected items */
         QSet<QString>                            sourceNames;
-        QSet<QString>                            targetNames;
+        QMap<QString, int>                       targetInputOrdinals;
         QMap<QString, PrcLibrary::PrimitiveType> itemTypes;
+
+        /* The connector name carries the persistent input ordinal (`in`,
+           `in_1`, ...); that number is the physical mux input. */
+        const auto connectorOrdinal = [](const QString &connText) {
+            const qsizetype sep = connText.lastIndexOf('_');
+            if (sep < 0) {
+                return 0;
+            }
+            bool      numberOk = false;
+            const int ordinal  = connText.mid(sep + 1).toInt(&numberOk);
+            return numberOk ? ordinal : 0;
+        };
 
         for (const auto &wire : wireNet->wires()) {
             auto qsWire = std::dynamic_pointer_cast<QSchematic::Items::Wire>(wire);
@@ -981,14 +993,18 @@ QList<PrcWindow::WireConnectionInfo> PrcWindow::analyzeWireConnections() const
                 } else if (primType == PrcLibrary::ClockTarget || primType == PrcLibrary::ResetTarget) {
                     /* Target types have "in" connectors */
                     if (connText == "in" || connText.startsWith("in_")) {
-                        targetNames.insert(itemName);
+                        const int ordinal = connectorOrdinal(connText);
+                        if (!targetInputOrdinals.contains(itemName)
+                            || ordinal < targetInputOrdinals.value(itemName)) {
+                            targetInputOrdinals.insert(itemName, ordinal);
+                        }
                     }
                 } else if (primType == PrcLibrary::PowerDomain) {
                     /* Power domains can be both source and target */
                     if (connText == "out") {
                         sourceNames.insert(itemName);
                     } else if (connText == "dep") {
-                        targetNames.insert(itemName);
+                        targetInputOrdinals.insert(itemName, 0);
                     }
                 }
             }
@@ -997,7 +1013,10 @@ QList<PrcWindow::WireConnectionInfo> PrcWindow::analyzeWireConnections() const
         /* Create connection records for each source->target pair in this net */
         QString wireNetName = wireNet->name();
         for (const QString &src : sourceNames) {
-            for (const QString &tgt : targetNames) {
+            for (auto tgtIt = targetInputOrdinals.constBegin();
+                 tgtIt != targetInputOrdinals.constEnd();
+                 ++tgtIt) {
+                const QString &tgt = tgtIt.key();
                 /* Validate type compatibility */
                 auto srcType = itemTypes.value(src);
                 auto tgtType = itemTypes.value(tgt);
@@ -1013,27 +1032,49 @@ QList<PrcWindow::WireConnectionInfo> PrcWindow::analyzeWireConnections() const
 
                 if (compatible) {
                     WireConnectionInfo info;
-                    info.sourceName  = src;
-                    info.targetName  = tgt;
-                    info.wireNetName = wireNetName;
-                    info.net         = wireNet.get();
+                    info.sourceName    = src;
+                    info.targetName    = tgt;
+                    info.wireNetName   = wireNetName;
+                    info.targetOrdinal = tgtIt.value();
+                    info.net           = wireNet.get();
                     connections.append(info);
                 }
             }
         }
     }
 
+    /* Container iteration order follows the per-process hash seed, so two
+       runs of one diagram exported different link orders and different mux
+       input indices. The persistent connector ordinal is the physical mux
+       input; names only break ties, so renaming a source cannot renumber
+       the select encoding. */
+    std::sort(
+        connections.begin(),
+        connections.end(),
+        [](const WireConnectionInfo &left, const WireConnectionInfo &right) {
+            if (left.targetName != right.targetName) {
+                return left.targetName < right.targetName;
+            }
+            if (left.targetOrdinal != right.targetOrdinal) {
+                return left.targetOrdinal < right.targetOrdinal;
+            }
+            if (left.sourceName != right.sourceName) {
+                return left.sourceName < right.sourceName;
+            }
+            return left.wireNetName < right.wireNetName;
+        });
+
     return connections;
 }
 
-QSet<QString> PrcWindow::getConnectedSources(const QString &targetName) const
+QStringList PrcWindow::getConnectedSources(const QString &targetName) const
 {
-    QSet<QString> sources;
-    auto          connections = analyzeWireConnections();
+    QStringList sources;
+    const auto  connections = analyzeWireConnections();
 
     for (const auto &conn : connections) {
-        if (conn.targetName == targetName) {
-            sources.insert(conn.sourceName);
+        if (conn.targetName == targetName && !sources.contains(conn.sourceName)) {
+            sources.append(conn.sourceName);
         }
     }
 

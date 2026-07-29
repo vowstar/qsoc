@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QMainWindow>
 #include <QMap>
+#include <QStringList>
 
 #include <qschematic/settings.hpp>
 #include <qschematic/view.hpp>
@@ -72,6 +73,14 @@ public:
      * @return Const reference to PrcScene
      */
     const PrcLibrary::PrcScene &prcScene() const;
+
+    /**
+     * @brief Export PRC netlist to file
+     * @param[in] filePath Output file path
+     * @retval true Export successful
+     * @retval false Export failed
+     */
+    bool exportNetlist(const QString &filePath);
 
     /**
      * @brief Collect all existing PRC element names from scene
@@ -302,14 +311,6 @@ private:
      */
     void updateAllDynamicPorts();
 
-    /**
-     * @brief Export PRC netlist to file
-     * @param[in] filePath Output file path
-     * @retval true Export successful
-     * @retval false Export failed
-     */
-    bool exportNetlist(const QString &filePath);
-
     /* Link Parameter Management */
 
     /**
@@ -350,9 +351,10 @@ private:
      */
     struct WireConnectionInfo
     {
-        QString sourceName;  /**< Source primitive name (ClockInput/ResetSource) */
-        QString targetName;  /**< Target primitive name (ClockTarget/ResetTarget) */
-        QString wireNetName; /**< Wire net name */
+        QString sourceName;                  /**< Source primitive name (ClockInput/ResetSource) */
+        QString targetName;                  /**< Target primitive name (ClockTarget/ResetTarget) */
+        QString wireNetName;                 /**< Wire net name */
+        int     targetOrdinal           = 0; /**< Ordinal of the target input connector */
         QSchematic::Items::WireNet *net = nullptr; /**< Net carrying the connection */
     };
 
@@ -368,11 +370,14 @@ private:
     QList<WireConnectionInfo> analyzeWireConnections() const;
 
     /**
-     * @brief Get set of source names connected to a specific target via wires
+     * @brief Get source names connected to a specific target via wires
+     * @details Ordered by the target input connector ordinal, names only
+     *          breaking ties, so the exported link order and the mux input
+     *          indices it implies survive renames and are reproducible.
      * @param[in] targetName Target primitive name
-     * @return Set of connected source names
+     * @return Connected source names in target connector order
      */
-    QSet<QString> getConnectedSources(const QString &targetName) const;
+    QStringList getConnectedSources(const QString &targetName) const;
 
     /* Member Variables */
 

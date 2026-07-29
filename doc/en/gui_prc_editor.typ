@@ -81,6 +81,11 @@ primitives are assigned to, and falls back to `clock_ctrl`, `reset_ctrl` and
 `power_ctrl` when nothing is assigned. Keys come from the name shown on each
 box.
 
+Connected sources within each target are emitted in the order of the input
+connectors they attach to, so the link wired to `in` becomes mux input 0,
+`in_1` becomes input 1, and so on. The numeric select contract follows the
+diagram's physical wiring and survives renaming a source.
+
 == Limitations
 <gui-prc-limitations>
 #figure(
