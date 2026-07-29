@@ -207,6 +207,57 @@ private slots:
             "Generated file should contain field information from simplified JSON");
     }
 
+    /* v0.3.0 emits field resets as hex strings and register_reset_value at
+       full register width; both must format to the same numbers the old
+       integer payload produced. */
+    void testRdlFieldResetsFormatAsNumbers()
+    {
+        messageList.clear();
+
+        const QString rdlContent = R"(addrmap reset_chip {
+    reg {
+        regwidth = 32;
+        field {
+            sw = rw;
+            hw = r;
+        } mode[7:0] = 0x2c;
+        field {
+            sw = rw;
+            hw = r;
+        } gain[15:8] = 3;
+    } cfg_reg @ 0x0000;
+};)";
+
+        const QString rdlFilePath = createTempFile("reset_chip.rdl", rdlContent);
+
+        const QString templateContent = R"({% for reg in reset_chip.registers %}
+reg={{ reg.inst_name }} rrv={{ "32'h{:08x}"|format(reg.register_reset_value) }}
+{% for field in reg.fields %}
+field={{ field.inst_name }} reset_d={{ "{:d}"|format(field.reset) }} reset_x={{ "0x{:02x}"|format(field.reset) }}
+{% endfor %}
+{% endfor %})";
+
+        const QString templateFilePath = createTempFile("reset_probe.txt.j2", templateContent);
+
+        const QStringList arguments
+            = {"qsoc",
+               "generate",
+               "template",
+               "-d",
+               projectManager.getCurrentPath(),
+               "--rdl",
+               rdlFilePath,
+               templateFilePath};
+
+        QSocCliWorker worker;
+        worker.setup(arguments, false);
+        worker.run();
+        QVERIFY(verifyTemplateOutputExistence("reset_probe.txt"));
+        QVERIFY(verifyTemplateContent("reset_probe.txt", "rrv=32'h0000032c"));
+        QVERIFY(verifyTemplateContent("reset_probe.txt", "field=mode reset_d=44 reset_x=0x2c"));
+        QVERIFY(verifyTemplateContent("reset_probe.txt", "field=gain reset_d=3 reset_x=0x03"));
+    }
+
     void testRdlTemplateWithMultipleFiles()
     {
         messageList.clear();

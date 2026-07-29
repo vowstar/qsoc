@@ -279,7 +279,7 @@ else()
     set(ANTLR4_LDFLAGS_OTHER "" CACHE STRING "systemrdl antlr4 ldflags other")
     add_subdirectory(external/systemrdl)
     set(SYSTEMRDL_INCLUDE_DIRS
-        "${CMAKE_CURRENT_SOURCE_DIR}/external/systemrdl"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/systemrdl/include/systemrdl"
     )
     set(SYSTEMRDL_LIBRARIES SystemRDL::systemrdl_static)
     message(STATUS "Use local systemrdl library: ${SYSTEMRDL_LIBRARIES} ${SYSTEMRDL_INCLUDE_DIRS}")
