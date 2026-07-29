@@ -65,6 +65,28 @@ std::optional<int> provenBuiltInWidth(const QString &type)
     return static_cast<int>(width);
 }
 
+struct TieClassification
+{
+    QSocNumberInfo::NumericTextKind kind;
+    QSocNumberInfo::Spelling        spelling;
+    QString                         emittedText;
+};
+
+TieClassification classifyTie(const QString &value)
+{
+    const QSocNumberInfo::NumericText numeric = QSocNumberInfo::classifyNumericText(value);
+    return {numeric.kind, numeric.spelling, QSocNumberInfo::normalizeHexBaseAliases(value)};
+}
+
+QString tieDiagnosticText(const QString &value)
+{
+    constexpr qsizetype maximumLength = 128;
+    if (value.size() <= maximumLength) {
+        return value;
+    }
+    return value.left(maximumLength - 3) + QStringLiteral("...");
+}
+
 } // namespace
 
 bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
@@ -1760,25 +1782,24 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                                    portNode["tie"].as<std::string>())
                                                                    .trimmed();
 
-                                        /* Only a fully matched two-state number
-                                           may enter numeric normalization. A
-                                           looser test fed identifiers spelled in
-                                           hex letters (`cafe`) and four-state
-                                           values (`16'hzzzz`) to the number
-                                           parser, which collapsed them to
-                                           unrelated constants. Everything else
-                                           passes through verbatim. */
-                                        static const QRegularExpression twoStateNumberRegex(
-                                            R"(^(?:\d[\d_]*|0[xX][0-9a-fA-F_]+|0[bB][01_]+)"
-                                            R"(|(?:\d[\d_]*)?')"
-                                            R"((?:[bB][01_]+|[oO][0-7_]+|[dD][0-9_]+|[hHxX][0-9a-fA-F_]+))$)");
-                                        const bool tieIsExpression
-                                            = !twoStateNumberRegex.match(tieStr).hasMatch();
-                                        if (tieIsExpression) {
+                                        const TieClassification tieClassification = classifyTie(
+                                            tieStr);
+                                        if (tieClassification.kind
+                                            == QSocNumberInfo::NumericTextKind::Reject) {
+                                            /* The port keeps the standard
+                                               unconnected handling, so it stays
+                                               visible in the report. */
+                                            QSocConsole::warn()
+                                                << "'tie' on" << instanceName << "." << portName
+                                                << "ignored: value" << tieDiagnosticText(tieStr)
+                                                << "is not a valid number";
+                                        } else if (
+                                            tieClassification.kind
+                                            == QSocNumberInfo::NumericTextKind::PassThrough) {
                                             if (direction.toLower() == "input"
                                                 || direction.toLower() == "in") {
                                                 hasTie   = true;
-                                                tieValue = tieStr;
+                                                tieValue = tieClassification.emittedText;
                                                 if (portNode["invert"]
                                                     && portNode["invert"].IsScalar()
                                                     && portNode["invert"].as<bool>()) {
@@ -1816,15 +1837,14 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
                                                        with the value and base
                                                        kept, width left to the
                                                        context. */
-                                                    static const QRegularExpression cStyleRegex(
-                                                        R"(^(?:0[xXbB][0-9a-fA-F_]+|0\d+)$)");
-                                                    if (cStyleRegex.match(tieStr).hasMatch()
+                                                    if (tieClassification.spelling
+                                                            == QSocNumberInfo::Spelling::CStyle
                                                         && !numInfo.errorDetected) {
                                                         tieValue = numInfo.formatVerilog();
                                                         tieValue.remove(
                                                             QRegularExpression(R"(^\d+)"));
                                                     } else {
-                                                        tieValue = numInfo.originalString;
+                                                        tieValue = tieClassification.emittedText;
                                                     }
                                                     if (portNode["invert"]
                                                         && portNode["invert"].IsScalar()

@@ -4,6 +4,7 @@
 #include "common/qsocnumberinfo.h"
 #include "qsoc_test.h"
 
+#include <QElapsedTimer>
 #include <QtTest>
 
 class TestQSocNumberInfo : public QObject
@@ -23,6 +24,11 @@ private slots:
     void parseNumber_cStyleHex();
     void parseNumber_cStyleBinary();
     void parseNumber_cStyleOctal();
+    void parseNumber_cStyleOctalPrefixed();
+    void classifyNumericText_contract();
+    void classifyNumericText_commentsScaleLinearly();
+    void normalizeHexBaseAliases_contract();
+    void normalizeHexBaseAliases_commentsScaleLinearly();
     void parseNumber_cStyleDecimal();
 
     /* Format output */
@@ -137,6 +143,239 @@ void TestQSocNumberInfo::parseNumber_cStyleOctal()
     QSocNumberInfo info = QSocNumberInfo::parseNumber("0644");
     QCOMPARE(info.base, QSocNumberInfo::Base::Octal);
     QCOMPARE(info.toInt64(), 0644);
+}
+
+void TestQSocNumberInfo::parseNumber_cStyleOctalPrefixed()
+{
+    QSocNumberInfo info = QSocNumberInfo::parseNumber("0o644");
+    QCOMPARE(info.base, QSocNumberInfo::Base::Octal);
+    QCOMPARE(info.toInt64(), 0644);
+    QVERIFY(!info.errorDetected);
+
+    QSocNumberInfo upper = QSocNumberInfo::parseNumber("0O7_7");
+    QCOMPARE(upper.base, QSocNumberInfo::Base::Octal);
+    QCOMPARE(upper.toInt64(), 077);
+}
+
+void TestQSocNumberInfo::classifyNumericText_contract()
+{
+    using Kind     = QSocNumberInfo::NumericTextKind;
+    using Spelling = QSocNumberInfo::Spelling;
+
+    struct NumericCase
+    {
+        const char *text;
+        Kind        kind;
+        Spelling    spelling;
+    };
+
+    const QList<NumericCase> cases{
+        {"abc123", Kind::PassThrough, Spelling::NotANumber},
+        {"`VALUE", Kind::PassThrough, Spelling::NotANumber},
+        {"1+`VALUE", Kind::PassThrough, Spelling::NotANumber},
+        {"8'hFF+`VALUE", Kind::PassThrough, Spelling::NotANumber},
+        {"8'xFF+`VALUE", Kind::PassThrough, Spelling::NotANumber},
+        {"8'xFF+1", Kind::PassThrough, Spelling::NotANumber},
+        {"1+8'xF", Kind::PassThrough, Spelling::NotANumber},
+        {"8'xF+8'x1", Kind::PassThrough, Spelling::NotANumber},
+        {"8'(x)", Kind::PassThrough, Spelling::NotANumber},
+        {"8' (x)", Kind::PassThrough, Spelling::NotANumber},
+        {"8 ' (x)", Kind::PassThrough, Spelling::NotANumber},
+        {"8' /* gap */ (x)", Kind::PassThrough, Spelling::NotANumber},
+        {"8' `CAST", Kind::PassThrough, Spelling::NotANumber},
+        {"8/* gap */'(1)", Kind::PassThrough, Spelling::NotANumber},
+        {"8'// gap\n(1)", Kind::PassThrough, Spelling::NotANumber},
+        {"_8'(1)", Kind::PassThrough, Spelling::NotANumber},
+        {"__8 '(1)", Kind::PassThrough, Spelling::NotANumber},
+        {"_8' /* gap */ (1)", Kind::PassThrough, Spelling::NotANumber},
+        {"___'{default:0}", Kind::PassThrough, Spelling::NotANumber},
+        {"8'h/* gap */FF", Kind::PassThrough, Spelling::NotANumber},
+        {"8'x/* gap */FF", Kind::PassThrough, Spelling::NotANumber},
+        {"8/* gap */'hFF", Kind::PassThrough, Spelling::NotANumber},
+        {"8/* gap */'xFF", Kind::PassThrough, Spelling::NotANumber},
+        {"8// gap\n'hFF", Kind::PassThrough, Spelling::NotANumber},
+        {"8'h// gap\nFF", Kind::PassThrough, Spelling::NotANumber},
+        {"8'hFF// gap\n+1", Kind::PassThrough, Spelling::NotANumber},
+        {"8'hF/* gap */", Kind::PassThrough, Spelling::NotANumber},
+        {"8'hF /* gap */", Kind::PassThrough, Spelling::NotANumber},
+        {"8'xF /* gap */", Kind::PassThrough, Spelling::NotANumber},
+        {"8'hF // gap\n+1", Kind::PassThrough, Spelling::NotANumber},
+        {"8'h8'(1)", Kind::PassThrough, Spelling::NotANumber},
+        {"'{default:'0}", Kind::PassThrough, Spelling::NotANumber},
+        {"'x?1:0", Kind::PassThrough, Spelling::NotANumber},
+        {"'x/* gap */", Kind::PassThrough, Spelling::NotANumber},
+        {"'x /* gap */", Kind::PassThrough, Spelling::NotANumber},
+        {"'z/* gap */+1", Kind::PassThrough, Spelling::NotANumber},
+        {"1e9999", Kind::PassThrough, Spelling::NotANumber},
+        {"1e-9999", Kind::PassThrough, Spelling::NotANumber},
+        {"1.5ns", Kind::PassThrough, Spelling::NotANumber},
+        {"8'sd5", Kind::PassThrough, Spelling::NotANumber},
+        {"8'sxFF", Kind::PassThrough, Spelling::NotANumber},
+        {"8'hZ?", Kind::PassThrough, Spelling::NotANumber},
+        {"8'xZ?", Kind::PassThrough, Spelling::NotANumber},
+        {"8'dx", Kind::PassThrough, Spelling::NotANumber},
+        {"8'd?", Kind::PassThrough, Spelling::NotANumber},
+        {"8 'h1", Kind::PassThrough, Spelling::NotANumber},
+        {"8 'h 1", Kind::PassThrough, Spelling::NotANumber},
+        {"8 'shF", Kind::PassThrough, Spelling::NotANumber},
+        {"1 'hF", Kind::PassThrough, Spelling::NotANumber},
+        {"1 'shF", Kind::PassThrough, Spelling::NotANumber},
+        {"8 'x Z?", Kind::PassThrough, Spelling::NotANumber},
+        {"123", Kind::Normalize, Spelling::PlainDecimal},
+        {"1_", Kind::Normalize, Spelling::PlainDecimal},
+        {"0x1F", Kind::Normalize, Spelling::CStyle},
+        {"0o644", Kind::Normalize, Spelling::CStyle},
+        {"0644", Kind::Normalize, Spelling::CStyle},
+        {"8'hF_", Kind::Normalize, Spelling::Verilog},
+        {"8_'h1", Kind::Normalize, Spelling::Verilog},
+        {"08'h1", Kind::Normalize, Spelling::Verilog},
+        {"0_8'h1", Kind::Normalize, Spelling::Verilog},
+        {"8'xFF", Kind::Normalize, Spelling::Verilog},
+        {"0x+`VALUE", Kind::Reject, Spelling::NotANumber},
+        {"0xFF+1", Kind::Reject, Spelling::NotANumber},
+        {"8'h`VALUE", Kind::PassThrough, Spelling::NotANumber},
+        {"8'x`VALUE", Kind::PassThrough, Spelling::NotANumber},
+        {"8'`CAST", Kind::PassThrough, Spelling::NotANumber},
+        {"8's`BASE_VALUE", Kind::PassThrough, Spelling::NotANumber},
+        {"1.`FRACTION", Kind::PassThrough, Spelling::NotANumber},
+        {"1e`EXPONENT", Kind::PassThrough, Spelling::NotANumber},
+        {"1e+`EXPONENT", Kind::PassThrough, Spelling::NotANumber},
+        {".5", Kind::Reject, Spelling::NotANumber},
+        {".e3", Kind::Reject, Spelling::NotANumber},
+        {"'?", Kind::Reject, Spelling::NotANumber},
+        {"'x// gap", Kind::Reject, Spelling::NotANumber},
+        {"'x/* gap", Kind::Reject, Spelling::NotANumber},
+        {"1step", Kind::Reject, Spelling::NotANumber},
+        {"8' h1", Kind::Reject, Spelling::NotANumber},
+        {"8's h1", Kind::Reject, Spelling::NotANumber},
+        {"8'/* gap */Q", Kind::Reject, Spelling::NotANumber},
+        {"8/* gap */'GG", Kind::Reject, Spelling::NotANumber},
+        {"8'h/* gap */GG", Kind::Reject, Spelling::NotANumber},
+        {"8'h// gap", Kind::Reject, Spelling::NotANumber},
+        {"8'h/* gap", Kind::Reject, Spelling::NotANumber},
+        {"8'hF/* gap", Kind::Reject, Spelling::NotANumber},
+        {"8'hF /* gap", Kind::Reject, Spelling::NotANumber},
+        {"8'hF // gap", Kind::Reject, Spelling::NotANumber},
+        {"_8'h1", Kind::Reject, Spelling::NotANumber},
+        {"__8 'h1", Kind::Reject, Spelling::NotANumber},
+        {"___ 'h1", Kind::Reject, Spelling::NotANumber},
+        {"16'd", Kind::Reject, Spelling::NotANumber},
+        {"'d", Kind::Reject, Spelling::NotANumber},
+        {"8'", Kind::Reject, Spelling::NotANumber},
+        {"0x", Kind::Reject, Spelling::NotANumber},
+        {"0678", Kind::Reject, Spelling::NotANumber},
+        {"4'b12", Kind::Reject, Spelling::NotANumber},
+        {"8'd12x", Kind::Reject, Spelling::NotANumber},
+        {"8'd1?", Kind::Reject, Spelling::NotANumber},
+        {"8'dx1", Kind::Reject, Spelling::NotANumber},
+        {"8'd1x2", Kind::Reject, Spelling::NotANumber},
+        {"0x___", Kind::Reject, Spelling::NotANumber},
+        {"16'h___", Kind::Reject, Spelling::NotANumber},
+        {"0'h1", Kind::Reject, Spelling::NotANumber},
+        {"16777216'h1", Kind::Reject, Spelling::NotANumber},
+        {"1.2e+_3", Kind::Reject, Spelling::NotANumber},
+        {"1e2ns", Kind::Reject, Spelling::NotANumber},
+        {"1.0e2ns", Kind::Reject, Spelling::NotANumber},
+        {"1.0 /* gap", Kind::Reject, Spelling::NotANumber},
+        {"1ns /* gap", Kind::Reject, Spelling::NotANumber},
+        {"1e2 /* gap", Kind::Reject, Spelling::NotANumber},
+        {"'x /* gap", Kind::Reject, Spelling::NotANumber},
+        {"123abc", Kind::Reject, Spelling::NotANumber},
+    };
+
+    for (const NumericCase &numericCase : cases) {
+        const QSocNumberInfo::NumericText result = QSocNumberInfo::classifyNumericText(
+            QString::fromLatin1(numericCase.text));
+        QVERIFY2(result.kind == numericCase.kind, numericCase.text);
+        QCOMPARE(result.spelling, numericCase.spelling);
+    }
+
+    const QString oversizedTwoState   = "262144'h"
+                                        + QString(QSocNumberInfo::MaximumNumericCharacters, 'F');
+    const QString oversizedFourState  = "262144'h"
+                                        + QString(QSocNumberInfo::MaximumNumericCharacters, 'x');
+    const QString oversizedSigned     = "262144'sh"
+                                        + QString(QSocNumberInfo::MaximumNumericCharacters, 'F');
+    const QString oversizedExpression = "1+"
+                                        + QString(QSocNumberInfo::MaximumNumericCharacters, ' ')
+                                        + "2";
+    const QString oversizedMalformed  = "8'h"
+                                        + QString(QSocNumberInfo::MaximumNumericCharacters - 3, 'F')
+                                        + "Q";
+    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedTwoState).kind, Kind::Reject);
+    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedFourState).kind, Kind::PassThrough);
+    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedSigned).kind, Kind::PassThrough);
+    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedExpression).kind, Kind::PassThrough);
+    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedMalformed).kind, Kind::Reject);
+}
+
+void TestQSocNumberInfo::classifyNumericText_commentsScaleLinearly()
+{
+    QString text = "8";
+    text.reserve(1600004);
+    for (int index = 0; index < 400000; ++index) {
+        text += "//x\n";
+    }
+    text += "'h1";
+
+    QElapsedTimer timer;
+    timer.start();
+    QCOMPARE(
+        QSocNumberInfo::classifyNumericText(text).kind,
+        QSocNumberInfo::NumericTextKind::PassThrough);
+    QVERIFY2(timer.elapsed() < 5000, "numeric comment scan exceeded the linear-time deadline");
+}
+
+void TestQSocNumberInfo::normalizeHexBaseAliases_contract()
+{
+    struct AliasCase
+    {
+        const char *input;
+        const char *expected;
+    };
+
+    const QList<AliasCase> cases{
+        {"8'xF + 1", "8'hF + 1"},
+        {"1 + 8'xF", "1 + 8'hF"},
+        {"8'xF + 8'X1", "8'hF + 8'H1"},
+        {"8'sxF + 'sx1", "8'shF + 'sh1"},
+        {"8'SXF", "8'SHF"},
+        {"'xF + 'X1", "'hF + 'H1"},
+        {"8/* size */'x/* value */FF", "8/* size */'h/* value */FF"},
+        {"8'x// value\nFF", "8'h// value\nFF"},
+        {"'x", "'x"},
+        {"'x?1:0", "'x?1:0"},
+        {"'x /* condition */ ? 1 : 0", "'x /* condition */ ? 1 : 0"},
+        {"\"8'xF\"", "\"8'xF\""},
+        {"\"escaped \\\"8'xF\\\"\"", "\"escaped \\\"8'xF\\\"\""},
+        {"\\escaped8'xF  + 8'x1", "\\escaped8'xF  + 8'h1"},
+        {"// 8'xF\n8'x1", "// 8'xF\n8'h1"},
+        {"/* 8'xF */ 8'x1", "/* 8'xF */ 8'h1"},
+        {"8'xF + \"8'x1\" + 8'x2", "8'hF + \"8'x1\" + 8'h2"},
+        {"8'x/* unterminated", "8'x/* unterminated"},
+    };
+
+    for (const AliasCase &aliasCase : cases) {
+        QCOMPARE(
+            QSocNumberInfo::normalizeHexBaseAliases(QString::fromLatin1(aliasCase.input)),
+            QString::fromLatin1(aliasCase.expected));
+    }
+}
+
+void TestQSocNumberInfo::normalizeHexBaseAliases_commentsScaleLinearly()
+{
+    QString text;
+    text.reserve(1600000);
+    for (int index = 0; index < 100000; ++index) {
+        text += "8'xF+/*8'x0*/";
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    const QString normalized = QSocNumberInfo::normalizeHexBaseAliases(text);
+    QVERIFY2(timer.elapsed() < 5000, "x-base alias scan exceeded the linear-time deadline");
+    QCOMPARE(normalized.count(QStringLiteral("8'hF")), 100000);
+    QCOMPARE(normalized.count(QStringLiteral("8'x0")), 100000);
 }
 
 void TestQSocNumberInfo::parseNumber_cStyleDecimal()

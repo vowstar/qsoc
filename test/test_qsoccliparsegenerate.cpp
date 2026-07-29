@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "common/qslangdriver.h"
 #include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
@@ -4357,6 +4358,10 @@ instance:
     module: "exact_dut"
     port:
       din:  { tie: "sel_a & sel_b", invert: true }
+  u7:
+    module: "exact_dut"
+    port:
+      din:  { tie: "8'xF + 1" }
 )";
         const QString filePath   = createTempFile("test_tie_exact.soc_net", netContent);
         QVERIFY(filePath != "");
@@ -4388,6 +4393,8 @@ instance:
         QVERIFY(verifyVerilogContent("test_tie_exact", ".din (16'b1010)"));
         /* Inversion wraps a pass-through expression. */
         QVERIFY(verifyVerilogContent("test_tie_exact", ".din (~(sel_a & sel_b))"));
+        /* Hexadecimal aliases are normalized inside expressions. */
+        QVERIFY(verifyVerilogContent("test_tie_exact", ".din (8'hF + 1)"));
     }
 
     /* A literal's value is bounded by its declared width before port
@@ -4697,6 +4704,305 @@ instance:
         QVERIFY(verifyVerilogContent("test_tie_unproven", ".dlarge_width    (8'hCD)"));
         QVERIFY(!verifyVerilogContent("test_tie_unproven", ".dlarge_endpoint (1'h1)"));
         QVERIFY(!verifyVerilogContent("test_tie_unproven", ".dlarge_width    (1'h1)"));
+    }
+
+    /* An explicit 0o prefix is octal, same value and emission as the bare
+       leading-zero contract spelling. */
+    void testGenerateTieParsesExplicitOctalPrefix()
+    {
+        const QString drvContent = R"(
+octal_dut:
+  port:
+    d9:
+      type: "logic[8:0]"
+      direction: input
+    e9:
+      type: "logic[8:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         drvMod(moduleDir.filePath("octal_dut.soc_mod"));
+        QVERIFY(drvMod.open(QIODevice::WriteOnly | QIODevice::Text));
+        drvMod.write(drvContent.toUtf8());
+        drvMod.close();
+
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_tie_octal_prefix"
+instance:
+  u0:
+    module: "octal_dut"
+    port:
+      d9: { tie: "0o644" }
+      e9: { tie: "0644" }
+)";
+        const QString filePath   = createTempFile("test_tie_octal_prefix.soc_net", netContent);
+        QVERIFY(filePath != "");
+        QVERIFY(removeVerilogOutput("test_tie_octal_prefix"));
+        messageList.clear();
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+        QVERIFY2(sawVerilogSuccess("test_tie_octal_prefix"), qPrintable(messageList.join('\n')));
+
+        QVERIFY(verifyVerilogContent("test_tie_octal_prefix", ".d9 (9'o644)"));
+        QVERIFY(verifyVerilogContent("test_tie_octal_prefix", ".e9 (9'o644)"));
+        QVERIFY(!verifyVerilogContent("test_tie_octal_prefix", "0o644"));
+    }
+
+    /* Classify numeric ties and strictly elaborate the emitted Verilog. */
+    void testGenerateTieClassifiesNumericText()
+    {
+        const QString moduleContent = R"(
+token_dut:
+  parameter:
+    WIDTH:
+      type: int
+      default: 8
+  port:
+    fixed:
+      type: "logic[8:0]"
+      direction: input
+    symbolic:
+      type: "logic[WIDTH-1:0]"
+      direction: input
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        QFile         moduleFile(moduleDir.filePath("token_dut.soc_mod"));
+        QVERIFY(moduleFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        moduleFile.write(moduleContent.toUtf8());
+        moduleFile.close();
+
+        struct TieCase
+        {
+            const char *name;
+            QString     value;
+            QString     emitted;
+            bool        accepted;
+            bool        symbolic = false;
+        };
+
+        QList<TieCase> tieCases{
+            {"u_identifier", "abc123", "abc123", true},
+            {"u_unbased", "'x", "'x", true},
+            {"u_unbased_comment", "'x/* gap */", "'x/* gap */", true},
+            {"u_real", "1.2e-3", "1.2e-3", true},
+            {"u_time", "1.5ns", "1.5ns", true},
+            {"u_expression", "1+2", "1+2", true},
+            {"u_macro_expression", "1+`TIE_VALUE", "1+`TIE_VALUE", true},
+            {"u_based_macro_expression", "8'hFF+`TIE_VALUE", "8'hFF+`TIE_VALUE", true},
+            {"u_x_alias_leading", "8'xF+1", "8'hF+1", true},
+            {"u_x_alias_middle", "1+8'xF", "1+8'hF", true},
+            {"u_x_alias_multiple", "8'xF+8'X1", "8'hF+8'H1", true},
+            {"u_x_alias_signed", "8'sxF", "8'shF", true},
+            {"u_x_alias_unsized", "'xF", "9'hf", true},
+            {"u_unbased_expression", "'x?1:0", "'x?1:0", true},
+            {"u_cast", "8'(1)", "8'(1)", true},
+            {"u_cast_gap", "8' (1)", "8' (1)", true},
+            {"u_cast_comment_gap", "8' /* gap */ (1)", "8' /* gap */ (1)", true},
+            {"u_cast_macro_gap", "8' `TIE_CAST", "8' `TIE_CAST", true},
+            {"u_size_comment_cast", "8/* gap */'(1)", "8/* gap */'(1)", true},
+            {"u_line_comment_cast", "8'// gap\n(1)", "8'// gap\n(1)", true},
+            {"u_typedef_cast", "_8'(1)", "_8'(1)", true},
+            {"u_based_comment_gap", "8'h/* gap */FF", "8'h/* gap */FF", true},
+            {"u_trailing_comment", "8'hF /* gap */", "8'hF /* gap */", true},
+            {"u_size_comment_literal", "8/* gap */'hFF", "8/* gap */'hFF", true},
+            {"u_x_base_comment_literal", "8'x/* gap */FF", "8'h/* gap */FF", true},
+            {"u_line_comment_size", "8// gap\n'hFF", "8// gap\n'hFF", true},
+            {"u_line_comment_value", "8'h// gap\nFF", "8'h// gap\nFF", true},
+            {"u_line_comment_expression", "8'hFF// gap\n+1", "8'hFF// gap\n+1", true},
+            {"u_nested_sized_cast", "8'h8'(1)", "8'h8'(1)", true},
+            {"u_legacy_octal_expression", "0644+1", "0644+1", true},
+            {"u_signed", "8'sd5", "8'sd5", true},
+            {"u_four_state", "8'hZ?", "8'hZ?", true},
+            {"u_decimal_four_state", "8'dx", "8'dx", true},
+            {"u_spaced_size", "8 'h1", "8 'h1", true},
+            {"u_spaced_value", "8 'h 1", "8 'h 1", true},
+            {"u_spaced_signed", "8 'shF", "8 'shF", true},
+            {"u_spaced_warning", "1 'hF", "1 'hF", true},
+            {"u_spaced_signed_warning", "1 'shF", "1 'shF", true},
+            {"u_trailing_decimal_separator", "1_", "9'd1", true},
+            {"u_trailing_based_separator", "8'hF_", "9'hf", true},
+            {"u_trailing_width_separator", "8_'h1", "9'h1", true},
+            {"u_leading_zero_width", "08'h1", "9'h1", true},
+            {"u_unproven_x_alias", "8'xFF", "8'hFF", true, true},
+            {"u_missing_decimal", "16'd", {}, false},
+            {"u_missing_unsized", "'d", {}, false},
+            {"u_missing_base", "8'", {}, false},
+            {"u_missing_c_digits", "0x", {}, false},
+            {"u_bad_legacy_octal", "0678", {}, false},
+            {"u_bad_binary_digit", "4'b12", {}, false},
+            {"u_bad_decimal_state", "8'dx1", {}, false},
+            {"u_bad_decimal_mixed_state", "8'd12x", {}, false},
+            {"u_empty_c_digits", "0x___", {}, false},
+            {"u_empty_based_digits", "16'h___", {}, false},
+            {"u_zero_width", "0'h1", {}, false},
+            {"u_large_width", "99999999'h1", {}, false},
+            {"u_numeric_suffix", "123abc", {}, false},
+            {"u_unknown_prefix", "0q12", {}, false},
+            {"u_bad_spaced_digit", "8 'hQ", {}, false},
+            {"u_bad_spaced_suffix", "8 'h FQ", {}, false},
+            {"u_bad_comment_digit", "8'h/* gap */GG", {}, false},
+            {"u_bad_comment_cast", "8'/* gap */Q", {}, false},
+            {"u_bad_size_comment_base", "8/* gap */'GG", {}, false},
+            {"u_bad_line_comment", "8'h// gap", {}, false},
+            {"u_bad_unclosed_comment", "8'h/* gap", {}, false},
+            {"u_bad_trailing_comment", "8'hF /* gap", {}, false},
+            {"u_bad_trailing_line_comment", "8'hF // gap", {}, false},
+            {"u_bad_unbased_line_comment", "'x// gap", {}, false},
+            {"u_bad_unbased_comment", "'x/* gap", {}, false},
+            {"u_zero_spaced_width", "0 'h1", {}, false},
+            {"u_underscore_width", "___ 'h1", {}, false},
+            {"u_leading_underscore_width", "_8'h1", {}, false},
+            {"u_double_underscore_width", "__8 'h1", {}, false},
+            {"u_max_width_overflow", "16777216 'h1", {}, false},
+            {"u_bad_exponent", "1.2e+_3", {}, false},
+            {"u_bad_exponent_time", "1e2ns", {}, false},
+            {"u_bad_real_comment", "1.0 /* gap", {}, false},
+            {"u_bad_time_keyword", "1step", {}, false},
+            {"u_bad_c_macro", "0x+`TIE_VALUE", {}, false},
+            {"u_bad_c_expression", "0xFF+1", {}, false},
+            {"u_based_macro", "8'h`TIE_VALUE", "8'h`TIE_VALUE", true},
+            {"u_cast_macro", "8'`TIE_CAST", "8'`TIE_CAST", true},
+            {"u_signed_base_macro", "8's`TIE_BASE", "8's`TIE_BASE", true},
+            {"u_fraction_macro", "1.`TIE_FRACTION", "1.`TIE_FRACTION", true},
+            {"u_exponent_macro", "1e`TIE_EXPONENT", "1e`TIE_EXPONENT", true},
+            {"u_signed_exponent_macro", "1e+`TIE_EXPONENT", "1e+`TIE_EXPONENT", true},
+            {"u_bad_leading_fraction", ".5", {}, false},
+            {"u_bad_leading_dot", ".e3", {}, false},
+        };
+
+        const QString oversizedTwoState  = "262144'h"
+                                           + QString(QSocNumberInfo::MaximumNumericCharacters, 'F');
+        const QString oversizedFourState = "262144'h"
+                                           + QString(QSocNumberInfo::MaximumNumericCharacters, 'x');
+        const QString oversizedExpression = "1+"
+                                            + QString(QSocNumberInfo::MaximumNumericCharacters, ' ')
+                                            + "2";
+        const QString oversizedMalformed
+            = "8'h" + QString(QSocNumberInfo::MaximumNumericCharacters - 3, 'F') + "Q";
+        tieCases.append({"u_oversized_two_state", oversizedTwoState, {}, false});
+        tieCases.append({"u_oversized_four_state", oversizedFourState, oversizedFourState, true});
+        tieCases.append({"u_oversized_expression", oversizedExpression, oversizedExpression, true});
+        tieCases.append({"u_oversized_malformed", oversizedMalformed, {}, false});
+
+        QString netContent = QStringLiteral(
+            "\n"
+            "---\n"
+            "version: \"1.0\"\n"
+            "module: \"test_tie_token_classification\"\n"
+            "port:\n"
+            "  abc123:\n"
+            "    type: \"logic[8:0]\"\n"
+            "    direction: input\n"
+            "instance:\n");
+        for (const TieCase &tieCase : tieCases) {
+            const QString port      = tieCase.symbolic ? QStringLiteral("symbolic")
+                                                       : QStringLiteral("fixed");
+            QString       yamlValue = tieCase.value;
+            yamlValue.replace(QStringLiteral("\n"), QStringLiteral("\\n"));
+            yamlValue.replace(QStringLiteral("\r"), QStringLiteral("\\r"));
+            netContent += QStringLiteral(
+                              "  %1:\n"
+                              "    module: \"token_dut\"\n"
+                              "    port:\n"
+                              "      %2: { tie: \"%3\" }\n")
+                              .arg(QString::fromLatin1(tieCase.name), port, yamlValue);
+        }
+
+        const QString filePath = createTempFile("test_tie_token_classification.soc_net", netContent);
+        QVERIFY(!filePath.isEmpty());
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_tie_token_classification.v");
+        QVERIFY(!QFile::exists(verilogPath) || QFile::remove(verilogPath));
+        QVERIFY(!QFile::exists(verilogPath));
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        bool foundCurrentSuccess = false;
+        for (const QString &message : messageList) {
+            foundCurrentSuccess |= message.contains("Successfully generated Verilog code:")
+                                   && message.contains(verilogPath);
+        }
+        QVERIFY(foundCurrentSuccess);
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray verilogBytes = verilogFile.readAll();
+
+        const auto extractInstance = [&verilogBytes](const QByteArray &name) {
+            const QByteArray marker = "token_dut " + name + " (";
+            const qsizetype  begin  = verilogBytes.indexOf(marker);
+            if (begin < 0) {
+                return QByteArray();
+            }
+            const qsizetype end = verilogBytes.indexOf("\n    );", begin);
+            if (end < 0) {
+                return QByteArray();
+            }
+            return verilogBytes.mid(begin, end - begin + QByteArray("\n    );").size());
+        };
+
+        for (const TieCase &tieCase : tieCases) {
+            const QByteArray instance = extractInstance(tieCase.name);
+            QVERIFY2(!instance.isEmpty(), tieCase.name);
+            const QByteArray port = tieCase.symbolic ? "symbolic" : "fixed";
+            if (tieCase.accepted) {
+                const QByteArray connection = "." + port + "(" + tieCase.emitted.toUtf8() + ")";
+                QVERIFY2(instance.contains(connection), tieCase.name);
+            } else {
+                const QByteArray width   = tieCase.symbolic ? QByteArray() : QByteArray("[8:0] ");
+                const QByteArray missing = "." + port + "(/* FIXME: input " + width + port
+                                           + " missing */)";
+                QVERIFY2(instance.contains(missing), tieCase.name);
+            }
+        }
+
+        bool foundBoundedWarning = false;
+        for (const QString &message : messageList) {
+            if (message.contains("u_oversized_two_state")) {
+                foundBoundedWarning = true;
+                QVERIFY(message.size() < 320);
+            }
+        }
+        QVERIFY(foundBoundedWarning);
+
+        const QString stubPath = createTempFile(
+            "token_dut_stub.v",
+            R"(`define TIE_VALUE 1
+`define TIE_CAST (1)
+`define TIE_BASE hFF
+`define TIE_FRACTION 5
+`define TIE_EXPONENT 2
+typedef logic [7:0] _8;
+module token_dut #(
+    parameter int WIDTH = 8
+) (
+    input logic [8:0] fixed,
+    input logic [WIDTH-1:0] symbolic
+);
+endmodule
+)");
+
+        /* The embedded parser does not re-form a numeric token across macro
+           replacement. Pin the generated bytes above, then elaborate the
+           corresponding preprocessed text. */
+        QByteArray elaborationBytes = verilogBytes;
+        elaborationBytes.replace("8's`TIE_BASE", "8'shFF");
+        elaborationBytes.replace("1.`TIE_FRACTION", "1.5");
+        elaborationBytes.replace("1e`TIE_EXPONENT", "1e2");
+        elaborationBytes.replace("1e+`TIE_EXPONENT", "1e+2");
+        const QString elaborationPath = createTempFile(
+            "test_tie_token_classification_elaborated.v", QString::fromUtf8(elaborationBytes));
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "", {stubPath, elaborationPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
     }
 
     void testGenerateEmptyTieAndLinkIgnored()

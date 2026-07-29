@@ -13,7 +13,9 @@
 class QSocNumberInfo
 {
 public:
-    static constexpr int MaximumDeclaredWidth = 16777215;
+    /* Bound arbitrary-precision conversion work by the original text size. */
+    static constexpr int MaximumNumericCharacters = 65536;
+    static constexpr int MaximumDeclaredWidth     = 16777215;
 
     /**
      * @brief Numeric base enumeration
@@ -96,6 +98,60 @@ public:
      * @return int64_t representation, or 0 if conversion fails or value is too large
      */
     int64_t toInt64() const;
+
+    /**
+     * @brief Two-state number spelling classes for the strict entry
+     */
+    enum class Spelling : std::uint8_t {
+        NotANumber,   /**< Not a complete two-state number */
+        PlainDecimal, /**< Bare decimal digits without a leading zero */
+        CStyle,       /**< 0x / 0b / 0o prefixed or leading-zero octal */
+        Verilog       /**< Two-state Verilog literal, sized or unsized */
+    };
+
+    /**
+     * @brief Generator handling for number-shaped text
+     */
+    enum class NumericTextKind : std::uint8_t {
+        Normalize,   /**< Complete two-state number */
+        PassThrough, /**< Opaque expression or non-normalized value */
+        Reject       /**< Complete malformed number */
+    };
+
+    /**
+     * @brief Result of deterministic numeric text classification
+     */
+    struct NumericText
+    {
+        NumericTextKind kind     = NumericTextKind::PassThrough;
+        Spelling        spelling = Spelling::NotANumber;
+    };
+
+    /**
+     * @brief Classify a complete number or a number-leading expression
+     * @param text Candidate text
+     * @return Handling class and spelling
+     */
+    static NumericText classifyNumericText(const QString &text);
+
+    /**
+     * @brief Normalize hexadecimal x-base aliases in an expression
+     * @details Strings, comments, escaped identifiers, and unbased 'x stay unchanged.
+     * @param text Candidate expression
+     * @return Text with hexadecimal base markers written as h/H
+     */
+    static QString normalizeHexBaseAliases(const QString &text);
+
+    /**
+     * @brief Strictly classify a complete two-state number
+     * @details The single gate for numeric conversion. Text longer than
+     *          MaximumNumericCharacters returns before classification; the
+     *          grammar consumes the whole string and requires a bounded,
+     *          nonzero Verilog width.
+     * @param numStr Candidate text
+     * @return The spelling class, or NotANumber
+     */
+    static Spelling classifyTwoStateNumber(const QString &numStr);
 };
 
 #endif // QSOCNUMBERINFO_H
