@@ -18,19 +18,6 @@
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -267,7 +254,6 @@ c906:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);

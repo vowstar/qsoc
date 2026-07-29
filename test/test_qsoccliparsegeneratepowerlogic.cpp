@@ -16,19 +16,6 @@
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -131,7 +118,6 @@ private:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
@@ -149,6 +135,46 @@ private slots:
         QDir projectDir(projectManager.getCurrentPath());
         projectDir.removeRecursively();
         qInstallMessageHandler(nullptr);
+    }
+
+    /* A netlist whose only section is `power:` is complete; the controller
+       must generate without port/instance/net scaffolding. */
+    void test_pure_power_netlist_generates()
+    {
+        const QString netlistContent = R"(
+power:
+  - name: pure_pwr_ctrl
+    host_clock: clk_ao
+    host_reset: rst_ao_n
+    domain:
+      - name: ao
+        v_mv: 900
+        wait_dep: 0
+        settle_on: 0
+        settle_off: 0
+        follow: []
+)";
+        const QString netlistPath    = createTempFile("test_pure_power.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        /* A stale artifact from an earlier run would satisfy the existence
+           check even if this generation failed. */
+        QFile::remove(QDir(projectManager.getOutputPath()).filePath("test_pure_power.v"));
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_pure_power.v");
+        QVERIFY(QFile::exists(verilogPath));
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module pure_pwr_ctrl"));
     }
 
     void test_ao_domain_inference()

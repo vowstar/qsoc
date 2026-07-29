@@ -16,19 +16,6 @@
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -100,7 +87,6 @@ private:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
@@ -124,6 +110,48 @@ private slots:
     }
 
     void init() { messageList.clear(); }
+
+    /* A netlist whose only section is `reset:` is complete; the controller
+       must generate without port/instance/net scaffolding. */
+    void testPureResetNetlistGenerates()
+    {
+        const QString netlistContent = R"(
+reset:
+  - name: pure_rst_ctrl
+    source:
+      por_rst_n:
+        active: low
+    target:
+      sys_rst_n:
+        active: low
+        link:
+          por_rst_n:
+            async:
+              clock: clk_sys
+              stage: 4
+)";
+        const QString netlistPath    = createTempFile("test_pure_reset.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        /* A stale artifact from an earlier run would satisfy the existence
+           check even if this generation failed. */
+        QFile::remove(QDir(projectManager.getOutputPath()).filePath("test_pure_reset.v"));
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_pure_reset.v");
+        QVERIFY(QFile::exists(verilogPath));
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module pure_rst_ctrl"));
+    }
 
     void testBasicResetController()
     {

@@ -17,19 +17,6 @@
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -62,7 +49,6 @@ private:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
@@ -868,6 +854,46 @@ clock:
         QCOMPARE(collisionErrors, 1);
         QCOMPARE(rejections, 1);
         QVERIFY(!QFile::exists(typstPath));
+    }
+
+    /* A netlist whose only section is `clock:` is complete; the controller
+       must generate without port/instance/net scaffolding. */
+    void test_pure_clock_netlist_generates()
+    {
+        const QString netlistContent = R"(
+clock:
+  - name: pure_clk_ctrl
+    input:
+      osc_24m:
+        freq: 24MHz
+    target:
+      adc_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+)";
+        const QString netlistPath    = createTempFile("test_pure_clock.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        /* A stale artifact from an earlier run would satisfy the existence
+           check even if this generation failed. */
+        QFile::remove(QDir(projectManager.getOutputPath()).filePath("test_pure_clock.v"));
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_pure_clock.v");
+        QVERIFY(QFile::exists(verilogPath));
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "module pure_clk_ctrl"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign adc_clk"));
     }
 
     void test_pass_thru_clock()
