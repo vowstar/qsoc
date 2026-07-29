@@ -8,6 +8,8 @@
 #include <QPainter>
 #include <QStyleOptionGraphicsItem>
 
+#include <limits>
+
 using namespace PrcLibrary;
 
 /* Color Definitions */
@@ -26,6 +28,29 @@ const QColor RST_TARGET_BG   = QColor(255, 220, 180); /* Light orange */
 /* Power domain colors */
 const QColor PWR_CTRL_BORDER = QColor(70, 130, 70);   /* Dark green */
 const QColor PWR_DOMAIN_BG   = QColor(200, 255, 200); /* Light green */
+
+int inputOrdinal(const QString &name)
+{
+    if (name == "in") {
+        return 0;
+    }
+    if (!name.startsWith("in_")) {
+        return -1;
+    }
+
+    bool      ok      = false;
+    const int ordinal = name.mid(3).toInt(&ok);
+    return ok && ordinal > 0 ? ordinal : -1;
+}
+
+int maximumInputOrdinal(const QList<std::shared_ptr<PrcConnector>> &connectors)
+{
+    int maximum = 0;
+    for (const auto &connector : connectors) {
+        maximum = qMax(maximum, inputOrdinal(connector->text()));
+    }
+    return maximum;
+}
 
 } // namespace
 
@@ -743,32 +768,36 @@ void PrcPrimitiveItem::updateDynamicPorts()
     const int gridSize = _settings.gridSize > 0 ? _settings.gridSize : 20;
 
     /* Count input ports and connected ports */
-    int totalInputs    = inputPortCount();
-    int connectedCount = connectedInputPortCount();
+    int       totalInputs    = inputPortCount();
+    const int connectedCount = connectedInputPortCount();
 
     /* Ensure there's always at least one available (unconnected) input port */
     if (connectedCount >= totalInputs && totalInputs > 0) {
         /* All input ports are connected - add a new one */
-        int newIndex = totalInputs;
+        const int highestOrdinal = maximumInputOrdinal(m_connectors);
+        if (highestOrdinal < std::numeric_limits<int>::max()) {
+            const int newOrdinal = highestOrdinal + 1;
 
-        /* Calculate required height for all ports */
-        qreal requiredHeight = ITEM_HEIGHT + newIndex * gridSize;
-        if (requiredHeight > size().height()) {
-            setSize(size().width(), requiredHeight);
+            /* Calculate required height for all ports */
+            const qreal requiredHeight = ITEM_HEIGHT + static_cast<qreal>(newOrdinal) * gridSize;
+            if (requiredHeight > size().height()) {
+                setSize(size().width(), requiredHeight);
+            }
+
+            int    yOffset    = newOrdinal * gridSize; /* Stacked vertically */
+            QPoint gridPosNew = QPoint(0, static_cast<int>((ITEM_HEIGHT / 2 + yOffset) / gridSize));
+
+            QString connName = QString("in_%1").arg(newOrdinal);
+
+            PrcConnector::PortType portType = (m_primitiveType == ClockTarget)
+                                                  ? PrcConnector::Clock
+                                                  : PrcConnector::Reset;
+
+            auto newInput = std::make_shared<PrcConnector>(
+                gridPosNew, connName, portType, PrcConnector::Left, this);
+            addConnector(newInput);
+            m_connectors.append(newInput);
         }
-
-        int    yOffset    = newIndex * gridSize; /* Stacked vertically */
-        QPoint gridPosNew = QPoint(0, static_cast<int>((ITEM_HEIGHT / 2 + yOffset) / gridSize));
-
-        QString connName = QString("in_%1").arg(newIndex);
-
-        PrcConnector::PortType portType = (m_primitiveType == ClockTarget) ? PrcConnector::Clock
-                                                                           : PrcConnector::Reset;
-
-        auto newInput = std::make_shared<PrcConnector>(
-            gridPosNew, connName, portType, PrcConnector::Left, this);
-        addConnector(newInput);
-        m_connectors.append(newInput);
     }
 
     /* Remove excess unconnected ports (keep at least one available) */
@@ -792,11 +821,12 @@ void PrcPrimitiveItem::updateDynamicPorts()
     }
 
     /* Shrink height if ports were removed, but keep minimum height */
-    qreal minRequiredHeight = ITEM_HEIGHT + (totalInputs - 1) * gridSize;
+    qreal minRequiredHeight = ITEM_HEIGHT
+                              + static_cast<qreal>(maximumInputOrdinal(m_connectors)) * gridSize;
     if (minRequiredHeight < ITEM_HEIGHT) {
         minRequiredHeight = ITEM_HEIGHT;
     }
-    if (size().height() > minRequiredHeight + gridSize) {
+    if (size().height() < minRequiredHeight || size().height() > minRequiredHeight + gridSize) {
         setSize(size().width(), minRequiredHeight);
     }
 

@@ -70,6 +70,30 @@ private:
         return nullptr;
     }
 
+    static std::shared_ptr<PrcConnector> inputConnector(
+        const std::shared_ptr<PrcPrimitiveItem> &item, const QString &name)
+    {
+        for (const auto &connector : item->connectors()) {
+            auto prcConnector = std::dynamic_pointer_cast<PrcConnector>(connector);
+            if (prcConnector && prcConnector->text() == name) {
+                return prcConnector;
+            }
+        }
+        return nullptr;
+    }
+
+    static QStringList inputConnectorNames(const std::shared_ptr<PrcPrimitiveItem> &item)
+    {
+        QStringList names;
+        for (const auto &connector : item->connectors()) {
+            const QString name = connector->text();
+            if (name == "in" || name.startsWith("in_")) {
+                names.append(name);
+            }
+        }
+        return names;
+    }
+
     static bool populateClockScene(PrcWindow &window)
     {
         auto target                 = std::make_shared<PrcPrimitiveItem>(ClockTarget, "clk_out");
@@ -238,6 +262,137 @@ private slots:
                 QCOMPARE(verilogBytes, verilogBaseline);
             }
         }
+    }
+
+    void dynamicPortOrdinalsSurviveAHole()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        PrcWindow window;
+        auto      target            = std::make_shared<PrcPrimitiveItem>(ClockTarget, "clk_out");
+        auto      targetParams      = std::get<ClockTargetParams>(target->params());
+        targetParams.name           = "clk_out";
+        targetParams.freq           = "100MHz";
+        targetParams.controller     = "clock_ctrl";
+        targetParams.select         = "clk_select";
+        targetParams.mux.configured = true;
+        target->setParams(targetParams);
+        target->setPos(600.0, 300.0);
+
+        for (const QString &name : {"in", "in_1"}) {
+            const auto connector = inputConnector(target, name);
+            QVERIFY(connector);
+            connector->setConnected(true);
+            target->updateDynamicPorts();
+        }
+
+        const auto inputOne = inputConnector(target, "in_1");
+        const auto inputTwo = inputConnector(target, "in_2");
+        QVERIFY(inputOne);
+        QVERIFY(inputTwo);
+        inputTwo->setText("in_3");
+        inputOne->setConnected(false);
+        inputTwo->setConnected(true);
+        target->updateDynamicPorts();
+        QVERIFY(!inputConnector(target, "in_2"));
+        QVERIFY(inputConnector(target, "in_1"));
+        QVERIFY(inputConnector(target, "in_3"));
+        QVERIFY(target->size().height() >= 120.0);
+
+        inputOne->setConnected(true);
+        target->updateDynamicPorts();
+
+        const QStringList connectorNames = inputConnectorNames(target);
+        QSet<QString>     uniqueNames;
+        for (const QString &name : connectorNames) {
+            uniqueNames.insert(name);
+        }
+        QCOMPARE(uniqueNames.size(), connectorNames.size());
+        QVERIFY(uniqueNames.contains("in_4"));
+        QVERIFY(target->size().height() >= 140.0);
+
+        struct Link
+        {
+            QString                                  connector;
+            QString                                  name;
+            QString                                  renamed;
+            std::shared_ptr<PrcPrimitiveItem>        source;
+            std::shared_ptr<QSchematic::Items::Wire> wire;
+        };
+        QList<Link> links = {
+            {"in", "clk_a", "clk_z", {}, {}},
+            {"in_1", "clk_m", "clk_m", {}, {}},
+            {"in_3", "clk_z", "clk_a", {}, {}},
+        };
+
+        {
+            QSignalBlocker blocker(&window.prcScene());
+            QVERIFY(window.prcScene().addItem(target));
+            for (int index = 0; index < links.size(); ++index) {
+                Link &link              = links[index];
+                link.source             = std::make_shared<PrcPrimitiveItem>(ClockInput, link.name);
+                auto sourceParams       = std::get<ClockInputParams>(link.source->params());
+                sourceParams.name       = link.name;
+                sourceParams.freq       = "100MHz";
+                sourceParams.controller = "clock_ctrl";
+                link.source->setParams(sourceParams);
+                link.source->setPos(0.0, index * 100.0);
+                QVERIFY(window.prcScene().addItem(link.source));
+
+                const auto output = outputConnector(link.source);
+                const auto input  = inputConnector(target, link.connector);
+                QVERIFY(output);
+                QVERIFY(input);
+                link.wire = std::make_shared<QSchematic::Items::Wire>();
+                link.wire->append_point(output->scenePos());
+                link.wire->append_point(input->scenePos());
+                if (index + 1 < links.size()) {
+                    QVERIFY(window.prcScene().addWire(link.wire));
+                }
+            }
+        }
+        QVERIFY(window.prcScene().addWire(links.last().wire));
+
+        const auto exportedLinks = [&](const QString &path) {
+            const QByteArray bytes = readFile(path);
+            if (bytes.isEmpty()) {
+                return QStringList();
+            }
+            const YAML::Node root = YAML::Load(std::string(bytes.constData(), bytes.size()));
+            const YAML::Node node = root["clock"][0]["target"]["clk_out"]["link"];
+            QStringList      names;
+            for (auto it = node.begin(); it != node.end(); ++it) {
+                names.append(QString::fromStdString(it->first.as<std::string>()));
+            }
+            return names;
+        };
+
+        const QString firstPath = directory.filePath("before_rename.soc_net");
+        QVERIFY(window.exportNetlist(firstPath));
+        QCOMPARE(exportedLinks(firstPath), QStringList({"clk_a", "clk_m", "clk_z"}));
+
+        for (Link &link : links) {
+            link.source->setPrimitiveName(link.renamed);
+            auto sourceParams = std::get<ClockInputParams>(link.source->params());
+            sourceParams.name = link.renamed;
+            link.source->setParams(sourceParams);
+        }
+
+        const QString renamedPath = directory.filePath("after_rename.soc_net");
+        QVERIFY(window.exportNetlist(renamedPath));
+        QCOMPARE(exportedLinks(renamedPath), QStringList({"clk_z", "clk_m", "clk_a"}));
+
+        const QByteArray   bytes = readFile(renamedPath);
+        const YAML::Node   root  = YAML::Load(std::string(bytes.constData(), bytes.size()));
+        QSocClockPrimitive primitive;
+        QString            verilog;
+        QTextStream        stream(&verilog);
+        QVERIFY(primitive.generateClockController(root["clock"][0], stream));
+        verilog.remove(QRegularExpression("\\s+"));
+        QVERIFY(verilog.contains(
+            ".clk_in({clk_clk_out_from_clk_a,"
+            "clk_clk_out_from_clk_m,clk_clk_out_from_clk_z})"));
     }
 };
 
