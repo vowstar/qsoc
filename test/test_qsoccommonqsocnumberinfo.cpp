@@ -5,6 +5,9 @@
 #include "qsoc_test.h"
 
 #include <QElapsedTimer>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QTemporaryDir>
 #include <QtTest>
 
 class TestQSocNumberInfo : public QObject
@@ -25,11 +28,15 @@ private slots:
     void parseNumber_cStyleBinary();
     void parseNumber_cStyleOctal();
     void parseNumber_cStyleOctalPrefixed();
+    void tryToInt64_boundaries();
+    void stringToBigInteger_matchesReference();
+    void stringToBigInteger_skipsInvalidCharacters();
+    void stringToBigInteger_rejectsOversizedText();
+    void parseNumber_maximumDecimalCompletesWithinBound();
     void classifyNumericText_contract();
     void classifyNumericText_commentsScaleLinearly();
     void normalizeHexBaseAliases_contract();
     void normalizeHexBaseAliases_commentsScaleLinearly();
-    void tryToInt64_boundaries();
     void tryToInt64_rejectsOverflow();
     void truncateValueToWidthKeepsLowBits();
     void parseNumber_cStyleDecimal();
@@ -39,6 +46,7 @@ private slots:
     void format_octal();
     void format_decimal();
     void format_hexadecimal();
+    void formatDecimalMaximumCompletesWithinBound();
 
     void formatVerilog_withWidth();
     void formatVerilog_withoutWidth();
@@ -158,6 +166,158 @@ void TestQSocNumberInfo::parseNumber_cStyleOctalPrefixed()
     QSocNumberInfo upper = QSocNumberInfo::parseNumber("0O7_7");
     QCOMPARE(upper.base, QSocNumberInfo::Base::Octal);
     QCOMPARE(upper.toInt64(), 077);
+}
+
+void TestQSocNumberInfo::stringToBigInteger_matchesReference()
+{
+    /* Conversion paths must agree with the original recurrence. */
+    const auto reference = [](const std::string &digits, int base) {
+        BigUnsigned result(0);
+        for (const char character : digits) {
+            int digit = 0;
+            if (character >= '0' && character <= '9') {
+                digit = character - '0';
+            } else if (character >= 'a' && character <= 'f') {
+                digit = character - 'a' + 10;
+            } else {
+                digit = character - 'A' + 10;
+            }
+            result = result * BigUnsigned(base) + BigUnsigned(digit);
+        }
+        return BigInteger(result);
+    };
+
+    const std::string hexDigits = "DeadBeefCafe0123456789abcdefABCDEF";
+    QVERIFY(QSocNumberInfo::stringToBigIntegerWithBase(hexDigits, 16) == reference(hexDigits, 16));
+
+    const std::string decimalDigits = "123456789012345678901234567890123456789";
+    QVERIFY(
+        QSocNumberInfo::stringToBigIntegerWithBase(decimalDigits, 10)
+        == reference(decimalDigits, 10));
+
+    const std::string octalDigits = "76543210076543210076543210";
+    QVERIFY(QSocNumberInfo::stringToBigIntegerWithBase(octalDigits, 8) == reference(octalDigits, 8));
+
+    const std::string binaryDigits = "1101010101111000010101010101010101010101011";
+    QVERIFY(
+        QSocNumberInfo::stringToBigIntegerWithBase(binaryDigits, 2) == reference(binaryDigits, 2));
+
+    for (const char *decimalText :
+         {"99999999",
+          "999999999",
+          "1000000000",
+          "99999999999999999",
+          "999999999999999999",
+          "1000000000000000000",
+          "4294967295",
+          "4294967296",
+          "18446744073709551615",
+          "18446744073709551616"}) {
+        const std::string digits(decimalText);
+        QVERIFY(QSocNumberInfo::stringToBigIntegerWithBase(digits, 10) == reference(digits, 10));
+    }
+
+    QVERIFY(QSocNumberInfo::stringToBigIntegerWithBase("102", 3) == reference("102", 3));
+    QVERIFY(QSocNumberInfo::stringToBigIntegerWithBase("B5", 12) == reference("B5", 12));
+}
+
+void TestQSocNumberInfo::stringToBigInteger_skipsInvalidCharacters()
+{
+    /* Lenient skipping is long-standing behavior other callers rely on. */
+    QVERIFY(QSocNumberInfo::stringToBigIntegerWithBase("Z5", 16) == BigInteger(5));
+    QVERIFY(QSocNumberInfo::stringToBigIntegerWithBase("19", 8) == BigInteger(1));
+    QVERIFY(QSocNumberInfo::stringToBigIntegerWithBase("ZZ", 16) == BigInteger(0));
+}
+
+void TestQSocNumberInfo::stringToBigInteger_rejectsOversizedText()
+{
+    const std::string oversized(QSocNumberInfo::MaximumNumericCharacters + 1, '7');
+    bool              thrown = false;
+    try {
+        QSocNumberInfo::stringToBigIntegerWithBase(oversized, 10);
+    } catch (const std::invalid_argument &) {
+        thrown = true;
+    }
+    QVERIFY(thrown);
+
+    /* And parseNumber surfaces it as errorDetected instead of a value. */
+    const QSocNumberInfo parsed = QSocNumberInfo::parseNumber(
+        QString::fromStdString(
+            "0x" + std::string(QSocNumberInfo::MaximumNumericCharacters + 1, 'F')));
+    QVERIFY(parsed.errorDetected);
+
+    const QString maximumRaw = "0x1" + QString(QSocNumberInfo::MaximumNumericCharacters - 3, '_');
+    QCOMPARE(maximumRaw.size(), QSocNumberInfo::MaximumNumericCharacters);
+    const QSocNumberInfo maximumParsed = QSocNumberInfo::parseNumber(maximumRaw);
+    QVERIFY(!maximumParsed.errorDetected);
+    QCOMPARE(maximumParsed.base, QSocNumberInfo::Base::Hexadecimal);
+    QCOMPARE(maximumParsed.width, 1);
+    QVERIFY(maximumParsed.value == BigInteger(1));
+
+    const QString        oversizedRaw = maximumRaw + "_";
+    const QSocNumberInfo rejected     = QSocNumberInfo::parseNumber(oversizedRaw);
+    QVERIFY(rejected.errorDetected);
+    QCOMPARE(rejected.originalString, oversizedRaw);
+    QCOMPARE(rejected.base, QSocNumberInfo::Base::Unknown);
+    QCOMPARE(rejected.width, 0);
+    QVERIFY(!rejected.hasExplicitWidth);
+    QVERIFY(rejected.value == BigInteger(0));
+
+    const QString        underscoreBypass = "0x1" + QString(70000, '_');
+    const QSocNumberInfo bypassRejected   = QSocNumberInfo::parseNumber(underscoreBypass);
+    QVERIFY(bypassRejected.errorDetected);
+    QCOMPARE(bypassRejected.base, QSocNumberInfo::Base::Unknown);
+    QCOMPARE(bypassRejected.width, 0);
+    QVERIFY(bypassRejected.value == BigInteger(0));
+
+    bool underscoreThrown = false;
+    try {
+        QSocNumberInfo::stringToBigIntegerWithBase(
+            std::string(QSocNumberInfo::MaximumNumericCharacters + 1, '_'), 16);
+    } catch (const std::invalid_argument &) {
+        underscoreThrown = true;
+    }
+    QVERIFY(underscoreThrown);
+    QCOMPARE(
+        QSocNumberInfo::classifyTwoStateNumber(oversizedRaw), QSocNumberInfo::Spelling::NotANumber);
+
+    const QSocNumberInfo hexAlias = QSocNumberInfo::parseNumber("8'xF");
+    QCOMPARE(hexAlias.base, QSocNumberInfo::Base::Hexadecimal);
+    QCOMPARE(hexAlias.width, 8);
+    QCOMPARE(hexAlias.toInt64(), int64_t(15));
+
+    const QString underscoredWidth = "1_______6'hF";
+    QCOMPARE(
+        QSocNumberInfo::classifyTwoStateNumber(underscoredWidth), QSocNumberInfo::Spelling::Verilog);
+    const QSocNumberInfo underscoredParsed = QSocNumberInfo::parseNumber(underscoredWidth);
+    QVERIFY(!underscoredParsed.errorDetected);
+    QCOMPARE(underscoredParsed.width, 16);
+    QCOMPARE(underscoredParsed.toInt64(), int64_t(15));
+
+    for (const QString &leadingZeroWidth : {QStringLiteral("08'h1"), QStringLiteral("0_8'h1")}) {
+        QCOMPARE(
+            QSocNumberInfo::classifyTwoStateNumber(leadingZeroWidth),
+            QSocNumberInfo::Spelling::Verilog);
+        const QSocNumberInfo leadingZeroParsed = QSocNumberInfo::parseNumber(leadingZeroWidth);
+        QVERIFY(!leadingZeroParsed.errorDetected);
+        QCOMPARE(leadingZeroParsed.width, 8);
+        QCOMPARE(leadingZeroParsed.toInt64(), int64_t(1));
+    }
+}
+
+void TestQSocNumberInfo::parseNumber_maximumDecimalCompletesWithinBound()
+{
+    const QString maximumDecimal(QSocNumberInfo::MaximumNumericCharacters, '9');
+
+    QElapsedTimer timer;
+    timer.start();
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        const QSocNumberInfo parsed = QSocNumberInfo::parseNumber(maximumDecimal);
+        QVERIFY(!parsed.errorDetected);
+        QCOMPARE(parsed.base, QSocNumberInfo::Base::Decimal);
+        QCOMPARE(parsed.width, 217706);
+    }
+    QVERIFY2(timer.elapsed() < 5000, "maximum decimal parsing exceeded the deadline");
 }
 
 void TestQSocNumberInfo::classifyNumericText_contract()
@@ -453,6 +613,44 @@ void TestQSocNumberInfo::format_hexadecimal()
     QCOMPARE(info.format(), QString("'hdeadbeef"));
 }
 
+void TestQSocNumberInfo::formatDecimalMaximumCompletesWithinBound()
+{
+    if (qEnvironmentVariableIsSet("QSOC_TEST_DECIMAL_FORMAT_CHILD")) {
+        const QString        digits(QSocNumberInfo::MaximumNumericCharacters, '9');
+        const QSocNumberInfo parsed = QSocNumberInfo::parseNumber(digits);
+        QVERIFY(!parsed.errorDetected);
+        const QString expected = "217706'd" + digits;
+        for (int iteration = 0; iteration < 3; ++iteration) {
+            QCOMPARE(parsed.formatVerilog(), expected);
+        }
+        return;
+    }
+
+    QTemporaryDir runDirectory;
+    QVERIFY(runDirectory.isValid());
+
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert("QSOC_TEST_DECIMAL_FORMAT_CHILD", "1");
+    environment.insert("TMPDIR", runDirectory.path());
+
+    QProcess child;
+    child.setProcessEnvironment(environment);
+    child.setProcessChannelMode(QProcess::MergedChannels);
+    child.setWorkingDirectory(runDirectory.path());
+    child.start(QCoreApplication::applicationFilePath(), {"formatDecimalMaximumCompletesWithinBound"});
+    QVERIFY(child.waitForStarted(5000));
+    const bool stopped = child.waitForFinished(5000);
+    if (!stopped) {
+        child.kill();
+        child.waitForFinished(1000);
+    }
+    const QByteArray childOutput = child.readAll();
+    QVERIFY2(stopped, childOutput.constData());
+    QVERIFY2(
+        child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
+        childOutput.constData());
+}
+
 void TestQSocNumberInfo::formatVerilog_withWidth()
 {
     QSocNumberInfo info = QSocNumberInfo::parseNumber("32'hDEAD");
@@ -530,9 +728,29 @@ void TestQSocNumberInfo::bigIntegerConversion_hexadecimal()
 
 void TestQSocNumberInfo::bigIntegerConversion_decimal()
 {
-    BigInteger  val = QSocNumberInfo::stringToBigIntegerWithBase("123456789", 10);
-    std::string str = QSocNumberInfo::bigIntegerToStringWithBase(val, 10);
-    QCOMPARE(QString::fromStdString(str), QString("123456789"));
+    for (const char *decimalText :
+         {"0",
+          "1",
+          "999999999",
+          "1000000000",
+          "1000000001",
+          "999999999999999999",
+          "1000000000000000000",
+          "1000000000000000001",
+          "4294967295",
+          "4294967296",
+          "4294967297",
+          "18446744073709551615",
+          "18446744073709551616",
+          "18446744073709551617",
+          "00000123456789"}) {
+        const BigInteger  value    = QSocNumberInfo::stringToBigIntegerWithBase(decimalText, 10);
+        const std::string expected = std::string(BigUnsignedInABase(value.getMagnitude(), 10));
+        QCOMPARE(QSocNumberInfo::bigIntegerToStringWithBase(value, 10), expected);
+    }
+
+    const BigInteger negative(BigUnsigned(1000000001), BigInteger::negative);
+    QCOMPARE(QSocNumberInfo::bigIntegerToStringWithBase(negative, 10), std::string("-1000000001"));
 }
 
 /* toInt64 */

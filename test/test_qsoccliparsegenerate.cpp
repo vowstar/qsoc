@@ -4503,6 +4503,110 @@ instance:
         QVERIFY(verifyVerilogContent("test_tie_wide_masks", ".contextual (1000000'd1)"));
     }
 
+    void testGenerateTieFormatsMaximumDecimalWithinBound()
+    {
+        if (qEnvironmentVariableIsSet("QSOC_TEST_DECIMAL_GENERATE_CHILD")) {
+            const QString moduleContent = R"(
+decimal_format_dut:
+  port:
+    d:
+      type: "logic[7:0]"
+      direction: input
+)";
+            const QDir    moduleDir(projectManager.getModulePath());
+            QFile         moduleFile(moduleDir.filePath("decimal_format_dut.soc_mod"));
+            QVERIFY(moduleFile.open(QIODevice::WriteOnly | QIODevice::Text));
+            moduleFile.write(moduleContent.toUtf8());
+            moduleFile.close();
+
+            const QString digits(QSocNumberInfo::MaximumNumericCharacters, '9');
+            const QString netContent = QString(R"(
+---
+version: "1.0"
+module: "test_tie_maximum_decimal"
+instance:
+  u0:
+    module: "decimal_format_dut"
+    port:
+      d: { tie: "%1" }
+)")
+                                           .arg(digits);
+            const QString netPath = createTempFile("test_tie_maximum_decimal.soc_net", netContent);
+            QVERIFY(!netPath.isEmpty());
+            const QString outputPath
+                = QDir(projectManager.getOutputPath()).filePath("test_tie_maximum_decimal.v");
+
+            const auto generate = [&](QByteArray &bytes) {
+                if (QFile::exists(outputPath) && !QFile::remove(outputPath)) {
+                    return false;
+                }
+                QSocCliWorker socCliWorker;
+                socCliWorker.setup(
+                    {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netPath},
+                    false);
+                socCliWorker.run();
+                if (!QFile::exists(outputPath)) {
+                    return false;
+                }
+                QFile outputFile(outputPath);
+                if (!outputFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    return false;
+                }
+                bytes = outputFile.readAll();
+                return true;
+            };
+
+            QByteArray firstBytes;
+            QVERIFY(generate(firstBytes));
+            const QByteArray expectedInstance = QByteArray(
+                                                    "decimal_format_dut u0 (\n"
+                                                    "        .d(8'd255 /* FIXME: Value 217706'd")
+                                                + digits.toUtf8()
+                                                + QByteArray(
+                                                    " wider than port width 8 bits */)\n"
+                                                    "    );");
+            QVERIFY(firstBytes.contains(expectedInstance));
+
+            const QString stubPath = createTempFile(
+                "decimal_format_dut.v",
+                "module decimal_format_dut(input logic [7:0] d);\nendmodule\n");
+            QSlangDriver driver;
+            QVERIFY(driver.parseFileList(
+                "", {stubPath, outputPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+
+            QByteArray secondBytes;
+            QVERIFY(generate(secondBytes));
+            QCOMPARE(secondBytes, firstBytes);
+            return;
+        }
+
+        QTemporaryDir runDirectory;
+        QVERIFY(runDirectory.isValid());
+
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.insert("QSOC_TEST_DECIMAL_GENERATE_CHILD", "1");
+        environment.insert("TMPDIR", runDirectory.path());
+
+        QProcess child;
+        child.setProcessEnvironment(environment);
+        child.setProcessChannelMode(QProcess::MergedChannels);
+        child.setWorkingDirectory(runDirectory.path());
+        child.start(
+            QCoreApplication::applicationFilePath(),
+            {"testGenerateTieFormatsMaximumDecimalWithinBound"});
+        QVERIFY(child.waitForStarted(5000));
+        const bool stopped = child.waitForFinished(5000);
+        if (!stopped) {
+            child.kill();
+            child.waitForFinished(1000);
+        }
+        const QByteArray childOutput = child.readAll();
+        QVERIFY2(stopped, childOutput.constData());
+        QVERIFY2(
+            child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
+            childOutput.constData());
+    }
+
     void testGenerateTieRecognizesBuiltInPackedTypes()
     {
         const QString moduleContent = R"(

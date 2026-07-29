@@ -7,7 +7,10 @@
 #include <QCoreApplication>
 #include <QRegularExpression>
 
+#include <cstdint>
 #include <limits>
+#include <stdexcept>
+#include <vector>
 
 QSocNumberInfo::QSocNumberInfo()
     : base(Base::Unknown)
@@ -19,45 +22,204 @@ QSocNumberInfo::QSocNumberInfo()
 
 QSocNumberInfo::~QSocNumberInfo() = default;
 
-std::string QSocNumberInfo::bigIntegerToStringWithBase(const BigInteger &value, int base)
+namespace {
+
+void appendBinaryWord(std::vector<std::uint32_t> &chunks, std::uint32_t word)
 {
-    std::string result;
-    if (value.getSign() == BigInteger::negative) {
-        result = "-";
-        result += std::string(BigUnsignedInABase(value.getMagnitude(), base));
-    } else {
-        result = std::string(BigUnsignedInABase(value.getMagnitude(), base));
+    constexpr std::uint64_t decimalChunkBase = 1000000000ULL;
+    std::uint64_t           carry            = word;
+
+    for (std::uint32_t &chunk : chunks) {
+        const std::uint64_t expanded = (static_cast<std::uint64_t>(chunk) << 32) + carry;
+        chunk                        = static_cast<std::uint32_t>(expanded % decimalChunkBase);
+        carry                        = expanded / decimalChunkBase;
+    }
+
+    while (carry != 0) {
+        chunks.push_back(static_cast<std::uint32_t>(carry % decimalChunkBase));
+        carry /= decimalChunkBase;
+    }
+}
+
+std::string formatDecimalNumber(const BigUnsigned &value)
+{
+    static_assert(sizeof(BigUnsigned::Blk) == 4 || sizeof(BigUnsigned::Blk) == 8);
+
+    std::vector<std::uint32_t> chunks;
+    for (BigUnsigned::Index index = value.getLength(); index > 0; --index) {
+        const std::uint64_t block = static_cast<std::uint64_t>(value.getBlock(index - 1));
+        if constexpr (sizeof(BigUnsigned::Blk) == 8) {
+            appendBinaryWord(chunks, static_cast<std::uint32_t>(block >> 32));
+        }
+        appendBinaryWord(chunks, static_cast<std::uint32_t>(block));
+    }
+
+    if (chunks.empty()) {
+        return "0";
+    }
+
+    std::string result = std::to_string(chunks.back());
+    for (std::size_t index = chunks.size() - 1; index > 0; --index) {
+        const std::string chunk = std::to_string(chunks[index - 1]);
+        result.append(9 - chunk.size(), '0');
+        result.append(chunk);
     }
     return result;
 }
 
-BigInteger QSocNumberInfo::stringToBigIntegerWithBase(const std::string &str, int base)
+} // namespace
+
+std::string QSocNumberInfo::bigIntegerToStringWithBase(const BigInteger &value, int base)
 {
-    BigUnsigned       result(0);
-    const BigUnsigned baseVal(base);
+    std::string result = base == 10 ? formatDecimalNumber(value.getMagnitude())
+                                    : std::string(BigUnsignedInABase(value.getMagnitude(), base));
+    if (value.getSign() == BigInteger::negative) {
+        result.insert(result.begin(), '-');
+    }
+    return result;
+}
 
-    for (const char character : str) {
-        int digit;
-        if (character >= '0' && character <= '9') {
-            digit = character - '0';
-        } else if (character >= 'a' && character <= 'f') {
-            digit = character - 'a' + 10;
-        } else if (character >= 'A' && character <= 'F') {
-            digit = character - 'A' + 10;
-        } else {
-            /* Skip invalid characters */
-            continue;
+namespace {
+
+int numericDigit(char character)
+{
+    if (character >= '0' && character <= '9') {
+        return character - '0';
+    }
+    if (character >= 'a' && character <= 'f') {
+        return character - 'a' + 10;
+    }
+    if (character >= 'A' && character <= 'F') {
+        return character - 'A' + 10;
+    }
+    return -1;
+}
+
+/* Pack base 2/8/16 digits into blocks from the least significant end; the
+   per-digit multiply-accumulate is quadratic in the digit count. */
+BigUnsigned parsePowerOfTwoNumber(const std::string &digits, int base)
+{
+    const unsigned int            bitsPerDigit = base == 2 ? 1U : base == 8 ? 3U : 4U;
+    std::vector<BigUnsigned::Blk> blocks;
+    blocks.reserve((digits.size() * bitsPerDigit + BigUnsigned::N - 1) / BigUnsigned::N);
+    BigUnsigned::Blk block     = 0;
+    unsigned int     blockBits = 0;
+
+    for (auto iterator = digits.crbegin(); iterator != digits.crend(); ++iterator) {
+        unsigned int digitBits = bitsPerDigit;
+        auto         digit     = static_cast<unsigned int>(numericDigit(*iterator));
+        while (digitBits > 0) {
+            const unsigned int availableBits = BigUnsigned::N - blockBits;
+            const unsigned int takenBits = digitBits < availableBits ? digitBits : availableBits;
+            const BigUnsigned::Blk mask  = (BigUnsigned::Blk(1) << takenBits) - 1;
+            block |= (BigUnsigned::Blk(digit) & mask) << blockBits;
+            digit >>= takenBits;
+            digitBits -= takenBits;
+            blockBits += takenBits;
+
+            if (blockBits == BigUnsigned::N) {
+                blocks.push_back(block);
+                block     = 0;
+                blockBits = 0;
+            }
         }
-
-        if (digit >= base) {
-            /* Skip invalid digits for this base */
-            continue;
-        }
-
-        result = result * baseVal + BigUnsigned(digit);
     }
 
-    return {result};
+    if (blockBits > 0) {
+        blocks.push_back(block);
+    }
+    return {blocks.data(), static_cast<BigUnsigned::Index>(blocks.size())};
+}
+
+void multiplyAddDecimalChunk(
+    std::vector<BigUnsigned::Blk> &blocks, std::uint32_t scale, std::uint32_t value)
+{
+    static_assert(sizeof(BigUnsigned::Blk) == 4 || sizeof(BigUnsigned::Blk) == 8);
+
+    constexpr std::uint64_t halfMask = 0xffffffffULL;
+    std::uint64_t           carry    = value;
+
+    for (BigUnsigned::Blk &block : blocks) {
+        const std::uint64_t blockValue = static_cast<std::uint64_t>(block);
+        if constexpr (sizeof(BigUnsigned::Blk) == 4) {
+            const std::uint64_t product = blockValue * scale + carry;
+            block                       = static_cast<BigUnsigned::Blk>(product);
+            carry                       = product >> 32;
+        } else {
+            const std::uint64_t lowProduct  = (blockValue & halfMask) * scale + carry;
+            const std::uint64_t highProduct = (blockValue >> 32) * scale + (lowProduct >> 32);
+            block = static_cast<BigUnsigned::Blk>((highProduct << 32) | (lowProduct & halfMask));
+            carry = highProduct >> 32;
+        }
+    }
+
+    if (carry != 0) {
+        blocks.push_back(static_cast<BigUnsigned::Blk>(carry));
+    }
+}
+
+BigUnsigned parseDecimalNumber(const std::string &digits)
+{
+    constexpr std::size_t         chunkDigits = 9;
+    std::vector<BigUnsigned::Blk> blocks;
+    blocks.reserve((digits.size() * 4 + BigUnsigned::N - 1) / BigUnsigned::N);
+    std::size_t position    = 0;
+    std::size_t chunkLength = (digits.size() - 1) % chunkDigits + 1;
+
+    while (position < digits.size()) {
+        std::uint32_t chunkValue = 0;
+        std::uint32_t chunkScale = 1;
+        for (std::size_t offset = 0; offset < chunkLength; ++offset) {
+            chunkValue = chunkValue * 10
+                         + static_cast<std::uint32_t>(numericDigit(digits[position + offset]));
+            chunkScale *= 10;
+        }
+        multiplyAddDecimalChunk(blocks, chunkScale, chunkValue);
+        position += chunkLength;
+        chunkLength = chunkDigits;
+    }
+    return {blocks.data(), static_cast<BigUnsigned::Index>(blocks.size())};
+}
+
+BigUnsigned parseGenericNumber(const std::string &digits, int base)
+{
+    BigUnsigned       result(0);
+    const BigUnsigned baseValue(base);
+    for (const char character : digits) {
+        result = result * baseValue + BigUnsigned(numericDigit(character));
+    }
+    return result;
+}
+
+} // namespace
+
+BigInteger QSocNumberInfo::stringToBigIntegerWithBase(const std::string &str, int base)
+{
+    if (str.size() > static_cast<std::size_t>(MaximumNumericCharacters)) {
+        throw std::invalid_argument("number exceeds character limit");
+    }
+
+    /* Characters outside the base are skipped, as the per-digit loop always
+       did; the fast paths below require a digits-only string. */
+    std::string digits;
+    digits.reserve(str.size());
+    for (const char character : str) {
+        const int digit = numericDigit(character);
+        if (digit >= 0 && digit < base) {
+            digits.push_back(character);
+        }
+    }
+    if (digits.empty()) {
+        return BigInteger(0);
+    }
+
+    if (base == 2 || base == 8 || base == 16) {
+        return {parsePowerOfTwoNumber(digits, base)};
+    }
+    if (base == 10) {
+        return {parseDecimalNumber(digits)};
+    }
+    return {parseGenericNumber(digits, base)};
 }
 
 QString QSocNumberInfo::format() const
@@ -166,6 +328,13 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
     result.width            = 0;
     result.hasExplicitWidth = false;
     result.errorDetected    = false;
+
+    if (numStr.size() > MaximumNumericCharacters) {
+        result.errorDetected = true;
+        QSocConsole::warn() << "Number text length" << numStr.size() << "exceeds limit"
+                            << MaximumNumericCharacters;
+        return result;
+    }
 
     /* Remove all underscores from the string (Verilog style) */
     QString cleanStr = numStr;
@@ -415,27 +584,7 @@ QSocNumberInfo QSocNumberInfo::parseNumber(const QString &numStr)
         } else if (result.value == 0) {
             result.width = 1; /* Special case for zero */
         } else {
-            /* Calculate minimum required width based on the value */
-            BigInteger tempValue       = result.value;
-            int        calculatedWidth = 0;
-
-            /* Count how many bits are needed */
-            while (tempValue != 0) {
-                /* Shift right by one bit */
-                if (tempValue.getSign() == BigInteger::negative) {
-                    BigUnsigned magnitude = tempValue.getMagnitude();
-                    magnitude             = magnitude >> 1;
-                    tempValue             = BigInteger(magnitude, BigInteger::negative);
-                } else {
-                    BigUnsigned magnitude = tempValue.getMagnitude();
-                    magnitude             = magnitude >> 1;
-                    tempValue             = BigInteger(magnitude);
-                }
-                calculatedWidth++;
-            }
-
-            /* Use exact calculated width */
-            result.width = calculatedWidth;
+            result.width = static_cast<int>(result.value.getMagnitude().bitLength());
         }
     }
 
