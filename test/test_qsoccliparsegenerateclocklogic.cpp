@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
+#include "common/qslangdriver.h"
 #include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
@@ -49,11 +50,12 @@ private:
     {
         QString filePath = QDir(projectManager.getCurrentPath()).filePath(fileName);
         QFile   file(filePath);
-        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream stream(&file);
-            stream << content;
-            file.close();
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            return {};
         }
+        QTextStream stream(&file);
+        stream << content;
+        file.close();
         return filePath;
     }
 
@@ -141,6 +143,731 @@ private slots:
         }
 
         return true;
+    }
+
+    void test_mux_dead_dft_path_rejects_generation()
+    {
+        messageList.clear();
+        const QString netlistContent = R"(
+clock:
+  - name: bad_ctl
+    input:
+      osc_24m:
+        freq: 24MHz
+      pll_800m:
+        freq: 800MHz
+      tclk:
+        freq: 100MHz
+    target:
+      gf_noen:
+        freq: 24MHz
+        link:
+          osc_24m:
+          pll_800m:
+        select: sel_a
+        reset: rst_n
+        test_clock: tclk
+)";
+
+        const QString netlistPath = createTempFile("test_dead_dft_path.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_dead_dft_path.v");
+        const QString typstPath = QDir(projectManager.getOutputPath()).filePath("bad_ctl.typ");
+        QVERIFY(!QFile::exists(verilogPath) || QFile::remove(verilogPath));
+        QVERIFY(!QFile::exists(typstPath) || QFile::remove(typstPath));
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        int contractErrors = 0;
+        int rejections     = 0;
+        for (const QString &message : messageList) {
+            if (message.contains("gf_noen test_clock requires test_enable")) {
+                ++contractErrors;
+            }
+            if (message.contains("configuration rejected")) {
+                ++rejections;
+            }
+        }
+        QCOMPARE(contractErrors, 1);
+        QCOMPARE(rejections, 1);
+        QVERIFY(!QFile::exists(typstPath));
+    }
+
+    void test_mux_missing_select_rejects_controller()
+    {
+        messageList.clear();
+        const QString netlistContent = R"(
+clock:
+  - name: missing_select_ctl
+    input:
+      a:
+        freq: 1MHz
+      b:
+        freq: 2MHz
+    target:
+      good:
+        freq: 1MHz
+        link:
+          a:
+      dropped:
+        freq: 2MHz
+        link:
+          a:
+          b:
+        reset: rst_n
+)";
+
+        const QString netlistPath = createTempFile("test_missing_select.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        int selectErrors = 0;
+        int rejections   = 0;
+        int successes    = 0;
+        for (const QString &message : messageList) {
+            if (message.contains("'select' signal is required for multi-link target: dropped")) {
+                ++selectErrors;
+            }
+            if (message.contains("missing_select_ctl configuration rejected")) {
+                ++rejections;
+            }
+            if (message.contains("Successfully generated Verilog code:")) {
+                ++successes;
+            }
+        }
+        QCOMPARE(selectErrors, 1);
+        QCOMPARE(rejections, 1);
+        QCOMPARE(successes, 0);
+    }
+
+    void test_dft_target_collision_rejects_generation_data()
+    {
+        QTest::addColumn<QString>("controllerDft");
+        QTest::addColumn<QString>("targetDft");
+
+        QTest::newRow("controller-enable")
+            << QString("    test_enable: out_clk\n") << QString("        test_clock: t\n");
+        QTest::newRow("target-enable") << QString()
+                                       << QString(
+                                              "        test_enable: out_clk\n"
+                                              "        test_clock: t\n");
+        QTest::newRow("test-clock")
+            << QString("    test_enable: ten\n") << QString("        test_clock: out_clk\n");
+    }
+
+    void test_dft_target_collision_rejects_generation()
+    {
+        QFETCH(QString, controllerDft);
+        QFETCH(QString, targetDft);
+
+        messageList.clear();
+        const QString netlistContent = QString(R"(
+clock:
+  - name: dft_collision_ctl
+%1    input:
+      a:
+        freq: 1MHz
+      b:
+        freq: 2MHz
+      t:
+        freq: 3MHz
+    target:
+      out_clk:
+        freq: 1MHz
+        link:
+          a:
+          b:
+        select: sel
+        reset: rst_n
+%2)")
+                                           .arg(controllerDft, targetDft);
+
+        const QString netlistPath = createTempFile("test_dft_collision.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        int collisionErrors = 0;
+        int rejections      = 0;
+        int successes       = 0;
+        for (const QString &message : messageList) {
+            if (message.contains("Clock DFT signal used as both input and target output: out_clk")) {
+                ++collisionErrors;
+            }
+            if (message.contains("dft_collision_ctl configuration rejected")) {
+                ++rejections;
+            }
+            if (message.contains("Successfully generated Verilog code:")) {
+                ++successes;
+            }
+        }
+        QCOMPARE(collisionErrors, 1);
+        QCOMPARE(rejections, 1);
+        QCOMPARE(successes, 0);
+    }
+
+    void test_mux_ignored_dft_keys_do_not_change_artifacts()
+    {
+        const auto netlistContent = [](bool withIgnoredKeys) {
+            const QString standardKeys
+                = withIgnoredKeys ? "\n        test_enable: std_ten\n        test_clock: std_tclk"
+                                  : "";
+            const QString singleKeys
+                = withIgnoredKeys
+                      ? "\n        test_enable: single_ten\n        test_clock: single_tclk"
+                      : "";
+            const QString enableOnlyKeys = withIgnoredKeys ? "\n        test_enable: orphan_ten"
+                                                           : "";
+            return QString(R"(
+clock:
+  - name: ignored_dft_ctl
+    input:
+      osc_24m:
+        freq: 24MHz
+      pll_800m:
+        freq: 800MHz
+    target:
+      std_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+          pll_800m:
+        select: sel%1
+      single_clk:
+        freq: 24MHz
+        link:
+          osc_24m:%2
+      enable_only_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+          pll_800m:
+        select: sel
+        reset: rst_n%3
+)")
+                .arg(standardKeys, singleKeys, enableOnlyKeys);
+        };
+
+        const QString netlistPath
+            = QDir(projectManager.getCurrentPath()).filePath("test_ignored_dft.soc_net");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_ignored_dft.v");
+        const QString typstPath
+            = QDir(projectManager.getOutputPath()).filePath("ignored_dft_ctl.typ");
+
+        const auto generate = [&](const QString &content, QByteArray &verilog, QByteArray &typst) {
+            if (createTempFile("test_ignored_dft.soc_net", content).isEmpty()) {
+                return false;
+            }
+            if ((QFile::exists(verilogPath) && !QFile::remove(verilogPath))
+                || (QFile::exists(typstPath) && !QFile::remove(typstPath))) {
+                return false;
+            }
+
+            QSocCliWorker socCliWorker;
+            socCliWorker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+                false);
+            socCliWorker.run();
+
+            QFile verilogFile(verilogPath);
+            QFile typstFile(typstPath);
+            if (!verilogFile.open(QIODevice::ReadOnly | QIODevice::Text)
+                || !typstFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                return false;
+            }
+            verilog = verilogFile.readAll();
+            typst   = typstFile.readAll();
+            return true;
+        };
+
+        QByteArray baselineVerilog;
+        QByteArray baselineTypst;
+        messageList.clear();
+        QVERIFY(generate(netlistContent(false), baselineVerilog, baselineTypst));
+
+        QByteArray ignoredVerilog;
+        QByteArray ignoredTypst;
+        messageList.clear();
+        QVERIFY(generate(netlistContent(true), ignoredVerilog, ignoredTypst));
+
+        int standardWarnings = 0;
+        int singleWarnings   = 0;
+        int enableWarnings   = 0;
+        // cppcheck-suppress knownEmptyContainer
+        for (const QString &message : messageList) {
+            if (message.contains("std_clk test_clock is ignored on a standard mux")) {
+                ++standardWarnings;
+            }
+            if (message.contains("single_clk has a single link")) {
+                ++singleWarnings;
+            }
+            if (message.contains("enable_only_clk test_enable without test_clock has no effect")) {
+                ++enableWarnings;
+            }
+            QVERIFY(!message.contains("configuration rejected"));
+        }
+        QCOMPARE(standardWarnings, 1);
+        QCOMPARE(singleWarnings, 1);
+        QCOMPARE(enableWarnings, 1);
+        QCOMPARE(ignoredVerilog, baselineVerilog);
+        QCOMPARE(ignoredTypst, baselineTypst);
+
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        QSlangDriver  driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+    }
+
+    void test_mux_dft_enable_matrix()
+    {
+        messageList.clear();
+        const QString netlistContent = R"(
+port:
+  osc_24m:
+    direction: input
+    type: logic
+  pll_800m:
+    direction: input
+    type: logic
+  tclk:
+    direction: input
+    type: logic
+  sel:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  ctl_ten:
+    direction: input
+    type: logic
+  tgt_ten:
+    direction: input
+    type: logic
+  baseline_clk:
+    direction: output
+    type: logic
+  target_only_clk:
+    direction: output
+    type: logic
+  fallback_clk:
+    direction: output
+    type: logic
+  inherited_clk:
+    direction: output
+    type: logic
+  override_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: dft_baseline
+    input:
+      osc_24m:
+        freq: 24MHz
+      pll_800m:
+        freq: 800MHz
+      tclk:
+        freq: 100MHz
+    target:
+      baseline_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+          pll_800m:
+        select: sel
+        reset: rst_n
+  - name: dft_target_only
+    input:
+      osc_24m:
+        freq: 24MHz
+      pll_800m:
+        freq: 800MHz
+      tclk:
+        freq: 100MHz
+    target:
+      target_only_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+          pll_800m:
+        select: sel
+        reset: rst_n
+        test_enable: orphan_ten
+  - name: dft_fallback
+    test_enable: ctl_ten
+    input:
+      osc_24m:
+        freq: 24MHz
+      pll_800m:
+        freq: 800MHz
+      tclk:
+        freq: 100MHz
+    target:
+      fallback_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+          pll_800m:
+        select: sel
+        reset: rst_n
+        test_enable: ignored_ten
+  - name: dft_inherited
+    test_enable: ctl_ten
+    input:
+      osc_24m:
+        freq: 24MHz
+      pll_800m:
+        freq: 800MHz
+      tclk:
+        freq: 100MHz
+    target:
+      inherited_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+          pll_800m:
+        select: sel
+        reset: rst_n
+        test_clock: tclk
+  - name: dft_override
+    test_enable: ctl_ten
+    input:
+      osc_24m:
+        freq: 24MHz
+      pll_800m:
+        freq: 800MHz
+      tclk:
+        freq: 100MHz
+    target:
+      override_clk:
+        freq: 24MHz
+        link:
+          osc_24m:
+          pll_800m:
+        select: sel
+        reset: rst_n
+        test_enable: tgt_ten
+        test_clock: tclk
+)";
+
+        const QString netlistPath = createTempFile("test_dft_enable_matrix.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_dft_enable_matrix.v");
+        QVERIFY(QFile::exists(verilogPath));
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray verilogBytes = verilogFile.readAll();
+        verilogFile.close();
+
+        int targetOnlyWarnings = 0;
+        int fallbackWarnings   = 0;
+        for (const QString &message : messageList) {
+            if (message.contains("target_only_clk test_enable without test_clock has no effect")) {
+                ++targetOnlyWarnings;
+            }
+            if (message.contains("fallback_clk test_enable without test_clock has no effect")) {
+                ++fallbackWarnings;
+            }
+            QVERIFY(!message.contains("configuration rejected"));
+        }
+        QCOMPARE(targetOnlyWarnings, 1);
+        QCOMPARE(fallbackWarnings, 1);
+
+        const auto extractModule = [&verilogBytes](const QByteArray &name) {
+            const QByteArray marker = "module " + name + " (";
+            const qsizetype  begin  = verilogBytes.indexOf(marker);
+            if (begin < 0) {
+                return QByteArray();
+            }
+            const qsizetype end = verilogBytes.indexOf("\nendmodule", begin);
+            if (end < 0) {
+                return QByteArray();
+            }
+            return verilogBytes.mid(begin, end - begin + QByteArray("\nendmodule").size());
+        };
+
+        const QByteArray baselineModule   = extractModule("dft_baseline");
+        QByteArray       targetOnlyModule = extractModule("dft_target_only");
+        const QByteArray fallbackModule   = extractModule("dft_fallback");
+        const QByteArray inheritedModule  = extractModule("dft_inherited");
+        const QByteArray overrideModule   = extractModule("dft_override");
+        QVERIFY(!baselineModule.isEmpty());
+        QVERIFY(!targetOnlyModule.isEmpty());
+        QVERIFY(!fallbackModule.isEmpty());
+        QVERIFY(!inheritedModule.isEmpty());
+        QVERIFY(!overrideModule.isEmpty());
+
+        QVERIFY(!targetOnlyModule.contains("orphan_ten"));
+        QVERIFY(!fallbackModule.contains("ignored_ten"));
+        QVERIFY(fallbackModule.contains("input  wire ctl_ten"));
+        QVERIFY(inheritedModule.contains("input  wire ctl_ten"));
+        QVERIFY(overrideModule.contains("input  wire tgt_ten"));
+        QVERIFY(!overrideModule.contains(".test_en(ctl_ten)"));
+
+        targetOnlyModule.replace("dft_target_only", "dft_baseline");
+        targetOnlyModule.replace("target_only_clk", "baseline_clk");
+        QCOMPARE(targetOnlyModule, baselineModule);
+
+        const auto extractMux = [](const QByteArray &moduleBytes) {
+            const qsizetype begin = moduleBytes.indexOf("qsoc_clk_mux_gf #(");
+            if (begin < 0) {
+                return QByteArray();
+            }
+            const qsizetype end = moduleBytes.indexOf("\n    );", begin);
+            if (end < 0) {
+                return QByteArray();
+            }
+            return moduleBytes.mid(begin, end - begin + QByteArray("\n    );").size());
+        };
+
+        struct MuxCase
+        {
+            QByteArray moduleBytes;
+            QByteArray target;
+            QByteArray testClock;
+            QByteArray testEnable;
+        };
+        const QList<MuxCase> modules{
+            {baselineModule, "baseline_clk", "1'b0", "1'b0"},
+            {extractModule("dft_target_only"), "target_only_clk", "1'b0", "1'b0"},
+            {fallbackModule, "fallback_clk", "1'b0", "ctl_ten"},
+            {inheritedModule, "inherited_clk", "tclk", "ctl_ten"},
+            {overrideModule, "override_clk", "tclk", "tgt_ten"},
+        };
+        QByteArray normalizedBaseline;
+        for (const MuxCase &module : modules) {
+            const QByteArray testClockConnection  = ".test_clk(" + module.testClock + "),";
+            const QByteArray testEnableConnection = ".test_en(" + module.testEnable + "),";
+            QCOMPARE(module.moduleBytes.count(".test_clk("), qsizetype(1));
+            QCOMPARE(module.moduleBytes.count(".test_en("), qsizetype(1));
+            QCOMPARE(module.moduleBytes.count(testClockConnection), qsizetype(1));
+            QCOMPARE(module.moduleBytes.count(testEnableConnection), qsizetype(1));
+
+            const QByteArray mux = extractMux(module.moduleBytes);
+            QVERIFY(!mux.isEmpty());
+            QVERIFY(mux.contains(".CLOCK_DURING_RESET(1'b1)"));
+            QVERIFY(mux.contains(".async_rst_n(rst_n)"));
+            QVERIFY(mux.contains(".async_sel(sel)"));
+            QVERIFY(mux.contains(
+                ".clk_in({clk_" + module.target + "_from_pll_800m, clk_" + module.target
+                + "_from_osc_24m})"));
+
+            QByteArray normalized = mux;
+            normalized.replace(module.target, "clock_target");
+            normalized.replace(testClockConnection, ".test_clk(<dft_clock>),");
+            normalized.replace(testEnableConnection, ".test_en(<dft_enable>),");
+            if (normalizedBaseline.isEmpty()) {
+                normalizedBaseline = normalized;
+            } else {
+                QCOMPARE(normalized, normalizedBaseline);
+            }
+        }
+
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        QFile         clockCellFile(clockCellPath);
+        QVERIFY(clockCellFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray clockCellBytes = clockCellFile.readAll();
+        const qsizetype  gfBegin        = clockCellBytes.indexOf("module qsoc_clk_mux_gf #(");
+        const qsizetype  gfEnd          = clockCellBytes.indexOf("\nendmodule", gfBegin);
+        QVERIFY(gfBegin >= 0);
+        QVERIFY(gfEnd > gfBegin);
+        const QByteArray gfCell = clockCellBytes.mid(gfBegin, gfEnd - gfBegin);
+
+        const QByteArray orTreeBlock = "    qsoc_clk_or_tree #(\n"
+                                       "        .INPUT_COUNT(NUM_INPUTS)\n"
+                                       "    ) i_clk_or_tree (\n"
+                                       "        .clk_in(gated_clock),\n"
+                                       "        .clk_out(output_clock)\n"
+                                       "    );";
+        const QByteArray dftMuxBlock = "    qsoc_tc_clk_mux2 i_test_clk_mux (\n"
+                                       "        .CLK_IN0(output_clock),\n"
+                                       "        .CLK_IN1(test_clk),\n"
+                                       "        .CLK_SEL(test_en),\n"
+                                       "        .CLK_OUT(clk_out)\n"
+                                       "    );";
+        const QByteArray orToDft     = orTreeBlock
+                                       + "\n    \n"
+                                         "    // DFT mux: select between functional clock and test "
+                                         "clock using dedicated clock mux\n"
+                                       + dftMuxBlock;
+        QCOMPARE(gfCell.count(orToDft), qsizetype(1));
+
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+
+        QFile fallbackTypstFile(QDir(projectManager.getOutputPath()).filePath("dft_fallback.typ"));
+        QFile inheritedTypstFile(QDir(projectManager.getOutputPath()).filePath("dft_inherited.typ"));
+        QFile overrideTypstFile(QDir(projectManager.getOutputPath()).filePath("dft_override.typ"));
+        QVERIFY(fallbackTypstFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QVERIFY(inheritedTypstFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QVERIFY(overrideTypstFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray fallbackTypst  = fallbackTypstFile.readAll();
+        const QByteArray inheritedTypst = inheritedTypstFile.readAll();
+        const QByteArray overrideTypst  = overrideTypstFile.readAll();
+        QVERIFY(!fallbackTypst.contains("fallback_clk_TM"));
+        QVERIFY(inheritedTypst.contains("name: \"ctl_ten\""));
+        QVERIFY(!inheritedTypst.contains("name: \"tgt_ten\""));
+        QVERIFY(overrideTypst.contains("name: \"tgt_ten\""));
+        QVERIFY(!overrideTypst.contains("name: \"ctl_ten\""));
+    }
+
+    /* Names that collide after bracket sanitization would declare one port
+       twice; the controller is rejected instead. */
+    void test_duplicate_sanitized_names_reject_generation()
+    {
+        messageList.clear();
+        const QString netlistContent = R"(
+port:
+  out_a:
+    direction: output
+    type: logic
+  out_b:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: dup_ctl
+    input:
+      "osc[0]":
+        freq: 24MHz
+      "osc_0":
+        freq: 48MHz
+    target:
+      out_a:
+        freq: 24MHz
+        link:
+          "osc[0]":
+      out_b:
+        freq: 48MHz
+        link:
+          "osc_0":
+)";
+
+        const QString netlistPath = createTempFile("test_dup_sanitized.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        bool seen     = false;
+        bool rejected = false;
+        for (const QString &message : messageList) {
+            if (message.contains("Duplicate clock input name after sanitization: osc_0")) {
+                seen = true;
+            }
+            if (message.contains("dup_ctl configuration rejected")) {
+                rejected = true;
+            }
+        }
+        QVERIFY(seen);
+        QVERIFY(rejected);
+    }
+
+    void test_input_target_name_collision_rejects_generation_data()
+    {
+        QTest::addColumn<QString>("inputName");
+        QTest::addColumn<QString>("targetName");
+
+        QTest::newRow("sanitized-input") << QString("clk[0]") << QString("clk_0");
+        QTest::newRow("sanitized-target") << QString("clk_0") << QString("clk[0]");
+        QTest::newRow("exact-name") << QString("clk_0") << QString("clk_0");
+    }
+
+    void test_input_target_name_collision_rejects_generation()
+    {
+        QFETCH(QString, inputName);
+        QFETCH(QString, targetName);
+
+        messageList.clear();
+        const QString netlistContent = QString(R"(
+clock:
+  - name: input_target_collision
+    input:
+      "%1":
+        freq: 24MHz
+    target:
+      "%2":
+        freq: 24MHz
+        link:
+          "%1":
+)")
+                                           .arg(inputName, targetName);
+        const QString netlistPath
+            = createTempFile("test_input_target_collision.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_input_target_collision.v");
+        const QString typstPath
+            = QDir(projectManager.getOutputPath()).filePath("input_target_collision.typ");
+        QVERIFY(!QFile::exists(verilogPath) || QFile::remove(verilogPath));
+        QVERIFY(!QFile::exists(typstPath) || QFile::remove(typstPath));
+
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+            false);
+        socCliWorker.run();
+
+        int collisionErrors = 0;
+        int rejections      = 0;
+        for (const QString &message : messageList) {
+            if (message.contains(
+                    "Clock name used as both input and target after sanitization: clk_0")) {
+                ++collisionErrors;
+            }
+            if (message.contains("configuration rejected")) {
+                ++rejections;
+            }
+        }
+        QCOMPARE(collisionErrors, 1);
+        QCOMPARE(rejections, 1);
+        QVERIFY(!QFile::exists(typstPath));
     }
 
     void test_pass_thru_clock()
@@ -645,11 +1372,9 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_mux_gf"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(sys_rst_n)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(custom_sel)"));
-        // Since test_enable is explicitly defined, it should be used
-        // But target.test_enable was overridden to use config.testEnable
-        // In this test, test_enable is explicitly defined as "test_enable" in target
-        // But new logic overrides it with config.testEnable which is empty
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en(1'b0)"));
+        /* The target-level test_enable is the effective DFT enable. */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en(test_enable)"));
+        QVERIFY(!verifyVerilogContentNormalized(verilogContent, ".test_en(1'b0)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_clk(test_clock)"));
 
         // clock_cell.v should be created and complete

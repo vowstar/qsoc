@@ -48,6 +48,12 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
         return false;
     }
 
+    if (!config.valid) {
+        QSocConsole::error() << "Clock controller" << config.name
+                             << "configuration rejected; nothing generated";
+        return false;
+    }
+
     /* By design, a link source that is neither a declared input nor
        another target gets auto-promoted to a fresh input port on the
        controller (so the parent can wire software-controlled signals
@@ -132,6 +138,13 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 }
                 if (it->second["duty"]) {
                     input.duty = QString::fromStdString(it->second["duty"].as<std::string>());
+                }
+            }
+            for (const auto &existing : config.inputs) {
+                if (existing.name == input.name) {
+                    QSocConsole::error()
+                        << "Duplicate clock input name after sanitization:" << input.name;
+                    config.valid = false;
                 }
             }
             config.inputs.append(input);
@@ -487,6 +500,13 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                         }
                     }
 
+                    for (const auto &existing : target.links) {
+                        if (existing.source == link.source) {
+                            QSocConsole::error()
+                                << "Duplicate clock link source after sanitization:" << link.source;
+                            config.valid = false;
+                        }
+                    }
                     target.links.append(link);
                 }
             }
@@ -500,17 +520,45 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 if (it->second["reset"]) {
                     target.reset = QString::fromStdString(it->second["reset"].as<std::string>());
                 }
-                target.test_enable = config.testEnable; // Use controller-level test_enable
+                QString requestedTestEnable;
+                if (it->second["test_enable"]) {
+                    requestedTestEnable = QString::fromStdString(
+                        it->second["test_enable"].as<std::string>());
+                }
+                QString requestedTestClock;
                 if (it->second["test_clock"]) {
-                    target.test_clock = QString::fromStdString(
+                    requestedTestClock = QString::fromStdString(
                         it->second["test_clock"].as<std::string>());
                 }
-
+                /* DFT contract: the pair travels together. A test_clock with
+                   no effective enable wires .test_en(1'b0) and the DFT path
+                   is dead; an enable with no clock switches to nothing. */
+                if (!requestedTestEnable.isEmpty() && requestedTestClock.isEmpty()) {
+                    QSocConsole::warn() << "Clock target" << target.name
+                                        << "test_enable without test_clock has no effect";
+                }
                 // Auto-select mux type based on reset presence
                 if (!target.reset.isEmpty()) {
-                    target.mux.type = GF_MUX; // Has reset → Glitch-free mux
+                    target.mux.type    = GF_MUX; // Has reset → Glitch-free mux
+                    target.test_clock  = requestedTestClock;
+                    target.test_enable = !requestedTestEnable.isEmpty()
+                                                 && !requestedTestClock.isEmpty()
+                                             ? requestedTestEnable
+                                             : config.testEnable;
+                    /* A test_clock with no effective enable wires
+                       .test_en(1'b0) and the DFT path is dead silicon. */
+                    if (!target.test_clock.isEmpty() && target.test_enable.isEmpty()) {
+                        QSocConsole::error()
+                            << "Clock target" << target.name << "test_clock requires test_enable";
+                        config.valid = false;
+                    }
                 } else {
                     target.mux.type = STD_MUX; // No reset → Standard mux
+                    if (!requestedTestClock.isEmpty()) {
+                        QSocConsole::warn() << "Clock target" << target.name
+                                            << "test_clock is ignored on a standard mux; add reset "
+                                               "for a glitch-free mux with a DFT path";
+                    }
                 }
 
                 // Parse MUX sta_guide configuration
@@ -542,8 +590,14 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                         << "'select' signal is required for multi-link target:" << target.name;
                     QSocConsole::error()
                         << "Example: target: { link: {clk1: ~, clk2: ~}, select: sel_sig }";
+                    config.valid = false;
                     return config;
                 }
+
+            } else if (it->second["test_clock"] || it->second["test_enable"]) {
+                QSocConsole::warn() << "Clock target" << target.name
+                                    << "has a single link; test_clock/test_enable "
+                                       "apply only to a multi-link mux and are ignored";
             }
 
             config.targets.append(target);
@@ -551,13 +605,43 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
     }
 
     // Check for duplicate target names (output signals)
+    QSet<QString> inputNames;
+    for (const auto &input : config.inputs) {
+        inputNames.insert(input.name);
+    }
+
     QSet<QString> targetNames;
     for (const auto &target : config.targets) {
         if (targetNames.contains(target.name)) {
             QSocConsole::error() << "ERROR: Duplicate output target name:" << target.name;
             QSocConsole::err() << "Each target must have a unique output signal name" << "\n";
+            config.valid = false;
         } else {
             targetNames.insert(target.name);
+        }
+        if (inputNames.contains(target.name)) {
+            QSocConsole::error() << "Clock name used as both input and target after sanitization:"
+                                 << target.name;
+            config.valid = false;
+        }
+    }
+
+    QStringList dftSignals;
+    const auto  addDftSignal = [&dftSignals](const QString &signal) {
+        if (!signal.isEmpty() && !dftSignals.contains(signal)) {
+            dftSignals.append(signal);
+        }
+    };
+    addDftSignal(config.testEnable);
+    for (const auto &target : config.targets) {
+        addDftSignal(target.test_enable);
+        addDftSignal(target.test_clock);
+    }
+    for (const QString &signal : dftSignals) {
+        if (targetNames.contains(signal)) {
+            QSocConsole::error() << "Clock DFT signal used as both input and target output:"
+                                 << signal;
+            config.valid = false;
         }
     }
 
@@ -750,6 +834,19 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
         portDecls << QString("    input  wire %1").arg(config.testEnable);
         portComments << QString("/**< Test enable signal */");
         addedSignals.insert(config.testEnable);
+    }
+
+    /* A target-level test_enable override reaches .test_en directly; without
+       a port declaration it degrades to an implicit net. Only a used enable
+       (paired with test_clock) earns a port, so the module interface never
+       grows for a no-effect key. */
+    for (const auto &target : config.targets) {
+        if (!target.test_clock.isEmpty() && !target.test_enable.isEmpty()
+            && !addedSignals.contains(target.test_enable)) {
+            portDecls << QString("    input  wire %1").arg(target.test_enable);
+            portComments << QString("/**< Test enable for %1 */").arg(target.name);
+            addedSignals.insert(target.test_enable);
+        }
     }
 
     // Add ICG interface ports (target-level)
@@ -3004,7 +3101,7 @@ bool QSocClockPrimitive::generateTypstDiagram(
         // Position target so MUX TOP is at currentY
         // typstTarget uses y as MUX bottom, so y = currentY - muxHeight
         float targetY = currentY - muxHeight;
-        out << typstTarget(target, x0, targetY, config.testEnable);
+        out << typstTarget(target, x0, targetY, target.test_enable);
 
         // Move to next target position (MUX bottom is at targetY)
         currentY = targetY - extraMargin;

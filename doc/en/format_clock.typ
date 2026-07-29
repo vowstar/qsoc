@@ -593,6 +593,13 @@ target:
     test_clock: test_clock        # DFT test clock (optional)
 ```
 
+For a glitch-free mux, `test_enable` and `test_clock` form one DFT
+connection. A complete target-level pair overrides the controller-level
+`test_enable`; otherwise a target `test_clock` uses the controller-level
+enable. A test clock with no effective enable rejects the controller.
+Standard muxes and single-link targets warn and ignore target-level DFT
+keys without changing the generated artifacts.
+
 == Clock Properties
 <soc-net-clock-properties>
 Clock controller properties define inputs, processing, and outputs:

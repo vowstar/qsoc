@@ -155,12 +155,13 @@ public:
      */
     struct ClockControllerConfig
     {
-        QString            name;       // Controller instance name
-        QString            moduleName; // Module name
-        QString            testEnable; // Test enable signal (optional)
-        QString            ref_clock;  // Reference clock for GF_MUX
-        QList<ClockInput>  inputs;     // Clock inputs
-        QList<ClockTarget> targets;    // Clock targets
+        bool               valid = true; // False when the configuration is rejected
+        QString            name;         // Controller instance name
+        QString            moduleName;   // Module name
+        QString            testEnable;   // Test enable signal (optional)
+        QString            ref_clock;    // Reference clock for GF_MUX
+        QList<ClockInput>  inputs;       // Clock inputs
+        QList<ClockTarget> targets;      // Clock targets
     };
 
 public:
