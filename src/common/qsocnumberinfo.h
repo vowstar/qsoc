@@ -152,6 +152,19 @@ public:
      * @return The spelling class, or NotANumber
      */
     static Spelling classifyTwoStateNumber(const QString &numStr);
+
+    /**
+     * @brief Truncate the stored magnitude to a bit width
+     * @param bitWidth number of low bits to retain; nonpositive values do nothing
+     */
+    void truncateValueToWidth(int bitWidth);
+
+    /**
+     * @brief Convert the value to int64_t with explicit success status
+     * @param convertedValue receives the value on success and is unchanged on failure
+     * @return true when the value is valid and representable as int64_t
+     */
+    bool tryToInt64(int64_t &convertedValue) const;
 };
 
 #endif // QSOCNUMBERINFO_H

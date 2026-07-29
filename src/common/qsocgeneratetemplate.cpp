@@ -426,6 +426,7 @@ bool QSocGenerateManager::renderTemplate(
 
         /* Setup inja environment */
         inja::Environment env;
+        QString           renderError;
 
         /* Disable line statements */
         env.set_line_statement("");
@@ -570,7 +571,7 @@ bool QSocGenerateManager::renderTemplate(
         });
 
         /* Add format filter using fmt library */
-        env.add_callback("format", [](inja::Arguments &args) -> nlohmann::json {
+        env.add_callback("format", [&renderError](inja::Arguments &args) -> nlohmann::json {
             if (args.size() < 2) {
                 QSocConsole::warn() << QCoreApplication::translate(
                     "generate",
@@ -588,36 +589,39 @@ bool QSocGenerateManager::renderTemplate(
                 if (arg.is_string()) {
                     std::string str_val = arg.get<std::string>();
 
-                    /* Check if string looks like a number (C or Verilog style) before parsing */
-                    const QString qstr            = QString::fromStdString(str_val);
-                    bool          looksLikeNumber = false;
+                    /* Only a fully matched two-state number converts before
+                       formatting. The old prefix test fed strings with invalid
+                       digits to the number parser, which collapsed them to
+                       unrelated constants, and never recognized sized Verilog
+                       literals at all. Plain decimals keep string semantics. */
+                    const QString                  qstr = QString::fromStdString(str_val);
+                    const QSocNumberInfo::Spelling spelling
+                        = QSocNumberInfo::classifyTwoStateNumber(qstr);
 
-                    /* Check for common number patterns */
-                    if (qstr.startsWith("0x") || qstr.startsWith("0X") || /* C hex */
-                        qstr.startsWith("0b") || qstr.startsWith("0B") || /* C binary */
-                        qstr.startsWith("'h") || qstr.startsWith("'H") || /* Verilog hex */
-                        qstr.startsWith("'b") || qstr.startsWith("'B") || /* Verilog binary */
-                        qstr.startsWith("'o") || qstr.startsWith("'O") || /* Verilog octal */
-                        qstr.startsWith("'d") || qstr.startsWith("'D") || /* Verilog decimal */
-                        (qstr.startsWith("0") && qstr.length() > 1
-                         && qstr.at(1).isDigit())) { /* C octal */
-                        looksLikeNumber = true;
-                    }
+                    if (spelling == QSocNumberInfo::Spelling::CStyle
+                        || spelling == QSocNumberInfo::Spelling::Verilog) {
+                        QSocNumberInfo numberInfo = QSocNumberInfo::parseNumber(qstr);
 
-                    if (looksLikeNumber) {
-                        /* Try to parse the string as a number */
-                        const QSocNumberInfo numberInfo = QSocNumberInfo::parseNumber(qstr);
-
-                        if (!numberInfo.errorDetected) {
-                            /* String was successfully parsed as a number, use its int64_t value */
-                            const int64_t int_val = numberInfo.toInt64();
-                            result = fmt::vformat(formatStr, fmt::make_format_args(int_val));
-                        } else {
-                            /* Parsing failed, treat as regular string */
-                            result = fmt::vformat(formatStr, fmt::make_format_args(str_val));
+                        /* A sized literal denotes only its declared bits:
+                           16'hFFFFF is 16'hFFFF. */
+                        if (numberInfo.hasExplicitWidth && numberInfo.width > 0) {
+                            numberInfo.truncateValueToWidth(numberInfo.width);
                         }
+
+                        int64_t intValue = 0;
+                        if (!numberInfo.tryToInt64(intValue)) {
+                            if (renderError.isEmpty()) {
+                                renderError = QCoreApplication::translate(
+                                                  "generate",
+                                                  "Template format value \"%1\" is outside "
+                                                  "the signed 64-bit range")
+                                                  .arg(qstr);
+                            }
+                            return std::string("");
+                        }
+                        result = fmt::vformat(formatStr, fmt::make_format_args(intValue));
                     } else {
-                        /* Doesn't look like a number, treat as regular string */
+                        /* Not a two-state number, treat as regular string */
                         result = fmt::vformat(formatStr, fmt::make_format_args(str_val));
                     }
                 } else if (arg.is_number_integer()) {
@@ -655,6 +659,10 @@ bool QSocGenerateManager::renderTemplate(
         /* Render template */
         const std::string templateStr = templateData.toStdString();
         const std::string result      = env.render(templateStr, dataObject);
+        if (!renderError.isEmpty()) {
+            QSocConsole::error() << renderError;
+            return false;
+        }
 
         /* Create output file */
         if (!projectManager || !projectManager->isValidOutputPath(true)) {

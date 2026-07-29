@@ -29,6 +29,9 @@ private slots:
     void classifyNumericText_commentsScaleLinearly();
     void normalizeHexBaseAliases_contract();
     void normalizeHexBaseAliases_commentsScaleLinearly();
+    void tryToInt64_boundaries();
+    void tryToInt64_rejectsOverflow();
+    void truncateValueToWidthKeepsLowBits();
     void parseNumber_cStyleDecimal();
 
     /* Format output */
@@ -376,6 +379,44 @@ void TestQSocNumberInfo::normalizeHexBaseAliases_commentsScaleLinearly()
     QVERIFY2(timer.elapsed() < 5000, "x-base alias scan exceeded the linear-time deadline");
     QCOMPARE(normalized.count(QStringLiteral("8'hF")), 100000);
     QCOMPARE(normalized.count(QStringLiteral("8'x0")), 100000);
+}
+
+void TestQSocNumberInfo::tryToInt64_boundaries()
+{
+    const QSocNumberInfo maximum        = QSocNumberInfo::parseNumber("0x7FFFFFFFFFFFFFFF");
+    int64_t              convertedValue = 0;
+    QVERIFY(maximum.tryToInt64(convertedValue));
+    QCOMPARE(convertedValue, std::numeric_limits<int64_t>::max());
+
+    QSocNumberInfo minimum;
+    minimum.value = BigInteger(
+        BigUnsigned(std::numeric_limits<int64_t>::max()) + BigUnsigned(1), BigInteger::negative);
+    QVERIFY(minimum.tryToInt64(convertedValue));
+    QCOMPARE(convertedValue, std::numeric_limits<int64_t>::min());
+}
+
+void TestQSocNumberInfo::tryToInt64_rejectsOverflow()
+{
+    const QSocNumberInfo overflow       = QSocNumberInfo::parseNumber("0x8000000000000000");
+    int64_t              convertedValue = 17;
+    QVERIFY(!overflow.tryToInt64(convertedValue));
+    QCOMPARE(convertedValue, int64_t(17));
+}
+
+void TestQSocNumberInfo::truncateValueToWidthKeepsLowBits()
+{
+    QSocNumberInfo number = QSocNumberInfo::parseNumber("16'hFFFFF");
+    number.truncateValueToWidth(number.width);
+
+    int64_t convertedValue = 0;
+    QVERIFY(number.tryToInt64(convertedValue));
+    QCOMPARE(convertedValue, int64_t(0xFFFF));
+
+    /* A value already inside the width is untouched. */
+    QSocNumberInfo small = QSocNumberInfo::parseNumber("16'h1F");
+    small.truncateValueToWidth(small.width);
+    QVERIFY(small.tryToInt64(convertedValue));
+    QCOMPARE(convertedValue, int64_t(0x1F));
 }
 
 void TestQSocNumberInfo::parseNumber_cStyleDecimal()

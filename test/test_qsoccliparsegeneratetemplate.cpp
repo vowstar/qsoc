@@ -44,8 +44,9 @@ private:
             QTextStream stream(&file);
             stream << content;
             file.close();
+            return filePath;
         }
-        return filePath;
+        return {};
     }
 
     /* Verify template output existence */
@@ -663,6 +664,132 @@ endmodule // {{ module.name }})";
 
         /* Test binary formatting */
         QVERIFY(verifyTemplateContent("format_test_template", "Binary: 0b1111"));
+    }
+
+    /* String values convert to integers only on a complete two-state number;
+       sized literals are truncated to their declared width first. */
+    void testGenerateTemplateFormatConvertsNumericStrings()
+    {
+        messageList.clear();
+        const QDir projectDir(projectManager.getCurrentPath());
+
+        /* Plain string literal: apostrophes inside a raw string desync the
+           moc lexer and it stops seeing Q_OBJECT. */
+        const QString jsonContent  = "{\n"
+                                     "    \"sizedHex\": \"8'hAB\",\n"
+                                     "    \"overWidth\": \"16'hFFFFF\",\n"
+                                     "    \"unsizedHex\": \"'h1f\",\n"
+                                     "    \"cOctal\": \"0644\",\n"
+                                     "    \"prefixedOctal\": \"0o644\",\n"
+                                     "    \"badHex\": \"0xZZ\",\n"
+                                     "    \"badUnderscore\": \"8'h___\",\n"
+                                     "    \"plainDecimal\": \"42\"\n"
+                                     "}";
+        const QString jsonFilePath = projectDir.filePath("format_numeric_data.json");
+        QFile         jsonFile(jsonFilePath);
+        QVERIFY(jsonFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream(&jsonFile) << jsonContent;
+        jsonFile.close();
+
+        const QString templateContent  = R"(sized={{ "{:d}"|format(sizedHex) }}
+over={{ "{:d}"|format(overWidth) }}
+unsized={{ "{:d}"|format(unsizedHex) }}
+coctal={{ "{:d}"|format(cOctal) }}
+poctal={{ "{:d}"|format(prefixedOctal) }}
+bad=[{{ "{:s}"|format(badHex) }}]
+badu=[{{ "{:s}"|format(badUnderscore) }}]
+plain=[{{ "{:s}"|format(plainDecimal) }}]
+)";
+        const QString templateFilePath = projectDir.filePath("format_numeric_template.j2");
+        QFile         templateFile(templateFilePath);
+        QVERIFY(templateFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream(&templateFile) << templateContent;
+        templateFile.close();
+
+        const QString outputPath
+            = QDir(projectManager.getOutputPath()).filePath("format_numeric_template");
+        QVERIFY(QFile::remove(outputPath) || !QFile::exists(outputPath));
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc",
+               "generate",
+               "template",
+               "-d",
+               projectManager.getCurrentPath(),
+               "--json",
+               jsonFilePath,
+               templateFilePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        const QString messages = messageList.join('\n');
+        QVERIFY2(
+            messages.contains("Successfully generated file from template: " + outputPath),
+            qPrintable(messages));
+        QFile outputFile(outputPath);
+        QVERIFY(outputFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString output = outputFile.readAll();
+        QVERIFY(output.contains("sized=171"));
+        QVERIFY(output.contains("over=65535"));
+        QVERIFY(output.contains("unsized=31"));
+        QVERIFY(output.contains("coctal=420"));
+        QVERIFY(output.contains("poctal=420"));
+        /* Invalid digits and plain decimals keep string semantics. */
+        QVERIFY(output.contains("bad=[0xZZ]"));
+        QVERIFY(output.contains("badu=[8'h___]"));
+        QVERIFY(output.contains("plain=[42]"));
+    }
+
+    /* A converted value outside the signed 64-bit range fails generation
+       before the output file is written. */
+    void testGenerateTemplateFormatRejectsOverflow()
+    {
+        messageList.clear();
+        const QDir projectDir(projectManager.getCurrentPath());
+
+        const QString jsonContent  = R"({
+    "huge": "0x10000000000000000"
+})";
+        const QString jsonFilePath = projectDir.filePath("format_overflow_data.json");
+        QFile         jsonFile(jsonFilePath);
+        QVERIFY(jsonFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream(&jsonFile) << jsonContent;
+        jsonFile.close();
+
+        /* A stale artifact from an earlier run would satisfy the existence
+           check even though this run refuses to write one. */
+        QFile::remove(QDir(projectManager.getOutputPath()).filePath("format_overflow_template"));
+
+        const QString templateContent  = R"(huge={{ "{:d}"|format(huge) }}
+)";
+        const QString templateFilePath = projectDir.filePath("format_overflow_template.j2");
+        QFile         templateFile(templateFilePath);
+        QVERIFY(templateFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream(&templateFile) << templateContent;
+        templateFile.close();
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc",
+               "generate",
+               "template",
+               "-d",
+               projectManager.getCurrentPath(),
+               "--json",
+               jsonFilePath,
+               templateFilePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        QVERIFY(!verifyTemplateOutputExistence("format_overflow_template"));
+        bool sawRangeError = false;
+        for (const QString &message : messageList) {
+            if (message.contains("outside the signed 64-bit range")) {
+                sawRangeError = true;
+            }
+        }
+        QVERIFY(sawRangeError);
     }
 
     void testTemplateArtifactCompatibility()

@@ -952,49 +952,68 @@ QSocNumberInfo::Spelling QSocNumberInfo::classifyTwoStateNumber(const QString &n
     return numeric.kind == NumericTextKind::Normalize ? numeric.spelling : Spelling::NotANumber;
 }
 
-int64_t QSocNumberInfo::toInt64() const
+void QSocNumberInfo::truncateValueToWidth(int bitWidth)
+{
+    if (bitWidth <= 0) {
+        return;
+    }
+
+    const BigUnsigned magnitude = value.getMagnitude();
+    if (magnitude.bitLength() <= static_cast<BigUnsigned::Index>(bitWidth)) {
+        return;
+    }
+
+    const BigUnsigned mask               = (BigUnsigned(1) << bitWidth) - BigUnsigned(1);
+    const BigUnsigned truncatedMagnitude = magnitude & mask;
+    value = value.getSign() == BigInteger::negative
+                ? BigInteger(truncatedMagnitude, BigInteger::negative)
+                : BigInteger(truncatedMagnitude);
+}
+
+bool QSocNumberInfo::tryToInt64(int64_t &convertedValue) const
 {
     if (errorDetected) {
-        return 0;
+        return false;
     }
 
     try {
-        /* Convert BigInteger to string, then to int64_t */
-        const std::string valueStr = bigIntegerToStringWithBase(value, 10);
-
-        /* Check if the value is negative */
+        const BigUnsigned magnitude = value.getMagnitude();
         if (value.getSign() == BigInteger::negative) {
-            /* For negative values, we need to handle the conversion carefully */
-            const BigUnsigned magnitude = value.getMagnitude();
-
-            /* Check if magnitude fits in int64_t range */
-            if (magnitude > BigUnsigned(std::numeric_limits<int64_t>::max())) {
-                QSocConsole::warn() << "Value too large for int64_t conversion:" << originalString;
-                return 0;
+            const BigUnsigned negativeLimit = BigUnsigned(std::numeric_limits<int64_t>::max())
+                                              + BigUnsigned(1);
+            if (magnitude > negativeLimit) {
+                return false;
+            }
+            if (magnitude == negativeLimit) {
+                convertedValue = std::numeric_limits<int64_t>::min();
+                return true;
             }
 
-            /* Convert magnitude to string and then to int64_t, then negate */
             const std::string magnitudeStr = std::string(BigUnsignedInABase(magnitude, 10));
-            const int64_t     result       = -static_cast<int64_t>(std::stoull(magnitudeStr));
-            return result;
-        } else {
-            /* For positive values */
-            const BigUnsigned magnitude = value.getMagnitude();
-
-            /* Check if magnitude fits in int64_t range */
-            if (magnitude > BigUnsigned(std::numeric_limits<int64_t>::max())) {
-                QSocConsole::warn() << "Value too large for int64_t conversion:" << originalString;
-                return 0;
-            }
-
-            /* Convert magnitude to string and then to int64_t */
-            const std::string magnitudeStr = std::string(BigUnsignedInABase(magnitude, 10));
-            const int64_t     result       = static_cast<int64_t>(std::stoull(magnitudeStr));
-            return result;
+            convertedValue                 = -static_cast<int64_t>(std::stoull(magnitudeStr));
+            return true;
         }
-    } catch (const std::exception &e) {
-        QSocConsole::warn() << "failed to convert to int64_t:" << originalString
-                            << "Error:" << e.what();
+
+        if (magnitude > BigUnsigned(std::numeric_limits<int64_t>::max())) {
+            return false;
+        }
+
+        const std::string magnitudeStr = std::string(BigUnsignedInABase(magnitude, 10));
+        convertedValue                 = static_cast<int64_t>(std::stoull(magnitudeStr));
+        return true;
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+int64_t QSocNumberInfo::toInt64() const
+{
+    int64_t convertedValue = 0;
+    if (!tryToInt64(convertedValue)) {
+        if (!errorDetected) {
+            QSocConsole::warn() << "Value too large for int64_t conversion:" << originalString;
+        }
         return 0;
     }
+    return convertedValue;
 }

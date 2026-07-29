@@ -33,6 +33,22 @@ QSoC uses the Inja template engine, which provides:
 - Filters: `{{ value | filter_name(args) }}`
 - Comments: `{# This is a comment #}`
 
+=== Format Filter
+<format-filter>
+The `format` filter applies a runtime format string:
+
+````
+{{ "Address: 0x{:08X}" | format(register.address) }}
+````
+
+A string value converts to an integer before formatting when it is a
+complete C numeric literal (`0x`, `0b`, `0o`, or leading-zero octal) or a
+two-state SystemVerilog `b`/`o`/`d`/`h` literal, sized or unsized. A sized
+literal denotes only its declared bits, so `16'hFFFFF` formats as 65535.
+The converted value must fit the signed 64-bit range; an overflow fails
+generation before the output file is written. Every other string,
+including plain decimals, keeps string semantics.
+
 == Regex Filters
 <regex-filters>
 QSoC provides three powerful regex filters for text processing within templates. All filters support inline modifiers for pattern matching options.
