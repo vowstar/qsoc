@@ -80,9 +80,11 @@ When a top-level port uses `connect` to name an internal net, combinational
 logic emits through that port. Simple `expr` assignments retain diagnostics
 for explicitly declared input ports and undeclared targets.
 
-When several output ports use `connect` for the same net, the first declared
-port is canonical and drives the remaining aliases. Mixed-direction and inout
-alias groups require manual correction.
+Ports joined by `connect` are resolved as one component. Direction determines
+ownership: one top-level input can source output sinks, while process and
+instance drivers land on an output sink. Declaration order only selects among
+equivalent sinks. Multiple sources, inout endpoints, and other ambiguous
+groups emit a FIXME without inventing a connection.
 
 === Simple Assignment (expr)
 <soc-net-comb-expr>

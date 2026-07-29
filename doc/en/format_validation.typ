@@ -226,19 +226,25 @@ them change or drop parts of the design rather than only warning:
 
 - *Missing instance port*: an unresolved port is instantiated as
   `.port(/* FIXME: ... missing */)`
-- *`tie` width violations*: a tie value wider or narrower than the port is
-  reported and the tie is not applied
+- *`tie` width adaptation*: for a proven built-in port width, a literal is
+  first bounded by its own declared width and then adapted to the port width;
+  truncation emits a FIXME. Unknown or symbolic port widths preserve the
+  literal without a guessed mask
 - *`tie` / `invert` on unsupported port kinds*: rejected with a warning
 - *Invalid identifiers*: reserved Verilog keywords and illegal characters in
   port, parameter, or instance names are reported
-- *Artifact paths*: primary outputs whose resolved parent leaves `output/`, or
-  whose target is a symbolic link or non-regular file, are rejected. Existing
-  nested directories are allowed; optional diagrams, reports, and JSON
-  sidecars remain non-critical
+- *Artifact paths*: primary outputs whose resolved parent leaves `output/`
+  are rejected. Writing through an existing symbolic link inside `output/` is
+  allowed, so flows may redirect artifacts into their tree. Existing nested
+  directories are allowed; optional diagrams, reports, and JSON sidecars
+  remain non-critical
 - *Bracket leakage in controller names*: reset, clock, and power configurations
   with brackets in a signal name are renamed, with a warning
-- *`connect:` aliases*: all-output groups use the first declared port as the
-  canonical signal; mixed-direction or inout groups emit a FIXME
+- *`connect:` aliases*: every spelling of a connected component is judged
+  together; direction fixes each endpoint's role (top input sources, top
+  output sinks), exactly one source drives the sinks, multiple sources or
+  inout endpoints emit a FIXME, and declaration order only stabilizes
+  equivalent sinks
 - *Combinational and sequential driver conflicts*: a signal driven from more
   than one `comb`/`seq` block is rejected
 - *Power `follow` conflicts*: an entry whose `clock` equals `host_clock`, or
