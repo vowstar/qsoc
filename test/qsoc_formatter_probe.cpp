@@ -22,6 +22,21 @@ int main(int argc, char *argv[])
         return requestedExit == 0 ? 8 : requestedExit;
     }
 
+    /* Taint mode mutates the input first and then fails, the way a real
+       formatter can die midway through an in-place rewrite. */
+    bool      hasTaintExit = false;
+    const int taintExit
+        = qEnvironmentVariableIntValue("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE", &hasTaintExit);
+    if (hasTaintExit) {
+        QFile taintedFile(arguments.constLast());
+        if (taintedFile.open(QIODevice::WriteOnly | QIODevice::Append)) {
+            taintedFile.write("\n// formatter probe\n");
+            taintedFile.close();
+        }
+        fputs("formatter probe taint failure\n", stderr);
+        return taintExit == 0 ? 8 : taintExit;
+    }
+
     QFile outputFile(arguments.constLast());
     if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Append)) {
         return 3;

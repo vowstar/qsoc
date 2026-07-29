@@ -429,7 +429,9 @@ private slots:
         const bool       hadSentinel = qEnvironmentVariableIsSet("QSOC_FORMATTER_PROBE_SENTINEL");
         const QByteArray originalProbeExit = qgetenv("QSOC_FORMATTER_PROBE_EXIT_CODE");
         const bool       hadProbeExit = qEnvironmentVariableIsSet("QSOC_FORMATTER_PROBE_EXIT_CODE");
-        const auto       restoreEnvironment = qScopeGuard([&]() {
+        const QByteArray originalTaintExit = qgetenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
+        const bool hadTaintExit = qEnvironmentVariableIsSet("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
+        const auto restoreEnvironment = qScopeGuard([&]() {
             if (hadOriginalPath) {
                 qputenv("PATH", originalPath);
             } else {
@@ -444,6 +446,11 @@ private slots:
                 qputenv("QSOC_FORMATTER_PROBE_EXIT_CODE", originalProbeExit);
             } else {
                 qunsetenv("QSOC_FORMATTER_PROBE_EXIT_CODE");
+            }
+            if (hadTaintExit) {
+                qputenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE", originalTaintExit);
+            } else {
+                qunsetenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
             }
         });
 
@@ -565,11 +572,43 @@ reset:
         QCOMPARE(exitSpy.takeFirst().at(0).toInt(), 0);
 
         QVERIFY(QFileInfo::exists(sentinelPath));
-        QFile formattedFile(QDir(manager.getOutputPath()).filePath("formatted.v"));
+        const QString formattedPath = QDir(manager.getOutputPath()).filePath("formatted.v");
+        QFile         formattedFile(formattedPath);
         QVERIFY(formattedFile.open(QIODevice::ReadOnly));
-        QVERIFY(formattedFile.readAll().contains("formatter probe"));
+        const QByteArray committedFormattedBytes = formattedFile.readAll();
+        QVERIFY(committedFormattedBytes.contains("formatter probe"));
         formattedFile.close();
 
+        const QString    predictableCandidatePath = formattedPath + ".fmt.tmp";
+        const QByteArray predictableCandidateBytes("caller-owned sibling\n");
+        QFile            predictableCandidate(predictableCandidatePath);
+        QVERIFY(predictableCandidate.open(QIODevice::WriteOnly));
+        QCOMPARE(
+            predictableCandidate.write(predictableCandidateBytes), predictableCandidateBytes.size());
+        predictableCandidate.close();
+
+        qputenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE", "6");
+        QSocCliWorker taintWorker;
+        QSignalSpy    taintExitSpy(&taintWorker, &QSocCliWorker::exit);
+        taintWorker
+            .setup({"qsoc", "generate", "verilog", "--format", "-d", projectPath, netlistPath}, true);
+        QVERIFY(taintExitSpy.wait());
+        QCOMPARE(taintExitSpy.count(), 1);
+        QCOMPARE(taintExitSpy.takeFirst().at(0).toInt(), 1);
+
+        QVERIFY(formattedFile.open(QIODevice::ReadOnly));
+        QCOMPARE(formattedFile.readAll(), committedFormattedBytes);
+        formattedFile.close();
+        QVERIFY(predictableCandidate.open(QIODevice::ReadOnly));
+        QCOMPARE(predictableCandidate.readAll(), predictableCandidateBytes);
+        predictableCandidate.close();
+
+        if (hadTaintExit) {
+            qputenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE", originalTaintExit);
+        } else {
+            qunsetenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
+        }
+        QVERIFY(QFile::remove(predictableCandidatePath));
         QVERIFY(QFile::remove(sentinelPath));
         qputenv("PATH", QFile::encodeName(emptyPathDirectory.path()));
         QSocCliWorker missingWorker;
@@ -580,6 +619,14 @@ reset:
         QCOMPARE(missingExitSpy.count(), 1);
         QCOMPARE(missingExitSpy.takeFirst().at(0).toInt(), 1);
         QVERIFY(!QFileInfo::exists(sentinelPath));
+        QVERIFY(formattedFile.open(QIODevice::ReadOnly));
+        QCOMPARE(formattedFile.readAll(), committedFormattedBytes);
+        formattedFile.close();
+        QVERIFY(QDir(manager.getOutputPath())
+                    .entryList(
+                        {".formatted.v.qsoc-*.v"},
+                        QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot)
+                    .isEmpty());
 
         qputenv("PATH", testPath);
         qputenv("QSOC_FORMATTER_PROBE_EXIT_CODE", "9");
@@ -589,6 +636,221 @@ reset:
         const QString diagnostic = capture.text();
         QVERIFY(diagnostic.contains("exit code 9"));
         QVERIFY(diagnostic.contains("formatter probe failure"));
+    }
+
+    /* A formatter that mutates its input and then dies must not reach the
+       committed artifact; formatting happens on a staged copy. */
+    void formatterFailureKeepsCommittedBytes()
+    {
+        QTemporaryDir formatterDirectory;
+        QTemporaryDir workDirectory;
+        QVERIFY(formatterDirectory.isValid());
+        QVERIFY(workDirectory.isValid());
+
+#ifdef Q_OS_WIN
+        const QString formatterName = "verible-verilog-format.exe";
+#else
+        const QString formatterName = "verible-verilog-format";
+#endif
+        const QString formatterPath = QDir(formatterDirectory.path()).filePath(formatterName);
+        QVERIFY(QFile::copy(QString::fromUtf8(QSOC_FORMATTER_PROBE_PATH), formatterPath));
+#ifndef Q_OS_WIN
+        QVERIFY(
+            QFile::setPermissions(
+                formatterPath,
+                QFile::permissions(formatterPath) | QFileDevice::ExeOwner | QFileDevice::ExeUser
+                    | QFileDevice::ExeGroup | QFileDevice::ExeOther));
+#endif
+
+        const QByteArray originalPath       = qgetenv("PATH");
+        const bool       hadOriginalPath    = qEnvironmentVariableIsSet("PATH");
+        const auto       restoreEnvironment = qScopeGuard([&]() {
+            if (hadOriginalPath) {
+                qputenv("PATH", originalPath);
+            } else {
+                qunsetenv("PATH");
+            }
+            qunsetenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
+        });
+        QByteArray       testPath           = QFile::encodeName(formatterDirectory.path());
+        if (!originalPath.isEmpty()) {
+            testPath += QDir::listSeparator().toLatin1();
+            testPath += originalPath;
+        }
+        qputenv("PATH", testPath);
+        qputenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE", "6");
+
+        const QString    verilogPath    = QDir(workDirectory.path()).filePath("committed.v");
+        const QByteArray committedBytes = "module committed ();\nendmodule\n";
+        const QString    predictableCandidatePath = verilogPath + ".fmt.tmp";
+        const QByteArray predictableCandidateBytes("caller-owned sibling\n");
+        {
+            QFile verilogFile(verilogPath);
+            QVERIFY(verilogFile.open(QIODevice::WriteOnly));
+            QCOMPARE(verilogFile.write(committedBytes), committedBytes.size());
+        }
+        {
+            QFile predictableCandidate(predictableCandidatePath);
+            QVERIFY(predictableCandidate.open(QIODevice::WriteOnly));
+            QCOMPARE(
+                predictableCandidate.write(predictableCandidateBytes),
+                predictableCandidateBytes.size());
+        }
+
+        QVERIFY(!QSocGenerateManager::formatVerilogFile(verilogPath));
+
+        QFile keptFile(verilogPath);
+        QVERIFY(keptFile.open(QIODevice::ReadOnly));
+        QCOMPARE(keptFile.readAll(), committedBytes);
+        QFile keptCandidate(predictableCandidatePath);
+        QVERIFY(keptCandidate.open(QIODevice::ReadOnly));
+        QCOMPARE(keptCandidate.readAll(), predictableCandidateBytes);
+        QVERIFY(QDir(workDirectory.path())
+                    .entryList(
+                        {".committed.v.qsoc-*.v"},
+                        QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot)
+                    .isEmpty());
+    }
+
+    void formattedGenerationPreservesLinks()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This platform does not provide Unix symbolic-link semantics.");
+#else
+        QTemporaryDir formatterDirectory;
+        QTemporaryDir workDirectory;
+        QVERIFY(formatterDirectory.isValid());
+        QVERIFY(workDirectory.isValid());
+
+        const QString formatterPath
+            = QDir(formatterDirectory.path()).filePath("verible-verilog-format");
+        QVERIFY(QFile::copy(QString::fromUtf8(QSOC_FORMATTER_PROBE_PATH), formatterPath));
+        QVERIFY(
+            QFile::setPermissions(
+                formatterPath,
+                QFile::permissions(formatterPath) | QFileDevice::ExeOwner | QFileDevice::ExeUser
+                    | QFileDevice::ExeGroup | QFileDevice::ExeOther));
+
+        const QByteArray originalPath     = qgetenv("PATH");
+        const bool       hadPath          = qEnvironmentVariableIsSet("PATH");
+        const QByteArray originalSentinel = qgetenv("QSOC_FORMATTER_PROBE_SENTINEL");
+        const bool       hadSentinel   = qEnvironmentVariableIsSet("QSOC_FORMATTER_PROBE_SENTINEL");
+        const QByteArray originalTaint = qgetenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
+        const bool hadTaint = qEnvironmentVariableIsSet("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
+        const QByteArray originalProbeExit = qgetenv("QSOC_FORMATTER_PROBE_EXIT_CODE");
+        const bool       hadProbeExit = qEnvironmentVariableIsSet("QSOC_FORMATTER_PROBE_EXIT_CODE");
+        const auto       restoreEnvironment = qScopeGuard([&]() {
+            if (hadPath) {
+                qputenv("PATH", originalPath);
+            } else {
+                qunsetenv("PATH");
+            }
+            if (hadSentinel) {
+                qputenv("QSOC_FORMATTER_PROBE_SENTINEL", originalSentinel);
+            } else {
+                qunsetenv("QSOC_FORMATTER_PROBE_SENTINEL");
+            }
+            if (hadTaint) {
+                qputenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE", originalTaint);
+            } else {
+                qunsetenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
+            }
+            if (hadProbeExit) {
+                qputenv("QSOC_FORMATTER_PROBE_EXIT_CODE", originalProbeExit);
+            } else {
+                qunsetenv("QSOC_FORMATTER_PROBE_EXIT_CODE");
+            }
+        });
+
+        QByteArray testPath = QFile::encodeName(formatterDirectory.path());
+        if (!originalPath.isEmpty()) {
+            testPath += QDir::listSeparator().toLatin1();
+            testPath += originalPath;
+        }
+        qputenv("PATH", testPath);
+        const QString sentinelPath = QDir(formatterDirectory.path()).filePath("called");
+        qputenv("QSOC_FORMATTER_PROBE_SENTINEL", QFile::encodeName(sentinelPath));
+        qunsetenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
+        qunsetenv("QSOC_FORMATTER_PROBE_EXIT_CODE");
+
+        QSocProjectManager manager;
+        manager.setCurrentPath(QDir(workDirectory.path()).filePath("project"));
+        QVERIFY(manager.mkpath());
+
+        QSocGenerateManager generator(nullptr, &manager);
+        QVERIFY(generator.setNetlistData(YAML::Load(R"(
+port:
+  src:
+    direction: input
+    type: logic
+  dst:
+    direction: output
+    type: logic
+comb:
+  - out: dst
+    expr: src
+        )")));
+        QVERIFY(generator.processNetlist());
+
+        const QString linkPath   = QDir(manager.getOutputPath()).filePath("linked.v");
+        const QString targetPath = QDir(workDirectory.path()).filePath("linked-target.v");
+        QVERIFY(generator.generateVerilog("linked"));
+        QFile generatedFile(linkPath);
+        QVERIFY(generatedFile.open(QIODevice::ReadOnly));
+        const QByteArray generatedBytes = generatedFile.readAll();
+        generatedFile.close();
+        const QByteArray formattedBytes = generatedBytes + "\n// formatter probe\n";
+        QVERIFY(QFile::remove(linkPath));
+
+        const QByteArray oldTargetBytes("old target\n");
+        QFile            targetFile(targetPath);
+        QVERIFY(targetFile.open(QIODevice::WriteOnly));
+        QCOMPARE(targetFile.write(oldTargetBytes), oldTargetBytes.size());
+        targetFile.close();
+        QVERIFY(QFile::link(targetPath, linkPath));
+
+        const auto verifyNoCandidate = [&]() {
+            QVERIFY(QDir(manager.getOutputPath())
+                        .entryList(
+                            {".linked.v.qsoc-*.v"},
+                            QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot)
+                        .isEmpty());
+        };
+
+        QVERIFY(generator.generateVerilog("linked", true));
+        QVERIFY(QFileInfo(linkPath).isSymLink());
+        QVERIFY(targetFile.open(QIODevice::ReadOnly));
+        const QByteArray formattedTargetBytes = targetFile.readAll();
+        QCOMPARE(formattedTargetBytes, formattedBytes);
+        QVERIFY(!formattedTargetBytes.contains(oldTargetBytes));
+        targetFile.close();
+        verifyNoCandidate();
+
+        qputenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE", "6");
+        QVERIFY(!generator.generateVerilog("linked", true));
+        QVERIFY(QFileInfo(linkPath).isSymLink());
+        QVERIFY(targetFile.open(QIODevice::ReadOnly));
+        QCOMPARE(targetFile.readAll(), formattedTargetBytes);
+        targetFile.close();
+        verifyNoCandidate();
+
+        QVERIFY(QFile::remove(targetPath));
+        QVERIFY(QFileInfo(linkPath).isSymLink());
+        QVERIFY(!QFileInfo::exists(targetPath));
+        QVERIFY(!generator.generateVerilog("linked", true));
+        QVERIFY(QFileInfo(linkPath).isSymLink());
+        QVERIFY(!QFileInfo::exists(targetPath));
+        verifyNoCandidate();
+
+        qunsetenv("QSOC_FORMATTER_PROBE_TAINT_EXIT_CODE");
+        QVERIFY(generator.generateVerilog("linked", true));
+        QVERIFY(QFileInfo(linkPath).isSymLink());
+        QVERIFY(QFileInfo::exists(targetPath));
+        QVERIFY(targetFile.open(QIODevice::ReadOnly));
+        QCOMPARE(targetFile.readAll(), formattedBytes);
+        targetFile.close();
+        verifyNoCandidate();
+#endif
     }
 
     void projectMetadataDoesNotChangeBytes()

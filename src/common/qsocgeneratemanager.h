@@ -488,6 +488,15 @@ public slots:
     bool generateVerilog(const QString &outputFileName);
 
     /**
+     * @brief Generate Verilog with optional formatting before the final commit.
+     * @param outputFileName Output file name (without extension).
+     * @param formatOutput Run the configured Verilog formatter when true.
+     * @retval true Verilog code generated and committed successfully.
+     * @retval false Generation, formatting, or commit failed.
+     */
+    bool generateVerilog(const QString &outputFileName, bool formatOutput);
+
+    /**
      * @brief Render a Jinja2 template with provided data files.
      * @details Loads data from CSV, YAML, JSON, SystemRDL, and RCSV files, then renders a Jinja2 template
      *          and saves the result to the output directory.

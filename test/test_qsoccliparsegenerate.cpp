@@ -6088,6 +6088,9 @@ power:
         const QString filePath   = createTempFile("test_power_no_host.soc_net", netContent);
         QVERIFY(filePath != "");
 
+        /* A stale partial file from an earlier run would defeat the check. */
+        QFile::remove(QDir(projectManager.getOutputPath()).filePath("test_power_no_host.v"));
+
         messageList.clear();
         QSocCliWorker socCliWorker;
         socCliWorker.setup(
@@ -6104,6 +6107,132 @@ power:
 
         /* The power cell is the artifact that never got written. */
         QVERIFY(!QFile::exists(QDir(projectManager.getOutputPath()).filePath("power_cell.v")));
+
+        /* And the failed run must not leave a partial top-level file. */
+        QVERIFY(
+            !QFile::exists(QDir(projectManager.getOutputPath()).filePath("test_power_no_host.v")));
+    }
+
+    /* A failed regeneration must leave the previous complete RTL untouched
+       instead of replacing it with a partial file. */
+    void testGenerateFailureKeepsPreviousOutput()
+    {
+        const QString goodContent = R"(
+---
+version: "1.0"
+module: "test_atomic_keep"
+clock:
+  - name: atomic_ctrl
+    input:
+      osc:
+        freq: 24MHz
+    target:
+      o_clk:
+        freq: 24MHz
+        link:
+          osc:
+)";
+        const QString filePath    = createTempFile("test_atomic_keep.soc_net", goodContent);
+        QVERIFY(filePath != "");
+        {
+            QSocCliWorker socCliWorker;
+            socCliWorker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath},
+                false);
+            socCliWorker.run();
+        }
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_atomic_keep.v");
+        QVERIFY(QFile::exists(verilogPath));
+        QFile goodFile(verilogPath);
+        QVERIFY(goodFile.open(QIODevice::ReadOnly));
+        const QByteArray goodBytes = goodFile.readAll();
+        goodFile.close();
+        QVERIFY(!goodBytes.isEmpty());
+
+        /* Same output name, now with a rejected DFT contract. */
+        const QString badContent = R"(
+---
+version: "1.0"
+module: "test_atomic_keep"
+clock:
+  - name: atomic_ctrl
+    input:
+      osc:
+        freq: 24MHz
+      osc2:
+        freq: 48MHz
+      tclk:
+        freq: 10MHz
+    target:
+      o_clk:
+        freq: 24MHz
+        link:
+          osc:
+          osc2:
+        select: s
+        reset: r_n
+        test_clock: tclk
+)";
+        const QString badPath    = createTempFile("test_atomic_keep.soc_net", badContent);
+        QVERIFY(badPath != "");
+        messageList.clear();
+        {
+            QSocCliWorker socCliWorker;
+            socCliWorker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), badPath},
+                false);
+            socCliWorker.run();
+        }
+        bool reportedFailure = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("failed to generate Verilog code")) {
+                reportedFailure = true;
+            }
+        }
+        QVERIFY(reportedFailure);
+
+        QFile keptFile(verilogPath);
+        QVERIFY(keptFile.open(QIODevice::ReadOnly));
+        QCOMPARE(keptFile.readAll(), goodBytes);
+    }
+
+    /* A top-level output named after a primitive cell artifact would race the
+       cell generator for one path; the collision is refused up front. */
+    void testGenerateRejectsPrimitiveCellOutputCollision()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "clock_cell"
+clock:
+  - name: cellname_ctrl
+    input:
+      osc:
+        freq: 24MHz
+    target:
+      o_clk:
+        freq: 24MHz
+        link:
+          osc:
+)";
+        const QString filePath   = createTempFile("clock_cell.soc_net", netContent);
+        QVERIFY(filePath != "");
+        messageList.clear();
+        {
+            QSocCliWorker socCliWorker;
+            socCliWorker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath},
+                false);
+            socCliWorker.run();
+        }
+        bool reportedCollision = false;
+        for (const QString &msg : messageList) {
+            if (msg.contains("collides with a primitive cell artifact")) {
+                reportedCollision = true;
+            }
+        }
+        QVERIFY(reportedCollision);
     }
 
     void testGenerateRefusesResetWithNoSource()

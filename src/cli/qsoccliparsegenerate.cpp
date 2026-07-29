@@ -159,22 +159,6 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
     return processIndividualNetlists(filePathList);
 }
 
-bool QSocCliWorker::formatGeneratedVerilog(const QString &outputFileName)
-{
-    if (!parser.isSet("format")) {
-        return true;
-    }
-    const QString outputFilePath
-        = QDir(projectManager->getOutputPath()).filePath(outputFileName + ".v");
-    if (QSocGenerateManager::formatVerilogFile(outputFilePath)) {
-        return true;
-    }
-    return showError(
-        1,
-        QCoreApplication::translate("main", "Error: failed to format Verilog file: %1")
-            .arg(outputFilePath));
-}
-
 bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
 {
     /* Validate all files exist first */
@@ -247,15 +231,14 @@ bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
     }
 
     /* Generate Verilog code for the merged netlist */
-    if (!generateManager->generateVerilog(outputFileName)) {
-        return showError(
-            1,
-            QCoreApplication::translate(
-                "main", "Error: failed to generate Verilog code for merged netlist: %1")
-                .arg(outputFileName));
-    }
-    if (!formatGeneratedVerilog(outputFileName)) {
-        return false;
+    if (!generateManager->generateVerilog(outputFileName, parser.isSet("format"))) {
+        const QString message
+            = parser.isSet("format")
+                  ? QCoreApplication::translate(
+                        "main", "Error: failed to generate or format merged Verilog code: %1")
+                  : QCoreApplication::translate(
+                        "main", "Error: failed to generate Verilog code for merged netlist: %1");
+        return showError(1, message.arg(outputFileName));
     }
 
     showInfo(
@@ -298,14 +281,14 @@ bool QSocCliWorker::processIndividualNetlists(const QStringList &filePathList)
         /* Generate Verilog code */
         const QFileInfo fileInfo(netlistFilePath);
         const QString   outputFileName = fileInfo.baseName();
-        if (!generateManager->generateVerilog(outputFileName)) {
-            return showError(
-                1,
-                QCoreApplication::translate("main", "Error: failed to generate Verilog code for: %1")
-                    .arg(outputFileName));
-        }
-        if (!formatGeneratedVerilog(outputFileName)) {
-            return false;
+        if (!generateManager->generateVerilog(outputFileName, parser.isSet("format"))) {
+            const QString message
+                = parser.isSet("format")
+                      ? QCoreApplication::translate(
+                            "main", "Error: failed to generate or format Verilog code for: %1")
+                      : QCoreApplication::translate(
+                            "main", "Error: failed to generate Verilog code for: %1");
+            return showError(1, message.arg(outputFileName));
         }
 
         showInfo(

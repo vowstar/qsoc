@@ -20,7 +20,9 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QStandardPaths>
+#include <QTemporaryFile>
 #include <QTextStream>
 
 #include <fstream>
@@ -29,6 +31,121 @@
 #include <optional>
 
 namespace {
+
+QString verilogCandidateTemplate(const QString &filePath)
+{
+    const QFileInfo fileInfo(filePath);
+    return QDir(fileInfo.absolutePath())
+        .filePath(QStringLiteral(".%1.qsoc-XXXXXX.v").arg(fileInfo.fileName()));
+}
+
+bool copyDeviceContents(QIODevice &source, QIODevice &destination)
+{
+    constexpr qint64 blockSize = 64 * 1024;
+    while (!source.atEnd()) {
+        const QByteArray block = source.read(blockSize);
+        if (block.isEmpty()) {
+            return false;
+        }
+        if (destination.write(block) != block.size()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool runVerilogFormatter(const QString &candidatePath)
+{
+    const QString formatterPath = QStandardPaths::findExecutable("verible-verilog-format");
+    if (formatterPath.isEmpty()) {
+        QSocConsole::warn() << "Verilog formatter not found.";
+        return false;
+    }
+
+    QSocConsole::info() << "Formatting Verilog file...";
+
+    QProcess formatter;
+    /* clang-format off */
+    const QString argsStr = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
+        --inplace
+        --column_limit 119
+        --indentation_spaces 4
+        --line_break_penalty 4
+        --wrap_spaces 4
+        --port_declarations_alignment align
+        --port_declarations_indentation indent
+        --formal_parameters_alignment align
+        --formal_parameters_indentation indent
+        --assignment_statement_alignment align
+        --enum_assignment_statement_alignment align
+        --class_member_variable_alignment align
+        --module_net_variable_alignment align
+        --named_parameter_alignment align
+        --named_parameter_indentation indent
+        --named_port_alignment align
+        --named_port_indentation indent
+        --struct_union_members_alignment align
+    )");
+    /* clang-format on */
+
+    QStringList args = argsStr.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    args << candidatePath;
+
+    formatter.start(formatterPath, args);
+    if (!formatter.waitForStarted()) {
+        QSocConsole::warn() << "failed to start Verilog formatter:" << formatter.errorString();
+        return false;
+    }
+    if (!formatter.waitForFinished()) {
+        formatter.kill();
+        formatter.waitForFinished();
+        QSocConsole::warn() << "Verilog formatter timed out.";
+        return false;
+    }
+    if (formatter.exitStatus() != QProcess::NormalExit) {
+        QSocConsole::warn() << "Verilog formatter terminated abnormally:"
+                            << formatter.errorString();
+        return false;
+    }
+    if (formatter.exitCode() != 0) {
+        const QString standardError = QString::fromUtf8(formatter.readAllStandardError()).trimmed();
+        QSocConsole::warn() << "Verilog formatter failed with exit code" << formatter.exitCode()
+                            << (standardError.isEmpty() ? QString() : ": " + standardError);
+        return false;
+    }
+
+    const QFileInfo candidateInfo(candidatePath);
+    if (!candidateInfo.exists() || !candidateInfo.isFile() || candidateInfo.isSymbolicLink()) {
+        QSocConsole::warn() << "Verilog formatter did not leave a regular candidate file";
+        return false;
+    }
+    return true;
+}
+
+bool commitVerilogCandidate(const QString &candidatePath, const QString &outputPath)
+{
+    QFile candidate(candidatePath);
+    if (!candidate.open(QIODevice::ReadOnly)) {
+        QSocConsole::warn() << "failed to read Verilog candidate:" << candidate.errorString();
+        return false;
+    }
+
+    QSaveFile finalFile(outputPath);
+    finalFile.setDirectWriteFallback(false);
+    if (!finalFile.open(QIODevice::WriteOnly)) {
+        QSocConsole::warn() << "failed to open final Verilog file:" << finalFile.errorString();
+        return false;
+    }
+    if (!copyDeviceContents(candidate, finalFile)) {
+        QSocConsole::warn() << "failed to stage final Verilog file";
+        return false;
+    }
+    if (!finalFile.commit()) {
+        QSocConsole::warn() << "failed to commit final Verilog file:" << finalFile.errorString();
+        return false;
+    }
+    return true;
+}
 
 std::optional<int> provenBuiltInWidth(const QString &type)
 {
@@ -91,6 +208,11 @@ QString tieDiagnosticText(const QString &value)
 
 bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 {
+    return generateVerilog(outputFileName, false);
+}
+
+bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool formatOutput)
+{
     /* Create unconnected port reporter for collecting data */
     QSocGenerateReportUnconnected unconnectedPortReporter;
 
@@ -136,22 +258,67 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         return false;
     }
 
+    const QString              outputLeaf = outputFileName + ".v";
+    static const QSet<QString> primitiveCellArtifacts{
+        QStringLiteral("clock_cell.v"),
+        QStringLiteral("power_cell.v"),
+        QStringLiteral("reset_cell.v"),
+    };
+    if (primitiveCellArtifacts.contains(outputLeaf.toCaseFolded())) {
+        QSocConsole::error() << "Top-level Verilog output collides with a primitive cell artifact:"
+                             << outputLeaf;
+        return false;
+    }
+
     const auto outputArtifact
-        = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), outputFileName + ".v");
+        = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), outputLeaf);
     if (!outputArtifact.isValid()) {
         QSocConsole::error() << outputArtifact.error;
         return false;
     }
     const QString outputFilePath = outputArtifact.path;
 
-    /* Open output file for writing */
-    QFile outputFile(outputFilePath);
-    if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    QSaveFile      outputFile(outputFilePath);
+    QTemporaryFile formattedCandidate(verilogCandidateTemplate(outputFilePath));
+    QFileDevice   *outputDevice = formatOutput ? static_cast<QFileDevice *>(&formattedCandidate)
+                                               : static_cast<QFileDevice *>(&outputFile);
+    outputFile.setDirectWriteFallback(false);
+    if (!outputDevice->open(QIODevice::WriteOnly)) {
         QSocConsole::error() << "Failed to open output file for writing:" << outputFilePath;
         return false;
     }
 
-    QTextStream out(&outputFile);
+    QTextStream out(outputDevice);
+    out.setEncoding(QStringConverter::Utf8);
+    const auto commitOutput = [&]() {
+        out.flush();
+        if (out.status() != QTextStream::Ok) {
+            QSocConsole::error() << "Failed to write generated Verilog file:"
+                                 << outputDevice->errorString();
+            return false;
+        }
+        if (formatOutput) {
+            if (!formattedCandidate.flush()) {
+                QSocConsole::error() << "Failed to flush generated Verilog file:"
+                                     << formattedCandidate.errorString();
+                return false;
+            }
+            const QString candidatePath = formattedCandidate.fileName();
+            formattedCandidate.close();
+            if (!runVerilogFormatter(candidatePath)
+                || !commitVerilogCandidate(candidatePath, outputFilePath)) {
+                return false;
+            }
+            QSocConsole::info() << "Successfully formatted Verilog file";
+            return true;
+        }
+        if (!outputFile.commit()) {
+            QSocConsole::error() << "Failed to commit generated Verilog file:"
+                                 << outputFile.errorString();
+            return false;
+        }
+        return true;
+    };
 
     /* Generate file header */
     out << "/**\n";
@@ -297,9 +464,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
             out << "\nendmodule\n";
         }
 
-        outputFile.close();
+        if (primitiveFailed || !commitOutput()) {
+            return false;
+        }
         QSocConsole::info() << "Successfully generated Verilog file:" << outputFilePath;
-        return !primitiveFailed;
+        return true;
     }
 
     /* Generate top-level module declaration */
@@ -2521,7 +2690,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
     /* Close module */
     out << "\nendmodule\n";
 
-    outputFile.close();
+    if (primitiveFailed || !commitOutput()) {
+        return false;
+    }
     QSocConsole::info() << "Successfully generated Verilog file:" << outputFilePath;
 
     /* Generate unconnected port report if we have unconnected ports */
@@ -2535,17 +2706,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
         }
     }
 
-    return !primitiveFailed;
+    return true;
 }
 
 bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
 {
-    const QString formatterPath = QStandardPaths::findExecutable("verible-verilog-format");
-    if (formatterPath.isEmpty()) {
-        QSocConsole::warn() << "Verilog formatter not found.";
-        return false;
-    }
-
     const QFileInfo fileInfo(filePath);
     const auto      artifactPath
         = QSocPaths::resolveArtifactPath(fileInfo.absolutePath(), fileInfo.fileName());
@@ -2554,60 +2719,32 @@ bool QSocGenerateManager::formatVerilogFile(const QString &filePath)
         return false;
     }
 
-    QSocConsole::info() << "Formatting Verilog file...";
-
-    QProcess formatter;
-    /* clang-format off */
-    const QString argsStr = QStaticStringWeaver::stripCommonLeadingWhitespace(R"(
-        --inplace
-        --column_limit 119
-        --indentation_spaces 4
-        --line_break_penalty 4
-        --wrap_spaces 4
-        --port_declarations_alignment align
-        --port_declarations_indentation indent
-        --formal_parameters_alignment align
-        --formal_parameters_indentation indent
-        --assignment_statement_alignment align
-        --enum_assignment_statement_alignment align
-        --class_member_variable_alignment align
-        --module_net_variable_alignment align
-        --named_parameter_alignment align
-        --named_parameter_indentation indent
-        --named_port_alignment align
-        --named_port_indentation indent
-        --struct_union_members_alignment align
-    )");
-    /* clang-format on */
-
-    QStringList args = argsStr.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-    args << artifactPath.path;
-
-    formatter.start(formatterPath, args);
-    if (!formatter.waitForStarted()) {
-        QSocConsole::warn() << "failed to start Verilog formatter:" << formatter.errorString();
-        return false;
-    }
-    if (!formatter.waitForFinished()) {
-        formatter.kill();
-        formatter.waitForFinished();
-        QSocConsole::warn() << "Verilog formatter timed out.";
+    QFile sourceFile(artifactPath.path);
+    if (!sourceFile.open(QIODevice::ReadOnly)) {
+        QSocConsole::warn() << "failed to read Verilog file for formatting:"
+                            << sourceFile.errorString();
         return false;
     }
 
-    if (formatter.exitStatus() == QProcess::NormalExit && formatter.exitCode() == 0) {
-        QSocConsole::info() << "Successfully formatted Verilog file";
-        return true;
-    }
-    if (formatter.exitStatus() != QProcess::NormalExit) {
-        QSocConsole::warn() << "Verilog formatter terminated abnormally:"
-                            << formatter.errorString();
+    QTemporaryFile candidate(verilogCandidateTemplate(artifactPath.path));
+    if (!candidate.open()) {
+        QSocConsole::warn() << "failed to create Verilog formatting candidate:"
+                            << candidate.errorString();
         return false;
     }
-    const QString standardError = QString::fromUtf8(formatter.readAllStandardError()).trimmed();
-    QSocConsole::warn() << "Verilog formatter failed with exit code" << formatter.exitCode()
-                        << (standardError.isEmpty() ? QString() : ": " + standardError);
-    return false;
+    if (!copyDeviceContents(sourceFile, candidate) || !candidate.flush()) {
+        QSocConsole::warn() << "failed to stage Verilog file for formatting";
+        return false;
+    }
+    const QString candidatePath = candidate.fileName();
+    candidate.close();
+
+    if (!runVerilogFormatter(candidatePath)
+        || !commitVerilogCandidate(candidatePath, artifactPath.path)) {
+        return false;
+    }
+    QSocConsole::info() << "Successfully formatted Verilog file";
+    return true;
 }
 
 bool QSocGenerateManager::generateCombPrimitive(

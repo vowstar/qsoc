@@ -183,6 +183,7 @@ clock:
         }
         QCOMPARE(contractErrors, 1);
         QCOMPARE(rejections, 1);
+        QVERIFY(!QFile::exists(verilogPath));
         QVERIFY(!QFile::exists(typstPath));
     }
 
@@ -853,6 +854,7 @@ clock:
         }
         QCOMPARE(collisionErrors, 1);
         QCOMPARE(rejections, 1);
+        QVERIFY(!QFile::exists(verilogPath));
         QVERIFY(!QFile::exists(typstPath));
     }
 
