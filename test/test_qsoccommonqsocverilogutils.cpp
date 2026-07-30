@@ -43,6 +43,7 @@ private slots:
     void isValidIdentifier_withDollar();
     void isValidIdentifier_empty();
     void isValidIdentifier_specialChars();
+    void isValidIdentifier_nonAscii();
 
     /* escapeVerilogComment */
     void escapeVerilogComment_blockCommentEnd();
@@ -176,6 +177,11 @@ void TestQSocVerilogUtils::isValidIdentifier_validNames()
     QVERIFY(QSocVerilogUtils::isValidVerilogIdentifier("_internal"));
     QVERIFY(QSocVerilogUtils::isValidVerilogIdentifier("signal123"));
     QVERIFY(QSocVerilogUtils::isValidVerilogIdentifier("MySignal"));
+    QVERIFY(QSocVerilogUtils::isValidVerilogIdentifier("_"));
+    QVERIFY(QSocVerilogUtils::isValidVerilogIdentifier("Module"));
+    QVERIFY(QSocVerilogUtils::isValidVerilogIdentifier("strength"));
+    QVERIFY(QSocVerilogUtils::isValidVerilogIdentifier("uwire"));
+    QVERIFY(QSocVerilogUtils::isValidVerilogIdentifier("logic"));
 }
 
 void TestQSocVerilogUtils::isValidIdentifier_invalidStart()
@@ -183,18 +189,35 @@ void TestQSocVerilogUtils::isValidIdentifier_invalidStart()
     /* Cannot start with digit */
     QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("123abc"));
     QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("0signal"));
+    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("$root"));
 }
 
 void TestQSocVerilogUtils::isValidIdentifier_reservedWords()
 {
-    /* Verilog keywords */
-    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("begin"));
-    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("end"));
-    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("module"));
-    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("wire"));
-    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("reg"));
-    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("if"));
-    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("else"));
+    const QStringList keywords
+        = QStringLiteral(
+              "always and assign automatic begin buf bufif0 bufif1 case "
+              "casex casez cell cmos config deassign default defparam "
+              "design disable edge else end endcase endconfig endfunction "
+              "endgenerate endmodule endprimitive endspecify endtable "
+              "endtask event for force forever fork function generate "
+              "genvar highz0 highz1 if ifnone incdir include initial inout "
+              "input instance integer join large liblist library localparam "
+              "macromodule medium module nand negedge nmos nor "
+              "noshowcancelled not notif0 notif1 or output parameter pmos "
+              "posedge primitive pull0 pull1 pulldown pullup "
+              "pulsestyle_ondetect pulsestyle_onevent rcmos real realtime "
+              "reg release repeat rnmos rpmos rtran rtranif0 rtranif1 "
+              "scalared showcancelled signed small specify specparam strong0 "
+              "strong1 supply0 supply1 table task time tran tranif0 tranif1 "
+              "tri tri0 tri1 triand trior trireg unsigned use vectored wait "
+              "wand weak0 weak1 while wire wor xnor xor")
+              .split(' ');
+    for (const QString &keyword : keywords) {
+        QVERIFY2(
+            !QSocVerilogUtils::isValidVerilogIdentifier(keyword),
+            qPrintable("Accepted reserved keyword: " + keyword));
+    }
 }
 
 void TestQSocVerilogUtils::isValidIdentifier_withDollar()
@@ -215,6 +238,13 @@ void TestQSocVerilogUtils::isValidIdentifier_specialChars()
     QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("signal-name"));
     QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("signal.name"));
     QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier("signal@name"));
+}
+
+void TestQSocVerilogUtils::isValidIdentifier_nonAscii()
+{
+    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier(QString(QChar(0x00e9)) + QString("clock")));
+    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier(QString("clock") + QString(QChar(0x0661))));
+    QVERIFY(!QSocVerilogUtils::isValidVerilogIdentifier(QString("clock") + QString(QChar(0x00e9))));
 }
 
 /* escapeVerilogComment */

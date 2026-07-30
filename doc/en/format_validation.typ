@@ -231,8 +231,10 @@ them change or drop parts of the design rather than only warning:
   truncation emits a FIXME. Unknown or symbolic port widths preserve the
   literal without a guessed mask
 - *`tie` / `invert` on unsupported port kinds*: rejected with a warning
-- *Invalid identifiers*: reserved Verilog keywords and illegal characters in
-  port, parameter, or instance names are reported
+- *Invalid identifiers*: port, parameter, and instance names must be IEEE
+  1364-2001 simple identifiers, that is ASCII letters, digits, `_`, and `$`
+  with no leading digit, and must not be a reserved keyword. Keyword matching
+  is case-sensitive, so `Module` is a legal name and `module` is not
 - *Artifact paths*: primary outputs whose resolved parent leaves `output/`
   are rejected. Writing through an existing symbolic link inside `output/` is
   allowed, so flows may redirect artifacts into their tree. Existing nested

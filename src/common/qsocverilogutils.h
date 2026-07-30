@@ -45,9 +45,9 @@ public:
     static QString generateIndent(int level);
 
     /**
-     * @brief Check if a string is a valid Verilog identifier
+     * @brief Check for an IEEE 1364-2001 simple identifier
      * @param identifier String to check
-     * @return true if valid Verilog identifier
+     * @return true for an ASCII simple identifier that is not a reserved keyword
      */
     static bool isValidVerilogIdentifier(const QString &identifier);
 

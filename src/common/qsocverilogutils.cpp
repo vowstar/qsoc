@@ -1,5 +1,7 @@
 #include "qsocverilogutils.h"
 
+#include <QSet>
+
 QString QSocVerilogUtils::cleanTypeForWireDeclaration(const QString &typeStr)
 {
     if (typeStr.isEmpty()) {
@@ -92,40 +94,154 @@ bool QSocVerilogUtils::isValidVerilogIdentifier(const QString &identifier)
         return false;
     }
 
-    // Verilog identifier must start with letter or underscore
-    if (!identifier[0].isLetter() && identifier[0] != '_') {
+    const auto isAsciiLetter = [](QChar character) {
+        const ushort value = character.unicode();
+        return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
+    };
+    const auto isAsciiDigit = [](QChar character) {
+        const ushort value = character.unicode();
+        return value >= '0' && value <= '9';
+    };
+
+    if (!isAsciiLetter(identifier[0]) && identifier[0] != '_') {
         return false;
     }
 
-    // Rest must be letters, digits, underscores, or dollar signs
     for (int i = 1; i < identifier.length(); ++i) {
-        QChar c = identifier[i];
-        if (!c.isLetterOrNumber() && c != '_' && c != '$') {
+        const QChar character = identifier[i];
+        if (!isAsciiLetter(character) && !isAsciiDigit(character) && character != '_'
+            && character != '$') {
             return false;
         }
     }
 
-    // Check against Verilog reserved keywords (basic set)
-    static const QStringList reservedWords
-        = {"always",   "and",         "assign",    "begin",        "buf",        "bufif0",
-           "bufif1",   "case",        "casex",     "casez",        "cmos",       "deassign",
-           "default",  "defparam",    "disable",   "edge",         "else",       "end",
-           "endcase",  "endfunction", "endmodule", "endprimitive", "endspecify", "endtable",
-           "endtask",  "event",       "for",       "force",        "forever",    "fork",
-           "function", "highz0",      "highz1",    "if",           "ifnone",     "initial",
-           "inout",    "input",       "integer",   "join",         "large",      "medium",
-           "module",   "nand",        "negedge",   "nmos",         "nor",        "not",
-           "notif0",   "notif1",      "or",        "output",       "parameter",  "pmos",
-           "posedge",  "primitive",   "pull0",     "pull1",        "pulldown",   "pullup",
-           "rcmos",    "real",        "realtime",  "reg",          "release",    "repeat",
-           "rnmos",    "rpmos",       "rtran",     "rtranif0",     "rtranif1",   "scalared",
-           "small",    "specify",     "specparam", "strength",     "strong0",    "strong1",
-           "supply0",  "supply1",     "table",     "task",         "time",       "tran",
-           "tranif0",  "tranif1",     "tri",       "tri0",         "tri1",       "triand",
-           "trior",    "trireg",      "vectored",  "wait",         "wand",       "weak0",
-           "weak1",    "while",       "wire",      "wor",          "xnor",       "xor"};
+    static const QSet<QString> reservedWords = {
+        "always",
+        "and",
+        "assign",
+        "automatic",
+        "begin",
+        "buf",
+        "bufif0",
+        "bufif1",
+        "case",
+        "casex",
+        "casez",
+        "cell",
+        "cmos",
+        "config",
+        "deassign",
+        "default",
+        "defparam",
+        "design",
+        "disable",
+        "edge",
+        "else",
+        "end",
+        "endcase",
+        "endconfig",
+        "endfunction",
+        "endgenerate",
+        "endmodule",
+        "endprimitive",
+        "endspecify",
+        "endtable",
+        "endtask",
+        "event",
+        "for",
+        "force",
+        "forever",
+        "fork",
+        "function",
+        "generate",
+        "genvar",
+        "highz0",
+        "highz1",
+        "if",
+        "ifnone",
+        "incdir",
+        "include",
+        "initial",
+        "inout",
+        "input",
+        "instance",
+        "integer",
+        "join",
+        "large",
+        "liblist",
+        "library",
+        "localparam",
+        "macromodule",
+        "medium",
+        "module",
+        "nand",
+        "negedge",
+        "nmos",
+        "nor",
+        "noshowcancelled",
+        "not",
+        "notif0",
+        "notif1",
+        "or",
+        "output",
+        "parameter",
+        "pmos",
+        "posedge",
+        "primitive",
+        "pull0",
+        "pull1",
+        "pulldown",
+        "pullup",
+        "pulsestyle_ondetect",
+        "pulsestyle_onevent",
+        "rcmos",
+        "real",
+        "realtime",
+        "reg",
+        "release",
+        "repeat",
+        "rnmos",
+        "rpmos",
+        "rtran",
+        "rtranif0",
+        "rtranif1",
+        "scalared",
+        "showcancelled",
+        "signed",
+        "small",
+        "specify",
+        "specparam",
+        "strong0",
+        "strong1",
+        "supply0",
+        "supply1",
+        "table",
+        "task",
+        "time",
+        "tran",
+        "tranif0",
+        "tranif1",
+        "tri",
+        "tri0",
+        "tri1",
+        "triand",
+        "trior",
+        "trireg",
+        "unsigned",
+        "use",
+        "vectored",
+        "wait",
+        "wand",
+        "weak0",
+        "weak1",
+        "while",
+        "wire",
+        "wor",
+        "xnor",
+        "xor",
+    };
 
-    return !reservedWords.contains(identifier.toLower());
+    return !reservedWords.contains(identifier);
 }
 
 QString QSocVerilogUtils::escapeVerilogComment(const QString &text)
