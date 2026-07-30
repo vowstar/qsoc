@@ -391,7 +391,7 @@ private slots:
         QVERIFY(primitive.generateClockController(root["clock"][0], stream));
         verilog.remove(QRegularExpression("\\s+"));
         QVERIFY(verilog.contains(
-            ".clk_in({clk_clk_out_from_clk_a,"
+            ".clk_in({1'b0,clk_clk_out_from_clk_a,"
             "clk_clk_out_from_clk_m,clk_clk_out_from_clk_z})"));
     }
 };

@@ -564,6 +564,10 @@ Targets with multiple links (≥2) automatically generate multiplexers. Mux type
   kind: table,
 )
 
+For `STD_MUX`, `select` is the zero-based ordinal of each source in `link`.
+Unused binary encodings drive the output low. A standard mux accepts at most
+4096 linked sources.
+
 === Multiplexer Configuration
 <soc-net-clock-mux-config>
 ```yaml
@@ -836,6 +840,9 @@ Templates include:
 - Reset handling and test mode support
 - Dynamic configuration with handshaking
 - Cycle counters and status outputs
+
+`qsoc_clk_mux_raw.NUM_INPUTS` must be a power of two. Generated controllers
+pad unused high lanes with zero.
 
 *Read the generated `clock_cell.v` file for actual interfaces.*
 Replace with foundry cells before production use.

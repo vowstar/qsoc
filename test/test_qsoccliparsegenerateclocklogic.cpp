@@ -1246,6 +1246,80 @@ clock:
         QVERIFY(verifyClockCellFileComplete());
     }
 
+    void test_std_mux_pads_to_power_of_two()
+    {
+        QString netlistContent = R"(
+port:
+  pll_800m:
+    direction: input
+    type: logic
+  test_clk:
+    direction: input
+    type: logic
+  osc_32k:
+    direction: input
+    type: logic
+  func_sel:
+    direction: input
+    type: logic
+  func_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_pad_ctrl
+    clock: clk_sys
+    input:
+      pll_800m:
+        freq: 800MHz
+      test_clk:
+        freq: 100MHz
+      osc_32k:
+        freq: 32768Hz
+    target:
+      func_clk:
+        freq: 100MHz
+        link:
+          pll_800m:
+          test_clk:
+          osc_32k:
+        select: func_sel
+)";
+
+        QString netlistPath = createTempFile("test_std_mux_pad.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_std_mux_pad.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Three sources occupy a four-lane mux so that select 0, 1, and 2
+           still name link 0, 1, and 2, and select 3 drives the output low. */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".NUM_INPUTS(4)"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent,
+            ".clk_in({1'b0, clk_func_clk_from_osc_32k, clk_func_clk_from_test_clk, "
+            "clk_func_clk_from_pll_800m})"));
+    }
+
     void test_gf_mux_clock()
     {
         // Create netlist file with GF_MUX (glitch-free) multi-source clock (KISS format)

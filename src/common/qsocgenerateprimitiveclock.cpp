@@ -24,6 +24,14 @@
  * ICG signals, MUX signals, divider controls, and reset signals.
  */
 
+namespace {
+
+/* Above this the raw mux template's width ternary stops widening, so the
+   upper half of the tree becomes unreachable. */
+constexpr qsizetype kMaxRawMuxInputs = 4096;
+
+} // namespace
+
 QSocClockPrimitive::QSocClockPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
 {}
@@ -554,6 +562,12 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     }
                 } else {
                     target.mux.type = STD_MUX; // No reset → Standard mux
+                    if (target.links.size() > kMaxRawMuxInputs) {
+                        QSocConsole::error()
+                            << "Clock target" << target.name << "STD_MUX supports at most"
+                            << kMaxRawMuxInputs << "inputs";
+                        config.valid = false;
+                    }
                     if (!requestedTestClock.isEmpty()) {
                         QSocConsole::warn() << "Clock target" << target.name
                                             << "test_clock is ignored on a standard mux; add reset "
@@ -1445,15 +1459,24 @@ void QSocClockPrimitive::generateMuxInstance(
     }
 
     if (target.mux.type == STD_MUX) {
+        /* The raw mux halves NUM_INPUTS down the tree while passing the full
+           select to both branches, so a non-power-of-two width truncates the
+           select and breaks the source ordinal. Pad instead. */
+        const int implementationInputs = 1 << selWidth;
+
         // Standard mux using qsoc_clk_mux_raw
         out << "    qsoc_clk_mux_raw #(\n";
-        out << "        .NUM_INPUTS(" << numInputs << ")\n";
+        out << "        .NUM_INPUTS(" << implementationInputs << ")\n";
         out << "    ) " << instanceName << " (\n";
 
         // Connect clock inputs as array
         out << "        .clk_in({";
-        for (int i = numInputs - 1; i >= 0; --i) {
-            out << inputWires[i];
+        for (int i = implementationInputs - 1; i >= 0; --i) {
+            if (i < numInputs) {
+                out << inputWires[i];
+            } else {
+                out << "1'b0";
+            }
             if (i > 0)
                 out << ", ";
         }
