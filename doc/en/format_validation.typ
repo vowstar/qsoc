@@ -242,6 +242,11 @@ them change or drop parts of the design rather than only warning:
   remain non-critical
 - *Bracket leakage in controller names*: reset, clock, and power configurations
   with brackets in a signal name are renamed, with a warning
+- *Clock topology*: every target must be a map with a non-empty `link`, and
+  controller, input, target, and link source names must be valid Verilog
+  identifiers. A malformed configuration is reported and nothing is written.
+  A link source that names neither an input nor another target becomes an
+  input port on the controller
 - *`connect:` aliases*: every spelling of a connected component is judged
   together; direction fixes each endpoint's role (top input sources, top
   output sinks), exactly one source drives the sinks, multiple sources or

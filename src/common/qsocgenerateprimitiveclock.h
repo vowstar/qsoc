@@ -204,6 +204,13 @@ public:
 
 private:
     /**
+     * @brief Parse clock configuration without guarding YAML conversions
+     * @param clockNode YAML node containing clock configuration
+     * @return Parsed configuration structure
+     */
+    ClockControllerConfig parseClockConfigUnguarded(const YAML::Node &clockNode);
+
+    /**
      * @brief Generate or update clock_cell.v file with template cells
      * @param outputDir Output directory path
      * @return true if successful, false otherwise

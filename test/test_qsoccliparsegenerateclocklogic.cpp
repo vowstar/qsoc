@@ -1320,6 +1320,148 @@ clock:
             "clk_func_clk_from_pll_800m})"));
     }
 
+    void test_malformed_clock_topology_is_rejected_data()
+    {
+        QTest::addColumn<QString>("stem");
+        QTest::addColumn<QString>("targetBody");
+        QTest::addColumn<QString>("expectedError");
+
+        QTest::newRow("scalar target") << "test_topo_scalar" << "      out_clk: 24MHz\n"
+                                       << "must be a map";
+        QTest::newRow("missing link") << "test_topo_nolink"
+                                      << "      out_clk:\n"
+                                         "        freq: 800MHz\n"
+                                      << "requires a non-empty link map";
+        QTest::newRow("sequence freq") << "test_topo_seq"
+                                       << "      out_clk:\n"
+                                          "        freq: [800MHz]\n"
+                                          "        link:\n"
+                                          "          pll_800m:\n"
+                                       << "Invalid clock configuration";
+    }
+
+    void test_malformed_clock_topology_is_rejected()
+    {
+        QFETCH(QString, stem);
+        QFETCH(QString, targetBody);
+        QFETCH(QString, expectedError);
+
+        messageList.clear();
+        const QString netlistContent = QString(R"(
+port:
+  pll_800m:
+    direction: input
+    type: logic
+  out_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: %1_ctrl
+    clock: clk_sys
+    input:
+      pll_800m:
+        freq: 800MHz
+    target:
+%2
+)")
+                                           .arg(stem, targetBody);
+
+        /* Each shape reached an unguarded yaml-cpp conversion or an empty
+           right hand side, so it aborted or emitted unparseable Verilog. */
+        const QString verilogContent = generateClockNetlist(stem, netlistContent);
+        QVERIFY(verilogContent.isEmpty());
+
+        bool reported = false;
+        for (const QString &message : messageList) {
+            if (message.contains(expectedError)) {
+                reported = true;
+            }
+        }
+        QVERIFY2(reported, qPrintable(expectedError));
+    }
+
+    void test_invalid_controller_identifier_is_rejected()
+    {
+        messageList.clear();
+        const QString netlistContent = R"(
+port:
+  pll_800m:
+    direction: input
+    type: logic
+  out_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: module
+    clock: clk_sys
+    input:
+      pll_800m:
+        freq: 800MHz
+    target:
+      out_clk:
+        freq: 800MHz
+        link:
+          pll_800m:
+)";
+
+        const QString verilogContent = generateClockNetlist("test_topo_keyword", netlistContent);
+        QVERIFY(verilogContent.isEmpty());
+
+        bool reported = false;
+        for (const QString &message : messageList) {
+            if (message.contains("must be a valid Verilog identifier")) {
+                reported = true;
+            }
+        }
+        QVERIFY(reported);
+    }
+
+    void test_undeclared_link_source_becomes_an_input_port()
+    {
+        const QString netlistContent = R"(
+port:
+  pll_800m:
+    direction: input
+    type: logic
+  out_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_topo_promote_ctrl
+    clock: clk_sys
+    input:
+      pll_800m:
+        freq: 800MHz
+    target:
+      out_clk:
+        freq: 800MHz
+        link:
+          sw_clk_a:
+)";
+
+        const QString verilogContent = generateClockNetlist("test_topo_promote", netlistContent);
+        QVERIFY(!verilogContent.isEmpty());
+
+        /* Without a port the source is an implicit undriven net, so the
+           target clock is X in simulation and dangling in synthesis. */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire sw_clk_a"));
+    }
+
     void test_inverter_applies_once_through_a_cell()
     {
         const QString verilogContent = generateInverterCase(
@@ -3664,6 +3806,36 @@ clock:
     }
 
 private:
+    QString generateClockNetlist(const QString &stem, const QString &netlistContent)
+    {
+        const QString netlistPath = createTempFile(stem + ".soc_net", netlistContent);
+        if (netlistPath.isEmpty()) {
+            return QString();
+        }
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        if (QFile::exists(verilogPath) && !QFile::remove(verilogPath)) {
+            return QString();
+        }
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        if (!QFile::exists(verilogPath)) {
+            return QString();
+        }
+        QFile verilogFile(verilogPath);
+        if (!verilogFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            return QString();
+        }
+        const QString content = verilogFile.readAll();
+        verilogFile.close();
+        return content;
+    }
+
     QString generateInverterCase(const QString &stem, const QString &linkBody)
     {
         const QString netlistContent = QString(R"(

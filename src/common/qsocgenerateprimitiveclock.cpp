@@ -234,6 +234,21 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
 QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
     const YAML::Node &clockNode)
 {
+    /* A malformed shape reaches yaml-cpp as an exception, and an uncaught one
+       aborts the process instead of reporting the user's configuration. */
+    try {
+        return parseClockConfigUnguarded(clockNode);
+    } catch (const YAML::Exception &error) {
+        ClockControllerConfig config;
+        config.valid = false;
+        QSocConsole::error() << "Invalid clock configuration:" << error.what();
+        return config;
+    }
+}
+
+QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUnguarded(
+    const YAML::Node &clockNode)
+{
     ClockControllerConfig config;
 
     // Parse basic properties
@@ -297,6 +312,14 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
             if (target.name != rawName) {
                 QSocConsole::warn() << "Clock target name" << rawName
                                     << "contains bracket characters; sanitized to" << target.name;
+            }
+
+            /* A scalar or sequence here indexes as a map further down and
+               takes the process with it. */
+            if (!it->second.IsMap()) {
+                QSocConsole::error() << "Clock target" << target.name << "must be a map";
+                config.valid = false;
+                continue;
             }
 
             if (it->second["freq"]) {
@@ -630,6 +653,14 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                 }
             }
 
+            /* Without a source the output assignment has nothing on its right
+               hand side and the emitted controller does not parse. */
+            if (target.links.isEmpty()) {
+                QSocConsole::error()
+                    << "Clock target" << target.name << "requires a non-empty link map";
+                config.valid = false;
+            }
+
             // Parse multiplexer configuration (only if ≥2 links) - New format per documentation
             if (target.links.size() >= 2) {
                 // Parse target-level MUX signals (new format)
@@ -765,6 +796,42 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
             QSocConsole::error() << "Clock name used as both input and target after sanitization:"
                                  << target.name;
             config.valid = false;
+        }
+    }
+
+    /* These names become module, port, and instance identifiers verbatim. */
+    const auto requireIdentifier = [&config](const QString &name, const QString &role) {
+        if (!QSocVerilogUtils::isValidVerilogIdentifier(name)) {
+            QSocConsole::error() << role << name << "must be a valid Verilog identifier";
+            config.valid = false;
+        }
+    };
+    requireIdentifier(config.name, "Clock controller name");
+    for (const auto &input : config.inputs) {
+        requireIdentifier(input.name, "Clock input name");
+    }
+    for (const auto &target : config.targets) {
+        requireIdentifier(target.name, "Clock target name");
+        for (const auto &link : target.links) {
+            requireIdentifier(link.source, "Clock link source");
+        }
+    }
+
+    /* A link source that is neither a declared input nor another target gets
+       an input port, so it is driven instead of an implicit net. */
+    QSet<QString> knownClocks = inputNames;
+    for (const auto &target : config.targets) {
+        knownClocks.insert(target.name);
+    }
+    for (const auto &target : config.targets) {
+        for (const auto &link : target.links) {
+            if (knownClocks.contains(link.source)) {
+                continue;
+            }
+            knownClocks.insert(link.source);
+            ClockInput promoted;
+            promoted.name = link.source;
+            config.inputs.append(promoted);
         }
     }
 
