@@ -265,6 +265,9 @@ target:
 <soc-net-clock-icg-config>
 Clock gating cells (ICG) control clock distribution by enabling or disabling clock output based on enable signals. The ICG primitive supports both target-level and link-level configurations.
 
+An `enable` or `reset` name that is not already a controller signal becomes an
+input port, at either level.
+
 === ICG Parameters
 <soc-net-clock-icg-params>
 #figure(
@@ -566,7 +569,8 @@ Targets with multiple links (≥2) automatically generate multiplexers. Mux type
 
 For `STD_MUX`, `select` is the zero-based ordinal of each source in `link`.
 Unused binary encodings drive the output low. A standard mux accepts at most
-4096 linked sources.
+4096 linked sources. Targets may share one `select` name: the port is declared
+at the widest target's width, and narrower targets read its low bits.
 
 === Multiplexer Configuration
 <soc-net-clock-mux-config>

@@ -144,10 +144,12 @@ public:
         QString          comment; // Optional comment
 
         // Target-level MUX signals (new format per documentation)
-        QString select;      // MUX select signal (required for ≥2 links)
-        QString reset;       // Reset signal for GF_MUX auto-selection (optional)
-        QString test_enable; // DFT test enable signal (GF_MUX only, optional)
-        QString test_clock;  // DFT test clock signal (GF_MUX only, optional)
+        QString select;                // MUX select signal (required for ≥2 links)
+        int     select_width      = 1; // Width this target consumes
+        int     select_port_width = 1; // Widest width sharing the same port
+        QString reset;                 // Reset signal for GF_MUX auto-selection (optional)
+        QString test_enable;           // DFT test enable signal (GF_MUX only, optional)
+        QString test_clock;            // DFT test clock signal (GF_MUX only, optional)
     };
 
     /**

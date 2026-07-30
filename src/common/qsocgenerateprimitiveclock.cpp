@@ -30,6 +30,30 @@ namespace {
    upper half of the tree becomes unreachable. */
 constexpr qsizetype kMaxRawMuxInputs = 4096;
 
+int clockSelectWidth(qsizetype inputCount)
+{
+    int       width    = 1;
+    qsizetype capacity = 2;
+    while (capacity < inputCount) {
+        capacity *= 2;
+        ++width;
+    }
+    return width;
+}
+
+/* Targets sharing one select port declare it at the widest width, so a
+   narrower target reads the low bits instead of the whole port. */
+QString clockSelectExpression(const QSocClockPrimitive::ClockTarget &target)
+{
+    if (target.select_width >= target.select_port_width) {
+        return target.select;
+    }
+    if (target.select_width == 1) {
+        return target.select + "[0]";
+    }
+    return QString("%1[%2:0]").arg(target.select).arg(target.select_width - 1);
+}
+
 } // namespace
 
 QSocClockPrimitive::QSocClockPrimitive(QSocGenerateManager *parent)
@@ -618,6 +642,23 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
         }
     }
 
+    // One select port serves every target that names it, at the widest width
+    QHash<QString, int> selectPortWidths;
+    for (auto &target : config.targets) {
+        if (target.links.size() < 2) {
+            continue;
+        }
+        target.select_width = clockSelectWidth(target.links.size());
+        if (target.select_width > selectPortWidths.value(target.select, 0)) {
+            selectPortWidths.insert(target.select, target.select_width);
+        }
+    }
+    for (auto &target : config.targets) {
+        if (target.links.size() >= 2) {
+            target.select_port_width = selectPortWidths.value(target.select);
+        }
+    }
+
     // Check for duplicate target names (output signals)
     QSet<QString> inputNames;
     for (const auto &input : config.inputs) {
@@ -877,16 +918,28 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
         }
     }
 
+    // Add ICG interface ports (link-level)
+    for (const auto &target : config.targets) {
+        for (const auto &link : target.links) {
+            const QString linkName = QString("%1_from_%2").arg(target.name, link.source);
+            if (!link.icg.enable.isEmpty() && !addedSignals.contains(link.icg.enable)) {
+                portDecls << QString("    input  wire %1").arg(link.icg.enable);
+                portComments << QString("/**< Link ICG enable for %1 */").arg(linkName);
+                addedSignals.insert(link.icg.enable);
+            }
+            if (!link.icg.reset.isEmpty() && !addedSignals.contains(link.icg.reset)) {
+                portDecls << QString("    input  wire %1").arg(link.icg.reset);
+                portComments << QString("/**< Link ICG reset for %1 */").arg(linkName);
+                addedSignals.insert(link.icg.reset);
+            }
+        }
+    }
+
     // Add MUX interface ports (target-level)
     for (const auto &target : config.targets) {
         if (target.links.size() >= 2) { // Only for multi-source targets
             if (!target.select.isEmpty() && !addedSignals.contains(target.select)) {
-                // Calculate select signal width based on number of inputs
-                int numInputs   = target.links.size();
-                int selectWidth = 1;
-                while ((1 << selectWidth) < numInputs) {
-                    selectWidth++;
-                }
+                const int selectWidth = target.select_port_width;
 
                 QString selectDecl;
                 if (selectWidth > 1) {
@@ -1457,6 +1510,7 @@ void QSocClockPrimitive::generateMuxInstance(
         while ((1 << selWidth) < numInputs)
             selWidth++;
     }
+    const QString functionalSelect = clockSelectExpression(target);
 
     if (target.mux.type == STD_MUX) {
         /* The raw mux halves NUM_INPUTS down the tree while passing the full
@@ -1483,7 +1537,7 @@ void QSocClockPrimitive::generateMuxInstance(
         out << "}),\n";
 
         // Connect select signal
-        out << "        .clk_sel(" << target.select << "),\n";
+        out << "        .clk_sel(" << functionalSelect << "),\n";
         out << "        .clk_out(" << muxOut << ")\n";
         out << "    );\n";
 
@@ -1515,7 +1569,7 @@ void QSocClockPrimitive::generateMuxInstance(
         out << "        .async_rst_n(" << resetSig << "),\n";
 
         // Connect select signal
-        out << "        .async_sel(" << target.select << "),\n";
+        out << "        .async_sel(" << functionalSelect << "),\n";
         out << "        .clk_out(" << muxOut << ")\n";
         out << "    );\n";
     }

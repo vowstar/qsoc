@@ -1320,6 +1320,153 @@ clock:
             "clk_func_clk_from_pll_800m})"));
     }
 
+    void test_shared_select_port_takes_the_widest_target()
+    {
+        QString netlistContent = R"(
+port:
+  clk_a:
+    direction: input
+    type: logic
+  clk_b:
+    direction: input
+    type: logic
+  clk_c:
+    direction: input
+    type: logic
+  clk_d:
+    direction: input
+    type: logic
+  shared_sel:
+    direction: input
+    type: logic
+  out_small:
+    direction: output
+    type: logic
+  out_big:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_shared_sel_ctrl
+    clock: clk_sys
+    input:
+      clk_a:
+        freq: 100MHz
+      clk_b:
+        freq: 100MHz
+      clk_c:
+        freq: 100MHz
+      clk_d:
+        freq: 100MHz
+    target:
+      out_small:
+        freq: 100MHz
+        link:
+          clk_a:
+          clk_b:
+        select: shared_sel
+      out_big:
+        freq: 100MHz
+        link:
+          clk_a:
+          clk_b:
+          clk_c:
+          clk_d:
+        select: shared_sel
+)";
+
+        QString netlistPath = createTempFile("test_shared_sel.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_shared_sel.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* The port carries the widest target, and the narrow one reads the
+           low bit, so no encoding of the wide target becomes unreachable. */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire [1:0] shared_sel"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_sel(shared_sel[0])"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_sel(shared_sel)"));
+    }
+
+    void test_link_icg_controls_are_declared()
+    {
+        QString netlistContent = R"(
+port:
+  pll_800m:
+    direction: input
+    type: logic
+  gate_en_a:
+    direction: input
+    type: logic
+  gated_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_link_icg_ctrl
+    clock: clk_sys
+    input:
+      pll_800m:
+        freq: 800MHz
+    target:
+      gated_clk:
+        freq: 800MHz
+        link:
+          pll_800m:
+            icg:
+              enable: gate_en_a
+)";
+
+        QString netlistPath = createTempFile("test_link_icg.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_link_icg.v");
+        QVERIFY(QFile::exists(verilogPath));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* A link gate driven by an undeclared name is an implicit net, so the
+           gate never opens. The control must reach the module header. */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire gate_en_a"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(gate_en_a)"));
+    }
+
     void test_gf_mux_clock()
     {
         // Create netlist file with GF_MUX (glitch-free) multi-source clock (KISS format)
