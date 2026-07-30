@@ -1320,6 +1320,63 @@ clock:
             "clk_func_clk_from_pll_800m})"));
     }
 
+    void test_inverter_applies_once_through_a_cell()
+    {
+        const QString verilogContent = generateInverterCase(
+            "test_inv_once",
+            "          pll_800m:\n"
+            "            inv:\n");
+        QVERIFY(!verilogContent.isEmpty());
+
+        /* One cell instance carries the inversion, so a behavioral `~` beside
+           it would invert the clock twice and cancel out. */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_IN("));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_OUT("));
+        QVERIFY(!verilogContent.contains("= ~"));
+        QCOMPARE(verilogContent.count("qsoc_tc_clk_inv"), 1);
+    }
+
+    void test_inverter_accepts_the_compact_scalar_form()
+    {
+        const QString verilogContent
+            = generateInverterCase("test_inv_scalar", "          pll_800m: inv\n");
+        QVERIFY(!verilogContent.isEmpty());
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
+    }
+
+    void test_inverter_disabled_by_an_explicit_false()
+    {
+        const QString verilogContent = generateInverterCase(
+            "test_inv_false",
+            "          pll_800m:\n"
+            "            inv: false\n");
+        QVERIFY(!verilogContent.isEmpty());
+        QVERIFY(!verilogContent.contains("qsoc_tc_clk_inv"));
+    }
+
+    void test_inverter_sta_guide_requires_cell_in_and_out()
+    {
+        messageList.clear();
+        const QString verilogContent = generateInverterCase(
+            "test_inv_bad_guide",
+            "          pll_800m:\n"
+            "            inv:\n"
+            "              sta_guide:\n"
+            "                cell: MY_BUF\n"
+            "                in: A\n");
+
+        /* A guide without `out` would emit an empty port connection. */
+        QVERIFY(verilogContent.isEmpty());
+        int guideErrors = 0;
+        for (const QString &message : messageList) {
+            if (message.contains("requires cell, in, and out")) {
+                ++guideErrors;
+            }
+        }
+        QCOMPARE(guideErrors, 1);
+    }
+
     void test_shared_select_port_takes_the_widest_target()
     {
         QString netlistContent = R"(
@@ -3602,11 +3659,68 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_out_icg_out)"));
         // DIV output feeds INV input (through INV module instance)
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_in(clk_out_div_out)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_out(clk_out_inv_out)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_IN(clk_out_div_out)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_OUT(clk_out_inv_out)"));
     }
 
 private:
+    QString generateInverterCase(const QString &stem, const QString &linkBody)
+    {
+        const QString netlistContent = QString(R"(
+port:
+  pll_800m:
+    direction: input
+    type: logic
+  out_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: %1_ctrl
+    clock: clk_sys
+    input:
+      pll_800m:
+        freq: 800MHz
+    target:
+      out_clk:
+        freq: 800MHz
+        link:
+%2
+)")
+                                           .arg(stem, linkBody);
+
+        const QString netlistPath = createTempFile(stem + ".soc_net", netlistContent);
+        if (netlistPath.isEmpty()) {
+            return QString();
+        }
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        if (QFile::exists(verilogPath) && !QFile::remove(verilogPath)) {
+            return QString();
+        }
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        if (!QFile::exists(verilogPath)) {
+            return QString();
+        }
+        QFile verilogFile(verilogPath);
+        if (!verilogFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            return QString();
+        }
+        const QString content = verilogFile.readAll();
+        verilogFile.close();
+        return content;
+    }
+
     QString readGeneratedVerilog(const QString &filename)
     {
         QString verilogPath = QDir(projectManager.getOutputPath()).filePath(filename);

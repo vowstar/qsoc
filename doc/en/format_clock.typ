@@ -981,6 +981,10 @@ Clock format supports two processing levels with distinct syntax patterns:
 - `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
 - Pass-through: No attributes specified
 
+A link accepts only `icg`, `div`, and `inv`, or the scalar `inv`. `inv: false`
+and `enabled: false` disable the inverter; a present inverter is one cell, so
+its `sta_guide` requires `cell`, `in`, and `out` together.
+
 == Best Practices
 <soc-net-clock-practices>
 

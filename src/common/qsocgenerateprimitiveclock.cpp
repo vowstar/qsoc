@@ -41,6 +41,111 @@ int clockSelectWidth(qsizetype inputCount)
     return width;
 }
 
+bool validateMapKeys(const YAML::Node &node, const QSet<QString> &allowedKeys, const QString &context)
+{
+    for (auto it = node.begin(); it != node.end(); ++it) {
+        if (!it->first.IsScalar()) {
+            QSocConsole::error() << context << "contains a non-scalar property";
+            return false;
+        }
+        const QString key = QString::fromStdString(it->first.as<std::string>());
+        if (!allowedKeys.contains(key)) {
+            QSocConsole::error() << context << "contains unsupported property" << key;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool parseInverterStaGuide(
+    const YAML::Node &node, QSocClockPrimitive::ClockSTAGuide &guide, const QString &context)
+{
+    if (!node.IsMap()) {
+        QSocConsole::error() << context << "must be a map";
+        return false;
+    }
+    if (!validateMapKeys(node, {"cell", "in", "out", "instance"}, context)) {
+        return false;
+    }
+
+    const QStringList requiredKeys = {"cell", "in", "out"};
+    for (const QString &key : requiredKeys) {
+        const YAML::Node value = node[key.toStdString()];
+        if (!value || !value.IsScalar() || value.as<std::string>().empty()) {
+            QSocConsole::error() << context << "requires cell, in, and out";
+            return false;
+        }
+        const QString identifier = QString::fromStdString(value.as<std::string>());
+        if (!QSocVerilogUtils::isValidVerilogIdentifier(identifier)) {
+            QSocConsole::error() << context << key << "must be a valid Verilog identifier";
+            return false;
+        }
+    }
+    if (node["instance"]
+        && (!node["instance"].IsScalar() || node["instance"].as<std::string>().empty())) {
+        QSocConsole::error() << context << "instance must be a non-empty scalar";
+        return false;
+    }
+    if (node["instance"]
+        && !QSocVerilogUtils::isValidVerilogIdentifier(
+            QString::fromStdString(node["instance"].as<std::string>()))) {
+        QSocConsole::error() << context << "instance must be a valid Verilog identifier";
+        return false;
+    }
+
+    guide.cell = QString::fromStdString(node["cell"].as<std::string>());
+    guide.in   = QString::fromStdString(node["in"].as<std::string>());
+    guide.out  = QString::fromStdString(node["out"].as<std::string>());
+    if (node["instance"]) {
+        guide.instance = QString::fromStdString(node["instance"].as<std::string>());
+    }
+    return true;
+}
+
+bool parseInverter(
+    const YAML::Node &node, QSocClockPrimitive::ClockInverter &inverter, const QString &context)
+{
+    if (node.IsNull()) {
+        inverter.configured = true;
+        return true;
+    }
+    if (node.IsScalar()) {
+        try {
+            inverter.configured = node.as<bool>();
+            return true;
+        } catch (const YAML::Exception &) {
+            QSocConsole::error() << context << "must be empty, a map, or a boolean";
+            return false;
+        }
+    }
+    if (!node.IsMap()) {
+        QSocConsole::error() << context << "must be empty, a map, or a boolean";
+        return false;
+    }
+    if (!validateMapKeys(node, {"enabled", "sta_guide"}, context)) {
+        return false;
+    }
+
+    inverter.configured = true;
+    if (node["enabled"]) {
+        if (!node["enabled"].IsScalar()) {
+            QSocConsole::error() << context << "enabled must be a boolean";
+            return false;
+        }
+        try {
+            inverter.configured = node["enabled"].as<bool>();
+        } catch (const YAML::Exception &) {
+            QSocConsole::error() << context << "enabled must be a boolean";
+            return false;
+        }
+    }
+    if (node["sta_guide"]
+        && !parseInverterStaGuide(node["sta_guide"], inverter.sta_guide, context + ".sta_guide")) {
+        return false;
+    }
+    return true;
+}
+
 /* Targets sharing one select port declare it at the widest width, so a
    narrower target reads the low bits instead of the whole port. */
 QString clockSelectExpression(const QSocClockPrimitive::ClockTarget &target)
@@ -322,33 +427,11 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
             }
 
             // Parse target-level inverter
-            if (it->second["inv"]) {
-                target.inv.configured = true; // INV block exists in YAML
-                // Check if it's the new format (map) or old format (bool)
-                if (it->second["inv"].IsMap()) {
-                    // Parse INV sta_guide
-                    if (it->second["inv"]["sta_guide"] && it->second["inv"]["sta_guide"].IsMap()) {
-                        if (it->second["inv"]["sta_guide"]["cell"]) {
-                            target.inv.sta_guide.cell = QString::fromStdString(
-                                it->second["inv"]["sta_guide"]["cell"].as<std::string>());
-                        }
-                        if (it->second["inv"]["sta_guide"]["in"]) {
-                            target.inv.sta_guide.in = QString::fromStdString(
-                                it->second["inv"]["sta_guide"]["in"].as<std::string>());
-                        }
-                        if (it->second["inv"]["sta_guide"]["out"]) {
-                            target.inv.sta_guide.out = QString::fromStdString(
-                                it->second["inv"]["sta_guide"]["out"].as<std::string>());
-                        }
-                        if (it->second["inv"]["sta_guide"]["instance"]) {
-                            target.inv.sta_guide.instance = QString::fromStdString(
-                                it->second["inv"]["sta_guide"]["instance"].as<std::string>());
-                        }
-                    }
-                } else {
-                    // Old format compatibility: simple boolean (inv: true)
-                    // exists is already set to true above
-                }
+            const YAML::Node targetInvNode = it->second["inv"];
+            if (targetInvNode
+                && !parseInverter(
+                    targetInvNode, target.inv, QString("Clock target %1 inv").arg(target.name))) {
+                config.valid = false;
             }
 
             // Parse links
@@ -366,34 +449,38 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
                     }
 
                     // Link-level inverter
-                    if (linkIt->second.IsMap() && linkIt->second["inv"]) {
-                        link.inv.configured = true; // INV block exists in YAML
-                        // Check if it's the new format (map) or old format (bool)
-                        if (linkIt->second["inv"].IsMap()) {
-                            // Parse INV sta_guide
-                            if (linkIt->second["inv"]["sta_guide"]
-                                && linkIt->second["inv"]["sta_guide"].IsMap()) {
-                                if (linkIt->second["inv"]["sta_guide"]["cell"]) {
-                                    link.inv.sta_guide.cell = QString::fromStdString(
-                                        linkIt->second["inv"]["sta_guide"]["cell"].as<std::string>());
-                                }
-                                if (linkIt->second["inv"]["sta_guide"]["in"]) {
-                                    link.inv.sta_guide.in = QString::fromStdString(
-                                        linkIt->second["inv"]["sta_guide"]["in"].as<std::string>());
-                                }
-                                if (linkIt->second["inv"]["sta_guide"]["out"]) {
-                                    link.inv.sta_guide.out = QString::fromStdString(
-                                        linkIt->second["inv"]["sta_guide"]["out"].as<std::string>());
-                                }
-                                if (linkIt->second["inv"]["sta_guide"]["instance"]) {
-                                    link.inv.sta_guide.instance = QString::fromStdString(
-                                        linkIt->second["inv"]["sta_guide"]["instance"]
-                                            .as<std::string>());
-                                }
-                            }
+                    const QString linkContext = QString("Clock link %1").arg(rawSource);
+                    if (linkIt->second.IsScalar()) {
+                        const QString operation = QString::fromStdString(
+                            linkIt->second.as<std::string>());
+                        if (operation == "inv") {
+                            link.inv.configured = true;
                         } else {
-                            // Old format compatibility: simple boolean (inv: true)
-                            // exists is already set to true above
+                            QSocConsole::error()
+                                << linkContext << "uses unsupported scalar operation" << operation;
+                            config.valid = false;
+                        }
+                    } else if (!linkIt->second.IsNull() && !linkIt->second.IsMap()) {
+                        QSocConsole::error()
+                            << linkContext << "must be empty, the scalar 'inv', or a map";
+                        config.valid = false;
+                    } else if (linkIt->second.IsMap()) {
+                        if (!validateMapKeys(linkIt->second, {"icg", "div", "inv"}, linkContext)) {
+                            config.valid = false;
+                        }
+                        if (linkIt->second["icg"] && !linkIt->second["icg"].IsMap()) {
+                            QSocConsole::error() << linkContext << "icg must be a map";
+                            config.valid = false;
+                        }
+                        if (linkIt->second["div"] && !linkIt->second["div"].IsMap()) {
+                            QSocConsole::error() << linkContext << "div must be a map";
+                            config.valid = false;
+                        }
+                        const YAML::Node linkInvNode = linkIt->second["inv"];
+                        if (linkInvNode
+                            && !parseInverter(
+                                linkInvNode, link.inv, QString("%1 inv").arg(linkContext))) {
+                            config.valid = false;
                         }
                     }
 
@@ -1061,14 +1148,6 @@ void QSocClockPrimitive::generateOutputAssignments(
             // Single source
             QString wireName = getLinkWireName(target.name, target.links[0].source, 0);
             currentSignal    = wireName;
-
-            // Apply legacy inversion if needed (deprecated)
-            if (target.links[0].inv.configured) {
-                QString invertWire = QString("%1_legacy_inv").arg(target.name);
-                out << "    wire " << invertWire << ";\n";
-                out << "    assign " << invertWire << " = ~" << wireName << ";\n";
-                currentSignal = invertWire;
-            }
         } else if (target.links.size() >= 2) {
             // Multiple sources - generate multiplexer first
             QString muxOutput = QString("%1_mux_out").arg(target.name);
@@ -1264,8 +1343,8 @@ void QSocClockPrimitive::generateOutputAssignments(
 
             out << "    wire " << invTempOutput << ";\n";
             out << "    qsoc_tc_clk_inv " << instanceName << "_inv (\n";
-            out << "        .clk_in(" << currentSignal << "),\n";
-            out << "        .clk_out(" << invTempOutput << ")\n";
+            out << "        .CLK_IN(" << currentSignal << "),\n";
+            out << "        .CLK_OUT(" << invTempOutput << ")\n";
             out << "    );\n";
 
             // INV sta_guide (if specified) - serial insertion, keeps final signal name consistent
@@ -1448,8 +1527,8 @@ void QSocClockPrimitive::generateClockInstance(
 
             out << "    wire " << invTempWire << ";\n";
             out << "    qsoc_tc_clk_inv " << instanceName << "_inv (\n";
-            out << "        .clk_in(" << currentWire << "),\n";
-            out << "        .clk_out(" << invTempWire << ")\n";
+            out << "        .CLK_IN(" << currentWire << "),\n";
+            out << "        .CLK_OUT(" << invTempWire << ")\n";
             out << "    );\n";
 
             // INV sta_guide (if specified) - serial insertion, keeps final signal name consistent
@@ -1487,20 +1566,10 @@ void QSocClockPrimitive::generateMuxInstance(
     QString instanceName = QString("u_%1_mux").arg(target.name);
     QString muxOut       = outputName.isEmpty() ? target.name : outputName;
 
-    // Generate intermediate wires for inversion if needed
+    // Each link already carries its own inverter cell, so take its wire as is
     QStringList inputWires;
     for (int i = 0; i < target.links.size(); ++i) {
-        const auto &link     = target.links[i];
-        QString     wireName = getLinkWireName(target.name, link.source, i);
-
-        if (link.inv.configured) {
-            QString invertedWire = QString("%1_inv").arg(wireName);
-            out << "    wire " << invertedWire << ";\n";
-            out << "    assign " << invertedWire << " = ~" << wireName << ";\n";
-            inputWires << invertedWire;
-        } else {
-            inputWires << wireName;
-        }
+        inputWires << getLinkWireName(target.name, target.links[i].source, i);
     }
 
     int numInputs = inputWires.size();
