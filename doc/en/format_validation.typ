@@ -249,9 +249,10 @@ them change or drop parts of the design rather than only warning:
   input port on the controller
 - *`connect:` aliases*: every spelling of a connected component is judged
   together; direction fixes each endpoint's role (top input sources, top
-  output sinks), exactly one source drives the sinks, multiple sources or
-  inout endpoints emit a FIXME, and declaration order only stabilizes
-  equivalent sinks
+  output sinks), exactly one bound source drives the sinks, multiple bound
+  sources or inout endpoints emit a FIXME, and declaration order only
+  stabilizes equivalent sinks. The count covers bound endpoints, not the
+  instance and process drivers reaching the component; see @known-limitations
 - *Combinational and sequential driver conflicts*: a signal driven from more
   than one `comb`/`seq` block is rejected
 - *Power `follow` conflicts*: an entry whose `clock` equals `host_clock`, or
@@ -262,3 +263,22 @@ them change or drop parts of the design rather than only warning:
 
 The unconnected-port report (`<module>.nc.rpt`, see @verilog-generation) lists
 every port left unconnected after all of the above.
+
+== Known Limitations
+<known-limitations>
+These are reported here because generation succeeds and the output looks
+ordinary. Check them by hand until they are closed.
+
+- *One top-level port named by two nets*: naming the same top-level port in
+  two `net:` entries, or in one `net:` entry and one `connect:` alias, joins
+  both into a single component. Two instance outputs may then drive that port
+  with no diagnostic, because the multiple-driver check counts drivers per net
+  name. A `connect:` value written as a sequence is dropped without a report.
+  Give a top-level port exactly one net.
+- *Undeclared port in a net binding*: a `net:` entry naming a port the module
+  does not declare is dropped silently, so the intended export disappears and
+  the net becomes an internal wire.
+- *Malformed `tie:` expressions*: a value that is neither a number nor a valid
+  expression is emitted verbatim, so a typo such as `1'b0 &&` reaches the
+  output and fails in the downstream parser rather than here. Malformed
+  numbers are still reported.

@@ -214,12 +214,12 @@ target:
         div:
           default: 16               # Default division value
           reset: rst_n
-        inv: ~                      # Link-level inverter (exists = enabled)
-        sta_guide:                  # Link-level STA guide
-          cell: FOUNDRY_GUIDE_BUF   # Foundry-specific cell
-          in: A                     # Input port
-          out: Y                    # Output port
-          instance: u_pll_sta       # Instance name
+        inv:                        # Link-level inverter (exists = enabled)
+          sta_guide:                # STA guide after the inverter
+            cell: FOUNDRY_GUIDE_BUF # Foundry-specific cell
+            in: A                   # Input port
+            out: Y                  # Output port
+            instance: u_pll_sta     # Instance name
 
 # Alternative compact syntax for link-level inverter
 target:
@@ -750,11 +750,11 @@ target:
         div:
           default: 2                # Link-level division
           reset: rst_n
-        sta_guide:                  # STA guide at end of chain
-          cell: FOUNDRY_GUIDE_BUF   # Generic foundry cell
-          in: A                     # Input port
-          out: Y                    # Output port
-          instance: u_pll_dsp_sta   # Instance name
+          sta_guide:                # STA guide at end of chain
+            cell: FOUNDRY_GUIDE_BUF # Generic foundry cell
+            in: A                   # Input port
+            out: Y                  # Output port
+            instance: u_pll_dsp_sta # Instance name
 
 # Combined target and link STA guides
 target:
@@ -765,11 +765,11 @@ target:
         div:
           default: 4                # Default division value
           reset: rst_n
-        sta_guide:                  # Link-level STA guide
-          cell: TSMC_CKBUF_X1       # Link buffer
-          in: I
-          out: Z
-          instance: u_complex_link_sta
+          sta_guide:                # STA guide after the link divider
+            cell: FOUNDRY_CKBUF_X1  # Link buffer
+            in: I
+            out: Z
+            instance: u_complex_link_sta
 ```
 
 === Generated Verilog
