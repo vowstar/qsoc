@@ -38,6 +38,7 @@ private slots:
     void normalizeHexBaseAliases_contract();
     void normalizeHexBaseAliases_commentsScaleLinearly();
     void tryToInt64_rejectsOverflow();
+    void bigUnsignedFromLongLong_keepsValue();
     void truncateValueToWidthKeepsLowBits();
     void parseNumber_cStyleDecimal();
 
@@ -564,6 +565,27 @@ void TestQSocNumberInfo::tryToInt64_rejectsOverflow()
     int64_t              convertedValue = 17;
     QVERIFY(!overflow.tryToInt64(convertedValue));
     QCOMPARE(convertedValue, int64_t(17));
+}
+
+void TestQSocNumberInfo::bigUnsignedFromLongLong_keepsValue()
+{
+    /* `int64_t` is `long long` on some platforms, so a limit such as
+       std::numeric_limits<int64_t>::max() reaches this overload there and
+       nowhere else. Compare it against the parser, which is width-agnostic. */
+    const BigUnsigned parsedSignedMax
+        = QSocNumberInfo::parseNumber("0x7FFFFFFFFFFFFFFF").value.getMagnitude();
+    const BigUnsigned fromSignedLongLong{static_cast<long long>(0x7FFFFFFFFFFFFFFFLL)};
+    QVERIFY(fromSignedLongLong == parsedSignedMax);
+
+    const BigUnsigned parsedUnsignedMax
+        = QSocNumberInfo::parseNumber("0xFFFFFFFFFFFFFFFF").value.getMagnitude();
+    const BigUnsigned fromUnsignedLongLong{static_cast<unsigned long long>(0xFFFFFFFFFFFFFFFFULL)};
+    QVERIFY(fromUnsignedLongLong == parsedUnsignedMax);
+
+    /* A value inside 32 bits must not gain a second block either. */
+    const BigUnsigned parsedSmall = QSocNumberInfo::parseNumber("0x1234").value.getMagnitude();
+    const BigUnsigned fromSmallLongLong{static_cast<long long>(0x1234LL)};
+    QVERIFY(fromSmallLongLong == parsedSmall);
 }
 
 void TestQSocNumberInfo::truncateValueToWidthKeepsLowBits()

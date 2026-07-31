@@ -11,10 +11,13 @@ BigUnsigned::BigUnsigned(unsigned short     x) { initFromPrimitive      (x); }
 BigUnsigned::BigUnsigned(         long      x) { initFromSignedPrimitive(x); }
 BigUnsigned::BigUnsigned(         int       x) { initFromSignedPrimitive(x); }
 BigUnsigned::BigUnsigned(         short     x) { initFromSignedPrimitive(x); }
+/* The two-block split below only holds where Blk is narrower than the value.
+ * Where Blk is 64 bits the halves must stay in one block, or each half is
+ * scaled by a whole block and the result is 2^32 times too large. */
 BigUnsigned::BigUnsigned(unsigned long long x) {
 	if (x == 0)
 		; // Already zero
-	else if (x <= 0xFFFFFFFFULL) {
+	else if (sizeof(Blk) >= sizeof(unsigned long long) || x <= 0xFFFFFFFFULL) {
 		cap = 1;
 		blk = new Blk[1];
 		len = 1;
@@ -34,7 +37,7 @@ BigUnsigned::BigUnsigned(long long x) {
 		unsigned long long ux = static_cast<unsigned long long>(x);
 		if (ux == 0)
 			;
-		else if (ux <= 0xFFFFFFFFULL) {
+		else if (sizeof(Blk) >= sizeof(unsigned long long) || ux <= 0xFFFFFFFFULL) {
 			cap = 1;
 			blk = new Blk[1];
 			len = 1;
