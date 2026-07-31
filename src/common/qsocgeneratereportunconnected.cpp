@@ -34,7 +34,7 @@ bool QSocGenerateReportUnconnected::generateReport(
     const QString reportFilePath = reportArtifact.path;
 
     QFile reportFile(reportFilePath);
-    if (!reportFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    if (!reportFile.open(QIODevice::WriteOnly)) {
         return false;
     }
 

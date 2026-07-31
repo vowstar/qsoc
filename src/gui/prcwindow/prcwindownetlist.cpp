@@ -812,7 +812,7 @@ bool PrcWindow::exportNetlist(const QString &filePath)
 
         /* Write to file */
         QFile file(filePath);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (!file.open(QIODevice::WriteOnly)) {
             return false;
         }
 

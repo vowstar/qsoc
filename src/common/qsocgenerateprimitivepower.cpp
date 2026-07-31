@@ -1182,7 +1182,7 @@ bool QSocPowerPrimitive::generateTypstDiagram(
     }
 
     QFile file(artifact.path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    if (!file.open(QIODevice::WriteOnly)) {
         QSocConsole::warn() << "Failed to open file for writing:" << artifact.path;
         return false;
     }

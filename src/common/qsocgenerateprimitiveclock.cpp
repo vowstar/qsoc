@@ -3277,7 +3277,7 @@ bool QSocClockPrimitive::generateTypstDiagram(
     }
 
     QFile file(artifact.path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    if (!file.open(QIODevice::WriteOnly)) {
         QSocConsole::warn() << "Failed to open Typst output file:" << artifact.path;
         return false;
     }

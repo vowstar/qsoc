@@ -679,7 +679,7 @@ bool QSocGenerateManager::renderTemplate(
         }
         const QString outputPath = outputArtifact.path;
         QFile         outputFile(outputPath);
-        if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (!outputFile.open(QIODevice::WriteOnly)) {
             QSocConsole::error() << QCoreApplication::translate(
                                         "generate", "Could not create output file \"%1\"")
                                         .arg(outputPath);
@@ -713,7 +713,7 @@ bool QSocGenerateManager::renderTemplate(
         }
 
         QFile jsonFile(jsonPath);
-        if (!jsonFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (!jsonFile.open(QIODevice::WriteOnly)) {
             QSocConsole::warn() << QCoreApplication::translate(
                                        "generate", "Warning: Could not create JSON data file \"%1\"")
                                        .arg(jsonPath);

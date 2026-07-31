@@ -95,7 +95,7 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
 
     /* Open output file for writing */
     QFile outputFile(outputFilePath);
-    if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    if (!outputFile.open(QIODevice::WriteOnly)) {
         QSocConsole::error() << "Failed to open output file for writing:" << outputFilePath;
         return false;
     }
@@ -312,7 +312,7 @@ bool QSocGenerateManager::generateLibStub(const QString &stubName, const QString
 
     /* Open output file for writing */
     QFile outputFile(outputFilePath);
-    if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    if (!outputFile.open(QIODevice::WriteOnly)) {
         QSocConsole::error() << "Failed to open output file for writing:" << outputFilePath;
         return false;
     }
