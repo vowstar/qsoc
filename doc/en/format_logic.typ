@@ -28,7 +28,7 @@ The `comb` section is a sequence of combinational logic items, each describing o
 
 === Basic Structure
 <soc-net-comb-structure>
-Each combinational logic item must have an `out` field specifying the output signal name, and exactly one logic specification field (`expr`, `if`, or `case`):
+Each combinational logic item must have an `out` field specifying the output signal name, and exactly one logic specification field (`expr`, `if`, or `case`). An item carrying more than one is reported and emitted from the first in the order `expr`, `if`, `case`; the others are dropped:
 
 ```yaml
 comb:
