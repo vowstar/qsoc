@@ -7,6 +7,8 @@
 #include <QtCore>
 #include <QtTest>
 
+#include <algorithm>
+
 #include <optional>
 
 #ifdef Q_OS_UNIX
@@ -17,6 +19,25 @@
 #endif
 
 namespace {
+
+/** Pull the tracked id out of a "Started in background." reply. */
+int backgroundProcessId(const QString &reply)
+{
+    const QRegularExpressionMatch match
+        = QRegularExpression(QStringLiteral("Process ID: (\\d+)")).match(reply);
+    return match.hasMatch() ? match.captured(1).toInt() : -1;
+}
+
+/** Tracked ids currently in the registry, in ascending order. */
+QList<int> backgroundIds()
+{
+    QList<int> ids;
+    for (const auto &snapshot : QSocToolShellBash::snapshotActive()) {
+        ids.append(snapshot.id);
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
 
 #ifdef Q_OS_UNIX
 bool processExists(const qint64 processId)
@@ -818,12 +839,21 @@ private slots:
         QVERIFY2(backgroundA.startsWith("Started in background."), qPrintable(backgroundA));
         QVERIFY2(backgroundB.startsWith("Started in background."), qPrintable(backgroundB));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 2);
+
+        const int idA = backgroundProcessId(backgroundA);
+        const int idB = backgroundProcessId(backgroundB);
+        QVERIFY(idA > 0);
+        QVERIFY(idB > 0);
+        QVERIFY(idA != idB);
+
+        /* Deleting an owner drops its entry and leaves the other owner's
+           alone. Stopping a tree costs a watchdog tick at worst, and the
+           command self-destructs after 8 s, so identity is the stable
+           property here and liveness is not. */
         delete ownerA;
-        const auto snapshots = QSocToolShellBash::snapshotActive();
-        QCOMPARE(snapshots.size(), 1);
-        QVERIFY(snapshots.constFirst().isRunning);
+        QTRY_COMPARE_WITH_TIMEOUT(backgroundIds(), QList<int>{idB}, 5000);
         delete ownerB;
-        QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
+        QTRY_COMPARE_WITH_TIMEOUT(QSocToolShellBash::activeProcessCount(), 0, 5000);
 #endif
     }
 };

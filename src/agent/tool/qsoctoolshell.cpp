@@ -235,16 +235,18 @@ void terminateProcessTree(const QPointer<QProcess> &process, const qint64 proces
     }
 }
 
-void killProcessTree(const QPointer<QProcess> &process, const qint64 processGroupId)
+/** Kill the whole tree; true when the group itself took the signal. */
+bool killProcessTree(const QPointer<QProcess> &process, const qint64 processGroupId)
 {
 #ifdef Q_OS_UNIX
     if (processGroupId > 0 && ::kill(-static_cast<pid_t>(processGroupId), SIGKILL) == 0) {
-        return;
+        return true;
     }
 #endif
     if (!process.isNull() && process->state() != QProcess::NotRunning) {
         process->kill();
     }
+    return false;
 }
 
 bool waitForProcessTreeStopped(
@@ -278,8 +280,15 @@ bool forceStopProcess(
         return true;
     }
 
-    killProcessTree(process, processGroupId);
-    return waitForProcessTreeStopped(process, processGroupId, trackProcessGroup, kForceStopMs);
+    const bool groupTookSignal = killProcessTree(process, processGroupId);
+    if (waitForProcessTreeStopped(process, processGroupId, trackProcessGroup, kForceStopMs)) {
+        return true;
+    }
+
+    /* SIGKILL cannot be caught, so once the group took it nothing there runs
+       again. A member that still answers kill(0) is a reparented zombie whose
+       reaping belongs to init, and waiting on that is not this call's job. */
+    return groupTookSignal && (process.isNull() || process->state() == QProcess::NotRunning);
 }
 
 } /* namespace */
@@ -381,6 +390,13 @@ void QSocToolShellBash::killTracked(const QSocToolShellBash *owner)
         const bool groupStopRequested = it->groupStopState
                                         == QSocBashProcessInfo::GroupStopState::Requested;
         if (!forceStopProcess(process, it->processGroupId, groupStopRequested)) {
+            /* The tree outlived the stop budget. Its owner is going away and
+               the watchdog only visits its own entries, so leaving this one
+               unmarked strands it in the registry for good. */
+            it = activeProcesses.find(processId);
+            if (it != activeProcesses.end()) {
+                it->removeWhenIdle = true;
+            }
             continue;
         }
         if (groupStopRequested) {
@@ -547,6 +563,17 @@ void QSocToolShellBash::tickWatchdog()
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     QList<int>   stuckHits; /* emit signals after the loop to keep
                                activeProcesses iteration re-entrancy-safe. */
+
+    /* An entry whose owner was destroyed while its tree was still stopping
+       belongs to no watchdog, so collect it here once it goes idle. */
+    const QList<int> trackedIds = activeProcesses.keys();
+    for (const int processId : trackedIds) {
+        auto entry = activeProcesses.find(processId);
+        if (entry == activeProcesses.end() || !entry->owner.isNull() || !entry->removeWhenIdle) {
+            continue;
+        }
+        requestProcessCleanup(activeProcesses, processId);
+    }
 
     for (auto it = activeProcesses.begin(); it != activeProcesses.end(); ++it) {
         auto &info = it.value();
