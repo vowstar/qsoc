@@ -5,6 +5,7 @@
 #include "agent/mcp/qsocmcpstdioparser_p.h"
 #include "agent/mcp/qsocmcptransport.h"
 #include "agent/mcp/qsocmcptypes.h"
+#include "common/qsocconsole.h"
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
@@ -85,6 +86,9 @@ class Test : public QObject
 private slots:
     void initTestCase()
     {
+        /* The transport logs the peer's stderr at debug level; a failure here
+           is unreadable without it. */
+        QSocConsole::setLevel(QSocConsole::Level::Debug);
         const QFileInfo peer(peerProgram());
         QVERIFY2(peer.isFile(), qPrintable(QStringLiteral("Missing stdio peer: %1").arg(peer.path())));
     }

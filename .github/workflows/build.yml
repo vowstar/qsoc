@@ -193,8 +193,8 @@ jobs:
                  Select-Object -First 1
           if ($null -eq $exe) { Write-Host "===== $name (binary not found) ====="; continue }
           $log = Join-Path $env:RUNNER_TEMP "$name.qtestlog"
-          & $exe.FullName -o "$log,txt" 2>&1 | Out-Null
           Write-Host "===== $name ====="
+          & $exe.FullName -o "$log,txt" 2>&1 | ForEach-Object { Write-Host "  | $_" }
           if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log produced)" }
         }
 
