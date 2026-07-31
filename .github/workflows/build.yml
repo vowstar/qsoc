@@ -178,6 +178,26 @@ jobs:
         cd build
         ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure -E "test_qsocgui|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected"
 
+    # ctest records no test output on Windows, so a failure arrives as a bare
+    # exit code. Re-run each failed binary with its own log file and print it.
+    - name: Failed test diagnostics
+      if: failure()
+      run: |
+        $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
+        cd build
+        $listing = "Testing/Temporary/LastTestsFailed.log"
+        if (-Not (Test-Path $listing)) { Write-Host "no failure listing"; exit 0 }
+        foreach ($line in Get-Content $listing) {
+          $name = ($line -split ':', 2)[1]
+          $exe = Get-ChildItem -Recurse -Filter "$name.exe" -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if ($null -eq $exe) { Write-Host "===== $name (binary not found) ====="; continue }
+          $log = Join-Path $env:RUNNER_TEMP "$name.qtestlog"
+          & $exe.FullName -o "$log,txt" 2>&1 | Out-Null
+          Write-Host "===== $name ====="
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log produced)" }
+        }
+
   build-macos:
     runs-on: macos-15
 
