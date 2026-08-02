@@ -7,6 +7,7 @@
 #include "common/qsocconsole.h"
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocmodulemanager.h"
+#include "common/qsocnumberinfo.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
@@ -753,18 +754,20 @@ zero={{ "{:d}"|format(bareZero) }}
         messageList.clear();
         const QDir projectDir(projectManager.getCurrentPath());
 
-        const QString jsonContent  = R"({
-    "huge": "0x10000000000000000"
-})";
-        const QString jsonFilePath = projectDir.filePath("format_overflow_data.json");
-        QFile         jsonFile(jsonFilePath);
-        QVERIFY(jsonFile.open(QIODevice::WriteOnly | QIODevice::Text));
-        QTextStream(&jsonFile) << jsonContent;
+        const QString huge = "0x" + QString(QSocNumberInfo::MaximumNumericCharacters - 2, 'F');
+        QCOMPARE(huge.size(), QSocNumberInfo::MaximumNumericCharacters);
+        const QJsonDocument document(QJsonObject{{"huge", huge}});
+        const QString       jsonFilePath = projectDir.filePath("format_overflow_data.json");
+        QFile               jsonFile(jsonFilePath);
+        QVERIFY(jsonFile.open(QIODevice::WriteOnly));
+        QCOMPARE(jsonFile.write(document.toJson()), document.toJson().size());
         jsonFile.close();
 
-        /* A stale artifact from an earlier run would satisfy the existence
-           check even though this run refuses to write one. */
-        QFile::remove(QDir(projectManager.getOutputPath()).filePath("format_overflow_template"));
+        const QDir    outputDir(projectManager.getOutputPath());
+        const QString outputPath  = outputDir.filePath("format_overflow_template");
+        const QString sidecarPath = outputDir.filePath("format_overflow_template.json");
+        QFile::remove(outputPath);
+        QFile::remove(sidecarPath);
 
         const QString templateContent  = R"(huge={{ "{:d}"|format(huge) }}
 )";
@@ -788,13 +791,90 @@ zero={{ "{:d}"|format(bareZero) }}
         socCliWorker.run();
 
         QVERIFY(!verifyTemplateOutputExistence("format_overflow_template"));
-        bool sawRangeError = false;
-        for (const QString &message : messageList) {
-            if (message.contains("outside the signed 64-bit range")) {
-                sawRangeError = true;
+        QVERIFY(!QFile::exists(sidecarPath));
+        const QString            messages = messageList.join('\n');
+        const QRegularExpression rangeRegex(
+            "Template format value \"([^\"]+)\" is outside the signed 64-bit range");
+        const QRegularExpressionMatch rangeMatch = rangeRegex.match(messages);
+        QVERIFY(rangeMatch.hasMatch());
+        QCOMPARE(rangeMatch.captured(1).size(), 128);
+        QVERIFY(rangeMatch.captured(1).endsWith("..."));
+        QVERIFY(!messages.contains(huge));
+        QVERIFY(messages.size() < 512);
+    }
+
+    void testGenerateTemplateFormatRejectsOversizedNumericText()
+    {
+        messageList.clear();
+        const QDir    projectDir(projectManager.getCurrentPath());
+        const QString maximum = "0x1" + QString(QSocNumberInfo::MaximumNumericCharacters - 3, '_');
+        QCOMPARE(maximum.size(), QSocNumberInfo::MaximumNumericCharacters);
+        const QString oversized = maximum + '_';
+        QCOMPARE(oversized.size(), QSocNumberInfo::MaximumNumericCharacters + 1);
+
+        const QString jsonPath       = projectDir.filePath("format_limit_data.json");
+        const auto    writeJsonValue = [&jsonPath](const QString &value) {
+            QFile file(jsonPath);
+            if (!file.open(QIODevice::WriteOnly)) {
+                return false;
             }
-        }
-        QVERIFY(sawRangeError);
+            const QByteArray bytes = QJsonDocument(QJsonObject{{"huge", value}}).toJson();
+            return file.write(bytes) == bytes.size();
+        };
+
+        const QString templatePath = projectDir.filePath("format_limit_template.j2");
+        QFile         templateFile(templatePath);
+        QVERIFY(templateFile.open(QIODevice::WriteOnly));
+        const QByteArray templateData = "decimal={{ \"{:d}\"|format(huge) }}\n"
+                                        "hex={{ \"{:x}\"|format(huge) }}\n";
+        QCOMPARE(templateFile.write(templateData), templateData.size());
+        templateFile.close();
+
+        const QDir    outputDir(projectManager.getOutputPath());
+        const QString outputPath    = outputDir.filePath("format_limit.out");
+        const QString sidecarPath   = outputDir.filePath("format_limit.json");
+        const auto    writeSentinel = [](const QString &path, const QByteArray &bytes) {
+            QFile file(path);
+            return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+        };
+        const auto readBytes = [](const QString &path) {
+            QFile file(path);
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+        };
+
+        const QString maximumOutputPath = outputDir.filePath("format_limit_ok.out");
+        QVERIFY(writeJsonValue(maximum));
+        QVERIFY(
+            generateManager
+                .renderTemplate(templatePath, {}, {}, {jsonPath}, {}, {}, "format_limit_ok.out"));
+        QCOMPARE(readBytes(maximumOutputPath), QByteArray("decimal=1\nhex=1\n"));
+
+        messageList.clear();
+        QVERIFY(writeJsonValue(oversized));
+        QVERIFY(writeSentinel(outputPath, "old primary\n"));
+        QVERIFY(writeSentinel(sidecarPath, "old sidecar\n"));
+        QVERIFY(!generateManager
+                     .renderTemplate(templatePath, {}, {}, {jsonPath}, {}, {}, "format_limit.out"));
+        QCOMPARE(readBytes(outputPath), QByteArray("old primary\n"));
+        QCOMPARE(readBytes(sidecarPath), QByteArray("old sidecar\n"));
+
+        const QString            messages = messageList.join('\n');
+        const QRegularExpression limitRegex(
+            "Template format value \"([^\"]+)\" exceeds the 65536-character limit");
+        const QRegularExpressionMatch limitMatch = limitRegex.match(messages);
+        QVERIFY(limitMatch.hasMatch());
+        QCOMPARE(limitMatch.captured(1).size(), 128);
+        QVERIFY(limitMatch.captured(1).endsWith("..."));
+        QVERIFY(!messages.contains(oversized));
+        QVERIFY(messages.size() < 512);
+
+        QVERIFY(QFile::remove(outputPath));
+        QVERIFY(QFile::remove(sidecarPath));
+        messageList.clear();
+        QVERIFY(!generateManager
+                     .renderTemplate(templatePath, {}, {}, {jsonPath}, {}, {}, "format_limit.out"));
+        QVERIFY(!QFile::exists(outputPath));
+        QVERIFY(!QFile::exists(sidecarPath));
     }
 
     void testTemplateArtifactCompatibility()

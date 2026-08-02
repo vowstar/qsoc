@@ -734,6 +734,9 @@ QSocNumberInfo::NumericText QSocNumberInfo::classifyNumericText(const QString &t
 {
     const NumericText pass{NumericTextKind::PassThrough, Spelling::NotANumber};
     const NumericText reject{NumericTextKind::Reject, Spelling::NotANumber};
+    const auto        characterLimit = [](Spelling spelling) {
+        return NumericText{NumericTextKind::Reject, spelling, NumericTextIssue::CharacterLimit};
+    };
     if (text.isEmpty()) {
         return pass;
     }
@@ -889,7 +892,7 @@ QSocNumberInfo::NumericText QSocNumberInfo::classifyNumericText(const QString &t
             return pass;
         }
         if (text.size() > MaximumNumericCharacters) {
-            return reject;
+            return characterLimit(Spelling::Verilog);
         }
         return {NumericTextKind::Normalize, Spelling::Verilog};
     }
@@ -922,7 +925,7 @@ QSocNumberInfo::NumericText QSocNumberInfo::classifyNumericText(const QString &t
                 return reject;
             }
             return text.size() > MaximumNumericCharacters
-                       ? reject
+                       ? characterLimit(Spelling::CStyle)
                        : NumericText{NumericTextKind::Normalize, Spelling::CStyle};
         }
     }
@@ -984,14 +987,19 @@ QSocNumberInfo::NumericText QSocNumberInfo::classifyNumericText(const QString &t
     if (real) {
         return pass;
     }
-    if (text.size() > MaximumNumericCharacters) {
-        return reject;
-    }
     /* Bare `0` is the zero of the C octal family, exactly like `00`,
        `0_0`, and `0o0`; excluding it was the one special case in the
        zero-led rule. Plain decimals start with 1-9. */
     if (text.at(0) == '0') {
-        return allOctal ? NumericText{NumericTextKind::Normalize, Spelling::CStyle} : reject;
+        if (!allOctal) {
+            return reject;
+        }
+        return text.size() > MaximumNumericCharacters
+                   ? characterLimit(Spelling::CStyle)
+                   : NumericText{NumericTextKind::Normalize, Spelling::CStyle};
+    }
+    if (text.size() > MaximumNumericCharacters) {
+        return characterLimit(Spelling::PlainDecimal);
     }
     return {NumericTextKind::Normalize, Spelling::PlainDecimal};
 }

@@ -23,6 +23,17 @@
 #include <rapidcsv.h>
 #include <sstream>
 
+namespace {
+
+QString boundedTemplateDiagnostic(const QString &text)
+{
+    constexpr qsizetype maximumLength = 128;
+    return text.size() <= maximumLength ? text
+                                        : text.left(maximumLength - 3) + QStringLiteral("...");
+}
+
+} // namespace
+
 bool QSocGenerateManager::renderTemplate(
     const QString     &templateFilePath,
     const QStringList &csvFiles,
@@ -594,12 +605,29 @@ bool QSocGenerateManager::renderTemplate(
                        digits to the number parser, which collapsed them to
                        unrelated constants, and never recognized sized Verilog
                        literals at all. Plain decimals keep string semantics. */
-                    const QString                  qstr = QString::fromStdString(str_val);
-                    const QSocNumberInfo::Spelling spelling
-                        = QSocNumberInfo::classifyTwoStateNumber(qstr);
+                    const QString                     qstr    = QString::fromStdString(str_val);
+                    const QSocNumberInfo::NumericText numeric = QSocNumberInfo::classifyNumericText(
+                        qstr);
+                    const bool convertsNumericText = numeric.spelling
+                                                         == QSocNumberInfo::Spelling::CStyle
+                                                     || numeric.spelling
+                                                            == QSocNumberInfo::Spelling::Verilog;
 
-                    if (spelling == QSocNumberInfo::Spelling::CStyle
-                        || spelling == QSocNumberInfo::Spelling::Verilog) {
+                    if (numeric.issue == QSocNumberInfo::NumericTextIssue::CharacterLimit
+                        && convertsNumericText) {
+                        if (renderError.isEmpty()) {
+                            renderError = QCoreApplication::translate(
+                                              "generate",
+                                              "Template format value \"%1\" exceeds the "
+                                              "%2-character limit")
+                                              .arg(boundedTemplateDiagnostic(qstr))
+                                              .arg(QSocNumberInfo::MaximumNumericCharacters);
+                        }
+                        return std::string("");
+                    }
+
+                    if (numeric.kind == QSocNumberInfo::NumericTextKind::Normalize
+                        && convertsNumericText) {
                         QSocNumberInfo numberInfo = QSocNumberInfo::parseNumber(qstr);
 
                         /* A sized literal denotes only its declared bits:
@@ -615,7 +643,7 @@ bool QSocGenerateManager::renderTemplate(
                                                   "generate",
                                                   "Template format value \"%1\" is outside "
                                                   "the signed 64-bit range")
-                                                  .arg(qstr);
+                                                  .arg(boundedTemplateDiagnostic(qstr));
                             }
                             return std::string("");
                         }

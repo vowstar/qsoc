@@ -118,13 +118,16 @@ public:
         Reject       /**< Complete malformed number */
     };
 
+    enum class NumericTextIssue : std::uint8_t { None, CharacterLimit };
+
     /**
      * @brief Result of deterministic numeric text classification
      */
     struct NumericText
     {
-        NumericTextKind kind     = NumericTextKind::PassThrough;
-        Spelling        spelling = Spelling::NotANumber;
+        NumericTextKind  kind     = NumericTextKind::PassThrough;
+        Spelling         spelling = Spelling::NotANumber;
+        NumericTextIssue issue    = NumericTextIssue::None;
     };
 
     /**

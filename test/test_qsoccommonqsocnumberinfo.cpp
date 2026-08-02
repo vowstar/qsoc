@@ -282,6 +282,39 @@ void TestQSocNumberInfo::stringToBigInteger_rejectsOversizedText()
     QCOMPARE(
         QSocNumberInfo::classifyTwoStateNumber(oversizedRaw), QSocNumberInfo::Spelling::NotANumber);
 
+    using Issue    = QSocNumberInfo::NumericTextIssue;
+    using Kind     = QSocNumberInfo::NumericTextKind;
+    using Spelling = QSocNumberInfo::Spelling;
+    const QList<QPair<QString, Spelling>> boundedSpellings{
+        {QStringLiteral("0x1"), Spelling::CStyle},
+        {QStringLiteral("0o1"), Spelling::CStyle},
+        {QStringLiteral("8'h1"), Spelling::Verilog},
+    };
+    for (const auto &[prefix, spelling] : boundedSpellings) {
+        const QString maximum
+            = prefix + QString(QSocNumberInfo::MaximumNumericCharacters - prefix.size(), '_');
+        QCOMPARE(maximum.size(), QSocNumberInfo::MaximumNumericCharacters);
+        const auto maximumClass = QSocNumberInfo::classifyNumericText(maximum);
+        QCOMPARE(maximumClass.kind, Kind::Normalize);
+        QCOMPARE(maximumClass.spelling, spelling);
+        QCOMPARE(maximumClass.issue, Issue::None);
+
+        const auto oversizedClass = QSocNumberInfo::classifyNumericText(maximum + '_');
+        QCOMPARE(oversizedClass.kind, Kind::Reject);
+        QCOMPARE(oversizedClass.spelling, spelling);
+        QCOMPARE(oversizedClass.issue, Issue::CharacterLimit);
+    }
+    const auto oversizedPlain = QSocNumberInfo::classifyNumericText(
+        QString(QSocNumberInfo::MaximumNumericCharacters + 1, '9'));
+    QCOMPARE(oversizedPlain.kind, Kind::Reject);
+    QCOMPARE(oversizedPlain.spelling, Spelling::PlainDecimal);
+    QCOMPARE(oversizedPlain.issue, Issue::CharacterLimit);
+    const auto oversizedMalformed = QSocNumberInfo::classifyNumericText(
+        QStringLiteral("0678") + QString(QSocNumberInfo::MaximumNumericCharacters, '_'));
+    QCOMPARE(oversizedMalformed.kind, Kind::Reject);
+    QCOMPARE(oversizedMalformed.spelling, Spelling::NotANumber);
+    QCOMPARE(oversizedMalformed.issue, Issue::None);
+
     const QSocNumberInfo hexAlias = QSocNumberInfo::parseNumber("8'xF");
     QCOMPARE(hexAlias.base, QSocNumberInfo::Base::Hexadecimal);
     QCOMPARE(hexAlias.width, 8);
@@ -323,6 +356,7 @@ void TestQSocNumberInfo::parseNumber_maximumDecimalCompletesWithinBound()
 
 void TestQSocNumberInfo::classifyNumericText_contract()
 {
+    using Issue    = QSocNumberInfo::NumericTextIssue;
     using Kind     = QSocNumberInfo::NumericTextKind;
     using Spelling = QSocNumberInfo::Spelling;
 
@@ -331,6 +365,7 @@ void TestQSocNumberInfo::classifyNumericText_contract()
         const char *text;
         Kind        kind;
         Spelling    spelling;
+        Issue       issue = Issue::None;
     };
 
     const QList<NumericCase> cases{
@@ -455,6 +490,7 @@ void TestQSocNumberInfo::classifyNumericText_contract()
             QString::fromLatin1(numericCase.text));
         QVERIFY2(result.kind == numericCase.kind, numericCase.text);
         QCOMPARE(result.spelling, numericCase.spelling);
+        QCOMPARE(result.issue, numericCase.issue);
     }
 
     const QString oversizedTwoState   = "262144'h"
@@ -469,11 +505,22 @@ void TestQSocNumberInfo::classifyNumericText_contract()
     const QString oversizedMalformed  = "8'h"
                                         + QString(QSocNumberInfo::MaximumNumericCharacters - 3, 'F')
                                         + "Q";
-    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedTwoState).kind, Kind::Reject);
-    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedFourState).kind, Kind::PassThrough);
-    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedSigned).kind, Kind::PassThrough);
-    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedExpression).kind, Kind::PassThrough);
-    QCOMPARE(QSocNumberInfo::classifyNumericText(oversizedMalformed).kind, Kind::Reject);
+    const auto    twoStateClass       = QSocNumberInfo::classifyNumericText(oversizedTwoState);
+    QCOMPARE(twoStateClass.kind, Kind::Reject);
+    QCOMPARE(twoStateClass.spelling, Spelling::Verilog);
+    QCOMPARE(twoStateClass.issue, Issue::CharacterLimit);
+    const auto fourStateClass = QSocNumberInfo::classifyNumericText(oversizedFourState);
+    QCOMPARE(fourStateClass.kind, Kind::PassThrough);
+    QCOMPARE(fourStateClass.issue, Issue::None);
+    const auto signedClass = QSocNumberInfo::classifyNumericText(oversizedSigned);
+    QCOMPARE(signedClass.kind, Kind::PassThrough);
+    QCOMPARE(signedClass.issue, Issue::None);
+    const auto expressionClass = QSocNumberInfo::classifyNumericText(oversizedExpression);
+    QCOMPARE(expressionClass.kind, Kind::PassThrough);
+    QCOMPARE(expressionClass.issue, Issue::None);
+    const auto malformedClass = QSocNumberInfo::classifyNumericText(oversizedMalformed);
+    QCOMPARE(malformedClass.kind, Kind::Reject);
+    QCOMPARE(malformedClass.issue, Issue::None);
 }
 
 void TestQSocNumberInfo::classifyNumericText_commentsScaleLinearly()
