@@ -89,8 +89,10 @@ bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
     try {
         /* Validate basic netlist structure - allow missing instance if primitives exist */
         bool hasInstances  = netlistData["instance"] && netlistData["instance"].IsMap();
+        bool hasPower      = netlistData["power"] && netlistData["power"].IsSequence()
+                             && netlistData["power"].size() > 0;
         bool hasPrimitives = netlistData["comb"] || netlistData["seq"] || netlistData["fsm"]
-                             || netlistData["reset"] || netlistData["clock"];
+                             || netlistData["reset"] || netlistData["clock"] || hasPower;
 
         if (!hasInstances && !hasPrimitives) {
             QSocConsole::error() << "Invalid netlist format, missing 'instance' section and no "

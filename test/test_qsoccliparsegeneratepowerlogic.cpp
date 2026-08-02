@@ -4,6 +4,7 @@
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
 #include "common/qsocconsole.h"
+#include "common/qsocgeneratemanager.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
@@ -175,6 +176,137 @@ power:
         const QString verilogContent = verilogFile.readAll();
         verilogFile.close();
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "module pure_pwr_ctrl"));
+    }
+
+    void test_pure_power_direct_data_matches_loaded_file()
+    {
+        const QString netlistContent = R"(
+power:
+  - name: pure_pwr_api
+    host_clock: clk_ao
+    host_reset: rst_ao_n
+    domain:
+      - name: ao
+        v_mv: 900
+        wait_dep: 0
+        settle_on: 0
+        settle_off: 0
+        follow: []
+)";
+        const QString netlistPath = createTempFile("test_pure_power_api.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        const QString outputPath
+            = QDir(projectManager.getOutputPath()).filePath("test_pure_power_api.v");
+        QVERIFY(QFile::remove(outputPath) || !QFile::exists(outputPath));
+
+        QSocGenerateManager loadedManager(nullptr, &projectManager);
+        QVERIFY(loadedManager.loadNetlist(netlistPath));
+        QVERIFY(loadedManager.processNetlist());
+        QVERIFY(loadedManager.generateVerilog("test_pure_power_api"));
+        QFile loadedFile(outputPath);
+        QVERIFY(loadedFile.open(QIODevice::ReadOnly));
+        const QByteArray loadedBytes = loadedFile.readAll();
+        loadedFile.close();
+        QVERIFY(!loadedBytes.isEmpty());
+
+        QVERIFY(QFile::remove(outputPath));
+        QSocGenerateManager directManager(nullptr, &projectManager);
+        QVERIFY(directManager.setNetlistData(YAML::Load(netlistContent.toStdString())));
+        QVERIFY(directManager.processNetlist());
+        QVERIFY(directManager.generateVerilog("test_pure_power_api"));
+        QFile directFile(outputPath);
+        QVERIFY(directFile.open(QIODevice::ReadOnly));
+        const QByteArray directBytes = directFile.readAll();
+        directFile.close();
+
+        QCOMPARE(directBytes, loadedBytes);
+    }
+
+    void test_invalid_power_direct_data_remains_rejected()
+    {
+        const QStringList invalidInputs = {"power: []\n", "power: {}\n", "power: false\n"};
+        for (const QString &input : invalidInputs) {
+            QSocGenerateManager manager(nullptr, &projectManager);
+            QVERIFY(!manager.setNetlistData(YAML::Load(input.toStdString())));
+        }
+    }
+
+    void test_pure_power_merge_matches_single_file()
+    {
+        const QString firstController  = R"(
+  - name: pure_pwr_merge_a
+    host_clock: clk_a
+    host_reset: rst_a_n
+    domain:
+      - name: a
+        v_mv: 900
+        wait_dep: 0
+        settle_on: 0
+        settle_off: 0
+        follow: []
+)";
+        const QString secondController = R"(
+  - name: pure_pwr_merge_b
+    host_clock: clk_b
+    host_reset: rst_b_n
+    domain:
+      - name: b
+        v_mv: 1000
+        wait_dep: 0
+        settle_on: 0
+        settle_off: 0
+        follow: []
+)";
+        const QString firstPath        = createTempFile(
+            "test_pure_power_merge.soc_net", "power:\n" + firstController + secondController);
+        QVERIFY(!firstPath.isEmpty());
+
+        const QString outputPath
+            = QDir(projectManager.getOutputPath()).filePath("test_pure_power_merge.v");
+        QVERIFY(QFile::remove(outputPath) || !QFile::exists(outputPath));
+        {
+            QSocCliWorker worker;
+            worker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), firstPath},
+                false);
+            worker.run();
+        }
+        QFile referenceFile(outputPath);
+        QVERIFY(referenceFile.open(QIODevice::ReadOnly));
+        const QByteArray referenceBytes = referenceFile.readAll();
+        referenceFile.close();
+        QVERIFY(!referenceBytes.isEmpty());
+
+        QVERIFY(!createTempFile("test_pure_power_merge.soc_net", "power:\n" + firstController)
+                     .isEmpty());
+        const QString secondPath
+            = createTempFile("test_pure_power_merge_part2.soc_net", "power:\n" + secondController);
+        QVERIFY(!secondPath.isEmpty());
+        QVERIFY(QFile::remove(outputPath));
+        {
+            QSocCliWorker worker;
+            worker.setup(
+                {"qsoc",
+                 "generate",
+                 "verilog",
+                 "--merge",
+                 "-d",
+                 projectManager.getCurrentPath(),
+                 firstPath,
+                 secondPath},
+                false);
+            worker.run();
+        }
+
+        QFile mergedFile(outputPath);
+        QVERIFY(mergedFile.open(QIODevice::ReadOnly));
+        const QByteArray mergedBytes = mergedFile.readAll();
+        mergedFile.close();
+        QCOMPARE(mergedBytes, referenceBytes);
+        QVERIFY(mergedBytes.contains("module pure_pwr_merge_a"));
+        QVERIFY(mergedBytes.contains("module pure_pwr_merge_b"));
+        QVERIFY(!mergedBytes.contains("module test_pure_power_merge"));
     }
 
     void test_ao_domain_inference()
