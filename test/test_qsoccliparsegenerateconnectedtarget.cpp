@@ -804,6 +804,60 @@ seq:
         QVERIFY(!verilog.contains("assign b_in"));
     }
 
+    void testDefaultInputDirectionsCannotBeDriven()
+    {
+        const QString verilog = generate("connected_default_input_process", R"(
+port:
+  clk:
+    direction: input
+    type: logic
+  data:
+    direction: input
+    type: logic
+  comb_default:
+    type: logic
+  comb_invalid:
+    direction: sideways
+    type: logic
+  seq_default:
+    type: logic
+  seq_invalid:
+    direction: sideways
+    type: logic
+
+comb:
+  - out: comb_default
+    expr: data
+  - out: comb_invalid
+    expr: data
+
+seq:
+  - reg: seq_default
+    clk: clk
+    next: data
+  - reg: seq_invalid
+    clk: clk
+    next: data
+)");
+        QVERIFY(!verilog.isEmpty());
+        QVERIFY(verilog.contains("input wire comb_default"));
+        QVERIFY(verilog.contains("input wire comb_invalid"));
+        QVERIFY(verilog.contains("input wire seq_default"));
+        QVERIFY(verilog.contains("input wire seq_invalid"));
+        QVERIFY(verilog.contains("comb tried to drive top-level input comb_default"));
+        QVERIFY(verilog.contains("comb tried to drive top-level input comb_invalid"));
+        QVERIFY(verilog.contains("seq tried to drive top-level input seq_default"));
+        QVERIFY(verilog.contains("seq tried to drive top-level input seq_invalid"));
+        QVERIFY(!verilog.contains("assign comb_default"));
+        QVERIFY(!verilog.contains("assign comb_invalid"));
+        QVERIFY(!verilog.contains("assign seq_default"));
+        QVERIFY(!verilog.contains("assign seq_invalid"));
+        QVERIFY(!verilog.contains("comb_default_reg"));
+        QVERIFY(!verilog.contains("comb_invalid_reg"));
+        QVERIFY(!verilog.contains("seq_default_reg"));
+        QVERIFY(!verilog.contains("seq_invalid_reg"));
+    }
+
     void testSkippedInputProcessDoesNotClaimTheAlias()
     {
         const QString verilog = generate("owner_skipped_input_process", R"(
@@ -830,23 +884,50 @@ port:
     direction: output
     type: logic
     connect: seq_net
+  src_default:
+    type: logic
+    connect: default_net
+  y_default:
+    direction: output
+    type: logic
+    connect: default_net
+  src_invalid:
+    direction: sideways
+    type: logic
+    connect: invalid_net
+  y_invalid:
+    direction: output
+    type: logic
+    connect: invalid_net
 
 comb:
   - out: src_c
+    expr: a
+  - out: src_default
     expr: a
 
 seq:
   - reg: src_s
     clk: clk
     next: a
+  - reg: src_invalid
+    clk: clk
+    next: a
 )");
         QVERIFY(!verilog.isEmpty());
         QVERIFY(verilog.contains("FIXME: comb tried to drive top-level input src_c"));
         QVERIFY(verilog.contains("FIXME: seq tried to drive top-level input src_s"));
+        QVERIFY(verilog.contains("FIXME: comb tried to drive top-level input src_default"));
+        QVERIFY(verilog.contains("FIXME: seq tried to drive top-level input src_invalid"));
         QVERIFY(verilog.contains("assign y_c = src_c;"));
         QVERIFY(verilog.contains("assign y_s = src_s;"));
+        QVERIFY(verilog.contains("assign y_default = src_default;"));
+        QVERIFY(verilog.contains("assign y_invalid = src_invalid;"));
         QVERIFY(!verilog.contains("net comb_net is already driven"));
         QVERIFY(!verilog.contains("net seq_net is already driven"));
+        QVERIFY(!verilog.contains("net default_net is already driven"));
+        QVERIFY(!verilog.contains("net invalid_net is already driven"));
+        QVERIFY(!verilog.contains("multi-driver conflict"));
     }
 
     /* A whole-base comb assign and a seq slice of the same base overlap on

@@ -2348,17 +2348,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                 const auto    parsed = parseSignalBitSelect(name);
                 const QSocGenerateManager::TopPortBinding target
                     = topPortRedirect.value(parsed.first, {parsed.first, QString()});
-                if (netlistData["port"] && netlistData["port"][target.port.toStdString()]
-                    && netlistData["port"][target.port.toStdString()]["direction"]
-                    && netlistData["port"][target.port.toStdString()]["direction"].IsScalar()) {
-                    const QString direction
-                        = QString::fromStdString(
-                              netlistData["port"][target.port.toStdString()]["direction"]
-                                  .as<std::string>())
-                              .toLower();
-                    if (direction == QStringLiteral("in") || direction == QStringLiteral("input")) {
-                        continue;
-                    }
+                if (QSocGenerateManager::topPortDirection(netlistData, target.port)
+                    == QStringLiteral("input")) {
+                    continue;
                 }
                 QString ownSlice = parsed.second;
                 if (combSection && item["bits"] && item["bits"].IsScalar()) {

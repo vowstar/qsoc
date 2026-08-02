@@ -96,13 +96,10 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
             if (!portEntry.first.IsScalar() || !portEntry.second.IsMap()) {
                 continue;
             }
-            if (!portEntry.second["direction"] || !portEntry.second["direction"].IsScalar()) {
-                continue;
-            }
-            const QString dir
-                = QString::fromStdString(portEntry.second["direction"].as<std::string>()).toLower();
-            if (dir == "in" || dir == "input") {
-                inputTopPortNames.insert(QString::fromStdString(portEntry.first.as<std::string>()));
+            const QString portName = QString::fromStdString(portEntry.first.as<std::string>());
+            if (QSocGenerateManager::topPortDirection(netlistData, portName)
+                == QStringLiteral("input")) {
+                inputTopPortNames.insert(portName);
             }
         }
     }

@@ -106,9 +106,8 @@ bool QSocCombPrimitive::generateCombLogic(
        could legally appear on a comb assign LHS so we can warn on typos. */
     const QMap<QString, QSocGenerateManager::TopPortBinding> topPortRedirect
         = QSocGenerateManager::buildTopPortRedirect(netlistData);
-    QMap<QString, QString> portDirection;
-    QSet<QString>          inputTopPortNames;
-    QSet<QString>          knownTargets;
+    QSet<QString> inputTopPortNames;
+    QSet<QString> knownTargets;
     for (auto redirectIt = topPortRedirect.constBegin(); redirectIt != topPortRedirect.constEnd();
          ++redirectIt) {
         knownTargets.insert(redirectIt.key());
@@ -120,20 +119,15 @@ bool QSocCombPrimitive::generateCombLogic(
             }
             const QString portName = QString::fromStdString(portEntry.first.as<std::string>());
             knownTargets.insert(portName);
-            QString dir;
-            if (portEntry.second["direction"] && portEntry.second["direction"].IsScalar()) {
-                dir = QString::fromStdString(portEntry.second["direction"].as<std::string>())
-                          .toLower();
-                portDirection.insert(portName, dir);
-                if (dir == "in" || dir == "input") {
-                    inputTopPortNames.insert(portName);
-                }
+            const QString direction = QSocGenerateManager::topPortDirection(netlistData, portName);
+            if (direction == QStringLiteral("input")) {
+                inputTopPortNames.insert(portName);
             }
             if (portEntry.second["connect"] && portEntry.second["connect"].IsScalar()) {
                 const QString netName = QString::fromStdString(
                     portEntry.second["connect"].as<std::string>());
                 knownTargets.insert(netName);
-                if (dir == "in" || dir == "input") {
+                if (direction == QStringLiteral("input")) {
                     inputTopPortNames.insert(netName);
                 }
             }

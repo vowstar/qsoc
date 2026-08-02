@@ -726,42 +726,30 @@ comb:
         QVERIFY(!verilogContent.contains("if_net_reg"));
         QVERIFY(!verilogContent.contains("case_net_reg"));
 
-        const QStringList skippedExprNames = {"connected_expr_in", "direct_expr_in"};
+        const QStringList skippedExprNames
+            = {"connected_expr_in", "direct_expr_in", "implicit_expr", "sideways_expr"};
         for (const QString &name : skippedExprNames) {
             QCOMPARE(verilogContent.count("FIXME: comb tried to drive top-level input " + name), 1);
             QVERIFY(!verifyVerilogContentNormalized(verilogContent, "assign " + name + " = value;"));
         }
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign implicit_expr = value;"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign sideways_expr = value;"));
-        QVERIFY(
-            !verilogContent.contains("FIXME: comb tried to drive top-level input implicit_expr"));
-        QVERIFY(
-            !verilogContent.contains("FIXME: comb tried to drive top-level input sideways_expr"));
 
         /* A process form on a top-level input is the same illegal driver as
            an expression on one; both skip emission behind a FIXME. */
-        const QStringList skippedProcessNames = {"connected_process_in", "direct_process_in"};
+        const QStringList skippedProcessNames
+            = {"connected_process_in", "direct_process_in", "implicit_process", "sideways_process"};
         for (const QString &name : skippedProcessNames) {
             QCOMPARE(verilogContent.count("FIXME: comb tried to drive top-level input " + name), 1);
             QVERIFY(!verilogContent.contains(name + "_reg"));
         }
-        const QStringList processNames = {"implicit_process", "sideways_process"};
-        for (const QString &name : processNames) {
-            QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg [3:0] " + name + "_reg;"));
-            QVERIFY(verifyVerilogContentNormalized(
-                verilogContent, "assign " + name + " = " + name + "_reg;"));
-            QVERIFY(verifyVerilogContentNormalized(verilogContent, name + "_reg = value;"));
-            QVERIFY(!verilogContent.contains("FIXME: comb tried to drive top-level input " + name));
-        }
         QVERIFY(!verilogContent.contains("process_input_net_reg"));
-        QCOMPARE(verilogContent.count("always @(*)"), 4);
+        QCOMPARE(verilogContent.count("always @(*)"), 2);
 
         QMap<QString, int> warningCounts;
         for (const QString &message : messageList) {
             if (!message.contains("comb writes to top-level input port")) {
                 continue;
             }
-            for (const QString &name : skippedExprNames + skippedProcessNames + processNames) {
+            for (const QString &name : skippedExprNames + skippedProcessNames) {
                 if (message.contains(name)) {
                     ++warningCounts[name];
                 }
@@ -769,9 +757,6 @@ comb:
         }
         for (const QString &name : skippedExprNames + skippedProcessNames) {
             QCOMPARE(warningCounts.value(name), 1);
-        }
-        for (const QString &name : processNames) {
-            QCOMPARE(warningCounts.value(name), 0);
         }
     }
 
