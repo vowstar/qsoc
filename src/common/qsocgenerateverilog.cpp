@@ -650,6 +650,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
        then choose ownership by direction from the same component. */
     const QMap<QString, NetTopPorts> netToTopPortAliases = QSocGenerateManager::buildNetToTopPorts(
         netlistData);
+    const QMap<QString, TopPortBinding> topPortRedirect = QSocGenerateManager::buildTopPortRedirect(
+        netlistData);
 
     /* Process port section if it exists */
     if (netlistData["port"] && netlistData["port"].IsMap()) {
@@ -828,39 +830,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
             const NetTopPorts netTopPorts        = netToTopPortAliases.value(netName);
             const bool        connectedToTopPort = !netTopPorts.members.isEmpty()
                                                    || !netTopPorts.slices.isEmpty();
-            /* A net is carried by its head sink so an instance driver lands
-               on a port that may legally sit on the left of an assign;
-               instance connections land on that port and slice together. */
-            QString connectedPortNameValue;
-            QString connectedPortSliceValue;
-            {
-                bool headFound = false;
-                for (const QString &member : netTopPorts.members) {
-                    if (topPortDirection(netlistData, member) == QStringLiteral("output")) {
-                        connectedPortNameValue = member;
-                        headFound              = true;
-                        break;
-                    }
-                }
-                if (!headFound) {
-                    for (const auto &candidate : netTopPorts.slices) {
-                        if (candidate.direction == QStringLiteral("output")) {
-                            connectedPortNameValue  = candidate.port;
-                            connectedPortSliceValue = candidate.slice;
-                            headFound               = true;
-                            break;
-                        }
-                    }
-                }
-                if (!headFound && !netTopPorts.members.isEmpty()) {
-                    connectedPortNameValue = netTopPorts.members.first();
-                } else if (!headFound && !netTopPorts.slices.isEmpty()) {
-                    connectedPortNameValue  = netTopPorts.slices.first().port;
-                    connectedPortSliceValue = netTopPorts.slices.first().slice;
-                }
-            }
-            const QString &connectedPortName  = connectedPortNameValue;
-            const QString &connectedPortSlice = connectedPortSliceValue;
+            /* Routing, processes, and aliases consume the same final target. */
+            const TopPortBinding connectedTarget    = topPortRedirect.value(netName);
+            const QString       &connectedPortName  = connectedTarget.port;
+            const QString       &connectedPortSlice = connectedTarget.slice;
 
             try {
                 /* Build connections using List format only */
@@ -1066,39 +1039,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                 QList<PortDetailInfo> portDetails;
 
                 /* Check if this net is connected to a top-level port */
-                const NetTopPorts netTopPorts        = netToTopPortAliases.value(netName);
-                const bool        connectedToTopPort = !netTopPorts.members.isEmpty()
-                                                       || !netTopPorts.slices.isEmpty();
-                QString           connectedPortNameValue;
-                QString           connectedHeadSliceValue;
-                {
-                    bool headFound = false;
-                    for (const QString &member : netTopPorts.members) {
-                        if (topPortDirection(netlistData, member) == QStringLiteral("output")) {
-                            connectedPortNameValue = member;
-                            headFound              = true;
-                            break;
-                        }
-                    }
-                    if (!headFound) {
-                        for (const auto &candidate : netTopPorts.slices) {
-                            if (candidate.direction == QStringLiteral("output")) {
-                                connectedPortNameValue  = candidate.port;
-                                connectedHeadSliceValue = candidate.slice;
-                                headFound               = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!headFound && !netTopPorts.members.isEmpty()) {
-                        connectedPortNameValue = netTopPorts.members.first();
-                    } else if (!headFound && !netTopPorts.slices.isEmpty()) {
-                        connectedPortNameValue  = netTopPorts.slices.first().port;
-                        connectedHeadSliceValue = netTopPorts.slices.first().slice;
-                    }
-                }
-                const QString &connectedPortName     = connectedPortNameValue;
-                QString        topLevelPortDirection = "unknown";
+                const NetTopPorts    netTopPorts             = netToTopPortAliases.value(netName);
+                const bool           connectedToTopPort      = !netTopPorts.members.isEmpty()
+                                                               || !netTopPorts.slices.isEmpty();
+                const TopPortBinding connectedTarget         = topPortRedirect.value(netName);
+                const QString       &connectedPortName       = connectedTarget.port;
+                const QString       &connectedHeadSliceValue = connectedTarget.slice;
+                QString              topLevelPortDirection   = "unknown";
                 QString reversedDirection = "unknown"; /* Default fallback, defined in outer scope */
 
                 if (connectedToTopPort) {
@@ -1139,7 +1086,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
 
                         /* Add top-level port to connection list */
                         portConnections.append(
-                            PortConnection::createTopLevelPort(connectedPortName));
+                            PortConnection::createTopLevelPort(
+                                connectedPortName, connectedHeadSliceValue));
 
                         /* Get port width */
                         QString portWidthSpec = "";
@@ -1155,9 +1103,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                                     portNode["type"].as<std::string>());
                             }
                         }
-
-                        /* Initialize bitSelection as empty string */
-                        const QString bitSelection = "";
 
                         /* CRITICAL FIX: Top-level port direction internal/external viewpoint
                          *
@@ -1180,7 +1125,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                                 connectedPortName,
                                 portWidthSpec,
                                 topLevelPortDirection,
-                                bitSelection));
+                                connectedHeadSliceValue));
                     }
 
                     /* The remaining members and every slice binding carry the
@@ -2380,8 +2325,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
         return false;
     };
     {
-        const QMap<QString, QSocGenerateManager::TopPortBinding> redirect
-            = QSocGenerateManager::buildTopPortRedirect(netlistData);
         const auto collect = [&](const char *section, const char *key, bool combSection) {
             if (!netlistData[section] || !netlistData[section].IsSequence()) {
                 return;
@@ -2402,7 +2345,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                 const QString name   = QString::fromStdString(item[key].as<std::string>());
                 const auto    parsed = parseSignalBitSelect(name);
                 const QSocGenerateManager::TopPortBinding target
-                    = redirect.value(parsed.first, {parsed.first, QString()});
+                    = topPortRedirect.value(parsed.first, {parsed.first, QString()});
                 if (netlistData["port"] && netlistData["port"][target.port.toStdString()]
                     && netlistData["port"][target.port.toStdString()]["direction"]
                     && netlistData["port"][target.port.toStdString()]["direction"].IsScalar()) {

@@ -1015,16 +1015,15 @@ comb:
         QCOMPARE(verilog.count("assign q ="), 1);
     }
 
-    /* An alias assignment covers the whole member, so a process driving that
-       member conflicts with it. The netlist is contradictory, but the conflict
-       has to be visible instead of shipping silently. */
-    void testAliasConflictingWithProcessIsDiagnosed()
+    /* A sliced binding through a secondary alias member names the canonical
+       signal without changing the interval. */
+    void testAliasSliceProcessResolvesToCanonical()
     {
         const QString verilog = generate("connected_alias_conflict", R"(
 port:
   d:
     direction: input
-    type: logic[7:0]
+    type: logic[3:0]
   y_p:
     direction: output
     type: logic[7:0]
@@ -1043,9 +1042,43 @@ comb:
     expr: d
 )");
         QVERIFY(!verilog.isEmpty());
-        QVERIFY(verilog.contains("assign m_p[3:0] = d;"));
-        QVERIFY(verilog.contains("assign m_p = y_p;"));
-        QVERIFY(verilog.contains("another driver also reaches m_p"));
+        QCOMPARE(verilog.count("assign y_p[3:0] ="), 1);
+        QVERIFY(verilog.contains("assign y_p[3:0] = d;"));
+        QCOMPARE(verilog.count("assign m_p = y_p;"), 1);
+        QVERIFY(!verilog.contains("assign m_p[3:0] = d;"));
+        QVERIFY(!verilog.contains("another driver also reaches"));
+        QVERIFY(!verilog.contains("width mismatch"));
+    }
+
+    void testAliasSliceInstanceResolvesToCanonical()
+    {
+        const QString verilog = generate("connected_alias_instance", R"(
+port:
+  y_p:
+    direction: output
+    type: logic[7:0]
+    connect: shared_n
+  m_p:
+    direction: output
+    type: logic[7:0]
+    connect: shared_n
+
+instance:
+  u_nibble:
+    module: nibble_mod
+
+net:
+  drv_n:
+    - { instance: top, port: m_p, bits: "[3:0]" }
+    - { instance: u_nibble, port: o }
+)");
+        QVERIFY(!verilog.isEmpty());
+        QCOMPARE(verilog.count(".o(y_p[3:0])"), 1);
+        QCOMPARE(verilog.count("assign m_p = y_p;"), 1);
+        QVERIFY(!verilog.contains("assign y_p[3:0] ="));
+        QVERIFY(!verilog.contains(".o(m_p[3:0])"));
+        QVERIFY(!verilog.contains("another driver also reaches"));
+        QVERIFY(!verilog.contains("width mismatch"));
     }
 
     /* A process driving the group's primary is the normal shape and must not

@@ -990,33 +990,11 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
                         netlistData["port"][portName.toStdString()]["direction"].as<std::string>());
                 }
 
-                /* Check for bit selection in net connections */
-                for (const auto &netIter : netlistData["net"]) {
-                    if (netIter.second.IsSequence()) {
-                        for (const auto &connectionNode : netIter.second) {
-                            if (connectionNode.IsMap() && connectionNode["port"]
-                                && connectionNode["port"].IsScalar()) {
-                                const QString connPortName = QString::fromStdString(
-                                    connectionNode["port"].as<std::string>());
-
-                                if (connPortName == portName) {
-                                    /* Found a connection to this port, check for bits attribute */
-                                    if (connectionNode["bits"]
-                                        && connectionNode["bits"].IsScalar()) {
-                                        widthInfo.bitSelect = QString::fromStdString(
-                                            connectionNode["bits"].as<std::string>());
-
-                                        /* Update effective width based on bit selection */
-                                        const int selectWidth = calculateBitSelectWidth(
-                                            widthInfo.bitSelect);
-                                        if (selectWidth > 0) {
-                                            widthInfo.effectiveWidth = selectWidth;
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
+                widthInfo.bitSelect = conn.bitSelect;
+                if (!widthInfo.bitSelect.isEmpty()) {
+                    const int selectWidth = calculateBitSelectWidth(widthInfo.bitSelect);
+                    if (selectWidth > 0) {
+                        widthInfo.effectiveWidth = selectWidth;
                     }
                 }
             }

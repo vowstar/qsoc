@@ -384,6 +384,7 @@ QMap<QString, QSocGenerateManager::TopPortBinding> QSocGenerateManager::buildTop
     const QMap<QString, NetTopPorts> netToTopPorts = buildNetToTopPorts(netlistData);
 
     QMap<QString, TopPortBinding> redirect;
+    QMap<QString, QString>        outputMemberRedirect;
     for (auto netIt = netToTopPorts.constBegin(); netIt != netToTopPorts.constEnd(); ++netIt) {
         const NetTopPorts &entry = netIt.value();
 
@@ -438,7 +439,18 @@ QMap<QString, QSocGenerateManager::TopPortBinding> QSocGenerateManager::buildTop
         }
         for (int index = 1; index < entry.members.size(); ++index) {
             const QString &member = entry.members.at(index);
+            outputMemberRedirect.insert(member, canonical);
             redirect.insert(member, {canonical, QString()});
+        }
+    }
+
+    /* A sliced binding may name a secondary whole-port member. Keep its
+       interval, but land it on the same canonical signal as every other
+       consumer of the component. */
+    for (auto redirectIt = redirect.begin(); redirectIt != redirect.end(); ++redirectIt) {
+        const QString canonical = outputMemberRedirect.value(redirectIt->port);
+        if (!canonical.isEmpty()) {
+            redirectIt->port = canonical;
         }
     }
 

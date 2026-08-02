@@ -260,6 +260,24 @@ port:
         }
     }
 
+    /* A sliced net can enter a component through a secondary whole member.
+       The target must close over that member redirect without changing the
+       endpoint's interval. */
+    void testSlicedBindingThroughSecondaryResolvesToCanonical()
+    {
+        const auto map = redirect(R"(
+port:
+  y_p: { direction: output, type: "logic[7:0]", connect: shared_n }
+  m_p: { direction: output, type: "logic[7:0]", connect: shared_n }
+net:
+  drv_n:
+    - { instance: top, port: m_p, bits: "[3:0]" }
+)");
+        QCOMPARE(map.value("drv_n").port, QStringLiteral("y_p"));
+        QCOMPARE(map.value("drv_n").slice, QStringLiteral("[3:0]"));
+        QCOMPARE(map.value("m_p").port, QStringLiteral("y_p"));
+    }
+
     /* Every non-canonical whole member resolves to the carrier, so a process
        cannot target a member the alias assignment already drives. */
     void testSecondaryMembersResolveToTheCarrier()

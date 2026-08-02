@@ -88,11 +88,14 @@ public:
         PortType type;
         QString  instanceName; /**< For Module type only, empty for TopLevel */
         QString  portName;
+        QString  bitSelect;
 
-        PortConnection(PortType portType, QString instanceName, QString portName)
+        PortConnection(
+            PortType portType, QString instanceName, QString portName, QString bitSelect = {})
             : type(portType)
             , instanceName(std::move(instanceName))
             , portName(std::move(portName))
+            , bitSelect(std::move(bitSelect))
         {}
 
         static PortConnection createModulePort(const QString &instanceName, const QString &portName)
@@ -100,9 +103,10 @@ public:
             return {PortType::Module, instanceName, portName};
         }
 
-        static PortConnection createTopLevelPort(const QString &portName)
+        static PortConnection createTopLevelPort(
+            const QString &portName, const QString &bitSelect = {})
         {
-            return {PortType::TopLevel, "", portName};
+            return {PortType::TopLevel, "", portName, bitSelect};
         }
 
         static PortConnection createCombSeqFsmPort(const QString &portName)
