@@ -4955,12 +4955,36 @@ token_dut:
             {"u_bad_time_keyword", "1step", {}, false},
             {"u_bad_c_macro", "0x+`TIE_VALUE", {}, false},
             {"u_bad_c_expression", "0xFF+1", {}, false},
+            {"u_malformed_expression", "1'b0 &&", {}, false},
+            {"u_trailing_line_comment", "abc // tail", {}, false},
+            {"u_injected_closer_comment", "1)// tail", {}, false},
+            {"u_comment_backtick_escape", "1)// `not_a_macro", {}, false},
+            {"u_block_comment_backtick_escape", "1)/* `not_a_macro */(2", {}, false},
+            {"u_nested_invocation_escape", "1)(2", {}, false},
+            {"u_unterminated_escaped_identifier", "\\\\foo", {}, false},
+            {"u_lone_backtick", "`", {}, false},
+            {"u_macro_paste_escape", "`` `TIE_VALUE", {}, false},
+            {"u_structural_escape",
+             "1); endmodule module injected; endmodule module resumed; logic x; assign x = (1",
+             {},
+             false},
             {"u_based_macro", "8'h`TIE_VALUE", "8'h`TIE_VALUE", true},
             {"u_cast_macro", "8'`TIE_CAST", "8'`TIE_CAST", true},
             {"u_signed_base_macro", "8's`TIE_BASE", "8's`TIE_BASE", true},
             {"u_fraction_macro", "1.`TIE_FRACTION", "1.`TIE_FRACTION", true},
             {"u_exponent_macro", "1e`TIE_EXPONENT", "1e`TIE_EXPONENT", true},
             {"u_signed_exponent_macro", "1e+`TIE_EXPONENT", "1e+`TIE_EXPONENT", true},
+            {"u_open_delimiter_macro", "`OPEN 1)", "`OPEN 1)", true},
+            {"u_close_delimiter_macro", "(1 `CLOSE", "(1 `CLOSE", true},
+            {"u_function_macro_argument", "`DROP(a; b)", "`DROP(a; b)", true},
+            {"u_conditional_directive",
+             "`ifdef SELECT_ONE\n1\n`else\n0\n`endif",
+             "`ifdef SELECT_ONE\n1\n`else\n0\n`endif",
+             true},
+            {"u_local_define_directive",
+             "`define INLINE_ONE 1\n`INLINE_ONE",
+             "`define INLINE_ONE 1\n`INLINE_ONE",
+             true},
             {"u_bad_leading_fraction", ".5", {}, false},
             {"u_bad_leading_dot", ".e3", {}, false},
         };
@@ -5054,6 +5078,16 @@ token_dut:
             }
         }
 
+        const QString reportPath
+            = QDir(projectManager.getOutputPath()).filePath("test_tie_token_classification.nc.rpt");
+        QFile reportFile(reportPath);
+        QVERIFY(reportFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray reportBytes = reportFile.readAll();
+        QVERIFY(reportBytes.contains(
+            "\n  u_malformed_expression:\n    module: token_dut\n    port:\n      fixed:"));
+        QVERIFY(reportBytes.contains(
+            "\n  u_expression:\n    module: token_dut\n    port:\n      symbolic:"));
+
         bool foundBoundedWarning = false;
         for (const QString &message : messageList) {
             if (message.contains("u_oversized_two_state")) {
@@ -5070,6 +5104,10 @@ token_dut:
 `define TIE_BASE hFF
 `define TIE_FRACTION 5
 `define TIE_EXPONENT 2
+`define OPEN (
+`define CLOSE )
+`define DROP(x) 1
+`define SELECT_ONE
 typedef logic [7:0] _8;
 module token_dut #(
     parameter int WIDTH = 8

@@ -29,6 +29,15 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <string_view>
+
+#include <slang/diagnostics/Diagnostics.h>
+#include <slang/parsing/Lexer.h>
+#include <slang/parsing/Parser.h>
+#include <slang/parsing/Preprocessor.h>
+#include <slang/syntax/AllSyntax.h>
+#include <slang/text/SourceManager.h>
+#include <slang/util/BumpAllocator.h>
 
 namespace {
 
@@ -202,6 +211,94 @@ QString tieDiagnosticText(const QString &value)
         return value;
     }
     return value.left(maximumLength - 3) + QStringLiteral("...");
+}
+
+enum class TiePreprocessorKind { None, Present, Malformed };
+
+TiePreprocessorKind classifyTiePreprocessor(const QString &value)
+{
+    using slang::parsing::TokenKind;
+
+    slang::SourceManager  sourceManager;
+    slang::BumpAllocator  allocator;
+    slang::Diagnostics    diagnostics;
+    const auto            buffer = sourceManager.assignText(value.toStdString());
+    slang::parsing::Lexer lexer(buffer, allocator, diagnostics, sourceManager);
+
+    while (true) {
+        const auto token = lexer.lex();
+        if (token.kind == TokenKind::EndOfFile) {
+            break;
+        }
+        if (token.kind == TokenKind::Directive) {
+            for (const auto &diagnostic : diagnostics) {
+                if (diagnostic.isError()) {
+                    return TiePreprocessorKind::Malformed;
+                }
+            }
+            return TiePreprocessorKind::Present;
+        }
+        switch (token.kind) {
+        case TokenKind::Unknown:
+        case TokenKind::MacroQuote:
+        case TokenKind::MacroTripleQuote:
+        case TokenKind::MacroEscapedQuote:
+        case TokenKind::MacroPaste:
+        case TokenKind::EmptyMacroArgument:
+        case TokenKind::LineContinuation:
+            return TiePreprocessorKind::Malformed;
+        default:
+            break;
+        }
+    }
+
+    for (const auto &diagnostic : diagnostics) {
+        if (diagnostic.isError()) {
+            return TiePreprocessorKind::Malformed;
+        }
+    }
+    return TiePreprocessorKind::None;
+}
+
+bool isValidTieExpression(const QString &value)
+{
+    const TiePreprocessorKind preprocessorKind = classifyTiePreprocessor(value);
+    if (preprocessorKind == TiePreprocessorKind::Malformed) {
+        return false;
+    }
+    if (preprocessorKind == TiePreprocessorKind::Present) {
+        return true;
+    }
+
+    constexpr std::string_view wrapperName = "__qsoc_tie";
+    const std::string          source = std::string(wrapperName) + "(" + value.toStdString() + ")";
+    slang::SourceManager       sourceManager;
+    slang::BumpAllocator       allocator;
+    slang::Diagnostics         diagnostics;
+    slang::parsing::Preprocessor preprocessor(sourceManager, allocator, diagnostics);
+    preprocessor.pushSource(source);
+    slang::parsing::Parser parser(preprocessor);
+    const auto            &expression = parser.parseExpression();
+    if (!parser.isDone()) {
+        return false;
+    }
+    for (const auto &diagnostic : diagnostics) {
+        if (diagnostic.isError()) {
+            return false;
+        }
+    }
+
+    const auto *invocation = expression.as_if<slang::syntax::InvocationExpressionSyntax>();
+    if (!invocation || !invocation->arguments || invocation->arguments->parameters.size() != 1) {
+        return false;
+    }
+    const auto *callee = invocation->left->as_if<slang::syntax::IdentifierNameSyntax>();
+    const auto *argument
+        = invocation->arguments->parameters[0]->as_if<slang::syntax::OrderedArgumentSyntax>();
+    return callee && callee->identifier.valueText() == wrapperName
+           && callee->identifier.location().offset() == 0
+           && invocation->arguments->openParen.location().offset() == wrapperName.size() && argument
+           && invocation->arguments->closeParen.location().offset() == source.size() - 1;
 }
 
 } // namespace
@@ -1967,25 +2064,35 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                                             == QSocNumberInfo::NumericTextKind::PassThrough) {
                                             if (direction.toLower() == "input"
                                                 || direction.toLower() == "in") {
-                                                hasTie   = true;
-                                                tieValue = tieClassification.emittedText;
-                                                if (portNode["invert"]
-                                                    && portNode["invert"].IsScalar()
-                                                    && portNode["invert"].as<bool>()) {
-                                                    tieValue = QString("~(%1)").arg(tieValue);
+                                                if (!isValidTieExpression(
+                                                        tieClassification.emittedText)) {
+                                                    QSocConsole::warn()
+                                                        << "'tie' on" << instanceName << "."
+                                                        << portName << "ignored: expression"
+                                                        << tieDiagnosticText(tieStr)
+                                                        << "is not valid Verilog";
+                                                } else {
+                                                    hasTie   = true;
+                                                    tieValue = tieClassification.emittedText;
+                                                    if (portNode["invert"]
+                                                        && portNode["invert"].IsScalar()
+                                                        && portNode["invert"].as<bool>()) {
+                                                        tieValue = QString("~(%1)").arg(tieValue);
+                                                    }
+                                                    portConnections.append(QString("        .%1(%2)")
+                                                                               .arg(portName)
+                                                                               .arg(tieValue));
+                                                    continue;
                                                 }
-                                                portConnections.append(QString("        .%1(%2)")
-                                                                           .arg(portName)
-                                                                           .arg(tieValue));
-                                                continue;
+                                            } else {
+                                                /* The port keeps the standard
+                                                   unconnected handling, so it stays
+                                                   visible in the report. */
+                                                QSocConsole::warn()
+                                                    << "'tie' on" << instanceName << "." << portName
+                                                    << "ignored:" << direction.toLower()
+                                                    << "ports cannot be tied";
                                             }
-                                            /* The port keeps the standard
-                                               unconnected handling, so it stays
-                                               visible in the report. */
-                                            QSocConsole::warn()
-                                                << "'tie' on" << instanceName << "." << portName
-                                                << "ignored:" << direction.toLower()
-                                                << "ports cannot be tied";
                                         } else {
                                             /* Parse the tie value using our number parser */
                                             const QSocNumberInfo numInfo

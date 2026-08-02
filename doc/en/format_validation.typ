@@ -230,6 +230,9 @@ them change or drop parts of the design rather than only warning:
   first bounded by its own declared width and then adapted to the port width;
   truncation emits a FIXME. Unknown or symbolic port widths preserve the
   literal without a guessed mask
+- *Malformed `tie` values*: malformed numbers and macro-free expressions that
+  fail SystemVerilog syntax are ignored with a warning, leaving the port in the
+  unconnected report
 - *`tie` / `invert` on unsupported port kinds*: rejected with a warning
 - *Invalid identifiers*: port, parameter, and instance names must be IEEE
   1364-2001 simple identifiers, that is ASCII letters, digits, `_`, and `$`
@@ -278,7 +281,6 @@ ordinary. Check them by hand until they are closed.
 - *Undeclared port in a net binding*: a `net:` entry naming a port the module
   does not declare is dropped silently, so the intended export disappears and
   the net becomes an internal wire.
-- *Malformed `tie:` expressions*: a value that is neither a number nor a valid
-  expression is emitted verbatim, so a typo such as `1'b0 &&` reaches the
-  output and fails in the downstream parser rather than here. Malformed
-  numbers are still reported.
+- *Preprocessor-dependent `tie` expressions*: not syntax-checked because the
+  caller's macro and include environment is unavailable; they otherwise follow
+  the existing `tie` emission rules.
