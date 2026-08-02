@@ -1867,6 +1867,25 @@ net:
         QVERIFY(verilog.contains(".i(d)"));
         QVERIFY(!verilog.contains("Top-level port aliases"));
     }
+
+    void testMalformedTopPortBindingDoesNotCrash()
+    {
+        const QString verilog = generate("connected_malformed_top_port", R"(
+port:
+  ghost: malformed
+instance:
+  u_sub:
+    module: sub_mod
+net:
+  shared_n:
+    - { instance: u_sub, port: o }
+    - { instance: top, port: ghost }
+)");
+        QVERIFY(!verilog.isEmpty());
+        QVERIFY(!verilog.contains("input wire ghost"));
+        QVERIFY(!verilog.contains("output wire ghost"));
+        QCOMPARE(messageList.filter("Port ghost has invalid format, skipping").size(), 1);
+    }
 };
 
 QStringList Test::messageList;

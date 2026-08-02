@@ -332,6 +332,21 @@ net:
         QVERIFY(!all.contains("shared_n"));
     }
 
+    void testMalformedPortIsNotBound()
+    {
+        const char      *yaml = R"(
+port:
+  ghost: malformed
+net:
+  shared_n:
+    - { instance: top, port: ghost }
+)";
+        const YAML::Node node = YAML::Load(yaml);
+        QVERIFY(QSocGenerateManager::topPortDirection(node, "ghost").isEmpty());
+        QVERIFY(!groups(yaml).contains("shared_n"));
+        QVERIFY(!redirect(yaml).contains("shared_n"));
+    }
+
     /* Empty and absent sections are legal input for the map builders. */
     void testEmptyNetlistYieldsEmptyMaps()
     {

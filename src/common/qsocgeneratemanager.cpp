@@ -139,6 +139,9 @@ QString QSocGenerateManager::topPortDirection(const YAML::Node &netlistData, con
         return {};
     }
     const YAML::Node node = netlistData["port"][portName.toStdString()];
+    if (!node.IsMap()) {
+        return {};
+    }
     if (!node["direction"] || !node["direction"].IsScalar()) {
         return QStringLiteral("input");
     }
@@ -163,6 +166,9 @@ bool isOutputTopPort(const YAML::Node &netlistData, const QString &portName)
         return false;
     }
     const YAML::Node node = netlistData["port"][portName.toStdString()];
+    if (!node.IsMap()) {
+        return false;
+    }
     if (!node["direction"] || !node["direction"].IsScalar()) {
         return false;
     }
@@ -179,7 +185,7 @@ QMap<QString, QSocGenerateManager::NetTopPorts> QSocGenerateManager::buildNetToT
     QSet<QString> topPortNameSet;
     if (netlistData["port"] && netlistData["port"].IsMap()) {
         for (const auto &portEntry : netlistData["port"]) {
-            if (!portEntry.first.IsScalar()) {
+            if (!portEntry.first.IsScalar() || !portEntry.second.IsMap()) {
                 continue;
             }
             const QString portName = QString::fromStdString(portEntry.first.as<std::string>());
