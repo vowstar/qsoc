@@ -604,7 +604,11 @@ target:
 For a glitch-free mux, `test_enable` and `test_clock` form one DFT
 connection. A complete target-level pair overrides the controller-level
 `test_enable`; otherwise a target `test_clock` uses the controller-level
-enable. A test clock with no effective enable rejects the controller.
+enable. `select` and `test_clock` must be identifiers. `test_enable` accepts
+an identifier or the exact constants `1'b0` and `1'b1`; a test clock with no
+enable rejects the controller. An explicit `1'b0` keeps the DFT path disabled.
+Without a target `test_clock`, the DFT mux stays disabled even when the
+controller enable is used by gates or dividers.
 Standard muxes and single-link targets warn and ignore target-level DFT
 keys without changing the generated artifacts.
 
@@ -971,9 +975,10 @@ Clock format supports two processing levels with distinct syntax patterns:
 - `icg` - Map format with enable/polarity/reset/clock_on_reset and optional sta_guide
 - `div` - Map format with default/reset/clock_on_reset (width auto-calculated for static mode) and optional sta_guide
 - `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
-- `select` - String (required for ≥2 links)
+- `select` - Identifier (required for ≥2 links)
 - `reset` - String (auto-selects GF_MUX when present)
-- `test_enable`, `test_clock` - String (GF_MUX DFT signals)
+- `test_enable` - Identifier or exact `1'b0`/`1'b1` constant
+- `test_clock` - Identifier (GF_MUX DFT clock)
 
 *Link Level* (key existence determines operation):
 - `icg` - Map format with enable/polarity/reset/clock_on_reset and optional sta_guide

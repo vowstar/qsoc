@@ -30,6 +30,27 @@ namespace {
    upper half of the tree becomes unreachable. */
 constexpr qsizetype kMaxRawMuxInputs = 4096;
 
+enum class ControlAtom {
+    Empty,
+    Identifier,
+    Constant,
+    Invalid,
+};
+
+ControlAtom classifyControlAtom(const QString &value)
+{
+    if (value.isEmpty()) {
+        return ControlAtom::Empty;
+    }
+    if (QSocVerilogUtils::isValidVerilogIdentifier(value)) {
+        return ControlAtom::Identifier;
+    }
+    if (value == "1'b0" || value == "1'b1") {
+        return ControlAtom::Constant;
+    }
+    return ControlAtom::Invalid;
+}
+
 int clockSelectWidth(qsizetype inputCount)
 {
     int       width    = 1;
@@ -263,6 +284,11 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
     // Test enable is optional - if not set, tie to 1'b0 internally
     if (clockNode["test_enable"]) {
         config.testEnable = QString::fromStdString(clockNode["test_enable"].as<std::string>());
+    }
+    if (classifyControlAtom(config.testEnable) == ControlAtom::Invalid) {
+        QSocConsole::error() << "Clock controller" << config.name
+                             << "test_enable must be a Verilog identifier, 1'b0, or 1'b1";
+        config.valid = false;
     }
 
     // Optional ref_clock for GF_MUX
@@ -680,27 +706,35 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                     requestedTestClock = QString::fromStdString(
                         it->second["test_clock"].as<std::string>());
                 }
-                /* DFT contract: the pair travels together. A test_clock with
-                   no effective enable wires .test_en(1'b0) and the DFT path
-                   is dead; an enable with no clock switches to nothing. */
+                /* test_enable without test_clock has no effect; test_clock
+                   requires an explicit or inherited enable. */
                 if (!requestedTestEnable.isEmpty() && requestedTestClock.isEmpty()) {
                     QSocConsole::warn() << "Clock target" << target.name
                                         << "test_enable without test_clock has no effect";
                 }
                 // Auto-select mux type based on reset presence
                 if (!target.reset.isEmpty()) {
-                    target.mux.type    = GF_MUX; // Has reset → Glitch-free mux
-                    target.test_clock  = requestedTestClock;
-                    target.test_enable = !requestedTestEnable.isEmpty()
-                                                 && !requestedTestClock.isEmpty()
-                                             ? requestedTestEnable
-                                             : config.testEnable;
-                    /* A test_clock with no effective enable wires
-                       .test_en(1'b0) and the DFT path is dead silicon. */
-                    if (!target.test_clock.isEmpty() && target.test_enable.isEmpty()) {
-                        QSocConsole::error()
-                            << "Clock target" << target.name << "test_clock requires test_enable";
-                        config.valid = false;
+                    target.mux.type = GF_MUX; // Has reset → Glitch-free mux
+                    if (!requestedTestClock.isEmpty()) {
+                        target.test_clock  = requestedTestClock;
+                        target.test_enable = requestedTestEnable.isEmpty() ? config.testEnable
+                                                                           : requestedTestEnable;
+                        if (classifyControlAtom(target.test_clock) != ControlAtom::Identifier) {
+                            QSocConsole::error() << "Clock target" << target.name
+                                                 << "test_clock must be a valid Verilog identifier";
+                            config.valid = false;
+                        }
+                        const ControlAtom enableAtom = classifyControlAtom(target.test_enable);
+                        if (enableAtom == ControlAtom::Empty) {
+                            QSocConsole::error() << "Clock target" << target.name
+                                                 << "test_clock requires test_enable";
+                            config.valid = false;
+                        } else if (enableAtom == ControlAtom::Invalid) {
+                            QSocConsole::error()
+                                << "Clock target" << target.name
+                                << "test_enable must be a Verilog identifier, 1'b0, or 1'b1";
+                            config.valid = false;
+                        }
                     }
                 } else {
                     target.mux.type = STD_MUX; // No reset → Standard mux
@@ -777,6 +811,27 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
         }
     }
 
+    QStringList scalarDftControls;
+    const auto  addScalarDftControl = [&scalarDftControls](const QString &signal) {
+        if (classifyControlAtom(signal) == ControlAtom::Identifier
+            && !scalarDftControls.contains(signal)) {
+            scalarDftControls.append(signal);
+        }
+    };
+    addScalarDftControl(config.testEnable);
+    for (const auto &target : config.targets) {
+        addScalarDftControl(target.test_enable);
+        addScalarDftControl(target.test_clock);
+    }
+    for (const QString &signal : scalarDftControls) {
+        const int selectWidth = selectPortWidths.value(signal, 0);
+        if (selectWidth > 1) {
+            QSocConsole::error() << "Clock DFT control" << signal << "conflicts with a"
+                                 << selectWidth << "bit mux select port";
+            config.valid = false;
+        }
+    }
+
     // Check for duplicate target names (output signals)
     QSet<QString> inputNames;
     for (const auto &input : config.inputs) {
@@ -812,6 +867,9 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
     }
     for (const auto &target : config.targets) {
         requireIdentifier(target.name, "Clock target name");
+        if (target.links.size() >= 2) {
+            requireIdentifier(target.select, "Clock select signal");
+        }
         for (const auto &link : target.links) {
             requireIdentifier(link.source, "Clock link source");
         }
@@ -837,7 +895,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
 
     QStringList dftSignals;
     const auto  addDftSignal = [&dftSignals](const QString &signal) {
-        if (!signal.isEmpty() && !dftSignals.contains(signal)) {
+        if (classifyControlAtom(signal) == ControlAtom::Identifier && !dftSignals.contains(signal)) {
             dftSignals.append(signal);
         }
     };
@@ -1039,18 +1097,17 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     }
 
     // Add test enable signal (if specified)
-    if (!config.testEnable.isEmpty() && !addedSignals.contains(config.testEnable)) {
+    if (classifyControlAtom(config.testEnable) == ControlAtom::Identifier
+        && !addedSignals.contains(config.testEnable)) {
         portDecls << QString("    input  wire %1").arg(config.testEnable);
         portComments << QString("/**< Test enable signal */");
         addedSignals.insert(config.testEnable);
     }
 
-    /* A target-level test_enable override reaches .test_en directly; without
-       a port declaration it degrades to an implicit net. Only a used enable
-       (paired with test_clock) earns a port, so the module interface never
-       grows for a no-effect key. */
+    /* A consumed target-level test_enable identifier needs a port. */
     for (const auto &target : config.targets) {
-        if (!target.test_clock.isEmpty() && !target.test_enable.isEmpty()
+        if (!target.test_clock.isEmpty()
+            && classifyControlAtom(target.test_enable) == ControlAtom::Identifier
             && !addedSignals.contains(target.test_enable)) {
             portDecls << QString("    input  wire %1").arg(target.test_enable);
             portComments << QString("/**< Test enable for %1 */").arg(target.name);

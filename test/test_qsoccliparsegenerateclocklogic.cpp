@@ -317,13 +317,14 @@ clock:
     {
         const auto netlistContent = [](bool withIgnoredKeys) {
             const QString standardKeys
-                = withIgnoredKeys ? "\n        test_enable: std_ten\n        test_clock: std_tclk"
-                                  : "";
+                = withIgnoredKeys
+                      ? "\n        test_enable: \"a & b\"\n        test_clock: \"c & d\""
+                      : "";
             const QString singleKeys
                 = withIgnoredKeys
-                      ? "\n        test_enable: single_ten\n        test_clock: single_tclk"
+                      ? "\n        test_enable: \"a & b\"\n        test_clock: \"c & d\""
                       : "";
-            const QString enableOnlyKeys = withIgnoredKeys ? "\n        test_enable: orphan_ten"
+            const QString enableOnlyKeys = withIgnoredKeys ? "\n        test_enable: \"a & b\""
                                                            : "";
             return QString(R"(
 clock:
@@ -653,7 +654,7 @@ clock:
         const QList<MuxCase> modules{
             {baselineModule, "baseline_clk", "1'b0", "1'b0"},
             {extractModule("dft_target_only"), "target_only_clk", "1'b0", "1'b0"},
-            {fallbackModule, "fallback_clk", "1'b0", "ctl_ten"},
+            {fallbackModule, "fallback_clk", "1'b0", "1'b0"},
             {inheritedModule, "inherited_clk", "tclk", "ctl_ten"},
             {overrideModule, "override_clk", "tclk", "tgt_ten"},
         };
@@ -733,6 +734,299 @@ clock:
         QVERIFY(!inheritedTypst.contains("name: \"tgt_ten\""));
         QVERIFY(overrideTypst.contains("name: \"tgt_ten\""));
         QVERIFY(!overrideTypst.contains("name: \"ctl_ten\""));
+    }
+
+    void test_invalid_dft_controls_preserve_artifacts_data()
+    {
+        QTest::addColumn<QString>("controllerLine");
+        QTest::addColumn<QString>("selectValue");
+        QTest::addColumn<QString>("targetLines");
+        QTest::addColumn<QString>("diagnostic");
+
+        QTest::newRow("controller-expression")
+            << QString("    test_enable: \"a & b\"\n") << QString("sel")
+            << QString("        test_enable: \"1'b1\"\n        test_clock: tclk\n")
+            << QString("test_enable must be a Verilog identifier");
+        QTest::newRow("controller-alternate-width")
+            << QString("    test_enable: \"1'h0\"\n") << QString("sel")
+            << QString("        test_enable: \"1'b1\"\n        test_clock: tclk\n")
+            << QString("test_enable must be a Verilog identifier");
+        QTest::newRow("controller-four-state")
+            << QString("    test_enable: \"1'bx\"\n") << QString("sel")
+            << QString("        test_enable: \"1'b1\"\n        test_clock: tclk\n")
+            << QString("test_enable must be a Verilog identifier");
+        QTest::newRow("target-expression")
+            << QString("    test_enable: ctl_ten\n") << QString("sel")
+            << QString("        test_enable: \"a & b\"\n        test_clock: tclk\n")
+            << QString("test_enable must be a Verilog identifier");
+        QTest::newRow("test-clock-expression")
+            << QString("    test_enable: ctl_ten\n") << QString("sel")
+            << QString("        test_clock: \"a & b\"\n")
+            << QString("test_clock must be a valid Verilog identifier");
+        QTest::newRow("select-expression")
+            << QString("    test_enable: ctl_ten\n") << QString("\"a & b\"")
+            << QString("        test_clock: tclk\n")
+            << QString("Clock select signal a & b must be a valid Verilog identifier");
+        QTest::newRow("controller-select-width")
+            << QString("    test_enable: wide_sel\n") << QString("wide_sel")
+            << QString("        test_clock: tclk\n")
+            << QString("Clock DFT control wide_sel conflicts with a 2 bit mux select port");
+        QTest::newRow("target-select-width")
+            << QString("    test_enable: ctl_ten\n") << QString("wide_sel")
+            << QString("        test_enable: wide_sel\n        test_clock: tclk\n")
+            << QString("Clock DFT control wide_sel conflicts with a 2 bit mux select port");
+        QTest::newRow("test-clock-select-width")
+            << QString("    test_enable: ctl_ten\n") << QString("wide_sel")
+            << QString("        test_clock: wide_sel\n")
+            << QString("Clock DFT control wide_sel conflicts with a 2 bit mux select port");
+    }
+
+    void test_invalid_dft_controls_preserve_artifacts()
+    {
+        QFETCH(QString, controllerLine);
+        QFETCH(QString, selectValue);
+        QFETCH(QString, targetLines);
+        QFETCH(QString, diagnostic);
+
+        const QString netlistContent = QString(R"(
+clock:
+  - name: invalid_dft_ctl
+%1    input:
+      clk_a:
+        freq: 10MHz
+      clk_b:
+        freq: 20MHz
+      clk_c:
+        freq: 30MHz
+      clk_d:
+        freq: 40MHz
+      tclk:
+        freq: 5MHz
+    target:
+      clk_out:
+        freq: 10MHz
+        link:
+          clk_a:
+          clk_b:
+          clk_c:
+          clk_d:
+        select: %2
+        reset: rst_n
+%3)")
+                                           .arg(controllerLine, selectValue, targetLines);
+        const QString netlistPath
+            = createTempFile("test_invalid_dft_controls.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_invalid_dft_controls.v");
+        const QString typstPath
+            = QDir(projectManager.getOutputPath()).filePath("invalid_dft_ctl.typ");
+        const QByteArray verilogSentinel("existing-verilog\n");
+        const QByteArray typstSentinel("existing-typst\n");
+        {
+            QFile verilogFile(verilogPath);
+            QFile typstFile(typstPath);
+            QVERIFY(verilogFile.open(QIODevice::WriteOnly));
+            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
+            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+        }
+
+        messageList.clear();
+        {
+            QSocCliWorker worker;
+            worker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+                false);
+            worker.run();
+        }
+
+        int diagnostics = 0;
+        int rejections  = 0;
+        int successes   = 0;
+        for (const QString &message : messageList) {
+            diagnostics += message.contains(diagnostic) ? 1 : 0;
+            rejections += message.contains("configuration rejected") ? 1 : 0;
+            successes += message.contains("Successfully generated Verilog file") ? 1 : 0;
+        }
+        QCOMPARE(diagnostics, 1);
+        QCOMPARE(rejections, 1);
+        QCOMPARE(successes, 0);
+
+        QFile verilogFile(verilogPath);
+        QFile typstFile(typstPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly));
+        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QCOMPARE(verilogFile.readAll(), verilogSentinel);
+        QCOMPARE(typstFile.readAll(), typstSentinel);
+    }
+
+    void test_dft_constants_are_connections_not_ports()
+    {
+        const QString netlistContent = R"(
+clock:
+  - name: constant_low_icg
+    test_enable: "1'b0"
+    input:
+      clk_a:
+        freq: 10MHz
+    target:
+      clk_low:
+        freq: 10MHz
+        icg:
+          enable: gate_en
+        link:
+          clk_a:
+  - name: constant_high_dft
+    test_enable: "1'b1"
+    input:
+      clk_a:
+        freq: 10MHz
+      clk_b:
+        freq: 20MHz
+      tclk:
+        freq: 5MHz
+    target:
+      clk_high:
+        freq: 10MHz
+        link:
+          clk_a:
+          clk_b:
+        select: sel
+        reset: rst_n
+        test_clock: tclk
+  - name: constant_low_dft
+    test_enable: "1'b0"
+    input:
+      clk_a:
+        freq: 10MHz
+      clk_b:
+        freq: 20MHz
+      tclk:
+        freq: 5MHz
+    target:
+      clk_low_dft:
+        freq: 10MHz
+        link:
+          clk_a:
+          clk_b:
+        select: sel
+        reset: rst_n
+        test_clock: tclk
+  - name: constant_high_override
+    test_enable: ctl_ten
+    input:
+      clk_a:
+        freq: 10MHz
+      clk_b:
+        freq: 20MHz
+      tclk:
+        freq: 5MHz
+    target:
+      clk_override:
+        freq: 10MHz
+        link:
+          clk_a:
+          clk_b:
+        select: sel
+        reset: rst_n
+        test_enable: "1'b1"
+        test_clock: tclk
+  - name: constant_low_override
+    test_enable: ctl_ten
+    input:
+      clk_a:
+        freq: 10MHz
+      clk_b:
+        freq: 20MHz
+      tclk:
+        freq: 5MHz
+    target:
+      clk_low_override:
+        freq: 10MHz
+        link:
+          clk_a:
+          clk_b:
+        select: sel
+        reset: rst_n
+        test_enable: "1'b0"
+        test_clock: tclk
+)";
+
+        const QString verilogContent = generateClockNetlist("test_dft_constants", netlistContent);
+        QVERIFY(!verilogContent.isEmpty());
+        QVERIFY(!verilogContent.contains("input  wire 1'b"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire ctl_ten"));
+
+        const auto extractModule = [&verilogContent](const QString &name) {
+            const QString   marker = "module " + name + " (";
+            const qsizetype begin  = verilogContent.indexOf(marker);
+            if (begin < 0) {
+                return QString();
+            }
+            const qsizetype end = verilogContent.indexOf("\nendmodule", begin);
+            return end < 0 ? QString() : verilogContent.mid(begin, end - begin);
+        };
+        const QList<QPair<QString, QString>> expectedConnections{
+            {"constant_low_icg", ".test_en(1'b0)"},
+            {"constant_high_dft", ".test_en(1'b1)"},
+            {"constant_low_dft", ".test_en(1'b0)"},
+            {"constant_high_override", ".test_en(1'b1)"},
+            {"constant_low_override", ".test_en(1'b0)"},
+        };
+        for (const auto &[moduleName, connection] : expectedConnections) {
+            const QString module = extractModule(moduleName);
+            QVERIFY2(!module.isEmpty(), qPrintable(moduleName));
+            QCOMPARE(module.count(".test_en("), qsizetype(1));
+            QCOMPARE(module.count(connection), qsizetype(1));
+        }
+
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_dft_constants.v");
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+    }
+
+    void test_one_bit_select_may_share_dft_enable()
+    {
+        const QString netlistContent = R"(
+clock:
+  - name: shared_scalar_ctl
+    input:
+      clk_a:
+        freq: 10MHz
+      clk_b:
+        freq: 20MHz
+      tclk:
+        freq: 5MHz
+    target:
+      clk_out:
+        freq: 10MHz
+        link:
+          clk_a:
+          clk_b:
+        select: ctl
+        reset: rst_n
+        test_enable: ctl
+        test_clock: tclk
+)";
+
+        const QString verilogContent
+            = generateClockNetlist("test_shared_scalar_dft", netlistContent);
+        QVERIFY(!verilogContent.isEmpty());
+        QCOMPARE(verilogContent.count("input  wire ctl"), qsizetype(1));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en(ctl)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(ctl)"));
+
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_shared_scalar_dft.v");
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
     }
 
     /* Names that collide after bracket sanitization would declare one port
