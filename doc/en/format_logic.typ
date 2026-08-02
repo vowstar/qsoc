@@ -261,6 +261,9 @@ The `seq` section supports various types of sequential logic with comprehensive 
 <soc-net-seq-structure>
 Each sequential logic item must have `reg` and `clk` fields, and exactly one logic specification field (`next` or `if`):
 
+An item whose `reg` or `clk` field is missing or non-scalar is skipped as a
+whole; it does not declare or drive its `reg` target.
+
 ```yaml
 seq:
   - reg: register_name

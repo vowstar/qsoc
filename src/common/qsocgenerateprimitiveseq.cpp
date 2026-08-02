@@ -107,12 +107,11 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
         }
     }
 
-    std::vector<bool>          seqOwnsDriverRange(netlistData["seq"].size(), true);
+    std::vector<bool>          seqOwnsDriverRange(netlistData["seq"].size(), false);
     QMap<QString, QStringList> seqDriverRanges;
     for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
         const YAML::Node &seqItem = netlistData["seq"][i];
-        if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["clk"] || !seqItem["reg"].IsScalar()
-            || !seqItem["clk"].IsScalar()) {
+        if (!QSocGenerateManager::seqItemCanEmitDriver(seqItem)) {
             continue;
         }
         const auto parsed = QSocGenerateManager::parseSignalBitSelect(
@@ -346,8 +345,7 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
     for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
         const YAML::Node &seqItem = netlistData["seq"][i];
 
-        if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["clk"] || !seqItem["reg"].IsScalar()
-            || !seqItem["clk"].IsScalar()) {
+        if (!QSocGenerateManager::seqItemCanEmitDriver(seqItem)) {
             continue; /* Skip invalid items */
         }
 

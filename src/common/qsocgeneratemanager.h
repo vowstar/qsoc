@@ -347,6 +347,13 @@ public:
         QMap<QString, QStringList> &claimedRanges, const QString &base, const QString &range);
 
     /**
+     * @brief Check whether a seq item has the fields needed to emit a driver
+     * @param seqItem Sequential logic item
+     * @return true for a map with scalar reg and clk fields
+     */
+    static bool seqItemCanEmitDriver(const YAML::Node &seqItem);
+
+    /**
      * @brief Check if bit ranges provide full coverage for a signal width
      * @param ranges List of bit range strings
      * @param signalWidth Expected signal width (0 means single bit)

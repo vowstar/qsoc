@@ -2341,6 +2341,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                     if (!hasExpression && !hasIf && !hasCase) {
                         continue;
                     }
+                } else if (!QSocGenerateManager::seqItemCanEmitDriver(item)) {
+                    continue;
                 }
                 const QString name   = QString::fromStdString(item[key].as<std::string>());
                 const auto    parsed = parseSignalBitSelect(name);

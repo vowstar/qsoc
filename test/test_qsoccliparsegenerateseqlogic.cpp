@@ -470,6 +470,9 @@ port:
   q:
     direction: output
     type: logic
+  r:
+    direction: output
+    type: logic
 
 instance: {}
 
@@ -479,10 +482,16 @@ seq:
   - reg: q
     # Missing clock signal - should generate warning
     next: "1'b0"
+  - reg: r
+    clk: [clk]
+    next: "1'b0"
 )";
 
         QString netlistPath = createTempFile("test_invalid_seq.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_invalid_seq.v");
+        QFile::remove(verilogPath);
 
         {
             QSocCliWorker socCliWorker;
@@ -497,6 +506,59 @@ seq:
         /* Check if warning message was generated */
         QString allMessages = messageList.join(" ");
         QVERIFY(allMessages.contains("has no 'clk' field"));
+        QVERIFY(allMessages.contains("'clk' field must be a scalar"));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly));
+        const QByteArray verilog = verilogFile.readAll();
+        QVERIFY(!verilog.contains("q_reg"));
+        QVERIFY(!verilog.contains("r_reg"));
+        QVERIFY(!verilog.contains("assign q"));
+        QVERIFY(!verilog.contains("assign r"));
+        QVERIFY(!verilog.contains("always @"));
+    }
+
+    void testInvalidSequentialDoesNotClaimAliasDriver()
+    {
+        const QString netlistContent = R"(
+port:
+  src:
+    direction: input
+    type: logic
+  dst:
+    direction: output
+    type: logic
+
+net:
+  shared:
+    - { instance: top, port: src }
+    - { instance: top, port: dst }
+
+seq:
+  - reg: shared
+    next: src
+)";
+
+        const QString netlistPath = createTempFile("test_invalid_seq_alias.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_invalid_seq_alias.v");
+        QFile::remove(verilogPath);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList args
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath};
+        socCliWorker.setup(args, false);
+        socCliWorker.run();
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly));
+        const QByteArray verilog = verilogFile.readAll();
+        QVERIFY(verilog.contains("assign dst = src;"));
+        QVERIFY(!verilog.contains("shared_reg"));
+        QVERIFY(!verilog.contains("already driven"));
+        QVERIFY(!verilog.contains("multiple drivers"));
+        QVERIFY(!verilog.contains("Comb/Seq/FSM Output"));
     }
 
     void testSequentialWithNestedCase()

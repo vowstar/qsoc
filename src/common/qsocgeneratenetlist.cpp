@@ -2341,6 +2341,12 @@ QPair<QString, QString> QSocGenerateManager::parseSignalBitSelect(const QString 
     return qMakePair(signalName, QString());
 }
 
+bool QSocGenerateManager::seqItemCanEmitDriver(const YAML::Node &seqItem)
+{
+    return seqItem.IsMap() && seqItem["reg"] && seqItem["clk"] && seqItem["reg"].IsScalar()
+           && seqItem["clk"].IsScalar();
+}
+
 QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFsmSignals()
 {
     QList<PortDetailInfo> signalList;
@@ -2442,7 +2448,7 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
         if (netlistData["seq"] && netlistData["seq"].IsSequence()) {
             for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
                 const YAML::Node &seqItem = netlistData["seq"][i];
-                if (seqItem.IsMap() && seqItem["reg"] && seqItem["reg"].IsScalar()) {
+                if (seqItemCanEmitDriver(seqItem)) {
                     const QString regName = QString::fromStdString(seqItem["reg"].as<std::string>());
 
                     auto    parsed    = parseSignalBitSelect(regName);
