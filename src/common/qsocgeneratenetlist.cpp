@@ -469,7 +469,14 @@ bool QSocGenerateManager::processNetlist()
                                 }
 
                                 if (!mappingFound || mappedPortName.empty()) {
-                                    /* Skip this signal for this connection */
+                                    /* Optional bus signals are legitimately
+                                       unmapped (APB pprot, AXI wuser, ...);
+                                       a warning here fires hundreds of times
+                                       on a healthy design. */
+                                    QSocConsole::debug()
+                                        << "No mapping for signal" << signalName.c_str()
+                                        << "on bus port" << conn.portName.c_str() << "of instance"
+                                        << conn.instanceName.c_str() << "; signal skipped";
                                     continue;
                                 }
 
@@ -1419,6 +1426,8 @@ bool QSocGenerateManager::processLinkConnections()
 
             /* Get module name */
             if (!instanceNode["module"] || !instanceNode["module"].IsScalar()) {
+                QSocConsole::warn() << "Instance" << instanceName.c_str()
+                                    << "has no module; its link and uplink attributes are dropped";
                 continue;
             }
             const auto moduleName = instanceNode["module"].as<std::string>();
@@ -1426,6 +1435,9 @@ bool QSocGenerateManager::processLinkConnections()
             /* Check if module exists */
             if (!moduleManager
                 || !moduleManager->isModuleExist(QString::fromStdString(moduleName))) {
+                QSocConsole::warn()
+                    << "Module" << moduleName.c_str() << "for instance" << instanceName.c_str()
+                    << "not found; its link and uplink attributes are dropped";
                 continue;
             }
 

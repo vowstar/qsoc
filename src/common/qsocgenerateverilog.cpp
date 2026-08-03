@@ -2148,6 +2148,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
 
                                                     if (numInfo.width > portWidth) {
                                                         /* Value is wider than port - show FIXME comment but use proper width */
+                                                        QSocConsole::warn()
+                                                            << "Tie value"
+                                                            << numInfo.formatVerilog()
+                                                            << "is wider than port" << portName
+                                                            << "and is truncated";
                                                         tieValue
                                                             = QString(
                                                                   "%1 /* FIXME: Value %2 wider "
@@ -2172,13 +2177,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                                                     }
                                                 }
                                             } else {
-                                                /* Add warning for non-input ports with tie */
-                                                tieValue = QString(
-                                                               "/* FIXME: 'tie' attribute for %1 "
-                                                               "port %2 "
-                                                               "ignored */")
-                                                               .arg(direction.toLower())
-                                                               .arg(portName);
+                                                /* The consumer requires an input port, so this
+                                                   string never reached the output; say it aloud
+                                                   instead. */
+                                                QSocConsole::warn()
+                                                    << "Tie on" << direction.toLower() << "port"
+                                                    << portName << "ignored";
                                             }
                                         }
                                     }
@@ -2188,11 +2192,10 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                                         && portNode["invert"].IsScalar()
                                         && (direction.toLower() == "input"
                                             || direction.toLower() == "in")) {
-                                        tieValue = QString(
-                                                       "/* FIXME: 'invert' attribute on %1 port %2 "
-                                                       "without 'tie' attribute */")
-                                                       .arg(direction.toLower())
-                                                       .arg(portName);
+                                        /* hasTie stays false here, so the old FIXME string was
+                                           discarded before emission; warn instead. */
+                                        QSocConsole::warn() << "Invert on port" << portName
+                                                            << "without a tie has no effect";
                                     }
                                 }
                             }

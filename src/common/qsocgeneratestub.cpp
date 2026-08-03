@@ -248,6 +248,9 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
                         direction = "input";
                     } else if (dirStr == "inout") {
                         direction = "inout";
+                    } else {
+                        QSocConsole::warn() << "Unknown direction" << dirStr << "on port"
+                                            << portName << "defaults to input";
                     }
                 }
 
@@ -501,6 +504,9 @@ bool QSocGenerateManager::generateLibStub(const QString &stubName, const QString
                         direction = "input";
                     } else if (dirStr == "inout") {
                         direction = "inout";
+                    } else {
+                        QSocConsole::warn() << "Unknown direction" << dirStr << "on port"
+                                            << portName << "defaults to input";
                     }
                 }
 

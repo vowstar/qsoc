@@ -438,6 +438,8 @@ QString QSocCombPrimitive::generateNestedCombValue(
         result += QString("%1endcase\n").arg(indent);
     } else {
         /* Unsupported nested structure - fallback to comment */
+        QSocConsole::warn() << "Unsupported nested structure for" << outputSignal
+                            << "left a FIXME in the combinational output";
         result += QString("%1/* FIXME: Unsupported nested structure for %2 */\n")
                       .arg(indent)
                       .arg(outputSignal);
