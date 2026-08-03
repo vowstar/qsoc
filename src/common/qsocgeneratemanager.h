@@ -188,13 +188,6 @@ public:
     };
 
     /**
-     * @brief Check port direction consistency for a list of connections
-     * @param connections List of port connections to check
-     * @return PortDirectionStatus Status of the connection (OK, Undriven, or Multidrive)
-     */
-    PortDirectionStatus checkPortDirectionConsistency(const QList<PortConnection> &connections);
-
-    /**
      * @brief Check port direction consistency with bit-level overlap detection
      * @param portDetails List of detailed port information to check
      * @return PortDirectionStatus Status of the connection (OK, Undriven, or Multidrive)

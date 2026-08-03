@@ -1255,116 +1255,6 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
     return true;
 }
 
-/**
- * @brief Check port direction consistency
- * @param portConnections   List of port connections to check
- * @return  PortDirectionStatus indicating the status (OK, Undriven, or Multidrive)
- */
-QSocGenerateManager::PortDirectionStatus QSocGenerateManager::checkPortDirectionConsistency(
-    const QList<PortConnection> &connections)
-{
-    int outputCount  = 0;
-    int inputCount   = 0;
-    int inoutCount   = 0;
-    int unknownCount = 0;
-
-    /* Count input/output ports */
-    for (const auto &conn : connections) {
-        QString direction = "unknown";
-
-        if (conn.type == PortType::CombSeqFsm) {
-            /* Comb/seq/fsm outputs are always output drivers */
-            direction = "output";
-        } else if (conn.type == PortType::TopLevel) {
-            /* For top-level ports, we need to reverse the direction for internal net perspective
-             * e.g., a top-level output is an input from the internal net's perspective (receives from internal)
-             * e.g., a top-level input is an output from the internal net's perspective (provides to internal) */
-            if (netlistData["port"] && netlistData["port"][conn.portName.toStdString()]
-                && netlistData["port"][conn.portName.toStdString()]["direction"]
-                && netlistData["port"][conn.portName.toStdString()]["direction"].IsScalar()) {
-                const QString dirStr
-                    = QString::fromStdString(
-                          netlistData["port"][conn.portName.toStdString()]["direction"]
-                              .as<std::string>())
-                          .toLower();
-
-                /* Reverse direction for internal net perspective */
-                if (dirStr == "out" || dirStr == "output") {
-                    direction = "input"; /* Top-level output is an input for internal nets */
-                } else if (dirStr == "in" || dirStr == "input") {
-                    direction = "output"; /* Top-level input is an output for internal nets */
-                } else if (dirStr == "inout") {
-                    direction = "inout";
-                }
-            }
-        } else {
-            /* Regular module port */
-            if (netlistData["instance"][conn.instanceName.toStdString()]
-                && netlistData["instance"][conn.instanceName.toStdString()]["module"]
-                && netlistData["instance"][conn.instanceName.toStdString()]["module"].IsScalar()) {
-                const QString moduleName = QString::fromStdString(
-                    netlistData["instance"][conn.instanceName.toStdString()]["module"]
-                        .as<std::string>());
-
-                /* Get port direction from module definition */
-                if (moduleManager && moduleManager->isModuleExist(moduleName)) {
-                    YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
-
-                    if (moduleData["port"] && moduleData["port"].IsMap()
-                        && moduleData["port"][conn.portName.toStdString()]["direction"]
-                        && moduleData["port"][conn.portName.toStdString()]["direction"].IsScalar()) {
-                        direction = QString::fromStdString(
-                                        moduleData["port"][conn.portName.toStdString()]["direction"]
-                                            .as<std::string>())
-                                        .toLower();
-
-                        /* Handle both full and abbreviated forms */
-                        if (direction == "out" || direction == "output") {
-                            direction = "output";
-                        } else if (direction == "in" || direction == "input") {
-                            direction = "input";
-                        }
-                    }
-                }
-            }
-        }
-
-        /* Count directions */
-        if (direction == "input") {
-            inputCount++;
-        } else if (direction == "output") {
-            outputCount++;
-        } else if (direction == "inout") {
-            inoutCount++;
-        } else {
-            unknownCount++;
-        }
-    }
-
-    /* Check for errors */
-    if (outputCount == 0 && inoutCount == 0) {
-        /* No output/inout, only inputs or unknowns - net is undriven */
-        return PortDirectionStatus::Undriven;
-    }
-
-    /* Check for true conflicts:
-     * - Multiple outputs (always a conflict)
-     * - Output + inout (potential conflict)
-     * Pure inout connections are normal (e.g., top-level inout to IO cell PAD)
-     */
-    if (outputCount > 1 || (outputCount > 0 && inoutCount > 0)) {
-        /* Multiple output ports or output + inout - potential conflict */
-        return PortDirectionStatus::Multidrive;
-    }
-
-    /* Normal cases:
-     * - One output + multiple inputs
-     * - Pure inout connections (bidirectional buses, IO connections)
-     * - One inout + multiple inputs
-     */
-    return PortDirectionStatus::Valid;
-}
-
 QSocGenerateManager::PortDirectionStatus
 QSocGenerateManager::checkPortDirectionConsistencyWithBitOverlap(
     const QList<PortDetailInfo> &portDetails)
@@ -1758,13 +1648,13 @@ bool QSocGenerateManager::processUplinkConnection(
 
         /* Get port information from module */
         if (!moduleData["port"] || !moduleData["port"].IsMap()) {
-            QSocConsole::warn() << "No port section in module" << moduleName.c_str();
+            QSocConsole::error() << "No port section in module" << moduleName.c_str();
             return false;
         }
 
         if (!moduleData["port"][portName] || !moduleData["port"][portName].IsMap()) {
-            QSocConsole::warn() << "Port" << portName.c_str() << "not found in module"
-                                << moduleName.c_str();
+            QSocConsole::error() << "Port" << portName.c_str() << "not found in module"
+                                 << moduleName.c_str();
             return false;
         }
 
@@ -1772,8 +1662,8 @@ bool QSocGenerateManager::processUplinkConnection(
 
         /* Get port direction */
         if (!modulePortNode["direction"] || !modulePortNode["direction"].IsScalar()) {
-            QSocConsole::warn() << "No direction for port" << portName.c_str() << "in module"
-                                << moduleName.c_str();
+            QSocConsole::error() << "No direction for port" << portName.c_str() << "in module"
+                                 << moduleName.c_str();
             return false;
         }
         auto modulePortDirection = modulePortNode["direction"].as<std::string>();
@@ -1800,8 +1690,8 @@ bool QSocGenerateManager::processUplinkConnection(
         } else if (modulePortDirection == "inout") {
             topLevelDirection = "inout";
         } else {
-            QSocConsole::warn() << "Unknown port direction" << modulePortDirection.c_str()
-                                << "for port" << portName.c_str();
+            QSocConsole::error() << "Unknown port direction" << modulePortDirection.c_str()
+                                 << "for port" << portName.c_str();
             return false;
         }
 
@@ -2292,7 +2182,8 @@ bool QSocGenerateManager::processSeqLogic()
                         break;
                     }
 
-                    if (!ifEntry["cond"].IsScalar() || !ifEntry["then"].IsScalar()) {
+                    if (!ifEntry["cond"].IsScalar()
+                        || (!ifEntry["then"].IsScalar() && !ifEntry["then"].IsMap())) {
                         QSocConsole::warn()
                             << "'cond' and 'then' fields must be scalars for register" << regName;
                         validIfBlock = false;
@@ -2302,12 +2193,6 @@ bool QSocGenerateManager::processSeqLogic()
 
                 if (!validIfBlock) {
                     continue;
-                }
-
-                /* Check for default value */
-                if (!seqItem["default"]) {
-                    QSocConsole::warn() << "Missing 'default' field for 'if' logic register"
-                                        << regName << ", may cause latches";
                 }
             }
 
@@ -2459,7 +2344,8 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
 
                     // Check if bits attribute exists and override bitSelect if present
                     if (seqItem["bits"] && seqItem["bits"].IsScalar()) {
-                        bitSelect = QString::fromStdString(seqItem["bits"].as<std::string>());
+                        bitSelect = QSocVerilogUtils::normalizeBitSelect(
+                            QString::fromStdString(seqItem["bits"].as<std::string>()));
                         QSocConsole::debug() << "Using bits attribute for seq output:" << baseName
                                              << "bits:" << bitSelect;
                     }

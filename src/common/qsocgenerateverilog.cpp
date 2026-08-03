@@ -67,7 +67,7 @@ bool runVerilogFormatter(const QString &candidatePath)
 {
     const QString formatterPath = QStandardPaths::findExecutable("verible-verilog-format");
     if (formatterPath.isEmpty()) {
-        QSocConsole::warn() << "Verilog formatter not found.";
+        QSocConsole::error() << "Verilog formatter not found.";
         return false;
     }
 
@@ -102,30 +102,30 @@ bool runVerilogFormatter(const QString &candidatePath)
 
     formatter.start(formatterPath, args);
     if (!formatter.waitForStarted()) {
-        QSocConsole::warn() << "failed to start Verilog formatter:" << formatter.errorString();
+        QSocConsole::error() << "failed to start Verilog formatter:" << formatter.errorString();
         return false;
     }
     if (!formatter.waitForFinished()) {
         formatter.kill();
         formatter.waitForFinished();
-        QSocConsole::warn() << "Verilog formatter timed out.";
+        QSocConsole::error() << "Verilog formatter timed out.";
         return false;
     }
     if (formatter.exitStatus() != QProcess::NormalExit) {
-        QSocConsole::warn() << "Verilog formatter terminated abnormally:"
-                            << formatter.errorString();
+        QSocConsole::error() << "Verilog formatter terminated abnormally:"
+                             << formatter.errorString();
         return false;
     }
     if (formatter.exitCode() != 0) {
         const QString standardError = QString::fromUtf8(formatter.readAllStandardError()).trimmed();
-        QSocConsole::warn() << "Verilog formatter failed with exit code" << formatter.exitCode()
-                            << (standardError.isEmpty() ? QString() : ": " + standardError);
+        QSocConsole::error() << "Verilog formatter failed with exit code" << formatter.exitCode()
+                             << (standardError.isEmpty() ? QString() : ": " + standardError);
         return false;
     }
 
     const QFileInfo candidateInfo(candidatePath);
     if (!candidateInfo.exists() || !candidateInfo.isFile() || candidateInfo.isSymbolicLink()) {
-        QSocConsole::warn() << "Verilog formatter did not leave a regular candidate file";
+        QSocConsole::error() << "Verilog formatter did not leave a regular candidate file";
         return false;
     }
     return true;
@@ -548,13 +548,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
 
             /* Generate combinational logic */
             if (!generateCombPrimitive(netlistData, {}, out)) {
-                QSocConsole::warn() << "Failed to generate combinational logic primitives";
+                QSocConsole::error() << "Failed to generate combinational logic primitives";
                 return false;
             }
 
             /* Generate sequential logic */
             if (!generateSeqPrimitive(netlistData, {}, out)) {
-                QSocConsole::warn() << "Failed to generate sequential logic primitives";
+                QSocConsole::error() << "Failed to generate sequential logic primitives";
                 return false;
             }
 
@@ -989,9 +989,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
 
     /* Generate wire declarations FIRST */
     if (netlistData["net"]) {
-        if (!netlistData["net"].IsMap()) {
-            QSocConsole::warn() << "'net' section is not a map, skipping wire declarations";
-        } else if (netlistData["net"].size() == 0) {
+        if (netlistData["net"].size() == 0) {
             QSocConsole::warn() << "'net' section is empty, no wire declarations to generate";
         } else {
             /* Collect comb/seq/fsm signals (inputs and outputs) once before the loop */
@@ -2283,13 +2281,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
 
     /* Generate combinational logic after module instantiations */
     if (!generateCombPrimitive(netlistData, declaredSignalRanges, out)) {
-        QSocConsole::warn() << "Failed to generate combinational logic primitives";
+        QSocConsole::error() << "Failed to generate combinational logic primitives";
         return false;
     }
 
     /* Generate sequential logic after combinational logic */
     if (!generateSeqPrimitive(netlistData, declaredSignalRanges, out)) {
-        QSocConsole::warn() << "Failed to generate sequential logic primitives";
+        QSocConsole::error() << "Failed to generate sequential logic primitives";
         return false;
     }
 
