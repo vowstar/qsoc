@@ -2340,12 +2340,22 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
        An empty range means
        the whole port. Conflicts are judged on bit ranges: a driver on one
        slice does not collide with an alias assignment onto a disjoint one. */
-    QMap<QString, QStringList> drivenRangesByPort;
-    QSet<QString>              processDrivenNets;
-    QSet<QString>              instanceDrivenNets;
-    QSet<QString>              inoutConnectionNets;
-    QSet<QString>              unknownOwnershipNets;
-    const auto                 rangesOverlap = [](const QString &lhs, const QString &rhs) {
+    struct ComponentDriver
+    {
+        enum class Kind { BoundInput, InstanceOutput, ProcessTarget };
+        Kind        kind;
+        QString     origin; /* port spelling, instance.port, or process target */
+        QString     slice;  /* empty = whole port */
+        QStringList ifdefGuards;
+        QStringList ifndefGuards;
+    };
+    QMap<QString, QStringList>            drivenRangesByPort;
+    QMap<QString, QList<ComponentDriver>> processDriversByPort;
+    QSet<QString>                         processDrivenNets;
+    QMap<QString, QList<ComponentDriver>> instanceDrivenNets;
+    QSet<QString>                         inoutConnectionNets;
+    QSet<QString>                         unknownOwnershipNets;
+    const auto rangesOverlap = [](const QString &lhs, const QString &rhs) {
         return lhs.isEmpty() || rhs.isEmpty() || QSocGenerateManager::doBitRangesOverlap(lhs, rhs);
     };
     const auto collidesWithDriver = [&drivenRangesByPort,
@@ -2403,6 +2413,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                     emissionRejected = true;
                 }
                 drivenRangesByPort[target.port].append(range);
+                processDriversByPort[target.port].append(
+                    {ComponentDriver::Kind::ProcessTarget, name, range, {}, {}});
                 if (netToTopPortAliases.contains(parsed.first)) {
                     processDrivenNets.insert(parsed.first);
                 }
@@ -2447,12 +2459,18 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                         unknownOwnershipNets.insert(netName);
                         continue;
                     }
+                    const auto      guardEntry = instanceGuards.value(instanceName);
+                    ComponentDriver record{
+                        ComponentDriver::Kind::InstanceOutput,
+                        instanceName + QStringLiteral(".") + portName,
+                        QString(),
+                        guardEntry.first,
+                        guardEntry.second};
                     if (role == InstancePortRole::Inout) {
-                        instanceDrivenNets.insert(netName);
+                        instanceDrivenNets[netName].append(record);
                         inoutConnectionNets.insert(netName);
                         continue;
                     }
-                    instanceDrivenNets.insert(netName);
                     QString connection = instancePortConnections.value(instanceName).value(portName);
                     if (connection.startsWith('~')) {
                         connection.remove(0, 1);
@@ -2460,7 +2478,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                     const auto target = parseSignalBitSelect(connection);
                     if (!target.first.isEmpty()) {
                         drivenRangesByPort[target.first].append(target.second);
+                        record.slice = target.second;
                     }
+                    instanceDrivenNets[netName].append(record);
                 }
             }
         }
@@ -2590,6 +2610,41 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
     for (const QString &componentKey : componentOrder) {
         const NetComponent &component = componentsByKey.value(componentKey);
         const QString      &netLabel  = component.netNames.first();
+
+        /* Census of every driver reaching this component. Bypass data for
+           now: the verdict below still runs on the legacy sets. */
+        QList<ComponentDriver> censusDrivers;
+        QSet<QString>          censusPorts;
+        for (const auto &endpoint : component.endpoints) {
+            if (endpoint.direction == QStringLiteral("input")) {
+                censusDrivers.append(
+                    {ComponentDriver::Kind::BoundInput, endpoint.port, endpoint.slice, {}, {}});
+            }
+            if (!censusPorts.contains(endpoint.port)) {
+                censusPorts.insert(endpoint.port);
+                censusDrivers.append(processDriversByPort.value(endpoint.port));
+            }
+        }
+        for (const QString &netName : component.netNames) {
+            censusDrivers.append(instanceDrivenNets.value(netName));
+        }
+        if (!censusDrivers.isEmpty()) {
+            QStringList censusText;
+            for (const auto &driver : censusDrivers) {
+                QString entry = (driver.kind == ComponentDriver::Kind::BoundInput
+                                     ? QStringLiteral("bound ")
+                                 : driver.kind == ComponentDriver::Kind::InstanceOutput
+                                     ? QStringLiteral("instance ")
+                                     : QStringLiteral("process "))
+                                + driver.origin + driver.slice;
+                if (!driver.ifdefGuards.isEmpty() || !driver.ifndefGuards.isEmpty()) {
+                    entry += QStringLiteral(" (guarded)");
+                }
+                censusText.append(entry);
+            }
+            QSocConsole::debug() << "Net" << netLabel
+                                 << "driver census:" << censusText.join(QStringLiteral(", "));
+        }
 
         QList<NetEndpoint> sinks;
         QList<NetEndpoint> sources;
