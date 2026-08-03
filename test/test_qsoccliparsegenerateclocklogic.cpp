@@ -4153,6 +4153,83 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_OUT(clk_out_inv_out)"));
     }
 
+    /* Divider width contracts reject instead of silently rewriting. */
+    void test_divider_width_contracts_are_rejected_data()
+    {
+        QTest::addColumn<QString>("stem");
+        QTest::addColumn<QString>("divBlock");
+        QTest::addColumn<QString>("fragment");
+
+        QTest::newRow("dynamic-no-width") << "rej_div_nowidth"
+                                          << QString(
+                                                 "            div:\n"
+                                                 "              default: 2\n"
+                                                 "              value: ratio\n"
+                                                 "              reset: rst_n\n")
+                                          << "requires explicit width specification";
+        QTest::newRow("dynamic-overflow") << "rej_div_dynover"
+                                          << QString(
+                                                 "            div:\n"
+                                                 "              default: 100\n"
+                                                 "              width: 4\n"
+                                                 "              value: ratio\n"
+                                                 "              reset: rst_n\n")
+                                          << "exceeds maximum value";
+        QTest::newRow("static-overflow") << "rej_div_statover"
+                                         << QString(
+                                                "            div:\n"
+                                                "              default: 100\n"
+                                                "              width: 4\n"
+                                                "              reset: rst_n\n")
+                                         << "exceeds maximum value";
+    }
+
+    void test_divider_width_contracts_are_rejected()
+    {
+        QFETCH(QString, stem);
+        QFETCH(QString, divBlock);
+        QFETCH(QString, fragment);
+
+        messageList.clear();
+        const QString netlist        = QString(
+                                           "port:\n"
+                                           "  osc:\n"
+                                           "    direction: input\n"
+                                           "    type: logic\n"
+                                           "  rst_n:\n"
+                                           "    direction: input\n"
+                                           "    type: logic\n"
+                                           "  ratio:\n"
+                                           "    direction: input\n"
+                                           "    type: logic[3:0]\n"
+                                           "  slow_clk:\n"
+                                           "    direction: output\n"
+                                           "    type: logic\n"
+                                           "\n"
+                                           "instance: {}\n"
+                                           "\n"
+                                           "net: {}\n"
+                                           "\n"
+                                           "clock:\n"
+                                           "  - name: %1_ctrl\n"
+                                           "    clock: clk_sys\n"
+                                           "    input:\n"
+                                           "      osc:\n"
+                                           "        freq: 24MHz\n"
+                                           "    target:\n"
+                                           "      slow_clk:\n"
+                                           "        freq: 12MHz\n"
+                                           "        link:\n"
+                                           "          osc:\n"
+                                           "%2")
+                                           .arg(stem, divBlock);
+        const QString verilogContent = generateClockNetlist(stem, netlist);
+        QVERIFY(verilogContent.isEmpty());
+        QVERIFY2(
+            messageList.join('\n').contains(fragment),
+            qPrintable(fragment + " | " + messageList.join('\n').right(600)));
+    }
+
 private:
     QString generateClockNetlist(const QString &stem, const QString &netlistContent)
     {

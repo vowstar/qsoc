@@ -795,13 +795,9 @@ seq:
     clk: clk
     next: "b_in + 1"
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(verilog.contains("FIXME: comb tried to drive top-level input a_in"));
-        QVERIFY(verilog.contains("FIXME: seq tried to drive top-level input b_in"));
-        QVERIFY(!verilog.contains("a_in_reg"));
-        QVERIFY(!verilog.contains("b_in_reg"));
-        QVERIFY(!verilog.contains("assign a_in"));
-        QVERIFY(!verilog.contains("assign b_in"));
+        /* Superseded pin: the skip-with-FIXME form was replaced by rejection */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains("an input cannot be driven from inside the module"));
     }
 
     void testDefaultInputDirectionsCannotBeDriven()
@@ -839,23 +835,9 @@ seq:
     clk: clk
     next: data
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(verilog.contains("input wire comb_default"));
-        QVERIFY(verilog.contains("input wire comb_invalid"));
-        QVERIFY(verilog.contains("input wire seq_default"));
-        QVERIFY(verilog.contains("input wire seq_invalid"));
-        QVERIFY(verilog.contains("comb tried to drive top-level input comb_default"));
-        QVERIFY(verilog.contains("comb tried to drive top-level input comb_invalid"));
-        QVERIFY(verilog.contains("seq tried to drive top-level input seq_default"));
-        QVERIFY(verilog.contains("seq tried to drive top-level input seq_invalid"));
-        QVERIFY(!verilog.contains("assign comb_default"));
-        QVERIFY(!verilog.contains("assign comb_invalid"));
-        QVERIFY(!verilog.contains("assign seq_default"));
-        QVERIFY(!verilog.contains("assign seq_invalid"));
-        QVERIFY(!verilog.contains("comb_default_reg"));
-        QVERIFY(!verilog.contains("comb_invalid_reg"));
-        QVERIFY(!verilog.contains("seq_default_reg"));
-        QVERIFY(!verilog.contains("seq_invalid_reg"));
+        /* Superseded pin: the skip-with-FIXME form was replaced by rejection */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains("an input cannot be driven from inside the module"));
     }
 
     void testSkippedInputProcessDoesNotClaimTheAlias()
@@ -914,20 +896,9 @@ seq:
     clk: clk
     next: a
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(verilog.contains("FIXME: comb tried to drive top-level input src_c"));
-        QVERIFY(verilog.contains("FIXME: seq tried to drive top-level input src_s"));
-        QVERIFY(verilog.contains("FIXME: comb tried to drive top-level input src_default"));
-        QVERIFY(verilog.contains("FIXME: seq tried to drive top-level input src_invalid"));
-        QVERIFY(verilog.contains("assign y_c = src_c;"));
-        QVERIFY(verilog.contains("assign y_s = src_s;"));
-        QVERIFY(verilog.contains("assign y_default = src_default;"));
-        QVERIFY(verilog.contains("assign y_invalid = src_invalid;"));
-        QVERIFY(!verilog.contains("net comb_net is already driven"));
-        QVERIFY(!verilog.contains("net seq_net is already driven"));
-        QVERIFY(!verilog.contains("net default_net is already driven"));
-        QVERIFY(!verilog.contains("net invalid_net is already driven"));
-        QVERIFY(!verilog.contains("multi-driver conflict"));
+        /* Superseded pin: the offending item now rejects the run instead of being skipped */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains("an input cannot be driven from inside the module"));
     }
 
     /* A whole-base comb assign and a seq slice of the same base overlap on
@@ -1559,10 +1530,9 @@ comb:
   - out: part
     expr: "4'h2"
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(verilog.contains("assign o_p = 8'h11;"));
-        QVERIFY(!verilog.contains("assign o_p[3:0] = 4'h2;"));
-        QVERIFY(verilog.contains("duplicate comb driver for o_p[3:0]"));
+        /* Superseded pin: keep-first for overlapping drivers was replaced by rejection */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains("comb has duplicate driver"));
     }
 
     /* An instance input just reads the net; only a driving instance port may
@@ -1627,13 +1597,9 @@ net:
   net_b:
     - { instance: u_missing, port: o }
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(!verilog.contains("sub_mod u_guarded"));
-        QVERIFY(verilog.contains("assign y_a = src_a;"));
-        QVERIFY(verilog.contains("assign y_b = src_b;"));
-        QVERIFY(!verilog.contains("net net_a is already driven"));
-        QVERIFY(!verilog.contains("net net_b is already driven"));
-        QVERIFY(!verilog.contains("multiple drivers"));
+        /* Superseded pin: a contradictory guard set now rejects the run instead of silently omitting the instance */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains("appears in both 'ifdef' and 'ifndef'"));
     }
 
     void testInstanceOutputNeverUsesATopInputAsItsDestination()
@@ -1830,10 +1796,9 @@ comb:
   - out: y
     expr: a
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(verilog.contains("assign y = y_reg;"));
-        QVERIFY(!verilog.contains("assign y = a;"));
-        QVERIFY(verilog.contains("duplicate comb driver for y"));
+        /* Superseded pin: keep-first for conflicting drivers was replaced by rejection */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains("driver"));
     }
 
     /* A net that merely shares a name with a top-level port, without any
@@ -1881,10 +1846,9 @@ net:
     - { instance: u_sub, port: o }
     - { instance: top, port: ghost }
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(!verilog.contains("input wire ghost"));
-        QVERIFY(!verilog.contains("output wire ghost"));
-        QCOMPARE(messageList.filter("Port ghost has invalid format, skipping").size(), 1);
+        /* Superseded pin: the crash became a skip and the skip is now a rejection; the property kept is that the process survives to report it */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains("Port ghost has invalid format"));
     }
 
     /* A top-level port named by two nets takes two instance drivers. The
@@ -2076,6 +2040,119 @@ net:
         QVERIFY(!verilog.isEmpty());
         QVERIFY(verilog.contains("p[7:4]"));
         QVERIFY(verilog.contains("p[3:0]"));
+    }
+    /* One rejection per structural family: a certain contradiction refuses
+       the run and leaves no artifact. */
+    void testStructuralContradictionsAreRejected_data()
+    {
+        QTest::addColumn<QString>("stem");
+        QTest::addColumn<QString>("netlist");
+        QTest::addColumn<QString>("fragment");
+
+        QTest::newRow("duplicate-port") << "rej_dup_port" << QString(R"(
+port:
+  p:
+    direction: output
+    type: logic
+  p:
+    direction: input
+    type: logic
+
+instance:
+  u0:
+    module: sub_mod
+)") << "Duplicate top-level port name p";
+
+        QTest::newRow("bad-identifier") << "rej_bad_ident" << QString(R"(
+port:
+  module:
+    direction: output
+    type: logic
+
+instance:
+  u0:
+    module: sub_mod
+)") << "not a valid Verilog identifier";
+
+        QTest::newRow("invert-on-output") << "rej_invert_out" << QString(R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: sub_mod
+    port:
+      o:
+        invert: true
+        link: p_net
+
+net:
+  p_net:
+    - instance: top
+      port: p
+)") << "cannot be applied to an output destination";
+
+        QTest::newRow("port-on-two-nets") << "rej_two_nets" << QString(R"(
+port:
+  a:
+    direction: output
+    type: logic[7:0]
+  b:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: sub_mod
+
+net:
+  n1:
+    - instance: top
+      port: a
+    - instance: u0
+      port: o
+  n2:
+    - instance: top
+      port: b
+    - instance: u0
+      port: o
+)") << "is wired to both nets";
+
+        QTest::newRow("guard-scalar") << "rej_guard_scalar" << QString(R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: sub_mod
+    ifdef: FPGA_ONLY
+
+net:
+  n1:
+    - instance: top
+      port: p
+    - instance: u0
+      port: o
+)") << "is not a list";
+    }
+
+    void testStructuralContradictionsAreRejected()
+    {
+        QFETCH(QString, stem);
+        QFETCH(QString, netlist);
+        QFETCH(QString, fragment);
+
+        createSubModule();
+        messageList.clear();
+        const QString verilog = generate(stem, netlist);
+        QVERIFY(verilog.isEmpty());
+        QVERIFY2(
+            messageList.join('\n').contains(fragment),
+            qPrintable(fragment + " | " + messageList.join('\n').right(600)));
     }
 };
 

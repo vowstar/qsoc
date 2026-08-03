@@ -52,10 +52,14 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
         for (const auto &domain : config.domains) {
             for (const auto &dep : domain.depends) {
                 if (!declaredDomains.contains(dep.name)) {
-                    QSocConsole::warn()
-                        << "Power domain" << domain.name << "depends on" << dep.name
-                        << "which is not declared in the `domain:` list - "
-                           "the generated controller will reference an undeclared signal";
+                    /* rdy_<name> may arrive as an external top-level port;
+                       the primitive cannot see the netlist to tell a typo
+                       from that documented pattern, so this stays a
+                       warning until the census can resolve it globally. */
+                    QSocConsole::warn() << "Power domain" << domain.name << "depends on" << dep.name
+                                        << "which is not declared in the `domain:` list - "
+                                           "the generated controller will reference rdy_"
+                                               + dep.name;
                 }
             }
         }
@@ -154,6 +158,7 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfigUn
             // Domain name (required)
             if (!domainNode["name"]) {
                 QSocConsole::error() << "'name' field is required for each domain";
+                config.valid = false;
                 continue;
             }
             const QString rawName = QString::fromStdString(domainNode["name"].as<std::string>());
@@ -219,6 +224,14 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfigUn
                     entry.stage = followNode["stage"] ? followNode["stage"].as<int>()
                                                       : 4; // Default to 4 stages
 
+                    if (entry.clock.isEmpty() != entry.reset.isEmpty()) {
+                        QSocConsole::error()
+                            << "Domain" << domain.name
+                            << "follow entry needs both clock and reset; it has only one";
+                        config.valid = false;
+                        continue;
+                    }
+
                     // Only add valid entries with strict validation
                     if (!entry.clock.isEmpty() && !entry.reset.isEmpty()) {
                         // FATAL: Check for host signal misuse (creates circular dependency)
@@ -227,14 +240,16 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfigUn
                                 << "FATAL: Domain" << domain.name
                                 << "follow entry cannot use host_clock" << config.host_clock
                                 << "as synchronization clock - this creates circular dependency!";
-                            continue; // Skip this erroneous configuration
+                            config.valid = false;
+                            continue;
                         }
                         if (entry.reset == config.host_reset) {
                             QSocConsole::error()
                                 << "FATAL: Domain" << domain.name
                                 << "follow entry cannot use host_reset" << config.host_reset
                                 << "as reset output - this creates port conflict!";
-                            continue; // Skip this erroneous configuration
+                            config.valid = false;
+                            continue;
                         }
                         domain.follow_entries.append(entry);
                     }

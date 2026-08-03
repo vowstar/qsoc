@@ -801,7 +801,7 @@ endmodule
             qPrintable("Generated Verilog changed signal width:\n" + verilogContent));
     }
 
-    void testOverlappingProcessesKeepFirstDriver()
+    void testOverlappingProcessesAreRejected()
     {
         const QString netlistContent = R"(
 port:
@@ -865,44 +865,15 @@ seq:
             false);
         worker.run();
 
+        /* Superseded pin: keep-first emission for overlapping drivers was
+           replaced by rejection under the two-form ruling; one driver may
+           own a bit range. */
         const QString messages = messageList.join('\n');
         QVERIFY2(
-            messages.contains("Successfully generated Verilog code: " + verilogPath),
+            !messages.contains("Successfully generated Verilog code: " + verilogPath),
             qPrintable(messages));
-
-        QFile verilogFile(verilogPath);
-        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QString verilogContent = verilogFile.readAll();
-
-        QCOMPARE(verilogContent.count("always @(posedge clk) begin"), 4);
-        QCOMPARE(verilogContent.count("assign result[3:0] = result_reg[3:0];"), 1);
-        QCOMPARE(verilogContent.count("assign result[7:4] = result_reg[7:4];"), 1);
-        QVERIFY(verilogContent.contains("result_reg[3:0] <= low_first;"));
-        QVERIFY(!verilogContent.contains("result_reg[3:0] <= low_second;"));
-        QVERIFY(verilogContent.contains("result_reg[7:4] <= high;"));
-        QCOMPARE(verilogContent.count("assign whole_first = whole_first_reg;"), 1);
-        QVERIFY(verilogContent.contains("whole_first_reg <= 8'hA5;"));
-        QVERIFY(!verilogContent.contains("whole_first_reg[3:0] <= low_second;"));
-        QCOMPARE(verilogContent.count("assign slice_first[3:0] = slice_first_reg[3:0];"), 1);
-        QVERIFY(verilogContent.contains("slice_first_reg[3:0] <= low_first;"));
-        QVERIFY(!verilogContent.contains("slice_first_reg <= 8'h5A;"));
-        QCOMPARE(
-            verilogContent.count("FIXME: overlapping seq process driver for result[3:0] skipped"),
-            1);
-        QCOMPARE(
-            verilogContent.count(
-                "FIXME: overlapping seq process driver for whole_first[3:0] skipped"),
-            1);
-        QCOMPARE(
-            verilogContent.count("FIXME: overlapping seq process driver for slice_first skipped"),
-            1);
-        QVERIFY(messages.contains("seq has overlapping process driver for result[3:0]"));
-
-        QSlangDriver driver;
-        QVERIFY2(
-            driver
-                .parseFileList("", {verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject),
-            qPrintable("Generated Verilog did not elaborate:\n" + verilogContent));
+        QVERIFY(!QFile::exists(verilogPath));
+        QVERIFY(messages.contains("seq has overlapping process driver for"));
     }
 
     void testDirectPrimitiveWidthGeneration()
@@ -930,6 +901,83 @@ seq:
         QSocSeqPrimitive primitive;
         QVERIFY(primitive.generateSeqLogic(netlistData, out));
         QCOMPARE(verilogContent.count("reg [7:0] data_reg;"), 1);
+    }
+    /* One rejection per malformed sequential family. */
+    void testMalformedSeqFormsAreRejected_data()
+    {
+        QTest::addColumn<QString>("stem");
+        QTest::addColumn<QString>("netlist");
+        QTest::addColumn<QString>("fragment");
+
+        const QString ports = R"(
+port:
+  clk:
+    direction: input
+    type: logic
+  d:
+    direction: input
+    type: logic
+  q:
+    direction: output
+    type: logic
+)";
+        QTest::newRow("next-and-if") << "rej_next_if" << ports + R"(
+seq:
+  - reg: q
+    clk: clk
+    next: d
+    if:
+      - cond: d
+        then: "1'b0"
+)" << "carries both 'next' and 'if'";
+
+        QTest::newRow("bad-edge") << "rej_bad_edge" << ports + R"(
+seq:
+  - reg: q
+    clk: clk
+    edge: negedge
+    next: d
+)" << "'edge' field must be 'pos' or 'neg'";
+
+        QTest::newRow("rst-no-rstval") << "rej_rst_noval" << ports + R"(
+seq:
+  - reg: q
+    clk: clk
+    rst: d
+    next: d
+)" << "'rst_val' is required";
+
+        QTest::newRow("enable-nonscalar") << "rej_en_shape" << ports + R"(
+seq:
+  - reg: q
+    clk: clk
+    enable: [a, b]
+    next: d
+)" << "'enable' field must be a scalar";
+    }
+
+    void testMalformedSeqFormsAreRejected()
+    {
+        QFETCH(QString, stem);
+        QFETCH(QString, netlist);
+        QFETCH(QString, fragment);
+        messageList.clear();
+        const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        QFile::remove(verilogPath);
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        QVERIFY(!QFile::exists(verilogPath));
+        QVERIFY2(
+            messageList.join('\n').contains(fragment),
+            qPrintable(fragment + " | " + messageList.join('\n').right(600)));
     }
 };
 

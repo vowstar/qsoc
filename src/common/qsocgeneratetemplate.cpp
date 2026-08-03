@@ -443,11 +443,12 @@ bool QSocGenerateManager::renderTemplate(
         env.set_line_statement("");
 
         /* Add regex_search filter - returns first match or default value */
-        env.add_callback("regex_search", [](inja::Arguments &args) -> nlohmann::json {
+        env.add_callback("regex_search", [&renderError](inja::Arguments &args) -> nlohmann::json {
             if (args.size() < 2) {
-                QSocConsole::warn() << QCoreApplication::translate(
-                    "generate",
-                    "Warning: regex_search requires at least 2 arguments (value, pattern)");
+                if (renderError.isEmpty()) {
+                    renderError = QCoreApplication::translate(
+                        "generate", "regex_search requires at least 2 arguments (value, pattern)");
+                }
                 return std::string("");
             }
 
@@ -469,10 +470,12 @@ bool QSocGenerateManager::renderTemplate(
 
                 const QRegularExpression regex(QString::fromStdString(pattern));
                 if (!regex.isValid()) {
-                    QSocConsole::warn()
-                        << QCoreApplication::translate(
-                               "generate", "Warning: Invalid regex pattern in regex_search: \"%1\"")
-                               .arg(QString::fromStdString(pattern));
+                    if (renderError.isEmpty()) {
+                        renderError = QCoreApplication::translate(
+                                          "generate",
+                                          "Invalid regex pattern in regex_search: \"%1\"")
+                                          .arg(QString::fromStdString(pattern));
+                    }
                     return defaultVal;
                 }
 
@@ -489,19 +492,22 @@ bool QSocGenerateManager::renderTemplate(
                 return defaultVal;
 
             } catch (const std::exception &e) {
-                QSocConsole::warn()
-                    << QCoreApplication::translate("generate", "Warning: Error in regex_search: %1")
-                           .arg(e.what());
+                if (renderError.isEmpty()) {
+                    renderError
+                        = QCoreApplication::translate("generate", "Error in regex_search: %1")
+                              .arg(e.what());
+                }
                 return std::string("");
             }
         });
 
         /* Add regex_findall filter - returns all matches as array */
-        env.add_callback("regex_findall", [](inja::Arguments &args) -> nlohmann::json {
+        env.add_callback("regex_findall", [&renderError](inja::Arguments &args) -> nlohmann::json {
             if (args.size() < 2) {
-                QSocConsole::warn() << QCoreApplication::translate(
-                    "generate",
-                    "Warning: regex_findall requires at least 2 arguments (value, pattern)");
+                if (renderError.isEmpty()) {
+                    renderError = QCoreApplication::translate(
+                        "generate", "regex_findall requires at least 2 arguments (value, pattern)");
+                }
                 return nlohmann::json::array();
             }
 
@@ -517,10 +523,12 @@ bool QSocGenerateManager::renderTemplate(
 
                 const QRegularExpression regex(QString::fromStdString(pattern));
                 if (!regex.isValid()) {
-                    QSocConsole::warn()
-                        << QCoreApplication::translate(
-                               "generate", "Warning: Invalid regex pattern in regex_findall: \"%1\"")
-                               .arg(QString::fromStdString(pattern));
+                    if (renderError.isEmpty()) {
+                        renderError = QCoreApplication::translate(
+                                          "generate",
+                                          "Invalid regex pattern in regex_findall: \"%1\"")
+                                          .arg(QString::fromStdString(pattern));
+                    }
                     return nlohmann::json::array();
                 }
 
@@ -537,19 +545,23 @@ bool QSocGenerateManager::renderTemplate(
                 return results;
 
             } catch (const std::exception &e) {
-                QSocConsole::warn()
-                    << QCoreApplication::translate("generate", "Warning: Error in regex_findall: %1")
-                           .arg(e.what());
+                if (renderError.isEmpty()) {
+                    renderError
+                        = QCoreApplication::translate("generate", "Error in regex_findall: %1")
+                              .arg(e.what());
+                }
                 return nlohmann::json::array();
             }
         });
 
         /* Add regex_replace filter - replaces all matches */
-        env.add_callback("regex_replace", [](inja::Arguments &args) -> nlohmann::json {
+        env.add_callback("regex_replace", [&renderError](inja::Arguments &args) -> nlohmann::json {
             if (args.size() < 3) {
-                QSocConsole::warn() << QCoreApplication::translate(
-                    "generate",
-                    "Warning: regex_replace requires 3 arguments (value, pattern, replacement)");
+                if (renderError.isEmpty()) {
+                    renderError = QCoreApplication::translate(
+                        "generate",
+                        "regex_replace requires 3 arguments (value, pattern, replacement)");
+                }
                 return std::string("");
             }
 
@@ -560,10 +572,12 @@ bool QSocGenerateManager::renderTemplate(
 
                 const QRegularExpression regex(QString::fromStdString(pattern));
                 if (!regex.isValid()) {
-                    QSocConsole::warn()
-                        << QCoreApplication::translate(
-                               "generate", "Warning: Invalid regex pattern in regex_replace: \"%1\"")
-                               .arg(QString::fromStdString(pattern));
+                    if (renderError.isEmpty()) {
+                        renderError = QCoreApplication::translate(
+                                          "generate",
+                                          "Invalid regex pattern in regex_replace: \"%1\"")
+                                          .arg(QString::fromStdString(pattern));
+                    }
                     return value; /* Return original on error */
                 }
 
@@ -574,9 +588,11 @@ bool QSocGenerateManager::renderTemplate(
                 return result.toStdString();
 
             } catch (const std::exception &e) {
-                QSocConsole::warn()
-                    << QCoreApplication::translate("generate", "Warning: Error in regex_replace: %1")
-                           .arg(e.what());
+                if (renderError.isEmpty()) {
+                    renderError
+                        = QCoreApplication::translate("generate", "Error in regex_replace: %1")
+                              .arg(e.what());
+                }
                 return args.at(0)->get<std::string>(); /* Return original on error */
             }
         });
@@ -584,9 +600,10 @@ bool QSocGenerateManager::renderTemplate(
         /* Add format filter using fmt library */
         env.add_callback("format", [&renderError](inja::Arguments &args) -> nlohmann::json {
             if (args.size() < 2) {
-                QSocConsole::warn() << QCoreApplication::translate(
-                    "generate",
-                    "Warning: format requires at least 2 arguments (format_string, value)");
+                if (renderError.isEmpty()) {
+                    renderError = QCoreApplication::translate(
+                        "generate", "format requires at least 2 arguments (format_string, value)");
+                }
                 return std::string("");
             }
 
@@ -672,14 +689,16 @@ bool QSocGenerateManager::renderTemplate(
                 return result;
 
             } catch (const fmt::format_error &e) {
-                QSocConsole::warn()
-                    << QCoreApplication::translate("generate", "Warning: fmt format error: %1")
-                           .arg(e.what());
+                if (renderError.isEmpty()) {
+                    renderError = QCoreApplication::translate("generate", "fmt format error: %1")
+                                      .arg(e.what());
+                }
                 return std::string("");
             } catch (const std::exception &e) {
-                QSocConsole::warn()
-                    << QCoreApplication::translate("generate", "Warning: Error in format: %1")
-                           .arg(e.what());
+                if (renderError.isEmpty()) {
+                    renderError = QCoreApplication::translate("generate", "Error in format: %1")
+                                      .arg(e.what());
+                }
                 return std::string("");
             }
         });

@@ -349,8 +349,11 @@ QMap<QString, QSocGenerateManager::NetTopPorts> QSocGenerateManager::buildNetToT
 }
 
 QString QSocGenerateManager::composeBitSelect(
-    const QString &boundSlice, const QString &innerSlice, const QString &context)
+    const QString &boundSlice, const QString &innerSlice, const QString &context, bool *composedOk)
 {
+    if (composedOk != nullptr) {
+        *composedOk = true;
+    }
     if (boundSlice.isEmpty()) {
         return innerSlice;
     }
@@ -375,8 +378,13 @@ QString QSocGenerateManager::composeBitSelect(
                                                           : innerMsb;
     const int width    = hi - lo + 1;
     if (innerMsb >= width || innerLsb >= width) {
-        QSocConsole::warn() << context << "select" << innerSlice << "exceeds the" << width
-                            << "bits bound by" << boundSlice;
+        /* Both sides parsed numerically, so the escape is proven; composing
+           anyway would read bits the netlist never bound. */
+        QSocConsole::error() << context << "select" << innerSlice << "exceeds the" << width
+                             << "bits bound by" << boundSlice;
+        if (composedOk != nullptr) {
+            *composedOk = false;
+        }
     }
     if (innerMatch.capturedLength(2) > 0) {
         return QString("[%1:%2]").arg(lo + innerMsb).arg(lo + innerLsb);

@@ -302,7 +302,10 @@ public:
      * @return The composed select, or the inner one when composition fails
      */
     static QString composeBitSelect(
-        const QString &boundSlice, const QString &innerSlice, const QString &context);
+        const QString &boundSlice,
+        const QString &innerSlice,
+        const QString &context,
+        bool          *composedOk = nullptr);
 
     /**
      * @brief Normalized direction of a top-level port
@@ -345,6 +348,13 @@ public:
      * @return true for a map with scalar reg and clk fields
      */
     static bool seqItemCanEmitDriver(const YAML::Node &seqItem);
+
+    /**
+     * @brief Check whether a comb item can emit a driver
+     * @param combItem YAML node of the comb item
+     * @return true when the item has an output and an emittable form
+     */
+    static bool combItemCanEmitDriver(const YAML::Node &combItem);
 
     /**
      * @brief Check if bit ranges provide full coverage for a signal width
@@ -561,6 +571,11 @@ public slots:
     bool generateLibStub(const QString &stubName, const QStringList &moduleNames);
 
 private:
+    /**
+     * @brief Set when an emission-phase check rejects the netlist
+     */
+    bool emissionRejected = false;
+
     /**
      * @brief Process link and uplink connections in the netlist
      * @return true if successful, false on error

@@ -1886,6 +1886,7 @@ bool QSocGenerateManager::processCombLogic()
         }
 
         QSocConsole::info() << "Processing combinational logic section...";
+        bool rejected = false;
 
         /* Iterate through each combinational logic item */
         for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
@@ -1922,24 +1923,28 @@ bool QSocGenerateManager::processCombLogic()
             }
 
             if (logicTypeCount > 1) {
-                QSocConsole::warn()
+                QSocConsole::error()
                     << "Combinational logic item" << i << "for output" << outputSignal
-                    << "has multiple logic types specified, using first found";
+                    << "carries more than one of expr, if, and case; pick one";
+                rejected = true;
+                continue;
             }
 
             /* Validate logic types */
             if (combItem["expr"]) {
                 /* Simple assignment - validate expr field */
                 if (!combItem["expr"].IsScalar()) {
-                    QSocConsole::warn()
-                        << "'expr' field for output" << outputSignal << "is not a scalar, skipping";
+                    QSocConsole::error()
+                        << "'expr' field for output" << outputSignal << "is not a scalar";
+                    rejected = true;
                     continue;
                 }
             } else if (combItem["if"]) {
                 /* Conditional logic - validate if field */
                 if (!combItem["if"].IsSequence()) {
-                    QSocConsole::warn()
-                        << "'if' field for output" << outputSignal << "is not a sequence, skipping";
+                    QSocConsole::error()
+                        << "'if' field for output" << outputSignal << "is not a sequence";
+                    rejected = true;
                     continue;
                 }
 
@@ -1947,24 +1952,27 @@ bool QSocGenerateManager::processCombLogic()
                 bool validIfBlock = true;
                 for (const auto &ifCondition : combItem["if"]) {
                     if (!ifCondition.IsMap() || !ifCondition["cond"] || !ifCondition["then"]) {
-                        QSocConsole::warn()
+                        QSocConsole::error()
                             << "Invalid if condition for output" << outputSignal
                             << ", each condition must have 'cond' and 'then' fields";
+                        rejected     = true;
                         validIfBlock = false;
                         break;
                     }
 
                     if (!ifCondition["cond"].IsScalar()) {
-                        QSocConsole::warn()
+                        QSocConsole::error()
                             << "'cond' field must be a scalar for output" << outputSignal;
+                        rejected     = true;
                         validIfBlock = false;
                         break;
                     }
 
                     /* 'then' can be either scalar (simple value) or map (nested structure) */
                     if (!ifCondition["then"].IsScalar() && !ifCondition["then"].IsMap()) {
-                        QSocConsole::warn()
+                        QSocConsole::error()
                             << "'then' field must be scalar or map for output" << outputSignal;
+                        rejected     = true;
                         validIfBlock = false;
                         break;
                     }
@@ -1976,17 +1984,19 @@ bool QSocGenerateManager::processCombLogic()
                         /* Check if it's a nested case structure */
                         if (thenNode["case"]) {
                             if (!thenNode["case"].IsScalar()) {
-                                QSocConsole::warn()
+                                QSocConsole::error()
                                     << "Nested 'case' field must be scalar for output"
                                     << outputSignal;
+                                rejected     = true;
                                 validIfBlock = false;
                                 break;
                             }
 
                             if (!thenNode["cases"] || !thenNode["cases"].IsMap()) {
-                                QSocConsole::warn() << "Nested 'cases' field missing or not a map "
-                                                       "for output"
-                                                    << outputSignal;
+                                QSocConsole::error()
+                                    << "Nested 'cases' field missing or not a map for output"
+                                    << outputSignal;
+                                rejected     = true;
                                 validIfBlock = false;
                                 break;
                             }
@@ -1994,9 +2004,11 @@ bool QSocGenerateManager::processCombLogic()
                             /* Validate nested case entries */
                             for (const auto &caseEntry : thenNode["cases"]) {
                                 if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
-                                    QSocConsole::warn() << "Nested case entries must have scalar "
-                                                           "keys and values for output"
-                                                        << outputSignal;
+                                    QSocConsole::error()
+                                        << "Nested case entries must have scalar keys and values "
+                                           "for output"
+                                        << outputSignal;
+                                    rejected     = true;
                                     validIfBlock = false;
                                     break;
                                 }
@@ -2023,14 +2035,16 @@ bool QSocGenerateManager::processCombLogic()
             } else if (combItem["case"]) {
                 /* Case statement - validate case and cases fields */
                 if (!combItem["case"].IsScalar()) {
-                    QSocConsole::warn()
-                        << "'case' field for output" << outputSignal << "is not a scalar, skipping";
+                    QSocConsole::error()
+                        << "'case' field for output" << outputSignal << "is not a scalar";
+                    rejected = true;
                     continue;
                 }
 
                 if (!combItem["cases"] || !combItem["cases"].IsMap()) {
-                    QSocConsole::warn() << "'cases' field for output" << outputSignal
-                                        << "is missing or not a map, skipping";
+                    QSocConsole::error()
+                        << "'cases' field for output" << outputSignal << "is missing or not a map";
+                    rejected = true;
                     continue;
                 }
 
@@ -2038,9 +2052,10 @@ bool QSocGenerateManager::processCombLogic()
                 bool validCaseBlock = true;
                 for (const auto &caseEntry : combItem["cases"]) {
                     if (!caseEntry.first.IsScalar() || !caseEntry.second.IsScalar()) {
-                        QSocConsole::warn()
+                        QSocConsole::error()
                             << "Case entries must have scalar keys and values for output"
                             << outputSignal;
+                        rejected       = true;
                         validCaseBlock = false;
                         break;
                     }
@@ -2061,6 +2076,10 @@ bool QSocGenerateManager::processCombLogic()
                                 << outputSignal;
         }
 
+        if (rejected) {
+            QSocConsole::error() << "Combinational logic section rejected; nothing generated";
+            return false;
+        }
         QSocConsole::info() << "Successfully processed combinational logic section";
         return true;
     } catch (const YAML::Exception &e) {
@@ -2089,6 +2108,7 @@ bool QSocGenerateManager::processSeqLogic()
         }
 
         QSocConsole::info() << "Processing sequential logic section...";
+        bool rejected = false;
 
         for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
             const YAML::Node &seqItem = netlistData["seq"][i];
@@ -2128,13 +2148,15 @@ bool QSocGenerateManager::processSeqLogic()
             /* Validate edge type (if present) */
             if (seqItem["edge"]) {
                 if (!seqItem["edge"].IsScalar()) {
-                    QSocConsole::warn() << "'edge' field must be a scalar for register" << regName;
+                    QSocConsole::error() << "'edge' field must be a scalar for register" << regName;
+                    rejected = true;
                     continue;
                 }
                 const QString edge = QString::fromStdString(seqItem["edge"].as<std::string>());
                 if (edge != "pos" && edge != "neg") {
-                    QSocConsole::warn() << "'edge' field must be 'pos' or 'neg' for register"
-                                        << regName << ", got:" << edge;
+                    QSocConsole::error() << "'edge' field must be 'pos' or 'neg' for register"
+                                         << regName << ", got:" << edge;
+                    rejected = true;
                     continue;
                 }
             }
@@ -2142,27 +2164,31 @@ bool QSocGenerateManager::processSeqLogic()
             /* Validate reset fields (if present) */
             if (seqItem["rst"]) {
                 if (!seqItem["rst"].IsScalar()) {
-                    QSocConsole::warn() << "'rst' field must be a scalar for register" << regName;
+                    QSocConsole::error() << "'rst' field must be a scalar for register" << regName;
+                    rejected = true;
                     continue;
                 }
 
                 /* Reset value is required when reset is present */
                 if (!seqItem["rst_val"]) {
-                    QSocConsole::warn()
+                    QSocConsole::error()
                         << "'rst_val' is required when 'rst' is present for register" << regName;
+                    rejected = true;
                     continue;
                 }
 
                 if (!seqItem["rst_val"].IsScalar()) {
-                    QSocConsole::warn()
+                    QSocConsole::error()
                         << "'rst_val' field must be a scalar for register" << regName;
+                    rejected = true;
                     continue;
                 }
             }
 
             /* Validate enable field (if present) */
             if (seqItem["enable"] && !seqItem["enable"].IsScalar()) {
-                QSocConsole::warn() << "'enable' field must be a scalar for register" << regName;
+                QSocConsole::error() << "'enable' field must be a scalar for register" << regName;
+                rejected = true;
                 continue;
             }
 
@@ -2177,8 +2203,9 @@ bool QSocGenerateManager::processSeqLogic()
             }
 
             if (hasNext && hasIf) {
-                QSocConsole::warn()
-                    << "Register" << regName << "has both 'next' and 'if' specifications, skipping";
+                QSocConsole::error()
+                    << "Register" << regName << "carries both 'next' and 'if'; pick one form";
+                rejected = true;
                 continue;
             }
 
@@ -2187,17 +2214,19 @@ bool QSocGenerateManager::processSeqLogic()
                 bool validIfBlock = true;
                 for (const auto &ifEntry : seqItem["if"]) {
                     if (!ifEntry.IsMap() || !ifEntry["cond"] || !ifEntry["then"]) {
-                        QSocConsole::warn() << "'if' entries must have 'cond' and 'then' fields "
-                                               "for register"
-                                            << regName;
+                        QSocConsole::error()
+                            << "'if' entries must have 'cond' and 'then' fields for register"
+                            << regName;
+                        rejected     = true;
                         validIfBlock = false;
                         break;
                     }
 
                     if (!ifEntry["cond"].IsScalar()
                         || (!ifEntry["then"].IsScalar() && !ifEntry["then"].IsMap())) {
-                        QSocConsole::warn()
+                        QSocConsole::error()
                             << "'cond' and 'then' fields must be scalars for register" << regName;
+                        rejected     = true;
                         validIfBlock = false;
                         break;
                     }
@@ -2212,6 +2241,10 @@ bool QSocGenerateManager::processSeqLogic()
                                 << regName;
         }
 
+        if (rejected) {
+            QSocConsole::error() << "Sequential logic section rejected; nothing generated";
+            return false;
+        }
         QSocConsole::info() << "Successfully processed sequential logic section";
         return true;
     } catch (const YAML::Exception &e) {
@@ -2242,8 +2275,25 @@ QPair<QString, QString> QSocGenerateManager::parseSignalBitSelect(const QString 
 
 bool QSocGenerateManager::seqItemCanEmitDriver(const YAML::Node &seqItem)
 {
-    return seqItem.IsMap() && seqItem["reg"] && seqItem["clk"] && seqItem["reg"].IsScalar()
-           && seqItem["clk"].IsScalar();
+    if (!seqItem.IsMap() || !seqItem["reg"] || !seqItem["clk"] || !seqItem["reg"].IsScalar()
+        || !seqItem["clk"].IsScalar()) {
+        return false;
+    }
+    /* Without a logic form the register would be an empty always block that
+       still claims the driver and hides the undriven marker. */
+    return (seqItem["next"] && seqItem["next"].IsScalar())
+           || (seqItem["if"] && seqItem["if"].IsSequence());
+}
+
+bool QSocGenerateManager::combItemCanEmitDriver(const YAML::Node &combItem)
+{
+    if (!combItem.IsMap() || !combItem["out"] || !combItem["out"].IsScalar()) {
+        return false;
+    }
+    return (combItem["expr"] && combItem["expr"].IsScalar())
+           || (combItem["if"] && combItem["if"].IsSequence())
+           || (combItem["case"] && combItem["case"].IsScalar() && combItem["cases"]
+               && combItem["cases"].IsMap());
 }
 
 QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFsmSignals()
@@ -2256,7 +2306,7 @@ QList<QSocGenerateManager::PortDetailInfo> QSocGenerateManager::collectCombSeqFs
         if (netlistData["comb"] && netlistData["comb"].IsSequence()) {
             for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
                 const YAML::Node &combItem = netlistData["comb"][i];
-                if (combItem.IsMap() && combItem["out"] && combItem["out"].IsScalar()) {
+                if (combItemCanEmitDriver(combItem)) {
                     const QString outputSignal = QString::fromStdString(
                         combItem["out"].as<std::string>());
 

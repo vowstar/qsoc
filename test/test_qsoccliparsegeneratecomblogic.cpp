@@ -833,7 +833,7 @@ comb:
         QVERIFY(!verilogContent.contains("multiple drivers"));
     }
 
-    void testOverlappingProcessesKeepFirstDriver()
+    void testOverlappingProcessesAreRejected()
     {
         const QString netlistContent = R"(
 port:
@@ -911,44 +911,15 @@ comb:
             false);
         worker.run();
 
+        /* Superseded pin: keep-first emission for overlapping drivers was
+           replaced by rejection under the two-form ruling; one driver may
+           own a bit range. */
         const QString messages = messageList.join('\n');
         QVERIFY2(
-            messages.contains("Successfully generated Verilog code: " + verilogPath),
+            !messages.contains("Successfully generated Verilog code: " + verilogPath),
             qPrintable(messages));
-
-        QFile verilogFile(verilogPath);
-        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QString verilogContent = verilogFile.readAll();
-
-        QCOMPARE(verilogContent.count("always @(*) begin"), 4);
-        QCOMPARE(verilogContent.count("assign result[3:0] = result_reg[3:0];"), 1);
-        QCOMPARE(verilogContent.count("assign result[7:4] = result_reg[7:4];"), 1);
-        QVERIFY(verilogContent.contains("result_reg[3:0] = low_first;"));
-        QVERIFY(!verilogContent.contains("result_reg[3:0] = low_second;"));
-        QVERIFY(verilogContent.contains("result_reg[7:4] = high;"));
-        QCOMPARE(verilogContent.count("assign whole_first = whole_first_reg;"), 1);
-        QVERIFY(verilogContent.contains("whole_first_reg = 8'hA5;"));
-        QVERIFY(!verilogContent.contains("whole_first_reg[3:0] = low_second;"));
-        QCOMPARE(verilogContent.count("assign slice_first[3:0] = slice_first_reg[3:0];"), 1);
-        QVERIFY(verilogContent.contains("slice_first_reg[3:0] = low_first;"));
-        QVERIFY(!verilogContent.contains("slice_first_reg = 8'h5A;"));
-        QCOMPARE(
-            verilogContent.count("FIXME: overlapping comb process driver for result[3:0] skipped"),
-            1);
-        QCOMPARE(
-            verilogContent.count(
-                "FIXME: overlapping comb process driver for whole_first[3:0] skipped"),
-            1);
-        QCOMPARE(
-            verilogContent.count("FIXME: overlapping comb process driver for slice_first skipped"),
-            1);
+        QVERIFY(!QFile::exists(verilogPath));
         QVERIFY(messages.contains("comb has overlapping process driver for result[3:0]"));
-
-        QSlangDriver driver;
-        QVERIFY2(
-            driver
-                .parseFileList("", {verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject),
-            qPrintable("Generated Verilog did not elaborate:\n" + verilogContent));
     }
 
     void testFullWidthProcessesUseDeclaredSignalWidths()
@@ -1080,6 +1051,76 @@ endmodule
                                  "-Werror=width-trunc -Werror=width-expand \"%1\" \"%2\"")
                                  .arg(stubPath, verilogPath)),
             qPrintable("Generated Verilog changed signal width:\n" + verilogContent));
+    }
+    /* Multi-form items and escaped slices reject the run. */
+    void testMalformedCombFormsAreRejected_data()
+    {
+        QTest::addColumn<QString>("stem");
+        QTest::addColumn<QString>("netlist");
+        QTest::addColumn<QString>("fragment");
+
+        QTest::newRow("expr-and-if") << "rej_multi_form" << QString(R"(
+port:
+  a:
+    direction: input
+    type: logic
+  y:
+    direction: output
+    type: logic
+
+comb:
+  - out: y
+    expr: a
+    if:
+      - cond: a
+        then: "1'b0"
+    default: "1'b1"
+)") << "carries more than one of expr, if, and case";
+
+        QTest::newRow("slice-escapes-binding") << "rej_slice_escape" << QString(R"(
+port:
+  a:
+    direction: input
+    type: logic[3:0]
+  y:
+    direction: output
+    type: logic[15:0]
+
+net:
+  part:
+    - instance: top
+      port: y
+      bits: "[7:4]"
+
+comb:
+  - out: part
+    bits: "[5]"
+    expr: a[0]
+)") << "exceeds the 4 bits bound by";
+    }
+
+    void testMalformedCombFormsAreRejected()
+    {
+        QFETCH(QString, stem);
+        QFETCH(QString, netlist);
+        QFETCH(QString, fragment);
+        messageList.clear();
+        const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        QFile::remove(verilogPath);
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        QVERIFY(!QFile::exists(verilogPath));
+        QVERIFY2(
+            messageList.join('\n').contains(fragment),
+            qPrintable(fragment + " | " + messageList.join('\n').right(600)));
     }
 };
 

@@ -13,6 +13,7 @@ namespace {
 
 struct CombTarget
 {
+    bool    sliceComposed = true; /* false when the inner select escapes the binding */
     QString requestedBase;
     QString emittedBase;
     QString slice;
@@ -56,7 +57,10 @@ CombTarget resolveCombTarget(
     /* A net bound over a slice denotes just that part of the port, so an
        inner select composes with the binding instead of replacing it. */
     target.slice = QSocGenerateManager::composeBitSelect(
-        binding.slice, target.slice, QStringLiteral("comb target ") + target.requestedBase);
+        binding.slice,
+        target.slice,
+        QStringLiteral("comb target ") + target.requestedBase,
+        &target.sliceComposed);
     target.topInput = inputTopPortNames.contains(target.emittedBase);
     target.known    = knownTargets.contains(target.requestedBase)
                       || knownTargets.contains(target.emittedBase);
@@ -234,6 +238,7 @@ bool QSocCombPrimitive::generateCombLogic(
     /* Track which (target, bit-slice) we have already emitted an assign for.
        Duplicate `out:` lines silently produced two `assign foo[3:0] = ...;`
        statements, a guaranteed multi-driver conflict. Keep the first. */
+    bool rejected = false;
     for (size_t i = 0; i < netlistData["comb"].size(); ++i) {
         const YAML::Node &combItem = netlistData["comb"][i];
 
@@ -243,41 +248,31 @@ bool QSocCombPrimitive::generateCombLogic(
 
         const CombTarget &target        = combTargets[i];
         const bool        hasExpression = combItem["expr"] && combItem["expr"].IsScalar();
+        if (!target.sliceComposed) {
+            rejected = true;
+            continue;
+        }
         /* Driving a top-level INPUT port from inside the module is illegal
            Verilog whatever form the item takes. Warn and skip the emission
            so the offending driver never lands in the output. */
         if (!hasExpression && target.topInput && usesProcessBlock(combItem)) {
-            QSocConsole::warn() << "comb writes to top-level input port" << target.emittedBase
-                                << "; cannot drive an input from inside the module - "
-                                   "skipping the always block";
-            out << "    /* FIXME: comb tried to drive top-level input " << target.emittedBase
-                << " - check the source netlist */\n";
+            QSocConsole::error() << "comb writes to top-level input port" << target.emittedBase
+                                 << "; an input cannot be driven from inside the module";
+            rejected = true;
             continue;
         }
         if (!hasExpression && usesProcessBlock(combItem) && !target.ownsProcessRange) {
             const QString fullOutputSignal = target.emittedBase + target.slice;
-            QSocConsole::warn() << "comb has overlapping process driver for" << fullOutputSignal
-                                << "; keeping the first - check the source netlist";
-            out << "    /* FIXME: overlapping comb process driver for " << fullOutputSignal
-                << " skipped - check the source netlist */\n";
+            QSocConsole::error() << "comb has overlapping process driver for" << fullOutputSignal
+                                 << "; one driver may own a bit range";
+            rejected = true;
             continue;
         }
         if (hasExpression) {
-            /* An item that also spells a process form emits only the
-               expression; surface the dropped branch instead of silently
-               ignoring it. */
-            if ((combItem["if"] && combItem["if"].IsSequence())
-                || (combItem["case"] && combItem["case"].IsScalar())) {
-                QSocConsole::warn() << "comb item for" << target.emittedBase
-                                    << "mixes expr with if/case; expr wins and the "
-                                       "process form is ignored";
-            }
             if (target.topInput) {
-                QSocConsole::warn() << "comb writes to top-level input port" << target.emittedBase
-                                    << "; cannot drive an input from inside the module - "
-                                       "skipping the assign";
-                out << "    /* FIXME: comb tried to drive top-level input " << target.emittedBase
-                    << " - check the source netlist */\n";
+                QSocConsole::error() << "comb writes to top-level input port" << target.emittedBase
+                                     << "; an input cannot be driven from inside the module";
+                rejected = true;
                 continue;
             }
 
@@ -296,10 +291,9 @@ bool QSocCombPrimitive::generateCombLogic(
             const QString fullOutputSignal = target.emittedBase + target.slice;
 
             if (conflictsWithSeen(target.emittedBase, target.slice)) {
-                QSocConsole::warn() << "comb has duplicate driver for" << fullOutputSignal
-                                    << "; keeping the first - check the source netlist";
-                out << "    /* FIXME: duplicate comb driver for " << fullOutputSignal
-                    << " skipped - check the source netlist */\n";
+                QSocConsole::error() << "comb has duplicate driver for" << fullOutputSignal
+                                     << "; one driver may own a bit range";
+                rejected = true;
                 continue;
             }
             seenAssignSlices[target.emittedBase].append(target.slice);
@@ -389,7 +383,7 @@ bool QSocCombPrimitive::generateCombLogic(
         }
     }
 
-    return true;
+    return !rejected;
 }
 
 QString QSocCombPrimitive::generateNestedCombValue(

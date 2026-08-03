@@ -116,6 +116,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
     if (!resetNode["name"]) {
         QSocConsole::error() << "'name' field is required in reset configuration";
         QSocConsole::err() << "Example: reset: { name: my_reset_ctrl, ... }" << "\n";
+        config.valid = false;
         return config;
     }
     config.name       = QString::fromStdString(resetNode["name"].as<std::string>());
@@ -148,6 +149,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                 QSocConsole::err()
                     << "Please specify active level explicitly: 'high' or 'low'" << "\n";
                 QSocConsole::error() << "Example: source: { " << source.name << ": {active: low} }";
+                config.valid = false;
                 return config;
             }
 
@@ -176,6 +178,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
             } else {
                 QSocConsole::error()
                     << "'active' field is required for target '" << target.name << "'";
+                config.valid = false;
                 return config;
             }
 
@@ -186,6 +189,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                     QSocConsole::error()
                         << "'clock' field is required for async component in target '"
                         << target.name << "'";
+                    config.valid = false;
                     return config;
                 }
                 target.async.clock = QString::fromStdString(asyncNode["clock"].as<std::string>());
@@ -199,6 +203,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                     QSocConsole::error()
                         << "'clock' field is required for sync component in target '" << target.name
                         << "'";
+                    config.valid = false;
                     return config;
                 }
                 target.sync.clock = QString::fromStdString(syncNode["clock"].as<std::string>());
@@ -212,6 +217,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                     QSocConsole::error()
                         << "'clock' field is required for count component in target '"
                         << target.name << "'";
+                    config.valid = false;
                     return config;
                 }
                 target.count.clock = QString::fromStdString(countNode["clock"].as<std::string>());
@@ -262,6 +268,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                             QSocConsole::error()
                                 << "'clock' field is required for async component in link '"
                                 << link.source << "' of target '" << target.name << "'";
+                            config.valid = false;
                             return config;
                         }
                         link.async.clock = QString::fromStdString(
@@ -277,6 +284,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                             QSocConsole::error()
                                 << "'clock' field is required for sync component in link '"
                                 << link.source << "' of target '" << target.name << "'";
+                            config.valid = false;
                             return config;
                         }
                         link.sync.clock = QString::fromStdString(
@@ -291,6 +299,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                             QSocConsole::error()
                                 << "'clock' field is required for count component in link '"
                                 << link.source << "' of target '" << target.name << "'";
+                            config.valid = false;
                             return config;
                         }
                         link.count.clock = QString::fromStdString(
@@ -359,6 +368,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                     QSocConsole::error()
                         << "  - " << source.name << " (active: " << source.active << ")";
                 }
+                config.valid = false;
                 return config;
             }
         } else {
@@ -366,6 +376,7 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
             QSocConsole::error()
                 << "Please specify which source signal should be used as the root reset.";
             QSocConsole::err() << "Example: reason: { root_reset: por_rst_n, ... }" << "\n";
+            config.valid = false;
             return config; // Return with error
         }
 
@@ -381,6 +392,15 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
         config.reason.vectorWidth = config.reason.sourceOrder.size();
         if (config.reason.vectorWidth == 0)
             config.reason.vectorWidth = 1; // Minimum 1 bit
+    }
+
+    /* A target without a link was silently tied to its inactive level and
+       never reset. Refuse while the author is present. */
+    for (const auto &target : config.targets) {
+        if (target.links.isEmpty()) {
+            QSocConsole::error() << "Reset target" << target.name << "requires at least one link";
+            config.valid = false;
+        }
     }
 
     return config;

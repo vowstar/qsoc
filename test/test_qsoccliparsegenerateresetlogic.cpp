@@ -1227,6 +1227,65 @@ reset:
         QVERIFY(!QFile::exists(verilogPath));
         QCOMPARE(messageList.filter("Invalid reset configuration:").size(), 1);
     }
+
+    /* Mid-parse errors reject the whole controller, never truncate it. */
+    void test_reset_structural_errors_are_rejected_data()
+    {
+        QTest::addColumn<QString>("stem");
+        QTest::addColumn<QString>("netlist");
+        QTest::addColumn<QString>("fragment");
+
+        QTest::newRow("second-target-broken") << "rej_second_target" << QString(R"(
+reset:
+  - name: trunc_ctl
+    source:
+      por_n:
+        active: low
+    target:
+      first_rst_n:
+        active: low
+        link:
+          por_n: ~
+      second_rst_n:
+        link:
+          por_n: ~
+)") << "active";
+
+        QTest::newRow("zero-link-target") << "rej_zero_link" << QString(R"(
+reset:
+  - name: nolink_ctl
+    source:
+      por_n:
+        active: low
+    target:
+      dead_rst_n:
+        active: low
+)") << "requires at least one link";
+    }
+
+    void test_reset_structural_errors_are_rejected()
+    {
+        QFETCH(QString, stem);
+        QFETCH(QString, netlist);
+        QFETCH(QString, fragment);
+        messageList.clear();
+        const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        QFile::remove(verilogPath);
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        QVERIFY(!QFile::exists(verilogPath));
+        QVERIFY2(
+            messageList.join('\n').contains(fragment),
+            qPrintable(fragment + " | " + messageList.join('\n').right(600)));
+    }
 };
 
 QStringList Test::messageList;

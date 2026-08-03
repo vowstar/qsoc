@@ -403,19 +403,11 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                     // Dynamic mode: width is required
                     target.div.width = it->second["div"]["width"].as<int>(0);
                     if (target.div.width <= 0) {
-                        QSocConsole::warn() << "ERROR: Dynamic divider for target"
-                                            << QString::fromStdString(it->first.as<std::string>())
-                                            << "requires explicit width specification";
-                        target.div.width = 8; // Default fallback
-                    }
-                    // Verify default value fits in specified width
-                    int maxValue = (1 << target.div.width) - 1;
-                    if (target.div.default_value > maxValue) {
-                        QSocConsole::warn()
-                            << "ERROR: Default value" << target.div.default_value << "for target"
-                            << QString::fromStdString(it->first.as<std::string>())
-                            << "exceeds maximum value" << maxValue << "for width"
-                            << target.div.width << "bits";
+                        /* An invented width is a changed port contract. */
+                        QSocConsole::error() << "Dynamic divider for target"
+                                             << QString::fromStdString(it->first.as<std::string>())
+                                             << "requires explicit width specification";
+                        config.valid = false;
                     }
                 } else {
                     // Static mode: calculate width from default value
@@ -425,6 +417,17 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                     if (it->second["div"]["width"]) {
                         target.div.width = it->second["div"]["width"].as<int>(target.div.width);
                     }
+                }
+                /* Synthesis ignores the initial-block guard, so an oversized
+                   default silently changes the division ratio in silicon. */
+                if (target.div.width > 0 && target.div.width < 31
+                    && target.div.default_value > (1 << target.div.width) - 1) {
+                    QSocConsole::error()
+                        << "Default value" << target.div.default_value << "for target"
+                        << QString::fromStdString(it->first.as<std::string>())
+                        << "exceeds maximum value" << ((1 << target.div.width) - 1) << "for width"
+                        << target.div.width << "bits";
+                    config.valid = false;
                 }
 
                 if (it->second["div"]["reset"]) {
@@ -588,23 +591,13 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                             // Dynamic mode: width is required
                             link.div.width = linkIt->second["div"]["width"].as<int>(0);
                             if (link.div.width <= 0) {
-                                QSocConsole::warn()
-                                    << "ERROR: Dynamic divider for link"
+                                /* An invented width is a changed port contract. */
+                                QSocConsole::error()
+                                    << "Dynamic divider for link"
                                     << QString::fromStdString(it->first.as<std::string>()) << "->"
                                     << QString::fromStdString(linkIt->first.as<std::string>())
                                     << "requires explicit width specification";
-                                link.div.width = 8; // Default fallback
-                            }
-                            // Verify default value fits in specified width
-                            int maxValue = (1 << link.div.width) - 1;
-                            if (link.div.default_value > maxValue) {
-                                QSocConsole::warn()
-                                    << "ERROR: Default value" << link.div.default_value
-                                    << "for link"
-                                    << QString::fromStdString(it->first.as<std::string>()) << "->"
-                                    << QString::fromStdString(linkIt->first.as<std::string>())
-                                    << "exceeds maximum value" << maxValue << "for width"
-                                    << link.div.width << "bits";
+                                config.valid = false;
                             }
                         } else {
                             // Static mode: calculate width from default value
@@ -615,6 +608,18 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                                 link.div.width = linkIt->second["div"]["width"].as<int>(
                                     link.div.width);
                             }
+                        }
+                        /* Synthesis ignores the initial-block guard, so an
+                           oversized default silently changes the ratio. */
+                        if (link.div.width > 0 && link.div.width < 31
+                            && link.div.default_value > (1 << link.div.width) - 1) {
+                            QSocConsole::error()
+                                << "Default value" << link.div.default_value << "for link"
+                                << QString::fromStdString(it->first.as<std::string>()) << "->"
+                                << QString::fromStdString(linkIt->first.as<std::string>())
+                                << "exceeds maximum value" << ((1 << link.div.width) - 1)
+                                << "for width" << link.div.width << "bits";
+                            config.valid = false;
                         }
                         link.div.clock_on_reset = linkIt->second["div"]["clock_on_reset"].as<bool>(
                             false);

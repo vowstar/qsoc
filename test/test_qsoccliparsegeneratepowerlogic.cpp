@@ -884,12 +884,6 @@ port:
   clr_gpu:
     direction: input
     type: logic
-  clk_gpu:
-    direction: input
-    type: logic
-  clk_gpu_dsp:
-    direction: input
-    type: logic
   rst_req_gpu_n:
     direction: output
     type: logic
@@ -1014,6 +1008,55 @@ power:
         }
         QVERIFY(!QFile::exists(verilogPath));
         QCOMPARE(messageList.filter("Invalid power configuration:").size(), 1);
+    }
+
+    /* Follow entries either come whole or reject the controller. */
+    void test_power_follow_contracts_are_rejected_data()
+    {
+        QTest::addColumn<QString>("stem");
+        QTest::addColumn<QString>("netlist");
+        QTest::addColumn<QString>("fragment");
+
+        const QString head = R"(
+power:
+  - name: follow_ctl
+    host_clock: clk_ao
+    host_reset: rst_ao_n
+    domain:
+      - name: core
+        follow:
+)";
+        QTest::newRow("partial-follow")
+            << "rej_follow_partial" << head + QString("          - clock: clk_core\n")
+            << "needs both clock and reset";
+        QTest::newRow("host-clock-follow")
+            << "rej_follow_host"
+            << head + QString("          - clock: clk_ao\n            reset: rst_core_n\n")
+            << "circular dependency";
+    }
+
+    void test_power_follow_contracts_are_rejected()
+    {
+        QFETCH(QString, stem);
+        QFETCH(QString, netlist);
+        QFETCH(QString, fragment);
+        messageList.clear();
+        const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        QFile::remove(verilogPath);
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        QVERIFY(!QFile::exists(verilogPath));
+        QVERIFY2(
+            messageList.join('\n').contains(fragment),
+            qPrintable(fragment + " | " + messageList.join('\n').right(600)));
     }
 };
 

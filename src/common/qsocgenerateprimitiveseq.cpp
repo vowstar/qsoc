@@ -81,11 +81,18 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
     /* A net bound over a slice carries only that part of the port. Without the
        slice the assign would drive the whole port and silently capture the
        bits the netlist never bound. */
+    bool       sliceComposeFailed = false;
     const auto resolveSlice =
-        [&topPortRedirect](const QString &baseName, const QString &ownSlice) -> QString {
+        [&topPortRedirect,
+         &sliceComposeFailed](const QString &baseName, const QString &ownSlice) -> QString {
         const QString boundSlice = topPortRedirect.value(baseName, {baseName, QString()}).slice;
-        return QSocGenerateManager::composeBitSelect(
-            boundSlice, ownSlice, QStringLiteral("seq target ") + baseName);
+        bool          composedOk = true;
+        const QString composed   = QSocGenerateManager::composeBitSelect(
+            boundSlice, ownSlice, QStringLiteral("seq target ") + baseName, &composedOk);
+        if (!composedOk) {
+            sliceComposeFailed = true;
+        }
+        return composed;
     };
 
     /* A top-level input already has an external source; a seq reg on it
@@ -339,6 +346,7 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
         }
     }
 
+    bool rejected = false;
     for (size_t i = 0; i < netlistData["seq"].size(); ++i) {
         const YAML::Node &seqItem = netlistData["seq"][i];
 
@@ -350,20 +358,17 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
         const auto    parsedReg = QSocGenerateManager::parseSignalBitSelect(regName);
         const QString regBase   = resolveBase(parsedReg.first);
         if (inputTopPortNames.contains(regBase)) {
-            QSocConsole::warn() << "seq writes to top-level input port" << regBase
-                                << "; cannot drive an input from inside the module - "
-                                   "skipping the always block";
-            out << "    /* FIXME: seq tried to drive top-level input " << regBase
-                << " - check the source netlist */\n";
+            QSocConsole::error() << "seq writes to top-level input port" << regBase
+                                 << "; an input cannot be driven from inside the module";
+            rejected = true;
             continue;
         }
         const QString regBitSlice = resolveSlice(parsedReg.first, parsedReg.second);
         if (!seqOwnsDriverRange[i]) {
             const QString fullRegName = regBase + regBitSlice;
-            QSocConsole::warn() << "seq has overlapping process driver for" << fullRegName
-                                << "; keeping the first - check the source netlist";
-            out << "    /* FIXME: overlapping seq process driver for " << fullRegName
-                << " skipped - check the source netlist */\n";
+            QSocConsole::error() << "seq has overlapping process driver for" << fullRegName
+                                 << "; one driver may own a bit range";
+            rejected = true;
             continue;
         }
         const QString regSignal = regBase + "_reg" + regBitSlice;
@@ -427,7 +432,7 @@ bool QSocSeqPrimitive::generateSeqLogicImpl(
         }
     }
 
-    return true;
+    return !rejected && !sliceComposeFailed;
 }
 
 void QSocSeqPrimitive::generateSeqLogicContent(

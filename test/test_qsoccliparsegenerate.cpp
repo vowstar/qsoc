@@ -6294,6 +6294,8 @@ reset:
     target:
       cpu_rst_n:
         active: low
+        link:
+          por_n: ~
 )";
         const QString filePath   = createTempFile("test_reset_no_source.soc_net", netContent);
         QVERIFY(filePath != "");
